@@ -9,6 +9,7 @@ for human review. It never sends outreach or activates a connector.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
@@ -18,6 +19,7 @@ import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.schemas.growth_agent import (
+    GrowthAgentCustomRunRequest,
     GrowthAgentHomeResponse,
     GrowthAgentMonitor,
     GrowthAgentPolicyCheck,
@@ -78,6 +80,18 @@ _BORROWER_360 = qualify("gold", "borrower_360")
 _LEAD_POPULATION = qualify("gold", "lead_population")
 _EVIDENCE_EVENTS = qualify("gold", "evidence_events")
 _SOURCE_READINESS = qualify("gold", "source_readiness")
+
+_SEGMENT_LABELS: dict[str, str] = {
+    "itm": "Prime Refi Candidates",
+    "listed": "Listed for Sale",
+    "permit": "HELOC Intent",
+    "investor": "Investor / Multi-Property",
+    "equity": "Home Equity Candidate",
+    "retention": "Retention Risk",
+}
+
+_CUSTOM_WORKFLOW_ID: GrowthAgentWorkflowId = "custom_segment_watch"
+_CUSTOM_WORKFLOW_TITLE = "Custom Segment Workflow"
 
 _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
     "daily_refi_brief": _WorkflowDef(
@@ -164,6 +178,54 @@ _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
     ),
 }
 
+
+def _custom_workflow(segment_codes: Sequence[str], segment_mode: str) -> _WorkflowDef:
+    deduped = [code for code in segment_codes if code in _SEGMENT_LABELS]
+    if not deduped:
+        raise HTTPException(status_code=422, detail="segment_codes must include at least one reviewed segment")
+    mode = "all" if segment_mode == "all" else "any"
+    segment_label = _format_segment_labels(deduped, mode=mode)
+    predicate = _segment_predicate(deduped, mode)
+    route_filters = {
+        "segment_codes": ",".join(deduped),
+        "segment_mode": mode,
+        "marketing_eligibility": "Eligible only",
+    }
+    return _WorkflowDef(
+        id=_CUSTOM_WORKFLOW_ID,
+        title=_CUSTOM_WORKFLOW_TITLE,
+        objective=f"Build a reviewed {segment_label} workflow from governed segment membership.",
+        trigger_label=f"{segment_label} segment screen",
+        action_label="Open eligible custom subset",
+        source_assets=(_BORROWER_360, _LEAD_POPULATION, _EVIDENCE_EVENTS),
+        proof_points=(
+            "Custom workflows are limited to reviewed Module 0 segment codes.",
+            f"Segment mode is {mode.upper()}: borrowers are counted once after matching {segment_label}.",
+            "The route opens only the eligible Lead Queue subset for human review.",
+        ),
+        broad_predicate=predicate,
+        actionable_predicate=predicate,
+        route_filters=route_filters,
+        tool_detail=(
+            f"Applied {mode.upper()} segment semantics across {segment_label}; "
+            "the result is de-duplicated at borrower grain before human review."
+        ),
+    )
+
+
+def _segment_predicate(segment_codes: list[str], mode: str) -> str:
+    joiner = " AND " if mode == "all" else " OR "
+    clauses = [f"array_contains(b.segment_codes, '{code}')" for code in segment_codes]
+    return "(" + joiner.join(clauses) + ")"
+
+
+def _format_segment_labels(segment_codes: list[str], *, mode: str) -> str:
+    labels = [_SEGMENT_LABELS[code] for code in segment_codes]
+    if len(labels) == 1:
+        return labels[0]
+    separator = " and " if mode == "all" else " or "
+    return ", ".join(labels[:-1]) + separator + labels[-1]
+
 _RUN_INSERT_SQL = """
 INSERT INTO mip_app.growth_agent_runs (
   actor_email, request_id, workflow_id, workflow_title, criteria,
@@ -176,8 +238,7 @@ INSERT INTO mip_app.growth_agent_runs (
   %(avg_rate_spread_bps)s, %(avg_equity_pct)s, %(route)s, %(source_assets)s,
   %(tool_steps)s::jsonb, %(policy_checks)s::jsonb
 )
-ON CONFLICT (actor_email, request_id) WHERE request_id IS NOT NULL DO UPDATE SET
-  request_id = EXCLUDED.request_id
+ON CONFLICT (actor_email, request_id) WHERE request_id IS NOT NULL DO NOTHING
 RETURNING run_id, workflow_id, criteria, broad_total, actionable_total,
           broad_avg_score, actionable_avg_score, avg_rate_spread_bps, avg_equity_pct,
           route, source_assets, tool_steps, policy_checks, audit_event_id, created_at
@@ -232,6 +293,16 @@ ORDER BY updated_at DESC
 LIMIT %(limit)s
 """
 
+_MONITOR_SELECT_BY_RUN_ID_SQL = """
+SELECT monitor_id, workflow_id, name, cadence, status, criteria, route,
+       actionable_total, source_assets, last_run_id, created_at, updated_at
+FROM mip_app.growth_agent_monitors
+WHERE actor_email = %(actor_email)s
+  AND last_run_id = %(last_run_id)s
+ORDER BY updated_at DESC
+LIMIT 1
+"""
+
 
 @router.get("", response_model=GrowthAgentHomeResponse)
 def growth_agent_home(request: Request, lakebase: LakebaseDep) -> GrowthAgentHomeResponse:
@@ -257,10 +328,45 @@ def run_growth_agent_workflow(
     sql_client: SqlDep,
     lakebase: LakebaseDep,
 ) -> GrowthAgentRunResponse:
-    actor = resolve_actor(request)
     workflow = _WORKFLOWS.get(workflow_id)
     if workflow is None:  # Defensive; path type normally handles this.
         raise HTTPException(status_code=404, detail="unknown growth-agent workflow")
+    return _run_workflow(
+        workflow=workflow,
+        payload=payload,
+        request=request,
+        sql_client=sql_client,
+        lakebase=lakebase,
+    )
+
+
+@router.post("/custom/run", response_model=GrowthAgentRunResponse)
+def run_custom_growth_agent_workflow(
+    payload: GrowthAgentCustomRunRequest,
+    request: Request,
+    _: Annotated[None, Depends(_require_json_content_type)],
+    sql_client: SqlDep,
+    lakebase: LakebaseDep,
+) -> GrowthAgentRunResponse:
+    workflow = _custom_workflow(payload.segment_codes, payload.segment_mode)
+    return _run_workflow(
+        workflow=workflow,
+        payload=payload,
+        request=request,
+        sql_client=sql_client,
+        lakebase=lakebase,
+    )
+
+
+def _run_workflow(
+    *,
+    workflow: _WorkflowDef,
+    payload: GrowthAgentRunRequest,
+    request: Request,
+    sql_client: DatabricksSqlClient,
+    lakebase: LakebaseClient,
+) -> GrowthAgentRunResponse:
+    actor = resolve_actor(request)
     criteria = _criteria_for(workflow, payload.states)
     route = _route({**workflow.route_filters, **({"states": ",".join(payload.states)} if payload.states else {})})
     request_id = payload.request_id or str(uuid4())
@@ -274,17 +380,13 @@ def run_growth_agent_workflow(
                 )
                 if existing_row is not None:
                     _assert_run_matches(existing_row, workflow=workflow, criteria=criteria)
-                    replay_monitor_row = (
-                        _upsert_monitor(
-                            conn,
-                            actor=actor,
-                            workflow=workflow,
-                            payload=payload,
-                            criteria=criteria,
-                            run_row=existing_row,
-                        )
-                        if payload.save_monitor
-                        else None
+                    replay_monitor_row = _txn_fetchone(
+                        conn,
+                        _MONITOR_SELECT_BY_RUN_ID_SQL,
+                        {
+                            "actor_email": actor,
+                            "last_run_id": existing_row["run_id"],
+                        },
                     )
                     return _run_response_from_row(
                         workflow=workflow,
@@ -324,7 +426,29 @@ def run_growth_agent_workflow(
                 },
             )
             if run_row is None:
-                raise RuntimeError("growth-agent run insert returned no row")
+                if payload.request_id is None:
+                    raise RuntimeError("growth-agent run insert returned no row")
+                existing_row = _txn_fetchone(
+                    conn,
+                    _RUN_SELECT_BY_REQUEST_ID_SQL,
+                    {"actor_email": actor, "request_id": request_id},
+                )
+                if existing_row is None:
+                    raise RuntimeError("growth-agent run conflict returned no row")
+                _assert_run_matches(existing_row, workflow=workflow, criteria=criteria)
+                replay_monitor_row = _txn_fetchone(
+                    conn,
+                    _MONITOR_SELECT_BY_RUN_ID_SQL,
+                    {
+                        "actor_email": actor,
+                        "last_run_id": existing_row["run_id"],
+                    },
+                )
+                return _run_response_from_row(
+                    workflow=workflow,
+                    run_row=existing_row,
+                    monitor_row=replay_monitor_row,
+                )
             _assert_run_matches(run_row, workflow=workflow, criteria=criteria)
             if run_row.get("audit_event_id") is None:
                 audit_event = write_audit_event_in_transaction(
@@ -541,6 +665,17 @@ def _policy_checks(
                 label="Permit honesty",
                 status="passed",
                 detail="HELOC Intent is propensity-backed; filed building-permit records remain a separate pending feed.",
+            )
+        )
+    if workflow.id == _CUSTOM_WORKFLOW_ID:
+        checks.append(
+            GrowthAgentPolicyCheck(
+                label="Reviewed custom workflow",
+                status="passed",
+                detail=(
+                    "Custom workflow criteria are reviewed segment codes and explicit Any/All mode only; "
+                    "no arbitrary SQL or outbound activation is stored."
+                ),
             )
         )
     if saved_monitor:

@@ -2478,6 +2478,36 @@ kbd {
   flex-wrap: wrap;
   gap: var(--sp-2);
 }
+.growth-agent-custom {
+  margin-block-start: var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.growth-agent-custom__head {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+  padding: var(--sp-4);
+  border-bottom: 1px solid var(--line-1);
+}
+.growth-agent-custom__body {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-3);
+  align-items: end;
+  padding: var(--sp-4);
+}
+.growth-agent-custom__body .chip-row {
+  flex: 1 1 calc(var(--sp-16) * 4);
+  align-self: center;
+}
+.growth-agent-custom__body .growth-agent__field {
+  flex: 1 1 calc(var(--sp-16) * 3 + var(--sp-8));
+}
+.growth-agent-custom__body .growth-agent-card__actions {
+  flex: 1 1 auto;
+}
 .growth-agent-run {
   margin-block-start: var(--sp-4);
   padding: var(--sp-4);

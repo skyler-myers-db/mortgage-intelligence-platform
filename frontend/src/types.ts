@@ -587,11 +587,14 @@ export interface GenieActionResult {
 
 export type {
   GrowthAgentCadence,
+  GrowthAgentCustomRunRequest,
   GrowthAgentHomeResponse,
   GrowthAgentMonitor,
   GrowthAgentPolicyCheck,
   GrowthAgentRunRequest,
   GrowthAgentRunResponse,
+  GrowthAgentSegmentCode,
+  GrowthAgentSegmentMode,
   GrowthAgentToolStep,
   GrowthAgentWorkflow,
   GrowthAgentWorkflowId,

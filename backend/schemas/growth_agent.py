@@ -19,8 +19,11 @@ GrowthAgentWorkflowId = Literal[
     "listing_watch",
     "competitor_recapture_monitor",
     "high_equity_heloc_watch",
+    "custom_segment_watch",
 ]
 GrowthAgentCadence = Literal["daily", "weekly"]
+GrowthAgentSegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
+GrowthAgentSegmentMode = Literal["any", "all"]
 
 _STATE_RE = re.compile(r"^[A-Z]{2}$")
 _MONITOR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+/-]{0,79}$")
@@ -30,7 +33,13 @@ _RAW_IDENTIFIER_RE = re.compile(
 )
 _WORKFLOW_MONITOR_TITLE_RE = re.compile(
     r"^(?:Daily Refi Opportunity Brief|Listed-for-Sale Purchase Watch|"
-    r"Competitor Recapture Monitor|High-Equity / HELOC Watch)"
+    r"Competitor Recapture Monitor|High-Equity / HELOC Watch|"
+    r"Custom Segment Workflow)"
+    r"(?: - [A-Z]{2}(?:, [A-Z]{2}){0,19})?$"
+)
+_CUSTOM_WORKFLOW_MONITOR_TITLE_RE = re.compile(
+    r"^Custom Segment Workflow - (?:ITM|LISTED|PERMIT|INVESTOR|EQUITY|RETENTION)"
+    r"(?:\+(?:ITM|LISTED|PERMIT|INVESTOR|EQUITY|RETENTION)){0,5}"
     r"(?: - [A-Z]{2}(?:, [A-Z]{2}){0,19})?$"
 )
 
@@ -112,7 +121,7 @@ class GrowthAgentRunRequest(BaseModel):
             return None
         if contains_pii_marker(clean) or _RAW_IDENTIFIER_RE.search(clean):
             raise ValueError("monitor_name must be a public-safe workflow label")
-        if _WORKFLOW_MONITOR_TITLE_RE.fullmatch(clean):
+        if _WORKFLOW_MONITOR_TITLE_RE.fullmatch(clean) or _CUSTOM_WORKFLOW_MONITOR_TITLE_RE.fullmatch(clean):
             return clean
         if not _MONITOR_NAME_RE.fullmatch(clean):
             raise ValueError("monitor_name must be a public-safe workflow label")
@@ -128,6 +137,22 @@ class GrowthAgentRunRequest(BaseModel):
         if value is None:
             return None
         return validate_public_opaque_id(value)
+
+
+class GrowthAgentCustomRunRequest(GrowthAgentRunRequest):
+    segment_codes: list[GrowthAgentSegmentCode] = Field(min_length=1, max_length=6)
+    segment_mode: GrowthAgentSegmentMode = "any"
+
+    @field_validator("segment_codes")
+    @classmethod
+    def _segment_codes(cls, values: list[GrowthAgentSegmentCode]) -> list[GrowthAgentSegmentCode]:
+        out: list[GrowthAgentSegmentCode] = []
+        for value in values:
+            if value not in out:
+                out.append(value)
+        if not out:
+            raise ValueError("segment_codes must include at least one reviewed segment")
+        return out
 
 
 class GrowthAgentRunResponse(BaseModel):

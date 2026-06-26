@@ -338,6 +338,7 @@ _GROWTH_AGENT_WORKFLOWS: frozenset[str] = frozenset(
         "listing_watch",
         "competitor_recapture_monitor",
         "high_equity_heloc_watch",
+        "custom_segment_watch",
     }
 )
 _GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
@@ -346,6 +347,7 @@ _GROWTH_AGENT_TITLES: frozenset[str] = frozenset(
         "Listed-for-Sale Purchase Watch",
         "Competitor Recapture Monitor",
         "High-Equity / HELOC Watch",
+        "Custom Segment Workflow",
     }
 )
 _GROWTH_AGENT_RUN_STATUSES: frozenset[str] = frozenset({"completed"})

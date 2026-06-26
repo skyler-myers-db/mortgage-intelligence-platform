@@ -40,6 +40,7 @@ import type {
   GenieStartResult,
   GrowthAgentHomeResponse,
   GrowthAgentMonitor,
+  GrowthAgentCustomRunRequest,
   GrowthAgentRunRequest,
   GrowthAgentRunResponse,
   GrowthAgentWorkflowId,
@@ -1305,6 +1306,21 @@ export const api = {
     };
     return postJson<GrowthAgentRunResponse, GrowthAgentRunRequest>(
       `/api/growth-agent/workflows/${workflowId}/run`,
+      body,
+      signal,
+    );
+  },
+
+  runCustomGrowthAgentWorkflow: (
+    payload: GrowthAgentCustomRunRequest,
+    signal?: AbortSignal,
+  ) => {
+    const body: GrowthAgentCustomRunRequest = {
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<GrowthAgentRunResponse, GrowthAgentCustomRunRequest>(
+      '/api/growth-agent/custom/run',
       body,
       signal,
     );

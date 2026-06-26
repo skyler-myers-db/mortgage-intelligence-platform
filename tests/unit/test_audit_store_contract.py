@@ -162,7 +162,8 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "record_lead_outcome": ("store.record_outcome(",),
     "genie_message": ("_required_audit_write",),
     "genie_action": ("handle_genie_action(",),
-    "run_growth_agent_workflow": ("write_audit_event_in_transaction(", "GROWTH_AGENT_RUN"),
+    "run_growth_agent_workflow": ("_run_workflow(",),
+    "run_custom_growth_agent_workflow": ("_run_workflow(",),
     "log_event": ("store.write(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
@@ -197,6 +198,14 @@ def test_every_mutation_route_has_audit_coverage_or_explicit_exemption() -> None
         covered.add(name)
 
     assert set(_MUTATION_AUDIT_EXPECTATIONS) == covered
+
+
+def test_growth_agent_shared_executor_writes_audit_event() -> None:
+    from backend.api import growth_agent
+
+    source = inspect.getsource(growth_agent._run_workflow)
+    assert "write_audit_event_in_transaction(" in source
+    assert "GROWTH_AGENT_RUN" in source
 
 
 def test_list_issues_select_ordered_desc_with_limit() -> None:
@@ -381,6 +390,46 @@ def test_growth_agent_audit_metadata_rejects_unknown_workflows() -> None:
             },
             action="growth_agent.run",
         )
+
+
+def test_custom_growth_agent_audit_metadata_is_governed() -> None:
+    metadata = build_safe_audit_metadata(
+        {
+            "workflow_id": "custom_segment_watch",
+            "workflow_title": "Custom Segment Workflow",
+            "run_status": "completed",
+            "broad_total": 100,
+            "actionable_total": 12,
+            "route": "/lead-queue?segment_codes=itm%2Clisted&segment_mode=all",
+            "result_filters": {
+                "source": "trusted_sql",
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "all",
+                "portfolio_criteria": {"marketing_eligibility": "Eligible only"},
+            },
+            "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_population"],
+            "tool_steps": [
+                {"label": "Apply custom segment screen", "status": "completed", "detail": "No identities returned."},
+            ],
+            "policy_checks": [
+                {"label": "Reviewed custom workflow", "status": "passed", "detail": "Reviewed segment vocabulary only."},
+            ],
+        },
+        action="growth_agent.run",
+    )
+
+    assert metadata["workflow_id"] == "custom_segment_watch"
+    assert metadata["workflow_title"] == "Custom Segment Workflow"
+    assert metadata["result_filters"]["segment_mode"] == "all"
+
+
+def test_custom_growth_agent_lakebase_schema_contract_is_migrated() -> None:
+    schema_sql = Path("lakebase/schema.sql").read_text(encoding="utf-8")
+
+    assert "custom_segment_watch" in schema_sql
+    assert "ck_growth_agent_runs_workflow_id" in schema_sql
+    assert "ck_growth_agent_monitors_workflow_id" in schema_sql
+    assert "2026_06_26_growth_agent_custom_segment_watch" in schema_sql
 
 
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:

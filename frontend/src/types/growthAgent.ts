@@ -2,9 +2,12 @@ export type GrowthAgentWorkflowId =
   | 'daily_refi_brief'
   | 'listing_watch'
   | 'competitor_recapture_monitor'
-  | 'high_equity_heloc_watch';
+  | 'high_equity_heloc_watch'
+  | 'custom_segment_watch';
 
 export type GrowthAgentCadence = 'daily' | 'weekly';
+export type GrowthAgentSegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
+export type GrowthAgentSegmentMode = 'any' | 'all';
 
 export interface GrowthAgentWorkflow {
   id: GrowthAgentWorkflowId;
@@ -52,6 +55,11 @@ export interface GrowthAgentRunRequest {
   cadence?: GrowthAgentCadence;
   monitor_name?: string | null;
   request_id?: string | null;
+}
+
+export interface GrowthAgentCustomRunRequest extends GrowthAgentRunRequest {
+  segment_codes: GrowthAgentSegmentCode[];
+  segment_mode: GrowthAgentSegmentMode;
 }
 
 export interface GrowthAgentRunResponse {

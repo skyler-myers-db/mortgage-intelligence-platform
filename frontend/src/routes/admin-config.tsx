@@ -372,7 +372,7 @@ export default function AdminConfig() {
           </div>
           <div className="surface__body admin-panel-body">
             <p className="body flush">
-              Append-only trail of approvals, rejections, and workflow actions. Exported nightly for compliance review.
+              Append-only trail of approvals, rejections, and workflow actions, available for compliance export.
             </p>
             {auditWarming && (
               <WarmingUpBlock state={auditWarming} title="Audit probe loading" compact />

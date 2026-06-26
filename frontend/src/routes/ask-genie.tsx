@@ -8,6 +8,8 @@ import type {
   GenieAnswer as GenieAnswerShape,
   GrowthAgentCadence,
   GrowthAgentRunResponse,
+  GrowthAgentSegmentCode,
+  GrowthAgentSegmentMode,
   GrowthAgentWorkflow,
   GrowthAgentWorkflowId,
 } from '../types';
@@ -69,6 +71,15 @@ export function buildTrustedAssetQuestion(asset: { label: string; path: string }
 }
 
 const STATE_TOKEN_RE = /^[A-Za-z]{2}$/;
+
+const CUSTOM_SEGMENTS: Array<{ code: GrowthAgentSegmentCode; label: string }> = [
+  { code: 'itm', label: 'Prime Refi Candidates' },
+  { code: 'listed', label: 'Listed for Sale' },
+  { code: 'permit', label: 'HELOC Intent' },
+  { code: 'investor', label: 'Investor / Multi-Property' },
+  { code: 'equity', label: 'Home Equity Candidate' },
+  { code: 'retention', label: 'Retention Risk' },
+];
 
 export function parseGrowthAgentStateInput(value: string): { states: string[]; invalid: string[] } {
   const tokens = value
@@ -134,8 +145,11 @@ export default function AskGenie() {
   const [agentStateText, setAgentStateText] = useState('');
   const [agentCadence, setAgentCadence] = useState<GrowthAgentCadence>('daily');
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
+  const [customAgentPendingAction, setCustomAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentError, setGrowthAgentError] = useState<string | null>(null);
   const [latestGrowthRun, setLatestGrowthRun] = useState<GrowthAgentRunResponse | null>(null);
+  const [customSegments, setCustomSegments] = useState<GrowthAgentSegmentCode[]>(['itm', 'listed']);
+  const [customMode, setCustomMode] = useState<GrowthAgentSegmentMode>('any');
 
   const growthAgentQuery = useQuery({
     queryKey: queryKeys.growthAgent(),
@@ -277,6 +291,49 @@ export default function AskGenie() {
     } finally {
       setGrowthAgentPending(null);
     }
+  }
+
+  async function runCustomGrowthAgentWorkflow(saveMonitor: boolean) {
+    const parsed = parseGrowthAgentStateInput(agentStateText);
+    if (parsed.invalid.length > 0) {
+      setGrowthAgentError(`Use two-letter state codes only: ${parsed.invalid.join(', ')}`);
+      return;
+    }
+    if (customSegments.length === 0) {
+      setGrowthAgentError('Choose at least one reviewed segment for the custom workflow.');
+      return;
+    }
+    setGrowthAgentPending('custom_segment_watch');
+    setCustomAgentPendingAction(saveMonitor ? 'save' : 'run');
+    setGrowthAgentError(null);
+    try {
+      const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
+      const result = await api.runCustomGrowthAgentWorkflow({
+        states: parsed.states,
+        segment_codes: customSegments,
+        segment_mode: customMode,
+        save_monitor: saveMonitor,
+        cadence: agentCadence,
+        monitor_name: saveMonitor ? `Custom Segment Workflow - ${customSegments.join('+').toUpperCase()}${stateSuffix}` : null,
+      });
+      setLatestGrowthRun(result);
+      if (saveMonitor) {
+        await growthAgentQuery.refetch();
+      }
+    } catch (err) {
+      setGrowthAgentError(err instanceof Error ? err.message : 'Custom Growth Agent workflow failed.');
+    } finally {
+      setGrowthAgentPending(null);
+      setCustomAgentPendingAction(null);
+    }
+  }
+
+  function toggleCustomSegment(code: GrowthAgentSegmentCode) {
+    setCustomSegments((current) => (
+      current.includes(code)
+        ? current.filter((item) => item !== code)
+        : [...current, code]
+    ));
   }
 
   useEffect(() => {
@@ -472,6 +529,73 @@ export default function AskGenie() {
             )}
           </div>
 
+          <div className="growth-agent-custom" aria-label="Build a custom Growth Agent workflow">
+            <div className="growth-agent-custom__head">
+              <Icon name="filter" size={14} className="icon-accent" />
+              <div>
+                <div className="h-4">Build a custom segment workflow</div>
+                <div className="muted fs-12">
+                  Combine reviewed Module 0 segment signals, reconcile to eligible leads, then save the monitor.
+                </div>
+              </div>
+              <div className="spacer" />
+              <Chip variant="neutral" icon="shield">Reviewed vocabulary only</Chip>
+            </div>
+            <div className="growth-agent-custom__body">
+              <div className="chip-row" role="group" aria-label="Custom workflow segments">
+                {CUSTOM_SEGMENTS.map((segment) => {
+                  const selected = customSegments.includes(segment.code);
+                  return (
+                    <button
+                      key={segment.code}
+                      type="button"
+                      className={`filter ${selected ? 'is-active' : ''}`}
+                      aria-pressed={selected}
+                      onClick={() => toggleCustomSegment(segment.code)}
+                    >
+                      <span className="filter__value">{segment.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <label className="growth-agent__field growth-agent__field--compact">
+                <span>Segment logic</span>
+                <select
+                  className="form-input"
+                  aria-label="Custom Growth Agent segment logic"
+                  value={customMode}
+                  onChange={(event) => setCustomMode(event.target.value as GrowthAgentSegmentMode)}
+                >
+                  <option value="any">Any selected segment</option>
+                  <option value="all">All selected segments</option>
+                </select>
+                <span className="growth-agent__hint">
+                  Any de-duplicates borrowers across selected segments; All requires every selected segment.
+                </span>
+              </label>
+              <div className="growth-agent-card__actions">
+                <Button
+                  variant="primary"
+                  size="sm"
+                  icon="play"
+                  onClick={() => runCustomGrowthAgentWorkflow(false)}
+                  disabled={growthAgentPending !== null || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
+                >
+                  {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'run' ? 'Running…' : 'Run custom'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="bell"
+                  onClick={() => runCustomGrowthAgentWorkflow(true)}
+                  disabled={growthAgentPending !== null || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
+                >
+                  {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'save' ? 'Saving…' : 'Save custom monitor'}
+                </Button>
+              </div>
+            </div>
+          </div>
+
           {latestGrowthRun && (
             <div className="growth-agent-run" aria-label="Latest Growth Agent run">
               <div className="growth-agent-run__head">
@@ -484,7 +608,7 @@ export default function AskGenie() {
                   icon="chevright"
                   onClick={() => navigate(latestGrowthRun.route)}
                 >
-                  Open eligible Lead Queue subset
+                  {latestGrowthRun.workflow.action_label}
                 </Button>
               </div>
               <div className="growth-agent-run__metrics">

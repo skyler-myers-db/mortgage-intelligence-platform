@@ -67,6 +67,7 @@ class _FakeLakebaseClient:
         self.audit_events: list[dict[str, Any]] = []
         self.runs: list[dict[str, Any]] = []
         self.monitors: list[dict[str, Any]] = []
+        self.miss_next_run_select = False
 
     def fetchall(
         self,
@@ -85,10 +86,21 @@ class _FakeLakebaseClient:
         self.executes.append((sql, params))
         now = datetime.now(UTC)
         if "FROM mip_app.growth_agent_runs" in sql and "WHERE actor_email" in sql:
+            if self.miss_next_run_select:
+                self.miss_next_run_select = False
+                return None
             for row in self.runs:
                 if (
                     row.get("actor_email") == params.get("actor_email")
                     and row.get("request_id") == params.get("request_id")
+                ):
+                    return dict(row)
+            return None
+        if "FROM mip_app.growth_agent_monitors" in sql and "last_run_id" in sql:
+            for row in self.monitors:
+                if (
+                    row.get("actor_email") == params.get("actor_email")
+                    and str(row.get("last_run_id")) == str(params.get("last_run_id"))
                 ):
                     return dict(row)
             return None
@@ -107,23 +119,7 @@ class _FakeLakebaseClient:
                     and row.get("request_id") == params.get("request_id")
                     and params.get("request_id") is not None
                 ):
-                    return {
-                        "run_id": row["run_id"],
-                        "workflow_id": row["workflow_id"],
-                        "criteria": row["criteria"],
-                        "broad_total": row["broad_total"],
-                        "actionable_total": row["actionable_total"],
-                        "broad_avg_score": row.get("broad_avg_score"),
-                        "actionable_avg_score": row.get("actionable_avg_score"),
-                        "avg_rate_spread_bps": row.get("avg_rate_spread_bps"),
-                        "avg_equity_pct": row.get("avg_equity_pct"),
-                        "route": row["route"],
-                        "source_assets": row["source_assets"],
-                        "tool_steps": row["tool_steps"],
-                        "policy_checks": row["policy_checks"],
-                        "audit_event_id": row.get("audit_event_id"),
-                        "created_at": row["created_at"],
-                    }
+                    return None
             row = {
                 "run_id": uuid4(),
                 "audit_event_id": None,
@@ -171,8 +167,28 @@ class _FakeLakebaseClient:
                     }
             return None
         if "INSERT INTO mip_app.growth_agent_monitors" in sql:
+            for existing in self.monitors:
+                if (
+                    existing["actor_email"] == params["actor_email"]
+                    and existing["workflow_id"] == params["workflow_id"]
+                    and existing["name"] == params["name"]
+                ):
+                    existing.update(
+                        {
+                            "cadence": params["cadence"],
+                            "status": "active",
+                            "criteria": json.loads(params["criteria"]),
+                            "route": params["route"],
+                            "actionable_total": params["actionable_total"],
+                            "source_assets": params["source_assets"],
+                            "last_run_id": params["last_run_id"],
+                            "updated_at": now,
+                        }
+                    )
+                    return existing
             row = {
                 "monitor_id": uuid4(),
+                "actor_email": params["actor_email"],
                 "workflow_id": params["workflow_id"],
                 "name": params["name"],
                 "cadence": params["cadence"],
@@ -238,6 +254,205 @@ def test_growth_agent_home_lists_governed_workflows() -> None:
     ]
     assert all(workflow["default_route"].startswith("/lead-queue?") for workflow in body["workflows"])
     assert body["monitors"] == []
+
+
+def test_custom_segment_workflow_uses_reviewed_any_semantics_and_writes_audit() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/custom/run",
+            json={
+                "states": ["IL", "TX"],
+                "segment_codes": ["investor", "listed", "investor"],
+                "segment_mode": "any",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["workflow"]["id"] == "custom_segment_watch"
+    assert body["workflow"]["title"] == "Custom Segment Workflow"
+    assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["investor", "listed"]
+    assert body["criteria"]["lead_queue_filters"]["segment_mode"] == "any"
+    assert body["route"] == (
+        "/lead-queue?segment_codes=investor%2Clisted&segment_mode=any"
+        "&marketing_eligibility=Eligible+only&states=IL%2CTX"
+    )
+    statement, params = sql.calls[0]
+    assert "array_contains(b.segment_codes, 'investor') OR array_contains(b.segment_codes, 'listed')" in statement
+    assert "array_contains(b.segment_codes, 'investor') AND array_contains(b.segment_codes, 'listed')" not in statement
+    assert "b.marketing_eligible = TRUE" in statement
+    assert params == {"state_0": "IL", "state_1": "TX"}
+    metadata = json.loads(lakebase.audit_events[0]["metadata"])
+    assert metadata["workflow_id"] == "custom_segment_watch"
+    assert metadata["workflow_title"] == "Custom Segment Workflow"
+    assert metadata["result_filters"]["segment_codes"] == ["investor", "listed"]
+    assert metadata["result_filters"]["segment_mode"] == "any"
+    assert "Reviewed custom workflow" in json.dumps(metadata["policy_checks"])
+
+
+def test_custom_segment_workflow_all_mode_and_monitor_are_safe() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    request_id = str(uuid4())
+    try:
+        first = client.post(
+            "/api/growth-agent/custom/run",
+            json={
+                "states": ["FL"],
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "all",
+                "save_monitor": True,
+                "cadence": "weekly",
+                "monitor_name": "Custom Segment Workflow - ITM+LISTED - FL",
+                "request_id": request_id,
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+        replay = client.post(
+            "/api/growth-agent/custom/run",
+            json={
+                "states": ["FL"],
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "all",
+                "save_monitor": True,
+                "cadence": "weekly",
+                "monitor_name": "Custom Segment Workflow - ITM+LISTED - FL",
+                "request_id": request_id,
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["run_id"] == first.json()["run_id"]
+    statement, params = sql.calls[0]
+    assert "array_contains(b.segment_codes, 'itm') AND array_contains(b.segment_codes, 'listed')" in statement
+    assert params == {"state_0": "FL"}
+    assert len(sql.calls) == 1
+    assert len(lakebase.audit_events) == 1
+    assert len(lakebase.runs) == 1
+    assert len(lakebase.monitors) == 1
+    assert first.json()["monitor"]["workflow_id"] == "custom_segment_watch"
+    assert first.json()["monitor"]["name"] == "Custom Segment Workflow - ITM+LISTED - FL"
+    assert "borrower_id" not in json.dumps(first.json()["monitor"]["criteria"]).lower()
+
+
+def test_custom_segment_workflow_direct_replay_skips_sql_and_cannot_add_monitor() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    request_id = str(uuid4())
+    try:
+        first = client.post(
+            "/api/growth-agent/custom/run",
+            json={
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "any",
+                "save_monitor": False,
+                "request_id": request_id,
+            },
+                headers={"X-Forwarded-Email": "operator@example.com"},
+            )
+        replay_with_monitor = client.post(
+            "/api/growth-agent/custom/run",
+            json={
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "any",
+                "save_monitor": True,
+                "monitor_name": "Custom Segment Workflow - ITM+LISTED",
+                "request_id": request_id,
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert replay_with_monitor.status_code == 200, replay_with_monitor.text
+    assert replay_with_monitor.json()["run_id"] == first.json()["run_id"]
+    assert replay_with_monitor.json()["monitor"] is None
+    assert len(sql.calls) == 1
+    assert len(lakebase.audit_events) == 1
+    assert lakebase.monitors == []
+
+
+def test_custom_segment_workflow_insert_conflict_replay_cannot_add_monitor_side_effect() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    request_id = str(uuid4())
+    try:
+        first = client.post(
+            "/api/growth-agent/custom/run",
+            json={
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "any",
+                "save_monitor": False,
+                "request_id": request_id,
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+        lakebase.miss_next_run_select = True
+        replay_with_monitor = client.post(
+            "/api/growth-agent/custom/run",
+            json={
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "any",
+                "save_monitor": True,
+                "monitor_name": "Custom Segment Workflow - ITM+LISTED",
+                "request_id": request_id,
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert replay_with_monitor.status_code == 200, replay_with_monitor.text
+    assert replay_with_monitor.json()["run_id"] == first.json()["run_id"]
+    assert replay_with_monitor.json()["monitor"] is None
+    assert len(sql.calls) == 2
+    assert len(lakebase.audit_events) == 1
+    assert lakebase.monitors == []
+
+
+def test_custom_segment_workflow_rejects_unknown_codes_and_freeform_sql() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        unknown = client.post(
+            "/api/growth-agent/custom/run",
+            json={"segment_codes": ["raw_clip"], "segment_mode": "any"},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+        empty = client.post(
+            "/api/growth-agent/custom/run",
+            json={"segment_codes": [], "segment_mode": "any"},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+        bad_mode = client.post(
+            "/api/growth-agent/custom/run",
+            json={"segment_codes": ["itm"], "segment_mode": "sql: 1=1"},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert unknown.status_code == 422
+    assert empty.status_code == 422
+    assert bad_mode.status_code == 422
+    assert not lakebase.runs
+    assert not sql.calls
 
 
 def test_growth_agent_monitor_list_route_reads_actor_scoped_monitors() -> None:

@@ -1,4 +1,4 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 to run live Growth Agent workflow coverage.');
@@ -40,6 +40,16 @@ function apiPathFromLeadQueueRoute(route: string): string {
   const params = new URLSearchParams(url.searchParams);
   params.set('limit', '1');
   return `/api/leads?${params.toString()}`;
+}
+
+async function expectLeadQueueHandoffMatchesActionableTotal(
+  request: APIRequestContext,
+  run: GrowthAgentRunResponse,
+): Promise<void> {
+  const apiPath = apiPathFromLeadQueueRoute(run.route);
+  const leadResp = await request.get(`${API_URL}${apiPath}`, { headers: AUTH_HEADERS });
+  expect(leadResp.status(), `GET ${apiPath} returned non-200`).toBe(200);
+  expect(Number(leadResp.headers()['x-total-matching'] ?? -1)).toBe(run.actionable_total);
 }
 
 test('Growth Agent run, saved monitor, and Lead Queue handoff are live and reconciled', async ({
@@ -122,16 +132,68 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
     'Daily Refi Opportunity Brief',
   );
 
-  const apiPath = apiPathFromLeadQueueRoute(run.route);
-  const leadResp = await request.get(`${API_URL}${apiPath}`, { headers: AUTH_HEADERS });
-  expect(leadResp.status(), `GET ${apiPath} returned non-200`).toBe(200);
-  expect(Number(leadResp.headers()['x-total-matching'] ?? -1)).toBe(run.actionable_total);
+  await expectLeadQueueHandoffMatchesActionableTotal(request, run);
 
-  await page.getByRole('button', { name: 'Open eligible Lead Queue subset' }).click();
+  await page.getByRole('button', { name: 'Open eligible refi subset' }).click();
   await expect(page).toHaveURL(/\/lead-queue\?/);
   await expect(page.getByRole('heading', { name: /Ranked borrowers/i })).toBeVisible();
   const landed = new URL(page.url());
   expect(landed.searchParams.get('marketing_eligibility')).toBe('Eligible only');
   expect(landed.searchParams.get('segment')).toBe('itm');
   expect(landed.searchParams.get('states')).toBe('IL,TX');
+});
+
+test('custom Growth Agent Any and All workflows reconcile to live Lead Queue totals', async ({
+  page,
+  request,
+}) => {
+  await gotoApp(page, '/ask-genie');
+  await expect(page.getByLabel('Build a custom Growth Agent workflow')).toBeVisible();
+
+  await page.getByLabel('Growth Agent state scope').fill('IL TX');
+  const customAnyResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'POST' &&
+    /\/api(?:\/v1)?\/growth-agent\/custom\/run/.test(response.url()),
+  );
+  await page.getByRole('button', { name: 'Run custom' }).click();
+  const customAnyResponse = await customAnyResponsePromise;
+  expect(customAnyResponse.status(), 'custom Any workflow run returned non-200').toBe(200);
+  const customAny = (await customAnyResponse.json()) as GrowthAgentRunResponse;
+
+  expect(customAny.workflow.id).toBe('custom_segment_watch');
+  expect(customAny.criteria.lead_queue_filters?.segment_codes).toEqual(['itm', 'listed']);
+  expect(customAny.criteria.lead_queue_filters?.segment_mode).toBe('any');
+  expect(customAny.route).toContain('segment_mode=any');
+  expect(customAny.route).toContain('marketing_eligibility=Eligible+only');
+  expect(customAny.broad_total).toBeGreaterThanOrEqual(customAny.actionable_total);
+  expect(customAny.policy_checks.map((check) => check.label)).toEqual(
+    expect.arrayContaining(['No outbound activation', 'Reviewed custom workflow']),
+  );
+  await expectLeadQueueHandoffMatchesActionableTotal(request, customAny);
+
+  await page.getByRole('button', { name: 'Open eligible custom subset' }).click();
+  await expect(page).toHaveURL(/\/lead-queue\?/);
+  const anyUrl = new URL(page.url());
+  expect(anyUrl.searchParams.get('segment_codes')).toBe('itm,listed');
+  expect(anyUrl.searchParams.get('segment_mode')).toBe('any');
+  expect(anyUrl.searchParams.get('marketing_eligibility')).toBe('Eligible only');
+
+  const allResponse = await request.post(`${API_URL}/api/growth-agent/custom/run`, {
+    headers: AUTH_HEADERS,
+    data: {
+      states: ['IL', 'TX'],
+      segment_codes: ['itm', 'listed'],
+      segment_mode: 'all',
+      save_monitor: false,
+    },
+  });
+  expect(allResponse.status(), 'custom All workflow run returned non-200').toBe(200);
+  const customAll = (await allResponse.json()) as GrowthAgentRunResponse;
+
+  expect(customAll.workflow.id).toBe('custom_segment_watch');
+  expect(customAll.criteria.lead_queue_filters?.segment_codes).toEqual(['itm', 'listed']);
+  expect(customAll.criteria.lead_queue_filters?.segment_mode).toBe('all');
+  expect(customAll.route).toContain('segment_mode=all');
+  expect(customAll.broad_total).toBeGreaterThanOrEqual(customAll.actionable_total);
+  await expectLeadQueueHandoffMatchesActionableTotal(request, customAll);
 });

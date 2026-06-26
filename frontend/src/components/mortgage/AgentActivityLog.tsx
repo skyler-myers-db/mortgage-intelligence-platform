@@ -255,7 +255,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
           Last health check{probeSuffix}
         </span>
       </div>
-      <div className="surface__ft">Exported nightly for compliance review</div>
+      <div className="surface__ft">Append-only and available for compliance export</div>
     </div>
   );
 }

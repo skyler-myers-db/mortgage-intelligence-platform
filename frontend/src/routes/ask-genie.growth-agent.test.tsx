@@ -19,6 +19,7 @@ const genieStart = vi.fn();
 const genie = vi.fn();
 const genieAction = vi.fn();
 const runGrowthAgentWorkflow = vi.fn();
+const runCustomGrowthAgentWorkflow = vi.fn();
 const navigate = vi.fn();
 const setDrawer = vi.fn();
 const refreshWorkspace = vi.fn();
@@ -30,6 +31,7 @@ vi.mock('../lib/api', () => ({
     genie: (...args: unknown[]) => genie(...args),
     genieAction: (...args: unknown[]) => genieAction(...args),
     runGrowthAgentWorkflow: (...args: unknown[]) => runGrowthAgentWorkflow(...args),
+    runCustomGrowthAgentWorkflow: (...args: unknown[]) => runCustomGrowthAgentWorkflow(...args),
   },
   ApiError: class ApiError extends Error {
     status = 500;
@@ -142,6 +144,31 @@ describe('AskGenie Growth Agent route panel', () => {
     genie.mockResolvedValue(null);
     genieAction.mockResolvedValue(null);
     runGrowthAgentWorkflow.mockResolvedValue(RUN);
+    runCustomGrowthAgentWorkflow.mockResolvedValue({
+      ...RUN,
+      workflow: {
+        ...WORKFLOW,
+        id: 'custom_segment_watch',
+        title: 'Custom Segment Workflow',
+        trigger_label: 'Prime Refi Candidates or Listed for Sale segment screen',
+        action_label: 'Open eligible custom subset',
+      },
+      route: '/lead-queue?segment_codes=itm%2Clisted&segment_mode=any&marketing_eligibility=Eligible+only&states=IL%2CTX',
+      criteria: {
+        states: ['IL', 'TX'],
+        lead_queue_filters: {
+          segment_codes: ['itm', 'listed'],
+          segment_mode: 'any',
+        },
+      },
+      policy_checks: [
+        {
+          label: 'Reviewed custom workflow',
+          status: 'passed',
+          detail: 'Custom workflow criteria are reviewed segment codes and explicit Any/All mode only.',
+        },
+      ],
+    });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -208,6 +235,7 @@ describe('AskGenie Growth Agent route panel', () => {
 
     expect(button(/^Run$/).disabled).toBe(true);
     expect(runGrowthAgentWorkflow).not.toHaveBeenCalled();
+    expect(runCustomGrowthAgentWorkflow).not.toHaveBeenCalled();
   });
 
   it('runs and opens the reconciled eligible Lead Queue subset', async () => {
@@ -228,7 +256,7 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => container.textContent?.includes('117,404') ?? false);
     expect(container.textContent).toContain('5,394');
 
-    act(() => button(/Open eligible Lead Queue subset/).click());
+    act(() => button(/Open eligible refi subset/).click());
     expect(navigate).toHaveBeenCalledWith(
       '/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL%2CTX',
     );
@@ -249,5 +277,93 @@ describe('AskGenie Growth Agent route panel', () => {
       monitor_name: 'Daily Refi Opportunity Brief - IL, TX',
     });
     await waitUntil(() => growthAgent.mock.calls.length >= 2);
+  });
+
+  it('runs custom reviewed segment workflows with any mode by default', async () => {
+    mount();
+    await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);
+
+    act(() => setNativeValue(stateInput(), 'IL TX'));
+    act(() => button(/^Run custom$/).click());
+
+    await waitUntil(() => runCustomGrowthAgentWorkflow.mock.calls.length === 1);
+    expect(runCustomGrowthAgentWorkflow.mock.calls[0][0]).toEqual({
+      states: ['IL', 'TX'],
+      segment_codes: ['itm', 'listed'],
+      segment_mode: 'any',
+      save_monitor: false,
+      cadence: 'daily',
+      monitor_name: null,
+    });
+    await waitUntil(() => container.textContent?.includes('Custom Segment Workflow') ?? false);
+    expect(container.textContent).toContain('Reviewed custom workflow');
+    expect(container.textContent).toContain('Open eligible custom subset');
+  });
+
+  it('saves custom monitors with all mode and selected segment labels', async () => {
+    mount();
+    await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);
+
+    const select = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Custom Growth Agent segment logic"]',
+    );
+    if (!select) throw new Error('custom segment mode select not rendered');
+    act(() => setNativeValue(select, 'all'));
+    act(() => button(/Save custom monitor/).click());
+
+    await waitUntil(() => runCustomGrowthAgentWorkflow.mock.calls.length === 1);
+    expect(runCustomGrowthAgentWorkflow.mock.calls[0][0]).toEqual({
+      states: [],
+      segment_codes: ['itm', 'listed'],
+      segment_mode: 'all',
+      save_monitor: true,
+      cadence: 'daily',
+      monitor_name: 'Custom Segment Workflow - ITM+LISTED',
+    });
+  });
+
+  it('updates custom segment payloads from chip selection and disables zero-segment runs', async () => {
+    mount();
+    await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);
+
+    act(() => button(/^Listed for Sale$/).click());
+    act(() => button(/^Prime Refi Candidates$/).click());
+    expect(button(/^Run custom$/).disabled).toBe(true);
+    expect(button(/^Save custom monitor$/).disabled).toBe(true);
+
+    act(() => button(/^Home Equity Candidate$/).click());
+    expect(button(/^Run custom$/).disabled).toBe(false);
+    act(() => button(/^Run custom$/).click());
+
+    await waitUntil(() => runCustomGrowthAgentWorkflow.mock.calls.length === 1);
+    expect(runCustomGrowthAgentWorkflow.mock.calls[0][0]).toMatchObject({
+      segment_codes: ['equity'],
+      segment_mode: 'any',
+      save_monitor: false,
+    });
+  });
+
+  it('shows a save-specific pending label while saving a custom monitor', async () => {
+    let resolveRun: ((value: GrowthAgentRunResponse) => void) | undefined;
+    runCustomGrowthAgentWorkflow.mockReturnValueOnce(
+      new Promise<GrowthAgentRunResponse>((resolve) => {
+        resolveRun = resolve;
+      }),
+    );
+    mount();
+    await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);
+
+    act(() => button(/^Save custom monitor$/).click());
+
+    await waitUntil(() => container.textContent?.includes('Saving…') ?? false);
+    expect(button(/^Run custom$/).disabled).toBe(true);
+    expect(button(/^Saving…$/).disabled).toBe(true);
+    expect(container.textContent).not.toContain('Running…');
+
+    await act(async () => {
+      resolveRun?.(RUN);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runCustomGrowthAgentWorkflow.mock.calls.length === 1);
   });
 });

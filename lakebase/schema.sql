@@ -693,7 +693,8 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
                        'daily_refi_brief',
                        'listing_watch',
                        'competitor_recapture_monitor',
-                       'high_equity_heloc_watch'
+                       'high_equity_heloc_watch',
+                       'custom_segment_watch'
                      )),
     workflow_title   TEXT NOT NULL,
     status           TEXT NOT NULL DEFAULT 'completed'
@@ -730,6 +731,23 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_growth_agent_runs_actor_request_id
     ON mip_app.growth_agent_runs (actor_email, request_id)
     WHERE request_id IS NOT NULL;
 
+DO $$
+BEGIN
+    ALTER TABLE mip_app.growth_agent_runs
+        DROP CONSTRAINT IF EXISTS growth_agent_runs_workflow_id_check;
+    ALTER TABLE mip_app.growth_agent_runs
+        DROP CONSTRAINT IF EXISTS ck_growth_agent_runs_workflow_id;
+    ALTER TABLE mip_app.growth_agent_runs
+        ADD CONSTRAINT ck_growth_agent_runs_workflow_id
+        CHECK (workflow_id IN (
+          'daily_refi_brief',
+          'listing_watch',
+          'competitor_recapture_monitor',
+          'high_equity_heloc_watch',
+          'custom_segment_watch'
+        ));
+END $$;
+
 -- Mortgage Growth Agent monitors -------------------------------------
 -- Saved scheduled-monitor definitions. Scheduling/orchestration can read
 -- these rows later, but each saved monitor remains a reviewed filter set,
@@ -742,7 +760,8 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_monitors (
                        'daily_refi_brief',
                        'listing_watch',
                        'competitor_recapture_monitor',
-                       'high_equity_heloc_watch'
+                       'high_equity_heloc_watch',
+                       'custom_segment_watch'
                      )),
     name             TEXT NOT NULL,
     cadence          TEXT NOT NULL CHECK (cadence IN ('daily','weekly')),
@@ -759,6 +778,30 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_monitors (
 );
 CREATE INDEX IF NOT EXISTS idx_growth_agent_monitors_actor_updated
     ON mip_app.growth_agent_monitors (actor_email, updated_at DESC);
+
+DO $$
+BEGIN
+    ALTER TABLE mip_app.growth_agent_monitors
+        DROP CONSTRAINT IF EXISTS growth_agent_monitors_workflow_id_check;
+    ALTER TABLE mip_app.growth_agent_monitors
+        DROP CONSTRAINT IF EXISTS ck_growth_agent_monitors_workflow_id;
+    ALTER TABLE mip_app.growth_agent_monitors
+        ADD CONSTRAINT ck_growth_agent_monitors_workflow_id
+        CHECK (workflow_id IN (
+          'daily_refi_brief',
+          'listing_watch',
+          'competitor_recapture_monitor',
+          'high_equity_heloc_watch',
+          'custom_segment_watch'
+        ));
+END $$;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_06_26_growth_agent_custom_segment_watch',
+    'Allow governed custom segment Growth Agent runs and monitors'
+)
+ON CONFLICT (version) DO NOTHING;
 
 -- Feedback ------------------------------------------------------------
 -- Thumbs-up / thumbs-down + free-text from the in-app feedback control.
