@@ -305,8 +305,7 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert "5,394" in body["policy_checks"][2]["detail"]
 
     statement, params = sql.calls[0]
-    assert "COUNT(DISTINCT b.clip)" in statement
-    assert "COUNT(DISTINCT lp.clip)" in statement
+    assert statement.count("COUNT(DISTINCT b.clip)") == 2
     assert params == {"state_0": "IL", "state_1": "TX"}
 
     assert len(lakebase.audit_events) == 1
@@ -330,22 +329,22 @@ def test_workflow_metric_sql_uses_live_predicates_and_actionability_gates() -> N
     expectations = {
         "daily_refi_brief": [
             "b.in_the_money = TRUE",
-            "array_contains(lp.segment_codes, 'itm')",
+            "array_contains(b.segment_codes, 'itm')",
         ],
         "listing_watch": [
             "b.listed_for_sale = TRUE",
-            "array_contains(lp.segment_codes, 'listed')",
+            "array_contains(b.segment_codes, 'listed')",
         ],
         "competitor_recapture_monitor": [
             "b.is_competitor_lien = TRUE",
-            "lp.is_competitor_lien = TRUE",
+            "b.is_competitor_lien = TRUE",
         ],
         "high_equity_heloc_watch": [
             "b.has_permit = TRUE OR b.has_heloc_propensity_trigger = TRUE",
             "b.equity_pct >= b.heloc_equity_min_applied",
             "COALESCE(b.second_pos_amount, 0) = 0",
-            "array_contains(lp.segment_codes, 'permit')",
-            "array_contains(lp.segment_codes, 'equity')",
+            "array_contains(b.segment_codes, 'permit')",
+            "array_contains(b.segment_codes, 'equity')",
         ],
     }
     for workflow_id, snippets in expectations.items():
@@ -366,11 +365,10 @@ def test_workflow_metric_sql_uses_live_predicates_and_actionability_gates() -> N
         assert "b.equity_pct >= 35" not in statement
         for snippet in snippets:
             assert snippet in statement
-        assert "lp.marketing_eligible = TRUE" in statement
-        assert "lp.consent_status = 'opt_in'" in statement
-        assert "lp.suppression_reason IS NULL" in statement
-        assert "UPPER(b.state) IN (:state_0)" in statement
-        assert "UPPER(lp.state) IN (:state_0)" in statement
+        assert "b.marketing_eligible = TRUE" in statement
+        assert "b.consent_status = 'opt_in'" in statement
+        assert "b.suppression_reason IS NULL" in statement
+        assert statement.count("UPPER(b.state) IN (:state_0)") == 2
         assert params == {"state_0": "IL"}
 
 

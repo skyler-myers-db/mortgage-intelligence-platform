@@ -93,7 +93,7 @@ _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
             "The route opens only the eligible Prime Refi Candidate subset.",
         ),
         broad_predicate="b.in_the_money = TRUE",
-        actionable_predicate="array_contains(lp.segment_codes, 'itm')",
+        actionable_predicate="array_contains(b.segment_codes, 'itm')",
         route_filters={"segment": "itm", "marketing_eligibility": "Eligible only"},
         tool_detail="Screened rate-spread and equity thresholds, then reconciled to the eligible Lead Queue subset.",
     ),
@@ -110,7 +110,7 @@ _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
             "The route opens only eligible listed-for-sale leads.",
         ),
         broad_predicate="b.listed_for_sale = TRUE",
-        actionable_predicate="array_contains(lp.segment_codes, 'listed')",
+        actionable_predicate="array_contains(b.segment_codes, 'listed')",
         route_filters={"segment": "listed", "marketing_eligibility": "Eligible only"},
         tool_detail="Checked live MLS listing flags and reconciled them to purchase-ready eligible leads.",
     ),
@@ -127,7 +127,7 @@ _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
             "Human review is required before any outreach draft or activation.",
         ),
         broad_predicate="b.is_competitor_lien = TRUE",
-        actionable_predicate="lp.is_competitor_lien = TRUE",
+        actionable_predicate="b.is_competitor_lien = TRUE",
         route_filters={
             "lender_relationship": "Competitor customer",
             "marketing_eligibility": "Eligible only",
@@ -152,8 +152,8 @@ _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
             "AND COALESCE(b.second_pos_amount, 0) = 0))"
         ),
         actionable_predicate=(
-            "(array_contains(lp.segment_codes, 'permit') "
-            "OR array_contains(lp.segment_codes, 'equity'))"
+            "(array_contains(b.segment_codes, 'permit') "
+            "OR array_contains(b.segment_codes, 'equity'))"
         ),
         route_filters={
             "segment_codes": "permit,equity",
@@ -389,7 +389,7 @@ def _load_workflow_metrics(
 ) -> dict[str, Any]:
     params: dict[str, Any] = {}
     broad_state_clause = _state_clause("b", states, params)
-    actionable_state_clause = _state_clause("lp", states, params)
+    actionable_state_clause = _state_clause("b", states, params)
     statement = f"""
 WITH broad AS (
   SELECT
@@ -401,17 +401,17 @@ WITH broad AS (
   WHERE {workflow.broad_predicate}
     {broad_state_clause}
 ),
-actionable AS (
-  SELECT
-    COUNT(DISTINCT lp.clip) AS actionable_total,
-    ROUND(AVG(CAST(lp.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score
-  FROM {_LEAD_POPULATION} lp
-  WHERE {workflow.actionable_predicate}
-    AND lp.marketing_eligible = TRUE
-    AND lp.consent_status = 'opt_in'
-    AND lp.suppression_reason IS NULL
-    {actionable_state_clause}
-)
+    actionable AS (
+      SELECT
+        COUNT(DISTINCT b.clip) AS actionable_total,
+        ROUND(AVG(CAST(b.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score
+      FROM {_BORROWER_360} b
+      WHERE {workflow.actionable_predicate}
+        AND b.marketing_eligible = TRUE
+        AND b.consent_status = 'opt_in'
+        AND b.suppression_reason IS NULL
+        {actionable_state_clause}
+    )
 SELECT
   broad.broad_total,
   actionable.actionable_total,
