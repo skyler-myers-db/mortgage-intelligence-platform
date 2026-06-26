@@ -65,7 +65,9 @@ describe('growth agent API client', () => {
     expect(calls[0].path).toBe('/api/v1/growth-agent/workflows/daily_refi_brief/run');
     expect(calls[0].init?.method).toBe('POST');
     expect(new Headers(calls[0].init?.headers).get('Content-Type')).toBe('application/json');
-    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body).toMatchObject({
       states: ['IL'],
       save_monitor: true,
       cadence: 'daily',

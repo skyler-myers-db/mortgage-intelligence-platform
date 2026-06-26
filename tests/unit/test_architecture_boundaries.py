@@ -18,6 +18,7 @@ FILE_SIZE_ALLOWLIST = ROOT / "tools" / "file_size_allowlist.json"
 
 ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/admin/health"): "tests/unit/test_health_endpoint.py",
+    ("GET", "/api/admin/capabilities"): "tests/unit/test_capabilities.py",
     ("GET", "/api/admin/rules"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/admin/assets/{asset_key}/metadata"): "tests/unit/test_asset_metadata.py",
     ("POST", "/api/admin/force-degraded"): "tests/unit/test_health_endpoint.py",

@@ -129,6 +129,54 @@ class Settings(BaseSettings):
     # locally with MIP_EXPOSE_OPENAPI=1 when they need schema browsing.
     mip_expose_openapi: bool = False
 
+    # --- DAIS 2026 agentic build: feature flags ------------------------
+    # These gate the governed Mortgage Growth Agent stack. They default to
+    # OFF so a fresh deploy never *claims* a capability it cannot back with
+    # a real, provisioned dependency (the no-overclaim posture). The
+    # capability probe (``backend.services.capabilities``) further narrows
+    # each flag to what is actually importable/configured in the running
+    # workspace, so flipping a flag on without the backing library/creds
+    # surfaces as an honest "not provisioned" capability, never a broken UI.
+    #
+    # ``mip_agent_orchestrator`` — route /ask-genie through the multi-agent
+    #   orchestrator (Phase 3). When off, the deterministic Genie path and
+    #   the existing Growth Agent slice remain the only surfaces.
+    # ``mip_ai_gateway`` — surface Unity AI Gateway governance signals
+    #   (Phase 6) read from real inference/system tables. When off, no
+    #   gateway chips render.
+    # ``mip_lakebase_sync`` — read hot aggregates from synced gold→Lakebase
+    #   tables (Phase 7) instead of the warehouse. When off, reads stay on
+    #   the warehouse path.
+    # ``mip_preview_mirror`` — show preview-gated DAIS capabilities
+    #   (CustomerLake, App Spaces, declarative Genie Agents, Lakehouse//RT)
+    #   as clearly-labelled *roadmap* patterns. When off, they are hidden
+    #   entirely. They are NEVER presented as integrated regardless.
+    mip_agent_orchestrator: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MIP_AGENT_ORCHESTRATOR", "AGENT_ORCHESTRATOR"),
+    )
+    mip_ai_gateway: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MIP_AI_GATEWAY", "AI_GATEWAY"),
+    )
+    mip_lakebase_sync: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MIP_LAKEBASE_SYNC", "LAKEBASE_SYNC"),
+    )
+    mip_preview_mirror: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("MIP_PREVIEW_MIRROR", "PREVIEW_MIRROR"),
+    )
+    # Default Databricks-hosted model for the orchestrator/specialists.
+    mip_agent_model: str = Field(
+        default="databricks-claude-sonnet-4-5",
+        validation_alias=AliasChoices("MIP_AGENT_MODEL", "AGENT_MODEL"),
+    )
+    # Optional serving-endpoint name for the hybrid-hosted orchestrator
+    # (Phase 3b). When set AND reachable, the in-App route may delegate to
+    # the served endpoint; otherwise it runs the orchestrator in-process.
+    mip_agent_serving_endpoint: str | None = None
+
     def effective_tenant_id(self) -> str:
         """Return the Lakebase disclosure namespace for this deployment."""
 

@@ -8,12 +8,11 @@ for human review. It never sends outreach or activates a connector.
 
 from __future__ import annotations
 
-import hashlib
 import json
 from dataclasses import dataclass
 from typing import Annotated, Any, Literal
 from urllib.parse import urlencode
-from uuid import NAMESPACE_URL, uuid5
+from uuid import uuid4
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -144,12 +143,13 @@ _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
         source_assets=(_BORROWER_360, _LEAD_POPULATION, _EVIDENCE_EVENTS, _SOURCE_READINESS),
         proof_points=(
             "HELOC Intent uses Cotality propensity, not filed building-permit rows.",
-            "High-equity counts are de-duplicated at borrower grain.",
+            "High-equity counts use the governed HELOC equity threshold applied during gold refresh.",
             "The route uses OR semantics and Lead Queue eligibility.",
         ),
         broad_predicate=(
-            "(b.has_heloc_propensity_trigger = TRUE "
-            "OR (b.equity_pct >= 35 AND COALESCE(b.second_pos_amount, 0) = 0))"
+            "((b.has_permit = TRUE OR b.has_heloc_propensity_trigger = TRUE) "
+            "OR (b.equity_pct >= b.heloc_equity_min_applied "
+            "AND COALESCE(b.second_pos_amount, 0) = 0))"
         ),
         actionable_predicate=(
             "(array_contains(lp.segment_codes, 'permit') "
@@ -166,15 +166,40 @@ _WORKFLOWS: dict[GrowthAgentWorkflowId, _WorkflowDef] = {
 
 _RUN_INSERT_SQL = """
 INSERT INTO mip_app.growth_agent_runs (
-  actor_email, workflow_id, workflow_title, criteria,
-  broad_total, actionable_total, route, source_assets,
-  tool_steps, policy_checks, audit_event_id
+  actor_email, request_id, workflow_id, workflow_title, criteria,
+  broad_total, actionable_total, broad_avg_score, actionable_avg_score,
+  avg_rate_spread_bps, avg_equity_pct, route, source_assets,
+  tool_steps, policy_checks
 ) VALUES (
-  %(actor_email)s, %(workflow_id)s, %(workflow_title)s, %(criteria)s::jsonb,
-  %(broad_total)s, %(actionable_total)s, %(route)s, %(source_assets)s,
-  %(tool_steps)s::jsonb, %(policy_checks)s::jsonb, %(audit_event_id)s
+  %(actor_email)s, %(request_id)s, %(workflow_id)s, %(workflow_title)s, %(criteria)s::jsonb,
+  %(broad_total)s, %(actionable_total)s, %(broad_avg_score)s, %(actionable_avg_score)s,
+  %(avg_rate_spread_bps)s, %(avg_equity_pct)s, %(route)s, %(source_assets)s,
+  %(tool_steps)s::jsonb, %(policy_checks)s::jsonb
 )
-RETURNING run_id, created_at
+ON CONFLICT (actor_email, request_id) WHERE request_id IS NOT NULL DO UPDATE SET
+  request_id = EXCLUDED.request_id
+RETURNING run_id, workflow_id, criteria, broad_total, actionable_total,
+          broad_avg_score, actionable_avg_score, avg_rate_spread_bps, avg_equity_pct,
+          route, source_assets, tool_steps, policy_checks, audit_event_id, created_at
+"""
+
+_RUN_ATTACH_AUDIT_SQL = """
+UPDATE mip_app.growth_agent_runs
+SET audit_event_id = %(audit_event_id)s
+WHERE run_id = %(run_id)s
+RETURNING run_id, workflow_id, criteria, broad_total, actionable_total,
+          broad_avg_score, actionable_avg_score, avg_rate_spread_bps, avg_equity_pct,
+          route, source_assets, tool_steps, policy_checks, audit_event_id, created_at
+"""
+
+_RUN_SELECT_BY_REQUEST_ID_SQL = """
+SELECT run_id, workflow_id, criteria, broad_total, actionable_total,
+       broad_avg_score, actionable_avg_score, avg_rate_spread_bps, avg_equity_pct,
+       route, source_assets, tool_steps, policy_checks, audit_event_id, created_at
+FROM mip_app.growth_agent_runs
+WHERE actor_email = %(actor_email)s
+  AND request_id = %(request_id)s
+LIMIT 1
 """
 
 _MONITOR_UPSERT_SQL = """
@@ -236,92 +261,123 @@ def run_growth_agent_workflow(
     workflow = _WORKFLOWS.get(workflow_id)
     if workflow is None:  # Defensive; path type normally handles this.
         raise HTTPException(status_code=404, detail="unknown growth-agent workflow")
-    metrics = _load_workflow_metrics(sql_client, workflow=workflow, states=payload.states)
     criteria = _criteria_for(workflow, payload.states)
     route = _route({**workflow.route_filters, **({"states": ",".join(payload.states)} if payload.states else {})})
+    request_id = payload.request_id or str(uuid4())
+    if payload.request_id is not None:
+        try:
+            with lakebase.transaction() as conn:
+                existing_row = _txn_fetchone(
+                    conn,
+                    _RUN_SELECT_BY_REQUEST_ID_SQL,
+                    {"actor_email": actor, "request_id": request_id},
+                )
+                if existing_row is not None:
+                    _assert_run_matches(existing_row, workflow=workflow, criteria=criteria)
+                    monitor_row = (
+                        _upsert_monitor(
+                            conn,
+                            actor=actor,
+                            workflow=workflow,
+                            payload=payload,
+                            criteria=criteria,
+                            run_row=existing_row,
+                        )
+                        if payload.save_monitor
+                        else None
+                    )
+                    return _run_response_from_row(
+                        workflow=workflow,
+                        run_row=existing_row,
+                        monitor_row=monitor_row,
+                    )
+        except HTTPException:
+            raise
+        except (LakebaseError, psycopg.Error) as exc:
+            raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+
+    metrics = _load_workflow_metrics(sql_client, workflow=workflow, states=payload.states)
     tool_steps = _tool_steps(workflow, metrics)
     policy_checks = _policy_checks(workflow, metrics, saved_monitor=payload.save_monitor)
     source_assets = list(workflow.source_assets)
-    request_id = _request_id(actor, workflow.id, criteria)
     try:
         with lakebase.transaction() as conn:
-            audit_event = write_audit_event_in_transaction(
-                conn,
-                actor=actor,
-                action="growth_agent.run",
-                entity_type="growth_agent_workflow",
-                entity_id=workflow.id,
-                payload_json={
-                    "workflow_id": workflow.id,
-                    "workflow_title": workflow.title,
-                    "run_status": "completed",
-                    "broad_total": metrics["broad_total"],
-                    "actionable_total": metrics["actionable_total"],
-                    "route": route,
-                    "result_filters": criteria["lead_queue_filters"],
-                    "source_assets": source_assets,
-                    "tool_steps": [step.model_dump() for step in tool_steps],
-                    "policy_checks": [check.model_dump() for check in policy_checks],
-                },
-                event_type="GROWTH_AGENT_RUN",
-                request_id=request_id,
-            )
             run_row = _txn_fetchone(
                 conn,
                 _RUN_INSERT_SQL,
                 {
                     "actor_email": actor,
+                    "request_id": request_id,
                     "workflow_id": workflow.id,
                     "workflow_title": workflow.title,
                     "criteria": json.dumps(criteria),
                     "broad_total": metrics["broad_total"],
                     "actionable_total": metrics["actionable_total"],
+                    "broad_avg_score": metrics.get("broad_avg_score"),
+                    "actionable_avg_score": metrics.get("actionable_avg_score"),
+                    "avg_rate_spread_bps": metrics.get("avg_rate_spread_bps"),
+                    "avg_equity_pct": metrics.get("avg_equity_pct"),
                     "route": route,
                     "source_assets": source_assets,
                     "tool_steps": json.dumps([step.model_dump() for step in tool_steps]),
                     "policy_checks": json.dumps([check.model_dump() for check in policy_checks]),
-                    "audit_event_id": audit_event.event_id,
                 },
             )
             if run_row is None:
                 raise RuntimeError("growth-agent run insert returned no row")
-            monitor_row: dict[str, Any] | None = None
-            if payload.save_monitor:
-                monitor_row = _txn_fetchone(
+            _assert_run_matches(run_row, workflow=workflow, criteria=criteria)
+            if run_row.get("audit_event_id") is None:
+                audit_event = write_audit_event_in_transaction(
                     conn,
-                    _MONITOR_UPSERT_SQL,
-                    {
-                        "actor_email": actor,
+                    actor=actor,
+                    action="growth_agent.run",
+                    entity_type="growth_agent_workflow",
+                    entity_id=workflow.id,
+                    payload_json={
                         "workflow_id": workflow.id,
-                        "name": payload.monitor_name or workflow.title,
-                        "cadence": payload.cadence,
-                        "criteria": json.dumps(criteria),
-                        "route": route,
+                        "workflow_title": workflow.title,
+                        "run_status": "completed",
+                        "broad_total": metrics["broad_total"],
                         "actionable_total": metrics["actionable_total"],
+                        "route": route,
+                        "result_filters": criteria["lead_queue_filters"],
                         "source_assets": source_assets,
-                        "last_run_id": run_row["run_id"],
+                        "tool_steps": [step.model_dump() for step in tool_steps],
+                        "policy_checks": [check.model_dump() for check in policy_checks],
+                    },
+                    event_type="GROWTH_AGENT_RUN",
+                    request_id=request_id,
+                )
+                run_row = _txn_fetchone(
+                    conn,
+                    _RUN_ATTACH_AUDIT_SQL,
+                    {
+                        "run_id": run_row["run_id"],
+                        "audit_event_id": audit_event.event_id,
                     },
                 )
+                if run_row is None:
+                    raise RuntimeError("growth-agent run audit attach returned no row")
+            monitor_row: dict[str, Any] | None = None
+            if payload.save_monitor:
+                monitor_row = _upsert_monitor(
+                    conn,
+                    actor=actor,
+                    workflow=workflow,
+                    payload=payload,
+                    criteria=criteria,
+                    run_row=run_row,
+                )
         monitor = _monitor_from_row(monitor_row) if monitor_row is not None else None
+    except HTTPException:
+        raise
     except (LakebaseError, psycopg.Error) as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
-    return GrowthAgentRunResponse(
-        workflow=workflow.schema(),
-        run_id=str(run_row["run_id"]),
+    return _run_response_from_row(
+        workflow=workflow,
+        run_row=run_row,
+        monitor_row=monitor_row,
         monitor=monitor,
-        broad_total=metrics["broad_total"],
-        actionable_total=metrics["actionable_total"],
-        broad_avg_score=metrics.get("broad_avg_score"),
-        actionable_avg_score=metrics.get("actionable_avg_score"),
-        avg_rate_spread_bps=metrics.get("avg_rate_spread_bps"),
-        avg_equity_pct=metrics.get("avg_equity_pct"),
-        route=route,
-        criteria=criteria,
-        source_assets=source_assets,
-        tool_steps=tool_steps,
-        policy_checks=policy_checks,
-        audit_event_id=audit_event.event_id,
-        created_at=run_row.get("created_at"),
     )
 
 
@@ -498,14 +554,90 @@ def _policy_checks(
     return checks
 
 
+def _upsert_monitor(
+    conn: Any,
+    *,
+    actor: str,
+    workflow: _WorkflowDef,
+    payload: GrowthAgentRunRequest,
+    criteria: dict[str, object],
+    run_row: dict[str, Any],
+) -> dict[str, Any] | None:
+    return _txn_fetchone(
+        conn,
+        _MONITOR_UPSERT_SQL,
+        {
+            "actor_email": actor,
+            "workflow_id": workflow.id,
+            "name": payload.monitor_name or workflow.title,
+            "cadence": payload.cadence,
+            "criteria": json.dumps(criteria),
+            "route": str(run_row["route"]),
+            "actionable_total": int(run_row.get("actionable_total") or 0),
+            "source_assets": _source_assets_from_row(run_row),
+            "last_run_id": run_row["run_id"],
+        },
+    )
+
+
+def _assert_run_matches(
+    run_row: dict[str, Any],
+    *,
+    workflow: _WorkflowDef,
+    criteria: dict[str, object],
+) -> None:
+    if run_row.get("workflow_id") != workflow.id or not _json_equivalent(
+        run_row.get("criteria"),
+        criteria,
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="request_id already belongs to a different growth-agent run",
+        )
+
+
+def _run_response_from_row(
+    *,
+    workflow: _WorkflowDef,
+    run_row: dict[str, Any],
+    monitor_row: dict[str, Any] | None,
+    monitor: GrowthAgentMonitor | None = None,
+) -> GrowthAgentRunResponse:
+    criteria = _json_object(run_row.get("criteria"))
+    tool_steps = [
+        GrowthAgentToolStep(**item)
+        for item in _json_list(run_row.get("tool_steps"))
+        if isinstance(item, dict)
+    ]
+    policy_checks = [
+        GrowthAgentPolicyCheck(**item)
+        for item in _json_list(run_row.get("policy_checks"))
+        if isinstance(item, dict)
+    ]
+    if monitor is None:
+        monitor = _monitor_from_row(monitor_row) if monitor_row is not None else None
+    return GrowthAgentRunResponse(
+        workflow=workflow.schema(),
+        run_id=str(run_row["run_id"]),
+        monitor=monitor,
+        broad_total=int(run_row.get("broad_total") or 0),
+        actionable_total=int(run_row.get("actionable_total") or 0),
+        broad_avg_score=_maybe_float(run_row.get("broad_avg_score")),
+        actionable_avg_score=_maybe_float(run_row.get("actionable_avg_score")),
+        avg_rate_spread_bps=_maybe_float(run_row.get("avg_rate_spread_bps")),
+        avg_equity_pct=_maybe_float(run_row.get("avg_equity_pct")),
+        route=str(run_row["route"]),
+        criteria=criteria,
+        source_assets=_source_assets_from_row(run_row),
+        tool_steps=tool_steps,
+        policy_checks=policy_checks,
+        audit_event_id=str(run_row["audit_event_id"]) if run_row.get("audit_event_id") else None,
+        created_at=run_row.get("created_at"),
+    )
+
+
 def _route(filters: dict[str, str]) -> str:
     return "/lead-queue?" + urlencode(filters)
-
-
-def _request_id(actor: str, workflow_id: str, criteria: dict[str, object]) -> str:
-    payload = json.dumps(criteria, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(f"{actor}|{workflow_id}|{payload}".encode()).hexdigest()
-    return str(uuid5(NAMESPACE_URL, f"mip:growth-agent:{digest}"))
 
 
 def _list_monitors(lakebase: LakebaseClient, *, actor: str) -> list[GrowthAgentMonitor]:
@@ -548,6 +680,43 @@ def _txn_fetchone(conn: Any, sql: str, params: dict[str, Any]) -> dict[str, Any]
         cur.execute(sql, params)
         row = cur.fetchone()
         return dict(row) if row is not None else None
+
+
+def _json_equivalent(value: Any, expected: dict[str, object]) -> bool:
+    return _json_object(value) == expected
+
+
+def _json_object(value: Any) -> dict[str, object]:
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
+
+
+def _json_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
+def _source_assets_from_row(row: dict[str, Any]) -> list[str]:
+    value = row.get("source_assets") or []
+    if isinstance(value, list):
+        return [str(item) for item in value]
+    if isinstance(value, tuple):
+        return [str(item) for item in value]
+    return []
 
 
 def _maybe_float(value: Any) -> float | None:

@@ -1,0 +1,319 @@
+"""Capability probe for the DAIS 2026 agentic build.
+
+The Mortgage Growth Agent stack layers several Databricks capabilities, each
+at a different maturity: some are GA and usable today (Genie Conversation API,
+certified metric views, UC-function tools, the Mosaic Agent Framework, the
+per-endpoint AI Gateway, Lakebase synced tables); others are Public Preview,
+Beta, or have no public API at all (Genie Ontology, CustomerLake, App Spaces /
+serverless micro-apps, Lakehouse//RT, declarative Genie Agents, UC Glossary /
+Domains).
+
+This module computes — at startup and on demand — an HONEST snapshot of what is
+actually provisioned in the *running* workspace, so the product never claims a
+capability it cannot back with a real dependency. It is the enforcement point
+for the no-overclaim posture: a feature flag turned on without the backing
+library or credentials resolves to ``not_provisioned`` (an honest "roadmap /
+not provisioned" chip), and preview-only capabilities resolve to
+``preview_mirror`` (clearly labelled roadmap) or ``hidden`` — NEVER to an
+"integrated" claim.
+
+The probe is intentionally cheap and side-effect free: it inspects installed
+modules (via :func:`importlib.util.find_spec`, which does not import them),
+package versions, and configured settings. It performs no network calls, so it
+is safe to call from a request handler and from tests without live creds.
+"""
+
+from __future__ import annotations
+
+import importlib.metadata
+import importlib.util
+from dataclasses import dataclass
+from enum import Enum
+from functools import lru_cache
+
+from backend.config.settings import Settings, get_settings
+
+
+class CapabilityStatus(str, Enum):
+    """Honest maturity/availability state for a single capability."""
+
+    #: GA underlying capability + backing dependency present + configured.
+    AVAILABLE = "available"
+    #: Flag/credential on and dependency present, but not yet exercised.
+    CONFIGURED = "configured"
+    #: GA-capable but the backing dependency or credential is missing, OR
+    #: the gating feature flag is off. Renders as an honest "not provisioned".
+    NOT_PROVISIONED = "not_provisioned"
+    #: Preview / no-public-API capability, shown only as a labelled roadmap
+    #: pattern (mirror flag on). Never "integrated".
+    PREVIEW_MIRROR = "preview_mirror"
+    #: Preview capability, mirror flag off -> hidden from the product.
+    HIDDEN = "hidden"
+
+
+# Statuses the product MAY present as an active, working capability. Anything
+# else is roadmap/absent and must render as such.
+_CLAIMABLE = frozenset({CapabilityStatus.AVAILABLE, CapabilityStatus.CONFIGURED})
+
+
+@dataclass(frozen=True)
+class Capability:
+    """One row of the capability snapshot."""
+
+    key: str
+    label: str
+    #: Is the underlying Databricks capability Generally Available?
+    ga: bool
+    status: CapabilityStatus
+    detail: str
+
+    @property
+    def claimable(self) -> bool:
+        """True only when the product may present this as a live capability."""
+        return self.status in _CLAIMABLE
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "key": self.key,
+            "label": self.label,
+            "ga": self.ga,
+            "status": self.status.value,
+            "claimable": self.claimable,
+            "detail": self.detail,
+        }
+
+
+def _module_present(name: str) -> bool:
+    """True if ``name`` is importable without importing it."""
+    try:
+        return importlib.util.find_spec(name) is not None
+    except (ImportError, ValueError, ModuleNotFoundError):
+        return False
+
+
+def _version_at_least(distribution: str, minimum: tuple[int, ...]) -> bool:
+    """True if the installed ``distribution`` version >= ``minimum``."""
+    try:
+        raw = importlib.metadata.version(distribution)
+    except importlib.metadata.PackageNotFoundError:
+        return False
+    parts: list[int] = []
+    for token in raw.split(".")[: len(minimum)]:
+        digits = "".join(ch for ch in token if ch.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts) >= minimum
+
+
+def _warehouse_configured(settings: Settings) -> bool:
+    """True when live warehouse creds appear present (not placeholders)."""
+    from backend.config.settings import is_placeholder_databricks_config
+
+    host = settings.databricks_host
+    warehouse = settings.databricks_warehouse_id
+    if not host or not warehouse:
+        return False
+    return not is_placeholder_databricks_config(host=host, warehouse_id=warehouse)
+
+
+def _lakebase_configured(settings: Settings) -> bool:
+    return bool(settings.lakebase_host and settings.lakebase_user)
+
+
+def _preview_status(mirror_on: bool) -> CapabilityStatus:
+    return CapabilityStatus.PREVIEW_MIRROR if mirror_on else CapabilityStatus.HIDDEN
+
+
+def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
+    """Return the honest capability snapshot for the running workspace."""
+    s = settings or get_settings()
+
+    sdk = _module_present("databricks.sdk")
+    mlflow_ok = _version_at_least("mlflow", (3, 1, 3))
+    agents_lib = _module_present("databricks.agents")
+    warehouse = _warehouse_configured(s)
+    lakebase = _lakebase_configured(s)
+    genie_configured = bool(s.genie_space_id)
+    mirror = s.mip_preview_mirror
+
+    caps: list[Capability] = []
+
+    # --- GA, usable today --------------------------------------------------
+    caps.append(
+        Capability(
+            key="genie_conversation_api",
+            label="Genie Conversation API",
+            ga=True,
+            status=(
+                CapabilityStatus.AVAILABLE
+                if sdk and warehouse and genie_configured
+                else CapabilityStatus.NOT_PROVISIONED
+            ),
+            detail=(
+                "Programmatic Genie answers with the generated SQL + row_count "
+                "for answer-to-action reconciliation."
+                if sdk and warehouse and genie_configured
+                else "Needs databricks-sdk, warehouse creds, and a Genie space id."
+            ),
+        )
+    )
+    caps.append(
+        Capability(
+            key="certified_metric_views",
+            label="Certified UC Metric Views",
+            ga=True,
+            status=CapabilityStatus.AVAILABLE if warehouse else CapabilityStatus.NOT_PROVISIONED,
+            detail=(
+                "Define-once KPIs with synonyms, certified and Genie-grounded."
+                if warehouse
+                else "Needs warehouse creds to deploy/read metric views."
+            ),
+        )
+    )
+    caps.append(
+        Capability(
+            key="uc_function_tools",
+            label="UC-Function Agent Tools",
+            ga=True,
+            status=CapabilityStatus.AVAILABLE if warehouse else CapabilityStatus.NOT_PROVISIONED,
+            detail=(
+                "Deterministic scoring/cohort actions exposed as governed, "
+                "UC-audited agent tools."
+                if warehouse
+                else "Needs warehouse creds to register/execute UC functions."
+            ),
+        )
+    )
+    caps.append(
+        Capability(
+            key="agent_eval",
+            label="MLflow Agent Evaluation",
+            ga=True,
+            status=CapabilityStatus.AVAILABLE if mlflow_ok else CapabilityStatus.NOT_PROVISIONED,
+            detail=(
+                "Trace-aware scorers reconcile every agent count to a tool result."
+                if mlflow_ok
+                else "Needs mlflow>=3.1.3 (not installed)."
+            ),
+        )
+    )
+
+    # --- GA capability, gated behind a feature flag ------------------------
+    if not s.mip_agent_orchestrator:
+        orchestrator_status = CapabilityStatus.NOT_PROVISIONED
+        orchestrator_detail = "Disabled (MIP_AGENT_ORCHESTRATOR off)."
+    elif mlflow_ok and agents_lib and warehouse:
+        orchestrator_status = CapabilityStatus.AVAILABLE
+        orchestrator_detail = "Multi-agent Mortgage Growth Agent over governed tools."
+    else:
+        orchestrator_status = CapabilityStatus.NOT_PROVISIONED
+        orchestrator_detail = "Flag on, but mlflow>=3.1.3 / databricks-agents / warehouse missing."
+    caps.append(
+        Capability(
+            key="agent_orchestrator",
+            label="Mortgage Growth Agent (multi-agent)",
+            ga=True,
+            status=orchestrator_status,
+            detail=orchestrator_detail,
+        )
+    )
+
+    if not s.mip_ai_gateway:
+        gateway_status = CapabilityStatus.NOT_PROVISIONED
+        gateway_detail = "Disabled (MIP_AI_GATEWAY off)."
+    elif sdk and warehouse:
+        gateway_status = CapabilityStatus.CONFIGURED
+        gateway_detail = "Per-endpoint guardrails/rate-limits + inference-table signals."
+    else:
+        gateway_status = CapabilityStatus.NOT_PROVISIONED
+        gateway_detail = "Flag on, but databricks-sdk / warehouse missing."
+    caps.append(
+        Capability(
+            key="ai_gateway",
+            label="Unity AI Gateway governance",
+            ga=True,
+            status=gateway_status,
+            detail=gateway_detail,
+        )
+    )
+
+    if not s.mip_lakebase_sync:
+        sync_status = CapabilityStatus.NOT_PROVISIONED
+        sync_detail = "Disabled (MIP_LAKEBASE_SYNC off); reads stay on the warehouse path."
+    elif lakebase:
+        sync_status = CapabilityStatus.CONFIGURED
+        sync_detail = "Hot gold aggregates served low-latency from synced Lakebase tables."
+    else:
+        sync_status = CapabilityStatus.NOT_PROVISIONED
+        sync_detail = "Flag on, but Lakebase creds missing."
+    caps.append(
+        Capability(
+            key="lakebase_sync",
+            label="Lakebase synced-table serving",
+            ga=True,
+            status=sync_status,
+            detail=sync_detail,
+        )
+    )
+
+    # --- Preview / no-public-API: mirror-the-pattern, never "integrated" ----
+    preview = _preview_status(mirror)
+    caps.extend(
+        Capability(key=key, label=label, ga=False, status=preview, detail=detail)
+        for key, label, detail in (
+            (
+                "genie_ontology",
+                "Genie Ontology",
+                "Public Preview. Grounded today via certified metric views (GA); "
+                "ontology features tracked as roadmap.",
+            ),
+            (
+                "customerlake",
+                "CustomerLake (Agentic CDP)",
+                "Private Preview, no public API. MIP mirrors the pattern as the "
+                "mortgage-vertical expression; not integrated.",
+            ),
+            (
+                "app_spaces_microapps",
+                "App Spaces / serverless micro-apps",
+                "Private previews 'coming soon'. Module boundaries designed for a "
+                "future split; not shipped.",
+            ),
+            (
+                "lakehouse_rt",
+                "Lakehouse//RT",
+                "Beta (read-only). Serving abstraction is the future swap point; "
+                "not integrated.",
+            ),
+            (
+                "declarative_genie_agents",
+                "Declarative Genie Agents",
+                "No declarative authoring API. Authored in UI / consumed via "
+                "Conversation API + serving endpoints.",
+            ),
+            (
+                "uc_glossary_domains",
+                "UC Glossary / Domains",
+                "Glossary 'coming soon'; Domains UI-only Public Preview. Interim "
+                "meaning lives in metric-view synonyms.",
+            ),
+        )
+    )
+
+    return caps
+
+
+@lru_cache(maxsize=1)
+def _cached_snapshot() -> tuple[Capability, ...]:
+    return tuple(probe_capabilities())
+
+
+def get_capabilities_snapshot(*, refresh: bool = False) -> list[Capability]:
+    """Return the cached capability snapshot (process-local).
+
+    The snapshot is derived from installed modules + settings, both fixed for
+    the process lifetime, so caching is safe. ``refresh=True`` recomputes (used
+    by tests that monkeypatch settings).
+    """
+    if refresh:
+        _cached_snapshot.cache_clear()
+    return list(_cached_snapshot())

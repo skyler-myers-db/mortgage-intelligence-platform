@@ -8,7 +8,11 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from backend.schemas.common import contains_pii_marker, validate_public_campaign_label
+from backend.schemas.common import (
+    contains_pii_marker,
+    validate_public_campaign_label,
+    validate_public_opaque_id,
+)
 
 GrowthAgentWorkflowId = Literal[
     "daily_refi_brief",
@@ -82,6 +86,7 @@ class GrowthAgentRunRequest(BaseModel):
     save_monitor: bool = False
     cadence: GrowthAgentCadence = "daily"
     monitor_name: str | None = Field(default=None, max_length=80)
+    request_id: str | None = None
 
     @field_validator("states")
     @classmethod
@@ -116,6 +121,13 @@ class GrowthAgentRunRequest(BaseModel):
         except ValueError as exc:
             raise ValueError("monitor_name must be a public-safe workflow label") from exc
         return clean
+
+    @field_validator("request_id")
+    @classmethod
+    def _request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_public_opaque_id(value)
 
 
 class GrowthAgentRunResponse(BaseModel):

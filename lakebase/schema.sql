@@ -687,6 +687,7 @@ CREATE INDEX IF NOT EXISTS idx_agent_sessions_actor
 CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     run_id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     actor_email      TEXT NOT NULL,
+    request_id       TEXT,
     workflow_id      TEXT NOT NULL
                      CHECK (workflow_id IN (
                        'daily_refi_brief',
@@ -700,6 +701,10 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     criteria         JSONB NOT NULL DEFAULT '{}'::jsonb,
     broad_total      INTEGER NOT NULL DEFAULT 0 CHECK (broad_total >= 0),
     actionable_total INTEGER NOT NULL DEFAULT 0 CHECK (actionable_total >= 0),
+    broad_avg_score  DOUBLE PRECISION,
+    actionable_avg_score DOUBLE PRECISION,
+    avg_rate_spread_bps DOUBLE PRECISION,
+    avg_equity_pct   DOUBLE PRECISION,
     route            TEXT NOT NULL,
     source_assets    TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
     tool_steps       JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -707,10 +712,23 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS broad_avg_score DOUBLE PRECISION;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS actionable_avg_score DOUBLE PRECISION;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS avg_rate_spread_bps DOUBLE PRECISION;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS avg_equity_pct DOUBLE PRECISION;
 CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_actor_created
     ON mip_app.growth_agent_runs (actor_email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_workflow_created
     ON mip_app.growth_agent_runs (workflow_id, created_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_growth_agent_runs_actor_request_id
+    ON mip_app.growth_agent_runs (actor_email, request_id)
+    WHERE request_id IS NOT NULL;
 
 -- Mortgage Growth Agent monitors -------------------------------------
 -- Saved scheduled-monitor definitions. Scheduling/orchestration can read

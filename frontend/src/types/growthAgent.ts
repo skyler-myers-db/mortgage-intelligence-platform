@@ -51,6 +51,7 @@ export interface GrowthAgentRunRequest {
   save_monitor?: boolean;
   cadence?: GrowthAgentCadence;
   monitor_name?: string | null;
+  request_id?: string | null;
 }
 
 export interface GrowthAgentRunResponse {

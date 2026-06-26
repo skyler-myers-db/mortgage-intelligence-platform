@@ -84,6 +84,14 @@ class _FakeLakebaseClient:
     def handle_execute(self, sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         self.executes.append((sql, params))
         now = datetime.now(UTC)
+        if "FROM mip_app.growth_agent_runs" in sql and "WHERE actor_email" in sql:
+            for row in self.runs:
+                if (
+                    row.get("actor_email") == params.get("actor_email")
+                    and row.get("request_id") == params.get("request_id")
+                ):
+                    return dict(row)
+            return None
         if "INSERT INTO mip_app.action_audit" in sql:
             row = {
                 "audit_id": uuid4(),
@@ -93,13 +101,75 @@ class _FakeLakebaseClient:
             self.audit_events.append(row)
             return row
         if "INSERT INTO mip_app.growth_agent_runs" in sql:
+            for row in self.runs:
+                if (
+                    row.get("actor_email") == params.get("actor_email")
+                    and row.get("request_id") == params.get("request_id")
+                    and params.get("request_id") is not None
+                ):
+                    return {
+                        "run_id": row["run_id"],
+                        "workflow_id": row["workflow_id"],
+                        "criteria": row["criteria"],
+                        "broad_total": row["broad_total"],
+                        "actionable_total": row["actionable_total"],
+                        "broad_avg_score": row.get("broad_avg_score"),
+                        "actionable_avg_score": row.get("actionable_avg_score"),
+                        "avg_rate_spread_bps": row.get("avg_rate_spread_bps"),
+                        "avg_equity_pct": row.get("avg_equity_pct"),
+                        "route": row["route"],
+                        "source_assets": row["source_assets"],
+                        "tool_steps": row["tool_steps"],
+                        "policy_checks": row["policy_checks"],
+                        "audit_event_id": row.get("audit_event_id"),
+                        "created_at": row["created_at"],
+                    }
             row = {
                 "run_id": uuid4(),
+                "audit_event_id": None,
                 "created_at": now,
                 **params,
             }
             self.runs.append(row)
-            return row
+            return {
+                "run_id": row["run_id"],
+                "workflow_id": row["workflow_id"],
+                "criteria": row["criteria"],
+                "broad_total": row["broad_total"],
+                "actionable_total": row["actionable_total"],
+                "broad_avg_score": row.get("broad_avg_score"),
+                "actionable_avg_score": row.get("actionable_avg_score"),
+                "avg_rate_spread_bps": row.get("avg_rate_spread_bps"),
+                "avg_equity_pct": row.get("avg_equity_pct"),
+                "route": row["route"],
+                "source_assets": row["source_assets"],
+                "tool_steps": row["tool_steps"],
+                "policy_checks": row["policy_checks"],
+                "audit_event_id": row.get("audit_event_id"),
+                "created_at": row["created_at"],
+            }
+        if "UPDATE mip_app.growth_agent_runs" in sql:
+            for row in self.runs:
+                if str(row.get("run_id")) == str(params.get("run_id")):
+                    row["audit_event_id"] = params["audit_event_id"]
+                    return {
+                        "run_id": row["run_id"],
+                        "workflow_id": row["workflow_id"],
+                        "criteria": row["criteria"],
+                        "broad_total": row["broad_total"],
+                        "actionable_total": row["actionable_total"],
+                        "broad_avg_score": row.get("broad_avg_score"),
+                        "actionable_avg_score": row.get("actionable_avg_score"),
+                        "avg_rate_spread_bps": row.get("avg_rate_spread_bps"),
+                        "avg_equity_pct": row.get("avg_equity_pct"),
+                        "route": row["route"],
+                        "source_assets": row["source_assets"],
+                        "tool_steps": row["tool_steps"],
+                        "policy_checks": row["policy_checks"],
+                        "audit_event_id": row.get("audit_event_id"),
+                        "created_at": row["created_at"],
+                    }
+            return None
         if "INSERT INTO mip_app.growth_agent_monitors" in sql:
             row = {
                 "monitor_id": uuid4(),
@@ -271,8 +341,9 @@ def test_workflow_metric_sql_uses_live_predicates_and_actionability_gates() -> N
             "lp.is_competitor_lien = TRUE",
         ],
         "high_equity_heloc_watch": [
-            "b.has_heloc_propensity_trigger = TRUE",
-            "b.equity_pct >= 35",
+            "b.has_permit = TRUE OR b.has_heloc_propensity_trigger = TRUE",
+            "b.equity_pct >= b.heloc_equity_min_applied",
+            "COALESCE(b.second_pos_amount, 0) = 0",
             "array_contains(lp.segment_codes, 'permit')",
             "array_contains(lp.segment_codes, 'equity')",
         ],
@@ -292,6 +363,7 @@ def test_workflow_metric_sql_uses_live_predicates_and_actionability_gates() -> N
 
         assert response.status_code == 200, response.text
         statement, params = sql.calls[0]
+        assert "b.equity_pct >= 35" not in statement
         for snippet in snippets:
             assert snippet in statement
         assert "lp.marketing_eligible = TRUE" in statement
@@ -449,6 +521,95 @@ def test_invalid_states_and_monitor_labels_fail_closed() -> None:
     assert name_monitor.status_code == 422
     assert clip_monitor.status_code == 422
     assert not lakebase.runs
+
+
+def test_growth_agent_request_id_replays_existing_run_without_duplicate_audit() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    request_id = str(uuid4())
+    payload = {"states": ["IL", "TX"], "request_id": request_id}
+    headers = {"X-Forwarded-Email": "operator@example.com"}
+    try:
+        first = client.post(
+            "/api/growth-agent/workflows/daily_refi_brief/run",
+            json=payload,
+            headers=headers,
+        )
+        replay = client.post(
+            "/api/growth-agent/workflows/daily_refi_brief/run",
+            json=payload,
+            headers=headers,
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["run_id"] == first.json()["run_id"]
+    assert replay.json()["audit_event_id"] == first.json()["audit_event_id"]
+    assert len(lakebase.runs) == 1
+    assert len(lakebase.audit_events) == 1
+    assert lakebase.runs[0]["request_id"] == lakebase.audit_events[0]["request_id"]
+    assert lakebase.runs[0]["request_id"] == request_id
+    assert len(sql.calls) == 1
+
+
+def test_same_growth_agent_criteria_with_new_request_id_writes_fresh_audit() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    headers = {"X-Forwarded-Email": "operator@example.com"}
+    try:
+        first = client.post(
+            "/api/growth-agent/workflows/daily_refi_brief/run",
+            json={"states": ["IL", "TX"], "request_id": str(uuid4())},
+            headers=headers,
+        )
+        second = client.post(
+            "/api/growth-agent/workflows/daily_refi_brief/run",
+            json={"states": ["IL", "TX"], "request_id": str(uuid4())},
+            headers=headers,
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    assert second.json()["run_id"] != first.json()["run_id"]
+    assert second.json()["audit_event_id"] != first.json()["audit_event_id"]
+    assert len(lakebase.runs) == 2
+    assert len(lakebase.audit_events) == 2
+    assert {row["request_id"] for row in lakebase.runs} == {
+        row["request_id"] for row in lakebase.audit_events
+    }
+
+
+def test_growth_agent_request_id_reuse_with_different_criteria_returns_409() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    request_id = str(uuid4())
+    headers = {"X-Forwarded-Email": "operator@example.com"}
+    try:
+        first = client.post(
+            "/api/growth-agent/workflows/daily_refi_brief/run",
+            json={"states": ["IL"], "request_id": request_id},
+            headers=headers,
+        )
+        mismatch = client.post(
+            "/api/growth-agent/workflows/daily_refi_brief/run",
+            json={"states": ["TX"], "request_id": request_id},
+            headers=headers,
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert mismatch.status_code == 409, mismatch.text
+    assert mismatch.json()["detail"] == "request_id already belongs to a different growth-agent run"
+    assert len(lakebase.runs) == 1
+    assert len(lakebase.audit_events) == 1
 
 
 def test_growth_agent_post_requires_json_body_contract() -> None:

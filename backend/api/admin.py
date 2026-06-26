@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 
 from backend.config.settings import settings
 from backend.schemas.admin import (
+    AdminCapabilitiesResponse,
     AdminOperationRunRequest,
     AdminOperationRunResponse,
     AdminOperationsResponse,
@@ -513,6 +514,21 @@ def post_operation_run(
         "run_page_url": launch.run_page_url,
         "audit_event_id": accepted_event.event_id,
     }
+
+
+@router.get("/capabilities", response_model=AdminCapabilitiesResponse)
+def get_capabilities(_actor: AdminDep) -> dict[str, object]:
+    """Return the honest DAIS-2026 capability snapshot for this workspace.
+
+    Side-effect free and dependency-free: derived from installed modules +
+    settings (no warehouse/Lakebase/Genie call), so it never 503s. Each row's
+    ``status``/``claimable`` is the enforcement point for the no-overclaim
+    posture — the frontend renders non-claimable rows as roadmap, never as an
+    integrated capability. See ``backend/services/capabilities.py``.
+    """
+    from backend.services.capabilities import get_capabilities_snapshot
+
+    return {"capabilities": [cap.to_dict() for cap in get_capabilities_snapshot()]}
 
 
 @router.get("/settings", response_model=AdminSettingsResponse)

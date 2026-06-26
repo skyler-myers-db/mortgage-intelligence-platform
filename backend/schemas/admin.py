@@ -48,6 +48,27 @@ class AdminSettingsResponse(BaseModel):
     warehouse_id: str | None = None
 
 
+class AdminCapability(BaseModel):
+    """One DAIS-2026 capability with its honest provisioning status."""
+
+    key: str
+    label: str
+    ga: bool
+    status: Literal[
+        "available",
+        "configured",
+        "not_provisioned",
+        "preview_mirror",
+        "hidden",
+    ]
+    claimable: bool
+    detail: str
+
+
+class AdminCapabilitiesResponse(BaseModel):
+    capabilities: list[AdminCapability] = Field(default_factory=list)
+
+
 AdminOperationJobKey = Literal[
     "fred_rates",
     "silver_refresh",

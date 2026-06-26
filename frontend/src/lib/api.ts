@@ -1298,12 +1298,17 @@ export const api = {
     workflowId: GrowthAgentWorkflowId,
     payload: GrowthAgentRunRequest = {},
     signal?: AbortSignal,
-  ) =>
-    postJson<GrowthAgentRunResponse, GrowthAgentRunRequest>(
+  ) => {
+    const body: GrowthAgentRunRequest = {
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<GrowthAgentRunResponse, GrowthAgentRunRequest>(
       `/api/growth-agent/workflows/${workflowId}/run`,
-      payload,
+      body,
       signal,
-    ),
+    );
+  },
 
   /**
    * Recent audit events for the Agent Activity Log. Routes through the
@@ -1392,6 +1397,14 @@ export const api = {
 
   adminOperations: <T>(signal?: AbortSignal) =>
     getJson<T>('/api/admin/operations', signal),
+
+  /**
+   * DAIS-2026 capability snapshot — honest per-capability provisioning
+   * status. Drives the admin "Agentic capability readiness" panel. Rows
+   * that aren't `claimable` render as roadmap, never as integrated.
+   */
+  adminCapabilities: <T>(signal?: AbortSignal) =>
+    getJson<T>('/api/admin/capabilities', signal),
 
   adminRunOperation: <T>(
     payload: {
