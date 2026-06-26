@@ -1,6 +1,6 @@
 """Borrower segment summary endpoint for Module 0 segment intelligence."""
 
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -27,6 +27,13 @@ def _parse_segment_codes(raw: str | None) -> list[str] | None:
         if code not in out:
             out.append(code)
     return out or None
+
+
+def _parse_segment_mode(raw: str) -> Literal["any", "all"]:
+    mode = raw.strip().lower()
+    if mode not in {"any", "all"}:
+        raise HTTPException(status_code=422, detail="segment_mode must be any or all")
+    return mode
 
 
 def _portfolio_criteria_from_query(
@@ -94,8 +101,7 @@ def list_segments(
     consent_status: str | None = None,
     recency: str | None = None,
 ) -> list[SegmentSummary]:
-    if segment_mode not in {"any", "all"}:
-        raise HTTPException(status_code=422, detail="segment_mode must be any or all")
+    segment_mode = _parse_segment_mode(segment_mode)
     try:
         portfolio_criteria = _portfolio_criteria_from_query(
             geography=geography,

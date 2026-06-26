@@ -5,7 +5,7 @@ segment, and evidence-signal dashboards without leaving the Mortgage
 Intelligence Platform for Databricks Lakeview. The repository reads the
 same governed UC gold/semantic datasets as the Lakeview artifacts.
 """
-from typing import Annotated, get_args
+from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -82,6 +82,13 @@ def _parse_segment_codes(raw: str | None) -> list[SegmentCode]:
     return out
 
 
+def _parse_segment_mode(raw: str) -> Literal["any", "all"]:
+    mode = raw.strip().lower()
+    if mode not in {"any", "all"}:
+        raise HTTPException(status_code=422, detail="segment_mode must be any or all")
+    return mode
+
+
 def _parse_signal_types(raw: str | None) -> list[str]:
     out: list[str] = []
     for value in _parse_csv(raw):
@@ -132,7 +139,7 @@ def _analytics_filters(
     ] = None,
     segment_mode: Annotated[
         str,
-        Query(pattern="^(any|all)$", description="Segment filter mode for multi-select codes."),
+        Query(description="Segment filter mode for multi-select codes."),
     ] = "any",
     lender_relationship: Annotated[
         str | None,
@@ -164,7 +171,7 @@ def _analytics_filters(
     return AnalyticsFilters(
         states=parsed_states,
         segment_codes=_parse_segment_codes(segment_codes),
-        segment_mode="all" if segment_mode.lower() == "all" else "any",
+        segment_mode=_parse_segment_mode(segment_mode),
         lender_relationship=_parse_lender_relationship(lender_relationship),
         target_lender_ref=_parse_target_lender_ref(target_lender_ref),
         signal_types=parsed_signals,

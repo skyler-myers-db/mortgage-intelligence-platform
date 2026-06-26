@@ -74,7 +74,7 @@ def test_analytics_route_normalizes_segment_codes_and_mode_case() -> None:
     app.dependency_overrides[get_analytics_repository] = lambda: _CaptureAnalyticsRepo()
     try:
         response = TestClient(app).get(
-            "/api/v1/analytics/signals?segment_codes=ITM,Equity,itm&segment_mode=all&signal_types=RATE_SPREAD",
+            "/api/v1/analytics/signals?segment_codes=ITM,Equity,itm&segment_mode=ALL&signal_types=RATE_SPREAD",
         )
     finally:
         if prior is None:

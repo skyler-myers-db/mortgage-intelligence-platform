@@ -7953,7 +7953,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -8142,7 +8141,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -8331,7 +8329,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -8520,7 +8517,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -8709,7 +8705,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -9832,7 +9827,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -10086,7 +10080,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -10354,7 +10347,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -10643,7 +10635,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -12713,7 +12704,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -12901,7 +12891,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -13089,7 +13078,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -13277,7 +13265,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -13465,7 +13452,6 @@
             "schema": {
               "default": "any",
               "description": "Segment filter mode for multi-select codes.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -14570,7 +14556,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -14823,7 +14808,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -15090,7 +15074,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }
@@ -15377,7 +15360,6 @@
             "schema": {
               "default": "any",
               "description": "any = segment arrays overlap; all = borrower contains every selected segment code.",
-              "pattern": "^(any|all)$",
               "title": "Segment Mode",
               "type": "string"
             }

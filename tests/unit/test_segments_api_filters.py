@@ -52,7 +52,7 @@ def test_segments_api_passes_segment_and_portfolio_filters_to_repository() -> No
     app.dependency_overrides[get_segment_repository] = lambda: repo
     try:
         response = TestClient(app).get(
-            "/api/segments?segment_codes=itm,equity&segment_mode=all"
+            "/api/segments?segment_codes=ITM,Equity&segment_mode=ALL"
             "&occupancy=Owner-occupied&lien_status=Open%20HELOC"
             "&min_equity_pct_label=%E2%89%A5%2025%25",
         )

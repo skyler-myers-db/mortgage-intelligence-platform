@@ -130,6 +130,13 @@ def _parse_segment_codes(raw: str | None) -> list[str] | None:
     return out or None
 
 
+def _parse_segment_mode(raw: str) -> Literal["any", "all"]:
+    mode = raw.strip().lower()
+    if mode not in {"any", "all"}:
+        raise HTTPException(status_code=422, detail="segment_mode must be any or all")
+    return mode
+
+
 def _parse_borrower_ids(raw: str | None) -> list[str] | None:
     if raw is None:
         return None
@@ -313,7 +320,6 @@ def list_leads(
     segment_mode: Annotated[
         str,
         Query(
-            pattern="^(any|all)$",
             description=(
                 "any = segment arrays overlap; all = borrower contains every "
                 "selected segment code."
@@ -633,6 +639,8 @@ def list_leads(
     cohort_filters: dict[str, object] = {}
 
     cohort_has_replay_filter = False
+    segment_mode = _parse_segment_mode(segment_mode)
+
     if cohort_id:
         # Cohort id is the governed source of truth. Query params are
         # useful for shareable URLs and visual chips, but they must not

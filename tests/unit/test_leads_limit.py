@@ -430,10 +430,10 @@ def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:
         client = TestClient(app)
 
         any_response = client.get(
-            "/api/leads?segment_codes=itm,equity&segment_mode=any&limit=5000"
+            "/api/leads?segment_codes=ITM,Equity&segment_mode=ANY&limit=5000"
         )
         all_response = client.get(
-            "/api/leads?segment_codes=itm,equity&segment_mode=all&limit=5000"
+            "/api/leads?segment_codes=ITM,Equity&segment_mode=ALL&limit=5000"
         )
         itm_response = client.get("/api/leads?segment=itm&limit=5000")
         equity_response = client.get("/api/leads?segment=equity&limit=5000")
@@ -989,8 +989,8 @@ def test_leads_route_audits_genie_cohort_filters() -> None:
             "?states=IL,TX"
             "&zips=60611"
             "&borrower_ids=B-48291"
-            "&segment_codes=itm,equity"
-            "&segment_mode=all"
+            "&segment_codes=ITM,Equity"
+            "&segment_mode=ALL"
             "&limit=10",
             headers={"X-Forwarded-Email": "qa@example.com"},
         )

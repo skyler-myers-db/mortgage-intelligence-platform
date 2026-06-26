@@ -16,7 +16,7 @@ render "—" (honest null).
 stable ``sample_borrower_id`` so the UI's ZIP-tile click-through deep-
 links to a real borrower dossier.
 """
-from typing import Annotated
+from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -50,6 +50,13 @@ def _parse_segment_codes(raw: str | None) -> list[str] | None:
         seen.add(code)
         parsed.append(code)
     return parsed or None
+
+
+def _parse_segment_mode(raw: str) -> Literal["any", "all"]:
+    mode = raw.strip().lower()
+    if mode not in {"any", "all"}:
+        raise HTTPException(status_code=422, detail="segment_mode must be any or all")
+    return mode
 
 
 def _portfolio_criteria_from_geo_query(
@@ -115,7 +122,6 @@ def state_rollups(
     segment_mode: Annotated[
         str,
         Query(
-            pattern="^(any|all)$",
             description=(
                 "any = segment arrays overlap; all = borrower contains every "
                 "selected segment code."
@@ -147,9 +153,10 @@ def state_rollups(
     cross-segment total.
     """
     parsed = _parse_segment_codes(segment_codes)
+    parsed_segment_mode = _parse_segment_mode(segment_mode)
     return repo.state_rollups(
         segment_codes=parsed,
-        segment_mode=segment_mode,
+        segment_mode=parsed_segment_mode,
         portfolio_criteria=_portfolio_criteria_from_geo_query(
             occupancy=occupancy,
             lien_status=lien_status,
@@ -192,7 +199,6 @@ def county_rollups(
     segment_mode: Annotated[
         str,
         Query(
-            pattern="^(any|all)$",
             description=(
                 "any = segment arrays overlap; all = borrower contains every "
                 "selected segment code."
@@ -222,7 +228,7 @@ def county_rollups(
     return repo.county_rollups(
         state,
         segment_codes=_parse_segment_codes(segment_codes),
-        segment_mode=segment_mode,
+        segment_mode=_parse_segment_mode(segment_mode),
         portfolio_criteria=_portfolio_criteria_from_geo_query(
             occupancy=occupancy,
             lien_status=lien_status,
@@ -266,7 +272,6 @@ def zip_rollups(
     segment_mode: Annotated[
         str,
         Query(
-            pattern="^(any|all)$",
             description=(
                 "any = segment arrays overlap; all = borrower contains every "
                 "selected segment code."
@@ -295,7 +300,7 @@ def zip_rollups(
     return repo.zip_rollups(
         county_fips,
         segment_codes=_parse_segment_codes(segment_codes),
-        segment_mode=segment_mode,
+        segment_mode=_parse_segment_mode(segment_mode),
         portfolio_criteria=_portfolio_criteria_from_geo_query(
             occupancy=occupancy,
             lien_status=lien_status,

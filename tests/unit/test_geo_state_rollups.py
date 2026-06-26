@@ -96,8 +96,8 @@ def test_state_rollups_passes_secondary_portfolio_criteria_to_repository():
     try:
         response = client.get(
             "/api/geo/state-rollups"
-            "?segment_codes=itm,investor"
-            "&segment_mode=all"
+            "?segment_codes=ITM,Investor"
+            "&segment_mode=ALL"
             "&occupancy=Owner-occupied"
             "&lien_status=Open%201st%20lien"
             "&lender_relationship=Competitor%20customer"
@@ -219,8 +219,8 @@ def test_county_rollups_passes_secondary_portfolio_criteria_to_repository():
         response = client.get(
             "/api/geo/county-rollups"
             "?state=fl"
-            "&segment_codes=itm,investor"
-            "&segment_mode=all"
+            "&segment_codes=ITM,Investor"
+            "&segment_mode=ALL"
             "&occupancy=Owner-occupied"
             "&lien_status=Open%201st%20lien"
             "&lender_relationship=Competitor%20customer"
@@ -318,8 +318,8 @@ def test_zip_rollups_passes_secondary_portfolio_criteria_to_repository():
         response = client.get(
             "/api/geo/zip-rollups"
             "?county_fips=17031"
-            "&segment_codes=itm,equity"
-            "&segment_mode=all"
+            "&segment_codes=ITM,Equity"
+            "&segment_mode=ALL"
             "&occupancy=Owner-occupied"
             "&lien_status=Open%201st%20lien"
             "&lender_relationship=Competitor%20customer"
