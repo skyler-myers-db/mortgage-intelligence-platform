@@ -114,10 +114,10 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
   );
 
   await expect(page.getByLabel('Latest Growth Agent run')).toBeVisible();
-  await expect(page.getByText('Broad opportunity')).toBeVisible();
-  await expect(page.getByText('Eligible subset')).toBeVisible();
-  await expect(page.getByText('Tool timeline')).toBeVisible();
-  await expect(page.getByText('Policy checks')).toBeVisible();
+  await expect(page.getByText('Broad opportunity', { exact: true })).toBeVisible();
+  await expect(page.getByText('Eligible subset', { exact: true })).toBeVisible();
+  await expect(page.getByText('Tool timeline', { exact: true })).toBeVisible();
+  await expect(page.getByText('Policy checks', { exact: true })).toBeVisible();
   await expect(page.getByLabel('Saved Growth Agent monitors')).toContainText(
     'Daily Refi Opportunity Brief',
   );
