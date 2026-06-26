@@ -5,8 +5,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from backend.main import app
-from backend.schemas.analytics import AnalyticsFilters
-from backend.schemas.analytics import SignalAnalyticsResponse
+from backend.schemas.analytics import AnalyticsFilters, SignalAnalyticsResponse
 from backend.services.repositories import get_analytics_repository
 from backend.services.repositories.databricks_analytics import DatabricksAnalyticsRepository
 
