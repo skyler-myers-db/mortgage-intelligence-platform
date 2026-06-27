@@ -9,6 +9,8 @@ claim. These tests pin that behaviour against the real probe logic.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from backend.config.settings import Settings
@@ -18,6 +20,8 @@ from backend.services.capabilities import (
     get_capabilities_snapshot,
     probe_capabilities,
 )
+
+_REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _settings(**overrides: object) -> Settings:
@@ -76,13 +80,42 @@ def test_orchestrator_flag_off_is_not_provisioned() -> None:
     assert "off" in orch.detail.lower()
 
 
-def test_metric_certification_and_uc_agent_tools_need_concrete_contracts() -> None:
+def test_metric_certification_and_uc_agent_tools_are_configured_not_claimed() -> None:
     caps = probe_capabilities(_settings())
     for key in ("certified_metric_views", "uc_function_tools"):
         cap = _by_key(caps, key)
         assert cap.ga is True
-        assert cap.status is CapabilityStatus.NOT_PROVISIONED
+        assert cap.status is CapabilityStatus.CONFIGURED
         assert cap.claimable is False
+        assert "live" in cap.detail.lower()
+
+
+def test_certified_metric_view_sql_contracts_are_present() -> None:
+    metric_dir = _REPO_ROOT / "sql" / "metric_views"
+    expected = {
+        "certified_borrower_opportunity_metric_view.sql",
+        "certified_lead_generation_metric_view.sql",
+        "certified_segment_performance_metric_view.sql",
+    }
+    for filename in expected:
+        text = (metric_dir / filename).read_text(encoding="utf-8").lower()
+        assert "with metrics" in text
+        assert "language yaml" in text
+        assert "certification:" in text
+
+
+def test_uc_growth_agent_tool_sql_contracts_are_present() -> None:
+    function_dir = _REPO_ROOT / "sql" / "uc_functions"
+    expected = {
+        "fn_build_cohort.sql",
+        "fn_segment_counts.sql",
+        "fn_lead_queue_url.sql",
+    }
+    for filename in expected:
+        text = (function_dir / filename).read_text(encoding="utf-8").lower()
+        assert "create or replace function" in text
+        assert "mortgage growth agent" in text
+        assert "read-only" in text or "no outreach or state write" in text
 
 
 def test_genie_conversation_needs_space_and_warehouse() -> None:

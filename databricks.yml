@@ -623,6 +623,54 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/ddl/005_semantics_views.sql
+        - task_key: publish_fn_build_cohort
+          description: "CREATE OR REPLACE mip.gold.fn_build_cohort for reviewed Growth Agent cohort counts."
+          depends_on:
+            - task_key: refresh_semantics_views
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_build_cohort.sql
+        - task_key: publish_fn_segment_counts
+          description: "CREATE OR REPLACE mip.gold.fn_segment_counts for reviewed Growth Agent eligible counts."
+          depends_on:
+            - task_key: refresh_semantics_views
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_segment_counts.sql
+        - task_key: publish_fn_lead_queue_url
+          description: "CREATE OR REPLACE mip.gold.fn_lead_queue_url for reviewed Growth Agent handoffs."
+          depends_on:
+            - task_key: refresh_semantics_views
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_lead_queue_url.sql
+        - task_key: refresh_certified_lead_metric_view
+          description: "CREATE OR REPLACE certified Lead Queue Databricks metric view wrapper."
+          depends_on:
+            - task_key: refresh_semantics_views
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/metric_views/certified_lead_generation_metric_view.sql
+        - task_key: refresh_certified_segment_metric_view
+          description: "CREATE OR REPLACE certified Segment Intelligence Databricks metric view wrapper."
+          depends_on:
+            - task_key: refresh_semantics_views
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/metric_views/certified_segment_performance_metric_view.sql
+        - task_key: refresh_certified_borrower_metric_view
+          description: "CREATE OR REPLACE certified Borrower Opportunity Databricks metric view wrapper."
+          depends_on:
+            - task_key: refresh_semantics_views
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/metric_views/certified_borrower_opportunity_metric_view.sql
 
     # Event-triggered sync of Lakebase approval + outreach state into
     # mip.gold.borrower_lifecycle_state. Metric views (segment_

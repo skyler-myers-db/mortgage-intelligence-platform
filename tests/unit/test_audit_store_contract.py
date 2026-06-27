@@ -165,6 +165,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "run_growth_agent_workflow": ("_run_workflow(",),
     "run_custom_growth_agent_workflow": ("_run_workflow(",),
     "run_mortgage_growth_agent": ("plan_growth_agent_prompt(", "_run_workflow("),
+    "rerun_growth_agent_monitor": ("_run_workflow(",),
     "log_event": ("store.write(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),

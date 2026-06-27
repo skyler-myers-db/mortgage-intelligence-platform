@@ -59,6 +59,13 @@ describe('parseGrowthAgentStateInput', () => {
       invalid: ['illinois', '123'],
     });
   });
+
+  it('fails closed on bogus two-letter state codes', () => {
+    expect(parseGrowthAgentStateInput('IL XX ZZ')).toEqual({
+      states: ['IL'],
+      invalid: ['XX', 'ZZ'],
+    });
+  });
 });
 
 describe('formatGrowthAgentCount', () => {

@@ -108,7 +108,7 @@ describe('growth agent API client', () => {
       segment_mode: 'any',
       save_monitor: true,
       cadence: 'weekly',
-      monitor_name: 'Custom Segment Workflow - ITM+LISTED - IL',
+      monitor_name: 'Custom Segment Workflow - ANY - ITM+LISTED - IL',
     });
 
     expect(res.workflow.id).toBe('custom_segment_watch');
@@ -124,5 +124,42 @@ describe('growth agent API client', () => {
       save_monitor: true,
       cadence: 'weekly',
     });
+  });
+
+  it('re-runs a saved monitor with JSON content type and request id', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        workflow: {
+          id: 'daily_refi_brief',
+          title: 'Daily Refi Opportunity Brief',
+          objective: 'Find borrowers with rate-spread economics.',
+          trigger_label: 'Prime refinance economics',
+          action_label: 'Open eligible refi subset',
+          source_assets: ['mip.gold.borrower_360'],
+          default_route: '/lead-queue?segment=itm',
+          proof_points: [],
+          cadence_options: ['daily', 'weekly'],
+        },
+        run_id: '11111111-1111-4111-8111-111111111111',
+        broad_total: 117404,
+        actionable_total: 5394,
+        route: '/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL',
+        criteria: {},
+        source_assets: ['mip.gold.borrower_360'],
+        tool_steps: [],
+        policy_checks: [],
+      });
+    });
+
+    const res = await api.rerunGrowthAgentMonitor('monitor-123', {});
+
+    expect(res.actionable_total).toBe(5394);
+    expect(calls[0].path).toBe('/api/v1/growth-agent/monitors/monitor-123/run');
+    expect(calls[0].init?.method).toBe('POST');
+    expect(new Headers(calls[0].init?.headers).get('Content-Type')).toBe('application/json');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
   });
 });

@@ -117,14 +117,14 @@ WORKFLOWS: dict[GrowthAgentWorkflowId, GrowthAgentWorkflowDef] = {
         action_label="Open eligible purchase subset",
         source_assets=(BORROWER_360, LEAD_POPULATION, EVIDENCE_EVENTS, SOURCE_READINESS),
         proof_points=(
-            "Listing signals come from live Cotality MLS rows surfaced in gold.",
+            "Listing signals are gated by gold.source_readiness and come only from Cotality MLS rows surfaced in gold.",
             "Filed building-permit records are not inferred from listings.",
             "The route opens only eligible listed-for-sale leads.",
         ),
         broad_predicate="b.listed_for_sale = TRUE",
         actionable_predicate="array_contains(b.segment_codes, 'listed')",
         route_filters={"segment": "listed", "marketing_eligibility": "Eligible only"},
-        tool_detail="Checked live MLS listing flags and reconciled them to purchase-ready eligible leads.",
+        tool_detail="Checked MLS-backed listed_for_sale flags and reconciled them to purchase-ready eligible leads.",
         specialist_agent="campaign_agent",
     ),
     "competitor_recapture_monitor": GrowthAgentWorkflowDef(
@@ -288,6 +288,11 @@ def planned_workflow(payload: GrowthAgentPromptRunRequest) -> tuple[GrowthAgentW
         return WORKFLOWS["source_freshness_sentinel"], "Data operations lens selected the global source/freshness sentinel."
     if any(term in q for term in ("dossier", "borrower story", "customer 360", "borrower 360", "explain top")):
         return WORKFLOWS["borrower_dossier_review"], "Borrower dossier lens selected the dossier review workflow."
+    if (
+        any(term in q for term in ("refi", "refinance", "rate spread", "economic incentive", "prime refinance"))
+        and not any(term in q for term in ("listed", "listing", "for sale", "purchase", "heloc", "cash out", "cash-out", "home equity", "equity line"))
+    ):
+        return WORKFLOWS["daily_refi_brief"], "Structured data lens selected the daily refi opportunity brief."
     if any(term in q for term in ("capacity", "branch", "manager", "aging", "stale approved", "loan officer", "lo ")):
         return WORKFLOWS["branch_capacity_review"], "Campaign lens selected the branch-manager capacity review."
     if any(term in q for term in ("heloc", "cash out", "cash-out", "home equity", "equity line")):

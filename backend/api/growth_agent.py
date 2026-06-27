@@ -9,11 +9,12 @@ for human review. It never sends outreach or activates a connector.
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any
-from uuid import uuid4
+from typing import Annotated, Any, cast
+from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import ValidationError
 
 from backend.agents.mortgage_growth_copilot import (
     GrowthAgentCopilotEvidence,
@@ -38,6 +39,12 @@ from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_ledger_sql import (
     MONITOR_LIST_SQL as _MONITOR_LIST_SQL,
+)
+from backend.services.growth_agent_ledger_sql import (
+    MONITOR_REFRESH_BY_ID_SQL as _MONITOR_REFRESH_BY_ID_SQL,
+)
+from backend.services.growth_agent_ledger_sql import (
+    MONITOR_SELECT_BY_ID_SQL as _MONITOR_SELECT_BY_ID_SQL,
 )
 from backend.services.growth_agent_ledger_sql import (
     MONITOR_SELECT_BY_RUN_ID_SQL as _MONITOR_SELECT_BY_RUN_ID_SQL,
@@ -120,6 +127,70 @@ def growth_agent_monitors(request: Request, lakebase: LakebaseDep) -> list[Growt
 
 
 @router.post(
+    "/monitors/{monitor_id}/run",
+    response_model=GrowthAgentRunResponse,
+    responses=_JSON_CONTENT_TYPE_RESPONSE,
+)
+def rerun_growth_agent_monitor(
+    monitor_id: UUID,
+    payload: GrowthAgentRunRequest,
+    request: Request,
+    _: Annotated[None, Depends(_require_json_content_type)],
+    sql_client: SqlDep,
+    lakebase: LakebaseDep,
+) -> GrowthAgentRunResponse:
+    """Re-run a saved, reviewed watchlist on demand.
+
+    This is the low-cost automation path: the user explicitly asks for a
+    fresh run, the stored criteria are replayed, and the monitor's counts are
+    refreshed. It does not create a scheduler, send outreach, or execute a raw
+    natural-language prompt.
+    """
+
+    actor = resolve_actor(request)
+    try:
+        with lakebase.transaction() as conn:
+            monitor_row = _txn_fetchone(
+                conn,
+                _MONITOR_SELECT_BY_ID_SQL,
+                {"actor_email": actor, "monitor_id": str(monitor_id)},
+            )
+    except (LakebaseError, psycopg.Error) as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    if monitor_row is None:
+        raise HTTPException(status_code=404, detail="growth-agent monitor not found")
+    workflow = _workflow_from_monitor(monitor_row)
+    states = _states_from_monitor_criteria(monitor_row.get("criteria"))
+    monitor_name = _stored_monitor_name(monitor_row, workflow=workflow)
+    return _run_workflow(
+        workflow=workflow,
+        payload=GrowthAgentRunRequest(
+            states=states,
+            save_monitor=True,
+            cadence=monitor_row["cadence"],
+            request_id=payload.request_id,
+        ),
+        request=request,
+        sql_client=sql_client,
+        lakebase=lakebase,
+        monitor_id_override=str(monitor_id),
+        monitor_name_override=monitor_name,
+        interpreted_intent=f"Saved watchlist re-run: {monitor_name}.",
+        copilot_evidence=GrowthAgentCopilotEvidence(
+            execution_mode="deterministic",
+            trace_kind="local_hash",
+            planner_label="Saved watchlist runner",
+            interpreted_intent=f"Saved watchlist re-run: {monitor_name}.",
+            reasoning_summary=(
+                "The user re-ran a saved reviewed watchlist. Stored filters were "
+                "replayed; no raw prompt, scheduler, outreach, or connector activation executed."
+            ),
+            fallback_reason="saved_monitor_rerun",
+        ),
+    )
+
+
+@router.post(
     "/workflows/{workflow_id}/run",
     response_model=GrowthAgentRunResponse,
     responses=_JSON_CONTENT_TYPE_RESPONSE,
@@ -198,6 +269,8 @@ def _run_workflow(
     request: Request,
     sql_client: DatabricksSqlClient,
     lakebase: LakebaseClient,
+    monitor_id_override: str | None = None,
+    monitor_name_override: str | None = None,
     interpreted_intent: str | None = None,
     copilot_evidence: GrowthAgentCopilotEvidence | None = None,
 ) -> GrowthAgentRunResponse:
@@ -355,7 +428,11 @@ def _run_workflow(
                     payload=payload,
                     criteria=criteria,
                     run_row=run_row,
+                    monitor_id_override=monitor_id_override,
+                    monitor_name_override=monitor_name_override,
                 )
+                if monitor_id_override and monitor_row is None:
+                    raise HTTPException(status_code=409, detail="saved monitor could not be refreshed")
         monitor = _monitor_from_row(monitor_row) if monitor_row is not None else None
     except HTTPException:
         raise
@@ -378,14 +455,18 @@ def _upsert_monitor(
     payload: GrowthAgentRunRequest,
     criteria: dict[str, object],
     run_row: dict[str, Any],
+    monitor_id_override: str | None = None,
+    monitor_name_override: str | None = None,
 ) -> dict[str, Any] | None:
+    statement = _MONITOR_REFRESH_BY_ID_SQL if monitor_id_override else _MONITOR_UPSERT_SQL
     return _txn_fetchone(
         conn,
-        _MONITOR_UPSERT_SQL,
+        statement,
         {
             "actor_email": actor,
+            "monitor_id": monitor_id_override,
             "workflow_id": workflow.id,
-            "name": payload.monitor_name or workflow.title,
+            "name": monitor_name_override or payload.monitor_name or workflow.title,
             "cadence": payload.cadence,
             "criteria": json.dumps(criteria),
             "route": str(run_row["route"]),
@@ -484,6 +565,65 @@ def _list_monitors(lakebase: LakebaseClient, *, actor: str) -> list[GrowthAgentM
     return [_monitor_from_row(row) for row in rows]
 
 
+def _workflow_from_monitor(row: dict[str, Any]) -> _WorkflowDef:
+    workflow_id = str(row.get("workflow_id") or "")
+    if workflow_id == "custom_segment_watch":
+        criteria = _json_object(row.get("criteria"))
+        lead_filters = criteria.get("lead_queue_filters")
+        if not isinstance(lead_filters, dict):
+            raise HTTPException(status_code=409, detail="saved monitor has malformed criteria")
+        segment_codes = lead_filters.get("segment_codes")
+        if not isinstance(segment_codes, list):
+            raise HTTPException(status_code=409, detail="saved monitor has malformed segment criteria")
+        segment_mode = str(lead_filters.get("segment_mode") or "any")
+        return _custom_workflow([str(code) for code in segment_codes], segment_mode)
+    workflow = _WORKFLOWS.get(cast(GrowthAgentWorkflowId, workflow_id))
+    if workflow is None:
+        raise HTTPException(status_code=409, detail="saved monitor references an unknown workflow")
+    return workflow
+
+
+def _states_from_monitor_criteria(criteria_value: Any) -> list[str]:
+    criteria = _json_object(criteria_value)
+    states = criteria.get("states")
+    if not isinstance(states, list):
+        return []
+    return [str(state).strip().upper() for state in states if str(state).strip()]
+
+
+def _stored_monitor_name(row: dict[str, Any], *, workflow: _WorkflowDef) -> str:
+    name = str(row.get("name") or "").strip()
+    if not name:
+        return workflow.title
+    try:
+        request = GrowthAgentRunRequest(monitor_name=name)
+    except ValidationError:
+        return workflow.title
+    return request.monitor_name or workflow.title
+
+
+def _monitor_fallback_name(row: dict[str, Any]) -> str:
+    workflow_id = str(row.get("workflow_id") or "")
+    workflow = _WORKFLOWS.get(cast(GrowthAgentWorkflowId, workflow_id))
+    if workflow is not None:
+        return workflow.title
+    if workflow_id == "custom_segment_watch":
+        return "Custom Segment Workflow"
+    return "Reviewed Growth Watchlist"
+
+
+def _safe_monitor_name_from_row(row: dict[str, Any]) -> str:
+    fallback = _monitor_fallback_name(row)
+    name = str(row.get("name") or "").strip()
+    if not name:
+        return fallback
+    try:
+        request = GrowthAgentRunRequest(monitor_name=name)
+    except ValidationError:
+        return fallback
+    return request.monitor_name or fallback
+
+
 def _monitor_from_row(row: dict[str, Any]) -> GrowthAgentMonitor:
     criteria = row.get("criteria") or {}
     if isinstance(criteria, str):
@@ -494,7 +634,7 @@ def _monitor_from_row(row: dict[str, Any]) -> GrowthAgentMonitor:
     return GrowthAgentMonitor(
         monitor_id=str(row["monitor_id"]),
         workflow_id=row["workflow_id"],
-        name=row["name"],
+        name=_safe_monitor_name_from_row(row),
         cadence=row["cadence"],
         status=row.get("status") or "active",
         criteria=criteria,

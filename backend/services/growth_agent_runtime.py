@@ -399,6 +399,8 @@ def _reviewed_tool_step(
     result_hash: str,
 ) -> GrowthAgentToolStep:
     tool = assert_tool_allowed_for_specialist(tool_name, workflow.specialist_agent)
+    if tool.writes_state:
+        raise ValueError(f"{tool.name} writes state and cannot run inside reviewed read-only workflow")
     return GrowthAgentToolStep(
         label=label,
         status=status,

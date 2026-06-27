@@ -340,25 +340,25 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   expect(promptRunResponse.status(), 'prompt-routed Growth Agent run returned non-200').toBe(200);
   const run = (await promptRunResponse.json()) as GrowthAgentRunResponse;
 
-  expect(run.workflow.id).toBe('branch_capacity_review');
-  expect(run.specialist_agent).toBe('campaign_agent');
+  expect(run.workflow.id).toBe('daily_refi_brief');
+  expect(run.specialist_agent).toBe('structured_data_agent');
   expect(run.execution_mode).toBe('deterministic');
   expect(run.trace_kind).toBe('local_hash');
   expect(run.agent_reasoning ?? '').toContain('No model-generated SQL');
-  expect(run.interpreted_intent).toContain('branch-manager capacity review');
+  expect(run.interpreted_intent).toContain('daily refi');
   expect(run.trace_id).toMatch(/^agent-trace-/);
   expect(run.tool_result_hash).toMatch(/^[a-f0-9]{64}$/);
   expect(run.broad_total).toBeGreaterThanOrEqual(run.actionable_total);
   expect(run.route).toContain('/lead-queue?');
-  expect(run.route).toContain('approval_status=approved');
-  expect(run.route).toContain('aged_days=7');
+  expect(run.route).toContain('segment=itm');
+  expect(run.route).toContain('marketing_eligibility=Eligible+only');
   expect(run.policy_checks.map((check) => check.label)).toEqual(
-    expect.arrayContaining(['No outbound activation', 'Manager review only']),
+    expect.arrayContaining(['No outbound activation', 'Broad vs actionable reconciliation']),
   );
   expect(run.governance_chips.map((chip) => chip.label)).toEqual(
     expect.arrayContaining(['PII-safe output', 'Human approval required']),
   );
-  await expect(page.getByText(/Owner:\s*Campaign lens/)).toBeVisible();
+  await expect(page.getByText(/Owner:\s*Structured data lens/)).toBeVisible();
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('Human approval required');
   await expectLeadQueueHandoffMatchesActionableTotal(request, run);
   await expectAuditRowMatchesGrowthRun(request, run);
@@ -395,8 +395,12 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   expect(persistedMonitor?.criteria).toMatchObject({
     lead_queue_filters: expect.objectContaining({
       states: ['IL'],
-      approval_status: 'approved',
-      aged_days: '7',
+      segment_codes: ['itm'],
+      segment_mode: 'any',
+      portfolio_criteria: expect.objectContaining({
+        marketing_eligibility: 'Eligible only',
+        states: ['IL'],
+      }),
     }),
   });
 });

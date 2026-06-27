@@ -7,6 +7,7 @@ import type {
   GenieActionSuggestion,
   GenieAnswer as GenieAnswerShape,
   GrowthAgentCadence,
+  GrowthAgentMonitor,
   GrowthAgentRunResponse,
   GrowthAgentSegmentCode,
   GrowthAgentSegmentMode,
@@ -30,6 +31,7 @@ import {
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
 import { GrowthAgentRunCard, formatGrowthAgentCount } from './ask-genie.growth-run-card';
+import { SavedGrowthAgentMonitors } from './ask-genie.saved-monitors';
 import {
   CUSTOM_SEGMENTS,
   buildTrustedAssetQuestion,
@@ -84,11 +86,17 @@ export default function AskGenie() {
   const [promptAgentPending, setPromptAgentPending] = useState(false);
   const [promptAgentPendingAction, setPromptAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
+  const [monitorPending, setMonitorPending] = useState<string | null>(null);
   const [customAgentPendingAction, setCustomAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentError, setGrowthAgentError] = useState<string | null>(null);
   const [latestGrowthRun, setLatestGrowthRun] = useState<GrowthAgentRunResponse | null>(null);
   const [customSegments, setCustomSegments] = useState<GrowthAgentSegmentCode[]>(['itm', 'listed']);
   const [customMode, setCustomMode] = useState<GrowthAgentSegmentMode>('any');
+
+  function clearGrowthAgentFeedback() {
+    setLatestGrowthRun(null);
+    setGrowthAgentError(null);
+  }
 
   const growthAgentQuery = useQuery({
     queryKey: queryKeys.growthAgent(),
@@ -208,10 +216,12 @@ export default function AskGenie() {
   async function runGrowthAgentWorkflow(workflow: GrowthAgentWorkflow, saveMonitor: boolean) {
     const parsed = parseGrowthAgentStateInput(agentStateText);
     if (parsed.invalid.length > 0) {
+      setLatestGrowthRun(null);
       setGrowthAgentError(`Use two-letter state codes only: ${parsed.invalid.join(', ')}`);
       return;
     }
     setGrowthAgentPending(workflow.id);
+    setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
       const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
@@ -236,15 +246,18 @@ export default function AskGenie() {
     const parsed = parseGrowthAgentStateInput(agentStateText);
     const prompt = agentPrompt.trim();
     if (parsed.invalid.length > 0) {
+      setLatestGrowthRun(null);
       setGrowthAgentError(`Use two-letter state codes only: ${parsed.invalid.join(', ')}`);
       return;
     }
     if (prompt.length < 3) {
+      setLatestGrowthRun(null);
       setGrowthAgentError('Enter a borrower-growth objective for the agent.');
       return;
     }
     setPromptAgentPending(true);
     setPromptAgentPendingAction(saveMonitor ? 'save' : 'run');
+    setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
       const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
@@ -270,15 +283,18 @@ export default function AskGenie() {
   async function runCustomGrowthAgentWorkflow(saveMonitor: boolean) {
     const parsed = parseGrowthAgentStateInput(agentStateText);
     if (parsed.invalid.length > 0) {
+      setLatestGrowthRun(null);
       setGrowthAgentError(`Use two-letter state codes only: ${parsed.invalid.join(', ')}`);
       return;
     }
     if (customSegments.length === 0) {
+      setLatestGrowthRun(null);
       setGrowthAgentError('Choose at least one reviewed segment for the custom workflow.');
       return;
     }
     setGrowthAgentPending('custom_segment_watch');
     setCustomAgentPendingAction(saveMonitor ? 'save' : 'run');
+    setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
       const stateSuffix = parsed.states.length > 0 ? ` - ${parsed.states.join(', ')}` : '';
@@ -288,7 +304,9 @@ export default function AskGenie() {
         segment_mode: customMode,
         save_monitor: saveMonitor,
         cadence: agentCadence,
-        monitor_name: saveMonitor ? `Custom Segment Workflow - ${customSegments.join('+').toUpperCase()}${stateSuffix}` : null,
+        monitor_name: saveMonitor
+          ? `Custom Segment Workflow - ${customMode.toUpperCase()} - ${customSegments.join('+').toUpperCase()}${stateSuffix}`
+          : null,
       });
       setLatestGrowthRun(result);
       if (saveMonitor) {
@@ -302,7 +320,23 @@ export default function AskGenie() {
     }
   }
 
+  async function rerunGrowthAgentMonitor(monitor: GrowthAgentMonitor) {
+    setMonitorPending(monitor.monitor_id);
+    setLatestGrowthRun(null);
+    setGrowthAgentError(null);
+    try {
+      const result = await api.rerunGrowthAgentMonitor(monitor.monitor_id, {});
+      setLatestGrowthRun(result);
+      await growthAgentQuery.refetch();
+    } catch (err) {
+      setGrowthAgentError(err instanceof Error ? err.message : 'Saved Growth Agent watchlist rerun failed.');
+    } finally {
+      setMonitorPending(null);
+    }
+  }
+
   function toggleCustomSegment(code: GrowthAgentSegmentCode) {
+    clearGrowthAgentFeedback();
     setCustomSegments((current) => (
       current.includes(code)
         ? current.filter((item) => item !== code)
@@ -383,6 +417,7 @@ export default function AskGenie() {
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
   const workflows = growthAgentQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? [];
+  const agentBusy = growthAgentPending !== null || promptAgentPending || monitorPending !== null;
   const capabilityRows = (growthAgentQuery.data?.capabilities ?? []).filter((row) => (
     [
       'genie_conversation_api',
@@ -399,7 +434,7 @@ export default function AskGenie() {
       lede="Route borrower-growth objectives to reviewed SQL workflows, review the exact eligible Lead Queue subset, then ask Genie follow-up questions against trusted Unity Catalog assets."
       heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie + SQL</Chip>}
     >
-      <div className="surface growth-agent" aria-busy={growthAgentPending !== null || promptAgentPending}>
+      <div className="surface growth-agent" aria-busy={agentBusy}>
         <div className="surface__hdr">
           <Icon name="bolt" size={14} className="icon-accent" />
           <div>
@@ -442,7 +477,10 @@ export default function AskGenie() {
                   className="route-textarea growth-agent-command__prompt"
                   aria-label="Mortgage Growth Agent prompt"
                   value={agentPrompt}
-                  onChange={(event) => setAgentPrompt(event.target.value)}
+                  onChange={(event) => {
+                    setAgentPrompt(event.target.value);
+                    clearGrowthAgentFeedback();
+                  }}
                 />
                 <span className="growth-agent__hint">
                   The co-pilot selects reviewed workflows only; raw borrower identifiers, PII, protected-class targeting, and unreviewed source requests are rejected.
@@ -455,7 +493,7 @@ export default function AskGenie() {
                 size="sm"
                 icon="sparkle"
                 onClick={() => runMortgageGrowthAgentPrompt(false)}
-                disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
+                disabled={agentBusy || stateParsePreview.invalid.length > 0}
               >
                 {promptAgentPending && promptAgentPendingAction === 'run' ? 'Planning…' : 'Plan reviewed workflow'}
               </Button>
@@ -464,7 +502,7 @@ export default function AskGenie() {
                 size="sm"
                 icon="bell"
                 onClick={() => runMortgageGrowthAgentPrompt(true)}
-                disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
+                disabled={agentBusy || stateParsePreview.invalid.length > 0}
               >
                 {promptAgentPending && promptAgentPendingAction === 'save' ? 'Saving…' : 'Save reviewed watchlist'}
               </Button>
@@ -479,7 +517,11 @@ export default function AskGenie() {
                 aria-label="Growth Agent state scope"
                 placeholder="All states or IL, TX, CA"
                 value={agentStateText}
-                onChange={(event) => setAgentStateText(event.target.value)}
+                onChange={(event) => {
+                  const nextValue = event.target.value;
+                  setAgentStateText(nextValue);
+                  clearGrowthAgentFeedback();
+                }}
               />
               <span className="growth-agent__hint">
                 {stateParsePreview.invalid.length > 0
@@ -495,7 +537,10 @@ export default function AskGenie() {
                 className="form-input"
                 aria-label="Growth Agent review cadence"
                 value={agentCadence}
-                onChange={(event) => setAgentCadence(event.target.value as GrowthAgentCadence)}
+                onChange={(event) => {
+                  setAgentCadence(event.target.value as GrowthAgentCadence);
+                  clearGrowthAgentFeedback();
+                }}
               >
                 <option value="daily">Daily review</option>
                 <option value="weekly">Weekly review</option>
@@ -547,7 +592,7 @@ export default function AskGenie() {
                       size="sm"
                       icon="play"
                       onClick={() => runGrowthAgentWorkflow(workflow, false)}
-                      disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
+                      disabled={agentBusy || stateParsePreview.invalid.length > 0}
                     >
                       {pending ? 'Running…' : 'Run'}
                     </Button>
@@ -556,7 +601,7 @@ export default function AskGenie() {
                       size="sm"
                       icon="bell"
                       onClick={() => runGrowthAgentWorkflow(workflow, true)}
-                      disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
+                      disabled={agentBusy || stateParsePreview.invalid.length > 0}
                     >
                       Save watchlist
                     </Button>
@@ -606,7 +651,10 @@ export default function AskGenie() {
                   className="form-input"
                   aria-label="Custom Growth Agent segment logic"
                   value={customMode}
-                  onChange={(event) => setCustomMode(event.target.value as GrowthAgentSegmentMode)}
+                  onChange={(event) => {
+                    setCustomMode(event.target.value as GrowthAgentSegmentMode);
+                    clearGrowthAgentFeedback();
+                  }}
                 >
                   <option value="any">Any selected segment</option>
                   <option value="all">All selected segments</option>
@@ -621,7 +669,7 @@ export default function AskGenie() {
                   size="sm"
                   icon="play"
                   onClick={() => runCustomGrowthAgentWorkflow(false)}
-                  disabled={growthAgentPending !== null || promptAgentPending || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
+                  disabled={agentBusy || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
                 >
                   {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'run' ? 'Running…' : 'Run custom'}
                 </Button>
@@ -630,7 +678,7 @@ export default function AskGenie() {
                   size="sm"
                   icon="bell"
                   onClick={() => runCustomGrowthAgentWorkflow(true)}
-                  disabled={growthAgentPending !== null || promptAgentPending || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
+                  disabled={agentBusy || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
                 >
                   {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'save' ? 'Saving…' : 'Save custom watchlist'}
                 </Button>
@@ -646,25 +694,13 @@ export default function AskGenie() {
             />
           )}
 
-          {monitors.length > 0 && (
-            <div className="growth-agent-monitors" aria-label="Saved Growth Agent watchlists">
-              <div className="eyebrow">Saved watchlists</div>
-              <div className="growth-agent-monitor-list">
-                {monitors.map((monitor) => (
-                  <button
-                    key={monitor.monitor_id}
-                    type="button"
-                    className="growth-agent-monitor"
-                    onClick={() => navigate(monitor.route)}
-                  >
-                    <span>{monitor.name}</span>
-                    <span>{monitor.cadence === 'weekly' ? 'Weekly review' : 'Daily review'}</span>
-                    <strong>{formatGrowthAgentCount(monitor.actionable_total)}</strong>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          <SavedGrowthAgentMonitors
+            monitors={monitors}
+            monitorPending={monitorPending}
+            actionsDisabled={agentBusy}
+            onRun={rerunGrowthAgentMonitor}
+            onOpen={(route) => navigate(route)}
+          />
         </div>
       </div>
 

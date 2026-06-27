@@ -79,6 +79,13 @@ _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Refinance",
         "Retention",
         "Review",
+        "Watch",
+        "Brief",
+        "Opportunity",
+        "Segment",
+        "Growth",
+        "Daily",
+        "Weekly",
     }
 )
 

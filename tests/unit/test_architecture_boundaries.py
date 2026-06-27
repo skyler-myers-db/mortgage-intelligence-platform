@@ -60,6 +60,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/growth-agent/monitors"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/agent/run"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/custom/run"): "tests/unit/test_growth_agent_api.py",
+    ("POST", "/api/growth-agent/monitors/{monitor_id}/run"): "tests/unit/test_growth_agent_api.py",
     ("POST", "/api/growth-agent/workflows/{workflow_id}/run"): "tests/unit/test_growth_agent_api.py",
     ("GET", "/api/health"): "tests/unit/test_health_endpoint.py",
     ("GET", "/api/leads"): "tests/unit/test_api_routes.py",

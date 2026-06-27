@@ -1,5 +1,6 @@
 import { Chip, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
+import { isUspsStateCode } from '../lib/uspsStates';
 import type {
   GrowthAgentSegmentCode,
   GrowthAgentWorkflowId,
@@ -54,7 +55,7 @@ export function parseGrowthAgentStateInput(value: string): { states: string[]; i
   const states: string[] = [];
   const invalid: string[] = [];
   tokens.forEach((token) => {
-    if (!STATE_TOKEN_RE.test(token)) {
+    if (!STATE_TOKEN_RE.test(token) || !isUspsStateCode(token)) {
       invalid.push(token);
       return;
     }

@@ -13,6 +13,7 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.schemas.usps import is_usps_state_code
 
 GrowthAgentWorkflowId = Literal[
     "daily_refi_brief",
@@ -55,9 +56,18 @@ _PROMPT_STREET_ADDRESS_NO_SUFFIX_RE = re.compile(
     r"(?:\s+[A-Z][A-Za-z0-9.'-]{2,}){0,2}\b"
 )
 _PROMPT_HUMAN_NAME_RE = re.compile(
-    r"\b(?:for|named|borrower|customer|prospect|contact|person|show|find|review)\s+"
+    r"\b(?:for|named|borrowers?|customers?|prospects?|contacts?|person|show|find|review)\s+"
     r"(?:(?:[A-Z][a-z]{1,30}|[A-Z]{2,30})\s+"
     r"(?:[A-Z]\s+)?(?:[A-Z][a-z]{1,30}|[A-Z]{2,30}))\b"
+)
+_PROMPT_COMMON_NAME_RE = re.compile(
+    r"\b(?:for|named|borrowers?|customers?|prospects?|contacts?|person|show|find|review)\s+"
+    r"(?:alice|john|jane|maria|robert|james|mary|michael|david|linda|william|"
+    r"richard|joseph|thomas|patricia|jennifer|barbara)\s+"
+    r"(?:[a-z]\s+)?"
+    r"(?:smith|johnson|williams|brown|jones|garcia|miller|davis|rodriguez|"
+    r"martinez|hernandez|lopez|gonzalez|wilson|anderson|thomas|taylor|moore)\b",
+    re.IGNORECASE,
 )
 _PROMPT_LEADING_HUMAN_NAME_RE = re.compile(
     r"^(?!(?:find|show|list|run|build|open|review|count|check|create|save|how|what|which|"
@@ -73,13 +83,13 @@ _PROMPT_PROTECTED_CLASS_RE = re.compile(
     re.IGNORECASE,
 )
 _PROMPT_JAILBREAK_RE = re.compile(
-    r"\b(?:ignore\s+(?:all\s+)?(?:previous|prior|system)\s+instructions|"
-    r"ignore\s+(?:the\s+)?safety\s+policy|"
-    r"system\s+prompt|developer\s+message|jailbreak|bypass\s+policy|"
-    r"show\s+all\s+tables|list\s+all\s+tables|raw\s+(?:tables?|sources?|rows?)|"
-    r"(?:use|query|read)\s+(?:the\s+)?silver\b|"
-    r"cotality_mortgage_data|"
-    r"select\s+\*|drop\s+table|insert\s+into|delete\s+from|update\s+\w+\s+set)\b",
+    r"(?:\bignore\s+(?:all\s+)?(?:previous|prior|system)\s+instructions\b|"
+    r"\bignore\s+(?:the\s+)?safety\s+policy\b|"
+    r"\bsystem\s+prompt\b|\bdeveloper\s+message\b|\bjailbreak\b|\bbypass\s+policy\b|"
+    r"\bshow\s+all\s+tables\b|\blist\s+all\s+tables\b|\braw\s+(?:tables?|sources?|rows?)\b|"
+    r"\b(?:use|query|read)\s+(?:the\s+)?silver\b|"
+    r"\bcotality_mortgage_data\b|"
+    r"\bselect\s+\*|\bdrop\s+table\b|\binsert\s+into\b|\bdelete\s+from\b|\bupdate\s+\w+\s+set\b)",
     re.IGNORECASE,
 )
 _PROMPT_UNAVAILABLE_SOURCE_RE = re.compile(
@@ -99,7 +109,8 @@ _WORKFLOW_MONITOR_TITLE_RE = re.compile(
 	r"(?: - [A-Z]{2}(?:, [A-Z]{2}){0,19})?$"
 )
 _CUSTOM_WORKFLOW_MONITOR_TITLE_RE = re.compile(
-    r"^Custom Segment Workflow - (?:ITM|LISTED|PERMIT|INVESTOR|EQUITY|RETENTION)"
+    r"^Custom Segment Workflow - (?:(?:ANY|ALL) - )?"
+    r"(?:ITM|LISTED|PERMIT|INVESTOR|EQUITY|RETENTION)"
     r"(?:\+(?:ITM|LISTED|PERMIT|INVESTOR|EQUITY|RETENTION)){0,5}"
     r"(?: - [A-Z]{2}(?:, [A-Z]{2}){0,19})?$"
 )
@@ -175,8 +186,8 @@ class GrowthAgentRunRequest(BaseModel):
             state = str(value).strip().upper()
             if not state:
                 continue
-            if not _STATE_RE.fullmatch(state):
-                raise ValueError("states must contain 2-character USPS codes")
+            if not _STATE_RE.fullmatch(state) or not is_usps_state_code(state):
+                raise ValueError("states must contain valid USPS state codes")
             if state not in out:
                 out.append(state)
         return out
@@ -240,6 +251,7 @@ class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
             or _PROMPT_STREET_ADDRESS_RE.search(clean)
             or _PROMPT_STREET_ADDRESS_NO_SUFFIX_RE.search(clean)
             or _PROMPT_HUMAN_NAME_RE.search(clean)
+            or _PROMPT_COMMON_NAME_RE.search(clean)
             or _PROMPT_LEADING_HUMAN_NAME_RE.search(clean)
             or _PROMPT_PROTECTED_CLASS_RE.search(clean)
             or _PROMPT_JAILBREAK_RE.search(clean)

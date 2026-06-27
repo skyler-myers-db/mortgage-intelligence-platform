@@ -63,6 +63,25 @@ RETURNING monitor_id, workflow_id, name, cadence, status, criteria, route,
           actionable_total, source_assets, last_run_id, created_at, updated_at
 """
 
+MONITOR_REFRESH_BY_ID_SQL = """
+UPDATE mip_app.growth_agent_monitors
+SET workflow_id = %(workflow_id)s,
+    name = %(name)s,
+    cadence = %(cadence)s,
+    criteria = %(criteria)s::jsonb,
+    route = %(route)s,
+    actionable_total = %(actionable_total)s,
+    source_assets = %(source_assets)s,
+    last_run_id = %(last_run_id)s,
+    status = 'active',
+    updated_at = now()
+WHERE actor_email = %(actor_email)s
+  AND monitor_id = %(monitor_id)s
+  AND status = 'active'
+RETURNING monitor_id, workflow_id, name, cadence, status, criteria, route,
+          actionable_total, source_assets, last_run_id, created_at, updated_at
+"""
+
 MONITOR_LIST_SQL = """
 SELECT monitor_id, workflow_id, name, cadence, status, criteria, route,
        actionable_total, source_assets, last_run_id, created_at, updated_at
@@ -79,5 +98,15 @@ FROM mip_app.growth_agent_monitors
 WHERE actor_email = %(actor_email)s
   AND last_run_id = %(last_run_id)s
 ORDER BY updated_at DESC
+LIMIT 1
+"""
+
+MONITOR_SELECT_BY_ID_SQL = """
+SELECT monitor_id, workflow_id, name, cadence, status, criteria, route,
+       actionable_total, source_assets, last_run_id, created_at, updated_at
+FROM mip_app.growth_agent_monitors
+WHERE actor_email = %(actor_email)s
+  AND monitor_id = %(monitor_id)s
+  AND status = 'active'
 LIMIT 1
 """

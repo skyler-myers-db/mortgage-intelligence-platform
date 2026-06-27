@@ -1296,6 +1296,22 @@ export const api = {
   growthAgentMonitors: (signal?: AbortSignal) =>
     getJson<GrowthAgentMonitor[]>('/api/growth-agent/monitors', signal),
 
+  rerunGrowthAgentMonitor: (
+    monitorId: string,
+    payload: GrowthAgentRunRequest = {},
+    signal?: AbortSignal,
+  ) => {
+    const body: GrowthAgentRunRequest = {
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<GrowthAgentRunResponse, GrowthAgentRunRequest>(
+      `/api/growth-agent/monitors/${encodeURIComponent(monitorId)}/run`,
+      body,
+      signal,
+    );
+  },
+
   runGrowthAgentWorkflow: (
     workflowId: GrowthAgentWorkflowId,
     payload: GrowthAgentRunRequest = {},

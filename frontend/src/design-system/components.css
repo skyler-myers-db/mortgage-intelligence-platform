@@ -2675,22 +2675,32 @@ kbd {
   border: 1px solid var(--line-1);
   border-radius: var(--r-md);
   padding: var(--sp-3);
-  cursor: pointer;
 }
 .growth-agent-monitor:hover,
 .growth-agent-monitor:focus-visible {
   border-color: var(--line-3);
   color: var(--text-1);
 }
-.growth-agent-monitor span:first-child {
+.growth-agent-monitor__main {
+  min-width: 0;
+  display: grid;
+  gap: var(--sp-1);
+}
+.growth-agent-monitor__main span:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.growth-agent-monitor span:nth-child(2),
+.growth-agent-monitor__main span:nth-child(2),
 .growth-agent-monitor strong {
   font-family: var(--font-mono);
   font-size: var(--fs-12);
+}
+.growth-agent-monitor__actions {
+  display: inline-flex;
+  gap: var(--sp-2);
+  justify-content: flex-end;
+  flex-wrap: wrap;
 }
 
 @media (max-width: 48rem) {
@@ -4068,6 +4078,8 @@ kbd {
   .layoutA-grid { grid-template-columns: 1fr; }
   .layoutA-grid.analytics-grid--wide-left { grid-template-columns: 1fr; }
   .proto-hero   { flex-direction: column; align-items: flex-start; }
+  .growth-agent-monitor { grid-template-columns: 1fr; }
+  .growth-agent-monitor__actions { justify-content: flex-start; }
 }
 
 /* Narrow (641–960px): 2-col KPIs, 2-col seg-grid, layoutA stacks. */

@@ -53,9 +53,10 @@ class CapabilityStatus(str, Enum):
     HIDDEN = "hidden"
 
 
-# Statuses the product MAY present as an active, working capability. Anything
-# else is roadmap/absent and must render as such.
-_CLAIMABLE = frozenset({CapabilityStatus.AVAILABLE, CapabilityStatus.CONFIGURED})
+# Statuses the product MAY present as an active, working capability. Configured
+# means the local/deploy contract exists but has not been live-probed; it must
+# render as "configured" rather than "working".
+_CLAIMABLE = frozenset({CapabilityStatus.AVAILABLE})
 
 
 @dataclass(frozen=True)
@@ -141,14 +142,19 @@ def _certified_metric_view_contract_present() -> bool:
     metric_dir = _repo_root() / "sql" / "metric_views"
     if not metric_dir.exists():
         return False
+    expected = {
+        "certified_borrower_opportunity_metric_view",
+        "certified_lead_generation_metric_view",
+        "certified_segment_performance_metric_view",
+    }
     for path in metric_dir.glob("*.sql"):
         try:
             text = path.read_text(encoding="utf-8").lower()
         except OSError:
             continue
-        if "with metrics" in text and "certification" in text:
-            return True
-    return False
+        if path.stem.lower() in expected and "with metrics" in text and "certification" in text:
+            expected.remove(path.stem.lower())
+    return not expected
 
 
 def _uc_agent_tool_contract_present() -> bool:
@@ -212,9 +218,9 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             key="certified_metric_views",
             label="UC metric-view certification",
             ga=True,
-            status=CapabilityStatus.AVAILABLE if warehouse and certified_metric_contract else CapabilityStatus.NOT_PROVISIONED,
+            status=CapabilityStatus.CONFIGURED if warehouse and certified_metric_contract else CapabilityStatus.NOT_PROVISIONED,
             detail=(
-                "Certified metric-view YAML/metadata is present and warehouse-backed."
+                "Certified metric-view SQL contracts are bundled; live UC deployment must be verified before claiming them active."
                 if warehouse and certified_metric_contract
                 else "Metric views exist, but certification metadata/probe is not provisioned."
             ),
@@ -225,9 +231,9 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             key="uc_function_tools",
             label="Application-reviewed SQL tools",
             ga=True,
-            status=CapabilityStatus.AVAILABLE if warehouse and uc_tool_contract else CapabilityStatus.NOT_PROVISIONED,
+            status=CapabilityStatus.CONFIGURED if warehouse and uc_tool_contract else CapabilityStatus.NOT_PROVISIONED,
             detail=(
-                "Reviewed cohort/action SQL tools have UC-function definitions present."
+                "Reviewed UC-function SQL contracts are bundled; live registration must be verified before claiming them active."
                 if warehouse and uc_tool_contract
                 else "Growth workflows use reviewed in-app SQL tools; UC-function agent tools are not registered."
             ),
@@ -260,7 +266,7 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
     caps.append(
         Capability(
             key="agent_orchestrator",
-            label="Mortgage Growth Agent (multi-agent)",
+            label="Agent Framework orchestration",
             ga=True,
             status=orchestrator_status,
             detail=orchestrator_detail,

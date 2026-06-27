@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.services import growth_agent_runtime
 from backend.services.agent_tools import (
     assert_tool_allowed_for_specialist,
     get_agent_tool,
@@ -9,6 +10,7 @@ from backend.services.agent_tools import (
     registered_agent_tools,
 )
 from backend.services.audit_metadata_value_policy import validate_source_assets
+from backend.services.growth_agent_workflows import WORKFLOWS
 
 
 def test_growth_agent_tool_registry_is_reviewed_and_deterministic() -> None:
@@ -44,3 +46,28 @@ def test_growth_agent_tool_registry_rejects_unknown_or_wrong_specialist_tools() 
         "borrower_dossier_agent",
     )
     assert tool.source_asset == "mip.gold.borrower_dossier"
+
+
+def test_growth_agent_runtime_refuses_state_writing_tool(monkeypatch: pytest.MonkeyPatch) -> None:
+    base_tool = get_agent_tool("fn_build_cohort")
+
+    class _StateWritingTool:
+        name = base_tool.name
+        source_asset = base_tool.source_asset
+        writes_state = True
+
+    monkeypatch.setattr(
+        growth_agent_runtime,
+        "assert_tool_allowed_for_specialist",
+        lambda _name, _specialist: _StateWritingTool(),
+    )
+
+    with pytest.raises(ValueError, match="writes state"):
+        growth_agent_runtime._reviewed_tool_step(  # noqa: SLF001 - executable boundary test
+            WORKFLOWS["daily_refi_brief"],
+            "fn_build_cohort",
+            label="Bad state-writing tool",
+            status="completed",
+            detail="Should be rejected before display.",
+            result_hash="a" * 64,
+        )
