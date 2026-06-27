@@ -76,13 +76,13 @@ def test_orchestrator_flag_off_is_not_provisioned() -> None:
     assert "off" in orch.detail.lower()
 
 
-def test_ga_capabilities_available_when_warehouse_configured() -> None:
+def test_metric_certification_and_uc_agent_tools_need_concrete_contracts() -> None:
     caps = probe_capabilities(_settings())
     for key in ("certified_metric_views", "uc_function_tools"):
         cap = _by_key(caps, key)
         assert cap.ga is True
-        assert cap.status is CapabilityStatus.AVAILABLE
-        assert cap.claimable is True
+        assert cap.status is CapabilityStatus.NOT_PROVISIONED
+        assert cap.claimable is False
 
 
 def test_genie_conversation_needs_space_and_warehouse() -> None:
@@ -93,6 +93,11 @@ def test_genie_conversation_needs_space_and_warehouse() -> None:
     )
     assert missing.status is CapabilityStatus.NOT_PROVISIONED
     assert missing.claimable is False
+    placeholder = _by_key(
+        probe_capabilities(_settings(genie_space_id="00000000PLACEHOLDER")), "genie_conversation_api"
+    )
+    assert placeholder.status is CapabilityStatus.NOT_PROVISIONED
+    assert placeholder.claimable is False
 
 
 def test_ai_gateway_and_lakebase_sync_gated_by_flags() -> None:
@@ -100,8 +105,22 @@ def test_ai_gateway_and_lakebase_sync_gated_by_flags() -> None:
     assert _by_key(off, "ai_gateway").status is CapabilityStatus.NOT_PROVISIONED
     assert _by_key(off, "lakebase_sync").status is CapabilityStatus.NOT_PROVISIONED
     on = probe_capabilities(_settings(mip_ai_gateway=True, mip_lakebase_sync=True))
-    assert _by_key(on, "ai_gateway").status is CapabilityStatus.CONFIGURED
+    assert _by_key(on, "ai_gateway").status is CapabilityStatus.NOT_PROVISIONED
     assert _by_key(on, "lakebase_sync").status is CapabilityStatus.CONFIGURED
+
+
+def test_ai_gateway_requires_endpoint_and_inference_table_config() -> None:
+    caps = probe_capabilities(
+        _settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app.agent_inference_logs",
+        )
+    )
+    gateway = _by_key(caps, "ai_gateway")
+    assert gateway.status is CapabilityStatus.NOT_PROVISIONED
+    assert gateway.claimable is False
+    assert "live signal probe is not implemented" in gateway.detail
 
 
 def test_warehouse_placeholder_is_not_provisioned() -> None:

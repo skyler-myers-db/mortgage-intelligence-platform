@@ -46,6 +46,7 @@ _PLACEHOLDER_WAREHOUSE_VALUES = {
     "sql-warehouse-id",
     "warehouse-id",
     "your-warehouse-id",
+    "00000000placeholder",
 }
 _PLACEHOLDER_HOSTS = {
     "<workspace-host>.cloud.databricks.com",
@@ -176,6 +177,9 @@ class Settings(BaseSettings):
     # (Phase 3b). When set AND reachable, the in-App route may delegate to
     # the served endpoint; otherwise it runs the orchestrator in-process.
     mip_agent_serving_endpoint: str | None = None
+    mip_ai_gateway_endpoint: str | None = None
+    mip_ai_gateway_inference_table: str | None = None
+    mip_agent_eval_experiment: str | None = None
 
     def effective_tenant_id(self) -> str:
         """Return the Lakebase disclosure namespace for this deployment."""

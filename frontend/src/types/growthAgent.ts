@@ -18,6 +18,8 @@ export type GrowthAgentSpecialist =
   | 'compliance_agent'
   | 'campaign_agent'
   | 'data_ops_agent';
+export type GrowthAgentExecutionMode = 'deterministic' | 'genie_conversation' | 'agent_framework';
+export type GrowthAgentTraceKind = 'local_hash' | 'genie_conversation' | 'mlflow_trace';
 
 export interface GrowthAgentWorkflow {
   id: GrowthAgentWorkflowId;
@@ -92,6 +94,9 @@ export interface GrowthAgentRunResponse {
   run_id: string;
   monitor?: GrowthAgentMonitor | null;
   specialist_agent: GrowthAgentSpecialist;
+  execution_mode: GrowthAgentExecutionMode;
+  trace_kind: GrowthAgentTraceKind;
+  planner_label: string;
   trace_id: string;
   tool_result_hash: string;
   broad_label: string;
@@ -109,11 +114,28 @@ export interface GrowthAgentRunResponse {
   policy_checks: GrowthAgentPolicyCheck[];
   governance_chips: GrowthAgentGovernanceChip[];
   interpreted_intent?: string | null;
+  agent_reasoning?: string | null;
+  genie_conversation_id?: string | null;
+  genie_message_id?: string | null;
+  genie_question_hash?: string | null;
+  genie_sql_hash?: string | null;
+  genie_row_count?: number | null;
+  genie_trusted_assets: string[];
   audit_event_id?: string | null;
   created_at?: string | null;
+}
+
+export interface GrowthAgentCapabilityRow {
+  key: string;
+  label: string;
+  ga: boolean;
+  status: 'available' | 'configured' | 'not_provisioned' | 'preview_mirror' | 'hidden';
+  claimable: boolean;
+  detail: string;
 }
 
 export interface GrowthAgentHomeResponse {
   workflows: GrowthAgentWorkflow[];
   monitors: GrowthAgentMonitor[];
+  capabilities?: GrowthAgentCapabilityRow[];
 }

@@ -6,19 +6,19 @@ INSERT INTO mip_app.growth_agent_runs (
   broad_total, actionable_total, broad_avg_score, actionable_avg_score,
   avg_rate_spread_bps, avg_equity_pct, route, source_assets,
   tool_steps, policy_checks
-  , trace_id, tool_result_hash, specialist_agent, governance_chips
+  , trace_id, tool_result_hash, specialist_agent, agent_evidence, governance_chips
 ) VALUES (
   %(actor_email)s, %(request_id)s, %(workflow_id)s, %(workflow_title)s, %(criteria)s::jsonb,
   %(broad_total)s, %(actionable_total)s, %(broad_avg_score)s, %(actionable_avg_score)s,
   %(avg_rate_spread_bps)s, %(avg_equity_pct)s, %(route)s, %(source_assets)s,
   %(tool_steps)s::jsonb, %(policy_checks)s::jsonb
-  , %(trace_id)s, %(tool_result_hash)s, %(specialist_agent)s, %(governance_chips)s::jsonb
+  , %(trace_id)s, %(tool_result_hash)s, %(specialist_agent)s, %(agent_evidence)s::jsonb, %(governance_chips)s::jsonb
 )
 ON CONFLICT (actor_email, request_id) WHERE request_id IS NOT NULL DO NOTHING
 RETURNING run_id, workflow_id, criteria, broad_total, actionable_total,
           broad_avg_score, actionable_avg_score, avg_rate_spread_bps, avg_equity_pct,
           route, source_assets, tool_steps, policy_checks, trace_id, tool_result_hash,
-          specialist_agent, governance_chips, audit_event_id, created_at
+          specialist_agent, agent_evidence, governance_chips, audit_event_id, created_at
 """
 
 RUN_ATTACH_AUDIT_SQL = """
@@ -28,14 +28,14 @@ WHERE run_id = %(run_id)s
 RETURNING run_id, workflow_id, criteria, broad_total, actionable_total,
           broad_avg_score, actionable_avg_score, avg_rate_spread_bps, avg_equity_pct,
           route, source_assets, tool_steps, policy_checks, trace_id, tool_result_hash,
-          specialist_agent, governance_chips, audit_event_id, created_at
+          specialist_agent, agent_evidence, governance_chips, audit_event_id, created_at
 """
 
 RUN_SELECT_BY_REQUEST_ID_SQL = """
 SELECT run_id, workflow_id, criteria, broad_total, actionable_total,
        broad_avg_score, actionable_avg_score, avg_rate_spread_bps, avg_equity_pct,
        route, source_assets, tool_steps, policy_checks, trace_id, tool_result_hash,
-       specialist_agent, governance_chips, audit_event_id, created_at
+       specialist_agent, agent_evidence, governance_chips, audit_event_id, created_at
 FROM mip_app.growth_agent_runs
 WHERE actor_email = %(actor_email)s
   AND request_id = %(request_id)s

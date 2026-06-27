@@ -1,12 +1,13 @@
 """Capability probe for the DAIS 2026 agentic build.
 
-The Mortgage Growth Agent stack layers several Databricks capabilities, each
-at a different maturity: some are GA and usable today (Genie Conversation API,
-certified metric views, UC-function tools, the Mosaic Agent Framework, the
-per-endpoint AI Gateway, Lakebase synced tables); others are Public Preview,
-Beta, or have no public API at all (Genie Ontology, CustomerLake, App Spaces /
-serverless micro-apps, Lakehouse//RT, declarative Genie Agents, UC Glossary /
-Domains).
+The Mortgage Growth Agent stack can layer several Databricks capabilities, each
+at a different maturity. Some are generally available but still require concrete
+workspace configuration before MIP may claim them live (Genie Conversation API,
+metric-view certification, UC-registered tools, Mosaic Agent Framework /
+Agent Bricks style orchestration, per-endpoint AI Gateway, Lakebase synced
+tables). Others are Public Preview, Beta, or have no public API at all (Genie
+Ontology, CustomerLake, App Spaces / serverless micro-apps, Lakehouse//RT,
+declarative Genie Agents, UC Glossary / Domains).
 
 This module computes — at startup and on demand — an HONEST snapshot of what is
 actually provisioned in the *running* workspace, so the product never claims a
@@ -30,6 +31,7 @@ import importlib.util
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
+from pathlib import Path
 
 from backend.config.settings import Settings, get_settings
 
@@ -119,8 +121,54 @@ def _lakebase_configured(settings: Settings) -> bool:
     return bool(settings.lakebase_host and settings.lakebase_user)
 
 
+def _genie_space_configured(settings: Settings) -> bool:
+    raw = (settings.genie_space_id or "").strip()
+    if not raw:
+        return False
+    normalized = raw.lower()
+    return "placeholder" not in normalized and not ("<" in raw and ">" in raw)
+
+
 def _preview_status(mirror_on: bool) -> CapabilityStatus:
     return CapabilityStatus.PREVIEW_MIRROR if mirror_on else CapabilityStatus.HIDDEN
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _certified_metric_view_contract_present() -> bool:
+    metric_dir = _repo_root() / "sql" / "metric_views"
+    if not metric_dir.exists():
+        return False
+    for path in metric_dir.glob("*.sql"):
+        try:
+            text = path.read_text(encoding="utf-8").lower()
+        except OSError:
+            continue
+        if "with metrics" in text and "certification" in text:
+            return True
+    return False
+
+
+def _uc_agent_tool_contract_present() -> bool:
+    functions_dir = _repo_root() / "sql" / "uc_functions"
+    if not functions_dir.exists():
+        return False
+    expected = {"fn_build_cohort", "fn_segment_counts", "fn_lead_queue_url"}
+    found: set[str] = set()
+    for path in functions_dir.glob("*.sql"):
+        name = path.stem.lower()
+        if name in expected:
+            found.add(name)
+    return expected <= found
+
+
+def _agent_eval_contract_present(settings: Settings) -> bool:
+    if not settings.mip_agent_eval_experiment:
+        return False
+    eval_dir = _repo_root() / "tests" / "eval"
+    return (eval_dir / "golden_agent_cases.jsonl").exists() and (eval_dir / "scorers.py").exists()
 
 
 def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
@@ -132,8 +180,11 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
     agents_lib = _module_present("databricks.agents")
     warehouse = _warehouse_configured(s)
     lakebase = _lakebase_configured(s)
-    genie_configured = bool(s.genie_space_id)
+    genie_configured = _genie_space_configured(s)
     mirror = s.mip_preview_mirror
+    certified_metric_contract = _certified_metric_view_contract_present()
+    uc_tool_contract = _uc_agent_tool_contract_present()
+    agent_eval_contract = _agent_eval_contract_present(s)
 
     caps: list[Capability] = []
 
@@ -159,27 +210,26 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
     caps.append(
         Capability(
             key="certified_metric_views",
-            label="Certified UC Metric Views",
+            label="UC metric-view certification",
             ga=True,
-            status=CapabilityStatus.AVAILABLE if warehouse else CapabilityStatus.NOT_PROVISIONED,
+            status=CapabilityStatus.AVAILABLE if warehouse and certified_metric_contract else CapabilityStatus.NOT_PROVISIONED,
             detail=(
-                "Define-once KPIs with synonyms, certified and Genie-grounded."
-                if warehouse
-                else "Needs warehouse creds to deploy/read metric views."
+                "Certified metric-view YAML/metadata is present and warehouse-backed."
+                if warehouse and certified_metric_contract
+                else "Metric views exist, but certification metadata/probe is not provisioned."
             ),
         )
     )
     caps.append(
         Capability(
             key="uc_function_tools",
-            label="UC-Function Agent Tools",
+            label="Application-reviewed SQL tools",
             ga=True,
-            status=CapabilityStatus.AVAILABLE if warehouse else CapabilityStatus.NOT_PROVISIONED,
+            status=CapabilityStatus.AVAILABLE if warehouse and uc_tool_contract else CapabilityStatus.NOT_PROVISIONED,
             detail=(
-                "Deterministic scoring/cohort actions exposed as governed, "
-                "UC-audited agent tools."
-                if warehouse
-                else "Needs warehouse creds to register/execute UC functions."
+                "Reviewed cohort/action SQL tools have UC-function definitions present."
+                if warehouse and uc_tool_contract
+                else "Growth workflows use reviewed in-app SQL tools; UC-function agent tools are not registered."
             ),
         )
     )
@@ -188,11 +238,11 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             key="agent_eval",
             label="MLflow Agent Evaluation",
             ga=True,
-            status=CapabilityStatus.AVAILABLE if mlflow_ok else CapabilityStatus.NOT_PROVISIONED,
+            status=CapabilityStatus.AVAILABLE if mlflow_ok and agent_eval_contract else CapabilityStatus.NOT_PROVISIONED,
             detail=(
-                "Trace-aware scorers reconcile every agent count to a tool result."
-                if mlflow_ok
-                else "Needs mlflow>=3.1.3 (not installed)."
+                "Configured MLflow GenAI eval experiment with golden agent cases."
+                if mlflow_ok and agent_eval_contract
+                else "Needs mlflow>=3.1.3 plus configured experiment and golden eval cases."
             ),
         )
     )
@@ -220,12 +270,12 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
     if not s.mip_ai_gateway:
         gateway_status = CapabilityStatus.NOT_PROVISIONED
         gateway_detail = "Disabled (MIP_AI_GATEWAY off)."
-    elif sdk and warehouse:
-        gateway_status = CapabilityStatus.CONFIGURED
-        gateway_detail = "Per-endpoint guardrails/rate-limits + inference-table signals."
+    elif sdk and warehouse and s.mip_ai_gateway_endpoint and s.mip_ai_gateway_inference_table:
+        gateway_status = CapabilityStatus.NOT_PROVISIONED
+        gateway_detail = "Gateway endpoint and inference-table config are present, but the live signal probe is not implemented."
     else:
         gateway_status = CapabilityStatus.NOT_PROVISIONED
-        gateway_detail = "Flag on, but databricks-sdk / warehouse missing."
+        gateway_detail = "Flag on, but gateway endpoint/inference-table config or warehouse/sdk is missing."
     caps.append(
         Capability(
             key="ai_gateway",

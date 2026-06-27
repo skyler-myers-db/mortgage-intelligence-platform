@@ -15,6 +15,9 @@ type GrowthAgentRunResponse = {
   workflow: { id: string; title: string };
   monitor?: { name: string; actionable_total: number } | null;
   specialist_agent: string;
+  execution_mode: string;
+  trace_kind: string;
+  planner_label: string;
   trace_id: string;
   tool_result_hash: string;
   broad_label: string;
@@ -41,6 +44,9 @@ type GrowthAgentRunResponse = {
   policy_checks: Array<{ label: string; status: string; detail: string }>;
   governance_chips: Array<{ label: string; status: string; detail: string }>;
   interpreted_intent?: string | null;
+  agent_reasoning?: string | null;
+  genie_conversation_id?: string | null;
+  genie_row_count?: number | null;
   audit_event_id?: string | null;
 };
 
@@ -52,6 +58,12 @@ type GrowthAgentMonitorResponse = {
   actionable_total: number;
   source_assets: string[];
   last_run_id?: string | null;
+};
+
+type AuditRow = {
+  event_id: string;
+  event_type?: string | null;
+  payload_json?: Record<string, unknown>;
 };
 
 test.beforeEach(({ page }) => {
@@ -87,7 +99,31 @@ async function expectLeadQueueHandoffMatchesActionableTotal(
   expect(Number(leadResp.headers()['x-total-matching'] ?? -1)).toBe(run.actionable_total);
 }
 
-test('Growth Agent run, saved monitor, and Lead Queue handoff are live and reconciled', async ({
+async function expectAuditRowMatchesGrowthRun(
+  request: APIRequestContext,
+  run: GrowthAgentRunResponse,
+): Promise<void> {
+  const resp = await request.get(`${API_URL}/api/audit/events?limit=100&event_type=GROWTH_AGENT_RUN`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(resp.status(), 'GET /api/audit/events for Growth Agent returned non-200').toBe(200);
+  const rows = (await resp.json()) as AuditRow[];
+  const row = rows.find((item) => item.event_id === run.audit_event_id);
+  expect(row, `audit event ${run.audit_event_id} not found`).toBeTruthy();
+  const payload = row?.payload_json ?? {};
+  expect(payload.workflow_id).toBe(run.workflow.id);
+  expect(payload.trace_id).toBe(run.trace_id);
+  expect(payload.tool_result_hash).toBe(run.tool_result_hash);
+  expect(payload.route).toBe(run.route);
+  expect(payload.source_assets).toEqual(expect.arrayContaining(run.source_assets));
+  expect(payload.result_filters).toMatchObject(run.criteria.lead_queue_filters ?? {});
+  const payloadText = JSON.stringify(payload).toLowerCase();
+  for (const forbidden of ['borrower_id', 'subject_clip', 'owner_name', 'raw_clip', 'street']) {
+    expect(payloadText).not.toContain(forbidden);
+  }
+}
+
+test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and reconciled', async ({
   page,
   request,
 }) => {
@@ -95,7 +131,7 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
 
   await expect(page.getByText('Mortgage Growth Agent').first()).toBeVisible();
   await expect(page.getByText('Borrower Dossier Review')).toBeVisible();
-  await expect(page.getByText('No auto-send')).toBeVisible();
+  await expect(page.getByText('No auto-send · no scheduled automation')).toBeVisible();
   await expect(page.getByText('Audited Lakebase run')).toBeVisible();
 
   const stateScope = page.getByLabel('Growth Agent state scope');
@@ -114,7 +150,7 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
   for (const button of await page.getByRole('button', { name: /^Run$/ }).all()) {
     await expect(button).toBeDisabled();
   }
-  for (const button of await page.getByRole('button', { name: 'Save monitor' }).all()) {
+  for (const button of await page.getByRole('button', { name: /Save (watchlist|custom watchlist)/ }).all()) {
     await expect(button).toBeDisabled();
   }
   await page.waitForTimeout(500);
@@ -131,7 +167,7 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/workflows\/daily_refi_brief\/run/.test(response.url()),
   );
-  await dailyCard.getByRole('button', { name: 'Save monitor' }).click();
+  await dailyCard.getByRole('button', { name: 'Save watchlist' }).click();
   const runResponse = await runResponsePromise;
   expect(runResponse.status(), 'Growth Agent workflow run returned non-200').toBe(200);
   const run = (await runResponse.json()) as GrowthAgentRunResponse;
@@ -140,6 +176,9 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
   expect(run.audit_event_id).toBeTruthy();
   expect(run.workflow.id).toBe('daily_refi_brief');
   expect(run.specialist_agent).toBe('structured_data_agent');
+  expect(run.execution_mode).toBe('deterministic');
+  expect(run.trace_kind).toBe('local_hash');
+  expect(run.planner_label).toBe('Reviewed workflow runner');
   expect(run.trace_id).toMatch(/^agent-trace-/);
   expect(run.tool_result_hash).toMatch(/^[a-f0-9]{64}$/);
   expect(run.broad_total).toBeGreaterThan(0);
@@ -158,7 +197,7 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
     expect.arrayContaining([
       'No outbound activation',
       'Broad vs actionable reconciliation',
-      'Monitor saved to Lakebase',
+      'Watchlist saved to Lakebase',
     ]),
   );
   expect(run.tool_steps.map((step) => step.tool_name)).toEqual(
@@ -177,13 +216,14 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
     page.locator('.growth-agent-run__section').filter({ hasText: 'Policy checks' }).first(),
   ).toBeVisible();
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('PII-safe output');
-  await expect(page.getByText(new RegExp(`Trace ${run.trace_id.slice(-12)}`, 'i'))).toBeVisible();
+  await expect(page.getByText(new RegExp(`Run correlation ${run.trace_id.slice(-12)}`, 'i'))).toBeVisible();
   await expect(page.getByText(new RegExp(`Hash ${run.tool_result_hash.slice(0, 12)}`))).toBeVisible();
-  await expect(page.getByLabel('Saved Growth Agent monitors')).toContainText(
+  await expect(page.getByLabel('Saved Growth Agent watchlists')).toContainText(
     'Daily Refi Opportunity Brief',
   );
 
   await expectLeadQueueHandoffMatchesActionableTotal(request, run);
+  await expectAuditRowMatchesGrowthRun(request, run);
 
   await page.getByRole('button', { name: 'Open eligible refi subset' }).click();
   await expect(page).toHaveURL(/\/lead-queue\?/);
@@ -221,6 +261,7 @@ test('custom Growth Agent Any and All workflows reconcile to live Lead Queue tot
     expect.arrayContaining(['No outbound activation', 'Reviewed custom workflow']),
   );
   await expectLeadQueueHandoffMatchesActionableTotal(request, customAny);
+  await expectAuditRowMatchesGrowthRun(request, customAny);
 
   await page.getByRole('button', { name: 'Open eligible custom subset' }).click();
   await expect(page).toHaveURL(/\/lead-queue\?/);
@@ -247,6 +288,36 @@ test('custom Growth Agent Any and All workflows reconcile to live Lead Queue tot
   expect(customAll.route).toContain('segment_mode=all');
   expect(customAll.broad_total).toBeGreaterThanOrEqual(customAll.actionable_total);
   await expectLeadQueueHandoffMatchesActionableTotal(request, customAll);
+  await expectAuditRowMatchesGrowthRun(request, customAll);
+});
+
+test('remaining reviewed workflow cards reconcile to live Lead Queue totals', async ({ request }) => {
+  for (const workflowId of [
+    'listing_watch',
+    'competitor_recapture_monitor',
+    'high_equity_heloc_watch',
+  ]) {
+    const response = await request.post(`${API_URL}/api/growth-agent/workflows/${workflowId}/run`, {
+      headers: AUTH_HEADERS,
+      data: {
+        states: ['IL', 'TX'],
+        save_monitor: false,
+      },
+    });
+    expect(response.status(), `${workflowId} returned non-200`).toBe(200);
+    const run = (await response.json()) as GrowthAgentRunResponse;
+    expect(run.workflow.id).toBe(workflowId);
+    expect(run.actionable_total).toBeGreaterThanOrEqual(0);
+    expect(run.route).toContain('/lead-queue?');
+    expect(run.policy_checks.map((check) => check.label)).toEqual(
+      expect.arrayContaining(['No outbound activation', 'Broad vs actionable reconciliation']),
+    );
+    expect(run.governance_chips.map((chip) => chip.label)).toEqual(
+      expect.arrayContaining(['PII-safe output', 'Human approval required', 'Policy checks']),
+    );
+    await expectLeadQueueHandoffMatchesActionableTotal(request, run);
+    await expectAuditRowMatchesGrowthRun(request, run);
+  }
 });
 
 test('natural-language Mortgage Growth Agent routes to reviewed tools and reconciled handoff', async ({
@@ -264,13 +335,16 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
   );
-  await page.getByRole('button', { name: 'Plan and run' }).click();
+  await page.getByRole('button', { name: 'Plan reviewed workflow' }).click();
   const promptRunResponse = await promptRunPromise;
   expect(promptRunResponse.status(), 'prompt-routed Growth Agent run returned non-200').toBe(200);
   const run = (await promptRunResponse.json()) as GrowthAgentRunResponse;
 
   expect(run.workflow.id).toBe('branch_capacity_review');
   expect(run.specialist_agent).toBe('campaign_agent');
+  expect(run.execution_mode).toBe('deterministic');
+  expect(run.trace_kind).toBe('local_hash');
+  expect(run.agent_reasoning ?? '').toContain('No model-generated SQL');
   expect(run.interpreted_intent).toContain('branch-manager capacity review');
   expect(run.trace_id).toMatch(/^agent-trace-/);
   expect(run.tool_result_hash).toMatch(/^[a-f0-9]{64}$/);
@@ -284,9 +358,10 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   expect(run.governance_chips.map((chip) => chip.label)).toEqual(
     expect.arrayContaining(['PII-safe output', 'Human approval required']),
   );
-  await expect(page.getByText('Campaign Agent', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Owner:\s*Campaign lens/)).toBeVisible();
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('Human approval required');
   await expectLeadQueueHandoffMatchesActionableTotal(request, run);
+  await expectAuditRowMatchesGrowthRun(request, run);
 
   await page
     .getByLabel('Mortgage Growth Agent prompt')
@@ -295,15 +370,16 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
   );
-  await page.getByRole('button', { name: 'Plan and save monitor' }).click();
+  await page.getByRole('button', { name: 'Save reviewed watchlist' }).click();
   const promptSaveResponse = await promptSavePromise;
   expect(promptSaveResponse.status(), 'prompt-routed Growth Agent save returned non-200').toBe(200);
   const savedRun = (await promptSaveResponse.json()) as GrowthAgentRunResponse;
   expect(savedRun.monitor?.name).toContain('Mortgage Growth Agent');
   expect(savedRun.monitor?.actionable_total).toBe(savedRun.actionable_total);
   expect(savedRun.monitor?.name.toLowerCase()).not.toContain('find prime refinance');
-  await expect(page.getByLabel('Saved Growth Agent monitors')).toContainText(savedRun.monitor?.name ?? '');
+  await expect(page.getByLabel('Saved Growth Agent watchlists')).toContainText(savedRun.monitor?.name ?? '');
   await expectLeadQueueHandoffMatchesActionableTotal(request, savedRun);
+  await expectAuditRowMatchesGrowthRun(request, savedRun);
 
   const monitorsResponse = await request.get(`${API_URL}/api/growth-agent/monitors`, {
     headers: AUTH_HEADERS,
@@ -338,13 +414,16 @@ test('natural-language dossier and data-ops specialists use governed traces and 
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
   );
-  await page.getByRole('button', { name: 'Plan and run' }).click();
+  await page.getByRole('button', { name: 'Plan reviewed workflow' }).click();
   const dossierRunResponse = await dossierRunPromise;
   expect(dossierRunResponse.status(), 'dossier prompt run returned non-200').toBe(200);
   const dossierRun = (await dossierRunResponse.json()) as GrowthAgentRunResponse;
 
   expect(dossierRun.workflow.id).toBe('borrower_dossier_review');
   expect(dossierRun.specialist_agent).toBe('borrower_dossier_agent');
+  expect(dossierRun.execution_mode).toBe('deterministic');
+  expect(dossierRun.trace_kind).toBe('local_hash');
+  expect(dossierRun.agent_reasoning ?? '').toContain('No model-generated SQL');
   expect(dossierRun.criteria.lead_queue_filters?.funnel_stage).toBe('high_opportunity');
   expect(dossierRun.route).toContain('funnel_stage=high_opportunity');
   expect(dossierRun.source_assets).toEqual(
@@ -356,9 +435,10 @@ test('natural-language dossier and data-ops specialists use governed traces and 
   expect(dossierRun.policy_checks.map((check) => check.label)).toEqual(
     expect.arrayContaining(['Dossier privacy', 'Broad vs actionable reconciliation']),
   );
-  await expect(page.getByText('Borrower Dossier Agent', { exact: true })).toBeVisible();
+  await expect(page.getByText(/Owner:\s*Borrower dossier lens/)).toBeVisible();
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('PII-safe output');
   await expectLeadQueueHandoffMatchesActionableTotal(request, dossierRun);
+  await expectAuditRowMatchesGrowthRun(request, dossierRun);
 
   await page
     .getByLabel('Mortgage Growth Agent prompt')
@@ -367,24 +447,36 @@ test('natural-language dossier and data-ops specialists use governed traces and 
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
   );
-  await page.getByRole('button', { name: 'Plan and run' }).click();
+  await page.getByRole('button', { name: 'Plan reviewed workflow' }).click();
   const sourceRunResponse = await sourceRunPromise;
   expect(sourceRunResponse.status(), 'source sentinel prompt run returned non-200').toBe(200);
   const sourceRun = (await sourceRunResponse.json()) as GrowthAgentRunResponse;
 
   expect(sourceRun.workflow.id).toBe('source_freshness_sentinel');
   expect(sourceRun.specialist_agent).toBe('data_ops_agent');
+  expect(sourceRun.execution_mode).toBe('deterministic');
+  expect(sourceRun.trace_kind).toBe('local_hash');
+  expect(sourceRun.agent_reasoning ?? '').toContain('No model-generated SQL');
   expect(sourceRun.route).toContain('/admin-config?panel=data-operations');
   expect(sourceRun.source_assets).toEqual(['mip.gold.source_readiness']);
-  expect(sourceRun.tool_steps.map((step) => step.tool_name)).toEqual([
-    'fn_source_readiness',
-    'source_readiness_status_rollup',
-    'open_admin_data_operations',
-  ]);
+  expect(sourceRun.tool_steps.map((step) => step.tool_name)).toEqual(
+    expect.arrayContaining([
+      'fn_source_readiness',
+      'source_readiness_status_rollup',
+      'open_admin_data_operations',
+    ]),
+  );
   expect(sourceRun.governance_chips.map((chip) => chip.label)).toEqual(
     expect.arrayContaining(['PII-safe output', 'Freshness signal']),
   );
-  await expect(page.getByText('Data Ops Agent', { exact: true })).toBeVisible();
+  expect(sourceRun.route).toBe('/admin-config?panel=data-operations');
+  expect(sourceRun.criteria.lead_queue_filters?.source).toBe('trusted_sql');
+  expect(sourceRun.criteria.lead_queue_filters?.portfolio_criteria).toMatchObject({
+    marketing_eligibility: 'Eligible only',
+  });
+  expect(sourceRun.criteria.lead_queue_filters?.states).toBeUndefined();
+  await expectAuditRowMatchesGrowthRun(request, sourceRun);
+  await expect(page.getByText(/Owner:\s*Data operations lens/)).toBeVisible();
   await page.getByRole('button', { name: 'Open data operations' }).click();
   await expect(page).toHaveURL(/\/admin-config\?panel=data-operations/);
   await expect(page.getByText(/Data operations/i).first()).toBeVisible();

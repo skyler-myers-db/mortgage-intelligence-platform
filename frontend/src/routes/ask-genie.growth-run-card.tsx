@@ -12,22 +12,22 @@ export function formatGrowthAgentCount(value: number | null | undefined): string
   return new Intl.NumberFormat('en-US').format(Math.max(0, Number(value ?? 0)));
 }
 
-function specialistAgentLabel(agent: GrowthAgentRunResponse['specialist_agent']): string {
+function workflowOwnerLabel(agent: GrowthAgentRunResponse['specialist_agent']): string {
   switch (agent) {
     case 'structured_data_agent':
-      return 'Structured Data Agent';
+      return 'Structured data lens';
     case 'borrower_dossier_agent':
-      return 'Borrower Dossier Agent';
+      return 'Borrower dossier lens';
     case 'offer_agent':
-      return 'Offer Agent';
+      return 'Offer lens';
     case 'compliance_agent':
-      return 'Compliance Agent';
+      return 'Compliance lens';
     case 'campaign_agent':
-      return 'Campaign Agent';
+      return 'Campaign lens';
     case 'data_ops_agent':
-      return 'Data Ops Agent';
+      return 'Data operations lens';
     default:
-      return 'Mortgage Growth Agent';
+      return 'Reviewed mortgage lens';
   }
 }
 
@@ -40,6 +40,18 @@ export function traceDisplay(value: string | null | undefined): string {
   if (!value) return 'not recorded';
   const normalized = value.startsWith('agent-trace-') ? value.slice('agent-trace-'.length) : value;
   return normalized.length > 12 ? normalized.slice(-12) : normalized;
+}
+
+function executionModeLabel(run: GrowthAgentRunResponse): string {
+  if (run.execution_mode === 'genie_conversation') return 'Genie Conversation';
+  if (run.execution_mode === 'agent_framework') return 'Agent framework';
+  return 'Reviewed workflow';
+}
+
+function traceLabel(run: GrowthAgentRunResponse): string {
+  if (run.trace_kind === 'mlflow_trace') return 'MLflow trace';
+  if (run.trace_kind === 'genie_conversation') return 'Genie message';
+  return 'Run correlation';
 }
 
 function governanceStatusLabel(status: GrowthAgentGovernanceChip['status']): string {
@@ -102,17 +114,30 @@ export function GrowthAgentRunCard({
         </Button>
       </div>
       <div className="chip-row growth-agent-run__trace">
-        <Chip variant="neutral" icon="sparkle">{specialistAgentLabel(run.specialist_agent)}</Chip>
+        <Chip variant="neutral" icon="sparkle">{executionModeLabel(run)}</Chip>
+        <Chip variant="neutral" icon="audit">Owner: {workflowOwnerLabel(run.specialist_agent)}</Chip>
         <Chip variant="neutral" icon="audit" title={run.trace_id ?? undefined}>
-          Trace {traceDisplay(run.trace_id)}
+          {traceLabel(run)} {traceDisplay(run.trace_id)}
         </Chip>
         <Chip variant="neutral" icon="link" title={run.tool_result_hash ?? undefined}>
           Hash {shortHash(run.tool_result_hash)}
         </Chip>
       </div>
+      <div className="growth-agent-run__intent">
+        {run.planner_label}
+        {run.genie_conversation_id ? ` · conversation ${shortHash(run.genie_conversation_id)}` : ''}
+        {run.genie_row_count !== null && run.genie_row_count !== undefined
+          ? ` · ${formatGrowthAgentCount(run.genie_row_count)} Genie rows`
+          : ''}
+      </div>
       {run.interpreted_intent && (
         <div className="growth-agent-run__intent">
           {run.interpreted_intent}
+        </div>
+      )}
+      {run.agent_reasoning && (
+        <div className="growth-agent-run__intent">
+          {run.agent_reasoning}
         </div>
       )}
       <div className="growth-agent-run__metrics">

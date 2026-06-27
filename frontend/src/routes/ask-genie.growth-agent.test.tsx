@@ -100,6 +100,40 @@ const BORROWER_DOSSIER_WORKFLOW: GrowthAgentWorkflow = {
 const HOME: GrowthAgentHomeResponse = {
   workflows: [WORKFLOW, BORROWER_DOSSIER_WORKFLOW],
   monitors: [],
+  capabilities: [
+    {
+      key: 'genie_conversation_api',
+      label: 'Genie Conversation API',
+      ga: true,
+      status: 'available',
+      claimable: true,
+      detail: 'Programmatic Genie answers are configured.',
+    },
+    {
+      key: 'agent_orchestrator',
+      label: 'Mortgage Growth Agent (multi-agent)',
+      ga: true,
+      status: 'not_provisioned',
+      claimable: false,
+      detail: 'Disabled or missing agent framework libraries.',
+    },
+    {
+      key: 'ai_gateway',
+      label: 'Unity AI Gateway governance',
+      ga: true,
+      status: 'not_provisioned',
+      claimable: false,
+      detail: 'Gateway endpoint/inference-table config is missing.',
+    },
+    {
+      key: 'agent_eval',
+      label: 'MLflow Agent Evaluation',
+      ga: true,
+      status: 'not_provisioned',
+      claimable: false,
+      detail: 'MLflow evaluation is not configured.',
+    },
+  ],
 };
 
 const START: GenieStartResult = {
@@ -112,6 +146,9 @@ const RUN: GrowthAgentRunResponse = {
   workflow: WORKFLOW,
   run_id: '11111111-1111-4111-8111-111111111111',
   specialist_agent: 'structured_data_agent',
+  execution_mode: 'deterministic',
+  trace_kind: 'local_hash',
+  planner_label: 'Reviewed deterministic planner',
   trace_id: 'agent-trace-11111111-1111-4111-8111-111111111111',
   tool_result_hash: 'a'.repeat(64),
   broad_label: 'Broad opportunity',
@@ -156,7 +193,9 @@ const RUN: GrowthAgentRunResponse = {
       evidence_ref: 'agent-trace-11111111-1111-4111-8111-111111111111',
     },
   ],
-  interpreted_intent: 'Structured Data Agent selected the daily refi opportunity brief.',
+  interpreted_intent: 'Reviewed deterministic planner selected the daily refi opportunity brief.',
+  agent_reasoning: 'Reviewed keyword routing selected a governed SQL workflow.',
+  genie_trusted_assets: [],
 };
 
 function setNativeValue(el: HTMLInputElement | HTMLSelectElement, value: string) {
@@ -207,7 +246,7 @@ describe('AskGenie Growth Agent route panel', () => {
           detail: 'Custom workflow criteria are reviewed segment codes and explicit Any/All mode only.',
         },
       ],
-      interpreted_intent: 'Campaign Agent built a custom ANY segment workflow.',
+      interpreted_intent: 'Campaign lens built a custom ANY segment workflow.',
     });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -268,7 +307,7 @@ describe('AskGenie Growth Agent route panel', () => {
 
     expect(container.textContent).toContain('Mortgage Growth Agent');
     expect(container.textContent).toContain('Borrower Dossier Review');
-    expect(container.textContent).toContain('No auto-send');
+    expect(container.textContent).toContain('No auto-send · no scheduled automation');
     expect(container.textContent).toContain('Audited Lakebase run');
 
     act(() => setNativeValue(stateInput(), 'IL illinois'));
@@ -282,7 +321,11 @@ describe('AskGenie Growth Agent route panel', () => {
 
   it('routes a natural-language agent objective through reviewed workflows', async () => {
     mount();
-    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
+    await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
+    expect(container.textContent).toContain('Mortgage Growth Agent (multi-agent)');
+    expect(container.textContent).toContain('Not provisioned');
+    expect(container.textContent).toContain('Gateway endpoint/inference-table config is missing.');
 
     const prompt = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Mortgage Growth Agent prompt"]',
@@ -295,7 +338,7 @@ describe('AskGenie Growth Agent route panel', () => {
       prompt.dispatchEvent(new Event('change', { bubbles: true }));
     });
     act(() => setNativeValue(stateInput(), 'IL'));
-    act(() => button(/^Plan and run$/).click());
+    act(() => button(/^Plan reviewed workflow$/).click());
 
     await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
     expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
@@ -305,11 +348,13 @@ describe('AskGenie Growth Agent route panel', () => {
       cadence: 'daily',
       monitor_name: null,
     });
-    await waitUntil(() => container.textContent?.includes('Structured Data Agent') ?? false);
-    expect(container.textContent).toContain('Trace 111111111111');
+    await waitUntil(() => container.textContent?.includes('Structured data lens') ?? false);
+    expect(container.textContent).toContain('Reviewed workflow');
+    expect(container.textContent).toContain('Run correlation 111111111111');
     expect(container.textContent).toContain('Hash aaaaaaaaaaaa');
     expect(container.textContent).toContain('PII-safe output');
     expect(container.textContent).toContain('fn_build_cohort');
+    expect(container.textContent).not.toContain('MLflow trace');
   });
 
   it('saves natural-language monitors with reviewed filters only', async () => {
@@ -339,7 +384,7 @@ describe('AskGenie Growth Agent route panel', () => {
       monitor: savedMonitor,
     });
     mount();
-    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
 
     const prompt = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Mortgage Growth Agent prompt"]',
@@ -353,11 +398,11 @@ describe('AskGenie Growth Agent route panel', () => {
     });
     act(() => setNativeValue(stateInput(), 'IL'));
     const cadence = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Growth Agent monitor cadence"]',
+      'select[aria-label="Growth Agent review cadence"]',
     );
-    if (!cadence) throw new Error('monitor cadence select not rendered');
+    if (!cadence) throw new Error('review cadence select not rendered');
     act(() => setNativeValue(cadence, 'weekly'));
-    act(() => button(/^Plan and save monitor$/).click());
+    act(() => button(/^Save reviewed watchlist$/).click());
 
     await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
     expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
@@ -368,13 +413,13 @@ describe('AskGenie Growth Agent route panel', () => {
       monitor_name: 'Mortgage Growth Agent - IL',
     });
     await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
-    expect(container.textContent).toContain('Saved monitors');
+    expect(container.textContent).toContain('Saved watchlists');
     expect(container.textContent).toContain('5,394');
   });
 
   it('does not imply a state scope in the default prompt', async () => {
     mount();
-    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
 
     const prompt = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Mortgage Growth Agent prompt"]',
@@ -383,7 +428,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(prompt.value).toContain('current coverage');
     expect(prompt.value).not.toContain('Illinois');
 
-    act(() => button(/^Plan and run$/).click());
+    act(() => button(/^Plan reviewed workflow$/).click());
     await waitUntil(() => runMortgageGrowthAgent.mock.calls.length === 1);
     expect(runMortgageGrowthAgent.mock.calls[0][0]).toEqual({
       prompt: 'Find prime refinance and listed-for-sale opportunities across current coverage.',
@@ -408,9 +453,9 @@ describe('AskGenie Growth Agent route panel', () => {
       ],
     });
     mount();
-    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
 
-    act(() => button(/^Plan and run$/).click());
+    act(() => button(/^Plan reviewed workflow$/).click());
     await waitUntil(() => container.textContent?.includes('Preview integration') ?? false);
 
     expect(container.textContent).toContain('Not provisioned');
@@ -438,9 +483,9 @@ describe('AskGenie Growth Agent route panel', () => {
       ],
     });
     mount();
-    await waitUntil(() => container.textContent?.includes('Agent objective') ?? false);
+    await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
 
-    act(() => button(/^Plan and run$/).click());
+    act(() => button(/^Plan reviewed workflow$/).click());
     await waitUntil(() => container.textContent?.includes('Activation policy') ?? false);
 
     expect(container.querySelector('.growth-agent-step--blocked')).not.toBeNull();
@@ -477,7 +522,7 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
 
     act(() => setNativeValue(stateInput(), 'IL TX'));
-    act(() => button(/Save monitor/).click());
+    act(() => button(/Save watchlist/).click());
 
     await waitUntil(() => runGrowthAgentWorkflow.mock.calls.length === 1);
     expect(runGrowthAgentWorkflow.mock.calls[0][1]).toEqual({
@@ -519,7 +564,7 @@ describe('AskGenie Growth Agent route panel', () => {
     );
     if (!select) throw new Error('custom segment mode select not rendered');
     act(() => setNativeValue(select, 'all'));
-    act(() => button(/Save custom monitor/).click());
+    act(() => button(/Save custom watchlist/).click());
 
     await waitUntil(() => runCustomGrowthAgentWorkflow.mock.calls.length === 1);
     expect(runCustomGrowthAgentWorkflow.mock.calls[0][0]).toEqual({
@@ -539,7 +584,7 @@ describe('AskGenie Growth Agent route panel', () => {
     act(() => button(/^Listed for Sale$/).click());
     act(() => button(/^Prime Refi Candidates$/).click());
     expect(button(/^Run custom$/).disabled).toBe(true);
-    expect(button(/^Save custom monitor$/).disabled).toBe(true);
+    expect(button(/^Save custom watchlist$/).disabled).toBe(true);
 
     act(() => button(/^Home Equity Candidate$/).click());
     expect(button(/^Run custom$/).disabled).toBe(false);
@@ -563,7 +608,7 @@ describe('AskGenie Growth Agent route panel', () => {
     mount();
     await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);
 
-    act(() => button(/^Save custom monitor$/).click());
+    act(() => button(/^Save custom watchlist$/).click());
 
     await waitUntil(() => container.textContent?.includes('Saving…') ?? false);
     expect(button(/^Run custom$/).disabled).toBe(true);

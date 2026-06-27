@@ -80,7 +80,7 @@ async function mockAskGenieShell(page: Page) {
 }
 
 async function fillAskGenieQuestion(page: Page, question: string) {
-  await expect(page.getByRole('heading', { name: /AI workflows for borrower growth/i })).toBeVisible({
+  await expect(page.getByRole('heading', { name: /Governed mortgage growth co-pilot/i })).toBeVisible({
     timeout: 45_000,
   });
   const textarea = page.locator('textarea[aria-label="Ask Genie — question"]');

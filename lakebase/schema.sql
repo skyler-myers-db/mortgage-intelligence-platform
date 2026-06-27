@@ -716,6 +716,7 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     trace_id         TEXT,
     tool_result_hash TEXT,
     specialist_agent TEXT,
+    agent_evidence   JSONB NOT NULL DEFAULT '{}'::jsonb,
     governance_chips JSONB NOT NULL DEFAULT '[]'::jsonb,
     audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -736,6 +737,8 @@ ALTER TABLE mip_app.growth_agent_runs
     ADD COLUMN IF NOT EXISTS tool_result_hash TEXT;
 ALTER TABLE mip_app.growth_agent_runs
     ADD COLUMN IF NOT EXISTS specialist_agent TEXT;
+ALTER TABLE mip_app.growth_agent_runs
+    ADD COLUMN IF NOT EXISTS agent_evidence JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE mip_app.growth_agent_runs
     ADD COLUMN IF NOT EXISTS governance_chips JSONB NOT NULL DEFAULT '[]'::jsonb;
 CREATE INDEX IF NOT EXISTS idx_growth_agent_runs_actor_created

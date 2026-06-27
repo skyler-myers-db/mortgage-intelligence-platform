@@ -124,6 +124,23 @@ function renderSourceAssetChip(asset: string) {
   return <Chip key={asset} variant="neutral" icon="db">{label}</Chip>;
 }
 
+function capabilityStatusText(status: string): string {
+  switch (status) {
+    case 'available':
+      return 'Available';
+    case 'configured':
+      return 'Configured';
+    case 'not_provisioned':
+      return 'Not provisioned';
+    case 'preview_mirror':
+      return 'Roadmap mirror';
+    case 'hidden':
+      return 'Hidden';
+    default:
+      return status.replace('_', ' ');
+  }
+}
+
 const NON_PERSISTABLE_SOURCES = new Set([
   'degraded',
   'policy_blocked',
@@ -451,12 +468,20 @@ export default function AskGenie() {
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
   const workflows = growthAgentQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? [];
+  const capabilityRows = (growthAgentQuery.data?.capabilities ?? []).filter((row) => (
+    [
+      'genie_conversation_api',
+      'agent_orchestrator',
+      'ai_gateway',
+      'agent_eval',
+    ].includes(row.key) && row.status !== 'hidden'
+  ));
 
   return (
     <PageShell
       eyebrow="Mortgage Growth Agent"
-      title="AI workflows for borrower growth"
-      lede="Run governed agent workflows, review the exact eligible Lead Queue subset, then ask Genie follow-up questions against trusted Unity Catalog assets."
+      title="Governed mortgage growth co-pilot"
+      lede="Route borrower-growth objectives to reviewed SQL workflows, review the exact eligible Lead Queue subset, then ask Genie follow-up questions against trusted Unity Catalog assets."
       heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie + SQL</Chip>}
     >
       <div className="surface growth-agent" aria-busy={growthAgentPending !== null || promptAgentPending}>
@@ -464,17 +489,40 @@ export default function AskGenie() {
           <Icon name="bolt" size={14} className="icon-accent" />
           <div>
             <div className="h-4">Mortgage Growth Agent</div>
-            <div className="muted fs-12">Governed workflow runs, saved monitors, and human-review Lead Queue handoffs.</div>
+            <div className="muted fs-12">Reviewed workflow runs, saved watchlists, and human-review Lead Queue handoffs.</div>
           </div>
           <div className="spacer" />
-          <Chip variant="success" icon="shield">No auto-send</Chip>
+          <Chip variant="success" icon="shield">No auto-send · no scheduled automation</Chip>
           <Chip variant="neutral" icon="audit">Audited Lakebase run</Chip>
         </div>
         <div className="surface__body">
+          <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
+            {capabilityRows.length > 0 ? capabilityRows.map((capability) => (
+              <div key={capability.key} className="growth-agent-capability">
+                <Chip variant={capability.claimable ? 'success' : 'neutral'}>
+                  {capabilityStatusText(capability.status)}
+                </Chip>
+                <div>
+                  <div className="growth-agent-step__title">{capability.label}</div>
+                  <div className="growth-agent-step__detail">{capability.detail}</div>
+                </div>
+              </div>
+            )) : (
+              <div className="growth-agent-capability">
+                <Chip variant="warning">Unverified</Chip>
+                <div>
+                  <div className="growth-agent-step__title">Agentic capability snapshot</div>
+                  <div className="growth-agent-step__detail">
+                    Capability readiness is unavailable; treat multi-agent, AI Gateway, and MLflow claims as unverified.
+                  </div>
+                </div>
+              </div>
+            )}
+          </section>
           <section className="growth-agent-command" aria-label="Mortgage Growth Agent command center">
             <div className="growth-agent-command__main">
               <label className="growth-agent__field">
-                <span>Agent objective</span>
+                <span>Growth objective</span>
                 <textarea
                   className="route-textarea growth-agent-command__prompt"
                   aria-label="Mortgage Growth Agent prompt"
@@ -482,7 +530,7 @@ export default function AskGenie() {
                   onChange={(event) => setAgentPrompt(event.target.value)}
                 />
                 <span className="growth-agent__hint">
-                  The agent selects reviewed tools only; raw borrower identifiers and PII are rejected.
+                  The co-pilot selects reviewed workflows only; raw borrower identifiers, PII, protected-class targeting, and unreviewed source requests are rejected.
                 </span>
               </label>
             </div>
@@ -494,7 +542,7 @@ export default function AskGenie() {
                 onClick={() => runMortgageGrowthAgentPrompt(false)}
                 disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
               >
-                {promptAgentPending && promptAgentPendingAction === 'run' ? 'Planning…' : 'Plan and run'}
+                {promptAgentPending && promptAgentPendingAction === 'run' ? 'Planning…' : 'Plan reviewed workflow'}
               </Button>
               <Button
                 variant="ghost"
@@ -503,7 +551,7 @@ export default function AskGenie() {
                 onClick={() => runMortgageGrowthAgentPrompt(true)}
                 disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
               >
-                {promptAgentPending && promptAgentPendingAction === 'save' ? 'Saving…' : 'Plan and save monitor'}
+                {promptAgentPending && promptAgentPendingAction === 'save' ? 'Saving…' : 'Save reviewed watchlist'}
               </Button>
             </div>
           </section>
@@ -527,17 +575,17 @@ export default function AskGenie() {
               </span>
             </label>
             <label className="growth-agent__field growth-agent__field--compact">
-              <span>Monitor cadence</span>
+              <span>Review cadence</span>
               <select
                 className="form-input"
-                aria-label="Growth Agent monitor cadence"
+                aria-label="Growth Agent review cadence"
                 value={agentCadence}
                 onChange={(event) => setAgentCadence(event.target.value as GrowthAgentCadence)}
               >
-                <option value="daily">Daily</option>
-                <option value="weekly">Weekly</option>
+                <option value="daily">Daily review</option>
+                <option value="weekly">Weekly review</option>
               </select>
-              <span className="growth-agent__hint">Saving a monitor stores reviewed filters only.</span>
+              <span className="growth-agent__hint">Saving stores reviewed filters only; it does not schedule an automatic run.</span>
             </label>
           </div>
 
@@ -595,7 +643,7 @@ export default function AskGenie() {
                       onClick={() => runGrowthAgentWorkflow(workflow, true)}
                       disabled={growthAgentPending !== null || promptAgentPending || stateParsePreview.invalid.length > 0}
                     >
-                      Save monitor
+                      Save watchlist
                     </Button>
                   </div>
                 </article>
@@ -614,7 +662,7 @@ export default function AskGenie() {
               <div>
                 <div className="h-4">Build a custom segment workflow</div>
                 <div className="muted fs-12">
-                  Combine reviewed Module 0 segment signals, reconcile to eligible leads, then save the monitor.
+                  Combine reviewed Module 0 segment signals, reconcile to eligible leads, then save the watchlist filters.
                 </div>
               </div>
               <div className="spacer" />
@@ -669,7 +717,7 @@ export default function AskGenie() {
                   onClick={() => runCustomGrowthAgentWorkflow(true)}
                   disabled={growthAgentPending !== null || promptAgentPending || customSegments.length === 0 || stateParsePreview.invalid.length > 0}
                 >
-                  {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'save' ? 'Saving…' : 'Save custom monitor'}
+                  {growthAgentPending === 'custom_segment_watch' && customAgentPendingAction === 'save' ? 'Saving…' : 'Save custom watchlist'}
                 </Button>
               </div>
             </div>
@@ -684,8 +732,8 @@ export default function AskGenie() {
           )}
 
           {monitors.length > 0 && (
-            <div className="growth-agent-monitors" aria-label="Saved Growth Agent monitors">
-              <div className="eyebrow">Saved monitors</div>
+            <div className="growth-agent-monitors" aria-label="Saved Growth Agent watchlists">
+              <div className="eyebrow">Saved watchlists</div>
               <div className="growth-agent-monitor-list">
                 {monitors.map((monitor) => (
                   <button
@@ -695,7 +743,7 @@ export default function AskGenie() {
                     onClick={() => navigate(monitor.route)}
                   >
                     <span>{monitor.name}</span>
-                    <span>{monitor.cadence}</span>
+                    <span>{monitor.cadence === 'weekly' ? 'Weekly review' : 'Daily review'}</span>
                     <strong>{formatGrowthAgentCount(monitor.actionable_total)}</strong>
                   </button>
                 ))}

@@ -35,6 +35,8 @@ GrowthAgentSpecialist = Literal[
     "campaign_agent",
     "data_ops_agent",
 ]
+GrowthAgentExecutionMode = Literal["deterministic", "genie_conversation", "agent_framework"]
+GrowthAgentTraceKind = Literal["local_hash", "genie_conversation", "mlflow_trace"]
 
 _STATE_RE = re.compile(r"^[A-Z]{2}$")
 _MONITOR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+/-]{0,79}$")
@@ -63,6 +65,31 @@ _PROMPT_LEADING_HUMAN_NAME_RE = re.compile(
     r"genie|Genie|cotality|Cotality|databricks|Databricks)\b)"
     r"(?:[A-Z][a-z]{1,30}|[A-Z]{2,30})\s+"
     r"(?:[A-Z]\s+)?(?:[A-Z][a-z]{1,30}|[A-Z]{2,30})\b"
+)
+_PROMPT_PROTECTED_CLASS_RE = re.compile(
+    r"\b(?:race|racial|ethnicity|ethnic|religion|religious|gender|sex|sexual|"
+    r"national\s+origin|familial\s+status|marital\s+status|disability|disabled|"
+    r"protected\s+class|age|color|public\s+assistance)\b",
+    re.IGNORECASE,
+)
+_PROMPT_JAILBREAK_RE = re.compile(
+    r"\b(?:ignore\s+(?:all\s+)?(?:previous|prior|system)\s+instructions|"
+    r"ignore\s+(?:the\s+)?safety\s+policy|"
+    r"system\s+prompt|developer\s+message|jailbreak|bypass\s+policy|"
+    r"show\s+all\s+tables|list\s+all\s+tables|raw\s+(?:tables?|sources?|rows?)|"
+    r"(?:use|query|read)\s+(?:the\s+)?silver\b|"
+    r"cotality_mortgage_data|"
+    r"select\s+\*|drop\s+table|insert\s+into|delete\s+from|update\s+\w+\s+set)\b",
+    re.IGNORECASE,
+)
+_PROMPT_UNAVAILABLE_SOURCE_RE = re.compile(
+    r"\b(?:fico|credit\s+score|filed\s+permits?|building\s+permits?|permit\s+activity)\b",
+    re.IGNORECASE,
+)
+_PROMPT_UNREVIEWED_LENDER_TARGET_RE = re.compile(
+    r"\b(?:wells\s+fargo|rocket\s+mortgage|fairway|loan\s*depot|movement\s+mortgage|"
+    r"chase|bank\s+of\s+america|td\s+bank)\s+(?:customers?|borrowers?|prospects?)\b",
+    re.IGNORECASE,
 )
 _WORKFLOW_MONITOR_TITLE_RE = re.compile(
 	r"^(?:Daily Refi Opportunity Brief|Listed-for-Sale Purchase Watch|"
@@ -214,8 +241,12 @@ class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
             or _PROMPT_STREET_ADDRESS_NO_SUFFIX_RE.search(clean)
             or _PROMPT_HUMAN_NAME_RE.search(clean)
             or _PROMPT_LEADING_HUMAN_NAME_RE.search(clean)
+            or _PROMPT_PROTECTED_CLASS_RE.search(clean)
+            or _PROMPT_JAILBREAK_RE.search(clean)
+            or _PROMPT_UNAVAILABLE_SOURCE_RE.search(clean)
+            or _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(clean)
         ):
-            raise ValueError("prompt must not include borrower PII or raw identifiers")
+            raise ValueError("prompt must use reviewed, non-PII mortgage-growth criteria")
         return clean
 
     @field_validator("segment_codes")
@@ -233,6 +264,9 @@ class GrowthAgentRunResponse(BaseModel):
     run_id: str
     monitor: GrowthAgentMonitor | None = None
     specialist_agent: GrowthAgentSpecialist
+    execution_mode: GrowthAgentExecutionMode = "deterministic"
+    trace_kind: GrowthAgentTraceKind = "local_hash"
+    planner_label: str = "Reviewed deterministic planner"
     trace_id: str
     tool_result_hash: str
     broad_label: str = "Broad opportunity"
@@ -250,6 +284,13 @@ class GrowthAgentRunResponse(BaseModel):
     policy_checks: list[GrowthAgentPolicyCheck]
     governance_chips: list[GrowthAgentGovernanceChip] = Field(default_factory=list)
     interpreted_intent: str | None = None
+    agent_reasoning: str | None = None
+    genie_conversation_id: str | None = None
+    genie_message_id: str | None = None
+    genie_question_hash: str | None = None
+    genie_sql_hash: str | None = None
+    genie_row_count: int | None = Field(default=None, ge=0)
+    genie_trusted_assets: list[str] = Field(default_factory=list)
     audit_event_id: str | None = None
     created_at: datetime | str | None = None
 
@@ -257,3 +298,4 @@ class GrowthAgentRunResponse(BaseModel):
 class GrowthAgentHomeResponse(BaseModel):
     workflows: list[GrowthAgentWorkflow]
     monitors: list[GrowthAgentMonitor]
+    capabilities: list[dict[str, object]] = Field(default_factory=list)

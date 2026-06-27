@@ -35,7 +35,7 @@ Remember these exact product anchors:
 - State: Lakebase for campaigns, approvals, agent sessions, action audit, feedback.
 - Databricks App: `app.yaml` invokes `python -m backend.runtime`.
 - Databricks resources: managed through `databricks.yml` bundle templates.
-- Agentic features: deterministic orchestrator now; Agent Bricks/Supervisor + MCP as production extension.
+- Agentic features: reviewed workflow executor now, with optional Genie Conversation planning when provisioned. Agent Framework/Agent Bricks/Supervisor, MLflow traces/evals, AI Gateway inference, and MCP-style tool publication are production extensions and must not be claimed unless their configured capability checks pass.
 
 ## Required workflow before editing
 
@@ -82,7 +82,7 @@ If a command fails, fix the root cause before moving to another feature. Do not 
 - **Backend layers — keep this separation:**
   - `backend/api/*` — thin FastAPI routers, one per domain (portfolio, segments, leads, borrowers, offers, outreach, genie, audit, admin, health).
   - `backend/services/*` — Databricks SQL, Lakebase, Genie, Cotality MCP, evidence, scoring, mock data. Routers call services, not each other.
-  - Agentic orchestration is currently deterministic and service-backed (`backend/api/v1/genie.py`, `backend/services/genie_*`, `backend/services/repositories/databricks_genie*`). A future Agent Bricks/Supervisor extension may add `backend/agents/*`, but that directory is not part of Module 0 today.
+  - Agentic orchestration is a reviewed, service-backed workflow surface (`backend/api/growth_agent.py`, `backend/agents/*`, `backend/services/growth_agent_*`, `backend/services/genie_*`). The co-pilot may use Databricks Genie Conversation to classify a user objective when the workspace is configured, but model output can only select one of the reviewed Module 0 workflows; the SQL, Lakebase writes, Lead Queue handoffs, and audit events remain deterministic and policy-gated. Agent Framework/Agent Bricks/Supervisor and MLflow trace/eval integrations are not part of the current runtime unless capability checks prove them live.
   - `backend/schemas/*` — Pydantic contracts shared between routers and services.
 - **Data plane (Unity Catalog, default catalog `mip`):** raw share → `sql/transformations/silver_*.sql` → `sql/transformations/gold_*.sql` → `sql/metric_views/*` consumed by the app and Genie. UC SQL functions in `sql/uc_functions/` (`fn_in_the_money`, `fn_lead_score`, `fn_next_best_offer`, `fn_rate_spread`) are the canonical scoring primitives — keep Python scoring in `backend/services/scoring.py` consistent with them.
 - **App state:** Lakebase Postgres (`lakebase/schema.sql`) holds campaigns, approvals, agent sessions, audit, feedback. Sample-lender seed in `lakebase/seed_campaigns.sql`.

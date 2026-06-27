@@ -285,22 +285,22 @@ def planned_workflow(payload: GrowthAgentPromptRunRequest) -> tuple[GrowthAgentW
             f"Custom reviewed segment workflow using {mode.upper()} semantics.",
         )
     if any(term in q for term in ("source", "fresh", "readiness", "stale data", "data ops", "refresh")):
-        return WORKFLOWS["source_freshness_sentinel"], "Data Ops Agent selected the global source/freshness sentinel."
+        return WORKFLOWS["source_freshness_sentinel"], "Data operations lens selected the global source/freshness sentinel."
     if any(term in q for term in ("dossier", "borrower story", "customer 360", "borrower 360", "explain top")):
-        return WORKFLOWS["borrower_dossier_review"], "Borrower Dossier Agent selected the dossier review workflow."
+        return WORKFLOWS["borrower_dossier_review"], "Borrower dossier lens selected the dossier review workflow."
     if any(term in q for term in ("capacity", "branch", "manager", "aging", "stale approved", "loan officer", "lo ")):
-        return WORKFLOWS["branch_capacity_review"], "Campaign Agent selected the branch-manager capacity review."
+        return WORKFLOWS["branch_capacity_review"], "Campaign lens selected the branch-manager capacity review."
     if any(term in q for term in ("heloc", "cash out", "cash-out", "home equity", "equity line")):
-        return WORKFLOWS["high_equity_heloc_watch"], "Offer Agent selected the high-equity HELOC watch."
+        return WORKFLOWS["high_equity_heloc_watch"], "Offer lens selected the high-equity HELOC watch."
     detected_segments = _segments_from_prompt(q)
     if len(detected_segments) >= 2:
         mode = "all" if any(term in q for term in ("both", "all selected", "intersection", "and")) else "any"
-        return custom_workflow(detected_segments, mode), f"Campaign Agent built a custom {mode.upper()} segment workflow."
+        return custom_workflow(detected_segments, mode), f"Campaign lens built a custom {mode.upper()} segment workflow."
     if any(term in q for term in ("listed", "listing", "for sale", "purchase")):
-        return WORKFLOWS["listing_watch"], "Campaign Agent selected the listed-for-sale purchase watch."
+        return WORKFLOWS["listing_watch"], "Campaign lens selected the listed-for-sale purchase watch."
     if any(term in q for term in ("competitor", "recapture", "retention", "current customer")):
-        return WORKFLOWS["competitor_recapture_monitor"], "Compliance Agent selected competitor recapture monitoring."
-    return WORKFLOWS["daily_refi_brief"], "Structured Data Agent selected the daily refi opportunity brief."
+        return WORKFLOWS["competitor_recapture_monitor"], "Compliance lens selected competitor recapture monitoring."
+    return WORKFLOWS["daily_refi_brief"], "Structured data lens selected the daily refi opportunity brief."
 
 
 _SEGMENT_PROMPT_TERMS: dict[str, str] = {

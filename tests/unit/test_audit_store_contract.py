@@ -164,7 +164,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "genie_action": ("handle_genie_action(",),
     "run_growth_agent_workflow": ("_run_workflow(",),
     "run_custom_growth_agent_workflow": ("_run_workflow(",),
-    "run_mortgage_growth_agent": ("_planned_workflow(", "_run_workflow("),
+    "run_mortgage_growth_agent": ("plan_growth_agent_prompt(", "_run_workflow("),
     "log_event": ("store.write(",),
     "save_lead": ("store.save_lead(",),
     "delete_lead": ("store.delete_lead(",),
@@ -524,6 +524,7 @@ def test_custom_growth_agent_lakebase_schema_contract_is_migrated() -> None:
     assert "ADD COLUMN IF NOT EXISTS trace_id TEXT" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS tool_result_hash TEXT" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS specialist_agent TEXT" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS agent_evidence JSONB" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS governance_chips JSONB" in schema_sql
     assert "ck_growth_agent_runs_workflow_id" in schema_sql
     assert "ck_growth_agent_monitors_workflow_id" in schema_sql

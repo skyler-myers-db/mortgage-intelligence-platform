@@ -16,6 +16,10 @@ from uuid import uuid4
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.agents.mortgage_growth_copilot import (
+    GrowthAgentCopilotEvidence,
+    plan_growth_agent_prompt,
+)
 from backend.schemas.growth_agent import (
     GrowthAgentCustomRunRequest,
     GrowthAgentGovernanceChip,
@@ -31,6 +35,7 @@ from backend.schemas.growth_agent import (
 from backend.services.agent_tools import assert_tool_allowed_for_specialist
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import resolve_actor
+from backend.services.capabilities import get_capabilities_snapshot
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_ledger_sql import (
@@ -70,9 +75,6 @@ from backend.services.growth_agent_workflows import (
 from backend.services.growth_agent_workflows import (
     custom_workflow as _custom_workflow,
 )
-from backend.services.growth_agent_workflows import (
-    planned_workflow as _planned_workflow,
-)
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 
 router = APIRouter(prefix="/growth-agent", tags=["growth-agent"])
@@ -95,6 +97,7 @@ def growth_agent_home(request: Request, lakebase: LakebaseDep) -> GrowthAgentHom
     return GrowthAgentHomeResponse(
         workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
         monitors=_list_monitors(lakebase, actor=actor),
+        capabilities=[cap.to_dict() for cap in get_capabilities_snapshot()],
     )
 
 
@@ -155,22 +158,23 @@ def run_mortgage_growth_agent(
     sql_client: SqlDep,
     lakebase: LakebaseDep,
 ) -> GrowthAgentRunResponse:
-    """Route a natural-language agent request to reviewed deterministic tools.
+    """Route a natural-language co-pilot request to reviewed workflows.
 
-    The prompt is used only for bounded routing. The LLM/agent layer never
-    executes SQL, DML, or outreach. It selects one reviewed workflow or one
-    reviewed custom segment screen, then the same deterministic executor writes
-    the Lakebase audit row and returns a reconciled Lead Queue/Admin handoff.
+    The current runtime uses reviewed deterministic routing only. It does not
+    call the normal Genie answer path for prompt planning because that path can
+    compile and execute SQL. The deterministic executor writes the Lakebase
+    audit row and returns a reconciled Lead Queue/Admin handoff.
     """
 
-    workflow, interpreted_intent = _planned_workflow(payload)
+    workflow, copilot_evidence = plan_growth_agent_prompt(payload)
     response = _run_workflow(
         workflow=workflow,
         payload=payload,
         request=request,
         sql_client=sql_client,
         lakebase=lakebase,
-        interpreted_intent=interpreted_intent,
+        interpreted_intent=copilot_evidence.interpreted_intent,
+        copilot_evidence=copilot_evidence,
     )
     return response
 
@@ -183,8 +187,10 @@ def _run_workflow(
     sql_client: DatabricksSqlClient,
     lakebase: LakebaseClient,
     interpreted_intent: str | None = None,
+    copilot_evidence: GrowthAgentCopilotEvidence | None = None,
 ) -> GrowthAgentRunResponse:
     actor = resolve_actor(request)
+    copilot_evidence = copilot_evidence or _default_copilot_evidence(workflow)
     effective_states = [] if workflow.id == "source_freshness_sentinel" else payload.states
     criteria = _criteria_for(workflow, effective_states)
     route = _route(
@@ -223,7 +229,12 @@ def _run_workflow(
     metrics = load_growth_agent_metrics(sql_client, workflow=workflow, states=effective_states)
     trace_id = f"agent-trace-{uuid4()}"
     tool_result_hash = _tool_result_hash(workflow=workflow, metrics=metrics, criteria=criteria, route=route)
-    tool_steps = _tool_steps(workflow, metrics, tool_result_hash=tool_result_hash)
+    tool_steps = _tool_steps(
+        workflow,
+        metrics,
+        tool_result_hash=tool_result_hash,
+        copilot_evidence=copilot_evidence,
+    )
     policy_checks = _policy_checks(workflow, metrics, saved_monitor=payload.save_monitor)
     governance_chips = _governance_chips(
         workflow,
@@ -231,6 +242,7 @@ def _run_workflow(
         policy_checks=policy_checks,
         trace_id=trace_id,
         audit_event_id=None,
+        copilot_evidence=copilot_evidence,
     )
     source_assets = list(workflow.source_assets)
     try:
@@ -257,6 +269,7 @@ def _run_workflow(
                     "trace_id": trace_id,
                     "tool_result_hash": tool_result_hash,
                     "specialist_agent": workflow.specialist_agent,
+                    "agent_evidence": json.dumps(copilot_evidence.criteria_json()),
                     "governance_chips": json.dumps([chip.model_dump() for chip in governance_chips]),
                 },
             )
@@ -345,6 +358,17 @@ def _run_workflow(
     )
 
 
+def _default_copilot_evidence(workflow: _WorkflowDef) -> GrowthAgentCopilotEvidence:
+    return GrowthAgentCopilotEvidence(
+        execution_mode="deterministic",
+        trace_kind="local_hash",
+        planner_label="Reviewed workflow runner",
+        interpreted_intent=f"Reviewed workflow selected: {workflow.title}.",
+        reasoning_summary="The user selected a reviewed workflow card; no model planner was used.",
+        fallback_reason="direct_workflow_run",
+    )
+
+
 def _criteria_for(workflow: _WorkflowDef, states: list[str]) -> dict[str, object]:
     lead_queue_filters: dict[str, object] = {
         "source": "trusted_sql",
@@ -380,11 +404,21 @@ def _tool_steps(
     metrics: dict[str, Any],
     *,
     tool_result_hash: str,
+    copilot_evidence: GrowthAgentCopilotEvidence,
 ) -> list[GrowthAgentToolStep]:
+    planner_step = GrowthAgentToolStep(
+        label="Interpret mortgage-growth objective",
+        status="completed",
+        detail=copilot_evidence.reasoning_summary,
+        source_asset=None,
+        tool_name=None,
+        result_hash=tool_result_hash,
+    )
     if workflow.id == "source_freshness_sentinel":
         warning_total = int(metrics.get("warning_total") or 0)
         stale_total = int(metrics.get("stale_total") or 0)
         return [
+            planner_step,
             _reviewed_tool_step(
                 workflow,
                 "fn_source_readiness",
@@ -415,6 +449,7 @@ def _tool_steps(
         ]
     if workflow.id == "borrower_dossier_review":
         return [
+            planner_step,
             _reviewed_tool_step(
                 workflow,
                 "fn_borrower_dossier_evidence",
@@ -445,6 +480,7 @@ def _tool_steps(
         ]
     if workflow.id == "high_equity_heloc_watch":
         return [
+            planner_step,
             _reviewed_tool_step(
                 workflow,
                 "fn_build_cohort",
@@ -474,6 +510,7 @@ def _tool_steps(
             ),
         ]
     return [
+        planner_step,
         _reviewed_tool_step(
             workflow,
             "fn_build_cohort",
@@ -612,9 +649,12 @@ def _policy_checks(
     if saved_monitor:
         checks.append(
             GrowthAgentPolicyCheck(
-                label="Monitor saved to Lakebase",
+                label="Watchlist saved to Lakebase",
                 status="passed",
-                detail="The saved monitor stores reviewed filters and counts, not borrower identities or raw prompts.",
+                detail=(
+                    "The saved watchlist stores reviewed filters and counts only; "
+                    "it does not create a scheduled run, outbound activation, borrower identity export, or raw prompt record."
+                ),
             )
         )
     return checks
@@ -627,6 +667,7 @@ def _governance_chips(
     policy_checks: list[GrowthAgentPolicyCheck],
     trace_id: str,
     audit_event_id: str | None,
+    copilot_evidence: GrowthAgentCopilotEvidence,
 ) -> list[GrowthAgentGovernanceChip]:
     blocked = any(check.status == "blocked" for check in policy_checks)
     review = any(check.status == "review_required" for check in policy_checks)
@@ -649,6 +690,28 @@ def _governance_chips(
             status=policy_status,
             detail=f"{len(policy_checks):,} policy checks evaluated for this workflow.",
             evidence_ref=audit_event_id,
+        ),
+        GrowthAgentGovernanceChip(
+            label="Genie Conversation",
+            status="passed" if copilot_evidence.execution_mode == "genie_conversation" else "not_provisioned",
+            detail=(
+                "Prompt interpretation is linked to a Genie Conversation message; deterministic tools executed the run."
+                if copilot_evidence.execution_mode == "genie_conversation"
+                else "This run used reviewed deterministic routing; no Genie Conversation proof was attached."
+            ),
+            evidence_ref=None,
+        ),
+        GrowthAgentGovernanceChip(
+            label="Multi-agent framework",
+            status="not_provisioned",
+            detail="Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead.",
+            evidence_ref=None,
+        ),
+        GrowthAgentGovernanceChip(
+            label="MLflow trace/eval",
+            status="not_provisioned",
+            detail="No MLflow trace URL or Agent Evaluation result is attached to this run.",
+            evidence_ref=None,
         ),
     ]
     if workflow.id == "source_freshness_sentinel":
@@ -733,6 +796,7 @@ def _run_response_from_row(
         for item in _json_list(run_row.get("governance_chips"))
         if isinstance(item, dict)
     ]
+    agent_evidence = _json_object(run_row.get("agent_evidence"))
     if monitor is None:
         monitor = _monitor_from_row(monitor_row) if monitor_row is not None else None
     return GrowthAgentRunResponse(
@@ -740,6 +804,9 @@ def _run_response_from_row(
         run_id=str(run_row["run_id"]),
         monitor=monitor,
         specialist_agent=run_row.get("specialist_agent") or workflow.specialist_agent,
+        execution_mode=str(agent_evidence.get("execution_mode") or "deterministic"),  # type: ignore[arg-type]
+        trace_kind=str(agent_evidence.get("trace_kind") or "local_hash"),  # type: ignore[arg-type]
+        planner_label=str(agent_evidence.get("planner_label") or "Reviewed deterministic planner"),
         trace_id=str(run_row.get("trace_id") or ""),
         tool_result_hash=str(run_row.get("tool_result_hash") or ""),
         broad_label=workflow.broad_label,
@@ -756,7 +823,14 @@ def _run_response_from_row(
         tool_steps=tool_steps,
         policy_checks=policy_checks,
         governance_chips=governance_chips,
-        interpreted_intent=interpreted_intent,
+        interpreted_intent=interpreted_intent or _maybe_str(agent_evidence.get("interpreted_intent")),
+        agent_reasoning=_maybe_str(agent_evidence.get("reasoning_summary")),
+        genie_conversation_id=_maybe_str(agent_evidence.get("conversation_id")),
+        genie_message_id=_maybe_str(agent_evidence.get("message_id")),
+        genie_question_hash=_maybe_str(agent_evidence.get("question_hash")),
+        genie_sql_hash=_maybe_str(agent_evidence.get("sql_hash")),
+        genie_row_count=_maybe_int(agent_evidence.get("row_count")),
+        genie_trusted_assets=_str_list(agent_evidence.get("trusted_assets")),
         audit_event_id=str(run_row["audit_event_id"]) if run_row.get("audit_event_id") else None,
         created_at=run_row.get("created_at"),
     )
@@ -865,3 +939,26 @@ def _maybe_float(value: Any) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _maybe_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
+def _maybe_str(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _str_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
