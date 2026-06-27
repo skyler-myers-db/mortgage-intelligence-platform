@@ -173,7 +173,9 @@ test('Growth Agent run, saved monitor, and Lead Queue handoff are live and recon
   await expect(page.getByText('Broad opportunity', { exact: true })).toBeVisible();
   await expect(page.getByText('Eligible subset', { exact: true })).toBeVisible();
   await expect(page.getByText('Tool timeline', { exact: true })).toBeVisible();
-  await expect(page.getByText('Policy checks', { exact: true })).toBeVisible();
+  await expect(
+    page.locator('.growth-agent-run__section').filter({ hasText: 'Policy checks' }).first(),
+  ).toBeVisible();
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('PII-safe output');
   await expect(page.getByText(new RegExp(`Trace ${run.trace_id.slice(-12)}`, 'i'))).toBeVisible();
   await expect(page.getByText(new RegExp(`Hash ${run.tool_result_hash.slice(0, 12)}`))).toBeVisible();
