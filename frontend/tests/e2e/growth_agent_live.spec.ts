@@ -132,7 +132,7 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
   await expect(page.getByText('Mortgage Growth Agent').first()).toBeVisible();
   await expect(page.getByText('Borrower Dossier Review')).toBeVisible();
   await expect(page.getByText('No auto-send · no scheduled automation')).toBeVisible();
-  await expect(page.getByText('Audited Lakebase run')).toBeVisible();
+  await expect(page.getByText('Audit checked after each run')).toBeVisible();
 
   const stateScope = page.getByLabel('Growth Agent state scope');
   let workflowPostCount = 0;
