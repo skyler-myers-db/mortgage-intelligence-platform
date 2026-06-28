@@ -519,6 +519,12 @@ def test_custom_segment_workflow_helper_fails_closed_for_internal_callers() -> N
     assert deduped.route_filters["segment_codes"] == "itm,equity"
     assert deduped.route_filters["segment_mode"] == "any"
 
+    single = custom_workflow(["itm"], "any")
+    assert single.route_filters == {
+        "segment": "itm",
+        "marketing_eligibility": "Eligible only",
+    }
+
 
 def test_growth_agent_monitor_list_route_reads_actor_scoped_monitors() -> None:
     sql = _FakeSqlClient()
@@ -812,6 +818,23 @@ def test_growth_agent_monitor_rerun_rejects_malformed_monitor_id() -> None:
     assert response.status_code == 422
 
 
+def test_growth_agent_monitor_rerun_lakebase_failure_returns_safe_503() -> None:
+    sql = _FakeSqlClient()
+    client = _client(sql, _FailingLakebaseClient())
+    try:
+        response = client.post(
+            f"/api/growth-agent/monitors/{uuid4()}/run",
+            json={},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json()["detail"] == "lakebase is temporarily unavailable"
+    assert not sql.calls
+
+
 def test_prompt_agent_routes_to_source_sentinel_without_storing_raw_prompt() -> None:
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -884,6 +907,41 @@ def test_prompt_agent_routes_home_equity_line_to_offer_agent_before_custom_segme
     assert body["interpreted_intent"] == "Offer lens selected the high-equity HELOC watch."
     assert "fn_offer_compare" in [step["tool_name"] for step in body["tool_steps"]]
     assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["permit", "equity"]
+
+
+@pytest.mark.parametrize(
+    ("prompt", "expected_segments", "expected_mode"),
+    [
+        ("Build a custom cohort for refi and HELOC candidates.", ["itm", "permit"], "all"),
+        ("Build a custom cohort for listed and HELOC candidates.", ["listed", "permit"], "all"),
+        ("Build a custom cohort for refi or HELOC candidates.", ["itm", "permit"], "any"),
+    ],
+)
+def test_prompt_agent_custom_segments_with_heloc_preserve_any_all_semantics(
+    prompt: str,
+    expected_segments: list[str],
+    expected_mode: str,
+) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": prompt},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["workflow"]["id"] == "custom_segment_watch"
+    assert body["criteria"]["lead_queue_filters"]["segment_codes"] == expected_segments
+    assert body["criteria"]["lead_queue_filters"]["segment_mode"] == expected_mode
+    statement, _params = sql.calls[0]
+    joiner = " AND " if expected_mode == "all" else " OR "
+    assert joiner.join(f"array_contains(b.segment_codes, '{code}')" for code in expected_segments) in statement
 
 
 def test_prompt_agent_routes_dossier_story_to_borrower_dossier_specialist() -> None:
@@ -969,7 +1027,12 @@ def test_prompt_agent_rejects_pii_and_raw_identifiers() -> None:
                 "run this for clip_ref_abcdef123456",
                 "find borrower for CLIP 123456789",
                 "run this for John Smith",
+                "run this for liam okafor refi opportunities",
+                "find liam okafor refi opportunities",
+                "review liam okafor equity candidates",
+                "build a refi list for liam okafor",
                 "show borrowers john smith refi",
+                "show borrowers liam okafor refi",
                 "find customers maria garcia equity",
                 "John Smith refi opportunities",
                 "JANE DOE refi opportunities",
@@ -1001,6 +1064,23 @@ def test_prompt_agent_rejects_pii_and_raw_identifiers() -> None:
     assert [response.status_code for response in responses] == [422] * len(responses)
     assert not sql.calls
     assert not lakebase.runs
+
+
+def test_prompt_agent_allows_safe_borrower_group_language() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": "show borrowers in the money for review"},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    assert response.json()["workflow"]["id"] == "daily_refi_brief"
 
 
 def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:

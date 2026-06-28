@@ -107,9 +107,25 @@ const HOME: GrowthAgentHomeResponse = {
       key: 'genie_conversation_api',
       label: 'Genie Conversation API',
       ga: true,
-      status: 'available',
-      claimable: true,
-      detail: 'Programmatic Genie answers are configured.',
+      status: 'configured',
+      claimable: false,
+      detail: 'Genie Conversation API dependencies are configured; a live Genie probe must pass before this row is claimable.',
+    },
+    {
+      key: 'certified_metric_views',
+      label: 'UC metric-view certification',
+      ga: true,
+      status: 'configured',
+      claimable: false,
+      detail: 'Certified metric-view SQL contracts are bundled; live UC deployment must be verified before claiming them active.',
+    },
+    {
+      key: 'uc_function_tools',
+      label: 'Application-reviewed SQL tools',
+      ga: true,
+      status: 'configured',
+      claimable: false,
+      detail: 'Reviewed UC-function SQL contracts are bundled; live registration must be verified before claiming them active.',
     },
     {
       key: 'agent_orchestrator',
@@ -126,6 +142,14 @@ const HOME: GrowthAgentHomeResponse = {
       status: 'not_provisioned',
       claimable: false,
       detail: 'Gateway endpoint/inference-table config is missing.',
+    },
+    {
+      key: 'lakebase_sync',
+      label: 'Lakebase synced-table serving',
+      ga: true,
+      status: 'not_provisioned',
+      claimable: false,
+      detail: 'Disabled; reads stay on the warehouse path.',
     },
     {
       key: 'agent_eval',
@@ -198,6 +222,7 @@ const RUN: GrowthAgentRunResponse = {
   interpreted_intent: 'Reviewed deterministic planner selected the daily refi opportunity brief.',
   agent_reasoning: 'Reviewed keyword routing selected a governed SQL workflow.',
   genie_trusted_assets: [],
+  audit_event_id: 'audit-11111111-1111-4111-8111-111111111111',
 };
 
 function setNativeValue(el: HTMLInputElement | HTMLSelectElement, value: string) {
@@ -327,7 +352,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('Mortgage Growth Agent');
     expect(container.textContent).toContain('Borrower Dossier Review');
     expect(container.textContent).toContain('No auto-send · no scheduled automation');
-    expect(container.textContent).toContain('Audited Lakebase run');
+    expect(container.textContent).toContain('Audit checked after each run');
 
     act(() => setNativeValue(stateInput(), 'IL illinois'));
     await waitUntil(() => container.textContent?.includes('Invalid: illinois') ?? false);
@@ -344,6 +369,10 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
     expect(container.textContent).toContain('Agent Framework orchestration');
     expect(container.textContent).toContain('Not provisioned');
+    expect(container.textContent).toContain('UC metric-view certification');
+    expect(container.textContent).toContain('Application-reviewed SQL tools');
+    expect(container.textContent).toContain('Lakebase synced-table serving');
+    expect(container.textContent).toContain('Configured');
     expect(container.textContent).toContain('Gateway endpoint/inference-table config is missing.');
 
     const prompt = container.querySelector<HTMLTextAreaElement>(
@@ -371,6 +400,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('Reviewed workflow');
     expect(container.textContent).toContain('Run correlation 111111111111');
     expect(container.textContent).toContain('Hash aaaaaaaaaaaa');
+    expect(container.textContent).toContain('Audit audit-1111');
     expect(container.textContent).toContain('PII-safe output');
     expect(container.textContent).toContain('fn_build_cohort');
     expect(container.textContent).not.toContain('MLflow trace');
@@ -472,6 +502,35 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('Saved watchlist re-run: Mortgage Growth Agent - IL.');
     expect(container.textContent).toContain('Eligible subset');
     expect(container.textContent).not.toContain('run this for John Smith');
+
+    act(() => button(/Open eligible refi subset/).click());
+    expect(navigate).toHaveBeenCalledWith(RUN.route);
+  });
+
+  it('shows inactive saved watchlists but blocks reruns', async () => {
+    const pausedMonitor = {
+      monitor_id: '33333333-3333-4333-8333-333333333333',
+      workflow_id: 'daily_refi_brief' as const,
+      name: 'Paused refi watchlist',
+      cadence: 'daily' as const,
+      status: 'paused' as const,
+      criteria: RUN.criteria,
+      route: RUN.route,
+      actionable_total: RUN.actionable_total,
+      source_assets: RUN.source_assets,
+      last_run_id: RUN.run_id,
+    };
+    growthAgent.mockResolvedValue({ ...HOME, monitors: [pausedMonitor] });
+    mount();
+    await waitUntil(() => container.textContent?.includes('Paused refi watchlist') ?? false);
+
+    expect(container.textContent).toContain('Paused');
+    const runButton = button(/^Run now$/);
+    expect(runButton.disabled).toBe(true);
+    act(() => runButton.click());
+    expect(rerunGrowthAgentMonitor).not.toHaveBeenCalled();
+    act(() => button(/^Open$/).click());
+    expect(navigate).toHaveBeenCalledWith(RUN.route);
   });
 
   it('does not imply a state scope in the default prompt', async () => {

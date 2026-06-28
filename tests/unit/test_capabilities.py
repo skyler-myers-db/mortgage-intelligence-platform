@@ -102,6 +102,7 @@ def test_certified_metric_view_sql_contracts_are_present() -> None:
         assert "with metrics" in text
         assert "language yaml" in text
         assert "certification:" in text
+        assert "synonyms:" in text
 
 
 def test_uc_growth_agent_tool_sql_contracts_are_present() -> None:
@@ -118,9 +119,22 @@ def test_uc_growth_agent_tool_sql_contracts_are_present() -> None:
         assert "read-only" in text or "no outreach or state write" in text
 
 
+def test_growth_agent_function_grants_are_documented_and_deployed() -> None:
+    deploy = (_REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    grants = (_REPO_ROOT / "docs" / "security" / "GRANTS.md").read_text(encoding="utf-8")
+    for function_name in ("fn_build_cohort", "fn_segment_counts", "fn_lead_queue_url"):
+        grant = "GRANT EXECUTE ON FUNCTION"
+        assert grant in deploy
+        assert f".gold.{function_name}" in deploy
+        assert grant in grants
+        assert f"mip.gold.{function_name}" in grants
+
+
 def test_genie_conversation_needs_space_and_warehouse() -> None:
     ok = _by_key(probe_capabilities(_settings()), "genie_conversation_api")
-    assert ok.status is CapabilityStatus.AVAILABLE and ok.claimable is True
+    assert ok.status is CapabilityStatus.CONFIGURED
+    assert ok.claimable is False
+    assert "live genie probe" in ok.detail.lower()
     missing = _by_key(
         probe_capabilities(_settings(genie_space_id=None)), "genie_conversation_api"
     )

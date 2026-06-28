@@ -64,8 +64,10 @@ def _operation_breaking_drift(
     current_contract = _operation_contract(current_operation)
     if baseline_contract.get("requestBody") != current_contract.get("requestBody"):
         return True
-    if baseline_contract.get("responses") != current_contract.get("responses"):
-        return True
+    current_responses = current_contract.get("responses", {})
+    for status_code, baseline_response in baseline_contract.get("responses", {}).items():
+        if current_responses.get(status_code) != baseline_response:
+            return True
 
     current_params = {
         (param.get("name"), param.get("in")): param

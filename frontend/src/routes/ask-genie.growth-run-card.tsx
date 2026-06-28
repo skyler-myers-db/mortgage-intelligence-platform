@@ -122,6 +122,13 @@ export function GrowthAgentRunCard({
         <Chip variant="neutral" icon="link" title={run.tool_result_hash ?? undefined}>
           Hash {shortHash(run.tool_result_hash)}
         </Chip>
+        <Chip
+          variant={run.audit_event_id ? 'success' : 'warning'}
+          icon="audit"
+          title={run.audit_event_id ?? undefined}
+        >
+          {run.audit_event_id ? `Audit ${shortHash(run.audit_event_id)}` : 'Audit pending'}
+        </Chip>
       </div>
       <div className="growth-agent-run__intent">
         {run.planner_label}

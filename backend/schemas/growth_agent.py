@@ -69,6 +69,60 @@ _PROMPT_COMMON_NAME_RE = re.compile(
     r"martinez|hernandez|lopez|gonzalez|wilson|anderson|thomas|taylor|moore)\b",
     re.IGNORECASE,
 )
+_PROMPT_LOWERCASE_NAME_AFTER_GROUP_RE = re.compile(
+    r"\b(?:borrowers?|customers?|prospects?|contacts?|people|person)\s+"
+    r"([a-z]{2,30})\s+(?:[a-z]\s+)?([a-z]{2,30})\b"
+)
+_PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE = re.compile(
+    r"\b(?:for|find|show|review|run(?:\s+this)?\s+for|build\b.{0,80}\bfor)\s+"
+    r"([a-z]{2,30})\s+(?:[a-z]\s+)?([a-z]{2,30})\b"
+)
+_PROMPT_LOWERCASE_NAME_SKIP_FIRST: frozenset[str] = frozenset(
+    {
+        "across",
+        "after",
+        "at",
+        "borrowers",
+        "both",
+        "by",
+        "customers",
+        "for",
+        "from",
+        "in",
+        "into",
+        "near",
+        "of",
+        "on",
+        "over",
+        "prospects",
+        "refi",
+        "that",
+        "the",
+        "under",
+        "weekly",
+        "where",
+        "who",
+        "whose",
+        "with",
+        "without",
+    }
+)
+_PROMPT_REVIEWED_LOWERCASE_PAIRS: frozenset[tuple[str, str]] = frozenset(
+    {
+        ("branch", "review"),
+        ("cash", "out"),
+        ("current", "coverage"),
+        ("current", "customer"),
+        ("economic", "incentive"),
+        ("for", "sale"),
+        ("home", "equity"),
+        ("prime", "refi"),
+        ("rate", "spread"),
+        ("retention", "risk"),
+        ("story", "dossiers"),
+        ("story", "queue"),
+    }
+)
 _PROMPT_LEADING_HUMAN_NAME_RE = re.compile(
     r"^(?!(?:find|show|list|run|build|open|review|count|check|create|save|how|what|which|"
     r"source|data|mortgage|growth|prime|home|high|daily|branch|heloc|HELOC|"
@@ -114,6 +168,39 @@ _CUSTOM_WORKFLOW_MONITOR_TITLE_RE = re.compile(
     r"(?:\+(?:ITM|LISTED|PERMIT|INVESTOR|EQUITY|RETENTION)){0,5}"
     r"(?: - [A-Z]{2}(?:, [A-Z]{2}){0,19})?$"
 )
+
+
+def _contains_lowercase_name_after_group(clean: str) -> bool:
+    """Catch uncommon lower-case names after borrower/person group nouns."""
+    for match in _PROMPT_LOWERCASE_NAME_AFTER_GROUP_RE.finditer(clean):
+        first, second = match.group(1).lower(), match.group(2).lower()
+        if _looks_like_unreviewed_lowercase_name_pair(first, second):
+            return True
+    for match in _PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE.finditer(clean):
+        first, second = match.group(1).lower(), match.group(2).lower()
+        if _looks_like_unreviewed_lowercase_name_pair(first, second):
+            return True
+    return False
+
+
+def _looks_like_unreviewed_lowercase_name_pair(first: str, second: str) -> bool:
+    if first in _PROMPT_LOWERCASE_NAME_SKIP_FIRST:
+        return False
+    if (first, second) in _PROMPT_REVIEWED_LOWERCASE_PAIRS:
+        return False
+    return second not in {
+        "and",
+        "candidates",
+        "cohort",
+        "coverage",
+        "customers",
+        "leads",
+        "opportunities",
+        "or",
+        "prospects",
+        "queue",
+        "workflow",
+    }
 
 
 def default_growth_agent_cadences() -> list[GrowthAgentCadence]:
@@ -237,6 +324,8 @@ class GrowthAgentCustomRunRequest(GrowthAgentRunRequest):
 
 
 class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
     prompt: str = Field(min_length=3, max_length=500)
     segment_codes: list[GrowthAgentSegmentCode] = Field(default_factory=list, max_length=6)
     segment_mode: GrowthAgentSegmentMode = "any"
@@ -253,6 +342,7 @@ class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
             or _PROMPT_HUMAN_NAME_RE.search(clean)
             or _PROMPT_COMMON_NAME_RE.search(clean)
             or _PROMPT_LEADING_HUMAN_NAME_RE.search(clean)
+            or _contains_lowercase_name_after_group(clean)
             or _PROMPT_PROTECTED_CLASS_RE.search(clean)
             or _PROMPT_JAILBREAK_RE.search(clean)
             or _PROMPT_UNAVAILABLE_SOURCE_RE.search(clean)

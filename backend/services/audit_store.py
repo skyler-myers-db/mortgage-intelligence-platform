@@ -77,14 +77,24 @@ def _reset_fallback_counter_for_tests() -> None:
 
 _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
     {
+        "address",
+        "borrower_email",
         "owner_name",
         "owner_full_name",
+        "owner_address",
         "display_name",
+        "full_name",
+        "first_name",
+        "last_name",
+        "mailing_address",
         "street_address",
         "mailing_street",
+        "property_address",
         "borrower_name",
         "email",
         "phone",
+        "raw_lender",
+        "raw_owner_name",
     }
 )
 
@@ -277,9 +287,58 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
 _FREE_TEXT_METADATA_KEYS: frozenset[str] = frozenset(
     {"draft_body", "rationale", "bulk_rationale", "reason", "notes"}
 )
+_NESTED_METADATA_KEYS_WITH_OWN_POLICY: frozenset[str] = frozenset(
+    {
+        "decision_inputs",
+        "governance_chips",
+        "per_lo_counts",
+        "policy_checks",
+        "portfolio_criteria",
+        "result_filters",
+        "thresholds_applied",
+        "tool_steps",
+    }
+)
 _HUMAN_NAME_OR_PLACEHOLDER_PATTERN = re.compile(
     r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b|"
     r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}"
+)
+_GROWTH_AGENT_REVIEWED_NAME_WORD_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "ALL",
+        "Agent",
+        "Applied",
+        "Bricks",
+        "Broad",
+        "Candidates",
+        "Conversation",
+        "Competitor",
+        "Custom",
+        "Data",
+        "Eligible",
+        "Equity",
+        "Evaluation",
+        "Genie",
+        "Growth",
+        "HELOC",
+        "Home",
+        "Human",
+        "Intent",
+        "Lakebase",
+        "Lead",
+        "MLflow",
+        "Mortgage",
+        "Mosaic",
+        "PII",
+        "Policy",
+        "Prime",
+        "Queue",
+        "Refi",
+        "Reviewed",
+        "Segment",
+        "Summit",
+        "Workflow",
+    }
 )
 
 _BORROWER_ID_METADATA_KEYS: frozenset[str] = frozenset({"borrower_id"})
@@ -466,20 +525,88 @@ def _metadata_keys_deep(value: Any) -> set[str]:
     return set()
 
 
+def _metadata_pii_value_paths(value: Any, *, path: str = "metadata") -> set[str]:
+    """Return JSON paths whose scalar values contain obvious PII markers.
+
+    ``_sanitize_metadata`` scrubs the intentionally free-text top-level fields
+    before this function runs. This recursive pass is for arbitrary nested
+    containers under allowed keys such as ``source`` where a caller could
+    otherwise hide ``{"free_text": "123 Main St"}`` from the top-level
+    allowlist and free-text scrub.
+    """
+    hits: set[str] = set()
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_lower = str(key).lower()
+            if (
+                key_lower in _INTERNAL_STAFF_EMAIL_METADATA_KEYS
+                or key_lower in _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS
+            ):
+                # Staff email metadata is operational, not borrower contact
+                # data, and is constrained by _assert_public_safe_values.
+                continue
+            if path == "metadata":
+                if key_lower in _NESTED_METADATA_KEYS_WITH_OWN_POLICY:
+                    continue
+                if not isinstance(nested, dict | list):
+                    # Top-level scalar fields already have key-specific
+                    # validators below (opaque ids, campaign labels, staff
+                    # emails, etc.). This scan exists for arbitrary nested
+                    # containers such as source={...}.
+                    continue
+            hits.update(_metadata_pii_value_paths(nested, path=f"{path}.{key}"))
+        return hits
+    if isinstance(value, list):
+        for idx, nested in enumerate(value):
+            hits.update(_metadata_pii_value_paths(nested, path=f"{path}[{idx}]"))
+        return hits
+    if value is None or isinstance(value, bool | int | float):
+        return hits
+    text = str(value)
+    if contains_pii_marker(text) or scrub_free_text(text) != text:
+        hits.add(path)
+    return hits
+
+
+def _growth_agent_reviewed_text_contains_pii(value: Any) -> bool:
+    if value is None or isinstance(value, bool | int | float):
+        return False
+    text = str(value)
+    return bool(
+        contains_pii_marker(text)
+        or scrub_free_text(text) != text
+        or _growth_agent_reviewed_text_contains_human_name(text)
+    )
+
+
+def _growth_agent_reviewed_text_contains_human_name(text: str) -> bool:
+    for match in _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.finditer(text):
+        candidate = match.group(0)
+        if candidate.startswith(("[", "{")):
+            return True
+        words = [word for word in re.split(r"\s+", candidate) if word]
+        if words and all(word in _GROWTH_AGENT_REVIEWED_NAME_WORD_ALLOWLIST for word in words):
+            continue
+        return True
+    return False
+
+
 def _assert_no_pii(metadata: dict[str, Any]) -> None:
     """Raise ``AuditPIIError`` if ``metadata`` has any denylist keys.
 
-    Top-level only: callers nest structured payload under
-    ``payload_json``, but no router currently stuffs borrower names into
-    nested objects. If that changes we deepen the check; for now a
-    top-level scan is the least-surprising contract.
+    The key scan is deep: allowed top-level containers may hold structured
+    proof objects, but they must not smuggle raw borrower/contact/address keys
+    into nested JSON. Scalar value scanning is also deep for email, phone, SSN,
+    and street-address shapes; intentionally free-text fields are scrubbed
+    before this check runs.
     """
     if not metadata:
         return
     lowered = _metadata_keys_deep(metadata)
     hits = lowered & _PII_DENYLIST_KEYS
-    if hits:
-        raise AuditPIIError(sorted(hits))
+    value_hits = _metadata_pii_value_paths(metadata)
+    if hits or value_hits:
+        raise AuditPIIError(sorted(hits | value_hits))
 
 
 def _assert_allowlisted(metadata: dict[str, Any]) -> None:
@@ -735,7 +862,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                         except ValueError as exc:
                             raise AuditMetadataValueViolation(field, str(exc)) from exc
                         continue
-                if contains_pii_marker(str(nested_value)):
+                if _growth_agent_reviewed_text_contains_pii(nested_value):
                     raise AuditMetadataValueViolation(field, "must not contain PII-shaped values")
     strict_sql_hash = str(metadata.get("action") or "") == "view_borrower_proof"
     for field, value in _metadata_values_for(metadata, {"sql_hash"}):

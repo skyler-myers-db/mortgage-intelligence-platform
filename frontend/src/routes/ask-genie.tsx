@@ -406,12 +406,6 @@ export default function AskGenie() {
       ? 'The answer was not displayed because it did not meet the governed Genie policy.'
     : undefined;
   const sourceChipVariant: 'warning' | undefined = isDegraded || isBlocked ? 'warning' : undefined;
-  // Map the Genie-provided source label to the best matching drawer entry.
-  // Returns null when no specific match exists — the chip then renders as
-  // an inert neutral chip rather than defaulting to NBO and misleading
-  // the user into the wrong drawer (the prior "default to NBO" routing
-  // was confusing per 2026-05-04 user feedback). Governed refusal/degraded
-  // chips also render inert (the chip text is the explanation).
   const drawerForSource = sourceChip ? drawerForAsset(sourceChip) : null;
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
@@ -421,8 +415,11 @@ export default function AskGenie() {
   const capabilityRows = (growthAgentQuery.data?.capabilities ?? []).filter((row) => (
     [
       'genie_conversation_api',
+      'certified_metric_views',
+      'uc_function_tools',
       'agent_orchestrator',
       'ai_gateway',
+      'lakebase_sync',
       'agent_eval',
     ].includes(row.key) && row.status !== 'hidden'
   ));
@@ -443,7 +440,7 @@ export default function AskGenie() {
           </div>
           <div className="spacer" />
           <Chip variant="success" icon="shield">No auto-send · no scheduled automation</Chip>
-          <Chip variant="neutral" icon="audit">Audited Lakebase run</Chip>
+          <Chip variant="neutral" icon="audit">Audit checked after each run</Chip>
         </div>
         <div className="surface__body">
           <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">

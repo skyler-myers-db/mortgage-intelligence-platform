@@ -201,13 +201,13 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             label="Genie Conversation API",
             ga=True,
             status=(
-                CapabilityStatus.AVAILABLE
+                CapabilityStatus.CONFIGURED
                 if sdk and warehouse and genie_configured
                 else CapabilityStatus.NOT_PROVISIONED
             ),
             detail=(
-                "Programmatic Genie answers with the generated SQL + row_count "
-                "for answer-to-action reconciliation."
+                "Genie Conversation API dependencies are configured; a live "
+                "Genie probe must pass before this row is claimable."
                 if sdk and warehouse and genie_configured
                 else "Needs databricks-sdk, warehouse creds, and a Genie space id."
             ),

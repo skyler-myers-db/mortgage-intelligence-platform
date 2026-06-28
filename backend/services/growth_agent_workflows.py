@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -237,11 +238,18 @@ def custom_workflow(segment_codes: Sequence[str], segment_mode: str) -> GrowthAg
     mode = segment_mode
     segment_label = _format_segment_labels(deduped, mode=mode)
     predicate = segment_predicate(deduped, mode)
-    route_filters = {
-        "segment_codes": ",".join(deduped),
-        "segment_mode": mode,
-        "marketing_eligibility": "Eligible only",
-    }
+    route_filters = (
+        {
+            "segment": deduped[0],
+            "marketing_eligibility": "Eligible only",
+        }
+        if len(deduped) == 1
+        else {
+            "segment_codes": ",".join(deduped),
+            "segment_mode": mode,
+            "marketing_eligibility": "Eligible only",
+        }
+    )
     return GrowthAgentWorkflowDef(
         id=CUSTOM_WORKFLOW_ID,
         title=CUSTOM_WORKFLOW_TITLE,
@@ -288,6 +296,15 @@ def planned_workflow(payload: GrowthAgentPromptRunRequest) -> tuple[GrowthAgentW
         return WORKFLOWS["source_freshness_sentinel"], "Data operations lens selected the global source/freshness sentinel."
     if any(term in q for term in ("dossier", "borrower story", "customer 360", "borrower 360", "explain top")):
         return WORKFLOWS["borrower_dossier_review"], "Borrower dossier lens selected the dossier review workflow."
+    detected_segments = _segments_from_prompt(q)
+    if len(detected_segments) >= 2 and _requests_custom_segment_workflow(q):
+        mode = "all" if _requests_all_segment_mode(q) else "any"
+        return custom_workflow(detected_segments, mode), f"Campaign lens built a custom {mode.upper()} segment workflow."
+    if any(term in q for term in ("heloc", "home equity line", "equity line")):
+        return WORKFLOWS["high_equity_heloc_watch"], "Offer lens selected the high-equity HELOC watch."
+    if len(detected_segments) >= 2:
+        mode = "all" if _requests_all_segment_mode(q) else "any"
+        return custom_workflow(detected_segments, mode), f"Campaign lens built a custom {mode.upper()} segment workflow."
     if (
         any(term in q for term in ("refi", "refinance", "rate spread", "economic incentive", "prime refinance"))
         and not any(term in q for term in ("listed", "listing", "for sale", "purchase", "heloc", "cash out", "cash-out", "home equity", "equity line"))
@@ -297,10 +314,6 @@ def planned_workflow(payload: GrowthAgentPromptRunRequest) -> tuple[GrowthAgentW
         return WORKFLOWS["branch_capacity_review"], "Campaign lens selected the branch-manager capacity review."
     if any(term in q for term in ("heloc", "cash out", "cash-out", "home equity", "equity line")):
         return WORKFLOWS["high_equity_heloc_watch"], "Offer lens selected the high-equity HELOC watch."
-    detected_segments = _segments_from_prompt(q)
-    if len(detected_segments) >= 2:
-        mode = "all" if any(term in q for term in ("both", "all selected", "intersection", "and")) else "any"
-        return custom_workflow(detected_segments, mode), f"Campaign lens built a custom {mode.upper()} segment workflow."
     if any(term in q for term in ("listed", "listing", "for sale", "purchase")):
         return WORKFLOWS["listing_watch"], "Campaign lens selected the listed-for-sale purchase watch."
     if any(term in q for term in ("competitor", "recapture", "retention", "current customer")):
@@ -316,6 +329,8 @@ _SEGMENT_PROMPT_TERMS: dict[str, str] = {
     "equity": "equity|cash out|cash-out|high equity",
     "retention": "retention|recapture|current customer",
 }
+_ALL_SEGMENT_MODE_RE = re.compile(r"\b(?:both|all selected|intersection|and)\b")
+_CUSTOM_SEGMENT_WORKFLOW_RE = re.compile(r"\b(?:custom|cohort|segment|segments|both|intersection)\b")
 
 
 def _format_segment_labels(segment_codes: list[str], *, mode: str) -> str:
@@ -332,3 +347,11 @@ def _segments_from_prompt(prompt: str) -> list[str]:
         if any(term in prompt for term in terms.split("|")) and code not in found:
             found.append(code)
     return found
+
+
+def _requests_all_segment_mode(prompt: str) -> bool:
+    return bool(_ALL_SEGMENT_MODE_RE.search(prompt))
+
+
+def _requests_custom_segment_workflow(prompt: str) -> bool:
+    return bool(_CUSTOM_SEGMENT_WORKFLOW_RE.search(prompt))

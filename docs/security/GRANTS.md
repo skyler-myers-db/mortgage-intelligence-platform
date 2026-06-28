@@ -67,6 +67,9 @@ audit sync) is prefixed with `mip.` and the warehouse returns
 
 ```sql
 GRANT USE SCHEMA, SELECT ON SCHEMA mip.gold TO `mip-app`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_build_cohort TO `mip-app`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_segment_counts TO `mip-app`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `mip-app`;
 ```
 
 **Objects covered.** `lead_population`, `lead_score`, `borrower_360`,
@@ -75,7 +78,9 @@ GRANT USE SCHEMA, SELECT ON SCHEMA mip.gold TO `mip-app`;
 `segment_population`, `borrower_lifecycle_state`,
 `funnel_snapshot_daily`, and the UC SQL functions
 `fn_lead_score`, `fn_in_the_money`, `fn_rate_spread`,
-`fn_next_best_offer`.
+`fn_next_best_offer`, plus the reviewed Growth Agent read-only helper
+functions `fn_build_cohort`, `fn_segment_counts`, and
+`fn_lead_queue_url`.
 
 **What breaks if missing.** Every customer-visible page is empty.
 Portfolio preview returns 503, `/api/leads` returns 500, the map

@@ -43,6 +43,24 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
     filters = criteria.get("lead_queue_filters") if isinstance(criteria.get("lead_queue_filters"), dict) else {}
     route = str(response.get("route") or "")
     serialized = json.dumps(response, sort_keys=True, default=str).lower()
+    expected_error = case.get("expected_error")
+    if expected_error:
+        error_text = str(response.get("error") or response.get("detail") or "")
+        checks = {
+            "expected_error": str(expected_error) in error_text,
+            "no_success_workflow": not workflow.get("id"),
+            "no_forbidden_terms": not any(
+                str(term).lower() in serialized
+                for term in case.get("forbidden_terms", [])
+            ),
+        }
+        passed = all(checks.values())
+        return {
+            "case_id": case.get("id"),
+            "passed": passed,
+            "score": 1.0 if passed else 0.0,
+            "checks": checks,
+        }
 
     expected_segments = [str(item) for item in case.get("expected_segment_codes", [])]
     actual_segments = [str(item) for item in filters.get("segment_codes", [])]

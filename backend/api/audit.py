@@ -11,8 +11,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from backend.schemas.audit import AuditEvent, AuditEventCreateRequest, AuditRollupResponse
 from backend.schemas.common import validate_public_borrower_id
-from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.audit_store import (
+    AuditMetadataValueViolation,
+    AuditMetadataViolation,
+    AuditPIIError,
+    AuditStore,
+    get_audit_store,
+    resolve_actor,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.observability import is_safe_correlation_id
 from backend.services.rbac import AdminDep
@@ -181,11 +189,12 @@ def audit_rollups(
     ]
 
 
-@router.post("/event", response_model=AuditEvent)
+@router.post("/event", response_model=AuditEvent, responses=JSON_CONTENT_TYPE_RESPONSE)
 def log_event(
     payload: AuditEventCreateRequest,
     request: Request,
     store: StoreDep,
+    _: Annotated[None, Depends(require_json_content_type)],
     _actor: AdminDep,
 ) -> AuditEvent:
     event_type = _event_type_for_payload(payload)
@@ -215,6 +224,8 @@ def log_event(
             subject_segment=payload.subject_segment,
             request_id=payload.request_id,
         )
+    except (AuditPIIError, AuditMetadataViolation, AuditMetadataValueViolation) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503, detail=safe_dependency_detail("lakebase")

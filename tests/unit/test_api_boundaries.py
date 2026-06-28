@@ -297,6 +297,65 @@ def test_public_audit_event_rejects_top_level_pii_values() -> None:
     assert response.status_code == 422
 
 
+def test_public_audit_event_requires_json_content_type() -> None:
+    response = client.post(
+        "/api/audit/event",
+        content='{"action":"view.custom","entity_type":"lead_queue","entity_id":"manual"}',
+        headers={"Content-Type": "text/plain"},
+    )
+
+    assert response.status_code == 415
+    assert response.json()["detail"] == "Unsupported content type"
+
+
+def test_public_audit_event_rejects_nested_metadata_pii() -> None:
+    response = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "anonymous",
+            "action": "view.custom",
+            "entity_type": "genie",
+            "entity_id": "manual",
+            "payload_json": {
+                "source": {
+                    "owner_address": "123 Main St",
+                    "free_text": "mailing address 123 Main St",
+                }
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert "owner_address" in detail
+    assert "metadata.source.free_text" in detail
+
+
+@pytest.mark.parametrize("container", ["tool_steps", "policy_checks", "governance_chips"])
+def test_public_audit_event_rejects_pii_in_growth_agent_proof_lists(container: str) -> None:
+    response = client.post(
+        "/api/audit/event",
+        json={
+            "actor": "anonymous",
+            "action": "view.custom",
+            "entity_type": "genie",
+            "entity_id": "manual",
+            "payload_json": {
+                container: [
+                    {
+                        "label": "Reviewed proof",
+                        "status": "completed",
+                        "detail": "mailing address 123 Main St",
+                    }
+                ]
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "PII-shaped" in response.json()["detail"]
+
+
 def test_public_audit_event_rejects_name_shaped_top_level_values() -> None:
     for field in ("action", "entity_type", "entity_id", "event_type", "subject_segment"):
         payload = {

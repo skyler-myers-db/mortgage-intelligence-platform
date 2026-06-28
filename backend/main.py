@@ -530,10 +530,21 @@ async def _request_validation_handler(
     join key for malformed request probes.
     """
 
+    detail = jsonable_encoder(exc.errors())
+    if _request.url.path.startswith(f"{CANONICAL_API_PREFIX}/growth-agent") or _request.url.path.startswith(
+        f"{COMPAT_API_PREFIX}/growth-agent"
+    ):
+        detail = [
+            {key: value for key, value in item.items() if key != "input"}
+            if isinstance(item, dict)
+            else item
+            for item in detail
+        ]
+
     return JSONResponse(
         status_code=422,
         content={
-            "detail": jsonable_encoder(exc.errors()),
+            "detail": detail,
             "correlation_id": get_correlation_id(),
         },
     )

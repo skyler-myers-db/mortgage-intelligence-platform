@@ -489,10 +489,9 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
 
 def test_in_memory_store_rejects_unlisted_metadata_key() -> None:
     """The InMemoryAuditStore must run the allowlist check. ``owner_address``
-    is NOT on the denylist (not one of the classic name/phone/email keys)
-    but is also NOT on the allowlist -- the exact gap R6-20 closes."""
+    is now a hard PII-denylist key, so it fails before the allowlist gate."""
     store = InMemoryAuditStore()
-    with pytest.raises(AuditMetadataViolation):
+    with pytest.raises(AuditPIIError):
         store.write(
             actor="skyler@entrada.ai",
             action="outreach.approve",
@@ -502,12 +501,66 @@ def test_in_memory_store_rejects_unlisted_metadata_key() -> None:
         )
 
 
+def test_in_memory_store_rejects_nested_pii_under_allowed_container() -> None:
+    """Allowed top-level containers cannot smuggle nested borrower PII."""
+    store = InMemoryAuditStore()
+    with pytest.raises(AuditPIIError) as info:
+        store.write(
+            actor="skyler@entrada.ai",
+            action="run_genie",
+            entity_type="genie",
+            entity_id="manual",
+            payload_json={
+                "source": {
+                    "owner_address": "123 Main St",
+                    "free_text": "mailing address 123 Main St",
+                }
+            },
+        )
+    assert "owner_address" in info.value.forbidden_keys
+
+
+def test_in_memory_store_rejects_nested_free_text_address_value() -> None:
+    store = InMemoryAuditStore()
+    with pytest.raises(AuditPIIError) as info:
+        store.write(
+            actor="skyler@entrada.ai",
+            action="run_genie",
+            entity_type="genie",
+            entity_id="manual",
+            payload_json={"source": {"free_text": "mailing address 123 Main St"}},
+        )
+    assert "metadata.source.free_text" in info.value.forbidden_keys
+
+
+@pytest.mark.parametrize("container", ["tool_steps", "policy_checks", "governance_chips"])
+@pytest.mark.parametrize("detail", ["mailing address 123 Main St", "John Smith"])
+def test_in_memory_store_rejects_pii_in_growth_agent_proof_lists(container: str, detail: str) -> None:
+    store = InMemoryAuditStore()
+    with pytest.raises(AuditMetadataValueViolation):
+        store.write(
+            actor="skyler@entrada.ai",
+            action="view.custom",
+            entity_type="genie",
+            entity_id="manual",
+            payload_json={
+                container: [
+                    {
+                        "label": "Reviewed proof",
+                        "status": "completed",
+                        "detail": detail,
+                    }
+                ]
+            },
+        )
+
+
 def test_lakebase_store_rejects_unlisted_key_before_insert() -> None:
     """Allowlist runs before the INSERT so poisoned payloads never
     reach Postgres."""
     client = MagicMock()
     store = LakebaseAuditStore(client=client)
-    with pytest.raises(AuditMetadataViolation):
+    with pytest.raises(AuditPIIError):
         store.write(
             actor="skyler@entrada.ai",
             action="outreach.approve",

@@ -92,22 +92,13 @@ from backend.services.growth_agent_workflows import (
 from backend.services.growth_agent_workflows import (
     custom_workflow as _custom_workflow,
 )
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 
 router = APIRouter(prefix="/growth-agent", tags=["growth-agent"])
-_JSON_CONTENT_TYPE_RESPONSE: dict[int | str, dict[str, Any]] = {
-    415: {"description": "Unsupported content type"}
-}
 
 SqlDep = Annotated[DatabricksSqlClient, Depends(get_sql_client)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
-
-
-def _require_json_content_type(request: Request) -> None:
-    content_type = request.headers.get("content-type", "")
-    media_type = content_type.split(";", 1)[0].strip().lower()
-    if media_type != "application/json":
-        raise HTTPException(status_code=415, detail="Unsupported content type")
 
 
 @router.get("", response_model=GrowthAgentHomeResponse)
@@ -129,13 +120,13 @@ def growth_agent_monitors(request: Request, lakebase: LakebaseDep) -> list[Growt
 @router.post(
     "/monitors/{monitor_id}/run",
     response_model=GrowthAgentRunResponse,
-    responses=_JSON_CONTENT_TYPE_RESPONSE,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
 )
 def rerun_growth_agent_monitor(
     monitor_id: UUID,
     payload: GrowthAgentRunRequest,
     request: Request,
-    _: Annotated[None, Depends(_require_json_content_type)],
+    _: Annotated[None, Depends(require_json_content_type)],
     sql_client: SqlDep,
     lakebase: LakebaseDep,
 ) -> GrowthAgentRunResponse:
@@ -193,13 +184,13 @@ def rerun_growth_agent_monitor(
 @router.post(
     "/workflows/{workflow_id}/run",
     response_model=GrowthAgentRunResponse,
-    responses=_JSON_CONTENT_TYPE_RESPONSE,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
 )
 def run_growth_agent_workflow(
     workflow_id: GrowthAgentWorkflowId,
     payload: GrowthAgentRunRequest,
     request: Request,
-    _: Annotated[None, Depends(_require_json_content_type)],
+    _: Annotated[None, Depends(require_json_content_type)],
     sql_client: SqlDep,
     lakebase: LakebaseDep,
 ) -> GrowthAgentRunResponse:
@@ -215,11 +206,11 @@ def run_growth_agent_workflow(
     )
 
 
-@router.post("/custom/run", response_model=GrowthAgentRunResponse, responses=_JSON_CONTENT_TYPE_RESPONSE)
+@router.post("/custom/run", response_model=GrowthAgentRunResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def run_custom_growth_agent_workflow(
     payload: GrowthAgentCustomRunRequest,
     request: Request,
-    _: Annotated[None, Depends(_require_json_content_type)],
+    _: Annotated[None, Depends(require_json_content_type)],
     sql_client: SqlDep,
     lakebase: LakebaseDep,
 ) -> GrowthAgentRunResponse:
@@ -233,11 +224,11 @@ def run_custom_growth_agent_workflow(
     )
 
 
-@router.post("/agent/run", response_model=GrowthAgentRunResponse, responses=_JSON_CONTENT_TYPE_RESPONSE)
+@router.post("/agent/run", response_model=GrowthAgentRunResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def run_mortgage_growth_agent(
     payload: GrowthAgentPromptRunRequest,
     request: Request,
-    _: Annotated[None, Depends(_require_json_content_type)],
+    _: Annotated[None, Depends(require_json_content_type)],
     sql_client: SqlDep,
     lakebase: LakebaseDep,
 ) -> GrowthAgentRunResponse:

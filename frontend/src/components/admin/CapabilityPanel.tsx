@@ -86,7 +86,7 @@ export function CapabilityPanel() {
         <div>
           <div className="h-4">Agentic capability readiness</div>
           <div className="muted fs-12">
-            DAIS-2026 stack. Live capabilities are real; roadmap rows are not integrated.
+            DAIS-2026 stack. Available rows are live-proven; configured rows require a live probe before claims.
           </div>
         </div>
         <Chip variant={error ? 'warning' : 'neutral'}>
@@ -118,8 +118,8 @@ export function CapabilityPanel() {
           </div>
         </div>
         <div className="muted fs-12">
-          Roadmap = the underlying Databricks capability is preview/no-API; MIP mirrors the
-          pattern but does not claim integration.
+          Configured = dependency wiring is present but not claimable yet. Roadmap = the underlying
+          Databricks capability is preview/no-API; MIP mirrors the pattern but does not claim integration.
         </div>
       </div>
     </div>
