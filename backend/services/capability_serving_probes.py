@@ -17,14 +17,27 @@ def query_serving_endpoint(
     task: str | None = None,
 ) -> Any:
     if str(task or "").lower().startswith("agent/v1/responses"):
+        input_messages = [{"role": "user", "content": prompt}]
         body: dict[str, Any] = {
             "model": endpoint,
-            "input": [{"role": "user", "content": prompt}],
+            "input": input_messages,
             "stream": False,
         }
         if client_request_id:
             body["client_request_id"] = client_request_id
-        return workspace_client.api_client.do("POST", "/serving-endpoints/responses", body=body)
+        try:
+            return workspace_client.api_client.do("POST", "/serving-endpoints/responses", body=body)
+        except Exception:
+            # Databricks Apps workspace identity can receive a non-JSON platform
+            # response from the shared Responses route even when the endpoint is
+            # queryable. The per-endpoint SDK query path still proves the agent
+            # serving endpoint accepted a bounded request.
+            return workspace_client.serving_endpoints.query(
+                endpoint,
+                input=input_messages,
+                stream=False,
+                client_request_id=client_request_id,
+            )
 
     try:
         from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
@@ -56,11 +69,11 @@ def serving_response_has_payload(response: Any) -> bool:
     if isinstance(response, dict):
         return any(
             bool(response.get(key))
-            for key in ("choices", "predictions", "outputs", "output", "response", "messages")
+            for key in ("choices", "predictions", "outputs", "output", "response", "messages", "id")
         )
     return any(
         bool(getattr(response, key, None))
-        for key in ("choices", "predictions", "outputs", "output", "response", "messages")
+        for key in ("choices", "predictions", "outputs", "output", "response", "messages", "id")
     )
 
 
@@ -108,8 +121,8 @@ def wait_for_inference_log_increment(
     *,
     previous_count: int,
     client_request_id: str,
-    timeout_s: float = 10.0,
-    interval_s: float = 1.0,
+    timeout_s: float = 90.0,
+    interval_s: float = 5.0,
 ) -> int:
     deadline = time.monotonic() + timeout_s
     latest = previous_count

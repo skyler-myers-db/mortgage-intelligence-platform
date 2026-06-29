@@ -9,6 +9,7 @@ claim. These tests pin that behaviour against the real probe logic.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -124,6 +125,7 @@ class _FakeWorkspaceClient:
         permission_denied: bool = False,
         serving_ready: bool = True,
         empty_serving_response: bool = False,
+        responses_api_error: Exception | None = None,
         eval_total: int = 5,
         eval_passed: int | None = None,
         eval_score: float = 1.0,
@@ -133,7 +135,10 @@ class _FakeWorkspaceClient:
         eval_run_experiment_id: str | None = None,
     ) -> None:
         self.database = _FakeDatabaseApi(permission_denied=permission_denied)
-        self.api_client = _FakeApiClient(empty_response=empty_serving_response)
+        self.api_client = _FakeApiClient(
+            empty_response=empty_serving_response,
+            error=responses_api_error,
+        )
         self.serving_endpoints = _FakeServingEndpoints(
             ready=serving_ready,
             empty_response=empty_serving_response,
@@ -178,12 +183,15 @@ class _FakeServingEndpoints:
 
 
 class _FakeApiClient:
-    def __init__(self, *, empty_response: bool = False) -> None:
+    def __init__(self, *, empty_response: bool = False, error: Exception | None = None) -> None:
         self.empty_response = empty_response
+        self.error = error
         self.requests: list[tuple[str, str, dict[str, object] | None]] = []
 
     def do(self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object) -> object:
         self.requests.append((method, path, body))
+        if self.error is not None:
+            raise self.error
         if self.empty_response:
             return {}
         return {"output": [{"content": [{"text": "ready"}]}]}
@@ -448,6 +456,33 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
     assert body["model"] == "mip-supervisor-endpoint"
 
 
+def test_agent_orchestrator_live_probe_falls_back_when_responses_route_returns_non_json() -> None:
+    workspace = _FakeWorkspaceClient(responses_api_error=json.JSONDecodeError("bad", "", 0))
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is True
+    assert workspace.api_client.requests
+    assert workspace.serving_endpoints.queries
+    endpoint, kwargs = workspace.serving_endpoints.queries[0]
+    assert endpoint == "mip-supervisor-endpoint"
+    assert kwargs["input"] == [
+        {
+            "role": "user",
+            "content": (
+                "Capability readiness check. Reply with a one-sentence acknowledgement "
+                "that the Mortgage Growth Agent endpoint is reachable."
+            ),
+        }
+    ]
+
+
 def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None:
     statuses = collect_live_capability_statuses(
         settings=_settings(
@@ -489,7 +524,7 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
 
 
 def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.MonkeyPatch) -> None:
-    ticks = iter([0.0, 11.0])
+    ticks = iter([0.0, 91.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
     statuses = collect_live_capability_statuses(
