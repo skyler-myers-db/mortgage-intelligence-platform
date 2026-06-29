@@ -62,6 +62,8 @@ function governanceStatusLabel(status: GrowthAgentGovernanceChip['status']): str
       return 'Review';
     case 'not_provisioned':
       return 'Not provisioned';
+    case 'not_attached':
+      return 'Not attached';
     case 'roadmap':
       return 'Roadmap';
     default:

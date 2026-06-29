@@ -335,7 +335,7 @@ def governance_chips(
         ),
         GrowthAgentGovernanceChip(
             label="Genie Conversation",
-            status="passed" if copilot_evidence.execution_mode == "genie_conversation" else "not_provisioned",
+            status="passed" if copilot_evidence.execution_mode == "genie_conversation" else "not_attached",
             detail=(
                 "Prompt interpretation is linked to a Genie Conversation message; deterministic tools executed the run."
                 if copilot_evidence.execution_mode == "genie_conversation"
@@ -345,13 +345,13 @@ def governance_chips(
         ),
         GrowthAgentGovernanceChip(
             label="Multi-agent framework",
-            status="not_provisioned",
+            status="not_attached",
             detail="Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead.",
             evidence_ref=None,
         ),
         GrowthAgentGovernanceChip(
             label="MLflow trace/eval",
-            status="not_provisioned",
+            status="not_attached",
             detail="No MLflow trace URL or Agent Evaluation result is attached to this run.",
             evidence_ref=None,
         ),

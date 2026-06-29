@@ -419,6 +419,27 @@ def test_health_authenticated_returns_runtime_status_only(
     assert "entrada" not in body["actor_cache_key"].lower()
 
 
+def test_authenticated_health_surfaces_deployed_git_sha(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    monkeypatch.setattr(health_mod.settings, "mip_git_sha", "abc123def456")
+
+    anon = client.get("/api/health")
+    assert anon.status_code == 200
+    assert "git_sha" not in anon.json()
+
+    auth = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
+    assert auth.status_code == 200
+    assert auth.json()["git_sha"] == "abc123def456"
+
+    admin = client.get("/api/admin/health", headers=ADMIN_HEADERS)
+    assert admin.status_code == 200
+    assert admin.json()["git_sha"] == "abc123def456"
+
+
 def test_health_admin_endpoint_returns_full_diagnostics(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

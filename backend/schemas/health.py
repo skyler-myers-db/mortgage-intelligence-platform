@@ -15,6 +15,7 @@ class ForcedDegradedInfo(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     mode: str
+    git_sha: str | None = None
     dependencies: dict[str, str] = Field(default_factory=dict)
     circuit_breakers: dict[str, str] = Field(default_factory=dict)
     actor_cache_key: str | None = None

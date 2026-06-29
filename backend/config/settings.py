@@ -119,6 +119,10 @@ class Settings(BaseSettings):
     )
 
     app_env: str = "local"
+    mip_git_sha: str | None = Field(
+        default=None,
+        validation_alias=AliasChoices("MIP_GIT_SHA", "GIT_SHA", "SOURCE_VERSION"),
+    )
     mip_lender_name: str = "Summit Mortgage"
     mip_tenant_id: str | None = None
     mip_default_catalog: str = "mip"

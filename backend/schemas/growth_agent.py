@@ -236,7 +236,7 @@ class GrowthAgentPolicyCheck(BaseModel):
 
 class GrowthAgentGovernanceChip(BaseModel):
     label: str
-    status: Literal["passed", "review_required", "roadmap", "not_provisioned"]
+    status: Literal["passed", "review_required", "roadmap", "not_provisioned", "not_attached"]
     detail: str
     evidence_ref: str | None = None
 

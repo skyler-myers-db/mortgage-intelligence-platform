@@ -567,6 +567,12 @@ describe('AskGenie Growth Agent route panel', () => {
           detail: 'This Databricks preview feature is not provisioned in the workspace.',
           evidence_ref: 'capability:not_provisioned',
         },
+        {
+          label: 'MLflow trace/eval',
+          status: 'not_attached',
+          detail: 'No MLflow trace URL or Agent Evaluation result is attached to this run.',
+          evidence_ref: null,
+        },
       ],
     });
     mount();
@@ -577,6 +583,8 @@ describe('AskGenie Growth Agent route panel', () => {
 
     expect(container.textContent).toContain('Not provisioned');
     expect(container.textContent).toContain('This Databricks preview feature is not provisioned in the workspace.');
+    expect(container.textContent).toContain('Not attached');
+    expect(container.textContent).toContain('No MLflow trace URL or Agent Evaluation result is attached to this run.');
   });
 
   it('renders blocked tool and policy states as blocked, not completed or review-only', async () => {

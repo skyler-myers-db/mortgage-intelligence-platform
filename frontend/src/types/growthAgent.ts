@@ -50,7 +50,7 @@ export interface GrowthAgentPolicyCheck {
 
 export interface GrowthAgentGovernanceChip {
   label: string;
-  status: 'passed' | 'review_required' | 'roadmap' | 'not_provisioned';
+  status: 'passed' | 'review_required' | 'roadmap' | 'not_provisioned' | 'not_attached';
   detail: string;
   evidence_ref?: string | null;
 }

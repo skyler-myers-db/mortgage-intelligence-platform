@@ -195,6 +195,8 @@ def _diagnostic_body(
         "fallback_identity_fallbacks_total": get_fallback_identity_count(),
         "boundary_warning": boundary_warning,
     }
+    if settings.mip_git_sha:
+        body["git_sha"] = settings.mip_git_sha
     if forced_degraded is not None:
         body["forced_degraded"] = forced_degraded
     return body
@@ -243,6 +245,8 @@ def health(request: Request) -> dict[str, Any]:
         "circuit_breakers": breakers,
         "actor_cache_key": _actor_cache_key(actor_email or ""),
     }
+    if settings.mip_git_sha:
+        body["git_sha"] = settings.mip_git_sha
     if forced_degraded is not None:
         body["forced_degraded"] = forced_degraded
     return body

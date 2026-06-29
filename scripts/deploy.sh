@@ -278,6 +278,7 @@ if [[ -z "$APP_RUNTIME_ENV" ]]; then
     APP_RUNTIME_ENV="$TARGET"
   fi
 fi
+APP_GIT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 
 # Cotality ID-mask HMAC visibility check (audit P3, 2026-06-11). When
 # MIP_COTALITY_ID_MASK_SECRET is unset, backend/services/pii_redaction.py
@@ -564,7 +565,7 @@ deploy_app_snapshot() {
   local label="$1"
   step "$label"
   APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
-  "$PYTHON" tools/databricks/app_deploy_payload.py \
+  MIP_GIT_SHA="$APP_GIT_SHA" "$PYTHON" tools/databricks/app_deploy_payload.py \
     --source-code-path "$APP_SOURCE_PATH" \
     --target "$TARGET" \
     --current-user-email "$APP_CURRENT_USER" \
