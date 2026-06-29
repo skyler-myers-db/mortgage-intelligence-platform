@@ -180,6 +180,12 @@ class Settings(BaseSettings):
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
     mip_agent_eval_experiment: str | None = None
+    mip_agent_eval_run_id: str | None = None
+    mip_agent_supervisor_id: str | None = None
+    mip_agent_supervisor_name: str | None = None
+    mip_lakebase_sync_catalog: str = "mip_app_state"
+    mip_lakebase_sync_schema: str = "mip_sync"
+    mip_lakebase_sync_tables: str = "source_readiness,segment_population,funnel_snapshot_daily"
 
     def effective_tenant_id(self) -> str:
         """Return the Lakebase disclosure namespace for this deployment."""

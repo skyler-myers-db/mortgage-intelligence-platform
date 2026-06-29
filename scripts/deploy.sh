@@ -21,7 +21,11 @@
 #       view columns resolve on the first dashboard render.
 #   10. Provision / rebind the Genie space via
 #       tools/databricks/provision_genie_space.py.
-#   11. Smoke-check the live API via scripts/smoke_live.sh (optional; fail-loud by default).
+#   11. Provision MIP-owned agentic resources: Lakebase synced tables,
+#       Supervisor Agent orchestration, and AI Gateway inference logging.
+#   12. Redeploy with agentic env, run live golden Agent Evaluation, then
+#       redeploy with the eval run id.
+#   13. Smoke-check the live API via scripts/smoke_live.sh (optional; fail-loud by default).
 #
 # Why one script (vs a bundle job that invokes provision_genie_space.py):
 # the Genie provisioner reads genie/mortgage_lead_intelligence_space.yml
@@ -150,10 +154,18 @@ fi
 
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
 APP_DEPLOY_PAYLOAD=""
+AGENTIC_ENV_FILE=""
+AGENT_EVAL_ENV_FILE=""
 
 restore_rendered_sql_fail_closed() {
   if [[ -n "${APP_DEPLOY_PAYLOAD:-}" ]]; then
     rm -f "$APP_DEPLOY_PAYLOAD"
+  fi
+  if [[ -n "${AGENTIC_ENV_FILE:-}" ]]; then
+    rm -f "$AGENTIC_ENV_FILE"
+  fi
+  if [[ -n "${AGENT_EVAL_ENV_FILE:-}" ]]; then
+    rm -f "$AGENT_EVAL_ENV_FILE"
   fi
   if [[ "$DRY_RUN" -eq 1 || "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -ne 1 ]]; then
     return 0
@@ -543,11 +555,39 @@ wait_for_app_deployable() {
   echo "${RED}[deploy] app deployment still in flight after 15 minutes; aborting snapshot deploy.${RST}" >&2
   return 1
 }
+
+deploy_app_snapshot() {
+  local label="$1"
+  step "$label"
+  APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
+  "$PYTHON" tools/databricks/app_deploy_payload.py \
+    --source-code-path "$APP_SOURCE_PATH" \
+    --target "$TARGET" \
+    --current-user-email "$APP_CURRENT_USER" \
+    --app-env "$APP_RUNTIME_ENV" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
+    > "$APP_DEPLOY_PAYLOAD"
+  run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
+  rm -f "$APP_DEPLOY_PAYLOAD"
+  APP_DEPLOY_PAYLOAD=""
+
+  if [[ "$DRY_RUN" -eq 0 && -z "${MIP_APP_URL:-}" ]]; then
+    DEPLOYED_APP_URL="$(databricks apps get "$APP_NAME" -o json | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("url",""))')"
+    if [[ -n "$DEPLOYED_APP_URL" ]]; then
+      export MIP_APP_URL="$DEPLOYED_APP_URL"
+      echo "  app url:    ${MIP_APP_URL}"
+    else
+      echo "${RED}[deploy] deployed app URL could not be resolved; refusing to run a local smoke while claiming deployed proof.${RST}" >&2
+      exit 1
+    fi
+  fi
+}
+
 if [[ "$DRY_RUN" -eq 0 ]]; then
   wait_for_app_deployable
 fi
 
-step "deploy Databricks App snapshot from uploaded bundle source"
 APP_DEPLOY_META="$(databricks bundle summary -t "$TARGET" -o json | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")')"
 APP_SOURCE_PATH="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '1p')"
 APP_CURRENT_USER="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '2p')"
@@ -555,29 +595,7 @@ if [[ -z "$APP_SOURCE_PATH" ]]; then
   echo "${RED}[deploy] bundle summary did not expose the uploaded app source path.${RST}" >&2
   exit 1
 fi
-APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
-"$PYTHON" tools/databricks/app_deploy_payload.py \
-  --source-code-path "$APP_SOURCE_PATH" \
-  --target "$TARGET" \
-  --current-user-email "$APP_CURRENT_USER" \
-  --app-env "$APP_RUNTIME_ENV" \
-  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-  --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
-  > "$APP_DEPLOY_PAYLOAD"
-run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
-rm -f "$APP_DEPLOY_PAYLOAD"
-APP_DEPLOY_PAYLOAD=""
-
-if [[ "$DRY_RUN" -eq 0 && -z "${MIP_APP_URL:-}" ]]; then
-  DEPLOYED_APP_URL="$(databricks apps get "$APP_NAME" -o json | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("url",""))')"
-  if [[ -n "$DEPLOYED_APP_URL" ]]; then
-    export MIP_APP_URL="$DEPLOYED_APP_URL"
-    echo "  app url:    ${MIP_APP_URL}"
-  else
-    echo "${RED}[deploy] deployed app URL could not be resolved; refusing to run a local smoke while claiming deployed proof.${RST}" >&2
-    exit 1
-  fi
-fi
+deploy_app_snapshot "deploy Databricks App snapshot from uploaded bundle source"
 
 # -----------------------------------------------------------------------------
 # Step 6: silver refresh (FRED + Cotality share)
@@ -613,6 +631,56 @@ run "$PYTHON" tools/sync_lifecycle_warehouse.py --catalog "${MIP_DEFAULT_CATALOG
 # -----------------------------------------------------------------------------
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
 run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
+
+# -----------------------------------------------------------------------------
+# Step 10b: provision MIP-owned agentic resources after gold/Genie assets exist
+# -----------------------------------------------------------------------------
+step "provision agentic resources — Lakebase sync, AI Gateway, Supervisor Agent"
+AGENTIC_ENV_FILE="$(mktemp -t mip-agentic.XXXXXX.env)"
+run "$PYTHON" tools/databricks/provision_agentic_resources.py \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --out-env "$AGENTIC_ENV_FILE"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
+fi
+
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  wait_for_app_deployable
+fi
+deploy_app_snapshot "deploy Databricks App snapshot with agentic resource env"
+
+# -----------------------------------------------------------------------------
+# Step 10c: run live Agent Evaluation, then redeploy with the eval run id
+# -----------------------------------------------------------------------------
+if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" && -z "${MIP_BEARER_TOKEN:-}" ]]; then
+  AUTH_HOST="${DATABRICKS_HOST:-$(dotenv_value DATABRICKS_HOST)}"
+  if [[ -n "$AUTH_HOST" ]]; then
+    export MIP_BEARER_TOKEN="$(databricks auth token --host "$AUTH_HOST" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
+  fi
+fi
+step "run live Agent Evaluation — golden Growth Agent workflows"
+mkdir -p dist
+AGENT_EVAL_ENV_FILE="$(mktemp -t mip-agent-eval.XXXXXX.env)"
+run "$PYTHON" tools/databricks/run_agent_eval.py \
+  --app-url "${MIP_APP_URL:-}" \
+  --token "${MIP_BEARER_TOKEN:-}" \
+  --out-env "$AGENT_EVAL_ENV_FILE" \
+  --out-json dist/agent-eval.json
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENT_EVAL_ENV_FILE"
+  set +a
+fi
+
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  wait_for_app_deployable
+fi
+deploy_app_snapshot "deploy Databricks App snapshot with Agent Evaluation proof"
 
 # -----------------------------------------------------------------------------
 # Step 11 (optional): live smoke test

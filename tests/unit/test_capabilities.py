@@ -71,6 +71,28 @@ class _LiveLakebase:
     pass
 
 
+class _SyncStatus:
+    detailed_state = "SYNCED_TABLE_ONLINE_NO_PENDING_UPDATE"
+
+
+class _SyncedTable:
+    data_synchronization_status = _SyncStatus()
+
+
+class _FakeDatabaseApi:
+    def __init__(self) -> None:
+        self.requested: list[str] = []
+
+    def get_synced_database_table(self, name: str) -> _SyncedTable:
+        self.requested.append(name)
+        return _SyncedTable()
+
+
+class _FakeWorkspaceClient:
+    def __init__(self) -> None:
+        self.database = _FakeDatabaseApi()
+
+
 def test_preview_capabilities_are_never_claimable() -> None:
     """CustomerLake / App Spaces / Lakehouse//RT / declarative agents / glossary
     / ontology must never present as integrated, regardless of mirror flag."""
@@ -142,10 +164,9 @@ def test_live_statuses_upgrade_configured_rows_only() -> None:
         assert cap.claimable is True
         assert "live" in cap.detail.lower()
     sync = _by_key(caps, "lakebase_sync")
-    assert sync.status is CapabilityStatus.CONFIGURED
-    assert sync.claimable is False
-    assert "ignored" in sync.detail.lower()
-    assert "synced gold" in sync.detail.lower()
+    assert sync.status is CapabilityStatus.AVAILABLE
+    assert sync.claimable is True
+    assert "lakebase sync live" in sync.detail.lower()
     customerlake = _by_key(caps, "customerlake")
     assert customerlake.claimable is False
 
@@ -178,8 +199,7 @@ def test_live_capability_probe_executes_exact_reviewed_contracts() -> None:
     assert statuses["genie_conversation_api"].available is True
     assert statuses["certified_metric_views"].available is True
     assert statuses["uc_function_tools"].available is True
-    assert statuses["lakebase_sync"].available is False
-    assert "not proof of sync" in statuses["lakebase_sync"].detail
+    assert "lakebase_sync" not in statuses
     assert len(sql.statements) == 6
     assert any(
         "semantics.certified_lead_generation_metric_view" in statement
@@ -203,7 +223,19 @@ def test_live_capability_probe_failures_are_captured() -> None:
     assert statuses["genie_conversation_api"].available is False
     assert statuses["certified_metric_views"].available is False
     assert statuses["uc_function_tools"].available is False
-    assert statuses["lakebase_sync"].available is False
+
+
+def test_lakebase_sync_live_probe_requires_synced_table_metadata() -> None:
+    sql = _LiveSqlClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
+        sql_client=sql,
+        lakebase=_LiveLakebase(),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["lakebase_sync"].available is True
+    assert "source_readiness" in sql.statements[-1]
 
 
 def test_certified_metric_view_sql_contracts_are_present() -> None:
@@ -280,9 +312,9 @@ def test_ai_gateway_requires_endpoint_and_inference_table_config() -> None:
         )
     )
     gateway = _by_key(caps, "ai_gateway")
-    assert gateway.status is CapabilityStatus.NOT_PROVISIONED
+    assert gateway.status is CapabilityStatus.CONFIGURED
     assert gateway.claimable is False
-    assert "live signal probe is not implemented" in gateway.detail
+    assert "live" in gateway.detail.lower()
 
 
 def test_warehouse_placeholder_is_not_provisioned() -> None:

@@ -33,7 +33,7 @@ from pathlib import Path
 from typing import Any
 
 from backend.config.settings import Settings, get_settings
-from backend.services.databricks_sql_helpers import qualify
+from backend.services.databricks_sql_helpers import _validate_identifier, qualify
 
 
 class CapabilityStatus(str, Enum):
@@ -188,6 +188,24 @@ def _agent_eval_contract_present(settings: Settings) -> bool:
     return (eval_dir / "golden_agent_cases.jsonl").exists() and (eval_dir / "scorers.py").exists()
 
 
+def _configured_csv(value: str | None) -> tuple[str, ...]:
+    if not value:
+        return ()
+    return tuple(part.strip() for part in value.split(",") if part.strip())
+
+
+def _enum_value(value: Any) -> str:
+    """Return SDK enum values as their wire value for stable comparisons."""
+
+    raw = getattr(value, "value", value)
+    return str(raw or "")
+
+
+def _synced_table_is_ready(state: str) -> bool:
+    normalized = state.upper()
+    return "ONLINE" in normalized or normalized.endswith("NO_PENDING_UPDATE")
+
+
 def _status_from_live(
     *,
     key: str,
@@ -218,8 +236,6 @@ def probe_capabilities(
     s = settings or get_settings()
 
     sdk = _module_present("databricks.sdk")
-    mlflow_ok = _version_at_least("mlflow", (3, 1, 3))
-    agents_lib = _module_present("databricks.agents")
     warehouse = _warehouse_configured(s)
     lakebase = _lakebase_configured(s)
     genie_configured = _genie_space_configured(s)
@@ -262,13 +278,13 @@ def probe_capabilities(
     )
     eval_status, eval_detail = _status_from_live(
         key="agent_eval",
-        configured=mlflow_ok and agent_eval_contract,
+        configured=agent_eval_contract,
         configured_detail=(
-            "MLflow/golden-case eval assets are configured, but no live "
+            "Golden-case Agent Evaluation assets are configured, but no live "
             "Agent Evaluation run has been verified for this deployment."
         ),
         not_provisioned_detail=(
-            "Needs mlflow>=3.1.3 plus configured experiment and golden eval cases."
+            "Needs a configured Databricks experiment and golden eval cases."
         ),
         live_statuses=live_statuses,
     )
@@ -314,18 +330,31 @@ def probe_capabilities(
     )
 
     # --- GA capability, gated behind a feature flag ------------------------
+    orchestrator_configured = bool(
+        s.mip_agent_orchestrator
+        and s.mip_agent_supervisor_id
+        and s.mip_agent_serving_endpoint
+    )
     if not s.mip_agent_orchestrator:
         orchestrator_status = CapabilityStatus.NOT_PROVISIONED
         orchestrator_detail = "Disabled (MIP_AGENT_ORCHESTRATOR off)."
-    elif mlflow_ok and agents_lib and warehouse:
-        orchestrator_status = CapabilityStatus.CONFIGURED
-        orchestrator_detail = (
-            "Agent Framework dependencies are present, but no live orchestrator "
-            "serving endpoint or agent run has been verified for this deployment."
+    elif orchestrator_configured:
+        orchestrator_status, orchestrator_detail = _status_from_live(
+            key="agent_orchestrator",
+            configured=True,
+            configured_detail=(
+                "Supervisor agent id and serving endpoint are configured; a live "
+                "serving endpoint probe must pass before this row is claimable."
+            ),
+            not_provisioned_detail="Supervisor agent id or serving endpoint missing.",
+            live_statuses=live_statuses,
         )
     else:
         orchestrator_status = CapabilityStatus.NOT_PROVISIONED
-        orchestrator_detail = "Flag on, but mlflow>=3.1.3 / databricks-agents / warehouse missing."
+        orchestrator_detail = (
+            "Flag on, but MIP_AGENT_SUPERVISOR_ID and MIP_AGENT_SERVING_ENDPOINT "
+            "are not both configured."
+        )
     caps.append(
         Capability(
             key="agent_orchestrator",
@@ -336,12 +365,23 @@ def probe_capabilities(
         )
     )
 
+    gateway_configured = bool(
+        s.mip_ai_gateway and s.mip_ai_gateway_endpoint and s.mip_ai_gateway_inference_table
+    )
     if not s.mip_ai_gateway:
         gateway_status = CapabilityStatus.NOT_PROVISIONED
         gateway_detail = "Disabled (MIP_AI_GATEWAY off)."
-    elif sdk and warehouse and s.mip_ai_gateway_endpoint and s.mip_ai_gateway_inference_table:
-        gateway_status = CapabilityStatus.NOT_PROVISIONED
-        gateway_detail = "Gateway endpoint and inference-table config are present, but the live signal probe is not implemented."
+    elif sdk and gateway_configured:
+        gateway_status, gateway_detail = _status_from_live(
+            key="ai_gateway",
+            configured=True,
+            configured_detail=(
+                "AI Gateway endpoint and inference-table config are present; a live "
+                "serving endpoint probe must pass before this row is claimable."
+            ),
+            not_provisioned_detail="Gateway endpoint or inference-table config missing.",
+            live_statuses=live_statuses,
+        )
     else:
         gateway_status = CapabilityStatus.NOT_PROVISIONED
         gateway_detail = (
@@ -357,29 +397,27 @@ def probe_capabilities(
         )
     )
 
+    sync_tables = _configured_csv(s.mip_lakebase_sync_tables)
+    sync_configured = bool(
+        s.mip_lakebase_sync
+        and s.mip_lakebase_sync_catalog
+        and s.mip_lakebase_sync_schema
+        and sync_tables
+    )
     if not s.mip_lakebase_sync:
         sync_status = CapabilityStatus.NOT_PROVISIONED
         sync_detail = "Disabled (MIP_LAKEBASE_SYNC off); reads stay on the warehouse path."
-    elif lakebase:
-        live_sync = live_statuses.get("lakebase_sync") if live_statuses else None
-        if live_sync:
-            sync_status = CapabilityStatus.CONFIGURED
-            if live_sync.available:
-                sync_detail = (
-                    "Lakebase sync evidence was ignored because no trusted synced "
-                    "gold serving-table probe is implemented."
-                )
-            else:
-                sync_detail = (
-                    "Lakebase sync is configured, but the live sync probe did not pass: "
-                    f"{live_sync.detail}"
-                )
-        else:
-            sync_status = CapabilityStatus.CONFIGURED
-            sync_detail = (
-                "Lakebase sync flag and credentials are present, but synced gold "
-                "serving tables have not been live-probed."
-            )
+    elif warehouse and lakebase and sync_configured:
+        sync_status, sync_detail = _status_from_live(
+            key="lakebase_sync",
+            configured=True,
+            configured_detail=(
+                "Lakebase synced-table serving config is present; live synced-table "
+                "metadata and row-count probes must pass before this row is claimable."
+            ),
+            not_provisioned_detail="Synced-table catalog/schema/table config missing.",
+            live_statuses=live_statuses,
+        )
     else:
         sync_status = CapabilityStatus.NOT_PROVISIONED
         sync_detail = "Flag on, but Lakebase creds missing."
@@ -442,9 +480,11 @@ def probe_capabilities(
 
 def collect_live_capability_statuses(
     *,
+    settings: Settings | None = None,
     sql_client: Any | None = None,
     genie_client: Any | None = None,
     lakebase: Any | None = None,
+    workspace_client: Any | None = None,
 ) -> dict[str, LiveCapabilityStatus]:
     """Run side-effect-free probes for capabilities that can be live-proven.
 
@@ -460,11 +500,19 @@ def collect_live_capability_statuses(
     if sql_client is not None:
         statuses["certified_metric_views"] = _probe_metric_views(sql_client)
         statuses["uc_function_tools"] = _probe_uc_functions(sql_client)
-    if lakebase is not None:
-        statuses["lakebase_sync"] = LiveCapabilityStatus(
-            False,
-            "No synced gold serving-table probe is implemented; operational Lakebase reads are not proof of sync.",
+    s = settings or get_settings()
+    if s.mip_lakebase_sync and lakebase is not None and sql_client is not None:
+        statuses["lakebase_sync"] = _probe_lakebase_synced_tables(
+            sql_client=sql_client,
+            workspace_client=workspace_client,
+            settings=s,
         )
+    if workspace_client is not None and s.mip_agent_eval_experiment:
+        statuses["agent_eval"] = _probe_agent_eval(workspace_client, s)
+    if workspace_client is not None and s.mip_agent_orchestrator:
+        statuses["agent_orchestrator"] = _probe_agent_orchestrator(workspace_client, s)
+    if workspace_client is not None and s.mip_ai_gateway:
+        statuses["ai_gateway"] = _probe_ai_gateway(workspace_client, s)
     return statuses
 
 
@@ -505,6 +553,133 @@ def _probe_uc_functions(sql_client: Any) -> LiveCapabilityStatus:
     return LiveCapabilityStatus(
         True, "Live UC function probes passed for all reviewed Growth Agent tools."
     )
+
+
+def _probe_lakebase_synced_tables(
+    *,
+    sql_client: Any,
+    workspace_client: Any | None,
+    settings: Settings,
+) -> LiveCapabilityStatus:
+    catalog = settings.mip_lakebase_sync_catalog
+    schema = settings.mip_lakebase_sync_schema
+    tables = _configured_csv(settings.mip_lakebase_sync_tables)
+    if not (catalog and schema and tables):
+        return LiveCapabilityStatus(False, "Synced-table catalog/schema/table config is incomplete.")
+    if workspace_client is None:
+        return LiveCapabilityStatus(False, "WorkspaceClient is required to verify synced-table metadata.")
+    try:
+        _validate_identifier("catalog", catalog)
+        _validate_identifier("schema", schema)
+        for table in tables:
+            _validate_identifier("table", table)
+    except ValueError as exc:
+        return LiveCapabilityStatus(False, str(exc))
+    try:
+        for table in tables:
+            full_name = f"{catalog}.{schema}.{table}"
+            synced = workspace_client.database.get_synced_database_table(full_name)
+            status = synced.data_synchronization_status
+            state = _enum_value(getattr(status, "detailed_state", ""))
+            if not _synced_table_is_ready(state):
+                return LiveCapabilityStatus(False, f"{full_name} sync state is {state or 'unknown'}.")
+            sql_client.execute(f"SELECT COUNT(*) AS n FROM {full_name}")
+    except Exception as exc:  # noqa: BLE001 - dependency details stay bounded
+        return LiveCapabilityStatus(False, f"Lakebase synced-table probe failed ({type(exc).__name__}).")
+    return LiveCapabilityStatus(
+        True,
+        f"Live Lakebase synced-table probes passed for {len(tables)} MIP-owned serving tables.",
+    )
+
+
+def _probe_agent_eval(workspace_client: Any, settings: Settings) -> LiveCapabilityStatus:
+    experiment_name = (settings.mip_agent_eval_experiment or "").strip()
+    if not experiment_name:
+        return LiveCapabilityStatus(False, "MIP_AGENT_EVAL_EXPERIMENT is not configured.")
+    try:
+        experiment = workspace_client.experiments.get_by_name(experiment_name).experiment
+        experiment_id = getattr(experiment, "experiment_id", None)
+        if not experiment_id:
+            return LiveCapabilityStatus(False, f"Experiment {experiment_name} has no id.")
+        run_id = (settings.mip_agent_eval_run_id or "").strip()
+        runs = []
+        if run_id:
+            runs = [workspace_client.experiments.get_run(run_id).run]
+        else:
+            runs = list(
+                workspace_client.experiments.search_runs(
+                    experiment_ids=[experiment_id],
+                    filter="tags.mip_eval_type = 'growth_agent_golden'",
+                    max_results=1,
+                    order_by=["attributes.start_time DESC"],
+                )
+            )
+        if not runs:
+            return LiveCapabilityStatus(False, "No MIP growth-agent golden eval run found.")
+        run = runs[0]
+        data = getattr(run, "data", None)
+        metrics = {m.key: m.value for m in (getattr(data, "metrics", None) or [])}
+        params = {p.key: p.value for p in (getattr(data, "params", None) or [])}
+        score = float(metrics.get("score", 0.0) or 0.0)
+        passed = int(float(metrics.get("passed", 0.0) or 0.0))
+        total = int(float(metrics.get("total", 0.0) or 0.0))
+        if total <= 0 or passed != total or score < 1.0:
+            return LiveCapabilityStatus(False, f"Latest eval run did not pass ({passed}/{total}, score={score:.3f}).")
+        sha = params.get("git_sha") or "unknown SHA"
+        return LiveCapabilityStatus(True, f"Live MLflow golden Agent Evaluation passed ({passed}/{total}) for {sha}.")
+    except Exception as exc:  # noqa: BLE001
+        return LiveCapabilityStatus(False, f"Agent Evaluation probe failed ({type(exc).__name__}).")
+
+
+def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> LiveCapabilityStatus:
+    endpoint = (settings.mip_agent_serving_endpoint or "").strip()
+    supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
+    if not endpoint or not supervisor_id:
+        return LiveCapabilityStatus(False, "Supervisor id or serving endpoint is not configured.")
+    try:
+        details = workspace_client.serving_endpoints.get(endpoint)
+        state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
+        task = getattr(details, "task", None)
+        if state != "READY":
+            return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} is not READY ({state}).")
+        if "agent" not in str(task).lower():
+            return LiveCapabilityStatus(False, f"Endpoint {endpoint} task is {task}, not agent.")
+        return LiveCapabilityStatus(True, f"Live Supervisor Agent endpoint is READY ({endpoint}, supervisor {supervisor_id}).")
+    except Exception as exc:  # noqa: BLE001
+        return LiveCapabilityStatus(False, f"Agent Orchestrator probe failed ({type(exc).__name__}).")
+
+
+def _probe_ai_gateway(workspace_client: Any, settings: Settings) -> LiveCapabilityStatus:
+    endpoint = (settings.mip_ai_gateway_endpoint or "").strip()
+    expected_table = (settings.mip_ai_gateway_inference_table or "").strip()
+    if not endpoint or not expected_table:
+        return LiveCapabilityStatus(False, "AI Gateway endpoint or inference table is not configured.")
+    try:
+        details = workspace_client.serving_endpoints.get(endpoint)
+        state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
+        gateway = getattr(details, "ai_gateway", None)
+        inference = getattr(gateway, "inference_table_config", None)
+        if state != "READY":
+            return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} is not READY ({state}).")
+        if not bool(getattr(inference, "enabled", False)):
+            return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} inference table is not enabled.")
+        actual = ".".join(
+            part
+            for part in (
+                getattr(inference, "catalog_name", None),
+                getattr(inference, "schema_name", None),
+                getattr(inference, "table_name_prefix", None),
+            )
+            if part
+        )
+        if expected_table and actual != expected_table:
+            return LiveCapabilityStatus(False, f"Gateway inference table is {actual}, expected {expected_table}.")
+        return LiveCapabilityStatus(
+            True,
+            f"Live AI Gateway endpoint is READY with governed inference logging at {actual}.",
+        )
+    except Exception as exc:  # noqa: BLE001
+        return LiveCapabilityStatus(False, f"AI Gateway probe failed ({type(exc).__name__}).")
 
 
 @lru_cache(maxsize=1)
