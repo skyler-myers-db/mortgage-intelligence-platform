@@ -34,7 +34,6 @@ export const queryKeys = {
   genieStart: () => ['mip', 'genie', 'start'] as const,
   genieAnswer: (criteria: readonly unknown[]) => ['mip', 'genie', 'answer', ...criteria] as const,
   growthAgent: () => ['mip', 'growth-agent'] as const,
-  growthAgentCapabilities: () => ['mip', 'growth-agent', 'capabilities', 'live'] as const,
 };
 
 export function invalidateOperationalQueries(queryClient: QueryClient): Promise<void> {

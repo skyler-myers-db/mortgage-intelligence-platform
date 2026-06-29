@@ -58,12 +58,15 @@ class _CapabilitySqlClient:
     ) -> list[dict[str, Any]]:
         _ = parameters
         self.statements.append(statement)
+        if "COUNT(*) AS row_count" in statement:
+            return [{"row_count": 0}]
         return [{"ok": 1}]
 
 
 class _CapabilityGenieClient:
-    def ping(self) -> bool:
-        return True
+    def ask(self, question: str) -> object:
+        _ = question
+        return type("GenieTurn", (), {"conversation_id": "conv-live", "message_id": "msg-live"})()
 
 
 class _ImpossibleReconciliationSqlClient(_FakeSqlClient):
@@ -343,7 +346,7 @@ def test_growth_agent_home_lists_governed_workflows() -> None:
     assert body["monitors"] == []
 
 
-def test_growth_agent_home_live_capabilities_uses_live_probes_without_overclaiming_lakebase(
+def test_growth_agent_home_ignores_live_capability_probe_query_param(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(capabilities_module, "get_settings", _capability_settings)
@@ -363,19 +366,12 @@ def test_growth_agent_home_live_capabilities_uses_live_probes_without_overclaimi
 
     assert response.status_code == 200, response.text
     rows = {row["key"]: row for row in response.json()["capabilities"]}
-    assert rows["genie_conversation_api"]["status"] == "available"
-    assert rows["certified_metric_views"]["status"] == "available"
-    assert rows["uc_function_tools"]["status"] == "available"
+    assert rows["genie_conversation_api"]["status"] == "configured"
+    assert rows["genie_conversation_api"]["claimable"] is False
+    assert rows["certified_metric_views"]["status"] == "configured"
+    assert rows["uc_function_tools"]["status"] == "configured"
     assert rows["lakebase_sync"]["claimable"] is False
-    assert any(
-        "semantics.certified_lead_generation_metric_view" in statement
-        for statement in sql.statements
-    )
-    assert not any(
-        "semantics.lead_generation_metric_view" in statement
-        and "semantics.certified_lead_generation_metric_view" not in statement
-        for statement in sql.statements
-    )
+    assert sql.statements == []
 
 
 def test_custom_segment_workflow_uses_reviewed_any_semantics_and_writes_audit() -> None:

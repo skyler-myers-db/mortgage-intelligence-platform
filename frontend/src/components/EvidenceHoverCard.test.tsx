@@ -18,6 +18,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { DrawerSource } from './AppContext';
 import { useEvidenceHoverCard } from './EvidenceHoverCard';
+import { EvidenceChip } from './Primitives';
 
 const setDrawer = vi.fn();
 vi.mock('./AppContext', () => ({
@@ -145,8 +146,7 @@ describe('EvidenceChip click path is unaffected by the hover card', () => {
     container.remove();
   });
 
-  it('still opens the full drawer on click', async () => {
-    const { EvidenceChip } = await import('./Primitives');
+  it('still opens the full drawer on click', () => {
     act(() => root.render(<EvidenceChip source={SOURCE}>Source</EvidenceChip>));
     act(() => container.querySelector<HTMLButtonElement>('.evidence-chip')!.click());
     expect(setDrawer).toHaveBeenCalledWith(SOURCE);

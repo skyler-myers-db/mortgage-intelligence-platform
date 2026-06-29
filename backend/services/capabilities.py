@@ -31,8 +31,15 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from backend.config.settings import Settings, get_settings
+from backend.services.capability_serving_probes import (
+    count_inference_log_rows,
+    query_serving_endpoint,
+    serving_response_has_payload,
+    wait_for_inference_log_increment,
+)
 from backend.services.databricks_sql_helpers import _validate_identifier, qualify
 
 
@@ -88,13 +95,14 @@ class Capability:
 
 @dataclass(frozen=True)
 class LiveCapabilityStatus:
-    """Result of a side-effect-free live capability probe."""
+    """Result of a bounded live capability probe."""
 
     available: bool
     detail: str
 
 
 LiveCapabilityMap = Mapping[str, LiveCapabilityStatus]
+MIN_GROWTH_AGENT_EVAL_CASES = 5
 
 
 def _module_present(name: str) -> bool:
@@ -488,12 +496,15 @@ def collect_live_capability_statuses(
     lakebase: Any | None = None,
     workspace_client: Any | None = None,
 ) -> dict[str, LiveCapabilityStatus]:
-    """Run side-effect-free probes for capabilities that can be live-proven.
+    """Run bounded live probes for capabilities that can be live-proven.
 
     The probes are intentionally conservative. They only upgrade a row to
-    ``available`` when the exact deployed dependencies respond. Any exception is
-    captured as a non-claimable ``configured`` row instead of failing the admin
-    surface or implying the dependency works.
+    ``available`` when the exact deployed dependencies respond to a functional
+    check. They never write MIP business state, but some checks intentionally
+    create provider-side proof artifacts (for example a Genie conversation turn,
+    a serving endpoint query, or an AI Gateway inference-log row). Any exception
+    is captured as a non-claimable ``configured`` row instead of failing the
+    admin surface or implying the dependency works.
     """
 
     statuses: dict[str, LiveCapabilityStatus] = {}
@@ -514,18 +525,31 @@ def collect_live_capability_statuses(
     if workspace_client is not None and s.mip_agent_orchestrator:
         statuses["agent_orchestrator"] = _probe_agent_orchestrator(workspace_client, s)
     if workspace_client is not None and s.mip_ai_gateway:
-        statuses["ai_gateway"] = _probe_ai_gateway(workspace_client, s)
+        statuses["ai_gateway"] = _probe_ai_gateway(workspace_client, s, sql_client=sql_client)
     return statuses
 
 
 def _probe_genie(genie_client: Any) -> LiveCapabilityStatus:
     try:
-        ok = bool(genie_client.ping())
+        ask = getattr(genie_client, "ask", None)
+        if not callable(ask):
+            return LiveCapabilityStatus(
+                False,
+                "Genie client does not expose a Conversation API turn probe.",
+            )
+        response = ask(
+            "Capability readiness check: reply with one short sentence about the Mortgage Lead Intelligence trusted assets."
+        )
     except Exception as exc:  # noqa: BLE001 - probe must not fail the surface
-        return LiveCapabilityStatus(False, f"Genie ping raised {type(exc).__name__}.")
-    if ok:
-        return LiveCapabilityStatus(True, "Live Genie space probe passed for this workspace.")
-    return LiveCapabilityStatus(False, "Genie space ping did not return healthy.")
+        return LiveCapabilityStatus(False, f"Genie Conversation API turn raised {type(exc).__name__}.")
+    conversation_id = str(getattr(response, "conversation_id", "") or "").strip()
+    message_id = str(getattr(response, "message_id", "") or "").strip()
+    if conversation_id and message_id:
+        return LiveCapabilityStatus(
+            True,
+            "Live Genie Conversation API turn completed for this workspace.",
+        )
+    return LiveCapabilityStatus(False, "Genie turn did not return a conversation and message id.")
 
 
 def _probe_metric_views(sql_client: Any) -> LiveCapabilityStatus:
@@ -591,7 +615,12 @@ def _probe_lakebase_synced_tables(
                 if type(exc).__name__ != "PermissionDenied":
                     raise
                 metadata_permission_denied = True
-            sql_client.execute(f"SELECT COUNT(*) AS n FROM {full_name}")
+            row_count = _count_relation_rows(sql_client, full_name)
+            if row_count <= 0:
+                return LiveCapabilityStatus(
+                    False,
+                    f"{full_name} is online but returned zero rows.",
+                )
     except Exception as exc:  # noqa: BLE001 - dependency details stay bounded
         return LiveCapabilityStatus(False, f"Lakebase synced-table probe failed ({type(exc).__name__}).")
     metadata_detail = (
@@ -603,6 +632,16 @@ def _probe_lakebase_synced_tables(
         True,
         f"Live Lakebase synced-table probes passed for {len(tables)} MIP-owned serving tables{metadata_detail}.",
     )
+
+
+def _count_relation_rows(sql_client: Any, relation: str) -> int:
+    rows = sql_client.execute(f"SELECT COUNT(*) AS row_count FROM {relation}")
+    if not rows:
+        return 0
+    raw = rows[0].get("row_count")
+    if raw is None:
+        raw = rows[0].get("n")
+    return int(raw or 0)
 
 
 def _probe_agent_eval(workspace_client: Any, settings: Settings) -> LiveCapabilityStatus:
@@ -630,15 +669,42 @@ def _probe_agent_eval(workspace_client: Any, settings: Settings) -> LiveCapabili
         if not runs:
             return LiveCapabilityStatus(False, "No MIP growth-agent golden eval run found.")
         run = runs[0]
+        info = getattr(run, "info", None)
+        if run_id:
+            run_experiment_id = str(getattr(info, "experiment_id", "") or "").strip()
+            if not run_experiment_id:
+                return LiveCapabilityStatus(False, f"Eval run {run_id} did not expose an experiment id.")
+            if run_experiment_id != str(experiment_id):
+                return LiveCapabilityStatus(
+                    False,
+                    f"Eval run {run_id} belongs to experiment {run_experiment_id}, not {experiment_id}.",
+                )
         data = getattr(run, "data", None)
         metrics = {m.key: m.value for m in (getattr(data, "metrics", None) or [])}
         params = {p.key: p.value for p in (getattr(data, "params", None) or [])}
+        tags = {t.key: t.value for t in (getattr(data, "tags", None) or [])}
+        eval_type = str(tags.get("mip_eval_type") or "").strip()
+        if eval_type != "growth_agent_golden":
+            return LiveCapabilityStatus(False, "Latest eval run is not tagged as a MIP growth-agent golden eval.")
         score = float(metrics.get("score", 0.0) or 0.0)
         passed = int(float(metrics.get("passed", 0.0) or 0.0))
         total = int(float(metrics.get("total", 0.0) or 0.0))
-        if total <= 0 or passed != total or score < 1.0:
-            return LiveCapabilityStatus(False, f"Latest eval run did not pass ({passed}/{total}, score={score:.3f}).")
         sha = params.get("git_sha") or "unknown SHA"
+        expected_sha = (settings.mip_git_sha or "").strip()
+        if not expected_sha:
+            return LiveCapabilityStatus(False, "MIP_GIT_SHA is required to prove Agent Evaluation matches this deployment.")
+        if expected_sha and sha != expected_sha:
+            return LiveCapabilityStatus(
+                False,
+                f"Latest eval run was for {sha}, not deployed SHA {expected_sha}.",
+            )
+        if total < MIN_GROWTH_AGENT_EVAL_CASES:
+            return LiveCapabilityStatus(
+                False,
+                f"Latest eval run covered only {total} cases; minimum is {MIN_GROWTH_AGENT_EVAL_CASES}.",
+            )
+        if passed != total or score < 1.0:
+            return LiveCapabilityStatus(False, f"Latest eval run did not pass ({passed}/{total}, score={score:.3f}).")
         return LiveCapabilityStatus(True, f"Live MLflow golden Agent Evaluation passed ({passed}/{total}) for {sha}.")
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"Agent Evaluation probe failed ({type(exc).__name__}).")
@@ -657,16 +723,36 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
             return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} is not READY ({state}).")
         if "agent" not in str(task).lower():
             return LiveCapabilityStatus(False, f"Endpoint {endpoint} task is {task}, not agent.")
-        return LiveCapabilityStatus(True, f"Live Supervisor Agent endpoint is READY ({endpoint}, supervisor {supervisor_id}).")
+        response = query_serving_endpoint(
+            workspace_client,
+            endpoint,
+            prompt=(
+                "Capability readiness check. Reply with a one-sentence acknowledgement "
+                "that the Mortgage Growth Agent endpoint is reachable."
+            ),
+        )
+        if not serving_response_has_payload(response):
+            return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} returned no response payload.")
+        return LiveCapabilityStatus(
+            True,
+            f"Live Supervisor Agent endpoint accepted a bounded query ({endpoint}, supervisor {supervisor_id}).",
+        )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"Agent Orchestrator probe failed ({type(exc).__name__}).")
 
 
-def _probe_ai_gateway(workspace_client: Any, settings: Settings) -> LiveCapabilityStatus:
+def _probe_ai_gateway(
+    workspace_client: Any,
+    settings: Settings,
+    *,
+    sql_client: Any | None,
+) -> LiveCapabilityStatus:
     endpoint = (settings.mip_ai_gateway_endpoint or "").strip()
     expected_table = (settings.mip_ai_gateway_inference_table or "").strip()
     if not endpoint or not expected_table:
         return LiveCapabilityStatus(False, "AI Gateway endpoint or inference table is not configured.")
+    if sql_client is None:
+        return LiveCapabilityStatus(False, "SQL client is required to verify AI Gateway inference log rows.")
     try:
         details = workspace_client.serving_endpoints.get(endpoint)
         state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
@@ -687,9 +773,37 @@ def _probe_ai_gateway(workspace_client: Any, settings: Settings) -> LiveCapabili
         )
         if expected_table and actual != expected_table:
             return LiveCapabilityStatus(False, f"Gateway inference table is {actual}, expected {expected_table}.")
+        client_request_id = f"mip-capability-{uuid4()}"
+        before_rows = count_inference_log_rows(
+            sql_client,
+            expected_table,
+            client_request_id=client_request_id,
+        )
+        response = query_serving_endpoint(
+            workspace_client,
+            endpoint,
+            prompt=(
+                "Capability readiness check. Reply with a one-sentence acknowledgement "
+                "for Mortgage Intelligence Platform AI Gateway logging."
+            ),
+            client_request_id=client_request_id,
+        )
+        if not serving_response_has_payload(response):
+            return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} returned no response payload.")
+        log_rows = wait_for_inference_log_increment(
+            sql_client,
+            expected_table,
+            previous_count=before_rows,
+            client_request_id=client_request_id,
+        )
+        if log_rows <= before_rows:
+            return LiveCapabilityStatus(
+                False,
+                f"AI Gateway endpoint responded, but no new inference log row was visible for {expected_table}.",
+            )
         return LiveCapabilityStatus(
             True,
-            f"Live AI Gateway endpoint is READY with governed inference logging at {actual}.",
+            f"Live AI Gateway endpoint accepted a bounded query and wrote an inference log row at {actual}.",
         )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"AI Gateway probe failed ({type(exc).__name__}).")

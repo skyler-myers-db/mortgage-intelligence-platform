@@ -59,6 +59,7 @@ vi.mock('react-router-dom', async () => {
 });
 
 import AskGenie from './ask-genie';
+import { GrowthAgentCapabilityPanel } from './ask-genie.growth-agent-capabilities';
 
 const WORKFLOW: GrowthAgentWorkflow = {
   id: 'daily_refi_brief',
@@ -241,7 +242,7 @@ describe('AskGenie Growth Agent route panel', () => {
   let root: Root;
 
   beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     growthAgent.mockResolvedValue(HOME);
     genieStart.mockResolvedValue(START);
     genie.mockResolvedValue(null);
@@ -345,6 +346,31 @@ describe('AskGenie Growth Agent route panel', () => {
     return match;
   }
 
+  it('does not render an inconsistent non-claimable available capability as green or available', () => {
+    act(() => {
+      root.render(
+        <GrowthAgentCapabilityPanel
+          isPending={false}
+          rows={[
+            {
+              key: 'agent_orchestrator',
+              label: 'Agent Framework orchestration',
+              ga: true,
+              status: 'available',
+              claimable: false,
+              detail: 'inconsistent backend row',
+            },
+          ]}
+        />,
+      );
+    });
+
+    const chip = container.querySelector<HTMLElement>('.chip');
+    expect(chip?.textContent).toContain('Configured');
+    expect(chip?.classList.contains('chip--neutral')).toBe(true);
+    expect(chip?.classList.contains('chip--success')).toBe(false);
+  });
+
   it('renders governed workflows and blocks invalid state scopes before posting', async () => {
     mount();
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
@@ -352,7 +378,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('Mortgage Growth Agent');
     expect(container.textContent).toContain('Borrower Dossier Review');
     expect(container.textContent).toContain('No auto-send · no scheduled automation');
-    expect(container.textContent).toContain('Audit checked after each run');
+    expect(container.textContent).toContain('Audit status shown per run');
 
     act(() => setNativeValue(stateInput(), 'IL illinois'));
     await waitUntil(() => container.textContent?.includes('Invalid: illinois') ?? false);
@@ -374,6 +400,12 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('Lakebase synced-table serving');
     expect(container.textContent).toContain('Configured');
     expect(container.textContent).toContain('Gateway endpoint/inference-table config is missing.');
+    const configuredCapability = Array.from(
+      container.querySelectorAll<HTMLElement>('.growth-agent-capability'),
+    ).find((row) => row.textContent?.includes('UC metric-view certification'));
+    const configuredChip = configuredCapability?.querySelector<HTMLElement>('.chip');
+    expect(configuredChip?.classList.contains('chip--neutral')).toBe(true);
+    expect(configuredChip?.classList.contains('chip--success')).toBe(false);
 
     const prompt = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Mortgage Growth Agent prompt"]',
@@ -426,7 +458,6 @@ describe('AskGenie Growth Agent route panel', () => {
       last_run_id: RUN.run_id,
     };
     growthAgent
-      .mockResolvedValueOnce(HOME)
       .mockResolvedValueOnce(HOME)
       .mockResolvedValueOnce({ ...HOME, monitors: [savedMonitor] });
     runMortgageGrowthAgent.mockResolvedValueOnce({

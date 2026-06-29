@@ -51,7 +51,7 @@ const STATUS_LABEL: Record<CapabilityStatus, string> = {
 };
 
 function toneFor(row: CapabilityRow): Tone {
-  if (row.status === 'available') return 'success';
+  if (row.claimable) return 'success';
   if (row.status === 'configured') return 'neutral';
   if (row.status === 'preview_mirror') return 'warning';
   return 'neutral'; // not_provisioned
@@ -62,7 +62,9 @@ export function toCapabilityViews(rows: CapabilityRow[] | undefined): Capability
     .filter((row) => row.status !== 'hidden')
     .map((row) => ({
       label: row.label,
-      statusLabel: row.ga ? STATUS_LABEL[row.status] : `${STATUS_LABEL[row.status]} · preview`,
+      statusLabel: row.ga
+        ? STATUS_LABEL[row.claimable || row.status !== 'available' ? row.status : 'configured']
+        : `${STATUS_LABEL[row.status]} · preview`,
       tone: toneFor(row),
       detail: row.detail,
     }));

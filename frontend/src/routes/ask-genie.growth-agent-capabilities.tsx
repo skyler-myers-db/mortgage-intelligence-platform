@@ -15,7 +15,9 @@ export function GrowthAgentCapabilityPanel({
     return rows.map((capability) => (
       <div key={capability.key} className="growth-agent-capability">
         <Chip variant={capability.claimable ? 'success' : 'neutral'}>
-          {capabilityStatusText(capability.status)}
+          {capability.claimable || capability.status !== 'available'
+            ? capabilityStatusText(capability.status)
+            : 'Configured'}
         </Chip>
         <div>
           <div className="growth-agent-step__title">{capability.label}</div>

@@ -10,11 +10,13 @@ claim. These tests pin that behaviour against the real probe logic.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
 
 import backend.services.capabilities as capabilities_module
+import backend.services.capability_serving_probes as serving_probe_module
 from backend.config.settings import Settings
 from backend.main import app
 from backend.services.capabilities import (
@@ -48,14 +50,32 @@ def _by_key(caps: list, key: str):
 
 
 class _LiveSqlClient:
-    def __init__(self, *, fail: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        fail: bool = False,
+        count: int = 7,
+        count_sequence: list[int] | None = None,
+    ) -> None:
         self.fail = fail
+        self.count = count
+        self.count_sequence = list(count_sequence or [])
+        self.count_calls = 0
         self.statements: list[str] = []
+        self.parameters: list[object | None] = []
 
     def execute(self, statement: str, parameters: object | None = None) -> list[dict[str, object]]:
         self.statements.append(statement)
+        self.parameters.append(parameters)
         if self.fail:
             raise RuntimeError("probe failed")
+        if "system.information_schema.tables" in statement:
+            return [{"table_name": "mip_agent_inference_payload"}]
+        if "COUNT(*) AS row_count" in statement:
+            self.count_calls += 1
+            if self.count_sequence:
+                return [{"row_count": self.count_sequence.pop(0)}]
+            return [{"row_count": self.count}]
         return [{"ok": 1}]
 
 
@@ -63,8 +83,11 @@ class _LiveGenieClient:
     def __init__(self, *, ok: bool = True) -> None:
         self.ok = ok
 
-    def ping(self) -> bool:
-        return self.ok
+    def ask(self, question: str) -> object:
+        _ = question
+        if not self.ok:
+            raise RuntimeError("genie unavailable")
+        return SimpleNamespace(conversation_id="conv-live", message_id="msg-live")
 
 
 class _LiveLakebase:
@@ -95,8 +118,101 @@ class _FakeDatabaseApi:
 
 
 class _FakeWorkspaceClient:
-    def __init__(self, *, permission_denied: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        permission_denied: bool = False,
+        serving_ready: bool = True,
+        empty_serving_response: bool = False,
+        eval_total: int = 5,
+        eval_passed: int | None = None,
+        eval_score: float = 1.0,
+        eval_sha: str = "sha-live",
+        eval_tag: str = "growth_agent_golden",
+        eval_experiment_id: str = "exp-1",
+        eval_run_experiment_id: str | None = None,
+    ) -> None:
         self.database = _FakeDatabaseApi(permission_denied=permission_denied)
+        self.serving_endpoints = _FakeServingEndpoints(
+            ready=serving_ready,
+            empty_response=empty_serving_response,
+        )
+        self.experiments = _FakeExperiments(
+            total=eval_total,
+            passed=eval_passed if eval_passed is not None else eval_total,
+            score=eval_score,
+            sha=eval_sha,
+            tag=eval_tag,
+            experiment_id=eval_experiment_id,
+            run_experiment_id=eval_run_experiment_id or eval_experiment_id,
+        )
+
+
+class _FakeServingEndpoints:
+    def __init__(self, *, ready: bool = True, empty_response: bool = False) -> None:
+        self.ready = ready
+        self.empty_response = empty_response
+        self.queries: list[tuple[str, dict[str, object]]] = []
+
+    def get(self, name: str) -> object:
+        _ = name
+        return SimpleNamespace(
+            state=SimpleNamespace(ready="READY" if self.ready else "NOT_READY"),
+            task="AGENT",
+            ai_gateway=SimpleNamespace(
+                inference_table_config=SimpleNamespace(
+                    enabled=True,
+                    catalog_name="mip_app_state",
+                    schema_name="mip_sync",
+                    table_name_prefix="mip_agent_inference",
+                )
+            ),
+        )
+
+    def query(self, name: str, **kwargs: object) -> object:
+        self.queries.append((name, kwargs))
+        if self.empty_response:
+            return {}
+        return {"choices": [{"message": {"content": "ready"}}]}
+
+
+class _FakeExperiments:
+    def __init__(
+        self,
+        *,
+        total: int,
+        passed: int,
+        score: float,
+        sha: str,
+        tag: str,
+        experiment_id: str,
+        run_experiment_id: str,
+    ) -> None:
+        self.experiment_id = experiment_id
+        self.run = SimpleNamespace(
+            info=SimpleNamespace(experiment_id=run_experiment_id),
+            data=SimpleNamespace(
+                metrics=[
+                    SimpleNamespace(key="score", value=score),
+                    SimpleNamespace(key="passed", value=passed),
+                    SimpleNamespace(key="total", value=total),
+                ],
+                params=[SimpleNamespace(key="git_sha", value=sha)],
+                tags=[SimpleNamespace(key="mip_eval_type", value=tag)],
+            )
+        )
+
+    def get_by_name(self, name: str) -> object:
+        _ = name
+        return SimpleNamespace(experiment=SimpleNamespace(experiment_id=self.experiment_id))
+
+    def get_run(self, run_id: str) -> object:
+        _ = run_id
+        return SimpleNamespace(run=self.run)
+
+    def search_runs(self, **kwargs: object) -> list[object]:
+        _ = kwargs
+        return [self.run]
 
 
 def test_preview_capabilities_are_never_claimable() -> None:
@@ -244,6 +360,18 @@ def test_lakebase_sync_live_probe_requires_synced_table_metadata() -> None:
     assert "source_readiness" in sql.statements[-1]
 
 
+def test_lakebase_sync_live_probe_requires_nonzero_rows() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
+        sql_client=_LiveSqlClient(count=0),
+        lakebase=_LiveLakebase(),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["lakebase_sync"].available is False
+    assert "zero rows" in statuses["lakebase_sync"].detail
+
+
 def test_lakebase_sync_capability_does_not_require_unused_lakebase_user() -> None:
     caps = probe_capabilities(
         _settings(
@@ -285,6 +413,172 @@ def test_lakebase_sync_probe_falls_back_to_sql_when_metadata_acl_denied() -> Non
     assert statuses["lakebase_sync"].available is True
     assert "SQL row-count proof" in statuses["lakebase_sync"].detail
     assert "source_readiness" in sql.statements[-1]
+
+
+def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
+    workspace = _FakeWorkspaceClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is True
+    assert workspace.serving_endpoints.queries
+    assert workspace.serving_endpoints.queries[0][0] == "mip-supervisor-endpoint"
+
+
+def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=_FakeWorkspaceClient(empty_serving_response=True),
+    )
+
+    assert statuses["agent_orchestrator"].available is False
+    assert "no response payload" in statuses["agent_orchestrator"].detail
+
+
+def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
+    sql = _LiveSqlClient(count_sequence=[1, 2])
+    workspace = _FakeWorkspaceClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=sql,
+        workspace_client=workspace,
+    )
+
+    assert statuses["ai_gateway"].available is True
+    assert workspace.serving_endpoints.queries
+    query_kwargs = workspace.serving_endpoints.queries[0][1]
+    client_request_id = str(query_kwargs.get("client_request_id") or "")
+    assert client_request_id.startswith("mip-capability-")
+    assert any("system.information_schema.tables" in statement for statement in sql.statements)
+    assert any("mip_agent_inference_payload" in statement for statement in sql.statements)
+    assert any(
+        isinstance(params, dict) and params.get("client_request_id") == client_request_id
+        for params in sql.parameters
+    )
+
+
+def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    ticks = iter([0.0, 11.0])
+    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=0),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "no new inference log row" in statuses["ai_gateway"].detail
+
+
+def test_agent_eval_live_probe_requires_full_case_floor_and_matching_sha() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(eval_total=5, eval_sha="sha-live"),
+    )
+
+    assert statuses["agent_eval"].available is True
+    assert "5/5" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_requires_deployed_sha_to_be_configured() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+        ),
+        workspace_client=_FakeWorkspaceClient(eval_total=5, eval_sha="old-sha"),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "MIP_GIT_SHA is required" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_rejects_too_few_cases() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(eval_total=1, eval_sha="sha-live"),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "minimum is 5" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_rejects_stale_sha() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="deployed-sha",
+        ),
+        workspace_client=_FakeWorkspaceClient(eval_total=5, eval_sha="old-sha"),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "not deployed SHA" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_rejects_untagged_run() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_tag="manual_debug",
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "golden eval" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_rejects_run_from_different_experiment() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_experiment_id="exp-1",
+            eval_run_experiment_id="other-exp",
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "not exp-1" in statuses["agent_eval"].detail
 
 
 def test_certified_metric_view_sql_contracts_are_present() -> None:

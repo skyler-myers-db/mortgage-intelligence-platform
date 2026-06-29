@@ -56,6 +56,21 @@ describe('toCapabilityViews', () => {
     expect(mv?.tone).toBe('success');
   });
 
+  it('does not render success when a row is marked available but not claimable', () => {
+    const inconsistent = toCapabilityViews([
+      {
+        key: 'agent_orchestrator',
+        label: 'Agent Framework orchestration',
+        ga: true,
+        status: 'available',
+        claimable: false,
+        detail: 'inconsistent backend row',
+      },
+    ]);
+    expect(inconsistent[0]?.statusLabel).toBe('configured');
+    expect(inconsistent[0]?.tone).not.toBe('success');
+  });
+
   it('renders a flag-off GA capability as not provisioned (neutral)', () => {
     const gw = toCapabilityViews(rows).find((v) => v.label.includes('AI Gateway'));
     expect(gw?.statusLabel).toBe('not provisioned');

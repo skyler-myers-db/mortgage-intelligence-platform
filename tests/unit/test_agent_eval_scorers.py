@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from pydantic import ValidationError
 
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
@@ -99,6 +100,11 @@ def test_growth_agent_eval_batch_summary() -> None:
     assert summary["passed"] == 5
     assert summary["total"] == 5
     assert summary["score"] == 1.0
+
+
+def test_growth_agent_eval_requires_full_case_floor() -> None:
+    with pytest.raises(ValueError, match="at least 5 cases"):
+        score_batch({}, [])
 
 
 def test_golden_cases_score_real_reviewed_planner_outputs() -> None:

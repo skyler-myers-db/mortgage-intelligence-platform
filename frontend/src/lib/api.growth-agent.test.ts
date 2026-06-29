@@ -27,19 +27,6 @@ describe('growth agent API client', () => {
     expect(calls[0].init?.method).toBeUndefined();
   });
 
-  it('loads governed workflows with explicit live capability probes when requested', async () => {
-    const calls: Array<{ path: string; init?: RequestInit }> = [];
-    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
-      calls.push({ path, init });
-      return jsonResponse(200, { workflows: [], monitors: [], capabilities: [] });
-    });
-
-    await api.growthAgent(undefined, true);
-
-    expect(calls[0].path).toBe('/api/v1/growth-agent?live_capabilities=1');
-    expect(calls[0].init?.method).toBeUndefined();
-  });
-
   it('loads admin capabilities with the live readiness probe enabled', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];
     vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {

@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 CASE_PATH = Path(__file__).with_name("golden_agent_cases.jsonl")
+MIN_GOLDEN_CASES = 5
 
 
 def load_cases(path: Path = CASE_PATH) -> list[dict[str, Any]]:
@@ -88,6 +89,11 @@ def score_batch(responses_by_case_id: dict[str, dict[str, Any]], cases: list[dic
     """Score multiple responses and return a compact eval summary."""
 
     loaded_cases = cases if cases is not None else load_cases()
+    if len(loaded_cases) < MIN_GOLDEN_CASES:
+        raise ValueError(
+            f"Growth Agent golden eval requires at least {MIN_GOLDEN_CASES} cases; "
+            f"got {len(loaded_cases)}."
+        )
     results = [
         score_growth_agent_response(responses_by_case_id.get(str(case["id"]), {}), case)
         for case in loaded_cases
