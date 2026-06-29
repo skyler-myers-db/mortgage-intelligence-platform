@@ -16,24 +16,24 @@ for the no-overclaim posture: a feature flag turned on without the backing
 library or credentials resolves to ``not_provisioned`` (an honest "roadmap /
 not provisioned" chip), and preview-only capabilities resolve to
 ``preview_mirror`` (clearly labelled roadmap) or ``hidden`` — NEVER to an
-"integrated" claim.
-
-The probe is intentionally cheap and side-effect free: it inspects installed
-modules (via :func:`importlib.util.find_spec`, which does not import them),
-package versions, and configured settings. It performs no network calls, so it
-is safe to call from a request handler and from tests without live creds.
+"integrated" claim. The default snapshot is cheap and dependency-free. Request
+handlers may opt into conservative live probes, which can only upgrade rows
+when the exact deployed dependency responds.
 """
 
 from __future__ import annotations
 
 import importlib.metadata
 import importlib.util
+from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import Enum
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 from backend.config.settings import Settings, get_settings
+from backend.services.databricks_sql_helpers import qualify
 
 
 class CapabilityStatus(str, Enum):
@@ -84,6 +84,17 @@ class Capability:
             "claimable": self.claimable,
             "detail": self.detail,
         }
+
+
+@dataclass(frozen=True)
+class LiveCapabilityStatus:
+    """Result of a side-effect-free live capability probe."""
+
+    available: bool
+    detail: str
+
+
+LiveCapabilityMap = Mapping[str, LiveCapabilityStatus]
 
 
 def _module_present(name: str) -> bool:
@@ -177,7 +188,32 @@ def _agent_eval_contract_present(settings: Settings) -> bool:
     return (eval_dir / "golden_agent_cases.jsonl").exists() and (eval_dir / "scorers.py").exists()
 
 
-def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
+def _status_from_live(
+    *,
+    key: str,
+    configured: bool,
+    configured_detail: str,
+    not_provisioned_detail: str,
+    live_statuses: LiveCapabilityMap | None,
+) -> tuple[CapabilityStatus, str]:
+    if not configured:
+        return CapabilityStatus.NOT_PROVISIONED, not_provisioned_detail
+    live = live_statuses.get(key) if live_statuses else None
+    if live is None:
+        return CapabilityStatus.CONFIGURED, configured_detail
+    if live.available:
+        return CapabilityStatus.AVAILABLE, live.detail
+    return (
+        CapabilityStatus.CONFIGURED,
+        f"{configured_detail} Live probe did not pass: {live.detail}",
+    )
+
+
+def probe_capabilities(
+    settings: Settings | None = None,
+    *,
+    live_statuses: LiveCapabilityMap | None = None,
+) -> list[Capability]:
     """Return the honest capability snapshot for the running workspace."""
     s = settings or get_settings()
 
@@ -191,6 +227,51 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
     certified_metric_contract = _certified_metric_view_contract_present()
     uc_tool_contract = _uc_agent_tool_contract_present()
     agent_eval_contract = _agent_eval_contract_present(s)
+    genie_status, genie_detail = _status_from_live(
+        key="genie_conversation_api",
+        configured=sdk and warehouse and genie_configured,
+        configured_detail=(
+            "Genie Conversation API dependencies are configured; a live Genie "
+            "probe must pass before this row is claimable."
+        ),
+        not_provisioned_detail="Needs databricks-sdk, warehouse creds, and a Genie space id.",
+        live_statuses=live_statuses,
+    )
+    certified_status, certified_detail = _status_from_live(
+        key="certified_metric_views",
+        configured=warehouse and certified_metric_contract,
+        configured_detail=(
+            "Certified metric-view SQL contracts are bundled; live UC deployment "
+            "must be verified before claiming them active."
+        ),
+        not_provisioned_detail="Metric views exist, but certification metadata/probe is not provisioned.",
+        live_statuses=live_statuses,
+    )
+    uc_tool_status, uc_tool_detail = _status_from_live(
+        key="uc_function_tools",
+        configured=warehouse and uc_tool_contract,
+        configured_detail=(
+            "Reviewed UC-function SQL contracts are bundled; live registration "
+            "must be verified before claiming them active."
+        ),
+        not_provisioned_detail=(
+            "Growth workflows use reviewed in-app SQL tools; UC-function agent "
+            "tools are not registered."
+        ),
+        live_statuses=live_statuses,
+    )
+    eval_status, eval_detail = _status_from_live(
+        key="agent_eval",
+        configured=mlflow_ok and agent_eval_contract,
+        configured_detail=(
+            "MLflow/golden-case eval assets are configured, but no live "
+            "Agent Evaluation run has been verified for this deployment."
+        ),
+        not_provisioned_detail=(
+            "Needs mlflow>=3.1.3 plus configured experiment and golden eval cases."
+        ),
+        live_statuses=live_statuses,
+    )
 
     caps: list[Capability] = []
 
@@ -200,17 +281,8 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             key="genie_conversation_api",
             label="Genie Conversation API",
             ga=True,
-            status=(
-                CapabilityStatus.CONFIGURED
-                if sdk and warehouse and genie_configured
-                else CapabilityStatus.NOT_PROVISIONED
-            ),
-            detail=(
-                "Genie Conversation API dependencies are configured; a live "
-                "Genie probe must pass before this row is claimable."
-                if sdk and warehouse and genie_configured
-                else "Needs databricks-sdk, warehouse creds, and a Genie space id."
-            ),
+            status=genie_status,
+            detail=genie_detail,
         )
     )
     caps.append(
@@ -218,12 +290,8 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             key="certified_metric_views",
             label="UC metric-view certification",
             ga=True,
-            status=CapabilityStatus.CONFIGURED if warehouse and certified_metric_contract else CapabilityStatus.NOT_PROVISIONED,
-            detail=(
-                "Certified metric-view SQL contracts are bundled; live UC deployment must be verified before claiming them active."
-                if warehouse and certified_metric_contract
-                else "Metric views exist, but certification metadata/probe is not provisioned."
-            ),
+            status=certified_status,
+            detail=certified_detail,
         )
     )
     caps.append(
@@ -231,12 +299,8 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             key="uc_function_tools",
             label="Application-reviewed SQL tools",
             ga=True,
-            status=CapabilityStatus.CONFIGURED if warehouse and uc_tool_contract else CapabilityStatus.NOT_PROVISIONED,
-            detail=(
-                "Reviewed UC-function SQL contracts are bundled; live registration must be verified before claiming them active."
-                if warehouse and uc_tool_contract
-                else "Growth workflows use reviewed in-app SQL tools; UC-function agent tools are not registered."
-            ),
+            status=uc_tool_status,
+            detail=uc_tool_detail,
         )
     )
     caps.append(
@@ -244,12 +308,8 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
             key="agent_eval",
             label="MLflow Agent Evaluation",
             ga=True,
-            status=CapabilityStatus.AVAILABLE if mlflow_ok and agent_eval_contract else CapabilityStatus.NOT_PROVISIONED,
-            detail=(
-                "Configured MLflow GenAI eval experiment with golden agent cases."
-                if mlflow_ok and agent_eval_contract
-                else "Needs mlflow>=3.1.3 plus configured experiment and golden eval cases."
-            ),
+            status=eval_status,
+            detail=eval_detail,
         )
     )
 
@@ -258,8 +318,11 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
         orchestrator_status = CapabilityStatus.NOT_PROVISIONED
         orchestrator_detail = "Disabled (MIP_AGENT_ORCHESTRATOR off)."
     elif mlflow_ok and agents_lib and warehouse:
-        orchestrator_status = CapabilityStatus.AVAILABLE
-        orchestrator_detail = "Multi-agent Mortgage Growth Agent over governed tools."
+        orchestrator_status = CapabilityStatus.CONFIGURED
+        orchestrator_detail = (
+            "Agent Framework dependencies are present, but no live orchestrator "
+            "serving endpoint or agent run has been verified for this deployment."
+        )
     else:
         orchestrator_status = CapabilityStatus.NOT_PROVISIONED
         orchestrator_detail = "Flag on, but mlflow>=3.1.3 / databricks-agents / warehouse missing."
@@ -281,7 +344,9 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
         gateway_detail = "Gateway endpoint and inference-table config are present, but the live signal probe is not implemented."
     else:
         gateway_status = CapabilityStatus.NOT_PROVISIONED
-        gateway_detail = "Flag on, but gateway endpoint/inference-table config or warehouse/sdk is missing."
+        gateway_detail = (
+            "Flag on, but gateway endpoint/inference-table config or warehouse/sdk is missing."
+        )
     caps.append(
         Capability(
             key="ai_gateway",
@@ -296,8 +361,25 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
         sync_status = CapabilityStatus.NOT_PROVISIONED
         sync_detail = "Disabled (MIP_LAKEBASE_SYNC off); reads stay on the warehouse path."
     elif lakebase:
-        sync_status = CapabilityStatus.CONFIGURED
-        sync_detail = "Hot gold aggregates served low-latency from synced Lakebase tables."
+        live_sync = live_statuses.get("lakebase_sync") if live_statuses else None
+        if live_sync:
+            sync_status = CapabilityStatus.CONFIGURED
+            if live_sync.available:
+                sync_detail = (
+                    "Lakebase sync evidence was ignored because no trusted synced "
+                    "gold serving-table probe is implemented."
+                )
+            else:
+                sync_detail = (
+                    "Lakebase sync is configured, but the live sync probe did not pass: "
+                    f"{live_sync.detail}"
+                )
+        else:
+            sync_status = CapabilityStatus.CONFIGURED
+            sync_detail = (
+                "Lakebase sync flag and credentials are present, but synced gold "
+                "serving tables have not been live-probed."
+            )
     else:
         sync_status = CapabilityStatus.NOT_PROVISIONED
         sync_detail = "Flag on, but Lakebase creds missing."
@@ -356,6 +438,73 @@ def probe_capabilities(settings: Settings | None = None) -> list[Capability]:
     )
 
     return caps
+
+
+def collect_live_capability_statuses(
+    *,
+    sql_client: Any | None = None,
+    genie_client: Any | None = None,
+    lakebase: Any | None = None,
+) -> dict[str, LiveCapabilityStatus]:
+    """Run side-effect-free probes for capabilities that can be live-proven.
+
+    The probes are intentionally conservative. They only upgrade a row to
+    ``available`` when the exact deployed dependencies respond. Any exception is
+    captured as a non-claimable ``configured`` row instead of failing the admin
+    surface or implying the dependency works.
+    """
+
+    statuses: dict[str, LiveCapabilityStatus] = {}
+    if genie_client is not None:
+        statuses["genie_conversation_api"] = _probe_genie(genie_client)
+    if sql_client is not None:
+        statuses["certified_metric_views"] = _probe_metric_views(sql_client)
+        statuses["uc_function_tools"] = _probe_uc_functions(sql_client)
+    if lakebase is not None:
+        statuses["lakebase_sync"] = LiveCapabilityStatus(
+            False,
+            "No synced gold serving-table probe is implemented; operational Lakebase reads are not proof of sync.",
+        )
+    return statuses
+
+
+def _probe_genie(genie_client: Any) -> LiveCapabilityStatus:
+    try:
+        ok = bool(genie_client.ping())
+    except Exception as exc:  # noqa: BLE001 - probe must not fail the surface
+        return LiveCapabilityStatus(False, f"Genie ping raised {type(exc).__name__}.")
+    if ok:
+        return LiveCapabilityStatus(True, "Live Genie space probe passed for this workspace.")
+    return LiveCapabilityStatus(False, "Genie space ping did not return healthy.")
+
+
+def _probe_metric_views(sql_client: Any) -> LiveCapabilityStatus:
+    assets = (
+        qualify("semantics", "certified_lead_generation_metric_view"),
+        qualify("semantics", "certified_segment_performance_metric_view"),
+        qualify("semantics", "certified_borrower_opportunity_metric_view"),
+    )
+    try:
+        for asset in assets:
+            sql_client.execute(f"SELECT 1 AS ok FROM {asset} LIMIT 1")
+    except Exception as exc:  # noqa: BLE001 - dependency details stay internal
+        return LiveCapabilityStatus(False, f"Metric-view query failed ({type(exc).__name__}).")
+    return LiveCapabilityStatus(True, "Live UC metric-view probes passed for all certified assets.")
+
+
+def _probe_uc_functions(sql_client: Any) -> LiveCapabilityStatus:
+    build = qualify("gold", "fn_build_cohort")
+    counts = qualify("gold", "fn_segment_counts")
+    route = qualify("gold", "fn_lead_queue_url")
+    try:
+        sql_client.execute(f"SELECT {build}(array('itm'), 'any', array()) AS n")
+        sql_client.execute(f"SELECT {counts}(array('itm'), 'any', array()) AS n")
+        sql_client.execute(f"SELECT {route}(array('itm'), 'any', array()) AS route")
+    except Exception as exc:  # noqa: BLE001 - dependency details stay internal
+        return LiveCapabilityStatus(False, f"UC-function probe failed ({type(exc).__name__}).")
+    return LiveCapabilityStatus(
+        True, "Live UC function probes passed for all reviewed Growth Agent tools."
+    )
 
 
 @lru_cache(maxsize=1)

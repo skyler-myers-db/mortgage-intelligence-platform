@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import HTTPException, Request
 
-JSON_CONTENT_TYPE_RESPONSE = {
+JSON_CONTENT_TYPE_RESPONSE: dict[int | str, dict[str, Any]] = {
     415: {
         "description": "Unsupported content type",
         "content": {

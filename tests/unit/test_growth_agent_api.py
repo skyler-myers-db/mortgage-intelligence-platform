@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services.databricks_sql import get_sql_client
+from backend.services.genie_client import get_genie_client
 from backend.services.growth_agent_workflows import custom_workflow
 from backend.services.lakebase import get_lakebase_client
 
@@ -21,7 +22,9 @@ class _FakeSqlClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
 
-    def execute_one(self, statement: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    def execute_one(
+        self, statement: str, parameters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         params = parameters or {}
         self.calls.append((statement, params))
         return {
@@ -34,8 +37,27 @@ class _FakeSqlClient:
         }
 
 
+class _CapabilitySqlClient:
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute(
+        self, statement: str, parameters: dict[str, Any] | None = None
+    ) -> list[dict[str, Any]]:
+        _ = parameters
+        self.statements.append(statement)
+        return [{"ok": 1}]
+
+
+class _CapabilityGenieClient:
+    def ping(self) -> bool:
+        return True
+
+
 class _ImpossibleReconciliationSqlClient(_FakeSqlClient):
-    def execute_one(self, statement: str, parameters: dict[str, Any] | None = None) -> dict[str, Any]:
+    def execute_one(
+        self, statement: str, parameters: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         self.calls.append((statement, parameters or {}))
         return {
             "broad_total": 10,
@@ -93,10 +115,9 @@ class _FakeLakebaseClient:
                 self.miss_next_run_select = False
                 return None
             for row in self.runs:
-                if (
-                    row.get("actor_email") == params.get("actor_email")
-                    and row.get("request_id") == params.get("request_id")
-                ):
+                if row.get("actor_email") == params.get("actor_email") and row.get(
+                    "request_id"
+                ) == params.get("request_id"):
                     return dict(row)
             return None
         if "FROM mip_app.growth_agent_monitors" in sql and "monitor_id" in sql:
@@ -110,10 +131,9 @@ class _FakeLakebaseClient:
             return None
         if "FROM mip_app.growth_agent_monitors" in sql and "last_run_id" in sql:
             for row in self.monitors:
-                if (
-                    row.get("actor_email") == params.get("actor_email")
-                    and str(row.get("last_run_id")) == str(params.get("last_run_id"))
-                ):
+                if row.get("actor_email") == params.get("actor_email") and str(
+                    row.get("last_run_id")
+                ) == str(params.get("last_run_id")):
                     return dict(row)
             return None
         if "INSERT INTO mip_app.action_audit" in sql:
@@ -277,6 +297,7 @@ def _client(sql: _FakeSqlClient, lakebase: Any) -> TestClient:
 
 def _clear_overrides() -> None:
     app.dependency_overrides.pop(get_sql_client, None)
+    app.dependency_overrides.pop(get_genie_client, None)
     app.dependency_overrides.pop(get_lakebase_client, None)
 
 
@@ -285,7 +306,9 @@ def test_growth_agent_home_lists_governed_workflows() -> None:
     lakebase = _FakeLakebaseClient()
     client = _client(sql, lakebase)
     try:
-        response = client.get("/api/growth-agent", headers={"X-Forwarded-Email": "operator@example.com"})
+        response = client.get(
+            "/api/growth-agent", headers={"X-Forwarded-Email": "operator@example.com"}
+        )
     finally:
         _clear_overrides()
 
@@ -306,6 +329,40 @@ def test_growth_agent_home_lists_governed_workflows() -> None:
     assert routes["branch_capacity_review"].startswith("/lead-queue?")
     assert routes["source_freshness_sentinel"] == "/admin-config?panel=data-operations"
     assert body["monitors"] == []
+
+
+def test_growth_agent_home_live_capabilities_uses_live_probes_without_overclaiming_lakebase() -> (
+    None
+):
+    sql = _CapabilitySqlClient()
+    lakebase = _FakeLakebaseClient()
+    app.dependency_overrides[get_sql_client] = lambda: sql
+    app.dependency_overrides[get_genie_client] = lambda: _CapabilityGenieClient()
+    app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    client = TestClient(app)
+    try:
+        response = client.get(
+            "/api/growth-agent?live_capabilities=1",
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    rows = {row["key"]: row for row in response.json()["capabilities"]}
+    assert rows["genie_conversation_api"]["status"] == "available"
+    assert rows["certified_metric_views"]["status"] == "available"
+    assert rows["uc_function_tools"]["status"] == "available"
+    assert rows["lakebase_sync"]["claimable"] is False
+    assert any(
+        "semantics.certified_lead_generation_metric_view" in statement
+        for statement in sql.statements
+    )
+    assert not any(
+        "semantics.lead_generation_metric_view" in statement
+        and "semantics.certified_lead_generation_metric_view" not in statement
+        for statement in sql.statements
+    )
 
 
 def test_custom_segment_workflow_uses_reviewed_any_semantics_and_writes_audit() -> None:
@@ -336,8 +393,14 @@ def test_custom_segment_workflow_uses_reviewed_any_semantics_and_writes_audit() 
         "&marketing_eligibility=Eligible+only&states=IL%2CTX"
     )
     statement, params = sql.calls[0]
-    assert "array_contains(b.segment_codes, 'investor') OR array_contains(b.segment_codes, 'listed')" in statement
-    assert "array_contains(b.segment_codes, 'investor') AND array_contains(b.segment_codes, 'listed')" not in statement
+    assert (
+        "array_contains(b.segment_codes, 'investor') OR array_contains(b.segment_codes, 'listed')"
+        in statement
+    )
+    assert (
+        "array_contains(b.segment_codes, 'investor') AND array_contains(b.segment_codes, 'listed')"
+        not in statement
+    )
     assert "b.marketing_eligible = TRUE" in statement
     assert params == {"state_0": "IL", "state_1": "TX"}
     metadata = json.loads(lakebase.audit_events[0]["metadata"])
@@ -387,7 +450,10 @@ def test_custom_segment_workflow_all_mode_and_monitor_are_safe() -> None:
     assert replay.status_code == 200, replay.text
     assert replay.json()["run_id"] == first.json()["run_id"]
     statement, params = sql.calls[0]
-    assert "array_contains(b.segment_codes, 'itm') AND array_contains(b.segment_codes, 'listed')" in statement
+    assert (
+        "array_contains(b.segment_codes, 'itm') AND array_contains(b.segment_codes, 'listed')"
+        in statement
+    )
     assert params == {"state_0": "FL"}
     assert len(sql.calls) == 1
     assert len(lakebase.audit_events) == 1
@@ -412,8 +478,8 @@ def test_custom_segment_workflow_direct_replay_skips_sql_and_cannot_add_monitor(
                 "save_monitor": False,
                 "request_id": request_id,
             },
-                headers={"X-Forwarded-Email": "operator@example.com"},
-            )
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
         replay_with_monitor = client.post(
             "/api/growth-agent/custom/run",
             json={
@@ -712,7 +778,10 @@ def test_growth_agent_custom_monitor_rerun_preserves_all_mode() -> None:
     assert body["criteria"]["lead_queue_filters"]["segment_mode"] == "all"
     assert "segment_mode=all" in body["route"]
     statement, params = sql.calls[0]
-    assert "array_contains(b.segment_codes, 'itm') AND array_contains(b.segment_codes, 'listed')" in statement
+    assert (
+        "array_contains(b.segment_codes, 'itm') AND array_contains(b.segment_codes, 'listed')"
+        in statement
+    )
     assert params == {"state_0": "TX"}
 
 
@@ -852,7 +921,10 @@ def test_prompt_agent_routes_to_source_sentinel_without_storing_raw_prompt() -> 
     body = response.json()
     assert body["workflow"]["id"] == "source_freshness_sentinel"
     assert body["specialist_agent"] == "data_ops_agent"
-    assert body["interpreted_intent"] == "Data operations lens selected the global source/freshness sentinel."
+    assert (
+        body["interpreted_intent"]
+        == "Data operations lens selected the global source/freshness sentinel."
+    )
     assert body["route"] == "/admin-config?panel=data-operations"
     assert body["criteria"]["states"] == []
     assert "states" not in body["criteria"]["lead_queue_filters"]
@@ -884,7 +956,10 @@ def test_prompt_agent_custom_segments_use_reviewed_all_semantics() -> None:
     assert body["criteria"]["lead_queue_filters"]["segment_mode"] == "all"
     assert body["interpreted_intent"] == "Campaign lens built a custom ALL segment workflow."
     statement, _params = sql.calls[0]
-    assert "array_contains(b.segment_codes, 'itm') AND array_contains(b.segment_codes, 'listed')" in statement
+    assert (
+        "array_contains(b.segment_codes, 'itm') AND array_contains(b.segment_codes, 'listed')"
+        in statement
+    )
 
 
 def test_prompt_agent_routes_home_equity_line_to_offer_agent_before_custom_segments() -> None:
@@ -941,7 +1016,10 @@ def test_prompt_agent_custom_segments_with_heloc_preserve_any_all_semantics(
     assert body["criteria"]["lead_queue_filters"]["segment_mode"] == expected_mode
     statement, _params = sql.calls[0]
     joiner = " AND " if expected_mode == "all" else " OR "
-    assert joiner.join(f"array_contains(b.segment_codes, '{code}')" for code in expected_segments) in statement
+    assert (
+        joiner.join(f"array_contains(b.segment_codes, '{code}')" for code in expected_segments)
+        in statement
+    )
 
 
 def test_prompt_agent_routes_dossier_story_to_borrower_dossier_specialist() -> None:
@@ -962,9 +1040,14 @@ def test_prompt_agent_routes_dossier_story_to_borrower_dossier_specialist() -> N
     assert body["workflow"]["id"] == "borrower_dossier_review"
     assert body["specialist_agent"] == "borrower_dossier_agent"
     assert body["criteria"]["lead_queue_filters"]["funnel_stage"] == "high_opportunity"
-    assert body["route"] == "/lead-queue?funnel_stage=high_opportunity&marketing_eligibility=Eligible+only"
+    assert (
+        body["route"]
+        == "/lead-queue?funnel_stage=high_opportunity&marketing_eligibility=Eligible+only"
+    )
     dossier_steps = [
-        step for step in body["tool_steps"] if step.get("tool_name") == "fn_borrower_dossier_evidence"
+        step
+        for step in body["tool_steps"]
+        if step.get("tool_name") == "fn_borrower_dossier_evidence"
     ]
     assert dossier_steps
     assert dossier_steps[0]["source_asset"] == "mip.gold.borrower_dossier"
@@ -1108,7 +1191,9 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert body["trace_kind"] == "local_hash"
     assert body["planner_label"] == "Reviewed workflow runner"
     assert body["tool_steps"][0]["label"] == "Interpret mortgage-growth objective"
-    build_step = next(step for step in body["tool_steps"] if step.get("tool_name") == "fn_build_cohort")
+    build_step = next(
+        step for step in body["tool_steps"] if step.get("tool_name") == "fn_build_cohort"
+    )
     assert build_step["result_hash"] == body["tool_result_hash"]
     assert body["criteria"]["states"] == ["IL", "TX"]
     assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["itm"]
@@ -1117,7 +1202,10 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
         "marketing_eligibility": "Eligible only",
         "states": ["IL", "TX"],
     }
-    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL%2CTX"
+    assert (
+        body["route"]
+        == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL%2CTX"
+    )
     assert body["policy_checks"][2]["label"] == "Broad vs actionable reconciliation"
     assert "117,404" in body["policy_checks"][2]["detail"]
     assert "5,394" in body["policy_checks"][2]["detail"]
@@ -1139,7 +1227,9 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert metadata["governance_chips"][0]["label"] == "PII-safe output"
     assert "Multi-agent framework" in json.dumps(metadata["governance_chips"])
     assert metadata["result_filters"]["segment_codes"] == ["itm"]
-    assert metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
+    assert (
+        metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
+    )
     metadata_text = json.dumps(metadata).lower()
     assert "borrower_id" not in metadata_text
     assert "subject_clip" not in metadata_text
@@ -1239,7 +1329,10 @@ def test_borrower_dossier_workflow_reads_dossier_and_evidence_assets() -> None:
     assert "COUNT(DISTINCT CASE WHEN ev.clip IS NOT NULL THEN d.clip END)" in statement
     assert "UPPER(d.state) IN (:state_0)" in statement
     assert params == {"state_0": "IL"}
-    assert any(step["tool_name"] == "fn_borrower_dossier_evidence" for step in response.json()["tool_steps"])
+    assert any(
+        step["tool_name"] == "fn_borrower_dossier_evidence"
+        for step in response.json()["tool_steps"]
+    )
 
 
 def test_impossible_reconciliation_requires_review_instead_of_false_pass() -> None:

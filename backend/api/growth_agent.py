@@ -34,7 +34,8 @@ from backend.schemas.growth_agent import (
 )
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import resolve_actor
-from backend.services.capabilities import get_capabilities_snapshot
+from backend.services.capabilities import probe_capabilities
+from backend.services.capability_request import collect_request_live_capability_statuses
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_ledger_sql import (
@@ -102,12 +103,21 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
 
 @router.get("", response_model=GrowthAgentHomeResponse)
-def growth_agent_home(request: Request, lakebase: LakebaseDep) -> GrowthAgentHomeResponse:
+def growth_agent_home(
+    request: Request,
+    lakebase: LakebaseDep,
+    live_capabilities: bool = False,
+) -> GrowthAgentHomeResponse:
     actor = resolve_actor(request)
+    live_statuses = (
+        collect_request_live_capability_statuses(request)
+        if live_capabilities
+        else None
+    )
     return GrowthAgentHomeResponse(
         workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
         monitors=_list_monitors(lakebase, actor=actor),
-        capabilities=[cap.to_dict() for cap in get_capabilities_snapshot()],
+        capabilities=[cap.to_dict() for cap in probe_capabilities(live_statuses=live_statuses)],
     )
 
 

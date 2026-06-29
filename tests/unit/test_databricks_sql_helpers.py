@@ -26,7 +26,25 @@ def test_qualify_accepts_explicit_catalog() -> None:
             "lead_generation_metric_view",
             "mip.semantics.lead_generation_metric_view",
         ),
+        (
+            "semantics",
+            "certified_lead_generation_metric_view",
+            "mip.semantics.certified_lead_generation_metric_view",
+        ),
+        (
+            "semantics",
+            "certified_segment_performance_metric_view",
+            "mip.semantics.certified_segment_performance_metric_view",
+        ),
+        (
+            "semantics",
+            "certified_borrower_opportunity_metric_view",
+            "mip.semantics.certified_borrower_opportunity_metric_view",
+        ),
         ("gold", "fn_next_best_offer", "mip.gold.fn_next_best_offer"),
+        ("gold", "fn_build_cohort", "mip.gold.fn_build_cohort"),
+        ("gold", "fn_segment_counts", "mip.gold.fn_segment_counts"),
+        ("gold", "fn_lead_queue_url", "mip.gold.fn_lead_queue_url"),
     ],
 )
 def test_qualify_allows_known_public_relations(

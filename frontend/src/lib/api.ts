@@ -1291,7 +1291,7 @@ export const api = {
     ),
 
   growthAgent: (signal?: AbortSignal) =>
-    getJson<GrowthAgentHomeResponse>('/api/growth-agent', signal),
+    getJson<GrowthAgentHomeResponse>('/api/growth-agent?live_capabilities=1', signal),
 
   growthAgentMonitors: (signal?: AbortSignal) =>
     getJson<GrowthAgentMonitor[]>('/api/growth-agent/monitors', signal),
@@ -1452,7 +1452,7 @@ export const api = {
    * that aren't `claimable` render as roadmap, never as integrated.
    */
   adminCapabilities: <T>(signal?: AbortSignal) =>
-    getJson<T>('/api/admin/capabilities', signal),
+    getJson<T>('/api/admin/capabilities?live=1', signal),
 
   adminRunOperation: <T>(
     payload: {

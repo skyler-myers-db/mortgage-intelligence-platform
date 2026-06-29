@@ -41,6 +41,8 @@ from backend.schemas.admin import (
 )
 from backend.services.admin_rules import AdminRulesService, get_admin_rules_service
 from backend.services.audit_store import AuditStore, get_audit_store
+from backend.services.capabilities import probe_capabilities
+from backend.services.capability_request import collect_request_live_capability_statuses
 from backend.services.databricks_jobs import (
     DatabricksJobOperations,
     JobAlreadyRunningError,
@@ -517,18 +519,16 @@ def post_operation_run(
 
 
 @router.get("/capabilities", response_model=AdminCapabilitiesResponse)
-def get_capabilities(_actor: AdminDep) -> dict[str, object]:
+def get_capabilities(_actor: AdminDep, request: Request, live: bool = False) -> dict[str, object]:
     """Return the honest DAIS-2026 capability snapshot for this workspace.
 
-    Side-effect free and dependency-free: derived from installed modules +
-    settings (no warehouse/Lakebase/Genie call), so it never 503s. Each row's
-    ``status``/``claimable`` is the enforcement point for the no-overclaim
-    posture — the frontend renders non-claimable rows as roadmap, never as an
-    integrated capability. See ``backend/services/capabilities.py``.
+    Best-effort live probes may upgrade configured rows to ``available``. Probe
+    failures never 503 this route; they leave the row non-claimable with a
+    probe-failed detail. Each row's ``status``/``claimable`` remains the
+    enforcement point for the no-overclaim posture.
     """
-    from backend.services.capabilities import get_capabilities_snapshot
-
-    return {"capabilities": [cap.to_dict() for cap in get_capabilities_snapshot()]}
+    live_statuses = collect_request_live_capability_statuses(request) if live else None
+    return {"capabilities": [cap.to_dict() for cap in probe_capabilities(live_statuses=live_statuses)]}
 
 
 @router.get("/settings", response_model=AdminSettingsResponse)
