@@ -105,6 +105,13 @@ export default function AskGenie() {
     refetchOnWindowFocus: false,
   });
 
+  const growthAgentCapabilitiesQuery = useQuery({
+    queryKey: queryKeys.growthAgentCapabilities(),
+    queryFn: ({ signal }) => api.growthAgent(signal, true),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
   const genieStartQuery = useQuery({
     queryKey: queryKeys.genieStart(),
     queryFn: ({ signal }) => api.genieStart(signal),
@@ -412,7 +419,7 @@ export default function AskGenie() {
   const workflows = growthAgentQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? [];
   const agentBusy = growthAgentPending !== null || promptAgentPending || monitorPending !== null;
-  const capabilityRows = (growthAgentQuery.data?.capabilities ?? []).filter((row) => (
+  const capabilityRows = (growthAgentCapabilitiesQuery.data?.capabilities ?? []).filter((row) => (
     [
       'genie_conversation_api',
       'certified_metric_views',
@@ -444,17 +451,29 @@ export default function AskGenie() {
         </div>
         <div className="surface__body">
           <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
-            {capabilityRows.length > 0 ? capabilityRows.map((capability) => (
-              <div key={capability.key} className="growth-agent-capability">
-                <Chip variant={capability.claimable ? 'success' : 'neutral'}>
-                  {capabilityStatusText(capability.status)}
-                </Chip>
+            {capabilityRows.length > 0 ? (
+              capabilityRows.map((capability) => (
+                <div key={capability.key} className="growth-agent-capability">
+                  <Chip variant={capability.claimable ? 'success' : 'neutral'}>
+                    {capabilityStatusText(capability.status)}
+                  </Chip>
+                  <div>
+                    <div className="growth-agent-step__title">{capability.label}</div>
+                    <div className="growth-agent-step__detail">{capability.detail}</div>
+                  </div>
+                </div>
+              ))
+            ) : growthAgentCapabilitiesQuery.isPending ? (
+              <div className="growth-agent-capability">
+                <Chip variant="neutral">Checking</Chip>
                 <div>
-                  <div className="growth-agent-step__title">{capability.label}</div>
-                  <div className="growth-agent-step__detail">{capability.detail}</div>
+                  <div className="growth-agent-step__title">Agentic capability snapshot</div>
+                  <div className="growth-agent-step__detail">
+                    Running live probes for Genie, certified metric views, reviewed SQL tools, and non-claimable roadmap items.
+                  </div>
                 </div>
               </div>
-            )) : (
+            ) : (
               <div className="growth-agent-capability">
                 <Chip variant="warning">Unverified</Chip>
                 <div>

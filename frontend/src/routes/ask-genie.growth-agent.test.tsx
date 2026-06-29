@@ -427,6 +427,7 @@ describe('AskGenie Growth Agent route panel', () => {
     };
     growthAgent
       .mockResolvedValueOnce(HOME)
+      .mockResolvedValueOnce(HOME)
       .mockResolvedValueOnce({ ...HOME, monitors: [savedMonitor] });
     runMortgageGrowthAgent.mockResolvedValueOnce({
       ...RUN,
