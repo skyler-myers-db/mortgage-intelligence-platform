@@ -11,8 +11,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
+import backend.services.capabilities as capabilities_module
 from backend.config.settings import Settings
 from backend.main import app
 from backend.services.capabilities import (
@@ -310,7 +312,10 @@ def test_capabilities_endpoint_admin_gated_and_shaped() -> None:
             assert row["claimable"] is False
 
 
-def test_capabilities_endpoint_live_probe_marks_live_dependencies_available() -> None:
+def test_capabilities_endpoint_live_probe_marks_live_dependencies_available(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capabilities_module, "get_settings", lambda: _settings())
     app.dependency_overrides[get_sql_client] = lambda: _LiveSqlClient()
     app.dependency_overrides[get_genie_client] = lambda: _LiveGenieClient(ok=True)
     app.dependency_overrides[get_lakebase_client] = lambda: _LiveLakebase()

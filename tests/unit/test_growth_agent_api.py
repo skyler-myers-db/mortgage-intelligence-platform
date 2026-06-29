@@ -11,6 +11,8 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import backend.services.capabilities as capabilities_module
+from backend.config.settings import Settings
 from backend.main import app
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_client import get_genie_client
@@ -35,6 +37,16 @@ class _FakeSqlClient:
             "avg_rate_spread_bps": 187.9,
             "avg_equity_pct": 42.4,
         }
+
+
+def _capability_settings() -> Settings:
+    return Settings(
+        databricks_host="dbc-test.cloud.databricks.com",
+        databricks_warehouse_id="wh-123",
+        genie_space_id="space-abc",
+        lakebase_host="lb-test",
+        lakebase_user="mip_app",
+    )
 
 
 class _CapabilitySqlClient:
@@ -331,9 +343,10 @@ def test_growth_agent_home_lists_governed_workflows() -> None:
     assert body["monitors"] == []
 
 
-def test_growth_agent_home_live_capabilities_uses_live_probes_without_overclaiming_lakebase() -> (
-    None
-):
+def test_growth_agent_home_live_capabilities_uses_live_probes_without_overclaiming_lakebase(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capabilities_module, "get_settings", _capability_settings)
     sql = _CapabilitySqlClient()
     lakebase = _FakeLakebaseClient()
     app.dependency_overrides[get_sql_client] = lambda: sql
