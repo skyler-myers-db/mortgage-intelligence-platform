@@ -237,7 +237,6 @@ def probe_capabilities(
 
     sdk = _module_present("databricks.sdk")
     warehouse = _warehouse_configured(s)
-    lakebase = _lakebase_configured(s)
     genie_configured = _genie_space_configured(s)
     mirror = s.mip_preview_mirror
     certified_metric_contract = _certified_metric_view_contract_present()
@@ -407,7 +406,7 @@ def probe_capabilities(
     if not s.mip_lakebase_sync:
         sync_status = CapabilityStatus.NOT_PROVISIONED
         sync_detail = "Disabled (MIP_LAKEBASE_SYNC off); reads stay on the warehouse path."
-    elif warehouse and lakebase and sync_configured:
+    elif sdk and warehouse and sync_configured:
         sync_status, sync_detail = _status_from_live(
             key="lakebase_sync",
             configured=True,
@@ -420,7 +419,10 @@ def probe_capabilities(
         )
     else:
         sync_status = CapabilityStatus.NOT_PROVISIONED
-        sync_detail = "Flag on, but Lakebase creds missing."
+        sync_detail = (
+            "Flag on, but synced-table catalog/schema/table config, warehouse creds, "
+            "or databricks-sdk is missing."
+        )
     caps.append(
         Capability(
             key="lakebase_sync",
@@ -501,7 +503,7 @@ def collect_live_capability_statuses(
         statuses["certified_metric_views"] = _probe_metric_views(sql_client)
         statuses["uc_function_tools"] = _probe_uc_functions(sql_client)
     s = settings or get_settings()
-    if s.mip_lakebase_sync and lakebase is not None and sql_client is not None:
+    if s.mip_lakebase_sync and sql_client is not None:
         statuses["lakebase_sync"] = _probe_lakebase_synced_tables(
             sql_client=sql_client,
             workspace_client=workspace_client,

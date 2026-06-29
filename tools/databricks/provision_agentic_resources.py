@@ -215,6 +215,39 @@ def _wait_serving_endpoint_ready(endpoint: str, *, timeout: str) -> None:
     raise TimeoutError(f"serving endpoint {endpoint} did not become ready")
 
 
+def _serving_endpoint_id(endpoint: str) -> str | None:
+    endpoints = _run(["serving-endpoints", "list"])
+    rows = endpoints if isinstance(endpoints, list) else endpoints.get("endpoints", [])
+    for row in rows:
+        if row.get("name") == endpoint:
+            return row.get("id")
+    return None
+
+
+def _grant_app_can_query_serving_endpoint(*, endpoint: str, app_name: str) -> None:
+    app = _run(["apps", "get", app_name])
+    service_principal = app.get("service_principal_client_id")
+    endpoint_id = _serving_endpoint_id(endpoint)
+    if not service_principal:
+        print(f"[agentic] app service principal not found for {app_name}; skipping endpoint ACL")
+        return
+    if not endpoint_id:
+        print(f"[agentic] serving endpoint id not found for {endpoint}; skipping endpoint ACL")
+        return
+    _run(
+        ["serving-endpoints", "update-permissions", endpoint_id],
+        input_json={
+            "access_control_list": [
+                {
+                    "service_principal_name": service_principal,
+                    "permission_level": "CAN_QUERY",
+                }
+            ]
+        },
+    )
+    print(f"[agentic] granted CAN_QUERY on {endpoint} to app service principal {service_principal}")
+
+
 def ensure_supervisor_agent(*, display_name: str, genie_space_id: str, catalog: str) -> tuple[str, str]:
     agents = _run(["supervisor-agents", "list-supervisor-agents"])
     for agent in agents if isinstance(agents, list) else agents.get("supervisor_agents", []):
@@ -319,6 +352,7 @@ def _parser() -> argparse.ArgumentParser:
         default=os.environ.get("MIP_AI_GATEWAY_TABLE_PREFIX", "mip_agent_gateway_sonnet"),
     )
     parser.add_argument("--supervisor-name", default=os.environ.get("MIP_AGENT_SUPERVISOR_NAME", "Mortgage Growth Agent"))
+    parser.add_argument("--app-name", default=os.environ.get("MIP_APP_NAME", "mip-app"))
     parser.add_argument("--genie-space-id", default=os.environ.get("GENIE_SPACE_ID", ""))
     parser.add_argument("--skip-gateway", action="store_true")
     parser.add_argument("--skip-supervisor", action="store_true")
@@ -352,6 +386,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         if supervisor_endpoint:
             _wait_serving_endpoint_ready(supervisor_endpoint, timeout=f"{args.timeout_s}s")
+            _grant_app_can_query_serving_endpoint(endpoint=supervisor_endpoint, app_name=args.app_name)
     gateway_endpoint: str | None = None
     gateway_table: str | None = None
     if not args.skip_gateway:

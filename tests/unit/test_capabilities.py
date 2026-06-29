@@ -238,6 +238,36 @@ def test_lakebase_sync_live_probe_requires_synced_table_metadata() -> None:
     assert "source_readiness" in sql.statements[-1]
 
 
+def test_lakebase_sync_capability_does_not_require_unused_lakebase_user() -> None:
+    caps = probe_capabilities(
+        _settings(
+            lakebase_user=None,
+            mip_lakebase_sync=True,
+            mip_lakebase_sync_tables="source_readiness",
+        ),
+        live_statuses={"lakebase_sync": LiveCapabilityStatus(True, "Synced tables live.")},
+    )
+
+    sync = _by_key(caps, "lakebase_sync")
+    assert sync.status is CapabilityStatus.AVAILABLE
+    assert sync.claimable is True
+    assert sync.detail == "Synced tables live."
+
+
+def test_lakebase_sync_live_probe_runs_without_lakebase_client() -> None:
+    sql = _LiveSqlClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
+        sql_client=sql,
+        lakebase=None,
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["lakebase_sync"].available is True
+    assert "mip.gold.fn_build_cohort" not in sql.statements[-1]
+    assert "source_readiness" in sql.statements[-1]
+
+
 def test_certified_metric_view_sql_contracts_are_present() -> None:
     metric_dir = _REPO_ROOT / "sql" / "metric_views"
     expected = {
