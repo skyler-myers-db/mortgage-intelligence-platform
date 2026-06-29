@@ -443,6 +443,8 @@ step "apply UC grants to the app service principal (idempotent)"
 _GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"
 _GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
 _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+_GRANTS_SYNC_CATALOG="${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}"
+_GRANTS_SYNC_SCHEMA="${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}"
 APP_SP_CLIENT_ID="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' || true)"
 if [[ -z "$APP_SP_CLIENT_ID" ]]; then
   echo "${RED}[deploy] could not resolve service_principal_client_id for app '$_GRANTS_APP_NAME'.${RST}" >&2
@@ -487,6 +489,8 @@ GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.ref TO \`${APP_SP_CLIENT_I
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${APP_SP_CLIENT_ID}\`
+GRANT USE CATALOG ON CATALOG ${_GRANTS_SYNC_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
+GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_SYNC_CATALOG}.${_GRANTS_SYNC_SCHEMA} TO \`${APP_SP_CLIENT_ID}\`
 GRANTS_EOF
 
 # -----------------------------------------------------------------------------

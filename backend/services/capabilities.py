@@ -412,7 +412,7 @@ def probe_capabilities(
             configured=True,
             configured_detail=(
                 "Lakebase synced-table serving config is present; live synced-table "
-                "metadata and row-count probes must pass before this row is claimable."
+                "row-count probes must pass before this row is claimable."
             ),
             not_provisioned_detail="Synced-table catalog/schema/table config missing.",
             live_statuses=live_statuses,
@@ -577,20 +577,31 @@ def _probe_lakebase_synced_tables(
             _validate_identifier("table", table)
     except ValueError as exc:
         return LiveCapabilityStatus(False, str(exc))
+    metadata_permission_denied = False
     try:
         for table in tables:
             full_name = f"{catalog}.{schema}.{table}"
-            synced = workspace_client.database.get_synced_database_table(full_name)
-            status = synced.data_synchronization_status
-            state = _enum_value(getattr(status, "detailed_state", ""))
-            if not _synced_table_is_ready(state):
-                return LiveCapabilityStatus(False, f"{full_name} sync state is {state or 'unknown'}.")
+            try:
+                synced = workspace_client.database.get_synced_database_table(full_name)
+                status = synced.data_synchronization_status
+                state = _enum_value(getattr(status, "detailed_state", ""))
+                if not _synced_table_is_ready(state):
+                    return LiveCapabilityStatus(False, f"{full_name} sync state is {state or 'unknown'}.")
+            except Exception as exc:  # noqa: BLE001 - app SP may have SQL access but not Database API metadata
+                if type(exc).__name__ != "PermissionDenied":
+                    raise
+                metadata_permission_denied = True
             sql_client.execute(f"SELECT COUNT(*) AS n FROM {full_name}")
     except Exception as exc:  # noqa: BLE001 - dependency details stay bounded
         return LiveCapabilityStatus(False, f"Lakebase synced-table probe failed ({type(exc).__name__}).")
+    metadata_detail = (
+        "; Database API metadata was not visible to the app service principal, so SQL row-count proof was used"
+        if metadata_permission_denied
+        else " with metadata state verification"
+    )
     return LiveCapabilityStatus(
         True,
-        f"Live Lakebase synced-table probes passed for {len(tables)} MIP-owned serving tables.",
+        f"Live Lakebase synced-table probes passed for {len(tables)} MIP-owned serving tables{metadata_detail}.",
     )
 
 

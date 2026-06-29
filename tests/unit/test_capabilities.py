@@ -80,17 +80,23 @@ class _SyncedTable:
 
 
 class _FakeDatabaseApi:
-    def __init__(self) -> None:
+    def __init__(self, *, permission_denied: bool = False) -> None:
         self.requested: list[str] = []
+        self.permission_denied = permission_denied
 
     def get_synced_database_table(self, name: str) -> _SyncedTable:
         self.requested.append(name)
+        if self.permission_denied:
+            class PermissionDenied(Exception):
+                pass
+
+            raise PermissionDenied("metadata denied")
         return _SyncedTable()
 
 
 class _FakeWorkspaceClient:
-    def __init__(self) -> None:
-        self.database = _FakeDatabaseApi()
+    def __init__(self, *, permission_denied: bool = False) -> None:
+        self.database = _FakeDatabaseApi(permission_denied=permission_denied)
 
 
 def test_preview_capabilities_are_never_claimable() -> None:
@@ -265,6 +271,19 @@ def test_lakebase_sync_live_probe_runs_without_lakebase_client() -> None:
 
     assert statuses["lakebase_sync"].available is True
     assert "mip.gold.fn_build_cohort" not in sql.statements[-1]
+    assert "source_readiness" in sql.statements[-1]
+
+
+def test_lakebase_sync_probe_falls_back_to_sql_when_metadata_acl_denied() -> None:
+    sql = _LiveSqlClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
+        sql_client=sql,
+        workspace_client=_FakeWorkspaceClient(permission_denied=True),
+    )
+
+    assert statuses["lakebase_sync"].available is True
+    assert "SQL row-count proof" in statuses["lakebase_sync"].detail
     assert "source_readiness" in sql.statements[-1]
 
 
