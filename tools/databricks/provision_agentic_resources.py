@@ -315,7 +315,11 @@ def _ensure_supervisor_tools(supervisor_id: str, *, genie_space_id: str, catalog
     ]
     for tool_id, tool_type, description, body in tool_specs:
         if tool_id in existing:
-            continue
+            if tool_type == "uc_function":
+                print(f"[agentic] refreshing supervisor tool: {tool_id}")
+                _run_no_json(["supervisor-agents", "delete-tool", f"{parent}/tools/{tool_id}"])
+            else:
+                continue
         print(f"[agentic] creating supervisor tool: {tool_id}")
         payload = {
             "tool_type": tool_type,

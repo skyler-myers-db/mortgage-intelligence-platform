@@ -133,6 +133,7 @@ class _FakeWorkspaceClient:
         eval_run_experiment_id: str | None = None,
     ) -> None:
         self.database = _FakeDatabaseApi(permission_denied=permission_denied)
+        self.api_client = _FakeApiClient(empty_response=empty_serving_response)
         self.serving_endpoints = _FakeServingEndpoints(
             ready=serving_ready,
             empty_response=empty_serving_response,
@@ -158,7 +159,7 @@ class _FakeServingEndpoints:
         _ = name
         return SimpleNamespace(
             state=SimpleNamespace(ready="READY" if self.ready else "NOT_READY"),
-            task="AGENT",
+            task="agent/v1/responses",
             ai_gateway=SimpleNamespace(
                 inference_table_config=SimpleNamespace(
                     enabled=True,
@@ -174,6 +175,18 @@ class _FakeServingEndpoints:
         if self.empty_response:
             return {}
         return {"choices": [{"message": {"content": "ready"}}]}
+
+
+class _FakeApiClient:
+    def __init__(self, *, empty_response: bool = False) -> None:
+        self.empty_response = empty_response
+        self.requests: list[tuple[str, str, dict[str, object] | None]] = []
+
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object) -> object:
+        self.requests.append((method, path, body))
+        if self.empty_response:
+            return {}
+        return {"output": [{"content": [{"text": "ready"}]}]}
 
 
 class _FakeExperiments:
@@ -427,8 +440,12 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
     )
 
     assert statuses["agent_orchestrator"].available is True
-    assert workspace.serving_endpoints.queries
-    assert workspace.serving_endpoints.queries[0][0] == "mip-supervisor-endpoint"
+    assert workspace.api_client.requests
+    method, path, body = workspace.api_client.requests[0]
+    assert method == "POST"
+    assert path == "/serving-endpoints/responses"
+    assert body is not None
+    assert body["model"] == "mip-supervisor-endpoint"
 
 
 def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None:

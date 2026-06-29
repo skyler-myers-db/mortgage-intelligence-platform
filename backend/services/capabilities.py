@@ -726,6 +726,7 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
         response = query_serving_endpoint(
             workspace_client,
             endpoint,
+            task=str(task),
             prompt=(
                 "Capability readiness check. Reply with a one-sentence acknowledgement "
                 "that the Mortgage Growth Agent endpoint is reachable."

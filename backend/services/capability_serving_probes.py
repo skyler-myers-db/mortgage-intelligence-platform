@@ -14,7 +14,18 @@ def query_serving_endpoint(
     *,
     prompt: str,
     client_request_id: str | None = None,
+    task: str | None = None,
 ) -> Any:
+    if str(task or "").lower().startswith("agent/v1/responses"):
+        body: dict[str, Any] = {
+            "model": endpoint,
+            "input": [{"role": "user", "content": prompt}],
+            "stream": False,
+        }
+        if client_request_id:
+            body["client_request_id"] = client_request_id
+        return workspace_client.api_client.do("POST", "/serving-endpoints/responses", body=body)
+
     try:
         from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 
