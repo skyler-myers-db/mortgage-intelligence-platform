@@ -21,7 +21,7 @@ against the DEFAULT profile. Here we verify:
 
 from __future__ import annotations
 
-import importlib
+import importlib.util
 import json
 import os
 import re
@@ -35,11 +35,13 @@ from backend.config.settings import settings  # noqa: E402
 from backend.services.genie_trusted_assets import trusted_assets  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-TOOLS_DIR = REPO_ROOT / "tools"
-if str(TOOLS_DIR) not in sys.path:
-    sys.path.insert(0, str(TOOLS_DIR))
-
-from databricks import provision_genie_space as pgs  # noqa: E402
+_PGS_PATH = REPO_ROOT / "tools" / "databricks" / "provision_genie_space.py"
+_MODNAME = "mip_provision_genie_space"
+_spec = importlib.util.spec_from_file_location(_MODNAME, _PGS_PATH)
+assert _spec is not None and _spec.loader is not None
+pgs = importlib.util.module_from_spec(_spec)
+sys.modules[_MODNAME] = pgs
+_spec.loader.exec_module(pgs)  # type: ignore[union-attr]
 
 EXPECTED_ASSET_PAIRS = (
     ("gold", "lead_population"),
