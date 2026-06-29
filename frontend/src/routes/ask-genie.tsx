@@ -30,12 +30,12 @@ import {
 } from '../lib/genieConversation';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
+import { GrowthAgentCapabilityPanel } from './ask-genie.growth-agent-capabilities';
 import { GrowthAgentRunCard, formatGrowthAgentCount } from './ask-genie.growth-run-card';
 import { SavedGrowthAgentMonitors } from './ask-genie.saved-monitors';
 import {
   CUSTOM_SEGMENTS,
   buildTrustedAssetQuestion,
-  capabilityStatusText,
   parseGrowthAgentStateInput,
   renderSourceAssetChip,
   trustedAssetsForCatalog,
@@ -451,39 +451,10 @@ export default function AskGenie() {
         </div>
         <div className="surface__body">
           <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
-            {capabilityRows.length > 0 ? (
-              capabilityRows.map((capability) => (
-                <div key={capability.key} className="growth-agent-capability">
-                  <Chip variant={capability.claimable ? 'success' : 'neutral'}>
-                    {capabilityStatusText(capability.status)}
-                  </Chip>
-                  <div>
-                    <div className="growth-agent-step__title">{capability.label}</div>
-                    <div className="growth-agent-step__detail">{capability.detail}</div>
-                  </div>
-                </div>
-              ))
-            ) : growthAgentCapabilitiesQuery.isPending ? (
-              <div className="growth-agent-capability">
-                <Chip variant="neutral">Checking</Chip>
-                <div>
-                  <div className="growth-agent-step__title">Agentic capability snapshot</div>
-                  <div className="growth-agent-step__detail">
-                    Running live probes for Genie, certified metric views, reviewed SQL tools, and non-claimable roadmap items.
-                  </div>
-                </div>
-              </div>
-            ) : (
-              <div className="growth-agent-capability">
-                <Chip variant="warning">Unverified</Chip>
-                <div>
-                  <div className="growth-agent-step__title">Agentic capability snapshot</div>
-                  <div className="growth-agent-step__detail">
-                    Capability readiness is unavailable; treat multi-agent, AI Gateway, and MLflow claims as unverified.
-                  </div>
-                </div>
-              </div>
-            )}
+            <GrowthAgentCapabilityPanel
+              rows={capabilityRows}
+              isPending={growthAgentCapabilitiesQuery.isPending}
+            />
           </section>
           <section className="growth-agent-command" aria-label="Mortgage Growth Agent command center">
             <div className="growth-agent-command__main">
