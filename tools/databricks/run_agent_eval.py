@@ -79,7 +79,7 @@ def _call_growth_agent(
 ) -> dict[str, Any]:
     payload = {
         "prompt": str(case["prompt"]),
-        "request_id": f"eval-{uuid.uuid4()}",
+        "request_id": str(uuid.uuid4()),
         "save_monitor": False,
     }
     headers = {
@@ -149,9 +149,7 @@ def _log_eval_run(
     # Keep the full payload local and concise in MLflow. The app capability
     # probe only needs the metrics and params above to prove the latest run.
     failures = [row for row in summary["results"] if not row["passed"]]
-    _run_no_output(
-        ["experiments", "set-tag", "--run-id", run_id, "--key", "mip_eval_failures", "--value", json.dumps(failures)[:250]],
-    )
+    _run_no_output(["experiments", "set-tag", "mip_eval_failures", json.dumps(failures)[:250], "--run-id", run_id])
     _run_no_output(
         ["experiments", "update-run", "--run-id", run_id, "--status", "FINISHED", "--end-time", str(int(time.time() * 1000))],
     )
@@ -206,13 +204,19 @@ def main(argv: list[str] | None = None) -> int:
             timeout_s=args.timeout_s,
         )
     summary = score_batch(responses, cases)
+    if args.out_json:
+        args.out_json.write_text(
+            json.dumps({"run_id": None, "experiment": args.experiment, "responses": responses, **summary}, indent=2, sort_keys=True)
+            + "\n",
+            encoding="utf-8",
+        )
     run_id = _log_eval_run(
         experiment_name=args.experiment,
         app_url=args.app_url,
         summary=summary,
         responses_by_case_id=responses,
     )
-    result = {"run_id": run_id, "experiment": args.experiment, **summary}
+    result = {"run_id": run_id, "experiment": args.experiment, "responses": responses, **summary}
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.out_json:
         args.out_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
