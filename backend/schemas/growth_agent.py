@@ -142,6 +142,19 @@ _PROMPT_PROTECTED_CLASS_RE = re.compile(
     r"protected\s+class|age|color|public\s+assistance)\b",
     re.IGNORECASE,
 )
+_PROMPT_PROTECTED_AGE_PROXY_RE = re.compile(
+    r"\b(?:elderly|older\s+(?:adults?|borrowers?|homeowners?|customers?|prospects?|people)|"
+    r"retirement[-\s]?age|senior\s+citizens?)\b|"
+    r"\b(?:borrowers?|homeowners?|customers?|prospects?|people|adults?)\s+"
+    r"(?:over|under)\s+(?:age\s+)?(?:6[0-9]|7[0-9]|8[0-9]|9[0-9])"
+    r"(?!\s*(?:bps?|basis\s+points?|percent|%|days?|weeks?|months?|score|points?))\b|"
+    r"\b(?:over|under)[-\s](?:age[-\s])?(?:6[0-9]|7[0-9]|8[0-9]|9[0-9])"
+    r"\s*(?:\+)?\s*(?:borrowers?|homeowners?|customers?|prospects?|people|adults?)\b|"
+    r"\b(?:6[0-9]|7[0-9]|8[0-9]|9[0-9])\s*(?:\+|plus)\s*"
+    r"(?:borrowers?|homeowners?|customers?|prospects?|people|adults?)\b|"
+    r"\b(?:aged?|ages)\s+(?:6[0-9]|7[0-9]|8[0-9]|9[0-9])\b",
+    re.IGNORECASE,
+)
 _PROMPT_JAILBREAK_RE = re.compile(
     r"(?:\bignore\s+(?:all\s+)?(?:previous|prior|system)\s+instructions\b|"
     r"\bignore\s+(?:the\s+)?safety\s+policy\b|"
@@ -401,6 +414,7 @@ class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
             or _PROMPT_LEADING_HUMAN_NAME_RE.search(clean)
             or _contains_lowercase_name_after_group(clean)
             or _PROMPT_PROTECTED_CLASS_RE.search(clean)
+            or _PROMPT_PROTECTED_AGE_PROXY_RE.search(clean)
             or _PROMPT_JAILBREAK_RE.search(clean)
             or _PROMPT_UNAVAILABLE_SOURCE_RE.search(clean)
             or _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(clean)

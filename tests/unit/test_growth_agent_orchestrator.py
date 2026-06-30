@@ -390,8 +390,18 @@ def test_prompt_agent_falls_back_when_supervisor_is_not_proven_ready(
     assert len(calls) == expected_calls
 
 
-def test_prompt_agent_rejects_pii_before_supervisor_call(
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "find refi opportunities at 742 evergreen terrace",
+        "Find elderly borrowers in Illinois for a mortgage offer.",
+        "target older homeowners in Illinois for a mortgage offer",
+        "find borrowers over 65 in Illinois",
+    ],
+)
+def test_prompt_agent_rejects_pii_and_protected_proxies_before_supervisor_call(
     monkeypatch: pytest.MonkeyPatch,
+    prompt: str,
 ) -> None:
     calls: list[dict[str, Any]] = []
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
@@ -407,7 +417,7 @@ def test_prompt_agent_rejects_pii_before_supervisor_call(
     try:
         response = client.post(
             "/api/growth-agent/agent/run",
-            json={"prompt": "find refi opportunities at 742 evergreen terrace"},
+            json={"prompt": prompt},
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
     finally:
