@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Any
 
 import psycopg
@@ -22,7 +23,7 @@ def create_notification_drafts(
     run_id: str,
     route: str,
     actionable_total: int,
-    channels: list[str],
+    channels: Sequence[str],
     request_id: str | None = None,
 ) -> list[GrowthAgentNotificationDraft]:
     drafts: list[GrowthAgentNotificationDraft] = []

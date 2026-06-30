@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from backend.config.settings import Settings, get_settings
-from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
+from backend.schemas.growth_agent import GrowthAgentPromptRunRequest, GrowthAgentWorkflowId
 from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
@@ -237,7 +237,7 @@ def _objective_signal_summary(payload: GrowthAgentPromptRunRequest) -> str:
 
 @dataclass(frozen=True)
 class _SupervisorDecision:
-    workflow_id: str
+    workflow_id: GrowthAgentWorkflowId
 
 
 def _supervisor_decision_from_response(response: Any) -> _SupervisorDecision | None:

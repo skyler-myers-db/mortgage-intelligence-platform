@@ -189,6 +189,10 @@ _CUSTOM_WORKFLOW_MONITOR_TITLE_RE = re.compile(
 )
 
 
+def _default_notification_channels() -> list[GrowthAgentNotificationChannel]:
+    return ["slack", "teams"]
+
+
 def _contains_lowercase_name_after_group(clean: str) -> bool:
     """Catch uncommon lower-case names after borrower/person group nouns."""
     for match in _PROMPT_LOWERCASE_NAME_AFTER_GROUP_RE.finditer(clean):
@@ -351,7 +355,7 @@ class GrowthAgentRunRequest(BaseModel):
 class GrowthAgentMonitorDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    channels: list[GrowthAgentNotificationChannel] = Field(default_factory=lambda: ["slack", "teams"])
+    channels: list[GrowthAgentNotificationChannel] = Field(default_factory=_default_notification_channels)
     request_id: str | None = None
 
     @field_validator("channels")

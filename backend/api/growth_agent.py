@@ -9,6 +9,7 @@ for human review. It never sends outreach or activates a connector.
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from typing import Annotated, Any
 from uuid import UUID, uuid4
 
@@ -363,7 +364,7 @@ def _run_due_monitor_rows(
     request: Request,
     sql_client: DatabricksSqlClient,
     lakebase: LakebaseClient,
-    channels: list[str],
+    channels: Sequence[str],
     request_id: str | None,
 ) -> tuple[list[GrowthAgentRunResponse], list[GrowthAgentNotificationDraft]]:
     runs: list[GrowthAgentRunResponse] = []
