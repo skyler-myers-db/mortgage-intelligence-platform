@@ -231,6 +231,81 @@ def test_genie_degraded_message_audits_with_question_hash_entity_id() -> None:
     assert audit.rows[0]["entity_id"] == "hash-degraded"
 
 
+def test_genie_trusted_message_without_message_id_records_safe_session_and_audit_id() -> None:
+    class _CaptureLakebase:
+        def __init__(self) -> None:
+            self.executes: list[tuple[str, dict[str, object]]] = []
+
+        def execute(self, sql: str, params: dict[str, object] | None = None) -> None:
+            self.executes.append((sql, params or {}))
+
+    class _CaptureAudit:
+        def __init__(self) -> None:
+            self.rows: list[dict[str, object]] = []
+
+        def write(self, **kwargs: object) -> None:
+            self.rows.append(kwargs)
+
+    class _Repo:
+        def respond(
+            self,
+            question: str,
+            conversation_id: str | None = None,
+        ) -> GenieMessageResponse:
+            _ = conversation_id
+            return GenieMessageResponse(
+                conversation_id="conv-idless",
+                message_id=None,
+                question=question,
+                question_hash="hash-idless",
+                answer="Trusted SQL answer.",
+                source="trusted_sql",
+                trusted_assets=["mip.gold.borrower_360"],
+                row_count=1,
+                table_rows=[{"borrowers": 1}],
+            )
+
+    lakebase = _CaptureLakebase()
+    audit = _CaptureAudit()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_lakebase = app.dependency_overrides.get(get_lakebase_client)
+    prior_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_genie_answer_repository] = lambda: _Repo()
+    app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        res = client.post(
+            "/api/genie/message",
+            json={"question": "How many governed borrowers are in scope?"},
+            headers=ACTOR_HEADERS,
+        )
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_lakebase is None:
+            app.dependency_overrides.pop(get_lakebase_client, None)
+        else:
+            app.dependency_overrides[get_lakebase_client] = prior_lakebase
+        if prior_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = prior_audit
+
+    assert res.status_code == 200, res.text
+    body = res.json()
+    assert body["source"] == "trusted_sql"
+    assert body["conversation_id"] == "conv-idless"
+    assert body["message_id"] is None
+    assert len(lakebase.executes) == 2
+    params = [params for _sql, params in lakebase.executes]
+    assert all(row["message_id"] == "trusted_sql-hash-idless" for row in params)
+    assert audit.rows[0]["entity_id"]
+    validate_public_audit_identifier_or_none(str(audit.rows[0]["entity_id"]))
+    assert audit.rows[0]["payload_json"]["message_id"] is None
+
+
 def test_genie_message_rejects_unowned_conversation_id() -> None:
     class _UnownedSessionLakebase:
         def fetchone(

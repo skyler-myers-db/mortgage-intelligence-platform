@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import backend.services.capabilities as capabilities_module
+import backend.services.rbac as rbac_module
 from backend.config.settings import Settings
 from backend.main import app
 from backend.services.databricks_sql import get_sql_client
@@ -107,6 +108,7 @@ class _FakeLakebaseClient:
         self.audit_events: list[dict[str, Any]] = []
         self.runs: list[dict[str, Any]] = []
         self.monitors: list[dict[str, Any]] = []
+        self.notification_drafts: list[dict[str, Any]] = []
         self.miss_next_run_select = False
 
     def fetchall(
@@ -116,6 +118,22 @@ class _FakeLakebaseClient:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         self.fetchalls.append((sql, params or {}, limit))
+        if "updated_at <= now()" in sql:
+            now = datetime.now(UTC)
+            due: list[dict[str, Any]] = []
+            actor_filter = (params or {}).get("actor_email")
+            for row in self.monitors:
+                updated_at = row.get("updated_at")
+                if (
+                    (actor_filter is not None and row.get("actor_email") != actor_filter)
+                    or row.get("status") != "active"
+                    or not isinstance(updated_at, datetime)
+                ):
+                    continue
+                cadence_days = 7 if row.get("cadence") == "weekly" else 1
+                if updated_at <= now - timedelta(days=cadence_days):
+                    due.append(dict(row))
+            return due[:limit]
         return [dict(row) for row in self.monitors[:limit]]
 
     @contextmanager
@@ -283,6 +301,52 @@ class _FakeLakebaseClient:
             }
             self.monitors.append(row)
             return row
+        if "INSERT INTO mip_app.growth_agent_notification_drafts" in sql:
+            for existing in self.notification_drafts:
+                if (
+                    params.get("request_id") is not None
+                    and existing.get("request_id") == params.get("request_id")
+                    and not (
+                        existing["actor_email"] == params["actor_email"]
+                        and str(existing["monitor_id"]) == str(params["monitor_id"])
+                        and str(existing["run_id"]) == str(params["run_id"])
+                        and existing["channel"] == params["channel"]
+                        and existing.get("status") == "draft"
+                    )
+                ):
+                    raise psycopg.errors.UniqueViolation("duplicate notification draft request_id")
+            for existing in self.notification_drafts:
+                if (
+                    existing["actor_email"] == params["actor_email"]
+                    and str(existing["monitor_id"]) == str(params["monitor_id"])
+                    and str(existing["run_id"]) == str(params["run_id"])
+                    and existing["channel"] == params["channel"]
+                    and existing.get("status") == "draft"
+                ):
+                    existing.update(
+                        {
+                            "title": params["title"],
+                            "body": params["body"],
+                            "request_id": params.get("request_id") or existing.get("request_id"),
+                            "updated_at": now,
+                        }
+                    )
+                    return dict(existing)
+            row = {
+                "draft_id": uuid4(),
+                "actor_email": params["actor_email"],
+                "monitor_id": params["monitor_id"],
+                "run_id": params["run_id"],
+                "channel": params["channel"],
+                "title": params["title"],
+                "body": params["body"],
+                "status": "draft",
+                "request_id": params.get("request_id"),
+                "created_at": now,
+                "updated_at": now,
+            }
+            self.notification_drafts.append(row)
+            return dict(row)
         return None
 
 
@@ -792,6 +856,281 @@ def test_growth_agent_custom_monitor_rerun_preserves_all_mode() -> None:
         in statement
     )
     assert params == {"state_0": "TX"}
+
+
+def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    monitor_id = uuid4()
+    lakebase.monitors.append(
+        {
+            "monitor_id": monitor_id,
+            "actor_email": "operator@example.com",
+            "workflow_id": "daily_refi_brief",
+            "name": "IL Refi Watch",
+            "cadence": "daily",
+            "status": "active",
+            "criteria": {
+                "states": ["IL"],
+                "lead_queue_filters": {
+                    "segment_codes": ["itm"],
+                    "segment_mode": "any",
+                    "states": ["IL"],
+                    "portfolio_criteria": {
+                        "marketing_eligibility": "Eligible only",
+                        "states": ["IL"],
+                    },
+                },
+                "marketing_eligibility": "Eligible only",
+                "workflow_id": "daily_refi_brief",
+            },
+            "route": "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL",
+            "actionable_total": 1,
+            "source_assets": ["mip.gold.borrower_360"],
+            "last_run_id": uuid4(),
+            "created_at": datetime.now(UTC) - timedelta(days=3),
+            "updated_at": datetime.now(UTC) - timedelta(days=2),
+        }
+    )
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/monitors/run-due",
+            json={
+                "channels": ["slack", "teams"],
+                "request_id": "11111111-1111-4111-8111-111111111111",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["due_count"] == 1
+    assert body["actor_count"] == 1
+    assert len(body["runs"]) == 1
+    assert len(body["drafts"]) == 2
+    assert {draft["channel"] for draft in body["drafts"]} == {"slack", "teams"}
+    assert {draft["status"] for draft in body["drafts"]} == {"draft"}
+    assert all("No borrower identities" in draft["body"] for draft in body["drafts"])
+    assert all("outbound messages are included" in draft["body"] for draft in body["drafts"])
+    assert len({draft["request_id"] for draft in lakebase.notification_drafts}) == 2
+    assert all(
+        str(draft["request_id"]).startswith("11111111-1111-4111-8111-111111111111-")
+        for draft in lakebase.notification_drafts
+    )
+    assert body["runs"][0]["monitor"]["last_run_id"] == body["runs"][0]["run_id"]
+    assert lakebase.monitors[0]["last_run_id"] == lakebase.runs[0]["run_id"]
+    assert len(lakebase.audit_events) == 3
+    draft_audits = [
+        event for event in lakebase.audit_events
+        if event.get("event_type") == "GROWTH_AGENT_NOTIFICATION_DRAFT"
+    ]
+    assert len(draft_audits) == 2
+    assert all("body" not in json.loads(event["metadata"]) for event in draft_audits)
+
+
+def test_growth_agent_due_monitor_all_actor_runner_requires_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rbac_module.settings, "admin_emails", "")
+    monkeypatch.setattr(rbac_module.settings, "admin_group_name", "mip-admin")
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    lakebase.monitors.append(
+        {
+            "monitor_id": uuid4(),
+            "actor_email": "owner@example.com",
+            "workflow_id": "daily_refi_brief",
+            "name": "Daily Refi Opportunity Brief",
+            "cadence": "daily",
+            "status": "active",
+            "criteria": {
+                "lead_queue_filters": {
+                    "segment_codes": ["itm"],
+                    "segment_mode": "any",
+                    "portfolio_criteria": {"marketing_eligibility": "Eligible only"},
+                },
+                "marketing_eligibility": "Eligible only",
+                "workflow_id": "daily_refi_brief",
+            },
+            "route": "/lead-queue?segment=itm&marketing_eligibility=Eligible+only",
+            "actionable_total": 1,
+            "source_assets": ["mip.gold.borrower_360"],
+            "last_run_id": uuid4(),
+            "created_at": datetime.now(UTC) - timedelta(days=3),
+            "updated_at": datetime.now(UTC) - timedelta(days=2),
+        }
+    )
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/monitors/run-due-all",
+            json={"channels": ["slack"]},
+            headers={
+                "X-Forwarded-Email": "operator@example.com",
+                "X-Forwarded-Groups": "",
+            },
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 403
+    assert response.json()["detail"] == "forbidden"
+    assert sql.calls == []
+    assert lakebase.runs == []
+    assert lakebase.notification_drafts == []
+
+
+def test_growth_agent_due_monitor_all_actor_runner_preserves_owner_attribution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rbac_module.settings, "admin_emails", "")
+    monkeypatch.setattr(rbac_module.settings, "admin_group_name", "mip-admin")
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    for actor, state in (("owner-a@example.com", "IL"), ("owner-b@example.com", "TX")):
+        lakebase.monitors.append(
+            {
+                "monitor_id": uuid4(),
+                "actor_email": actor,
+                "workflow_id": "daily_refi_brief",
+                "name": f"Daily Refi Opportunity Brief - {state}",
+                "cadence": "daily",
+                "status": "active",
+                "criteria": {
+                    "states": [state],
+                    "lead_queue_filters": {
+                        "segment_codes": ["itm"],
+                        "segment_mode": "any",
+                        "states": [state],
+                        "portfolio_criteria": {
+                            "marketing_eligibility": "Eligible only",
+                            "states": [state],
+                        },
+                    },
+                    "marketing_eligibility": "Eligible only",
+                    "workflow_id": "daily_refi_brief",
+                },
+                "route": f"/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states={state}",
+                "actionable_total": 1,
+                "source_assets": ["mip.gold.borrower_360"],
+                "last_run_id": uuid4(),
+                "created_at": datetime.now(UTC) - timedelta(days=3),
+                "updated_at": datetime.now(UTC) - timedelta(days=2),
+            }
+        )
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/monitors/run-due-all",
+            json={
+                "channels": ["slack", "teams"],
+                "request_id": "33333333-3333-4333-8333-333333333333",
+            },
+            headers={
+                "X-Forwarded-Email": "admin@example.com",
+                "X-Forwarded-Groups": "mip-admin",
+            },
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["due_count"] == 2
+    assert body["actor_count"] == 2
+    assert len(body["runs"]) == 2
+    assert len(body["drafts"]) == 4
+    assert len({draft["request_id"] for draft in lakebase.notification_drafts}) == 4
+    for draft in lakebase.notification_drafts:
+        assert str(draft["monitor_id"]) in str(draft["request_id"])
+        assert str(draft["run_id"]) in str(draft["request_id"])
+        assert str(draft["request_id"]).endswith(f"-{draft['channel']}")
+    assert {row["actor_email"] for row in lakebase.runs} == {
+        "owner-a@example.com",
+        "owner-b@example.com",
+    }
+    assert {row["actor_email"] for row in lakebase.notification_drafts} == {
+        "owner-a@example.com",
+        "owner-b@example.com",
+    }
+    assert {row["actor_email"] for row in lakebase.audit_events} == {
+        "owner-a@example.com",
+        "owner-b@example.com",
+    }
+    assert all("No borrower identities" in draft["body"] for draft in body["drafts"])
+    assert all("send" not in draft["body"].lower() for draft in body["drafts"])
+    assert all(call[1].get("actor_email") != "admin@example.com" for call in lakebase.executes)
+
+
+def test_growth_agent_monitor_notification_drafts_are_draft_only() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    monitor_id = uuid4()
+    run_id = uuid4()
+    lakebase.monitors.append(
+        {
+            "monitor_id": monitor_id,
+            "actor_email": "operator@example.com",
+            "workflow_id": "listing_watch",
+            "name": "Listed-for-Sale Purchase Watch",
+            "cadence": "weekly",
+            "status": "active",
+            "criteria": {
+                "lead_queue_filters": {
+                    "segment_codes": ["listed"],
+                    "segment_mode": "any",
+                    "portfolio_criteria": {"marketing_eligibility": "Eligible only"},
+                },
+                "marketing_eligibility": "Eligible only",
+                "workflow_id": "listing_watch",
+            },
+            "route": "/lead-queue?segment=listed&marketing_eligibility=Eligible+only",
+            "actionable_total": 4349,
+            "source_assets": ["mip.gold.borrower_360", "mip.gold.evidence_events"],
+            "last_run_id": run_id,
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            f"/api/growth-agent/monitors/{monitor_id}/notification-drafts",
+            json={
+                "channels": ["slack"],
+                "request_id": "22222222-2222-4222-8222-222222222222",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(body) == 1
+    draft = body[0]
+    assert draft["channel"] == "slack"
+    assert draft["status"] == "draft"
+    assert draft["run_id"] == str(run_id)
+    assert "Listed-for-Sale Purchase Watch" in draft["title"]
+    assert "4,349 eligible borrowers" in draft["body"]
+    assert "Review the current watchlist in MIP" in draft["body"]
+    assert "No borrower identities" in draft["body"]
+    assert "send" not in draft["body"].lower()
+    assert lakebase.notification_drafts[0]["request_id"] == (
+        f"22222222-2222-4222-8222-222222222222-{monitor_id}-{run_id}-slack"
+    )
+    assert len(lakebase.audit_events) == 1
+    metadata = json.loads(lakebase.audit_events[0]["metadata"])
+    assert metadata["action"] == "growth_agent.notification_draft"
+    assert metadata["workflow_id"] == "listing_watch"
+    assert metadata["channel"] == "slack"
+    assert metadata["actionable_total"] == 4349
+    assert "body" not in metadata
+    assert sql.calls == []
 
 
 def test_growth_agent_monitor_rerun_falls_back_from_unsafe_legacy_name() -> None:
@@ -1649,6 +1988,12 @@ def test_growth_agent_post_requires_json_body_contract() -> None:
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
     client = _client(sql, lakebase)
+    monitor_id = str(uuid4())
+    admin_headers = {
+        "Content-Type": "text/plain",
+        "X-Forwarded-Email": "admin@example.com",
+        "X-Forwarded-Groups": "mip-admin",
+    }
     try:
         workflow_text_response = client.post(
             "/api/growth-agent/workflows/daily_refi_brief/run",
@@ -1673,6 +2018,26 @@ def test_growth_agent_post_requires_json_body_contract() -> None:
             content='{"segment_codes":["itm"],"segment_mode":"any"}',
             headers={"Content-Type": "text/plain"},
         )
+        monitor_rerun_text_response = client.post(
+            f"/api/growth-agent/monitors/{monitor_id}/run",
+            content='{"request_id":"11111111-1111-4111-8111-111111111111"}',
+            headers={"Content-Type": "text/plain"},
+        )
+        monitor_draft_text_response = client.post(
+            f"/api/growth-agent/monitors/{monitor_id}/notification-drafts",
+            content='{"channels":["slack"]}',
+            headers={"Content-Type": "text/plain"},
+        )
+        due_text_response = client.post(
+            "/api/growth-agent/monitors/run-due",
+            content='{"limit":5}',
+            headers={"Content-Type": "text/plain"},
+        )
+        due_all_text_response = client.post(
+            "/api/growth-agent/monitors/run-due-all",
+            content='{"limit":5}',
+            headers=admin_headers,
+        )
     finally:
         _clear_overrides()
 
@@ -1682,9 +2047,13 @@ def test_growth_agent_post_requires_json_body_contract() -> None:
         workflow_missing_type_response,
         agent_text_response,
         custom_text_response,
+        monitor_rerun_text_response,
+        monitor_draft_text_response,
+        due_text_response,
+        due_all_text_response,
     ]
-    assert [response.status_code for response in responses] == [415, 415, 415, 415, 415]
-    assert [response.json()["detail"] for response in responses] == ["Unsupported content type"] * 5
+    assert [response.status_code for response in responses] == [415] * 9
+    assert [response.json()["detail"] for response in responses] == ["Unsupported content type"] * 9
     assert not lakebase.runs
 
 
@@ -1696,5 +2065,9 @@ def test_growth_agent_openapi_documents_unsupported_content_type() -> None:
         "/api/growth-agent/workflows/{workflow_id}/run",
         "/api/growth-agent/custom/run",
         "/api/growth-agent/agent/run",
+        "/api/growth-agent/monitors/{monitor_id}/run",
+        "/api/growth-agent/monitors/{monitor_id}/notification-drafts",
+        "/api/growth-agent/monitors/run-due",
+        "/api/growth-agent/monitors/run-due-all",
     ):
         assert paths[path]["post"]["responses"]["415"]["description"] == "Unsupported content type"

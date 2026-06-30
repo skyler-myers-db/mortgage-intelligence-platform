@@ -763,6 +763,44 @@ resources:
             file:
               path: sql/_rendered/transformations/gold_funnel_snapshot_daily.sql
 
+    # Draft-only scheduled Mortgage Growth Agent monitor runner. The job calls
+    # the deployed Databricks App through its OAuth proxy and hits the
+    # admin-gated /api/v1/growth-agent/monitors/run-due-all endpoint. It replays
+    # stored reviewed watchlists for their original owners and creates Slack /
+    # Teams review drafts only; it never sends notifications or connector
+    # writes. Paused by default to preserve the cost-control posture until an
+    # operator deliberately enables a customer-approved cadence.
+    mip_growth_agent_monitor_scheduler:
+      name: mip_growth_agent_monitor_scheduler
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: dais-agentic-growth-agent
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 30 8 ? * MON-FRI *"
+        timezone_id: America/Chicago
+        pause_status: PAUSED
+      environments:
+        - environment_key: py_default
+          spec:
+            environment_version: "5"
+            dependencies:
+              - databricks-sdk>=0.30.0
+      tasks:
+        - task_key: run_due_monitor_drafts
+          description: "Refresh due Growth Agent watchlists and create Slack/Teams review drafts only."
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/run_growth_agent_monitors.py
+            parameters:
+              - "--app-name=${var.app_name}"
+              - "--limit=20"
+              - "--channels=slack,teams"
+          max_retries: 2
+          retry_on_timeout: true
+
     # Slice 5 real-data migration: apply Lakebase DDL + seed sample
     # campaigns. Python task invokes jobs/lakebase_migrate.py which
     # opens a psycopg3 connection to the instance created above and

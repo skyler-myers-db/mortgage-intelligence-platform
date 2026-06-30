@@ -20,6 +20,7 @@ from backend.services.activation_state import (
 )
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.observability import emit
 from backend.services.repositories import (
@@ -100,10 +101,16 @@ def activation_summary(store: ActivationDep) -> ActivationSummary:
         raise _lakebase_503(exc) from exc
 
 
-@router.post("/stage", response_model=ActivationStageResponse, status_code=202)
+@router.post(
+    "/stage",
+    response_model=ActivationStageResponse,
+    status_code=202,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def stage_activation(
     payload: ActivationStageRequest,
     request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
     store: ActivationDep,
     repo: BorrowerRepoDep,
     sales_state: SalesStateDep,

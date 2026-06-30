@@ -13,6 +13,7 @@ import type {
   GrowthAgentRunResponse,
   GrowthAgentWorkflow,
 } from '../types';
+import type { GrowthAgentCapabilityRow } from '../types/growthAgent';
 
 const growthAgent = vi.fn();
 const genieStart = vi.fn();
@@ -22,6 +23,7 @@ const runGrowthAgentWorkflow = vi.fn();
 const runCustomGrowthAgentWorkflow = vi.fn();
 const runMortgageGrowthAgent = vi.fn();
 const rerunGrowthAgentMonitor = vi.fn();
+const createGrowthAgentMonitorNotificationDrafts = vi.fn();
 const navigate = vi.fn();
 const setDrawer = vi.fn();
 const refreshWorkspace = vi.fn();
@@ -36,6 +38,9 @@ vi.mock('../lib/api', () => ({
     runCustomGrowthAgentWorkflow: (...args: unknown[]) => runCustomGrowthAgentWorkflow(...args),
     runMortgageGrowthAgent: (...args: unknown[]) => runMortgageGrowthAgent(...args),
     rerunGrowthAgentMonitor: (...args: unknown[]) => rerunGrowthAgentMonitor(...args),
+    createGrowthAgentMonitorNotificationDrafts: (...args: unknown[]) => (
+      createGrowthAgentMonitorNotificationDrafts(...args)
+    ),
   },
   ApiError: class ApiError extends Error {
     status = 500;
@@ -59,6 +64,9 @@ vi.mock('react-router-dom', async () => {
 });
 
 import AskGenie from './ask-genie';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+vi.setConfig({ testTimeout: 20_000, hookTimeout: 20_000 });
 
 const WORKFLOW: GrowthAgentWorkflow = {
   id: 'daily_refi_brief',
@@ -99,66 +107,26 @@ const BORROWER_DOSSIER_WORKFLOW: GrowthAgentWorkflow = {
   cadence_options: ['daily', 'weekly'],
 };
 
+function capability(
+  key: GrowthAgentCapabilityRow['key'],
+  label: string,
+  status: GrowthAgentCapabilityRow['status'],
+  detail: string,
+) {
+  return { key, label, ga: true, status, claimable: false, detail };
+}
+
 const HOME: GrowthAgentHomeResponse = {
   workflows: [WORKFLOW, BORROWER_DOSSIER_WORKFLOW],
   monitors: [],
   capabilities: [
-    {
-      key: 'genie_conversation_api',
-      label: 'Genie Conversation API',
-      ga: true,
-      status: 'configured',
-      claimable: false,
-      detail: 'Genie Conversation API dependencies are configured; a live Genie probe must pass before this row is claimable.',
-    },
-    {
-      key: 'certified_metric_views',
-      label: 'UC metric-view certification',
-      ga: true,
-      status: 'configured',
-      claimable: false,
-      detail: 'Certified metric-view SQL contracts are bundled; live UC deployment must be verified before claiming them active.',
-    },
-    {
-      key: 'uc_function_tools',
-      label: 'Application-reviewed SQL tools',
-      ga: true,
-      status: 'configured',
-      claimable: false,
-      detail: 'Reviewed UC-function SQL contracts are bundled; live registration must be verified before claiming them active.',
-    },
-    {
-      key: 'agent_orchestrator',
-      label: 'Agent Framework orchestration',
-      ga: true,
-      status: 'not_provisioned',
-      claimable: false,
-      detail: 'Disabled or missing agent framework libraries.',
-    },
-    {
-      key: 'ai_gateway',
-      label: 'Unity AI Gateway governance',
-      ga: true,
-      status: 'not_provisioned',
-      claimable: false,
-      detail: 'Gateway endpoint/inference-table config is missing.',
-    },
-    {
-      key: 'lakebase_sync',
-      label: 'Lakebase synced-table serving',
-      ga: true,
-      status: 'not_provisioned',
-      claimable: false,
-      detail: 'Disabled; reads stay on the warehouse path.',
-    },
-    {
-      key: 'agent_eval',
-      label: 'MLflow Agent Evaluation',
-      ga: true,
-      status: 'not_provisioned',
-      claimable: false,
-      detail: 'MLflow evaluation is not configured.',
-    },
+    capability('genie_conversation_api', 'Genie Conversation API', 'configured', 'Genie Conversation API dependencies are configured; a live Genie probe must pass before this row is claimable.'),
+    capability('certified_metric_views', 'UC metric-view certification', 'configured', 'Certified metric-view SQL contracts are bundled; live UC deployment must be verified before claiming them active.'),
+    capability('uc_function_tools', 'Application-reviewed SQL tools', 'configured', 'Reviewed UC-function SQL contracts are bundled; live registration must be verified before claiming them active.'),
+    capability('agent_orchestrator', 'Agent Framework orchestration', 'not_provisioned', 'Disabled or missing agent framework libraries.'),
+    capability('ai_gateway', 'Unity AI Gateway governance', 'not_provisioned', 'Gateway endpoint/inference-table config is missing.'),
+    capability('lakebase_sync', 'Lakebase synced-table serving', 'not_provisioned', 'Disabled; reads stay on the warehouse path.'),
+    capability('agent_eval', 'MLflow Agent Evaluation', 'not_provisioned', 'MLflow evaluation is not configured.'),
   ],
 };
 
@@ -265,6 +233,26 @@ describe('AskGenie Growth Agent route panel', () => {
         last_run_id: RUN.run_id,
       },
     });
+    createGrowthAgentMonitorNotificationDrafts.mockResolvedValue([
+      {
+        draft_id: 'draft-slack',
+        monitor_id: '22222222-2222-4222-8222-222222222222',
+        run_id: RUN.run_id,
+        channel: 'slack',
+        title: 'Mortgage Growth Agent - IL - 5,394 eligible',
+        body: 'Draft for Slack: Mortgage Growth Agent - IL refreshed with 5,394 eligible borrowers. Review the current watchlist in MIP: /lead-queue?segment=itm. No borrower identities, contact data, or outbound messages are included.',
+        status: 'draft',
+      },
+      {
+        draft_id: 'draft-teams',
+        monitor_id: '22222222-2222-4222-8222-222222222222',
+        run_id: RUN.run_id,
+        channel: 'teams',
+        title: 'Mortgage Growth Agent - IL - 5,394 eligible',
+        body: 'Draft for Microsoft Teams: Mortgage Growth Agent - IL refreshed with 5,394 eligible borrowers. Review the current watchlist in MIP: /lead-queue?segment=itm. No borrower identities, contact data, or outbound messages are included.',
+        status: 'draft',
+      },
+    ]);
     runCustomGrowthAgentWorkflow.mockResolvedValue({
       ...RUN,
       workflow: {
@@ -320,7 +308,7 @@ describe('AskGenie Growth Agent route panel', () => {
     });
   }
 
-  async function waitUntil(cond: () => boolean, ms = 4000) {
+  async function waitUntil(cond: () => boolean, ms = 10_000) {
     const start = Date.now();
     while (!cond()) {
       if (Date.now() - start > ms) throw new Error('waitUntil timeout');
@@ -351,7 +339,7 @@ describe('AskGenie Growth Agent route panel', () => {
 
     expect(container.textContent).toContain('Mortgage Growth Agent');
     expect(container.textContent).toContain('Borrower Dossier Review');
-    expect(container.textContent).toContain('No auto-send · no scheduled automation');
+    expect(container.textContent).toContain('Draft-only handoffs · no auto-send');
     expect(container.textContent).toContain('Audit checked after each run');
 
     act(() => setNativeValue(stateInput(), 'IL illinois'));
@@ -453,7 +441,7 @@ describe('AskGenie Growth Agent route panel', () => {
     });
     act(() => setNativeValue(stateInput(), 'IL'));
     const cadence = container.querySelector<HTMLSelectElement>(
-      'select[aria-label="Growth Agent review cadence"]',
+      'select[aria-label="Growth Agent review interval"]',
     );
     if (!cadence) throw new Error('review cadence select not rendered');
     act(() => setNativeValue(cadence, 'weekly'));
@@ -513,6 +501,38 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(navigate).toHaveBeenCalledWith(RUN.route);
   });
 
+  it('creates Slack and Teams drafts from saved watchlists without sending them', async () => {
+    const savedMonitor = {
+      monitor_id: '22222222-2222-4222-8222-222222222222',
+      workflow_id: 'daily_refi_brief' as const,
+      name: 'Mortgage Growth Agent - IL',
+      cadence: 'weekly' as const,
+      status: 'active' as const,
+      criteria: RUN.criteria,
+      route: RUN.route,
+      actionable_total: RUN.actionable_total,
+      source_assets: RUN.source_assets,
+      last_run_id: RUN.run_id,
+    };
+    growthAgent.mockResolvedValue({ ...HOME, monitors: [savedMonitor] });
+    mount();
+    await waitUntil(() => container.textContent?.includes('Mortgage Growth Agent - IL') ?? false);
+
+    act(() => button(/^Draft Slack\/Teams$/).click());
+
+    await waitUntil(() => createGrowthAgentMonitorNotificationDrafts.mock.calls.length === 1);
+    expect(createGrowthAgentMonitorNotificationDrafts.mock.calls[0]).toEqual([
+      '22222222-2222-4222-8222-222222222222',
+      { channels: ['slack', 'teams'] },
+    ]);
+    await waitUntil(() => container.textContent?.includes('Slack draft') ?? false);
+    expect(container.textContent).toContain('Slack draft');
+    expect(container.textContent).toContain('Teams draft');
+    expect(container.textContent).toContain('Not sent');
+    expect(container.textContent).toContain('No borrower identities');
+    expect(container.textContent).not.toContain('Sent');
+  });
+
   it('shows inactive saved watchlists but blocks reruns', async () => {
     const pausedMonitor = {
       monitor_id: '33333333-3333-4333-8333-333333333333',
@@ -535,6 +555,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(runButton.disabled).toBe(true);
     act(() => runButton.click());
     expect(rerunGrowthAgentMonitor).not.toHaveBeenCalled();
+    expect(button(/^Draft Slack\/Teams$/).disabled).toBe(true);
     act(() => button(/^Open$/).click());
     expect(navigate).toHaveBeenCalledWith(RUN.route);
   });

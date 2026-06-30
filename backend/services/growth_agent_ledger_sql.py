@@ -110,3 +110,50 @@ WHERE actor_email = %(actor_email)s
   AND status = 'active'
 LIMIT 1
 """
+
+DUE_MONITOR_LIST_SQL = """
+SELECT monitor_id, workflow_id, name, cadence, status, criteria, route,
+       actionable_total, source_assets, last_run_id, created_at, updated_at
+FROM mip_app.growth_agent_monitors
+WHERE actor_email = %(actor_email)s
+  AND status = 'active'
+  AND (
+    updated_at <= now() - CASE
+      WHEN cadence = 'weekly' THEN INTERVAL '7 days'
+      ELSE INTERVAL '1 day'
+    END
+  )
+ORDER BY updated_at ASC
+LIMIT %(limit)s
+"""
+
+DUE_MONITOR_LIST_ALL_SQL = """
+SELECT actor_email, monitor_id, workflow_id, name, cadence, status, criteria, route,
+       actionable_total, source_assets, last_run_id, created_at, updated_at
+FROM mip_app.growth_agent_monitors
+WHERE status = 'active'
+  AND (
+    updated_at <= now() - CASE
+      WHEN cadence = 'weekly' THEN INTERVAL '7 days'
+      ELSE INTERVAL '1 day'
+    END
+  )
+ORDER BY actor_email ASC, updated_at ASC
+LIMIT %(limit)s
+"""
+
+NOTIFICATION_DRAFT_UPSERT_SQL = """
+INSERT INTO mip_app.growth_agent_notification_drafts (
+  actor_email, monitor_id, run_id, channel, title, body, request_id, updated_at
+) VALUES (
+  %(actor_email)s, %(monitor_id)s, %(run_id)s, %(channel)s, %(title)s, %(body)s,
+  %(request_id)s, now()
+)
+ON CONFLICT (actor_email, monitor_id, run_id, channel) WHERE status = 'draft'
+DO UPDATE SET
+  title = EXCLUDED.title,
+  body = EXCLUDED.body,
+  request_id = COALESCE(EXCLUDED.request_id, mip_app.growth_agent_notification_drafts.request_id),
+  updated_at = now()
+RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body, status, created_at, updated_at
+"""

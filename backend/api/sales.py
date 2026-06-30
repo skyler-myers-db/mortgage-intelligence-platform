@@ -29,6 +29,7 @@ from backend.schemas.sales import (
 )
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.lakebase_bootstrap import ensure_sales_workflow_request_id_columns
 from backend.services.repositories import (
@@ -96,11 +97,16 @@ def sales_team(request: Request, store: SalesStateDep) -> list[SalesTeamMember]:
         raise _lakebase_503(exc) from exc
 
 
-@router.post("/leads/{borrower_id}/assign", response_model=AssignmentResponse)
+@router.post(
+    "/leads/{borrower_id}/assign",
+    response_model=AssignmentResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def assign_lead(
     borrower_id: str,
     payload: AssignLeadRequest,
     request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
     repo: BorrowerRepoDep,
     store: SalesStateDep,
 ) -> AssignmentResponse:
@@ -164,10 +170,15 @@ def lead_assignment(
         raise _lakebase_503(exc) from exc
 
 
-@router.post("/sales/distribute", response_model=DistributeLeadsResponse)
+@router.post(
+    "/sales/distribute",
+    response_model=DistributeLeadsResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def distribute_leads(
     payload: DistributeLeadsRequest,
     request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
     repo: LeadRepoDep,
     borrower_repo: BorrowerRepoDep,
     store: SalesStateDep,
@@ -217,11 +228,16 @@ def distribute_leads(
         raise _lakebase_503(exc) from exc
 
 
-@router.post("/leads/{borrower_id}/disposition", response_model=DispositionResponse)
+@router.post(
+    "/leads/{borrower_id}/disposition",
+    response_model=DispositionResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def log_disposition(
     borrower_id: str,
     payload: DispositionRequest,
     request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
     repo: BorrowerRepoDep,
     store: SalesStateDep,
 ) -> DispositionResponse:
@@ -256,11 +272,16 @@ def log_disposition(
         raise _lakebase_503(exc) from exc
 
 
-@router.post("/leads/{borrower_id}/outcome", response_model=LeadOutcomeResponse)
+@router.post(
+    "/leads/{borrower_id}/outcome",
+    response_model=LeadOutcomeResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def record_lead_outcome(
     borrower_id: str,
     payload: LeadOutcomeRequest,
     request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
     repo: BorrowerRepoDep,
     store: SalesStateDep,
 ) -> LeadOutcomeResponse:

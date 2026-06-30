@@ -9,12 +9,11 @@ for human review. It never sends outreach or activates a connector.
 from __future__ import annotations
 
 import json
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 from uuid import UUID, uuid4
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import ValidationError
 
 from backend.agents.mortgage_growth_copilot import (
     GrowthAgentCopilotEvidence,
@@ -22,9 +21,13 @@ from backend.agents.mortgage_growth_copilot import (
 )
 from backend.schemas.growth_agent import (
     GrowthAgentCustomRunRequest,
+    GrowthAgentDueMonitorRunRequest,
+    GrowthAgentDueMonitorRunResponse,
     GrowthAgentGovernanceChip,
     GrowthAgentHomeResponse,
     GrowthAgentMonitor,
+    GrowthAgentMonitorDraftRequest,
+    GrowthAgentNotificationDraft,
     GrowthAgentPolicyCheck,
     GrowthAgentPromptRunRequest,
     GrowthAgentRunRequest,
@@ -37,8 +40,12 @@ from backend.services.audit_store import resolve_actor
 from backend.services.capabilities import probe_capabilities
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.growth_agent_drafts import create_notification_drafts
 from backend.services.growth_agent_ledger_sql import (
-    MONITOR_LIST_SQL as _MONITOR_LIST_SQL,
+    DUE_MONITOR_LIST_ALL_SQL as _DUE_MONITOR_LIST_ALL_SQL,
+)
+from backend.services.growth_agent_ledger_sql import (
+    DUE_MONITOR_LIST_SQL as _DUE_MONITOR_LIST_SQL,
 )
 from backend.services.growth_agent_ledger_sql import (
     MONITOR_REFRESH_BY_ID_SQL as _MONITOR_REFRESH_BY_ID_SQL,
@@ -62,6 +69,13 @@ from backend.services.growth_agent_ledger_sql import (
     RUN_SELECT_BY_REQUEST_ID_SQL as _RUN_SELECT_BY_REQUEST_ID_SQL,
 )
 from backend.services.growth_agent_metrics import load_growth_agent_metrics
+from backend.services.growth_agent_monitors import (
+    list_monitors,
+    monitor_from_row,
+    states_from_monitor_criteria,
+    stored_monitor_name,
+    workflow_from_monitor,
+)
 from backend.services.growth_agent_runtime import (
     criteria_for as _criteria_for,
 )
@@ -94,6 +108,7 @@ from backend.services.growth_agent_workflows import (
 )
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.rbac import require_admin
 
 router = APIRouter(prefix="/growth-agent", tags=["growth-agent"])
 
@@ -109,7 +124,7 @@ def growth_agent_home(
     actor = resolve_actor(request)
     return GrowthAgentHomeResponse(
         workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
-        monitors=_list_monitors(lakebase, actor=actor),
+        monitors=list_monitors(lakebase, actor=actor),
         capabilities=[cap.to_dict() for cap in probe_capabilities()],
     )
 
@@ -117,7 +132,139 @@ def growth_agent_home(
 @router.get("/monitors", response_model=list[GrowthAgentMonitor])
 def growth_agent_monitors(request: Request, lakebase: LakebaseDep) -> list[GrowthAgentMonitor]:
     actor = resolve_actor(request)
-    return _list_monitors(lakebase, actor=actor)
+    return list_monitors(lakebase, actor=actor)
+
+
+@router.post(
+    "/monitors/run-due",
+    response_model=GrowthAgentDueMonitorRunResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def run_due_growth_agent_monitors(
+    payload: GrowthAgentDueMonitorRunRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    sql_client: SqlDep,
+    lakebase: LakebaseDep,
+) -> GrowthAgentDueMonitorRunResponse:
+    """Run active saved watchlists whose cadence window has elapsed.
+
+    This endpoint is scheduler-safe but not a sender: it replays reviewed saved
+    filters, refreshes counts, and writes Slack/Teams review drafts only.
+    """
+
+    actor = resolve_actor(request)
+    try:
+        rows = lakebase.fetchall(
+            _DUE_MONITOR_LIST_SQL,
+            {"actor_email": actor, "limit": payload.limit},
+            limit=payload.limit,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    runs, drafts = _run_due_monitor_rows(
+        rows,
+        actor=actor,
+        request=request,
+        sql_client=sql_client,
+        lakebase=lakebase,
+        channels=payload.channels,
+        request_id=payload.request_id,
+    )
+    return GrowthAgentDueMonitorRunResponse(
+        runs=runs,
+        drafts=drafts,
+        due_count=len(rows),
+        actor_count=1 if rows else 0,
+    )
+
+
+@router.post(
+    "/monitors/run-due-all",
+    response_model=GrowthAgentDueMonitorRunResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def run_due_growth_agent_monitors_all_actors(
+    payload: GrowthAgentDueMonitorRunRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    _admin_actor: Annotated[str, Depends(require_admin)],
+    sql_client: SqlDep,
+    lakebase: LakebaseDep,
+) -> GrowthAgentDueMonitorRunResponse:
+    """Run all due saved watchlists for the scheduled Databricks job.
+
+    This is the only all-actor runner. It is admin-gated, replays only stored
+    reviewed monitor criteria, attributes each run/draft to the monitor owner,
+    and creates review drafts only. It never sends outreach or connector
+    notifications.
+    """
+
+    try:
+        rows = lakebase.fetchall(
+            _DUE_MONITOR_LIST_ALL_SQL,
+            {"limit": payload.limit},
+            limit=payload.limit,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    actor_count = len({str(row.get("actor_email") or "").lower() for row in rows if row.get("actor_email")})
+    runs, drafts = _run_due_monitor_rows(
+        rows,
+        actor=None,
+        request=request,
+        sql_client=sql_client,
+        lakebase=lakebase,
+        channels=payload.channels,
+        request_id=payload.request_id,
+    )
+    return GrowthAgentDueMonitorRunResponse(
+        runs=runs,
+        drafts=drafts,
+        due_count=len(rows),
+        actor_count=actor_count,
+    )
+
+
+@router.post(
+    "/monitors/{monitor_id}/notification-drafts",
+    response_model=list[GrowthAgentNotificationDraft],
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def create_growth_agent_monitor_notification_drafts(
+    monitor_id: UUID,
+    payload: GrowthAgentMonitorDraftRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    lakebase: LakebaseDep,
+) -> list[GrowthAgentNotificationDraft]:
+    """Create Slack/Teams review drafts for a saved watchlist's latest run."""
+
+    actor = resolve_actor(request)
+    try:
+        with lakebase.transaction() as conn:
+            monitor_row = _txn_fetchone(
+                conn,
+                _MONITOR_SELECT_BY_ID_SQL,
+                {"actor_email": actor, "monitor_id": str(monitor_id)},
+            )
+    except (LakebaseError, psycopg.Error) as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    if monitor_row is None:
+        raise HTTPException(status_code=404, detail="growth-agent monitor not found")
+    monitor = monitor_from_row(monitor_row)
+    if not monitor.last_run_id:
+        raise HTTPException(status_code=409, detail="saved monitor has not been run yet")
+    return create_notification_drafts(
+        lakebase,
+        actor=actor,
+        monitor=monitor,
+        run_id=monitor.last_run_id,
+        route=monitor.route,
+        actionable_total=monitor.actionable_total,
+        channels=payload.channels,
+        request_id=payload.request_id,
+    )
 
 
 @router.post(
@@ -153,35 +300,103 @@ def rerun_growth_agent_monitor(
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     if monitor_row is None:
         raise HTTPException(status_code=404, detail="growth-agent monitor not found")
-    workflow = _workflow_from_monitor(monitor_row)
-    states = _states_from_monitor_criteria(monitor_row.get("criteria"))
-    monitor_name = _stored_monitor_name(monitor_row, workflow=workflow)
+    return _run_monitor_row(
+        monitor_row,
+        request=request,
+        sql_client=sql_client,
+        lakebase=lakebase,
+        request_id=payload.request_id,
+        evidence_label="Saved watchlist re-run",
+        planner_label="Saved watchlist runner",
+        fallback_reason="saved_monitor_rerun",
+    )
+
+
+def _run_monitor_row(
+    monitor_row: dict[str, Any],
+    *,
+    request: Request,
+    sql_client: DatabricksSqlClient,
+    lakebase: LakebaseClient,
+    request_id: str | None = None,
+    evidence_label: str,
+    planner_label: str,
+    fallback_reason: str,
+    actor_override: str | None = None,
+) -> GrowthAgentRunResponse:
+    workflow = workflow_from_monitor(monitor_row)
+    states = states_from_monitor_criteria(monitor_row.get("criteria"))
+    monitor_name = stored_monitor_name(monitor_row, workflow=workflow)
     return _run_workflow(
         workflow=workflow,
         payload=GrowthAgentRunRequest(
             states=states,
             save_monitor=True,
             cadence=monitor_row["cadence"],
-            request_id=payload.request_id,
+            request_id=request_id,
         ),
         request=request,
         sql_client=sql_client,
         lakebase=lakebase,
-        monitor_id_override=str(monitor_id),
+        monitor_id_override=str(monitor_row["monitor_id"]),
         monitor_name_override=monitor_name,
-        interpreted_intent=f"Saved watchlist re-run: {monitor_name}.",
+        actor_override=actor_override,
+        interpreted_intent=f"{evidence_label}: {monitor_name}.",
         copilot_evidence=GrowthAgentCopilotEvidence(
             execution_mode="deterministic",
             trace_kind="local_hash",
-            planner_label="Saved watchlist runner",
-            interpreted_intent=f"Saved watchlist re-run: {monitor_name}.",
+            planner_label=planner_label,
+            interpreted_intent=f"{evidence_label}: {monitor_name}.",
             reasoning_summary=(
-                "The user re-ran a saved reviewed watchlist. Stored filters were "
-                "replayed; no raw prompt, scheduler, outreach, or connector activation executed."
+                "A saved reviewed watchlist was replayed from stored filters. No raw prompt, outreach, "
+                "or connector activation executed."
             ),
-            fallback_reason="saved_monitor_rerun",
+            fallback_reason=fallback_reason,
         ),
     )
+
+
+def _run_due_monitor_rows(
+    rows: list[dict[str, Any]],
+    *,
+    actor: str | None,
+    request: Request,
+    sql_client: DatabricksSqlClient,
+    lakebase: LakebaseClient,
+    channels: list[str],
+    request_id: str | None,
+) -> tuple[list[GrowthAgentRunResponse], list[GrowthAgentNotificationDraft]]:
+    runs: list[GrowthAgentRunResponse] = []
+    drafts: list[GrowthAgentNotificationDraft] = []
+    for row in rows:
+        row_actor = actor or str(row.get("actor_email") or "").strip().lower()
+        if not row_actor:
+            raise HTTPException(status_code=409, detail="saved monitor is missing an owner")
+        run = _run_monitor_row(
+            row,
+            request=request,
+            sql_client=sql_client,
+            lakebase=lakebase,
+            evidence_label="Scheduled watchlist run",
+            planner_label="Scheduled watchlist runner",
+            fallback_reason="scheduled_monitor_run",
+            actor_override=row_actor,
+        )
+        runs.append(run)
+        if run.monitor is not None:
+            drafts.extend(
+                create_notification_drafts(
+                    lakebase,
+                    actor=row_actor,
+                    monitor=run.monitor,
+                    run_id=run.run_id,
+                    route=run.route,
+                    actionable_total=run.actionable_total,
+                    channels=channels,
+                    request_id=request_id,
+                )
+            )
+    return runs, drafts
 
 
 @router.post(
@@ -237,10 +452,11 @@ def run_mortgage_growth_agent(
 ) -> GrowthAgentRunResponse:
     """Route a natural-language co-pilot request to reviewed workflows.
 
-    The current runtime uses reviewed deterministic routing only. It does not
-    call the normal Genie answer path for prompt planning because that path can
-    compile and execute SQL. The deterministic executor writes the Lakebase
-    audit row and returns a reconciled Lead Queue/Admin handoff.
+    When the Databricks Supervisor Agent is configured, it may choose exactly
+    one reviewed workflow id from the app allowlist. The endpoint still does
+    not call the normal Genie answer path for prompt planning because that path
+    can compile and execute SQL. Reviewed deterministic tools own SQL, counts,
+    filters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.
     """
 
     workflow, copilot_evidence = plan_growth_agent_prompt(payload)
@@ -265,10 +481,11 @@ def _run_workflow(
     lakebase: LakebaseClient,
     monitor_id_override: str | None = None,
     monitor_name_override: str | None = None,
+    actor_override: str | None = None,
     interpreted_intent: str | None = None,
     copilot_evidence: GrowthAgentCopilotEvidence | None = None,
 ) -> GrowthAgentRunResponse:
-    actor = resolve_actor(request)
+    actor = actor_override or resolve_actor(request)
     copilot_evidence = copilot_evidence or _default_copilot_evidence(workflow)
     effective_states = [] if workflow.id == "source_freshness_sentinel" else payload.states
     criteria = _criteria_for(workflow, effective_states)
@@ -427,7 +644,7 @@ def _run_workflow(
                 )
                 if monitor_id_override and monitor_row is None:
                     raise HTTPException(status_code=409, detail="saved monitor could not be refreshed")
-        monitor = _monitor_from_row(monitor_row) if monitor_row is not None else None
+        monitor = monitor_from_row(monitor_row) if monitor_row is not None else None
     except HTTPException:
         raise
     except (LakebaseError, psycopg.Error) as exc:
@@ -513,7 +730,7 @@ def _run_response_from_row(
     ]
     agent_evidence = _json_object(run_row.get("agent_evidence"))
     if monitor is None:
-        monitor = _monitor_from_row(monitor_row) if monitor_row is not None else None
+        monitor = monitor_from_row(monitor_row) if monitor_row is not None else None
     return GrowthAgentRunResponse(
         workflow=workflow.schema(),
         run_id=str(run_row["run_id"]),
@@ -548,96 +765,6 @@ def _run_response_from_row(
         genie_trusted_assets=_str_list(agent_evidence.get("trusted_assets")),
         audit_event_id=str(run_row["audit_event_id"]) if run_row.get("audit_event_id") else None,
         created_at=run_row.get("created_at"),
-    )
-
-
-def _list_monitors(lakebase: LakebaseClient, *, actor: str) -> list[GrowthAgentMonitor]:
-    try:
-        rows = lakebase.fetchall(_MONITOR_LIST_SQL, {"actor_email": actor, "limit": 20}, limit=20)
-    except LakebaseError as exc:
-        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
-    return [_monitor_from_row(row) for row in rows]
-
-
-def _workflow_from_monitor(row: dict[str, Any]) -> _WorkflowDef:
-    workflow_id = str(row.get("workflow_id") or "")
-    if workflow_id == "custom_segment_watch":
-        criteria = _json_object(row.get("criteria"))
-        lead_filters = criteria.get("lead_queue_filters")
-        if not isinstance(lead_filters, dict):
-            raise HTTPException(status_code=409, detail="saved monitor has malformed criteria")
-        segment_codes = lead_filters.get("segment_codes")
-        if not isinstance(segment_codes, list):
-            raise HTTPException(status_code=409, detail="saved monitor has malformed segment criteria")
-        segment_mode = str(lead_filters.get("segment_mode") or "any")
-        return _custom_workflow([str(code) for code in segment_codes], segment_mode)
-    workflow = _WORKFLOWS.get(cast(GrowthAgentWorkflowId, workflow_id))
-    if workflow is None:
-        raise HTTPException(status_code=409, detail="saved monitor references an unknown workflow")
-    return workflow
-
-
-def _states_from_monitor_criteria(criteria_value: Any) -> list[str]:
-    criteria = _json_object(criteria_value)
-    states = criteria.get("states")
-    if not isinstance(states, list):
-        return []
-    return [str(state).strip().upper() for state in states if str(state).strip()]
-
-
-def _stored_monitor_name(row: dict[str, Any], *, workflow: _WorkflowDef) -> str:
-    name = str(row.get("name") or "").strip()
-    if not name:
-        return workflow.title
-    try:
-        request = GrowthAgentRunRequest(monitor_name=name)
-    except ValidationError:
-        return workflow.title
-    return request.monitor_name or workflow.title
-
-
-def _monitor_fallback_name(row: dict[str, Any]) -> str:
-    workflow_id = str(row.get("workflow_id") or "")
-    workflow = _WORKFLOWS.get(cast(GrowthAgentWorkflowId, workflow_id))
-    if workflow is not None:
-        return workflow.title
-    if workflow_id == "custom_segment_watch":
-        return "Custom Segment Workflow"
-    return "Reviewed Growth Watchlist"
-
-
-def _safe_monitor_name_from_row(row: dict[str, Any]) -> str:
-    fallback = _monitor_fallback_name(row)
-    name = str(row.get("name") or "").strip()
-    if not name:
-        return fallback
-    try:
-        request = GrowthAgentRunRequest(monitor_name=name)
-    except ValidationError:
-        return fallback
-    return request.monitor_name or fallback
-
-
-def _monitor_from_row(row: dict[str, Any]) -> GrowthAgentMonitor:
-    criteria = row.get("criteria") or {}
-    if isinstance(criteria, str):
-        try:
-            criteria = json.loads(criteria)
-        except json.JSONDecodeError:
-            criteria = {}
-    return GrowthAgentMonitor(
-        monitor_id=str(row["monitor_id"]),
-        workflow_id=row["workflow_id"],
-        name=_safe_monitor_name_from_row(row),
-        cadence=row["cadence"],
-        status=row.get("status") or "active",
-        criteria=criteria,
-        route=row["route"],
-        actionable_total=int(row.get("actionable_total") or 0),
-        source_assets=list(row.get("source_assets") or []),
-        last_run_id=str(row["last_run_id"]) if row.get("last_run_id") else None,
-        created_at=row.get("created_at"),
-        updated_at=row.get("updated_at"),
     )
 
 

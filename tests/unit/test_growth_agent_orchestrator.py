@@ -72,7 +72,24 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
                 "task": task,
             }
         )
-        return {"id": "resp-supervisor-1", "output": [{"content": "ack"}]}
+        return {
+            "id": "resp-supervisor-1",
+            "output": [
+                {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "workflow_id": "listing_watch",
+                                    "confidence": 0.91,
+                                    "reason": "purchase intent from validated objective",
+                                }
+                            )
+                        }
+                    ]
+                }
+            ],
+        }
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
     monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
@@ -95,14 +112,19 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert calls[0]["endpoint"] == "mip-supervisor-endpoint"
     assert calls[0]["task"] == "agent/v1/responses"
     assert calls[0]["client_request_id"].startswith("mip-growth-agent-")
+    assert "Reviewed objective signals:" in calls[0]["prompt"]
     assert prompt_text not in calls[0]["prompt"]
     assert "Objective hash:" in calls[0]["prompt"]
-    assert "Reviewed workflow selected by the app contract: Daily Refi Opportunity Brief" in calls[0]["prompt"]
+    assert "Reviewed workflow allowlist:" in calls[0]["prompt"]
+    assert "daily_refi_brief" in calls[0]["prompt"]
+    assert "listing_watch" in calls[0]["prompt"]
     assert body["execution_mode"] == "agent_framework"
     assert body["trace_kind"] == "agent_framework"
     assert body["planner_label"] == "Databricks Supervisor Agent"
-    assert body["workflow"]["id"] == "daily_refi_brief"
-    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    assert body["workflow"]["id"] == "listing_watch"
+    assert body["route"] == "/lead-queue?segment=listed&marketing_eligibility=Eligible+only&states=IL"
+    assert "Supervisor Agent selected reviewed workflow" in body["interpreted_intent"]
+    assert "selected the reviewed Listed-for-Sale Purchase Watch workflow" in body["agent_reasoning"]
     assert body["genie_trusted_assets"] == [
         "databricks.serving_endpoint.mip-supervisor-endpoint",
         "databricks.supervisor_agent.supervisor-1",
@@ -116,6 +138,134 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert prompt_text.lower() not in json.dumps(body).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.runs, default=str).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.audit_events, default=str).lower()
+
+
+def test_prompt_agent_rejects_unreviewed_supervisor_workflow_choice(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
+        _ = args, kwargs
+        return {"id": "resp-supervisor-1", "output": [{"content": '{"workflow_id":"send_email"}'}]}
+
+    monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
+    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    _enable_orchestrator(monkeypatch)
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": "find listed-for-sale borrowers for review", "states": ["IL"]},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["execution_mode"] == "deterministic"
+    assert body["workflow"]["id"] == "listing_watch"
+    evidence = json.loads(lakebase.runs[0]["agent_evidence"])
+    assert evidence["fallback_reason"] == "agent_orchestrator_unavailable"
+
+
+def test_prompt_agent_discards_adversarial_supervisor_content(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adversarial_reason = "<script>alert(1)</script> John Smith SELECT * FROM mip.raw.secret"
+
+    def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
+        _ = args, kwargs
+        return {
+            "id": "resp-supervisor-1",
+            "output": [
+                {
+                    "content": [
+                        {
+                            "text": json.dumps(
+                                {
+                                    "workflow_id": "high_equity_heloc_watch",
+                                    "confidence": 1.0,
+                                    "reason": adversarial_reason,
+                                }
+                            )
+                        }
+                    ]
+                }
+            ],
+        }
+
+    monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
+    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    _enable_orchestrator(monkeypatch)
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": "find home equity line opportunities", "states": ["TX"]},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["execution_mode"] == "agent_framework"
+    assert body["workflow"]["id"] == "high_equity_heloc_watch"
+    persisted_text = " ".join(
+        [
+            json.dumps(body, default=str),
+            json.dumps(lakebase.runs, default=str),
+            json.dumps(lakebase.audit_events, default=str),
+        ]
+    ).lower()
+    for forbidden in ("<script", "john smith", "select *", "mip.raw.secret"):
+        assert forbidden not in persisted_text
+
+
+def test_prompt_agent_does_not_let_supervisor_override_explicit_custom_segments(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
+        calls.append({"args": args, "kwargs": kwargs})
+        return {"id": "resp-supervisor-1", "output": [{"content": '{"workflow_id":"listing_watch"}'}]}
+
+    monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
+    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    _enable_orchestrator(monkeypatch)
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={
+                "prompt": "find borrowers in both prime refi and listed segments",
+                "states": ["IL"],
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "all",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert calls == []
+    assert body["execution_mode"] == "deterministic"
+    assert body["workflow"]["id"] == "custom_segment_watch"
+    assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["itm", "listed"]
+    assert body["criteria"]["lead_queue_filters"]["segment_mode"] == "all"
+    assert body["route"] == (
+        "/lead-queue?segment_codes=itm%2Clisted&segment_mode=all&"
+        "marketing_eligibility=Eligible+only&states=IL"
+    )
 
 
 def test_prompt_agent_falls_back_when_supervisor_endpoint_fails(
@@ -298,7 +448,7 @@ def test_prompt_agent_allows_numeric_rank_prompts_with_supervisor_enabled(
                 "task": task,
             }
         )
-        return {"id": "resp-supervisor-1", "output": [{"content": "ack"}]}
+        return {"id": "resp-supervisor-1", "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}]}
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
     monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)

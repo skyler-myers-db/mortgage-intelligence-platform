@@ -11,6 +11,7 @@ export type GrowthAgentWorkflowId =
 export type GrowthAgentCadence = 'daily' | 'weekly';
 export type GrowthAgentSegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
 export type GrowthAgentSegmentMode = 'any' | 'all';
+export type GrowthAgentNotificationChannel = 'slack' | 'teams';
 export type GrowthAgentSpecialist =
   | 'structured_data_agent'
   | 'borrower_dossier_agent'
@@ -78,6 +79,15 @@ export interface GrowthAgentRunRequest {
   request_id?: string | null;
 }
 
+export interface GrowthAgentMonitorDraftRequest {
+  channels?: GrowthAgentNotificationChannel[];
+  request_id?: string | null;
+}
+
+export interface GrowthAgentDueMonitorRunRequest extends GrowthAgentMonitorDraftRequest {
+  limit?: number;
+}
+
 export interface GrowthAgentCustomRunRequest extends GrowthAgentRunRequest {
   segment_codes: GrowthAgentSegmentCode[];
   segment_mode: GrowthAgentSegmentMode;
@@ -125,6 +135,18 @@ export interface GrowthAgentRunResponse {
   created_at?: string | null;
 }
 
+export interface GrowthAgentNotificationDraft {
+  draft_id: string;
+  monitor_id: string;
+  run_id: string;
+  channel: GrowthAgentNotificationChannel;
+  title: string;
+  body: string;
+  status: 'draft' | 'reviewed' | 'cancelled';
+  created_at?: string | null;
+  updated_at?: string | null;
+}
+
 export interface GrowthAgentCapabilityRow {
   key: string;
   label: string;
@@ -138,4 +160,10 @@ export interface GrowthAgentHomeResponse {
   workflows: GrowthAgentWorkflow[];
   monitors: GrowthAgentMonitor[];
   capabilities?: GrowthAgentCapabilityRow[];
+}
+
+export interface GrowthAgentDueMonitorRunResponse {
+  runs: GrowthAgentRunResponse[];
+  drafts: GrowthAgentNotificationDraft[];
+  due_count: number;
 }

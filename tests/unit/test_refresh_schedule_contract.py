@@ -16,7 +16,11 @@ def test_mip_refresh_schedules_ship_paused_in_active_bundle() -> None:
     bundle = _load_yaml(ROOT / "databricks.yml")
     jobs = bundle["resources"]["jobs"]
 
-    for job_key in ("mip_sync_lifecycle_state", "mip_fred_rates_ingest"):
+    for job_key in (
+        "mip_sync_lifecycle_state",
+        "mip_fred_rates_ingest",
+        "mip_growth_agent_monitor_scheduler",
+    ):
         schedule = jobs[job_key]["schedule"]
         assert schedule["pause_status"] == "PAUSED"
 
@@ -44,7 +48,8 @@ def test_operator_docs_explain_app_refresh_default_and_paused_schedules() -> Non
     assert "Data operations" in runbook
     assert "schedules deploy **paused by" in runbook
     assert "default** in dev, prod, and prod_otlp" in runbook
-    assert "All MIP refresh schedules deploy paused by default" in deployment
-    assert "FRED and lifecycle fallback schedules deploy paused" in onboarding
+    assert "All MIP refresh and automation schedules deploy paused by default" in deployment
+    assert "FRED, lifecycle fallback, and Growth Agent monitor schedules deploy" in onboarding
+    assert "scheduler drafts" in onboarding
     assert "ships `PAUSED` in every bundle target" in dashboards
     assert "auto-UNPAUSES" not in dashboards

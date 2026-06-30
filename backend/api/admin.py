@@ -59,6 +59,7 @@ from backend.services.forced_degraded import (
     FORCED_DEGRADED_COOKIE_PATH,
     build_forced_degraded_cookie,
 )
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.observability import emit
 from backend.services.rbac import AdminDep
@@ -318,10 +319,16 @@ def get_operations(_actor: AdminDep, jobs: JobsDep, audit: AdminAuditDep) -> dic
         ) from exc
 
 
-@router.post("/operations/run", response_model=AdminOperationRunResponse, status_code=202)
+@router.post(
+    "/operations/run",
+    response_model=AdminOperationRunResponse,
+    status_code=202,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def post_operation_run(
     payload: AdminOperationRunRequest,
     _actor: AdminDep,
+    _: Annotated[None, Depends(require_json_content_type)],
     audit: AdminAuditDep,
     jobs: JobsDep,
 ) -> dict[str, object]:
@@ -543,12 +550,17 @@ def get_settings(_actor: AdminDep) -> dict[str, object]:
     }
 
 
-@router.post("/force-degraded", response_model=ForceDegradedResponse)
+@router.post(
+    "/force-degraded",
+    response_model=ForceDegradedResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def post_force_degraded(
     payload: ForceDegradedRequest,
     request: Request,
     response: Response,
     _actor: AdminDep,
+    _: Annotated[None, Depends(require_json_content_type)],
     audit: AuditDep,
 ) -> ForceDegradedResponse:
     """Issue or clear a browser-local degraded-banner proof cookie.

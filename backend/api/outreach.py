@@ -46,6 +46,7 @@ from backend.services.disclosures import (
     resolve_tenant_disclosure,
 )
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.job_trigger import enqueue_lifecycle_trigger
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.lakebase_bootstrap import (
@@ -486,7 +487,7 @@ def _assert_disclosure_backed_draft_body(
     return body
 
 
-@router.post("/draft", response_model=OutreachDraft)
+@router.post("/draft", response_model=OutreachDraft, responses=JSON_CONTENT_TYPE_RESPONSE)
 def draft_outreach(
     payload: OutreachDraftRequest,
     request: Request,
@@ -494,6 +495,7 @@ def draft_outreach(
     repo: RepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> OutreachDraft:
     b = repo.find_borrower(payload.borrower_id)
     if b is None:
@@ -536,7 +538,7 @@ def draft_outreach(
     )
 
 
-@router.post("/approve", response_model=OutreachApproveResponse)
+@router.post("/approve", response_model=OutreachApproveResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def approve_outreach(
     payload: OutreachApproveRequest,
     request: Request,
@@ -544,6 +546,7 @@ def approve_outreach(
     repo: RepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> OutreachApproveResponse:
     # R6 actor-spoof fix: attribution is always the edge-authenticated
     # identity from X-Forwarded-Email (via ``resolve_actor``). The
@@ -740,7 +743,7 @@ def approve_outreach(
     )
 
 
-@router.post("/reject", response_model=OutreachRejectResponse)
+@router.post("/reject", response_model=OutreachRejectResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def reject_outreach(
     payload: OutreachRejectRequest,
     request: Request,
@@ -748,6 +751,7 @@ def reject_outreach(
     repo: RepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> OutreachRejectResponse:
     """Governed borrower rejection — audit twin of ``/approve``.
 

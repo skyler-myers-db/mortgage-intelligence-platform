@@ -7,6 +7,11 @@ const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer ${BEARER}` } : {};
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
+const ADMIN_AUTH_HEADERS: Record<string, string> = ADMIN_BEARER
+  ? { Authorization: `Bearer ${ADMIN_BEARER}` }
+  : {};
+const EXPECT_AGENT_FRAMEWORK = process.env.MIP_EXPECT_AGENT_FRAMEWORK === '1';
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
@@ -67,6 +72,12 @@ type AuditRow = {
   payload_json?: Record<string, unknown>;
 };
 
+type CapabilityRow = {
+  key: string;
+  status: string;
+  claimable: boolean;
+};
+
 test.beforeEach(({ page }) => {
   page.on('console', (message) => {
     if (message.type() === 'error') {
@@ -124,12 +135,41 @@ async function expectAuditRowMatchesGrowthRun(
   }
 }
 
-function expectReviewedPlanningEvidence(run: GrowthAgentRunResponse): void {
+async function agentOrchestratorIsClaimable(request: APIRequestContext): Promise<boolean> {
+  if (!ADMIN_BEARER) {
+    expect(
+      EXPECT_AGENT_FRAMEWORK,
+      'MIP_ADMIN_BEARER_TOKEN is required when strict Supervisor proof is expected',
+    ).toBe(false);
+    return false;
+  }
+  const resp = await request.get(`${API_URL}/api/v1/admin/capabilities?live=1`, {
+    headers: ADMIN_AUTH_HEADERS,
+  });
+  expect(resp.status(), 'live capability probe returned non-200').toBe(200);
+  const body = (await resp.json()) as { capabilities?: CapabilityRow[] } | CapabilityRow[];
+  const rows = Array.isArray(body) ? body : body.capabilities ?? [];
+  const orchestrator = rows.find((row) => row.key === 'agent_orchestrator');
+  const claimable = Boolean(orchestrator?.claimable && orchestrator.status === 'available');
+  if (EXPECT_AGENT_FRAMEWORK) {
+    expect(claimable, 'Agent Orchestrator must be claimable in strict Supervisor proof mode').toBe(true);
+  }
+  return claimable;
+}
+
+function expectReviewedPlanningEvidence(
+  run: GrowthAgentRunResponse,
+  options: { expectAgentFramework?: boolean } = {},
+): void {
+  if (options.expectAgentFramework) {
+    expect(run.execution_mode).toBe('agent_framework');
+  }
   expect(['deterministic', 'agent_framework']).toContain(run.execution_mode);
   if (run.execution_mode === 'agent_framework') {
     expect(run.trace_kind).toBe('agent_framework');
     expect(run.planner_label).toBe('Databricks Supervisor Agent');
-    expect(run.agent_reasoning ?? '').toContain('Databricks Supervisor Agent accepted');
+    expect(run.agent_reasoning ?? '').toContain('Databricks Supervisor Agent selected');
+    expect(run.agent_reasoning ?? '').toContain('reviewed');
     expect(run.governance_chips).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -159,7 +199,7 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
 
   await expect(page.getByText('Mortgage Growth Agent').first()).toBeVisible();
   await expect(page.getByText('Borrower Dossier Review')).toBeVisible();
-  await expect(page.getByText('No auto-send · no scheduled automation')).toBeVisible();
+  await expect(page.getByText('Draft-only handoffs · no auto-send')).toBeVisible();
   await expect(page.getByText('Audit checked after each run')).toBeVisible();
 
   const stateScope = page.getByLabel('Growth Agent state scope');
@@ -324,6 +364,7 @@ test('remaining reviewed workflow cards reconcile to live Lead Queue totals', as
     'listing_watch',
     'competitor_recapture_monitor',
     'high_equity_heloc_watch',
+    'branch_capacity_review',
   ]) {
     const response = await request.post(`${API_URL}/api/growth-agent/workflows/${workflowId}/run`, {
       headers: AUTH_HEADERS,
@@ -352,6 +393,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   page,
   request,
 }) => {
+  const expectAgentFramework = await agentOrchestratorIsClaimable(request);
   await gotoApp(page, '/ask-genie');
 
   await page.getByLabel('Growth Agent state scope').fill('IL');
@@ -371,7 +413,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
 
   expect(run.workflow.id).toBe('daily_refi_brief');
   expect(run.specialist_agent).toBe('structured_data_agent');
-  expectReviewedPlanningEvidence(run);
+  expectReviewedPlanningEvidence(run, { expectAgentFramework });
   expect(run.interpreted_intent).toContain('daily refi');
   expect(run.trace_id).toMatch(/^agent-trace-/);
   expect(run.tool_result_hash).toMatch(/^[a-f0-9]{64}$/);
@@ -402,6 +444,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   const promptSaveResponse = await promptSavePromise;
   expect(promptSaveResponse.status(), 'prompt-routed Growth Agent save returned non-200').toBe(200);
   const savedRun = (await promptSaveResponse.json()) as GrowthAgentRunResponse;
+  expectReviewedPlanningEvidence(savedRun, { expectAgentFramework });
   expect(savedRun.monitor?.name).toContain('Mortgage Growth Agent');
   expect(savedRun.monitor?.actionable_total).toBe(savedRun.actionable_total);
   expect(savedRun.monitor?.name.toLowerCase()).not.toContain('find prime refinance');
@@ -437,6 +480,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
   page,
   request,
 }) => {
+  const expectAgentFramework = await agentOrchestratorIsClaimable(request);
   await gotoApp(page, '/ask-genie');
 
   await page
@@ -454,7 +498,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
 
   expect(dossierRun.workflow.id).toBe('borrower_dossier_review');
   expect(dossierRun.specialist_agent).toBe('borrower_dossier_agent');
-  expectReviewedPlanningEvidence(dossierRun);
+  expectReviewedPlanningEvidence(dossierRun, { expectAgentFramework });
   expect(dossierRun.criteria.lead_queue_filters?.funnel_stage).toBe('high_opportunity');
   expect(dossierRun.route).toContain('funnel_stage=high_opportunity');
   expect(dossierRun.source_assets).toEqual(
@@ -486,7 +530,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
 
   expect(sourceRun.workflow.id).toBe('source_freshness_sentinel');
   expect(sourceRun.specialist_agent).toBe('data_ops_agent');
-  expectReviewedPlanningEvidence(sourceRun);
+  expectReviewedPlanningEvidence(sourceRun, { expectAgentFramework });
   expect(sourceRun.route).toContain('/admin-config?panel=data-operations');
   expect(sourceRun.source_assets).toEqual(['mip.gold.source_readiness']);
   expect(sourceRun.tool_steps.map((step) => step.tool_name)).toEqual(

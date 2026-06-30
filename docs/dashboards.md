@@ -88,6 +88,11 @@ in `databricks.yml`. Trigger model (as of 2026-06-05):
    operations** button. This avoids recurring compute spend in intermittent
    workspaces and prevents two bundle targets from writing the same catalog.
 
+The Growth Agent monitor scheduler follows the same cost-control posture. Its
+weekday cron definition ships `PAUSED`; when deliberately run or unpaused it
+refreshes saved watchlists and creates Slack/Teams review drafts only. It does
+not send outreach or connector notifications.
+
 The `record_funnel_snapshot` task is the one that MERGEs today's per-
 (state, segment) counts into `mip.gold.funnel_snapshot_daily`. Because
 the MERGE is keyed on `(snapshot_date, state, segment_code)`, multiple

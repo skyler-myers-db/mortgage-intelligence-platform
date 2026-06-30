@@ -16,6 +16,7 @@ from backend.schemas.portfolio import (
 )
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.rbac import require_admin
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
@@ -42,9 +43,10 @@ def _assert_portfolio_visible(result: dict[str, object], *, actor: str, is_admin
         raise HTTPException(status_code=404, detail="portfolio not found")
 
 
-@router.post("/preview", response_model=PortfolioPreview)
+@router.post("/preview", response_model=PortfolioPreview, responses=JSON_CONTENT_TYPE_RESPONSE)
 def preview_portfolio(
     repo: RepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
     payload: PortfolioPreviewRequest | None = None,
 ) -> PortfolioPreview:
     # Portfolio preview is a deterministic projection of the requested
@@ -53,11 +55,12 @@ def preview_portfolio(
     return repo.preview(payload)
 
 
-@router.post("/create", response_model=PortfolioCreateResponse)
+@router.post("/create", response_model=PortfolioCreateResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def create_portfolio(
     request: Request,
     payload: PortfolioCreateRequest,
     repo: RepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> PortfolioCreateResponse:
     try:
         return repo.create(payload, actor=resolve_actor(request))

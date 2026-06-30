@@ -8,6 +8,7 @@ import type {
   GenieAnswer as GenieAnswerShape,
   GrowthAgentCadence,
   GrowthAgentMonitor,
+  GrowthAgentNotificationDraft,
   GrowthAgentRunResponse,
   GrowthAgentSegmentCode,
   GrowthAgentSegmentMode,
@@ -31,6 +32,7 @@ import {
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
 import { GrowthAgentCapabilityPanel } from './ask-genie.growth-agent-capabilities';
+import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import { GrowthAgentRunCard, formatGrowthAgentCount } from './ask-genie.growth-run-card';
 import { SavedGrowthAgentMonitors } from './ask-genie.saved-monitors';
 import {
@@ -48,15 +50,6 @@ export {
   parseGrowthAgentStateInput,
   trustedAssetsForCatalog,
 } from './ask-genie.growth-agent.helpers';
-/**
- * Ask Genie — deep-dive view with trusted-asset list and backend-provided
- * prompt suggestions.
- * The floating GenieChat in the AppShell is the "ask anywhere" entry point;
- * this route is the curated walkthrough for stakeholders who want to see
- * which trusted UC assets Genie is grounded on. Answer rendering is delegated
- * to the shared <GenieAnswer> so metric_value / table_rows / follow_ups
- * surface identically here and in the floating chat.
- */
 
 const NON_PERSISTABLE_SOURCES = new Set([
   'degraded',
@@ -87,14 +80,17 @@ export default function AskGenie() {
   const [promptAgentPendingAction, setPromptAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
   const [monitorPending, setMonitorPending] = useState<string | null>(null);
+  const [monitorDraftPending, setMonitorDraftPending] = useState<string | null>(null);
   const [customAgentPendingAction, setCustomAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentError, setGrowthAgentError] = useState<string | null>(null);
   const [latestGrowthRun, setLatestGrowthRun] = useState<GrowthAgentRunResponse | null>(null);
+  const [latestGrowthDrafts, setLatestGrowthDrafts] = useState<GrowthAgentNotificationDraft[]>([]);
   const [customSegments, setCustomSegments] = useState<GrowthAgentSegmentCode[]>(['itm', 'listed']);
   const [customMode, setCustomMode] = useState<GrowthAgentSegmentMode>('any');
 
   function clearGrowthAgentFeedback() {
     setLatestGrowthRun(null);
+    setLatestGrowthDrafts([]);
     setGrowthAgentError(null);
   }
 
@@ -323,6 +319,7 @@ export default function AskGenie() {
   async function rerunGrowthAgentMonitor(monitor: GrowthAgentMonitor) {
     setMonitorPending(monitor.monitor_id);
     setLatestGrowthRun(null);
+    setLatestGrowthDrafts([]);
     setGrowthAgentError(null);
     try {
       const result = await api.rerunGrowthAgentMonitor(monitor.monitor_id, {});
@@ -332,6 +329,23 @@ export default function AskGenie() {
       setGrowthAgentError(err instanceof Error ? err.message : 'Saved Growth Agent watchlist rerun failed.');
     } finally {
       setMonitorPending(null);
+    }
+  }
+
+  async function draftGrowthAgentMonitorNotifications(monitor: GrowthAgentMonitor) {
+    setMonitorDraftPending(monitor.monitor_id);
+    setLatestGrowthRun(null);
+    setLatestGrowthDrafts([]);
+    setGrowthAgentError(null);
+    try {
+      const drafts = await api.createGrowthAgentMonitorNotificationDrafts(monitor.monitor_id, {
+        channels: ['slack', 'teams'],
+      });
+      setLatestGrowthDrafts(drafts);
+    } catch (err) {
+      setGrowthAgentError(err instanceof Error ? err.message : 'Saved watchlist draft handoff failed.');
+    } finally {
+      setMonitorDraftPending(null);
     }
   }
 
@@ -411,7 +425,7 @@ export default function AskGenie() {
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
   const workflows = growthAgentQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? [];
-  const agentBusy = growthAgentPending !== null || promptAgentPending || monitorPending !== null;
+  const agentBusy = growthAgentPending !== null || promptAgentPending || monitorPending !== null || monitorDraftPending !== null;
   const capabilityRows = (growthAgentQuery.data?.capabilities ?? []).filter((row) => (
     [
       'genie_conversation_api',
@@ -439,7 +453,7 @@ export default function AskGenie() {
             <div className="muted fs-12">Reviewed workflow runs, saved watchlists, and human-review Lead Queue handoffs.</div>
           </div>
           <div className="spacer" />
-          <Chip variant="success" icon="shield">No auto-send · no scheduled automation</Chip>
+          <Chip variant="success" icon="shield">Draft-only handoffs · no auto-send</Chip>
           <Chip variant="neutral" icon="audit">Audit checked after each run</Chip>
         </div>
         <div className="surface__body">
@@ -512,20 +526,20 @@ export default function AskGenie() {
               </span>
             </label>
             <label className="growth-agent__field growth-agent__field--compact">
-              <span>Review cadence</span>
-              <select
-                className="form-input"
-                aria-label="Growth Agent review cadence"
-                value={agentCadence}
+                  <span>Review interval</span>
+                  <select
+                    className="form-input"
+                    aria-label="Growth Agent review interval"
+                    value={agentCadence}
                 onChange={(event) => {
                   setAgentCadence(event.target.value as GrowthAgentCadence);
                   clearGrowthAgentFeedback();
                 }}
               >
-                <option value="daily">Daily review</option>
-                <option value="weekly">Weekly review</option>
-              </select>
-              <span className="growth-agent__hint">Saving stores reviewed filters only; it does not schedule an automatic run.</span>
+                    <option value="daily">Daily interval</option>
+                    <option value="weekly">Weekly interval</option>
+                  </select>
+                  <span className="growth-agent__hint">Saving stores reviewed filters. Automatic refresh is paused until an admin enables the draft-only scheduler.</span>
             </label>
           </div>
 
@@ -674,11 +688,15 @@ export default function AskGenie() {
             />
           )}
 
+          <GrowthAgentDraftPanel drafts={latestGrowthDrafts} />
+
           <SavedGrowthAgentMonitors
             monitors={monitors}
             monitorPending={monitorPending}
+            draftPending={monitorDraftPending}
             actionsDisabled={agentBusy}
             onRun={rerunGrowthAgentMonitor}
+            onDraft={draftGrowthAgentMonitorNotifications}
             onOpen={(route) => navigate(route)}
           />
         </div>

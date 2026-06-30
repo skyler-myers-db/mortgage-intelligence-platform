@@ -42,6 +42,7 @@ from backend.services.genie_client import GenieClientError
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.genie_source_gaps import source_gap_answer
 from backend.services.genie_trusted_assets import trusted_assets
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.repositories import BorrowerRepository, GenieAnswerRepository
 from backend.services.repositories.factory import (
@@ -388,10 +389,11 @@ def _is_outreach_writer_request(question: str) -> bool:
     return any(re.search(pattern, q) for pattern in patterns)
 
 
-@router.post("/start", response_model=GenieStartResponse)
+@router.post("/start", response_model=GenieStartResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def genie_start(
     request: Request,
     lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
     payload: dict[str, object] | None = None,
 ) -> GenieStartResponse:
     _ = payload
@@ -403,7 +405,7 @@ def genie_start(
     )
 
 
-@router.post("/message", response_model=GenieMessageResponse)
+@router.post("/message", response_model=GenieMessageResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def genie_message(
     payload: GenieMessageRequest,
     request: Request,
@@ -412,6 +414,7 @@ def genie_message(
     audit: AuditDep,
     lakebase: LakebaseDep,
     borrower_repo: BorrowerRepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> GenieMessageResponse:
     actor = resolve_actor(request)
     _assert_genie_conversation_owned(
@@ -893,13 +896,14 @@ def genie_message(
     return _finalize_genie_response(lakebase, actor=actor, response=result)  # type: ignore[arg-type]
 
 
-@router.post("/actions", response_model=GenieActionResponse)
+@router.post("/actions", response_model=GenieActionResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
 def genie_action(
     payload: GenieActionRequest,
     request: Request,
     audit: AuditDep,
     workspace: WorkspaceDep,
     lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> GenieActionResponse:
     _ = audit
     actor = _actor(request)

@@ -350,8 +350,10 @@ Before ending the SE session:
       [`docs/module0-talk-track.md`](module0-talk-track.md).
 - [ ] Show the Admin **Data operations** panel and confirm the customer
       understands refreshes are operator-triggered from the app by default.
-      FRED and lifecycle fallback schedules deploy paused; unpause them only
-      after the customer approves a recurring cadence and catalog isolation.
+      FRED, lifecycle fallback, and Growth Agent monitor schedules deploy
+      paused; unpause them only after the customer approves a recurring
+      cadence and catalog isolation. The Growth Agent scheduler drafts
+      Slack/Teams review messages only; it never sends them.
 - [ ] Schedule the 90-day OAuth rotation on the customer's calendar
       (see [`docs/security/m2m-oauth-setup.md`](security/m2m-oauth-setup.md)
       "Rotation cadence") if they opted in to manual live validation.

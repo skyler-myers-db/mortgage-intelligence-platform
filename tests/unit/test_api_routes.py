@@ -72,3 +72,24 @@ def test_required_routes_exist_and_respond():
         assert response.status_code == expected, (
             f"{method.upper()} {path} returned {response.status_code}: {response.text}"
         )
+
+
+def test_structured_post_routes_require_and_document_json_content_type():
+    schema = app.openapi()
+    missing: list[str] = []
+    for route in app.routes:
+        methods = getattr(route, "methods", set()) or set()
+        path = str(getattr(route, "path", ""))
+        if "POST" not in methods or not path.startswith("/api/"):
+            continue
+        dependant = getattr(route, "dependant", None)
+        dependency_names = [] if dependant is None else [
+            getattr(dependency.call, "__name__", str(dependency.call))
+            for dependency in dependant.dependencies
+        ]
+        route_schema = schema["paths"].get(getattr(route, "path_format", path), {}).get("post", {})
+        responses = route_schema.get("responses", {})
+        if "require_json_content_type" not in dependency_names or "415" not in responses:
+            missing.append(path)
+
+    assert missing == []

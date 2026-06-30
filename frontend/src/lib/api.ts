@@ -38,8 +38,12 @@ import type {
   GenieActionResult,
   GenieActionSuggestion,
   GenieStartResult,
+  GrowthAgentDueMonitorRunRequest,
+  GrowthAgentDueMonitorRunResponse,
   GrowthAgentHomeResponse,
   GrowthAgentMonitor,
+  GrowthAgentMonitorDraftRequest,
+  GrowthAgentNotificationDraft,
   GrowthAgentCustomRunRequest,
   GrowthAgentPromptRunRequest,
   GrowthAgentRunRequest,
@@ -1295,6 +1299,39 @@ export const api = {
 
   growthAgentMonitors: (signal?: AbortSignal) =>
     getJson<GrowthAgentMonitor[]>('/api/growth-agent/monitors', signal),
+
+  runDueGrowthAgentMonitors: (
+    payload: GrowthAgentDueMonitorRunRequest = {},
+    signal?: AbortSignal,
+  ) => {
+    const body: GrowthAgentDueMonitorRunRequest = {
+      channels: ['slack', 'teams'],
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<GrowthAgentDueMonitorRunResponse, GrowthAgentDueMonitorRunRequest>(
+      '/api/growth-agent/monitors/run-due',
+      body,
+      signal,
+    );
+  },
+
+  createGrowthAgentMonitorNotificationDrafts: (
+    monitorId: string,
+    payload: GrowthAgentMonitorDraftRequest = {},
+    signal?: AbortSignal,
+  ) => {
+    const body: GrowthAgentMonitorDraftRequest = {
+      channels: ['slack', 'teams'],
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<GrowthAgentNotificationDraft[], GrowthAgentMonitorDraftRequest>(
+      `/api/growth-agent/monitors/${encodeURIComponent(monitorId)}/notification-drafts`,
+      body,
+      signal,
+    );
+  },
 
   rerunGrowthAgentMonitor: (
     monitorId: string,

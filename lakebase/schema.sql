@@ -802,6 +802,8 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_monitors (
 );
 CREATE INDEX IF NOT EXISTS idx_growth_agent_monitors_actor_updated
     ON mip_app.growth_agent_monitors (actor_email, updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_growth_agent_monitors_actor_due
+    ON mip_app.growth_agent_monitors (actor_email, status, updated_at ASC);
 
 DO $$
 BEGIN
@@ -822,6 +824,28 @@ BEGIN
           'custom_segment_watch'
         ));
 END $$;
+
+CREATE TABLE IF NOT EXISTS mip_app.growth_agent_notification_drafts (
+    draft_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email    TEXT NOT NULL,
+    monitor_id     UUID NOT NULL REFERENCES mip_app.growth_agent_monitors(monitor_id) ON DELETE CASCADE,
+    run_id         UUID NOT NULL REFERENCES mip_app.growth_agent_runs(run_id) ON DELETE CASCADE,
+    channel        TEXT NOT NULL CHECK (channel IN ('slack','teams')),
+    title          TEXT NOT NULL CHECK (length(title) BETWEEN 5 AND 120),
+    body           TEXT NOT NULL CHECK (length(body) BETWEEN 20 AND 2000),
+    status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','reviewed','cancelled')),
+    request_id     TEXT,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_growth_agent_notification_drafts_request
+    ON mip_app.growth_agent_notification_drafts (request_id)
+    WHERE request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_growth_agent_notification_drafts_active
+    ON mip_app.growth_agent_notification_drafts (actor_email, monitor_id, run_id, channel)
+    WHERE status = 'draft';
+CREATE INDEX IF NOT EXISTS idx_growth_agent_notification_drafts_actor
+    ON mip_app.growth_agent_notification_drafts (actor_email, created_at DESC);
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
@@ -951,5 +975,12 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_06_12_purge_dev_session_approvals',
     'Re-audit #3 P3: purge pre-2026-06-01 dev-session approvals (and their activation_outbox rows) so the stale-approved queue shows demo-era state only; canonical narrative five kept; action_audit untouched'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_06_30_growth_agent_monitor_drafts',
+    'Persist Growth Agent Slack/Teams review drafts for scheduled monitor runs; draft-only, no connector send path'
 )
 ON CONFLICT (version) DO NOTHING;

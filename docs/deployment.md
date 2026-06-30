@@ -145,12 +145,16 @@ full deployment `env_vars` list with `MIP_OTEL_HEADERS` set by
 `app.yaml`; that would make ordinary dev deploys depend on a secret that
 does not exist in every workspace.
 
-All MIP refresh schedules deploy paused by default, including `prod` and
-`prod_otlp`. The app's Admin **Data operations** panel is the normal
-customer-facing refresh surface. Only unpause FRED or lifecycle schedules
-after the customer approves a recurring cadence and confirms the target writes
-to an isolated catalog; otherwise multiple bundle targets can contend on the
-same Unity Catalog tables and burn avoidable compute.
+All MIP refresh and automation schedules deploy paused by default, including
+`prod` and `prod_otlp`. The app's Admin **Data operations** panel is the
+normal customer-facing refresh surface. The Growth Agent monitor scheduler is
+also paused by default; when an operator deliberately runs or unpauses it, it
+only refreshes saved reviewed watchlists and creates Slack/Teams review drafts.
+It does not send messages or activate connectors. Only unpause FRED,
+lifecycle, or Growth Agent schedules after the customer approves a recurring
+cadence and confirms the target writes to an isolated catalog; otherwise
+multiple bundle targets can contend on the same Unity Catalog tables and burn
+avoidable compute.
 
 If OTLP is being added to an already-deployed app in the same workspace,
 avoid deploying a second bundle target that tries to recreate existing

@@ -3,21 +3,32 @@
 from __future__ import annotations
 
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, Request, status
+from fastapi import APIRouter, Depends, Request, status
 
 from backend.config.settings import settings
 from backend.schemas.telemetry import RumBatch
 from backend.schemas.telemetry_response import RumAcceptedResponse
 from backend.services.backpressure import actor_key_for_request
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 
-@router.post("/rum", status_code=status.HTTP_202_ACCEPTED, response_model=RumAcceptedResponse)
-def record_rum(batch: RumBatch, request: Request) -> RumAcceptedResponse:
+@router.post(
+    "/rum",
+    status_code=status.HTTP_202_ACCEPTED,
+    response_model=RumAcceptedResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def record_rum(
+    batch: RumBatch,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+) -> RumAcceptedResponse:
     """Accept sanitized browser performance telemetry.
 
     RUM events are operational telemetry, not audit rows. They are kept

@@ -5,16 +5,20 @@ import { formatGrowthAgentCount } from './ask-genie.growth-run-card';
 interface SavedGrowthAgentMonitorsProps {
   monitors: GrowthAgentMonitor[];
   monitorPending: string | null;
+  draftPending: string | null;
   actionsDisabled: boolean;
   onRun: (monitor: GrowthAgentMonitor) => void;
+  onDraft: (monitor: GrowthAgentMonitor) => void;
   onOpen: (route: string) => void;
 }
 
 export function SavedGrowthAgentMonitors({
   monitors,
   monitorPending,
+  draftPending,
   actionsDisabled,
   onRun,
+  onDraft,
   onOpen,
 }: SavedGrowthAgentMonitorsProps) {
   if (monitors.length === 0) return null;
@@ -25,6 +29,7 @@ export function SavedGrowthAgentMonitors({
       <div className="growth-agent-monitor-list">
         {monitors.map((monitor) => {
           const inactive = monitor.status !== 'active';
+          const cannotDraft = inactive || !monitor.last_run_id;
           return (
             <div
               key={monitor.monitor_id}
@@ -32,7 +37,10 @@ export function SavedGrowthAgentMonitors({
             >
               <div className="growth-agent-monitor__main">
                 <span>{monitor.name}</span>
-                <span>{monitor.cadence === 'weekly' ? 'Weekly review' : 'Daily review'}</span>
+                <span>
+                  {monitor.cadence === 'weekly' ? 'Weekly interval' : 'Daily interval'}
+                  {' · scheduler paused'}
+                </span>
                 <Chip variant={inactive ? 'warning' : 'success'}>
                   {monitor.status === 'active'
                     ? 'Active'
@@ -55,6 +63,19 @@ export function SavedGrowthAgentMonitors({
                   title={inactive ? 'Only active watchlists can be rerun.' : undefined}
                 >
                   {monitorPending === monitor.monitor_id ? 'Running…' : 'Run now'}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  icon="doc"
+                  onClick={() => {
+                    if (!cannotDraft) onDraft(monitor);
+                  }}
+                  disabled={actionsDisabled || draftPending !== null || cannotDraft}
+                  aria-disabled={actionsDisabled || draftPending !== null || cannotDraft}
+                  title={cannotDraft ? 'Drafts require an active watchlist with a completed run.' : undefined}
+                >
+                  {draftPending === monitor.monitor_id ? 'Drafting…' : 'Draft Slack/Teams'}
                 </Button>
                 <Button
                   variant="ghost"

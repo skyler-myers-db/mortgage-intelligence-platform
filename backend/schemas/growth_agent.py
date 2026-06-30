@@ -28,6 +28,7 @@ GrowthAgentWorkflowId = Literal[
 GrowthAgentCadence = Literal["daily", "weekly"]
 GrowthAgentSegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
 GrowthAgentSegmentMode = Literal["any", "all"]
+GrowthAgentNotificationChannel = Literal["slack", "teams"]
 GrowthAgentSpecialist = Literal[
     "structured_data_agent",
     "borrower_dossier_agent",
@@ -271,6 +272,18 @@ class GrowthAgentMonitor(BaseModel):
     updated_at: datetime | str | None = None
 
 
+class GrowthAgentNotificationDraft(BaseModel):
+    draft_id: str
+    monitor_id: str
+    run_id: str
+    channel: GrowthAgentNotificationChannel
+    title: str
+    body: str
+    status: Literal["draft", "reviewed", "cancelled"] = "draft"
+    created_at: datetime | str | None = None
+    updated_at: datetime | str | None = None
+
+
 class GrowthAgentRunRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -320,6 +333,35 @@ class GrowthAgentRunRequest(BaseModel):
         if value is None:
             return None
         return validate_public_opaque_id(value)
+
+
+class GrowthAgentMonitorDraftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    channels: list[GrowthAgentNotificationChannel] = Field(default_factory=lambda: ["slack", "teams"])
+    request_id: str | None = None
+
+    @field_validator("channels")
+    @classmethod
+    def _channels(cls, values: list[GrowthAgentNotificationChannel]) -> list[GrowthAgentNotificationChannel]:
+        deduped: list[GrowthAgentNotificationChannel] = []
+        for value in values:
+            if value not in deduped:
+                deduped.append(value)
+        if not deduped:
+            raise ValueError("channels must include slack or teams")
+        return deduped[:2]
+
+    @field_validator("request_id")
+    @classmethod
+    def _draft_request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_public_opaque_id(value)
+
+
+class GrowthAgentDueMonitorRunRequest(GrowthAgentMonitorDraftRequest):
+    limit: int = Field(default=5, ge=1, le=20)
 
 
 class GrowthAgentCustomRunRequest(GrowthAgentRunRequest):
@@ -416,3 +458,10 @@ class GrowthAgentHomeResponse(BaseModel):
     workflows: list[GrowthAgentWorkflow]
     monitors: list[GrowthAgentMonitor]
     capabilities: list[dict[str, object]] = Field(default_factory=list)
+
+
+class GrowthAgentDueMonitorRunResponse(BaseModel):
+    runs: list[GrowthAgentRunResponse]
+    drafts: list[GrowthAgentNotificationDraft]
+    due_count: int = Field(ge=0)
+    actor_count: int = Field(default=1, ge=0)

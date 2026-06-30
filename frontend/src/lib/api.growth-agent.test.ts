@@ -175,4 +175,57 @@ describe('growth agent API client', () => {
     const body = JSON.parse(String(calls[0].init?.body));
     expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
   });
+
+  it('creates saved-monitor notification drafts with JSON content type and request id', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, [
+        {
+          draft_id: 'draft-1',
+          monitor_id: 'monitor-123',
+          run_id: 'run-123',
+          channel: 'slack',
+          title: 'IL Refi Watch - 5,394 eligible',
+          body: 'Draft for Slack: IL Refi Watch refreshed with 5,394 eligible borrowers.',
+          status: 'draft',
+        },
+      ]);
+    });
+
+    const res = await api.createGrowthAgentMonitorNotificationDrafts('monitor-123', {
+      channels: ['slack', 'teams'],
+    });
+
+    expect(res[0].channel).toBe('slack');
+    expect(calls[0].path).toBe('/api/v1/growth-agent/monitors/monitor-123/notification-drafts');
+    expect(calls[0].init?.method).toBe('POST');
+    expect(new Headers(calls[0].init?.headers).get('Content-Type')).toBe('application/json');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.channels).toEqual(['slack', 'teams']);
+  });
+
+  it('runs due saved monitors through the scheduler-safe endpoint', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, {
+        runs: [],
+        drafts: [],
+        due_count: 0,
+      });
+    });
+
+    const res = await api.runDueGrowthAgentMonitors({ limit: 5 });
+
+    expect(res.due_count).toBe(0);
+    expect(calls[0].path).toBe('/api/v1/growth-agent/monitors/run-due');
+    expect(calls[0].init?.method).toBe('POST');
+    expect(new Headers(calls[0].init?.headers).get('Content-Type')).toBe('application/json');
+    const body = JSON.parse(String(calls[0].init?.body));
+    expect(body.request_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(body.channels).toEqual(['slack', 'teams']);
+    expect(body.limit).toBe(5);
+  });
 });

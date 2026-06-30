@@ -284,10 +284,20 @@ That single invocation executes:
    but ships **PAUSED in every target**. Only
    unpause it for a customer-approved production cadence; otherwise
    use the Admin Data operations button when a refresh is needed.
-11. `python tools/databricks/provision_genie_space.py` — reads
+11. `databricks bundle run mip_growth_agent_monitor_scheduler -t dev` —
+   optional draft-only Growth Agent automation. It calls the deployed app's
+   admin-gated `/api/v1/growth-agent/monitors/run-due-all` endpoint, refreshes
+   due saved watchlists for their original owners, and creates Slack/Teams
+   review drafts. It never sends messages or connector writes. Its weekday
+   schedule ships **PAUSED in every target**; run it manually or unpause only
+   after the customer approves a cadence. The Databricks job run identity must
+   be admitted by the app's admin policy (`MIP_ADMIN_EMAILS` or the configured
+   admin group, usually `mip-admin`) before the job is unpaused; otherwise the
+   all-actor endpoint fails closed with `403 {"detail":"forbidden"}`.
+12. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
-12. `./scripts/smoke_live.sh` — verify the app and all four deps up.
+13. `./scripts/smoke_live.sh` — verify the app and all four deps up.
 
 Flags on `scripts/deploy.sh` for partial re-runs:
 
@@ -320,11 +330,14 @@ and `/admin-config` exposes them under **Data operations**:
 Each button is admin-only, writes a Lakebase audit row before launching
 compute, refuses duplicate active runs, and shows the latest Databricks run
 state. If the audit ledger is unavailable, the app does not launch the job.
-The bundle-defined FRED and lifecycle fallback schedules deploy **paused by
-default** in dev, prod, and prod_otlp so intermittent development and demo
-workspaces do not burn recurring warehouse/Lakebase compute. If a customer
-later wants scheduled refreshes, unpause the schedule explicitly in that
-customer workspace and document the approved cadence.
+The bundle-defined FRED, lifecycle fallback, and Growth Agent monitor
+schedules deploy **paused by default** in dev, prod, and prod_otlp so
+intermittent development and demo workspaces do not burn recurring
+warehouse/Lakebase compute. If a customer later wants scheduled refreshes or
+scheduled watchlist-draft creation, unpause the schedule explicitly in that
+customer workspace and document the approved cadence. The Growth Agent
+scheduler is draft-only: it creates Slack/Teams review drafts and never sends
+messages.
 
 **No manual UI step is required for deploy/bootstrap.** The previous runbook called for
 opening the Databricks UI to rebind the Genie space's trusted assets

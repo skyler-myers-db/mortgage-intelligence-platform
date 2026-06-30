@@ -16,6 +16,7 @@ from backend.schemas.offer import (
 )
 from backend.services.audit_decision_inputs import decision_inputs_from_offer_inputs
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.observability import emit
 from backend.services.repositories import (
@@ -263,7 +264,7 @@ def _alternatives_for(
     return []
 
 
-@router.post("/recommend", response_model=OfferRecommendation)
+@router.post("/recommend", response_model=OfferRecommendation, responses=JSON_CONTENT_TYPE_RESPONSE)
 def recommend_offer(
     payload: OfferRecommendRequest,
     request: Request,
@@ -271,6 +272,7 @@ def recommend_offer(
     borrower_repo: BorrowerRepoDep,
     offer_repo: OfferRepoDep,
     audit: AuditStoreDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> OfferRecommendation:
     borrower = borrower_repo.get(payload.borrower_id)
     if borrower is None:

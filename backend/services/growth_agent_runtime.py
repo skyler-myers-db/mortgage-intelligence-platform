@@ -68,10 +68,15 @@ def tool_steps(
     tool_result_hash: str,
     copilot_evidence: GrowthAgentCopilotEvidence,
 ) -> list[GrowthAgentToolStep]:
+    planner_detail = (
+        "Supervisor selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
+        if copilot_evidence.execution_mode == "agent_framework"
+        else "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
+    )
     planner_step = GrowthAgentToolStep(
         label="Interpret mortgage-growth objective",
         status="completed",
-        detail=copilot_evidence.reasoning_summary,
+        detail=planner_detail,
         source_asset=None,
         tool_name=None,
         result_hash=tool_result_hash,
@@ -347,7 +352,7 @@ def governance_chips(
             label="Multi-agent framework",
             status="passed" if copilot_evidence.execution_mode == "agent_framework" else "not_attached",
             detail=(
-                "Databricks Supervisor Agent accepted the planning prompt; reviewed deterministic tools executed the run."
+                "Databricks Supervisor Agent selected a reviewed workflow; reviewed deterministic tools executed the run."
                 if copilot_evidence.execution_mode == "agent_framework"
                 else "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
             ),

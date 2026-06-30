@@ -88,14 +88,16 @@ class _LiveSqlClient:
 
 
 class _LiveGenieClient:
-    def __init__(self, *, ok: bool = True) -> None:
+    def __init__(self, *, ok: bool = True, conversation_id: str = "conv-live", message_id: str | None = "msg-live") -> None:
         self.ok = ok
+        self.conversation_id = conversation_id
+        self.message_id = message_id
 
     def ask(self, question: str) -> object:
         _ = question
         if not self.ok:
             raise RuntimeError("genie unavailable")
-        return SimpleNamespace(conversation_id="conv-live", message_id="msg-live")
+        return SimpleNamespace(conversation_id=self.conversation_id, message_id=self.message_id)
 
 
 class _LiveLakebase:
@@ -398,6 +400,17 @@ def test_live_capability_probe_failures_are_captured() -> None:
     assert statuses["genie_conversation_api"].available is False
     assert statuses["certified_metric_views"].available is False
     assert statuses["uc_function_tools"].available is False
+
+
+def test_genie_live_probe_requires_conversation_and_message_ids() -> None:
+    statuses = collect_live_capability_statuses(
+        sql_client=_LiveSqlClient(),
+        genie_client=_LiveGenieClient(conversation_id="conv-live", message_id=None),
+        lakebase=_LiveLakebase(),
+    )
+
+    assert statuses["genie_conversation_api"].available is False
+    assert "conversation and message id" in statuses["genie_conversation_api"].detail
 
 
 def test_lakebase_sync_live_probe_requires_synced_table_metadata() -> None:
