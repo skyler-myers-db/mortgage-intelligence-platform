@@ -17,6 +17,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 import backend.services.capabilities as capabilities_module
+import backend.services.capability_request as capability_request_module
 import backend.services.capability_serving_probes as serving_probe_module
 from backend.config.settings import Settings
 from backend.main import app
@@ -27,9 +28,11 @@ from backend.services.capabilities import (
     get_capabilities_snapshot,
     probe_capabilities,
 )
+from backend.services.capability_request import reset_live_capability_probe_cache
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_client import get_genie_client
 from backend.services.lakebase import get_lakebase_client
+from backend.services.resilience import TTLCache
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -128,7 +131,12 @@ class _FakeWorkspaceClient:
         *,
         permission_denied: bool = False,
         serving_ready: bool = True,
+        serving_task: str = "agent/v1/responses",
         empty_serving_response: bool = False,
+        inference_enabled: bool = True,
+        inference_catalog: str = "mip_app_state",
+        inference_schema: str = "mip_sync",
+        inference_table_prefix: str = "mip_agent_inference",
         responses_api_error: Exception | None = None,
         eval_total: int = 5,
         eval_passed: int | None = None,
@@ -145,7 +153,12 @@ class _FakeWorkspaceClient:
         )
         self.serving_endpoints = _FakeServingEndpoints(
             ready=serving_ready,
+            task=serving_task,
             empty_response=empty_serving_response,
+            inference_enabled=inference_enabled,
+            inference_catalog=inference_catalog,
+            inference_schema=inference_schema,
+            inference_table_prefix=inference_table_prefix,
         )
         self.experiments = _FakeExperiments(
             total=eval_total,
@@ -159,22 +172,37 @@ class _FakeWorkspaceClient:
 
 
 class _FakeServingEndpoints:
-    def __init__(self, *, ready: bool = True, empty_response: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        ready: bool = True,
+        task: str = "agent/v1/responses",
+        empty_response: bool = False,
+        inference_enabled: bool = True,
+        inference_catalog: str = "mip_app_state",
+        inference_schema: str = "mip_sync",
+        inference_table_prefix: str = "mip_agent_inference",
+    ) -> None:
         self.ready = ready
+        self.task = task
         self.empty_response = empty_response
+        self.inference_enabled = inference_enabled
+        self.inference_catalog = inference_catalog
+        self.inference_schema = inference_schema
+        self.inference_table_prefix = inference_table_prefix
         self.queries: list[tuple[str, dict[str, object]]] = []
 
     def get(self, name: str) -> object:
         _ = name
         return SimpleNamespace(
             state=SimpleNamespace(ready="READY" if self.ready else "NOT_READY"),
-            task="agent/v1/responses",
+            task=self.task,
             ai_gateway=SimpleNamespace(
                 inference_table_config=SimpleNamespace(
-                    enabled=True,
-                    catalog_name="mip_app_state",
-                    schema_name="mip_sync",
-                    table_name_prefix="mip_agent_inference",
+                    enabled=self.inference_enabled,
+                    catalog_name=self.inference_catalog,
+                    schema_name=self.inference_schema,
+                    table_name_prefix=self.inference_table_prefix,
                 )
             ),
         )
@@ -501,6 +529,21 @@ def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None
     assert "no response payload" in statuses["agent_orchestrator"].detail
 
 
+@pytest.mark.parametrize("task", ["llm/v1/chat", "not_agent", "agentless-chat"])
+def test_agent_orchestrator_live_probe_requires_exact_agent_responses_task(task: str) -> None:
+    blocked = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=_FakeWorkspaceClient(serving_task=task),
+    )
+
+    assert blocked["agent_orchestrator"].available is False
+    assert "not agent" in blocked["agent_orchestrator"].detail.lower()
+
+
 def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     sql = _LiveSqlClient(count_sequence=[1, 2])
     workspace = _FakeWorkspaceClient()
@@ -527,7 +570,9 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     )
 
 
-def test_ai_gateway_live_probe_accepts_recent_async_inference_log_row(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ai_gateway_live_probe_rejects_recent_row_without_exact_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ticks = iter([0.0, 91.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
@@ -542,9 +587,9 @@ def test_ai_gateway_live_probe_accepts_recent_async_inference_log_row(monkeypatc
         workspace_client=_FakeWorkspaceClient(),
     )
 
-    assert statuses["ai_gateway"].available is True
-    assert "recent MIP capability inference log" in statuses["ai_gateway"].detail
-    assert any("recent_row_count" in statement for statement in sql.statements)
+    assert statuses["ai_gateway"].available is False
+    assert "this exact capability probe" in statuses["ai_gateway"].detail
+    assert not any("recent_row_count" in statement for statement in sql.statements)
 
 
 def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -562,7 +607,71 @@ def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.Monk
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "no inference log row" in statuses["ai_gateway"].detail
+    assert "this exact capability probe" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_endpoint_not_ready() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(),
+        workspace_client=_FakeWorkspaceClient(serving_ready=False),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "not READY" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_disabled_inference_logging() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(),
+        workspace_client=_FakeWorkspaceClient(inference_enabled=False),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "inference table is not enabled" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.other_gateway_prefix",
+        ),
+        sql_client=_LiveSqlClient(),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "expected mip_app_state.mip_sync.other_gateway_prefix" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_malformed_inference_table_config() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="not-three-part",
+        ),
+        sql_client=_LiveSqlClient(),
+        workspace_client=_FakeWorkspaceClient(
+            inference_catalog="not-three-part",
+            inference_schema="",
+            inference_table_prefix="",
+        ),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "AI Gateway probe failed (ValueError)" in statuses["ai_gateway"].detail
 
 
 def test_agent_eval_live_probe_requires_full_case_floor_and_matching_sha() -> None:
@@ -697,6 +806,16 @@ def test_growth_agent_function_grants_are_documented_and_deployed() -> None:
         assert f"mip.gold.{function_name}" in grants
 
 
+def test_ai_gateway_audit_grant_is_table_scoped() -> None:
+    deploy = (_REPO_ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    grants = (_REPO_ROOT / "docs" / "security" / "GRANTS.md").read_text(encoding="utf-8")
+    assert "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit" not in deploy
+    assert "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit" in deploy
+    assert "grant_ai_gateway_inference_table.py" in deploy
+    assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_sonnet_payload" in grants
+    assert "Do not grant `SELECT ON SCHEMA mip.audit`" in grants
+
+
 def test_genie_conversation_needs_space_and_warehouse() -> None:
     ok = _by_key(probe_capabilities(_settings()), "genie_conversation_api")
     assert ok.status is CapabilityStatus.CONFIGURED
@@ -767,6 +886,7 @@ def test_capabilities_endpoint_live_probe_marks_live_dependencies_available(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(capabilities_module, "get_settings", lambda: _settings())
+    reset_live_capability_probe_cache()
     app.dependency_overrides[get_sql_client] = lambda: _LiveSqlClient()
     app.dependency_overrides[get_genie_client] = lambda: _LiveGenieClient(ok=True)
     app.dependency_overrides[get_lakebase_client] = lambda: _LiveLakebase()
@@ -784,6 +904,153 @@ def test_capabilities_endpoint_live_probe_marks_live_dependencies_available(
     assert rows["certified_metric_views"]["status"] == "available"
     assert rows["uc_function_tools"]["status"] == "available"
     assert rows["genie_ontology"]["claimable"] is False
+
+
+def test_capabilities_live_probe_is_short_ttl_cached(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="mip-agent-gateway",
+        mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        mip_live_capability_probe_ttl_s=60.0,
+    )
+    workspace = _FakeWorkspaceClient()
+    sql = _LiveSqlClient(count_sequence=[0, 1])
+    monkeypatch.setattr(capabilities_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(capability_request_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(capability_request_module, "_workspace_client", lambda: (workspace, None))
+    reset_live_capability_probe_cache()
+    app.dependency_overrides[get_sql_client] = lambda: sql
+    app.dependency_overrides[get_genie_client] = lambda: _LiveGenieClient(ok=True)
+    app.dependency_overrides[get_lakebase_client] = lambda: _LiveLakebase()
+    try:
+        client = TestClient(app)
+        first = client.get("/api/admin/capabilities?live=1")
+        second = client.get("/api/admin/capabilities?live=1")
+    finally:
+        app.dependency_overrides.pop(get_sql_client, None)
+        app.dependency_overrides.pop(get_genie_client, None)
+        app.dependency_overrides.pop(get_lakebase_client, None)
+        reset_live_capability_probe_cache()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_rows = {row["key"]: row for row in first.json()["capabilities"]}
+    second_rows = {row["key"]: row for row in second.json()["capabilities"]}
+    assert first_rows["ai_gateway"]["status"] == "available"
+    assert second_rows["ai_gateway"]["status"] == "available"
+    assert len(workspace.serving_endpoints.queries) == 1
+
+
+def test_capabilities_live_probe_cache_expires(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    now = [0.0]
+    monkeypatch.setattr(capability_request_module, "_LIVE_CAPABILITY_CACHE", TTLCache(now=lambda: now[0]))
+    settings = _settings(
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="mip-agent-gateway",
+        mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        mip_live_capability_probe_ttl_s=10.0,
+    )
+    workspace = _FakeWorkspaceClient()
+    sql = _LiveSqlClient(count_sequence=[0, 1, 0, 1])
+    monkeypatch.setattr(capabilities_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(capability_request_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(capability_request_module, "_workspace_client", lambda: (workspace, None))
+    reset_live_capability_probe_cache()
+    app.dependency_overrides[get_sql_client] = lambda: sql
+    app.dependency_overrides[get_genie_client] = lambda: _LiveGenieClient(ok=True)
+    app.dependency_overrides[get_lakebase_client] = lambda: _LiveLakebase()
+    try:
+        client = TestClient(app)
+        first = client.get("/api/admin/capabilities?live=1")
+        now[0] = 11.0
+        second = client.get("/api/admin/capabilities?live=1")
+    finally:
+        app.dependency_overrides.pop(get_sql_client, None)
+        app.dependency_overrides.pop(get_genie_client, None)
+        app.dependency_overrides.pop(get_lakebase_client, None)
+        reset_live_capability_probe_cache()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(workspace.serving_endpoints.queries) == 2
+
+
+def test_capabilities_live_probe_ttl_zero_disables_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="mip-agent-gateway",
+        mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        mip_live_capability_probe_ttl_s=0.0,
+    )
+    workspace = _FakeWorkspaceClient()
+    sql = _LiveSqlClient(count_sequence=[0, 1, 0, 1])
+    monkeypatch.setattr(capabilities_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(capability_request_module, "get_settings", lambda: settings)
+    monkeypatch.setattr(capability_request_module, "_workspace_client", lambda: (workspace, None))
+    reset_live_capability_probe_cache()
+    app.dependency_overrides[get_sql_client] = lambda: sql
+    app.dependency_overrides[get_genie_client] = lambda: _LiveGenieClient(ok=True)
+    app.dependency_overrides[get_lakebase_client] = lambda: _LiveLakebase()
+    try:
+        client = TestClient(app)
+        first = client.get("/api/admin/capabilities?live=1")
+        second = client.get("/api/admin/capabilities?live=1")
+    finally:
+        app.dependency_overrides.pop(get_sql_client, None)
+        app.dependency_overrides.pop(get_genie_client, None)
+        app.dependency_overrides.pop(get_lakebase_client, None)
+        reset_live_capability_probe_cache()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(workspace.serving_endpoints.queries) == 2
+
+
+def test_capabilities_live_probe_cache_key_tracks_gateway_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings_a = _settings(
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="mip-agent-gateway-a",
+        mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        mip_live_capability_probe_ttl_s=60.0,
+    )
+    settings_b = _settings(
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="mip-agent-gateway-b",
+        mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        mip_live_capability_probe_ttl_s=60.0,
+    )
+    current = [settings_a]
+    workspace = _FakeWorkspaceClient()
+    sql = _LiveSqlClient(count_sequence=[0, 1, 0, 1])
+    monkeypatch.setattr(capabilities_module, "get_settings", lambda: current[0])
+    monkeypatch.setattr(capability_request_module, "get_settings", lambda: current[0])
+    monkeypatch.setattr(capability_request_module, "_workspace_client", lambda: (workspace, None))
+    reset_live_capability_probe_cache()
+    app.dependency_overrides[get_sql_client] = lambda: sql
+    app.dependency_overrides[get_genie_client] = lambda: _LiveGenieClient(ok=True)
+    app.dependency_overrides[get_lakebase_client] = lambda: _LiveLakebase()
+    try:
+        client = TestClient(app)
+        first = client.get("/api/admin/capabilities?live=1")
+        current[0] = settings_b
+        second = client.get("/api/admin/capabilities?live=1")
+    finally:
+        app.dependency_overrides.pop(get_sql_client, None)
+        app.dependency_overrides.pop(get_genie_client, None)
+        app.dependency_overrides.pop(get_lakebase_client, None)
+        reset_live_capability_probe_cache()
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert len(workspace.serving_endpoints.queries) == 2
 
 
 def test_capabilities_endpoint_requires_admin() -> None:

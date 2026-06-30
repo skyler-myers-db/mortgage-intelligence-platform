@@ -7,9 +7,10 @@
 **Automation status (2026-06-11, audit P1-3).** This document is now the
 audit-readable MATRIX, no longer a required manual runbook:
 
-* §catalog/§gold/§ref grants to the app service principal are applied
-  idempotently by `scripts/deploy.sh` **step 4c** (resolves the SP client
-  id from `databricks apps get`, executes via the deploy warehouse, fails
+* §catalog/§gold/§ref/§audit grants to the app service principal are
+  applied idempotently by `scripts/deploy.sh` **step 4c** and the
+  post-agentic AI Gateway table-grant step (resolves the SP client id
+  from `databricks apps get`, executes via the deploy warehouse, fails
   the deploy loudly when the deploying identity lacks GRANT authority).
 * §Lakebase app-role grants are applied by `jobs/lakebase_migrate.py`
   after schema + seed (role discovered from `pg_roles`; `action_audit`
@@ -110,7 +111,36 @@ The `refresh_run_state` read fails silently and every gold table's
 
 ---
 
-## 4. Schema `mip.silver` (ETL only — do not grant to the App)
+## 4. Schema `mip.audit` (AI Gateway inference proof — required when enabled)
+
+```sql
+GRANT USE SCHEMA ON SCHEMA mip.audit TO `mip-app`;
+-- Table prefix comes from MIP_AI_GATEWAY_INFERENCE_TABLE. The default
+-- provisioner value is mip.audit.mip_agent_gateway_sonnet, which usually
+-- materializes at least mip.audit.mip_agent_gateway_sonnet_payload.
+GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_sonnet_payload TO `mip-app`;
+```
+
+**Objects covered.** Only the MIP-owned AI Gateway inference-log tables
+whose names match the configured prefix `MIP_AI_GATEWAY_INFERENCE_TABLE`
+(default prefix `mip.audit.mip_agent_gateway_sonnet`). `scripts/deploy.sh`
+runs `tools/databricks/grant_ai_gateway_inference_table.py` after AI
+Gateway provisioning to discover the concrete prefixed table names and
+grant `SELECT` on those tables only.
+
+**What breaks if missing.** The AI Gateway capability row remains
+`configured` / non-claimable because the app cannot prove that its
+bounded Gateway probe wrote an inference-log row. This does not break the
+rest of the app; it prevents claiming AI Gateway governance live.
+
+**What not to grant.** Do not grant `SELECT ON SCHEMA mip.audit` to the
+running app service principal. That would expose every current and future
+audit table in the schema. The app needs `USE SCHEMA` plus `SELECT` on
+the MIP Gateway prefix tables only.
+
+---
+
+## 5. Schema `mip.silver` (ETL only — do not grant to the App)
 
 The running Databricks App service principal should not receive direct
 `SELECT` on `mip.silver.*`. The Admin → Sources panel reads
@@ -133,7 +163,7 @@ fails at refresh time. The app itself still only needs `mip.gold` and
 
 ---
 
-## 5. Schema `mip_app` (Lakebase Postgres — required)
+## 6. Schema `mip_app` (Lakebase Postgres — required)
 
 Lakebase is a Postgres instance, not a UC schema — but UC registers it
 as `mip_app_state` database catalog for cross-plane reads. Two layers
@@ -186,7 +216,7 @@ criterion is not met — governance review will block release.
 
 ---
 
-## 6. Cotality Delta Share
+## 7. Cotality Delta Share
 
 Cotality publishes the source data via a Delta Sharing provider.
 Customer workspace subscribes to the share once; the app reads from
@@ -224,7 +254,7 @@ reporting `"silver_max_ingested_at": null`.
 
 ---
 
-## 7. Genie space `mortgage_lead_intelligence`
+## 8. Genie space `mortgage_lead_intelligence`
 
 **Click path (workspace UI — no SQL):**
 
@@ -257,7 +287,7 @@ on `mip.semantics` and `mip.gold`.
 
 ---
 
-## 8. SQL warehouse `mip_serverless_sql`
+## 9. SQL warehouse `mip_serverless_sql`
 
 This is covered by the app binding in
 [`databricks.yml`](../../databricks.yml) lines 115–119
@@ -274,15 +304,17 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 
 ---
 
-## 9. Verification queries
+## 10. Verification queries
 
-Run after completing §§1–8 to confirm every grant is live:
+Run after completing §§1–9 to confirm every grant is live:
 
 ```sql
 -- Catalog + schemas
 SHOW GRANTS `mip-app` ON CATALOG mip;
 SHOW GRANTS `mip-app` ON SCHEMA mip.gold;
 SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
+SHOW GRANTS `mip-app` ON SCHEMA mip.audit;
+SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_sonnet_payload;
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.public;
 
 -- Cotality share (catalog name depends on customer) -- ETL/deploy identity only
@@ -294,13 +326,15 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 -- Concrete round-trip
 SELECT COUNT(*) FROM mip.gold.borrower_360;     -- expect > 0 after refresh
 SELECT COUNT(*) FROM mip.ref.offer_rules_config; -- expect > 0 after seed
+SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_sonnet_payload
+WHERE client_request_id LIKE 'mip-capability-%'; -- expect > 0 after live capability probe
 -- Optional ETL-only proof; run as `sp-mip-etl`, not `mip-app`.
 SELECT COUNT(*) FROM mip.silver.property_master;
 ```
 
 ---
 
-## 10. Trust boundary — X-Forwarded-* headers
+## 11. Trust boundary — X-Forwarded-* headers
 
 Databricks Apps is the authoritative identity edge. The platform strips
 every inbound `X-Forwarded-Email`, `X-Forwarded-User`, and
@@ -340,7 +374,7 @@ Flip this flag only if you cannot guarantee the edge strips
 it for an Apps-hosted deploy will make the product unusable without
 gaining any real safety.
 
-### 10a. Non-Databricks-Apps deploys — explicit guidance
+### 11a. Non-Databricks-Apps deploys — explicit guidance
 
 A handful of customers run the FastAPI process outside Databricks Apps
 (Azure App Service, GKE, a VM fronted by NGINX). That is a legitimate
@@ -382,7 +416,7 @@ assumption in your runbook.
 
 ---
 
-## 11. Negative grants (things you should NOT give the app SP)
+## 12. Negative grants (things you should NOT give the app SP)
 
 -- **`MANAGE` or `ALL PRIVILEGES`** on `mip` catalog. The app only reads
   gold/ref and writes to `mip_app` — never DDL. A leaked app
@@ -390,6 +424,9 @@ assumption in your runbook.
 - **`MODIFY`** on `mip.gold` / `mip.silver`. Gold/silver are
   materialized by bundle jobs under a separate jobs SP; the app SP
   should never write there.
+- **`SELECT ON SCHEMA mip.audit`**. The app only needs the MIP-owned AI
+  Gateway inference-log table prefix described in §4, not every audit
+  object that may later land in the schema.
 - **`CAN_MANAGE`** on the app resource. That belongs to the Entrada
   delivery team's admin group, not the app identity itself.
 - **Direct Postgres `SUPERUSER`** on the Lakebase role. The default
@@ -399,4 +436,4 @@ assumption in your runbook.
 
 *Owner: governance-security-reviewer + principal-architect. Review
 cadence: any time a new `mip.*` schema or share is introduced. Every
-new schema needs its own §N in this file and a smoke query in §9.*
+new schema needs its own §N in this file and a smoke query in §10.*

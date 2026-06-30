@@ -19,7 +19,7 @@ export type GrowthAgentSpecialist =
   | 'campaign_agent'
   | 'data_ops_agent';
 export type GrowthAgentExecutionMode = 'deterministic' | 'genie_conversation' | 'agent_framework';
-export type GrowthAgentTraceKind = 'local_hash' | 'genie_conversation' | 'mlflow_trace';
+export type GrowthAgentTraceKind = 'local_hash' | 'genie_conversation' | 'agent_framework' | 'mlflow_trace';
 
 export interface GrowthAgentWorkflow {
   id: GrowthAgentWorkflowId;

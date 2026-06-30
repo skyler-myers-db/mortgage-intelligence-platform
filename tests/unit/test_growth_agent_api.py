@@ -1134,6 +1134,7 @@ def test_prompt_agent_rejects_pii_and_raw_identifiers() -> None:
                 "find refi for JANE DOE",
                 "run this for 123 Main St",
                 "show 742 Evergreen Terrace",
+                "find refi opportunities at 742 evergreen terrace",
                 "rank borrowers by race for a campaign",
                 "rank borrowers by age for a campaign",
                 "find borrowers by marital status",
@@ -1173,6 +1174,29 @@ def test_prompt_agent_allows_safe_borrower_group_language() -> None:
 
     assert response.status_code == 200, response.text
     assert response.json()["workflow"]["id"] == "daily_refi_brief"
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "top 10 prime refi candidates",
+        "show 10 high equity borrowers",
+    ],
+)
+def test_prompt_agent_allows_safe_numeric_rank_language(prompt: str) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": prompt},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
 
 
 def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:

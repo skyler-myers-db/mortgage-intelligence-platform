@@ -433,11 +433,13 @@ run databricks bundle run mip_lakebase_migrate -t "$TARGET"
 # but nothing granted that SP read access to the UC objects — the app booted
 # to PERMISSION_DENIED on every endpoint and docs/security/GRANTS.md was a
 # manual copy-paste runbook (CLAUDE.md calls that exact pattern a packaging
-# bug). This step applies the GRANTS.md §catalog/§gold/§ref statements
-# idempotently (GRANT is a no-op when already granted) against the deploy
-# warehouse, addressed to the SP's client id. Failures are FATAL with a
-# pointer to GRANTS.md: a deploy that cannot grant is a deploy whose app
-# cannot read, and hiding that would violate the fail-visibly contract.
+# bug). This step applies the GRANTS.md §catalog/§gold/§ref/§audit
+# base statements idempotently (GRANT is a no-op when already granted)
+# against the deploy warehouse, addressed to the SP's client id. AI
+# Gateway table-level SELECT is applied after agentic provisioning once
+# the concrete inference table prefix is known. Failures are FATAL with
+# a pointer to GRANTS.md: a deploy that cannot grant is a deploy whose
+# app cannot read, and hiding that would violate the fail-visibly contract.
 # GRANTS.md remains the audit-readable matrix; Lakebase role grants are
 # applied by jobs/lakebase_migrate.py in step 4b.
 step "apply UC grants to the app service principal (idempotent)"
@@ -487,7 +489,7 @@ done <<GRANTS_EOF
 GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.ref TO \`${APP_SP_CLIENT_ID}\`
-GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${APP_SP_CLIENT_ID}\`
+GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${APP_SP_CLIENT_ID}\`
@@ -652,6 +654,14 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # shellcheck disable=SC1090
   . "$AGENTIC_ENV_FILE"
   set +a
+  if [[ -n "${MIP_AI_GATEWAY_INFERENCE_TABLE:-}" && -n "${MIP_AI_GATEWAY_ENDPOINT:-}" ]]; then
+    step "grant least-privilege AI Gateway inference-table access to the app service principal"
+    run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+      --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --principal "$APP_SP_CLIENT_ID"
+  fi
 fi
 
 if [[ "$DRY_RUN" -eq 0 ]]; then

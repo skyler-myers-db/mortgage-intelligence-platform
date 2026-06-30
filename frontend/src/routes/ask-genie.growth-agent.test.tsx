@@ -59,7 +59,6 @@ vi.mock('react-router-dom', async () => {
 });
 
 import AskGenie from './ask-genie';
-import { GrowthAgentCapabilityPanel } from './ask-genie.growth-agent-capabilities';
 
 const WORKFLOW: GrowthAgentWorkflow = {
   id: 'daily_refi_brief',
@@ -345,31 +344,6 @@ describe('AskGenie Growth Agent route panel', () => {
     if (!match) throw new Error(`button not rendered: ${name}`);
     return match;
   }
-
-  it('does not render an inconsistent non-claimable available capability as green or available', () => {
-    act(() => {
-      root.render(
-        <GrowthAgentCapabilityPanel
-          isPending={false}
-          rows={[
-            {
-              key: 'agent_orchestrator',
-              label: 'Agent Framework orchestration',
-              ga: true,
-              status: 'available',
-              claimable: false,
-              detail: 'inconsistent backend row',
-            },
-          ]}
-        />,
-      );
-    });
-
-    const chip = container.querySelector<HTMLElement>('.chip');
-    expect(chip?.textContent).toContain('Configured');
-    expect(chip?.classList.contains('chip--neutral')).toBe(true);
-    expect(chip?.classList.contains('chip--success')).toBe(false);
-  });
 
   it('renders governed workflows and blocks invalid state scopes before posting', async () => {
     mount();

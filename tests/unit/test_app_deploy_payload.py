@@ -37,6 +37,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     monkeypatch.setenv("MIP_TRUST_FORWARDED_HEADERS", "false")
     monkeypatch.setenv("MIP_RUM_ENABLED", "1")
     monkeypatch.setenv("MIP_GENIE_CONCURRENCY_LIMIT", "8")
+    monkeypatch.setenv("MIP_LIVE_CAPABILITY_PROBE_TTL_S", "45")
     monkeypatch.setenv("MIP_GIT_SHA", "abc123def456")
 
     payload = build_payload(
@@ -64,6 +65,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_TRUST_FORWARDED_HEADERS"]["value"] == "false"
     assert env["MIP_RUM_ENABLED"]["value"] == "1"
     assert env["MIP_GENIE_CONCURRENCY_LIMIT"]["value"] == "8"
+    assert env["MIP_LIVE_CAPABILITY_PROBE_TTL_S"]["value"] == "45"
     assert env["MIP_GIT_SHA"]["value"] == "abc123def456"
     assert "MIP_ADMIN_EMAILS" not in env
 

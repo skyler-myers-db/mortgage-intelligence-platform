@@ -51,7 +51,7 @@ const STATUS_LABEL: Record<CapabilityStatus, string> = {
 };
 
 function toneFor(row: CapabilityRow): Tone {
-  if (row.claimable) return 'success';
+  if (row.claimable && row.status === 'available') return 'success';
   if (row.status === 'configured') return 'neutral';
   if (row.status === 'preview_mirror') return 'warning';
   return 'neutral'; // not_provisioned

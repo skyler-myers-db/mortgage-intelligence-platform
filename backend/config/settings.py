@@ -388,6 +388,11 @@ class Settings(BaseSettings):
     # pre-measurement cache warmup while staying much shorter than the
     # warehouse gold-refresh cadence.
     mip_cache_ttl_s: float = 300.0
+    # Live capability checks can execute real Databricks work (including a
+    # bounded AI Gateway inference + inference-log polling). Cache the admin
+    # request-scoped live snapshot briefly so repeated page refreshes do not
+    # spam billable endpoints. Set to 0 to disable for tests/debugging.
+    mip_live_capability_probe_ttl_s: float = 60.0
     # 2026-06-11 audit P1-6: refresh-ahead interval for the default lead
     # page (the slowest hot-path query, 3.6-6.6s cold). backend.main warms
     # the default `/api/leads` list + count at startup and re-warms every

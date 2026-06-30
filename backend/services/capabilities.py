@@ -36,7 +36,6 @@ from uuid import uuid4
 from backend.config.settings import Settings, get_settings
 from backend.services.capability_serving_probes import (
     count_inference_log_rows,
-    count_recent_inference_log_rows,
     query_serving_endpoint,
     serving_response_has_payload,
     wait_for_inference_log_increment,
@@ -722,7 +721,7 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
         task = getattr(details, "task", None)
         if state != "READY":
             return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} is not READY ({state}).")
-        if "agent" not in str(task).lower():
+        if not _is_agent_responses_task(task):
             return LiveCapabilityStatus(False, f"Endpoint {endpoint} task is {task}, not agent.")
         response = query_serving_endpoint(
             workspace_client,
@@ -799,22 +798,11 @@ def _probe_ai_gateway(
             client_request_id=client_request_id,
         )
         if log_rows <= before_rows:
-            recent_rows = count_recent_inference_log_rows(
-                sql_client,
-                expected_table,
-                client_request_prefix="mip-capability-",
-            )
-            if recent_rows <= 0:
-                return LiveCapabilityStatus(
-                    False,
-                    f"AI Gateway endpoint responded, but no inference log row was visible for {expected_table}.",
-                )
             return LiveCapabilityStatus(
-                True,
+                False,
                 (
-                    "Live AI Gateway endpoint accepted a bounded query; exact-row visibility is "
-                    f"asynchronous, and {recent_rows} recent MIP capability inference log row(s) "
-                    f"were verified at {actual}."
+                    "AI Gateway endpoint responded, but no inference log row for this exact "
+                    f"capability probe was visible at {expected_table} before timeout."
                 ),
             )
         return LiveCapabilityStatus(
@@ -823,6 +811,13 @@ def _probe_ai_gateway(
         )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"AI Gateway probe failed ({type(exc).__name__}).")
+
+
+def _is_agent_responses_task(task: Any) -> bool:
+    raw = getattr(task, "value", task)
+    normalized = str(raw or "").strip().lower()
+    canonical = normalized.replace("-", "_").replace("/", "_")
+    return canonical == "agent_v1_responses"
 
 
 @lru_cache(maxsize=1)

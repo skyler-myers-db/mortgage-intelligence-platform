@@ -7,11 +7,14 @@ from typing import Any
 
 from fastapi import Request
 
-from backend.config.settings import get_settings
+from backend.config.settings import Settings, get_settings
 from backend.services.capabilities import LiveCapabilityStatus, collect_live_capability_statuses
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_client import get_genie_client
 from backend.services.lakebase import get_lakebase_client
+from backend.services.resilience import TTLCache
+
+_LIVE_CAPABILITY_CACHE = TTLCache(max_entries=8)
 
 
 def collect_request_live_capability_statuses(
@@ -25,6 +28,16 @@ def collect_request_live_capability_statuses(
     Agent overview fail. The capability row simply remains non-claimable with a
     probe-failed detail.
     """
+
+    settings = get_settings()
+    ttl_s = float(getattr(settings, "mip_live_capability_probe_ttl_s", 60.0) or 0.0)
+    cache_key = _cache_key(request, settings=settings, include_lakebase=include_lakebase)
+    if ttl_s > 0:
+        cached = _LIVE_CAPABILITY_CACHE.get(cache_key)
+        if isinstance(cached, dict) and all(
+            isinstance(value, LiveCapabilityStatus) for value in cached.values()
+        ):
+            return dict(cached)
 
     sql_client, sql_error = _resolve_dependency(request, get_sql_client)
     genie_client, genie_error = _resolve_dependency(request, get_genie_client)
@@ -45,14 +58,51 @@ def collect_request_live_capability_statuses(
             statuses[key] = LiveCapabilityStatus(False, workspace_error)
     statuses.update(
         collect_live_capability_statuses(
-            settings=get_settings(),
+            settings=settings,
             sql_client=sql_client,
             genie_client=genie_client,
             lakebase=lakebase,
             workspace_client=workspace_client,
         )
     )
+    if ttl_s > 0:
+        _LIVE_CAPABILITY_CACHE.set(cache_key, dict(statuses), ttl_s)
     return statuses
+
+
+def reset_live_capability_probe_cache() -> None:
+    """Clear the request-scoped live probe cache for tests and deploy smoke."""
+
+    _LIVE_CAPABILITY_CACHE.clear()
+
+
+def _cache_key(request: Request, *, settings: Settings, include_lakebase: bool) -> str:
+    overrides = request.app.dependency_overrides
+    dependency_ids = (
+        id(overrides.get(get_sql_client, get_sql_client)),
+        id(overrides.get(get_genie_client, get_genie_client)),
+        id(overrides.get(get_lakebase_client, get_lakebase_client)),
+    )
+    parts = (
+        include_lakebase,
+        settings.mip_git_sha,
+        settings.mip_default_catalog,
+        settings.genie_space_id,
+        settings.mip_agent_orchestrator,
+        settings.mip_agent_serving_endpoint,
+        settings.mip_agent_supervisor_id,
+        settings.mip_ai_gateway,
+        settings.mip_ai_gateway_endpoint,
+        settings.mip_ai_gateway_inference_table,
+        settings.mip_agent_eval_experiment,
+        settings.mip_agent_eval_run_id,
+        settings.mip_lakebase_sync,
+        settings.mip_lakebase_sync_catalog,
+        settings.mip_lakebase_sync_schema,
+        settings.mip_lakebase_sync_tables,
+        dependency_ids,
+    )
+    return "live-capabilities:" + "|".join(str(part) for part in parts)
 
 
 def _resolve_dependency(

@@ -14,7 +14,7 @@ export function GrowthAgentCapabilityPanel({
   if (rows.length > 0) {
     return rows.map((capability) => (
       <div key={capability.key} className="growth-agent-capability">
-        <Chip variant={capability.claimable ? 'success' : 'neutral'}>
+        <Chip variant={capability.claimable && capability.status === 'available' ? 'success' : 'neutral'}>
           {capability.claimable || capability.status !== 'available'
             ? capabilityStatusText(capability.status)
             : 'Configured'}

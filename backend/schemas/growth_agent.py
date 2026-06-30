@@ -37,7 +37,7 @@ GrowthAgentSpecialist = Literal[
     "data_ops_agent",
 ]
 GrowthAgentExecutionMode = Literal["deterministic", "genie_conversation", "agent_framework"]
-GrowthAgentTraceKind = Literal["local_hash", "genie_conversation", "mlflow_trace"]
+GrowthAgentTraceKind = Literal["local_hash", "genie_conversation", "agent_framework", "mlflow_trace"]
 
 _STATE_RE = re.compile(r"^[A-Z]{2}$")
 _MONITOR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+/-]{0,79}$")
@@ -48,12 +48,17 @@ _RAW_IDENTIFIER_RE = re.compile(
 )
 _PROMPT_STREET_ADDRESS_RE = re.compile(
     r"\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+"
-    r"(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way)\b",
+    r"(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|"
+    r"ter|terrace|way)\b",
     re.IGNORECASE,
 )
 _PROMPT_STREET_ADDRESS_NO_SUFFIX_RE = re.compile(
     r"\b\d{1,6}\s+[A-Z][A-Za-z0-9.'-]{2,}\s+[A-Z][A-Za-z0-9.'-]{2,}"
     r"(?:\s+[A-Z][A-Za-z0-9.'-]{2,}){0,2}\b"
+)
+_PROMPT_ADDRESS_CONTEXT_RE = re.compile(
+    r"\b(?:at|near|around|address|property|home|house|located|location)\s+$",
+    re.IGNORECASE,
 )
 _PROMPT_HUMAN_NAME_RE = re.compile(
     r"\b(?:for|named|borrowers?|customers?|prospects?|contacts?|person|show|find|review)\s+"
@@ -181,6 +186,16 @@ def _contains_lowercase_name_after_group(clean: str) -> bool:
         if _looks_like_unreviewed_lowercase_name_pair(first, second):
             return True
     return False
+
+
+def _contains_street_address_without_suffix(clean: str) -> bool:
+    """Catch address-like text without blocking ordinary numeric rank prompts."""
+
+    match = _PROMPT_STREET_ADDRESS_NO_SUFFIX_RE.search(clean)
+    if not match:
+        return False
+    prefix = clean[max(0, match.start() - 24) : match.start()]
+    return bool(_PROMPT_ADDRESS_CONTEXT_RE.search(prefix))
 
 
 def _looks_like_unreviewed_lowercase_name_pair(first: str, second: str) -> bool:
@@ -338,7 +353,7 @@ class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
             contains_pii_marker(clean)
             or _RAW_IDENTIFIER_RE.search(clean)
             or _PROMPT_STREET_ADDRESS_RE.search(clean)
-            or _PROMPT_STREET_ADDRESS_NO_SUFFIX_RE.search(clean)
+            or _contains_street_address_without_suffix(clean)
             or _PROMPT_HUMAN_NAME_RE.search(clean)
             or _PROMPT_COMMON_NAME_RE.search(clean)
             or _PROMPT_LEADING_HUMAN_NAME_RE.search(clean)

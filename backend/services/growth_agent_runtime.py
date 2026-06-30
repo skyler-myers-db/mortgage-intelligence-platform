@@ -345,9 +345,13 @@ def governance_chips(
         ),
         GrowthAgentGovernanceChip(
             label="Multi-agent framework",
-            status="not_attached",
-            detail="Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead.",
-            evidence_ref=None,
+            status="passed" if copilot_evidence.execution_mode == "agent_framework" else "not_attached",
+            detail=(
+                "Databricks Supervisor Agent accepted the planning prompt; reviewed deterministic tools executed the run."
+                if copilot_evidence.execution_mode == "agent_framework"
+                else "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
+            ),
+            evidence_ref=copilot_evidence.question_hash if copilot_evidence.execution_mode == "agent_framework" else None,
         ),
         GrowthAgentGovernanceChip(
             label="MLflow trace/eval",

@@ -51,6 +51,7 @@ function executionModeLabel(run: GrowthAgentRunResponse): string {
 function traceLabel(run: GrowthAgentRunResponse): string {
   if (run.trace_kind === 'mlflow_trace') return 'MLflow trace';
   if (run.trace_kind === 'genie_conversation') return 'Genie message';
+  if (run.trace_kind === 'agent_framework') return 'Supervisor Agent';
   return 'Run correlation';
 }
 

@@ -18,7 +18,7 @@ dev-ui:
 	npm --prefix frontend run dev
 
 test:
-	pytest -q
+	$(PYTHON) -m pytest -q
 	npm --prefix frontend run test
 
 # End-to-end Playwright — pins the Module 0 DAIS golden path.
@@ -28,7 +28,7 @@ test-e2e:
 	npm --prefix frontend run e2e
 
 lint:
-	ruff check backend tests tools
+	$(PYTHON) -m ruff check backend tests tools
 	npm --prefix frontend run lint
 
 # 2026-06-11 audit P2-14: ratcheted mypy gate — exemption list in
@@ -41,7 +41,7 @@ build:
 
 validate:
 	$(PYTHON) tools/verify_scaffold.py
-	pytest -q
+	$(PYTHON) -m pytest -q
 	npm --prefix frontend run build
 
 # `render-sql` materializes sql/_rendered/** from sql/** for the target UC

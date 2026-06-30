@@ -315,12 +315,14 @@ _GROWTH_AGENT_REVIEWED_NAME_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Competitor",
         "Custom",
         "Data",
+        "Databricks",
         "Eligible",
         "Equity",
         "Evaluation",
         "Genie",
         "Growth",
         "HELOC",
+        "High",
         "Home",
         "Human",
         "Intent",
@@ -337,6 +339,8 @@ _GROWTH_AGENT_REVIEWED_NAME_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Reviewed",
         "Segment",
         "Summit",
+        "Supervisor",
+        "Watch",
         "Workflow",
     }
 )
@@ -861,6 +865,12 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                             validate_source_assets([evidence_ref])
                         except ValueError as exc:
                             raise AuditMetadataValueViolation(field, str(exc)) from exc
+                        continue
+                    try:
+                        validate_sql_hash(evidence_ref)
+                    except ValueError:
+                        pass
+                    else:
                         continue
                 if _growth_agent_reviewed_text_contains_pii(nested_value):
                     raise AuditMetadataValueViolation(field, "must not contain PII-shaped values")
