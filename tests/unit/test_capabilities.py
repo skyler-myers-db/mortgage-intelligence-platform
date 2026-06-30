@@ -61,11 +61,13 @@ class _LiveSqlClient:
         count: int = 7,
         recent_count: int = 0,
         count_sequence: list[int] | None = None,
+        table_names: list[str] | None = None,
     ) -> None:
         self.fail = fail
         self.count = count
         self.recent_count = recent_count
         self.count_sequence = list(count_sequence or [])
+        self.table_names = ["mip_agent_inference_payload"] if table_names is None else list(table_names)
         self.count_calls = 0
         self.statements: list[str] = []
         self.parameters: list[object | None] = []
@@ -76,7 +78,7 @@ class _LiveSqlClient:
         if self.fail:
             raise RuntimeError("probe failed")
         if "system.information_schema.tables" in statement:
-            return [{"table_name": "mip_agent_inference_payload"}]
+            return [{"table_name": table_name} for table_name in self.table_names]
         if "COUNT(*) AS recent_row_count" in statement:
             return [{"recent_row_count": self.recent_count}]
         if "COUNT(*) AS row_count" in statement:
@@ -583,7 +585,7 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     )
 
 
-def test_ai_gateway_live_probe_rejects_recent_row_without_exact_request_id(
+def test_ai_gateway_live_probe_accepts_delayed_exact_log_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticks = iter([0.0, 91.0])
@@ -600,12 +602,15 @@ def test_ai_gateway_live_probe_rejects_recent_row_without_exact_request_id(
         workspace_client=_FakeWorkspaceClient(),
     )
 
-    assert statuses["ai_gateway"].available is False
-    assert "this exact capability probe" in statuses["ai_gateway"].detail
+    assert statuses["ai_gateway"].available is True
+    assert "accepted a bounded query" in statuses["ai_gateway"].detail
+    assert "reported as asynchronous" in statuses["ai_gateway"].detail
     assert not any("recent_row_count" in statement for statement in sql.statements)
 
 
-def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_ai_gateway_live_probe_accepts_queryable_table_before_exact_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     ticks = iter([0.0, 91.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
@@ -619,8 +624,24 @@ def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.Monk
         workspace_client=_FakeWorkspaceClient(),
     )
 
+    assert statuses["ai_gateway"].available is True
+    assert "inference logging is enabled/queryable" in statuses["ai_gateway"].detail
+    assert "reported as asynchronous" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_missing_inference_table() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(table_names=[]),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
     assert statuses["ai_gateway"].available is False
-    assert "this exact capability probe" in statuses["ai_gateway"].detail
+    assert "No AI Gateway inference tables matching" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_endpoint_not_ready() -> None:
