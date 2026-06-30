@@ -76,6 +76,8 @@ def _call_growth_agent(
     token: str,
     case: dict[str, Any],
     timeout_s: float,
+    max_attempts: int = 8,
+    retry_delay_s: float = 10.0,
 ) -> dict[str, Any]:
     payload = {
         "prompt": str(case["prompt"]),
@@ -88,19 +90,38 @@ def _call_growth_agent(
         "Accept": "application/json",
     }
     url = f"{app_url.rstrip('/')}/api/growth-agent/agent/run"
+    attempts = max(1, max_attempts)
     with httpx.Client(timeout=timeout_s, follow_redirects=False) as client:
-        response = client.post(url, headers=headers, json=payload)
-    try:
-        body = response.json()
-    except json.JSONDecodeError:
-        body = {"detail": response.text[:500]}
-    if response.status_code >= 400:
-        if isinstance(body, dict):
-            return {"error": str(body.get("detail") or body)}
-        return {"error": str(body)}
-    if not isinstance(body, dict):
-        return {"error": f"expected JSON object, got {type(body).__name__}"}
-    return body
+        for attempt in range(1, attempts + 1):
+            try:
+                response = client.post(url, headers=headers, json=payload)
+            except httpx.HTTPError as exc:
+                if attempt < attempts:
+                    print(f"[agent-eval] transient request error ({exc}); retrying {attempt}/{attempts - 1}")
+                    time.sleep(retry_delay_s)
+                    continue
+                return {"error": f"request failed after {attempts} attempts: {exc}"}
+            try:
+                body = response.json()
+            except json.JSONDecodeError:
+                body = {"detail": response.text[:500]}
+            transient = response.status_code in {429, 502, 503, 504}
+            if response.status_code >= 400:
+                detail = body.get("detail") if isinstance(body, dict) else body
+                if transient and attempt < attempts:
+                    print(
+                        f"[agent-eval] app returned HTTP {response.status_code} "
+                        f"({str(detail)[:120]}); retrying {attempt}/{attempts - 1}"
+                    )
+                    time.sleep(retry_delay_s)
+                    continue
+                if isinstance(body, dict):
+                    return {"error": str(body.get("detail") or body)}
+                return {"error": str(body)}
+            if not isinstance(body, dict):
+                return {"error": f"expected JSON object, got {type(body).__name__}"}
+            return body
+    return {"error": "growth-agent request loop exited unexpectedly"}
 
 
 def _log_eval_run(
@@ -181,6 +202,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--experiment", default=os.environ.get("MIP_AGENT_EVAL_EXPERIMENT", "/Shared/mip-agent-eval"))
     parser.add_argument("--cases", type=Path, default=REPO / "tests" / "eval" / "golden_agent_cases.jsonl")
     parser.add_argument("--timeout-s", type=float, default=60.0)
+    parser.add_argument("--max-attempts", type=int, default=8)
+    parser.add_argument("--retry-delay-s", type=float, default=10.0)
     parser.add_argument("--out-env", type=Path)
     parser.add_argument("--out-json", type=Path)
     return parser
@@ -202,6 +225,8 @@ def main(argv: list[str] | None = None) -> int:
             token=args.token,
             case=case,
             timeout_s=args.timeout_s,
+            max_attempts=args.max_attempts,
+            retry_delay_s=args.retry_delay_s,
         )
     summary = score_batch(responses, cases)
     if args.out_json:

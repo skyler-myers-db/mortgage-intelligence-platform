@@ -47,6 +47,7 @@ type GrowthAgentRunResponse = {
   agent_reasoning?: string | null;
   genie_conversation_id?: string | null;
   genie_row_count?: number | null;
+  genie_trusted_assets?: string[] | null;
   audit_event_id?: string | null;
 };
 
@@ -121,6 +122,33 @@ async function expectAuditRowMatchesGrowthRun(
   for (const forbidden of ['borrower_id', 'subject_clip', 'owner_name', 'raw_clip', 'street']) {
     expect(payloadText).not.toContain(forbidden);
   }
+}
+
+function expectReviewedPlanningEvidence(run: GrowthAgentRunResponse): void {
+  expect(['deterministic', 'agent_framework']).toContain(run.execution_mode);
+  if (run.execution_mode === 'agent_framework') {
+    expect(run.trace_kind).toBe('agent_framework');
+    expect(run.planner_label).toBe('Databricks Supervisor Agent');
+    expect(run.agent_reasoning ?? '').toContain('Databricks Supervisor Agent accepted');
+    expect(run.governance_chips).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          label: 'Multi-agent framework',
+          status: 'passed',
+        }),
+      ]),
+    );
+    expect(run.genie_trusted_assets ?? []).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^databricks\.serving_endpoint\./),
+        expect.stringMatching(/^databricks\.supervisor_agent\./),
+      ]),
+    );
+    return;
+  }
+  expect(run.trace_kind).toBe('local_hash');
+  expect(run.planner_label).toBe('Reviewed workflow runner');
+  expect(run.agent_reasoning ?? '').toContain('No model-generated SQL');
 }
 
 test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and reconciled', async ({
@@ -334,6 +362,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   const promptRunPromise = page.waitForResponse((response) =>
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
+    { timeout: 90_000 },
   );
   await page.getByRole('button', { name: 'Plan reviewed workflow' }).click();
   const promptRunResponse = await promptRunPromise;
@@ -342,9 +371,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
 
   expect(run.workflow.id).toBe('daily_refi_brief');
   expect(run.specialist_agent).toBe('structured_data_agent');
-  expect(run.execution_mode).toBe('deterministic');
-  expect(run.trace_kind).toBe('local_hash');
-  expect(run.agent_reasoning ?? '').toContain('No model-generated SQL');
+  expectReviewedPlanningEvidence(run);
   expect(run.interpreted_intent).toContain('daily refi');
   expect(run.trace_id).toMatch(/^agent-trace-/);
   expect(run.tool_result_hash).toMatch(/^[a-f0-9]{64}$/);
@@ -369,6 +396,7 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
   const promptSavePromise = page.waitForResponse((response) =>
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
+    { timeout: 90_000 },
   );
   await page.getByRole('button', { name: 'Save reviewed watchlist' }).click();
   const promptSaveResponse = await promptSavePromise;
@@ -417,6 +445,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
   const dossierRunPromise = page.waitForResponse((response) =>
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
+    { timeout: 90_000 },
   );
   await page.getByRole('button', { name: 'Plan reviewed workflow' }).click();
   const dossierRunResponse = await dossierRunPromise;
@@ -425,9 +454,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
 
   expect(dossierRun.workflow.id).toBe('borrower_dossier_review');
   expect(dossierRun.specialist_agent).toBe('borrower_dossier_agent');
-  expect(dossierRun.execution_mode).toBe('deterministic');
-  expect(dossierRun.trace_kind).toBe('local_hash');
-  expect(dossierRun.agent_reasoning ?? '').toContain('No model-generated SQL');
+  expectReviewedPlanningEvidence(dossierRun);
   expect(dossierRun.criteria.lead_queue_filters?.funnel_stage).toBe('high_opportunity');
   expect(dossierRun.route).toContain('funnel_stage=high_opportunity');
   expect(dossierRun.source_assets).toEqual(
@@ -450,6 +477,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
   const sourceRunPromise = page.waitForResponse((response) =>
     response.request().method() === 'POST' &&
     /\/api(?:\/v1)?\/growth-agent\/agent\/run/.test(response.url()),
+    { timeout: 90_000 },
   );
   await page.getByRole('button', { name: 'Plan reviewed workflow' }).click();
   const sourceRunResponse = await sourceRunPromise;
@@ -458,9 +486,7 @@ test('natural-language dossier and data-ops specialists use governed traces and 
 
   expect(sourceRun.workflow.id).toBe('source_freshness_sentinel');
   expect(sourceRun.specialist_agent).toBe('data_ops_agent');
-  expect(sourceRun.execution_mode).toBe('deterministic');
-  expect(sourceRun.trace_kind).toBe('local_hash');
-  expect(sourceRun.agent_reasoning ?? '').toContain('No model-generated SQL');
+  expectReviewedPlanningEvidence(sourceRun);
   expect(sourceRun.route).toContain('/admin-config?panel=data-operations');
   expect(sourceRun.source_assets).toEqual(['mip.gold.source_readiness']);
   expect(sourceRun.tool_steps.map((step) => step.tool_name)).toEqual(
