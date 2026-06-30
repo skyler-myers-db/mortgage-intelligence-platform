@@ -9,6 +9,7 @@ for human review. It never sends outreach or activates a connector.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Sequence
 from typing import Annotated, Any
 from uuid import UUID, uuid4
@@ -110,8 +111,19 @@ from backend.services.growth_agent_workflows import (
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.rbac import require_admin
+from backend.services.state_footprint import US_STATE_NAME_BY_CODE
 
 router = APIRouter(prefix="/growth-agent", tags=["growth-agent"])
+_STATE_CODE_PATTERN = re.compile(
+    r"\b(?:in|for|state|states|scope)\s+("
+    + "|".join(re.escape(code) for code in sorted(US_STATE_NAME_BY_CODE))
+    + r")\b",
+    flags=re.IGNORECASE,
+)
+_STATE_NAME_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
+    (code, re.compile(rf"\b{re.escape(name.lower())}\b"))
+    for code, name in sorted(US_STATE_NAME_BY_CODE.items())
+)
 
 SqlDep = Annotated[DatabricksSqlClient, Depends(get_sql_client)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
@@ -460,6 +472,7 @@ def run_mortgage_growth_agent(
     filters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.
     """
 
+    payload = _payload_with_prompt_state_scope(payload)
     workflow, copilot_evidence = plan_growth_agent_prompt(payload)
     response = _run_workflow(
         workflow=workflow,
@@ -471,6 +484,32 @@ def run_mortgage_growth_agent(
         copilot_evidence=copilot_evidence,
     )
     return response
+
+
+def _payload_with_prompt_state_scope(payload: GrowthAgentPromptRunRequest) -> GrowthAgentPromptRunRequest:
+    if payload.states:
+        return payload
+    states = _states_from_prompt(payload.prompt)
+    if not states:
+        return payload
+    return payload.model_copy(update={"states": states})
+
+
+def _states_from_prompt(prompt: str) -> list[str]:
+    found: list[str] = []
+    lowered = prompt.lower()
+    for code, pattern in _STATE_NAME_PATTERNS:
+        if pattern.search(lowered):
+            found.append(code)
+    for match in _STATE_CODE_PATTERN.finditer(prompt):
+        code = match.group(1).upper()
+        if code in US_STATE_NAME_BY_CODE:
+            found.append(code)
+    out: list[str] = []
+    for code in found:
+        if code not in out:
+            out.append(code)
+    return out[:20]
 
 
 def _run_workflow(

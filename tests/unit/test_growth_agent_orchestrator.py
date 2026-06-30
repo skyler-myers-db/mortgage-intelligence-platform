@@ -140,6 +140,62 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert prompt_text.lower() not in json.dumps(lakebase.audit_events, default=str).lower()
 
 
+def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    prompt_text = "Find prime refinance opportunities in Illinois for branch review."
+    calls: list[dict[str, Any]] = []
+
+    def fake_query_serving_endpoint(
+        workspace_client: object,
+        endpoint: str,
+        *,
+        prompt: str,
+        client_request_id: str | None = None,
+        task: str | None = None,
+    ) -> dict[str, Any]:
+        calls.append(
+            {
+                "workspace_client": workspace_client,
+                "endpoint": endpoint,
+                "prompt": prompt,
+                "client_request_id": client_request_id,
+                "task": task,
+            }
+        )
+        return {
+            "id": "resp-supervisor-1",
+            "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
+        }
+
+    monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
+    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    _enable_orchestrator(monkeypatch)
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": prompt_text},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert len(calls) == 1
+    assert "State scope: IL." in calls[0]["prompt"]
+    assert "Reviewed objective signals: refinance economics." in calls[0]["prompt"]
+    assert "branch capacity" not in calls[0]["prompt"]
+    assert prompt_text not in calls[0]["prompt"]
+    assert body["execution_mode"] == "agent_framework"
+    assert body["workflow"]["id"] == "daily_refi_brief"
+    assert body["criteria"]["states"] == ["IL"]
+    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+
+
 def test_prompt_agent_rejects_unreviewed_supervisor_workflow_choice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

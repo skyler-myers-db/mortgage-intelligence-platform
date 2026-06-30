@@ -222,7 +222,7 @@ def _objective_signal_summary(payload: GrowthAgentPromptRunRequest) -> str:
         ("investor or owner link", ("investor", "multi property", "multi-property", "owner link")),
         ("retention or recapture", ("retention", "recapture", "current customer", "competitor")),
         ("borrower dossier", ("dossier", "borrower story", "customer 360", "borrower 360")),
-        ("branch capacity", ("capacity", "branch", "manager", "aging", "stale approved", "loan officer")),
+        ("branch capacity", ("capacity", "aging", "stale approved", "loan officer")),
         ("source freshness", ("source", "fresh", "readiness", "stale data", "data ops", "refresh")),
         ("custom segment workflow", ("custom", "cohort", "segment", "segments", "both", "intersection")),
     )

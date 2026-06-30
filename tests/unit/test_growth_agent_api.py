@@ -1281,6 +1281,51 @@ def test_prompt_agent_routes_to_source_sentinel_without_storing_raw_prompt() -> 
     assert "before i demo" not in json.dumps(lakebase.audit_events, default=str).lower()
 
 
+def test_prompt_agent_infers_state_scope_from_full_state_name() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": "Find prime refinance opportunities in Illinois for branch review."},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["workflow"]["id"] == "daily_refi_brief"
+    assert body["criteria"]["states"] == ["IL"]
+    assert body["criteria"]["lead_queue_filters"]["states"] == ["IL"]
+    assert body["criteria"]["lead_queue_filters"]["portfolio_criteria"]["states"] == ["IL"]
+    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    statement, params = sql.calls[0]
+    assert "UPPER(b.state) IN (:state_0)" in statement
+    assert params == {"state_0": "IL"}
+
+
+def test_prompt_agent_infers_state_scope_from_lowercase_state_code() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": "Find prime refinance borrowers in il."},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["workflow"]["id"] == "daily_refi_brief"
+    assert body["criteria"]["states"] == ["IL"]
+    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+
+
 def test_prompt_agent_custom_segments_use_reviewed_all_semantics() -> None:
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
