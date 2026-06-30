@@ -378,7 +378,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('Mortgage Growth Agent');
     expect(container.textContent).toContain('Borrower Dossier Review');
     expect(container.textContent).toContain('No auto-send · no scheduled automation');
-    expect(container.textContent).toContain('Audit status shown per run');
+    expect(container.textContent).toContain('Audit checked after each run');
 
     act(() => setNativeValue(stateInput(), 'IL illinois'));
     await waitUntil(() => container.textContent?.includes('Invalid: illinois') ?? false);

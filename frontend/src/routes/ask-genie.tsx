@@ -440,7 +440,7 @@ export default function AskGenie() {
           </div>
           <div className="spacer" />
           <Chip variant="success" icon="shield">No auto-send · no scheduled automation</Chip>
-          <Chip variant="neutral" icon="audit">Audit status shown per run</Chip>
+          <Chip variant="neutral" icon="audit">Audit checked after each run</Chip>
         </div>
         <div className="surface__body">
           <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
