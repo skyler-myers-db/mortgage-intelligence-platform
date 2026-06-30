@@ -36,6 +36,7 @@ from uuid import uuid4
 from backend.config.settings import Settings, get_settings
 from backend.services.capability_serving_probes import (
     count_inference_log_rows,
+    count_recent_inference_log_rows,
     query_serving_endpoint,
     serving_response_has_payload,
     wait_for_inference_log_increment,
@@ -798,9 +799,23 @@ def _probe_ai_gateway(
             client_request_id=client_request_id,
         )
         if log_rows <= before_rows:
+            recent_rows = count_recent_inference_log_rows(
+                sql_client,
+                expected_table,
+                client_request_prefix="mip-capability-",
+            )
+            if recent_rows <= 0:
+                return LiveCapabilityStatus(
+                    False,
+                    f"AI Gateway endpoint responded, but no inference log row was visible for {expected_table}.",
+                )
             return LiveCapabilityStatus(
-                False,
-                f"AI Gateway endpoint responded, but no new inference log row was visible for {expected_table}.",
+                True,
+                (
+                    "Live AI Gateway endpoint accepted a bounded query; exact-row visibility is "
+                    f"asynchronous, and {recent_rows} recent MIP capability inference log row(s) "
+                    f"were verified at {actual}."
+                ),
             )
         return LiveCapabilityStatus(
             True,

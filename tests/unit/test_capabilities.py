@@ -56,10 +56,12 @@ class _LiveSqlClient:
         *,
         fail: bool = False,
         count: int = 7,
+        recent_count: int = 0,
         count_sequence: list[int] | None = None,
     ) -> None:
         self.fail = fail
         self.count = count
+        self.recent_count = recent_count
         self.count_sequence = list(count_sequence or [])
         self.count_calls = 0
         self.statements: list[str] = []
@@ -72,6 +74,8 @@ class _LiveSqlClient:
             raise RuntimeError("probe failed")
         if "system.information_schema.tables" in statement:
             return [{"table_name": "mip_agent_inference_payload"}]
+        if "COUNT(*) AS recent_row_count" in statement:
+            return [{"recent_row_count": self.recent_count}]
         if "COUNT(*) AS row_count" in statement:
             self.count_calls += 1
             if self.count_sequence:
@@ -523,6 +527,26 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     )
 
 
+def test_ai_gateway_live_probe_accepts_recent_async_inference_log_row(monkeypatch: pytest.MonkeyPatch) -> None:
+    ticks = iter([0.0, 91.0])
+    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    sql = _LiveSqlClient(count=0, recent_count=1)
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=sql,
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is True
+    assert "recent MIP capability inference log" in statuses["ai_gateway"].detail
+    assert any("recent_row_count" in statement for statement in sql.statements)
+
+
 def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     ticks = iter([0.0, 91.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
@@ -538,7 +562,7 @@ def test_ai_gateway_live_probe_rejects_missing_log_rows(monkeypatch: pytest.Monk
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "no new inference log row" in statuses["ai_gateway"].detail
+    assert "no inference log row" in statuses["ai_gateway"].detail
 
 
 def test_agent_eval_live_probe_requires_full_case_floor_and_matching_sha() -> None:
