@@ -12,12 +12,12 @@ annotated-doc==0.0.4
     # via fastapi
 annotated-types==0.7.0
     # via pydantic
-anyio==4.14.1
+anyio==4.13.0
     # via
     #   httpx
     #   starlette
     #   watchfiles
-ast-serialize==0.6.0
+ast-serialize==0.5.0
     # via mypy
 attrs==26.1.0
     # via
@@ -29,7 +29,7 @@ cachetools==7.1.4
     # via
     #   mlflow-skinny
     #   mlflow-tracing
-certifi==2026.6.17
+certifi==2026.4.22
     # via
     #   httpcore
     #   httpx
@@ -38,7 +38,7 @@ cffi==2.0.0
     # via cryptography
 charset-normalizer==3.4.7
     # via requests
-click==8.4.2
+click==8.3.3
     # via
     #   flask
     #   mlflow-skinny
@@ -47,7 +47,7 @@ cloudpickle==3.1.2
     # via mlflow-skinny
 contourpy==1.3.3
     # via matplotlib
-coverage==7.14.3
+coverage==7.14.0
     # via pytest-cov
 cryptography==48.0.1
     # via
@@ -89,7 +89,7 @@ gitdb==4.0.12
     # via gitpython
 gitpython==3.1.50
     # via mlflow-skinny
-google-auth==2.55.1
+google-auth==2.53.0
     # via databricks-sdk
 googleapis-common-protos==1.75.0
     # via
@@ -103,7 +103,7 @@ graphql-core==3.2.11
     #   graphql-relay
 graphql-relay==3.2.0
     # via graphene
-grpcio==1.81.1
+grpcio==1.80.0
     # via opentelemetry-exporter-otlp-proto-grpc
 gunicorn==26.0.0
     # via mlflow
@@ -113,7 +113,7 @@ h11==0.16.0
     #   uvicorn
 httpcore==1.0.9
     # via httpx
-httptools==0.8.0
+httptools==0.7.1
     # via uvicorn
 httpx==0.28.1
     # via -r requirements.in
@@ -121,14 +121,16 @@ huey==3.0.3
     # via mlflow
 hypothesis==6.123.7
     # via -r requirements.in
-idna==3.18
+idna==3.15
     # via
     #   anyio
     #   httpx
     #   requests
     #   yarl
-importlib-metadata==9.0.0
-    # via mlflow-skinny
+importlib-metadata==8.7.1
+    # via
+    #   mlflow-skinny
+    #   opentelemetry-api
 iniconfig==2.3.0
     # via pytest
 itsdangerous==2.2.0
@@ -139,7 +141,7 @@ joblib==1.5.3
     # via scikit-learn
 kiwisolver==1.5.0
     # via matplotlib
-librt==0.12.0
+librt==0.11.0
     # via mypy
 lz4==4.4.5
     # via databricks-sql-connector
@@ -167,9 +169,9 @@ mypy==2.1.0
     # via -r requirements.in
 mypy-extensions==1.1.0
     # via mypy
-narwhals==2.23.0
+narwhals==2.22.1
     # via scikit-learn
-numpy==2.4.6
+numpy==2.4.5
     # via
     #   contourpy
     #   matplotlib
@@ -182,7 +184,7 @@ oauthlib==3.3.1
     # via databricks-sql-connector
 openpyxl==3.1.5
     # via databricks-sql-connector
-opentelemetry-api==1.43.0
+opentelemetry-api==1.41.1
     # via
     #   mlflow-skinny
     #   mlflow-tracing
@@ -190,31 +192,31 @@ opentelemetry-api==1.43.0
     #   opentelemetry-exporter-otlp-proto-http
     #   opentelemetry-sdk
     #   opentelemetry-semantic-conventions
-opentelemetry-exporter-otlp==1.43.0
+opentelemetry-exporter-otlp==1.41.1
     # via -r requirements.in
-opentelemetry-exporter-otlp-proto-common==1.43.0
+opentelemetry-exporter-otlp-proto-common==1.41.1
     # via
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-exporter-otlp-proto-grpc==1.43.0
+opentelemetry-exporter-otlp-proto-grpc==1.41.1
     # via opentelemetry-exporter-otlp
-opentelemetry-exporter-otlp-proto-http==1.43.0
+opentelemetry-exporter-otlp-proto-http==1.41.1
     # via opentelemetry-exporter-otlp
-opentelemetry-proto==1.43.0
+opentelemetry-proto==1.41.1
     # via
     #   mlflow-skinny
     #   mlflow-tracing
     #   opentelemetry-exporter-otlp-proto-common
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-sdk==1.43.0
+opentelemetry-sdk==1.41.1
     # via
     #   -r requirements.in
     #   mlflow-skinny
     #   mlflow-tracing
     #   opentelemetry-exporter-otlp-proto-grpc
     #   opentelemetry-exporter-otlp-proto-http
-opentelemetry-semantic-conventions==0.64b0
+opentelemetry-semantic-conventions==0.62b1
     # via opentelemetry-sdk
 packaging==26.2
     # via
@@ -230,7 +232,7 @@ pandas==2.3.3
     #   mlflow
 pathspec==1.1.1
     # via mypy
-pillow==12.3.0
+pillow==12.2.0
     # via matplotlib
 pluggy==1.6.0
     # via pytest
@@ -387,7 +389,7 @@ uvicorn==0.47.0
     #   mlflow-skinny
 uvloop==0.22.1
     # via uvicorn
-watchfiles==1.2.0
+watchfiles==1.1.1
     # via uvicorn
 wcwidth==0.8.2
     # via prettytable
@@ -399,5 +401,5 @@ werkzeug==3.1.8
     #   flask-cors
 yarl==1.24.2
     # via aiohttp
-zipp==4.1.0
+zipp==3.23.1
     # via importlib-metadata
