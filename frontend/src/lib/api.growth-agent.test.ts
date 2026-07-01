@@ -13,7 +13,7 @@ afterEach(() => {
 });
 
 describe('growth agent API client', () => {
-  it('loads governed workflows with live capability readiness through canonical API v1', async () => {
+  it('loads governed workflows without blocking on live capability readiness', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];
     vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
       calls.push({ path, init });
@@ -23,6 +23,20 @@ describe('growth agent API client', () => {
     const res = await api.growthAgent();
 
     expect(res.workflows).toEqual([]);
+    expect(calls[0].path).toBe('/api/v1/growth-agent');
+    expect(calls[0].init?.method).toBeUndefined();
+  });
+
+  it('loads Growth Agent capability readiness through the live probe only when requested', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, { workflows: [], monitors: [], capabilities: [] });
+    });
+
+    const res = await api.growthAgentCapabilities();
+
+    expect(res.capabilities).toEqual([]);
     expect(calls[0].path).toBe('/api/v1/growth-agent?live_capabilities=1');
     expect(calls[0].init?.method).toBeUndefined();
   });

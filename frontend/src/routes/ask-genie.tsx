@@ -41,6 +41,7 @@ import {
   parseGrowthAgentStateInput,
   renderSourceAssetChip,
   trustedAssetsForCatalog,
+  visibleGrowthAgentCapabilities,
   workflowIcon,
 } from './ask-genie.growth-agent.helpers';
 
@@ -97,6 +98,13 @@ export default function AskGenie() {
   const growthAgentQuery = useQuery({
     queryKey: queryKeys.growthAgent(),
     queryFn: ({ signal }) => api.growthAgent(signal),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+
+  const growthAgentCapabilitiesQuery = useQuery({
+    queryKey: queryKeys.growthAgentCapabilities(),
+    queryFn: ({ signal }) => api.growthAgentCapabilities(signal),
     staleTime: 60_000,
     refetchOnWindowFocus: false,
   });
@@ -423,20 +431,14 @@ export default function AskGenie() {
   const drawerForSource = sourceChip ? drawerForAsset(sourceChip) : null;
   const composerSampleQuestions = sampleQuestions.slice(0, 4);
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
-  const workflows = growthAgentQuery.data?.workflows ?? [];
-  const monitors = growthAgentQuery.data?.monitors ?? [];
+  const workflows = growthAgentQuery.data?.workflows ?? growthAgentCapabilitiesQuery.data?.workflows ?? [];
+  const monitors = growthAgentQuery.data?.monitors ?? growthAgentCapabilitiesQuery.data?.monitors ?? [];
   const agentBusy = growthAgentPending !== null || promptAgentPending || monitorPending !== null || monitorDraftPending !== null;
-  const capabilityRows = (growthAgentQuery.data?.capabilities ?? []).filter((row) => (
-    [
-      'genie_conversation_api',
-      'certified_metric_views',
-      'uc_function_tools',
-      'agent_orchestrator',
-      'ai_gateway',
-      'lakebase_sync',
-      'agent_eval',
-    ].includes(row.key) && row.status !== 'hidden'
-  ));
+  const capabilityRows = (
+    visibleGrowthAgentCapabilities(
+      growthAgentCapabilitiesQuery.data?.capabilities ?? growthAgentQuery.data?.capabilities,
+    )
+  );
 
   return (
     <PageShell
@@ -460,7 +462,7 @@ export default function AskGenie() {
           <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
             <GrowthAgentCapabilityPanel
               rows={capabilityRows}
-              isPending={growthAgentQuery.isPending}
+              isPending={growthAgentCapabilitiesQuery.isPending}
             />
           </section>
           <section className="growth-agent-command" aria-label="Mortgage Growth Agent command center">

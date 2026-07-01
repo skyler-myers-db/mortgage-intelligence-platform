@@ -5,6 +5,7 @@ import type {
   GrowthAgentSegmentCode,
   GrowthAgentWorkflowId,
 } from '../types';
+import type { GrowthAgentCapabilityRow } from '../types/growthAgent';
 
 // Friendly name + catalog-relative suffix. The backend returns the concrete
 // catalog-qualified paths for this deployment on /api/genie/start.
@@ -86,6 +87,24 @@ export function renderSourceAssetChip(asset: string) {
   const label = sourceAssetLabel(asset);
   if (source) return <EvidenceChip key={asset} source={source}>{label}</EvidenceChip>;
   return <Chip key={asset} variant="neutral" icon="db">{label}</Chip>;
+}
+
+const GROWTH_AGENT_CAPABILITY_KEYS = new Set([
+  'genie_conversation_api',
+  'certified_metric_views',
+  'uc_function_tools',
+  'agent_orchestrator',
+  'ai_gateway',
+  'lakebase_sync',
+  'agent_eval',
+]);
+
+export function visibleGrowthAgentCapabilities(
+  rows: GrowthAgentCapabilityRow[] | undefined,
+): GrowthAgentCapabilityRow[] {
+  return (rows ?? []).filter(
+    (row) => GROWTH_AGENT_CAPABILITY_KEYS.has(row.key) && row.status !== 'hidden',
+  );
 }
 
 export function capabilityStatusText(status: string): string {

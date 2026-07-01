@@ -16,6 +16,7 @@ import type {
 import type { GrowthAgentCapabilityRow } from '../types/growthAgent';
 
 const growthAgent = vi.fn();
+const growthAgentCapabilities = vi.fn();
 const genieStart = vi.fn();
 const genie = vi.fn();
 const genieAction = vi.fn();
@@ -31,6 +32,7 @@ const refreshWorkspace = vi.fn();
 vi.mock('../lib/api', () => ({
   api: {
     growthAgent: (...args: unknown[]) => growthAgent(...args),
+    growthAgentCapabilities: (...args: unknown[]) => growthAgentCapabilities(...args),
     genieStart: (...args: unknown[]) => genieStart(...args),
     genie: (...args: unknown[]) => genie(...args),
     genieAction: (...args: unknown[]) => genieAction(...args),
@@ -211,6 +213,7 @@ describe('AskGenie Growth Agent route panel', () => {
   beforeEach(() => {
     vi.resetAllMocks();
     growthAgent.mockResolvedValue(HOME);
+    growthAgentCapabilities.mockResolvedValue(HOME);
     genieStart.mockResolvedValue(START);
     genie.mockResolvedValue(null);
     genieAction.mockResolvedValue(null);
@@ -336,19 +339,27 @@ describe('AskGenie Growth Agent route panel', () => {
   it('renders governed workflows and blocks invalid state scopes before posting', async () => {
     mount();
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
-
     expect(container.textContent).toContain('Mortgage Growth Agent');
     expect(container.textContent).toContain('Borrower Dossier Review');
     expect(container.textContent).toContain('Draft-only handoffs · no auto-send');
     expect(container.textContent).toContain('Audit checked after each run');
-
     act(() => setNativeValue(stateInput(), 'IL illinois'));
     await waitUntil(() => container.textContent?.includes('Invalid: illinois') ?? false);
-
     expect(button(/^Run$/).disabled).toBe(true);
     expect(runGrowthAgentWorkflow).not.toHaveBeenCalled();
     expect(runCustomGrowthAgentWorkflow).not.toHaveBeenCalled();
     expect(runMortgageGrowthAgent).not.toHaveBeenCalled();
+  });
+
+  it('renders governed workflows while live capability readiness is still pending', async () => {
+    growthAgent.mockResolvedValueOnce(HOME);
+    growthAgentCapabilities.mockImplementationOnce(() => new Promise(() => undefined));
+    mount();
+    await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
+    expect(container.textContent).toContain('Borrower Dossier Review');
+    expect(container.textContent).not.toContain('Loading governed workflows');
+    expect(growthAgent).toHaveBeenCalledTimes(1);
+    expect(growthAgentCapabilities).toHaveBeenCalledTimes(1);
   });
 
   it('routes a natural-language agent objective through reviewed workflows', async () => {
