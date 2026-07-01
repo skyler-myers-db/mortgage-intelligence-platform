@@ -683,6 +683,7 @@ mkdir -p dist
 AGENT_EVAL_ENV_FILE="$(mktemp -t mip-agent-eval.XXXXXX.env)"
 run "$PYTHON" tools/databricks/run_agent_eval.py \
   --app-url "${MIP_APP_URL:-}" \
+  --require-mlflow-genai-evaluate \
   --out-env "$AGENT_EVAL_ENV_FILE" \
   --out-json dist/agent-eval.json
 if [[ "$DRY_RUN" -eq 0 ]]; then

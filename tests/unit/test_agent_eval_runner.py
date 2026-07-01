@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import re
+import sys
+from types import SimpleNamespace
 from typing import Any
 
 from tools.databricks import run_agent_eval
@@ -176,9 +178,258 @@ def test_log_eval_run_uses_positional_set_tag(monkeypatch) -> None:
             "results": [{"case_id": "case-a", "passed": False}],
         },
         responses_by_case_id={"case-a": {"error": "bad"}},
+        genai_evaluate={
+            "used": True,
+            "reason": "mlflow.genai.evaluate completed",
+            "run_id": "genai-run-1",
+        },
     )
 
     assert run_id == "run-1"
     assert any(call[:2] == ["experiments", "log-batch"] for call in no_output_calls)
     assert any(call[:3] == ["experiments", "set-tag", "mip_eval_failures"] for call in no_output_calls)
     assert any(call[:2] == ["experiments", "update-run"] for call in no_output_calls)
+
+
+def test_log_eval_run_tags_mlflow_genai_evaluate(monkeypatch) -> None:
+    log_batch_payload: dict[str, Any] = {}
+
+    monkeypatch.setattr(run_agent_eval, "_experiment_id", lambda _name: "exp-1")
+    monkeypatch.setattr(run_agent_eval, "_git_sha", lambda: "abcdef123456")
+
+    def fake_run(args: list[str], *, input_json: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert input_json is not None
+        if args == ["experiments", "create-run"]:
+            return {"run": {"info": {"run_id": "run-1"}}}
+        raise AssertionError(f"unexpected _run call: {args}")
+
+    def fake_run_no_output(args: list[str], *, input_json: dict[str, Any] | None = None) -> None:
+        if args[:2] == ["experiments", "log-batch"]:
+            assert input_json is not None
+            log_batch_payload.update(input_json)
+
+    monkeypatch.setattr(run_agent_eval, "_run", fake_run)
+    monkeypatch.setattr(run_agent_eval, "_run_no_output", fake_run_no_output)
+
+    run_agent_eval._log_eval_run(
+        experiment_name="/Shared/mip-agent-eval",
+        app_url="https://mip.example.test",
+        summary={
+            "score": 1.0,
+            "passed": 1,
+            "total": 1,
+            "results": [
+                {
+                    "case_id": "case-a",
+                    "passed": True,
+                    "count_reconciliation": {"passed": True},
+                }
+            ],
+        },
+        responses_by_case_id={"case-a": {"workflow": {"id": "daily_refi_brief"}}},
+        genai_evaluate={
+            "used": True,
+            "reason": "ok",
+            "run_id": "genai-run-1",
+            "count_reconciles_score": 1.0,
+        },
+    )
+
+    tags = {item["key"]: item["value"] for item in log_batch_payload["tags"]}
+    metrics = {item["key"]: item["value"] for item in log_batch_payload["metrics"]}
+    params = {item["key"]: item["value"] for item in log_batch_payload["params"]}
+    assert tags["mip_mlflow_genai_evaluate"] == "true"
+    assert metrics["count_reconciles_passed"] == 1.0
+    assert metrics["mlflow_genai_count_reconciles_score"] == 1.0
+    assert params["mlflow_genai_evaluate_run_id"] == "genai-run-1"
+
+
+def test_mlflow_genai_evaluate_runs_custom_scorer(monkeypatch) -> None:
+    calls: dict[str, Any] = {}
+
+    def fake_scorer(func=None, **kwargs):
+        calls["scorer_kwargs"] = kwargs
+        return func
+
+    def fake_evaluate(*, data, scorers):
+        calls["data"] = data
+        calls["scorers"] = scorers
+        assert scorers[0](
+            inputs=data[0]["inputs"],
+            outputs=data[0]["outputs"],
+            expectations=data[0]["expectations"],
+        )
+        return SimpleNamespace(run_id="genai-run-1")
+
+    fake_mlflow = SimpleNamespace(
+        genai=SimpleNamespace(evaluate=fake_evaluate),
+        set_tracking_uri=lambda uri: calls.setdefault("tracking_uri", uri),
+        get_tracking_uri=lambda: calls["tracking_uri"],
+        set_experiment=lambda name: calls.setdefault("experiment", name),
+    )
+    monkeypatch.setattr(
+        run_agent_eval,
+        "_run",
+        lambda args: {
+            "run": {
+                "info": {"run_id": args[-1]},
+                "data": {
+                    "metrics": [
+                        {"key": "count_reconciles/mean", "value": 1.0},
+                    ]
+                },
+            }
+        },
+    )
+    monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+    monkeypatch.setitem(
+        sys.modules,
+        "mlflow.genai.scorers",
+        SimpleNamespace(scorer=fake_scorer),
+    )
+
+    result = run_agent_eval._run_mlflow_genai_evaluate(
+        experiment_name="/Shared/mip-agent-eval",
+        cases=[
+            {
+                "id": "case-a",
+                "prompt": "Find prime refinance opportunities.",
+                "expected_workflow_id": "daily_refi_brief",
+            }
+        ],
+        responses_by_case_id={
+            "case-a": {
+                "broad_total": 10,
+                "actionable_total": 5,
+                "route": "/lead-queue?segment=itm&marketing_eligibility=Eligible+only",
+                "source_assets": ["mip.gold.borrower_360"],
+                "trace_id": "agent-trace-test",
+                "tool_result_hash": "c" * 64,
+                "policy_checks": [
+                    {"label": "Broad vs actionable reconciliation", "status": "passed"}
+                ],
+            }
+        },
+        require=True,
+        tracking_uri="databricks",
+    )
+
+    assert result["used"] is True
+    assert result["run_id"] == "genai-run-1"
+    assert result["tracking_uri"] == "databricks"
+    assert result["verified_databricks_run"] is True
+    assert result["count_reconciles_score"] == 1.0
+    assert calls["experiment"] == "/Shared/mip-agent-eval"
+    assert calls["scorer_kwargs"]["name"] == "count_reconciles"
+
+
+def test_mlflow_genai_evaluate_requires_count_reconciles_metric(monkeypatch) -> None:
+    fake_mlflow = SimpleNamespace(
+        genai=SimpleNamespace(evaluate=lambda **_kwargs: SimpleNamespace(run_id="genai-run-1")),
+        set_tracking_uri=lambda _uri: None,
+        get_tracking_uri=lambda: "databricks",
+        set_experiment=lambda _name: None,
+    )
+    monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+    monkeypatch.setitem(
+        sys.modules,
+        "mlflow.genai.scorers",
+        SimpleNamespace(scorer=lambda func=None, **_kwargs: func),
+    )
+    monkeypatch.setattr(
+        run_agent_eval,
+        "_run",
+        lambda _args: {"run": {"info": {"run_id": "genai-run-1"}, "data": {"metrics": []}}},
+    )
+
+    try:
+        run_agent_eval._run_mlflow_genai_evaluate(
+            experiment_name="/Shared/mip-agent-eval",
+            cases=[],
+            responses_by_case_id={},
+            require=True,
+            tracking_uri="databricks",
+        )
+    except RuntimeError as exc:
+        assert "count_reconciles scorer metric" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected missing count_reconciles metric to fail closed")
+
+
+def test_mlflow_genai_evaluate_missing_can_fail_closed(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "mlflow", SimpleNamespace(genai=SimpleNamespace()))
+    monkeypatch.delitem(sys.modules, "mlflow.genai.scorers", raising=False)
+
+    try:
+        run_agent_eval._run_mlflow_genai_evaluate(
+            experiment_name="/Shared/mip-agent-eval",
+            cases=[],
+            responses_by_case_id={},
+            require=True,
+            tracking_uri="databricks",
+        )
+    except RuntimeError as exc:
+        assert "mlflow.genai.evaluate is required" in str(exc)
+    else:  # pragma: no cover - protects the fail-closed contract.
+        raise AssertionError("expected missing mlflow.genai.evaluate to raise")
+
+
+def test_mlflow_genai_evaluate_rejects_local_tracking_when_required(monkeypatch) -> None:
+    fake_mlflow = SimpleNamespace(
+        genai=SimpleNamespace(evaluate=lambda **_kwargs: SimpleNamespace(run_id="local-run")),
+        set_tracking_uri=lambda _uri: None,
+        get_tracking_uri=lambda: "sqlite:////tmp/mlflow.db",
+        set_experiment=lambda _name: None,
+    )
+    monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+    monkeypatch.setitem(
+        sys.modules,
+        "mlflow.genai.scorers",
+        SimpleNamespace(scorer=lambda func=None, **_kwargs: func),
+    )
+
+    try:
+        run_agent_eval._run_mlflow_genai_evaluate(
+            experiment_name="/Shared/mip-agent-eval",
+            cases=[],
+            responses_by_case_id={},
+            require=True,
+            tracking_uri="sqlite:////tmp/mlflow.db",
+        )
+    except RuntimeError as exc:
+        assert "tracking URI must be Databricks" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected local MLflow tracking URI to fail closed")
+
+
+def test_mlflow_genai_evaluate_requires_databricks_run_lookup(monkeypatch) -> None:
+    fake_mlflow = SimpleNamespace(
+        genai=SimpleNamespace(evaluate=lambda **_kwargs: SimpleNamespace(run_id="missing-run")),
+        set_tracking_uri=lambda _uri: None,
+        get_tracking_uri=lambda: "databricks",
+        set_experiment=lambda _name: None,
+    )
+    monkeypatch.setitem(sys.modules, "mlflow", fake_mlflow)
+    monkeypatch.setitem(
+        sys.modules,
+        "mlflow.genai.scorers",
+        SimpleNamespace(scorer=lambda func=None, **_kwargs: func),
+    )
+    monkeypatch.setattr(
+        run_agent_eval,
+        "_run",
+        lambda _args: (_ for _ in ()).throw(RuntimeError("not found")),
+    )
+
+    try:
+        run_agent_eval._run_mlflow_genai_evaluate(
+            experiment_name="/Shared/mip-agent-eval",
+            cases=[],
+            responses_by_case_id={},
+            require=True,
+            tracking_uri="databricks",
+        )
+    except RuntimeError as exc:
+        assert "not resolvable in Databricks" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected unresolved Databricks GenAI eval run to fail closed")

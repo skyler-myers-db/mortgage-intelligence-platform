@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 from jobs import run_growth_agent_monitors
@@ -59,3 +60,30 @@ def test_growth_agent_scheduler_posts_json_with_workspace_bearer(monkeypatch) ->
     assert payload["limit"] == 7
     assert payload["channels"] == ["slack"]
     assert isinstance(payload["request_id"], str)
+    assert payload["request_id"] == run_growth_agent_monitors._request_id_for_bucket(
+        limit=7,
+        channels=["slack"],
+    )
+
+
+def test_growth_agent_scheduler_request_id_is_stable_per_cadence_bucket() -> None:
+    now = datetime(2026, 6, 27, 13, 30, tzinfo=UTC)
+
+    left = run_growth_agent_monitors._request_id_for_bucket(
+        limit=20,
+        channels=["teams", "slack"],
+        now=now,
+    )
+    right = run_growth_agent_monitors._request_id_for_bucket(
+        limit=20,
+        channels=["slack", "teams"],
+        now=now,
+    )
+    different_limit = run_growth_agent_monitors._request_id_for_bucket(
+        limit=7,
+        channels=["slack", "teams"],
+        now=now,
+    )
+
+    assert left == right
+    assert left != different_limit

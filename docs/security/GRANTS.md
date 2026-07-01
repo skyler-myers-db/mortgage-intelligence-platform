@@ -207,6 +207,9 @@ GRANT SELECT, INSERT ON TABLE mip_app.action_audit TO "mip-app";
 REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.agent_sessions TO "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.feedback TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_runs TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors TO "mip-app";
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_notification_drafts TO "mip-app";
 ```
 
 **What breaks if missing.** `/api/audit/events` returns 503. Approval

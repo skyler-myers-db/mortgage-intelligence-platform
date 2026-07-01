@@ -27,7 +27,7 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
-from tests.eval.scorers import load_cases, score_batch  # noqa: E402
+from tests.eval.scorers import count_reconciles, load_cases, score_batch  # noqa: E402
 
 
 def _run(args: list[str], *, input_json: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -130,6 +130,7 @@ def _log_eval_run(
     app_url: str,
     summary: dict[str, Any],
     responses_by_case_id: dict[str, dict[str, Any]],
+    genai_evaluate: dict[str, Any],
 ) -> str:
     experiment_id = _experiment_id(experiment_name)
     if not experiment_id:
@@ -155,15 +156,58 @@ def _log_eval_run(
                 {"key": "score", "value": float(summary["score"]), "timestamp": now_ms, "step": 0},
                 {"key": "passed", "value": float(summary["passed"]), "timestamp": now_ms, "step": 0},
                 {"key": "total", "value": float(summary["total"]), "timestamp": now_ms, "step": 0},
+                {
+                    "key": "count_reconciles_passed",
+                    "value": float(
+                        sum(
+                            1
+                            for row in summary["results"]
+                            if row.get("count_reconciliation", {}).get("passed")
+                            or row.get("checks", {}).get("expected_error")
+                        )
+                    ),
+                    "timestamp": now_ms,
+                    "step": 0,
+                },
+                {
+                    "key": "mlflow_genai_count_reconciles_score",
+                    "value": float(genai_evaluate.get("count_reconciles_score") or 0.0),
+                    "timestamp": now_ms,
+                    "step": 0,
+                },
             ],
             "params": [
                 {"key": "git_sha", "value": git_sha[:250]},
                 {"key": "app_url", "value": app_url[:250]},
                 {"key": "case_count", "value": str(summary["total"])},
+                {
+                    "key": "mlflow_genai_evaluate_run_id",
+                    "value": str(genai_evaluate.get("run_id") or "")[:250],
+                },
+                {
+                    "key": "mlflow_genai_evaluate_tracking_uri",
+                    "value": str(genai_evaluate.get("tracking_uri") or "")[:250],
+                },
             ],
             "tags": [
                 {"key": "mip_eval_type", "value": "growth_agent_golden"},
                 {"key": "mip_git_sha", "value": git_sha[:250]},
+                {
+                    "key": "mip_mlflow_genai_evaluate",
+                    "value": "true" if genai_evaluate.get("used") is True else "false",
+                },
+                {
+                    "key": "mip_mlflow_genai_evaluate_reason",
+                    "value": str(genai_evaluate.get("reason") or "")[:250],
+                },
+                {
+                    "key": "mip_mlflow_genai_tracking_uri",
+                    "value": str(genai_evaluate.get("tracking_uri") or "")[:250],
+                },
+                {
+                    "key": "mip_mlflow_genai_databricks_run_verified",
+                    "value": "true" if genai_evaluate.get("verified_databricks_run") is True else "false",
+                },
             ],
         },
     )
@@ -176,6 +220,207 @@ def _log_eval_run(
     )
     _ = responses_by_case_id
     return run_id
+
+
+def _mlflow_genai_eval_data(
+    *,
+    cases: list[dict[str, Any]],
+    responses_by_case_id: dict[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for case in cases:
+        case_id = str(case["id"])
+        rows.append(
+            {
+                "inputs": {"prompt": str(case["prompt"]), "case_id": case_id},
+                "outputs": responses_by_case_id.get(case_id, {}),
+                "expectations": dict(case),
+            }
+        )
+    return rows
+
+
+def _is_databricks_tracking_uri(uri: str) -> bool:
+    normalized = uri.strip().lower()
+    return normalized == "databricks" or normalized.startswith("databricks://")
+
+
+def _metric_value_from_run_payload(payload: dict[str, Any], metric_key: str) -> float | None:
+    metrics = (((payload.get("run") or {}).get("data") or {}).get("metrics") or [])
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        if str(metric.get("key") or "").strip() != metric_key:
+            continue
+        try:
+            return float(metric.get("value"))
+        except (TypeError, ValueError):
+            return None
+    return None
+
+
+def _count_reconciles_metric_from_payload(payload: dict[str, Any]) -> float | None:
+    metrics = (((payload.get("run") or {}).get("data") or {}).get("metrics") or [])
+    for metric in metrics:
+        if not isinstance(metric, dict):
+            continue
+        key = str(metric.get("key") or "").strip().lower()
+        if "count_reconciles" not in key or "error" in key:
+            continue
+        try:
+            return float(metric.get("value"))
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _count_reconciles_metric_from_result(result: Any) -> float | None:
+    seen: set[int] = set()
+
+    def visit(value: Any) -> float | None:
+        if value is None or isinstance(value, str | bytes | bool):
+            return None
+        if isinstance(value, int | float):
+            return None
+        value_id = id(value)
+        if value_id in seen:
+            return None
+        seen.add(value_id)
+        if isinstance(value, dict):
+            for key, item in value.items():
+                normalized = str(key).strip().lower()
+                if "count_reconciles" in normalized and "error" not in normalized:
+                    try:
+                        return float(item)
+                    except (TypeError, ValueError):
+                        pass
+                found = visit(item)
+                if found is not None:
+                    return found
+            return None
+        if isinstance(value, list | tuple):
+            for item in value:
+                found = visit(item)
+                if found is not None:
+                    return found
+            return None
+        for attr in (
+            "metrics",
+            "aggregate_results",
+            "scorer_results",
+            "scores",
+            "results",
+            "__dict__",
+        ):
+            if not hasattr(value, attr):
+                continue
+            try:
+                found = visit(getattr(value, attr))
+            except Exception:  # noqa: BLE001 - best-effort shape extraction.
+                continue
+            if found is not None:
+                return found
+        return None
+
+    return visit(result)
+
+
+def _run_mlflow_genai_evaluate(
+    *,
+    experiment_name: str,
+    cases: list[dict[str, Any]],
+    responses_by_case_id: dict[str, dict[str, Any]],
+    require: bool,
+    tracking_uri: str | None = None,
+) -> dict[str, Any]:
+    """Run MLflow GenAI Evaluation with the reviewed custom scorer if present."""
+
+    try:
+        import mlflow  # type: ignore[import-untyped]
+        from mlflow.genai.scorers import scorer  # type: ignore[import-untyped]
+    except Exception as exc:  # noqa: BLE001 - absence is reflected honestly.
+        if require:
+            raise RuntimeError("mlflow.genai.evaluate is required but mlflow is unavailable") from exc
+        return {"used": False, "reason": f"mlflow unavailable: {type(exc).__name__}"}
+
+    evaluate = getattr(getattr(mlflow, "genai", None), "evaluate", None)
+    if not callable(evaluate):
+        if require:
+            raise RuntimeError("mlflow.genai.evaluate is required but not available")
+        return {"used": False, "reason": "mlflow.genai.evaluate unavailable"}
+
+    desired_tracking_uri = (tracking_uri or os.environ.get("MLFLOW_TRACKING_URI") or "databricks").strip()
+    if hasattr(mlflow, "set_tracking_uri"):
+        mlflow.set_tracking_uri(desired_tracking_uri)
+    actual_tracking_uri = str(
+        mlflow.get_tracking_uri() if hasattr(mlflow, "get_tracking_uri") else desired_tracking_uri
+    )
+    if not _is_databricks_tracking_uri(actual_tracking_uri):
+        message = f"mlflow.genai.evaluate tracking URI must be Databricks, got {actual_tracking_uri!r}"
+        if require:
+            raise RuntimeError(message)
+        return {
+            "used": False,
+            "reason": message,
+            "tracking_uri": actual_tracking_uri,
+        }
+
+    decorated_count_reconciles = scorer(
+        count_reconciles,
+        name="count_reconciles",
+        description="Broad and actionable Growth Agent counts reconcile with trace proof.",
+    )
+    if hasattr(mlflow, "set_experiment"):
+        mlflow.set_experiment(experiment_name)
+    result = evaluate(
+        data=_mlflow_genai_eval_data(cases=cases, responses_by_case_id=responses_by_case_id),
+        scorers=[decorated_count_reconciles],
+    )
+    run_id = str(getattr(result, "run_id", "") or getattr(result, "mlflow_run_id", "") or "")
+    if not run_id:
+        if require:
+            raise RuntimeError("mlflow.genai.evaluate completed without a run id")
+        return {
+            "used": False,
+            "reason": "mlflow.genai.evaluate completed without a run id",
+            "tracking_uri": actual_tracking_uri,
+        }
+    try:
+        run_payload = _run(["experiments", "get-run", run_id])
+    except RuntimeError as exc:
+        if require:
+            raise RuntimeError(
+                f"mlflow.genai.evaluate run {run_id} is not resolvable in Databricks"
+            ) from exc
+        return {
+            "used": False,
+            "reason": f"GenAI eval run not resolvable in Databricks: {type(exc).__name__}",
+            "run_id": run_id,
+            "tracking_uri": actual_tracking_uri,
+        }
+    count_metric = _count_reconciles_metric_from_payload(run_payload)
+    if count_metric is None:
+        count_metric = _count_reconciles_metric_from_result(result)
+    if count_metric is None or count_metric < 1.0:
+        message = "mlflow.genai.evaluate did not produce a passing count_reconciles scorer metric"
+        if require:
+            raise RuntimeError(message)
+        return {
+            "used": False,
+            "reason": message,
+            "run_id": run_id,
+            "tracking_uri": actual_tracking_uri,
+            "count_reconciles_score": count_metric,
+        }
+    return {
+        "used": True,
+        "reason": "mlflow.genai.evaluate completed",
+        "run_id": run_id,
+        "tracking_uri": actual_tracking_uri,
+        "verified_databricks_run": True,
+        "count_reconciles_score": count_metric,
+        "result_type": type(result).__name__,
+    }
 
 
 def _write_env(path: Path, *, experiment_name: str, run_id: str) -> None:
@@ -206,6 +451,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--retry-delay-s", type=float, default=10.0)
     parser.add_argument("--out-env", type=Path)
     parser.add_argument("--out-json", type=Path)
+    parser.add_argument("--mlflow-tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI", "databricks"))
+    parser.add_argument(
+        "--require-mlflow-genai-evaluate",
+        action="store_true",
+        default=os.environ.get("MIP_REQUIRE_MLFLOW_GENAI_EVALUATE", "").lower()
+        in {"1", "true", "yes"},
+        help="Fail if mlflow.genai.evaluate cannot run.",
+    )
     return parser
 
 
@@ -229,9 +482,26 @@ def main(argv: list[str] | None = None) -> int:
             retry_delay_s=args.retry_delay_s,
         )
     summary = score_batch(responses, cases)
+    genai_evaluate = _run_mlflow_genai_evaluate(
+        experiment_name=args.experiment,
+        cases=cases,
+        responses_by_case_id=responses,
+        require=bool(args.require_mlflow_genai_evaluate),
+        tracking_uri=args.mlflow_tracking_uri,
+    )
     if args.out_json:
         args.out_json.write_text(
-            json.dumps({"run_id": None, "experiment": args.experiment, "responses": responses, **summary}, indent=2, sort_keys=True)
+            json.dumps(
+                {
+                    "run_id": None,
+                    "experiment": args.experiment,
+                    "genai_evaluate": genai_evaluate,
+                    "responses": responses,
+                    **summary,
+                },
+                indent=2,
+                sort_keys=True,
+            )
             + "\n",
             encoding="utf-8",
         )
@@ -240,8 +510,15 @@ def main(argv: list[str] | None = None) -> int:
         app_url=args.app_url,
         summary=summary,
         responses_by_case_id=responses,
+        genai_evaluate=genai_evaluate,
     )
-    result = {"run_id": run_id, "experiment": args.experiment, "responses": responses, **summary}
+    result = {
+        "run_id": run_id,
+        "experiment": args.experiment,
+        "genai_evaluate": genai_evaluate,
+        "responses": responses,
+        **summary,
+    }
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.out_json:
         args.out_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")

@@ -55,3 +55,16 @@ def test_genie_audit_entity_id_from_parts_rekeys_guardrail_hash() -> None:
     assert entity_id.startswith("geniehash-")
     assert entity_id != question_hash
     assert validate_public_audit_identifier_or_none(entity_id) == entity_id
+
+
+def test_genie_audit_entity_id_from_parts_survives_idless_turn() -> None:
+    entity_id = genie_audit_entity_id_from_parts(
+        question="How many borrowers are currently in the money?",
+        conversation_id="",
+        message_id="",
+        question_hash="",
+        fallback="",
+    )
+
+    assert entity_id.startswith("geniehash-")
+    assert validate_public_audit_identifier_or_none(entity_id) == entity_id

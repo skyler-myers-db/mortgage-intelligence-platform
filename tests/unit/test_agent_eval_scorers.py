@@ -5,7 +5,13 @@ from pydantic import ValidationError
 
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 from backend.services.growth_agent_workflows import build_growth_agent_route, planned_workflow
-from tests.eval.scorers import load_cases, score_batch, score_growth_agent_response
+from tests.eval.scorers import (
+    count_reconciles,
+    load_cases,
+    score_batch,
+    score_count_reconciliation,
+    score_growth_agent_response,
+)
 from tests.unit.test_growth_agent_api import (
     _clear_overrides,
     _client,
@@ -17,8 +23,20 @@ from tests.unit.test_growth_agent_api import (
 def _response_for(case_id: str) -> dict:
     if case_id == "pii_prompt_is_rejected_before_planning":
         return {"error": "prompt must use reviewed, non-PII mortgage-growth criteria"}
+    common = {
+        "broad_total": 117404,
+        "actionable_total": 5394,
+        "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_population"],
+        "trace_id": "agent-trace-evalcase",
+        "tool_result_hash": "a" * 64,
+        "policy_checks": [
+            {"label": "Broad vs actionable reconciliation", "status": "passed"},
+            {"label": "No outbound activation", "status": "passed"},
+        ],
+    }
     if case_id == "custom_all_mode_preserves_intersection_semantics":
         return {
+            **common,
             "workflow": {"id": "custom_segment_watch"},
             "execution_mode": "deterministic",
             "route": "/lead-queue?segment_codes=itm%2Clisted&segment_mode=all&marketing_eligibility=Eligible+only",
@@ -31,6 +49,7 @@ def _response_for(case_id: str) -> dict:
         }
     if case_id == "custom_any_mode_preserves_or_semantics":
         return {
+            **common,
             "workflow": {"id": "custom_segment_watch"},
             "execution_mode": "deterministic",
             "route": "/lead-queue?segment_codes=itm%2Cequity&segment_mode=any&marketing_eligibility=Eligible+only",
@@ -43,6 +62,7 @@ def _response_for(case_id: str) -> dict:
         }
     if case_id == "listed_objective_routes_to_purchase_watch":
         return {
+            **common,
             "workflow": {"id": "listing_watch"},
             "execution_mode": "deterministic",
             "route": "/lead-queue?segment=listed&marketing_eligibility=Eligible+only",
@@ -54,6 +74,7 @@ def _response_for(case_id: str) -> dict:
             },
         }
     return {
+        **common,
         "workflow": {"id": "daily_refi_brief"},
         "execution_mode": "deterministic",
         "route": "/lead-queue?segment=itm&marketing_eligibility=Eligible+only",
@@ -93,6 +114,62 @@ def test_growth_agent_eval_scorer_fails_segment_mode_drift() -> None:
     assert result["checks"]["segment_mode"] is False
 
 
+def test_growth_agent_eval_scorer_fails_count_reconciliation_drift() -> None:
+    case = next(case for case in load_cases() if case["id"] == "refi_objective_routes_to_daily_refi")
+    response = _response_for(str(case["id"]))
+    response["actionable_total"] = response["broad_total"] + 1
+
+    result = score_growth_agent_response(response, case)
+
+    assert result["passed"] is False
+    assert result["checks"]["count_reconciles"] is False
+    assert result["count_reconciliation"]["checks"]["counts_ordered"] is False
+
+
+def test_count_reconciles_mlflow_scorer_signature() -> None:
+    case = next(case for case in load_cases() if case["id"] == "refi_objective_routes_to_daily_refi")
+    response = _response_for(str(case["id"]))
+
+    assert count_reconciles(inputs={"prompt": case["prompt"]}, outputs=response, expectations=case)
+
+
+def test_count_reconciliation_accepts_configured_catalog_trusted_assets() -> None:
+    case = next(case for case in load_cases() if case["id"] == "refi_objective_routes_to_daily_refi")
+    response = _response_for(str(case["id"]))
+    response["source_assets"] = [
+        "customer_mip.gold.borrower_360",
+        "customer_mip.semantics.lead_generation_metric_view",
+    ]
+
+    result = score_count_reconciliation(response, case)
+
+    assert result["passed"] is True
+
+
+def test_count_reconciliation_rejects_untrusted_source_assets() -> None:
+    case = next(case for case in load_cases() if case["id"] == "refi_objective_routes_to_daily_refi")
+    response = _response_for(str(case["id"]))
+    response["source_assets"] = ["customer_mip.raw.borrower_360"]
+
+    result = score_count_reconciliation(response, case)
+
+    assert result["passed"] is False
+    assert result["checks"]["source_assets_present"] is False
+
+
+def test_count_reconciliation_requires_trace_and_policy_evidence() -> None:
+    case = next(case for case in load_cases() if case["id"] == "refi_objective_routes_to_daily_refi")
+    response = _response_for(str(case["id"]))
+    response["policy_checks"] = []
+    response["trace_id"] = ""
+
+    result = score_count_reconciliation(response, case)
+
+    assert result["passed"] is False
+    assert result["checks"]["trace_id_present"] is False
+    assert result["checks"]["reconciliation_policy_check"] is False
+
+
 def test_growth_agent_eval_batch_summary() -> None:
     cases = load_cases()
     responses = {str(case["id"]): _response_for(str(case["id"])) for case in cases}
@@ -125,6 +202,14 @@ def test_golden_cases_score_real_reviewed_planner_outputs() -> None:
             "workflow": {"id": workflow.id},
             "execution_mode": "deterministic",
             "route": build_growth_agent_route(workflow.route_filters, path=workflow.route_path),
+            "broad_total": 117404,
+            "actionable_total": 5394,
+            "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_population"],
+            "trace_id": "agent-trace-planner",
+            "tool_result_hash": "b" * 64,
+            "policy_checks": [
+                {"label": "Broad vs actionable reconciliation", "status": "passed"},
+            ],
             "criteria": {
                 "lead_queue_filters": {
                     "segment_codes": list(workflow.route_filters.get("segment_codes", workflow.route_filters.get("segment", "")).split(",")),

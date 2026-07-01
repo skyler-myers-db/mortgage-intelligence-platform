@@ -147,6 +147,14 @@ class _FakeWorkspaceClient:
         eval_score: float = 1.0,
         eval_sha: str = "sha-live",
         eval_tag: str = "growth_agent_golden",
+        eval_genai_used: bool = True,
+        eval_genai_tracking_uri: str = "databricks",
+        eval_genai_run_verified: bool = True,
+        eval_genai_run_resolvable: bool = True,
+        eval_genai_run_id: str = "genai-run-1",
+        eval_genai_run_experiment_id: str | None = None,
+        eval_genai_count_reconciles_score: float = 1.0,
+        eval_count_reconciles_passed: int | None = None,
         eval_experiment_id: str = "exp-1",
         eval_run_experiment_id: str | None = None,
     ) -> None:
@@ -170,6 +178,18 @@ class _FakeWorkspaceClient:
             score=eval_score,
             sha=eval_sha,
             tag=eval_tag,
+            genai_used=eval_genai_used,
+            genai_tracking_uri=eval_genai_tracking_uri,
+            genai_run_verified=eval_genai_run_verified,
+            genai_run_resolvable=eval_genai_run_resolvable,
+            genai_run_id=eval_genai_run_id,
+            genai_run_experiment_id=eval_genai_run_experiment_id,
+            genai_count_reconciles_score=eval_genai_count_reconciles_score,
+            count_reconciles_passed=(
+                eval_count_reconciles_passed
+                if eval_count_reconciles_passed is not None
+                else (eval_passed if eval_passed is not None else eval_total)
+            ),
             experiment_id=eval_experiment_id,
             run_experiment_id=eval_run_experiment_id or eval_experiment_id,
         )
@@ -242,10 +262,31 @@ class _FakeExperiments:
         score: float,
         sha: str,
         tag: str,
+        genai_used: bool,
+        genai_tracking_uri: str,
+        genai_run_verified: bool,
+        genai_run_resolvable: bool,
+        genai_run_id: str,
+        genai_run_experiment_id: str | None,
+        genai_count_reconciles_score: float,
+        count_reconciles_passed: int,
         experiment_id: str,
         run_experiment_id: str,
     ) -> None:
         self.experiment_id = experiment_id
+        self.genai_run_verified = genai_run_verified
+        self.genai_run_resolvable = genai_run_resolvable
+        self.genai_run_id = genai_run_id
+        self.genai_run = SimpleNamespace(
+            info=SimpleNamespace(experiment_id=genai_run_experiment_id or experiment_id),
+            data=SimpleNamespace(
+                metrics=[
+                    SimpleNamespace(key="count_reconciles/mean", value=genai_count_reconciles_score),
+                ],
+                params=[],
+                tags=[],
+            ),
+        )
         self.run = SimpleNamespace(
             info=SimpleNamespace(experiment_id=run_experiment_id),
             data=SimpleNamespace(
@@ -253,9 +294,25 @@ class _FakeExperiments:
                     SimpleNamespace(key="score", value=score),
                     SimpleNamespace(key="passed", value=passed),
                     SimpleNamespace(key="total", value=total),
+                    SimpleNamespace(key="count_reconciles_passed", value=count_reconciles_passed),
+                    SimpleNamespace(key="mlflow_genai_count_reconciles_score", value=genai_count_reconciles_score),
                 ],
-                params=[SimpleNamespace(key="git_sha", value=sha)],
-                tags=[SimpleNamespace(key="mip_eval_type", value=tag)],
+                params=[
+                    SimpleNamespace(key="git_sha", value=sha),
+                    SimpleNamespace(key="mlflow_genai_evaluate_run_id", value=genai_run_id),
+                ],
+                tags=[
+                    SimpleNamespace(key="mip_eval_type", value=tag),
+                    SimpleNamespace(
+                        key="mip_mlflow_genai_evaluate",
+                        value="true" if genai_used else "false",
+                    ),
+                    SimpleNamespace(key="mip_mlflow_genai_tracking_uri", value=genai_tracking_uri),
+                    SimpleNamespace(
+                        key="mip_mlflow_genai_databricks_run_verified",
+                        value="true" if genai_run_verified else "false",
+                    ),
+                ],
             )
         )
 
@@ -264,7 +321,10 @@ class _FakeExperiments:
         return SimpleNamespace(experiment=SimpleNamespace(experiment_id=self.experiment_id))
 
     def get_run(self, run_id: str) -> object:
-        _ = run_id
+        if run_id == self.genai_run_id:
+            if not self.genai_run_resolvable:
+                raise RuntimeError("genai run missing")
+            return SimpleNamespace(run=self.genai_run)
         return SimpleNamespace(run=self.run)
 
     def search_runs(self, **kwargs: object) -> list[object]:
@@ -720,6 +780,7 @@ def test_agent_eval_live_probe_requires_full_case_floor_and_matching_sha() -> No
 
     assert statuses["agent_eval"].available is True
     assert "5/5" in statuses["agent_eval"].detail
+    assert "GenAI Evaluation" in statuses["agent_eval"].detail
 
 
 def test_agent_eval_live_probe_requires_deployed_sha_to_be_configured() -> None:
@@ -779,6 +840,114 @@ def test_agent_eval_live_probe_rejects_untagged_run() -> None:
 
     assert statuses["agent_eval"].available is False
     assert "golden eval" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_requires_mlflow_genai_evaluate() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_genai_used=False,
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "mlflow.genai.evaluate" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_requires_databricks_mlflow_tracking() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_genai_tracking_uri="sqlite:////tmp/mlflow.db",
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "Databricks MLflow tracking" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_requires_resolvable_genai_run() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_genai_run_resolvable=False,
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "not resolvable in Databricks MLflow" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_requires_genai_run_same_experiment() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_genai_run_experiment_id="other-exp",
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "belongs to experiment other-exp" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_requires_count_reconciliation_scorer() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_count_reconciles_passed=4,
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "reconciled 4/5" in statuses["agent_eval"].detail
+
+
+def test_agent_eval_live_probe_requires_genai_count_reconciliation_metric() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_eval_experiment="/Shared/mip-agent-eval",
+            mip_agent_eval_run_id="run-1",
+            mip_git_sha="sha-live",
+        ),
+        workspace_client=_FakeWorkspaceClient(
+            eval_total=5,
+            eval_sha="sha-live",
+            eval_genai_count_reconciles_score=0.0,
+        ),
+    )
+
+    assert statuses["agent_eval"].available is False
+    assert "count_reconciles scorer metric" in statuses["agent_eval"].detail
 
 
 def test_agent_eval_live_probe_rejects_run_from_different_experiment() -> None:

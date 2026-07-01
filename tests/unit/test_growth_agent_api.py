@@ -153,20 +153,20 @@ class _FakeLakebaseClient:
                 ) == params.get("request_id"):
                     return dict(row)
             return None
-        if "FROM mip_app.growth_agent_monitors" in sql and "monitor_id" in sql:
+        if "FROM mip_app.growth_agent_monitors" in sql and "last_run_id" in params:
+            for row in self.monitors:
+                if row.get("actor_email") == params.get("actor_email") and str(
+                    row.get("last_run_id")
+                ) == str(params.get("last_run_id")):
+                    return dict(row)
+            return None
+        if "FROM mip_app.growth_agent_monitors" in sql and "monitor_id" in params:
             for row in self.monitors:
                 if (
                     row.get("actor_email") == params.get("actor_email")
                     and str(row.get("monitor_id")) == str(params.get("monitor_id"))
                     and row.get("status") == "active"
                 ):
-                    return dict(row)
-            return None
-        if "FROM mip_app.growth_agent_monitors" in sql and "last_run_id" in sql:
-            for row in self.monitors:
-                if row.get("actor_email") == params.get("actor_email") and str(
-                    row.get("last_run_id")
-                ) == str(params.get("last_run_id")):
                     return dict(row)
             return None
         if "INSERT INTO mip_app.action_audit" in sql:
@@ -920,6 +920,8 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
         str(draft["request_id"]).startswith("11111111-1111-4111-8111-111111111111-")
         for draft in lakebase.notification_drafts
     )
+    assert lakebase.runs[0]["request_id"] != "11111111-1111-4111-8111-111111111111"
+    assert str(lakebase.runs[0]["request_id"]).count("-") == 4
     assert body["runs"][0]["monitor"]["last_run_id"] == body["runs"][0]["run_id"]
     assert lakebase.monitors[0]["last_run_id"] == lakebase.runs[0]["run_id"]
     assert len(lakebase.audit_events) == 3
@@ -1044,6 +1046,8 @@ def test_growth_agent_due_monitor_all_actor_runner_preserves_owner_attribution(
     assert len(body["runs"]) == 2
     assert len(body["drafts"]) == 4
     assert len({draft["request_id"] for draft in lakebase.notification_drafts}) == 4
+    assert len({run["request_id"] for run in lakebase.runs}) == 2
+    assert all(run["request_id"] != "33333333-3333-4333-8333-333333333333" for run in lakebase.runs)
     for draft in lakebase.notification_drafts:
         assert str(draft["monitor_id"]) in str(draft["request_id"])
         assert str(draft["run_id"]) in str(draft["request_id"])
@@ -1063,6 +1067,78 @@ def test_growth_agent_due_monitor_all_actor_runner_preserves_owner_attribution(
     assert all("No borrower identities" in draft["body"] for draft in body["drafts"])
     assert all("send" not in draft["body"].lower() for draft in body["drafts"])
     assert all(call[1].get("actor_email") != "admin@example.com" for call in lakebase.executes)
+
+
+def test_growth_agent_due_monitor_all_actor_runner_retries_without_duplicate_rows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rbac_module.settings, "admin_emails", "")
+    monkeypatch.setattr(rbac_module.settings, "admin_group_name", "mip-admin")
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    for actor, state in (("owner-a@example.com", "IL"), ("owner-b@example.com", "TX")):
+        lakebase.monitors.append(
+            {
+                "monitor_id": uuid4(),
+                "actor_email": actor,
+                "workflow_id": "daily_refi_brief",
+                "name": f"Daily Refi Opportunity Brief - {state}",
+                "cadence": "daily",
+                "status": "active",
+                "criteria": {
+                    "states": [state],
+                    "lead_queue_filters": {
+                        "segment_codes": ["itm"],
+                        "segment_mode": "any",
+                        "states": [state],
+                        "portfolio_criteria": {
+                            "marketing_eligibility": "Eligible only",
+                            "states": [state],
+                        },
+                    },
+                    "marketing_eligibility": "Eligible only",
+                    "workflow_id": "daily_refi_brief",
+                },
+                "route": f"/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states={state}",
+                "actionable_total": 1,
+                "source_assets": ["mip.gold.borrower_360"],
+                "last_run_id": uuid4(),
+                "created_at": datetime.now(UTC) - timedelta(days=3),
+                "updated_at": datetime.now(UTC) - timedelta(days=2),
+            }
+        )
+    client = _client(sql, lakebase)
+    payload = {
+        "channels": ["slack"],
+        "request_id": "44444444-4444-4444-8444-444444444444",
+    }
+    headers = {
+        "X-Forwarded-Email": "admin@example.com",
+        "X-Forwarded-Groups": "mip-admin",
+    }
+    try:
+        first = client.post("/api/growth-agent/monitors/run-due-all", json=payload, headers=headers)
+        for monitor in lakebase.monitors:
+            monitor["updated_at"] = datetime.now(UTC) - timedelta(days=2)
+        replay = client.post("/api/growth-agent/monitors/run-due-all", json=payload, headers=headers)
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    first_body = first.json()
+    replay_body = replay.json()
+    assert first_body["due_count"] == replay_body["due_count"] == 2
+    assert {run["run_id"] for run in first_body["runs"]} == {
+        run["run_id"] for run in replay_body["runs"]
+    }
+    assert {draft["draft_id"] for draft in first_body["drafts"]} == {
+        draft["draft_id"] for draft in replay_body["drafts"]
+    }
+    assert len(lakebase.runs) == 2
+    assert len(lakebase.notification_drafts) == 2
+    assert len({run["request_id"] for run in lakebase.runs}) == 2
+    assert all(str(run["request_id"]) != payload["request_id"] for run in lakebase.runs)
 
 
 def test_growth_agent_monitor_notification_drafts_are_draft_only() -> None:

@@ -537,6 +537,17 @@ def test_custom_growth_agent_lakebase_schema_contract_is_migrated() -> None:
     assert "2026_06_26_agentic_growth_trace" in schema_sql
 
 
+def test_lakebase_grants_reference_covers_growth_agent_tables() -> None:
+    grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
+
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_runs" in grants_doc
+    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors" in grants_doc
+    assert (
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "
+        "mip_app.growth_agent_notification_drafts"
+    ) in grants_doc
+
+
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:
     store = InMemoryAuditStore()
     e = store.write(

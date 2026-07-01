@@ -1,18 +1,38 @@
 """Pure scorers for Mortgage Growth Agent golden eval cases.
 
 These scorers are intentionally dependency-light so CI can verify the contract
-without a live MLflow workspace. Live MLflow Agent Evaluation can import the
-same functions and attach the returned facts to an experiment run.
+without a live MLflow workspace. Live MLflow Agent Evaluation imports the same
+functions and wraps them in ``mlflow.genai.scorers.scorer`` so the live run and
+fast tests score the same behavioral contract.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 CASE_PATH = Path(__file__).with_name("golden_agent_cases.jsonl")
 MIN_GOLDEN_CASES = 5
+_HEX64 = re.compile(r"^[0-9a-f]{64}$")
+_UC_THREE_PART = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$")
+_TRUSTED_ASSET_SUFFIXES = (
+    ".gold.lead_population",
+    ".gold.segment_population",
+    ".gold.lead_scores",
+    ".gold.borrower_360",
+    ".gold.borrower_dossier",
+    ".gold.evidence_events",
+    ".gold.source_readiness",
+    ".gold.lockin_cohort",
+    ".gold.funnel_snapshot_daily",
+    ".gold.county_rollup",
+    ".gold.zip_rollup",
+    ".semantics.lead_generation_metric_view",
+    ".semantics.segment_performance_metric_view",
+    ".semantics.borrower_opportunity_metric_view",
+)
 
 
 def load_cases(path: Path = CASE_PATH) -> list[dict[str, Any]]:
@@ -29,6 +49,106 @@ def load_cases(path: Path = CASE_PATH) -> list[dict[str, Any]]:
                 raise ValueError(f"{path}:{line_number} missing case id")
             cases.append(case)
     return cases
+
+
+def _number(value: Any) -> float | None:
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, int | float):
+        return float(value)
+    try:
+        return float(str(value).replace(",", ""))
+    except (TypeError, ValueError):
+        return None
+
+
+def _policy_check_passed(response: dict[str, Any], label: str) -> bool:
+    checks = response.get("policy_checks")
+    if not isinstance(checks, list):
+        return False
+    for item in checks:
+        if not isinstance(item, dict):
+            continue
+        item_label = str(item.get("label") or "").strip().lower()
+        item_status = str(item.get("status") or "").strip().lower()
+        if item_label == label.lower() and item_status == "passed":
+            return True
+    return False
+
+
+def _trusted_source_asset(value: Any) -> bool:
+    asset = str(value or "").strip()
+    return bool(_UC_THREE_PART.fullmatch(asset)) and asset.endswith(_TRUSTED_ASSET_SUFFIXES)
+
+
+def score_count_reconciliation(response: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
+    """Score the broad-vs-actionable count contract for a Growth Agent answer.
+
+    The scorer is trace-aware: a passing non-error answer must carry a stable
+    trace id, a tool-result hash, a trusted source-asset list, and the explicit
+    "Broad vs actionable reconciliation" policy check. This catches the exact
+    class of regressions where the answer headline and the Lead Queue handoff
+    are both individually valid but no longer refer to a reconciled population.
+    """
+
+    if case.get("expected_error"):
+        return {
+            "passed": True,
+            "checks": {"not_applicable_expected_error": True},
+        }
+
+    broad_total = _number(response.get("broad_total"))
+    actionable_total = _number(response.get("actionable_total"))
+    route = str(response.get("route") or "")
+    trace_id = str(response.get("trace_id") or "")
+    tool_hash = str(response.get("tool_result_hash") or "")
+    source_assets = response.get("source_assets")
+    checks = {
+        "broad_total_present": broad_total is not None,
+        "actionable_total_present": actionable_total is not None,
+        "counts_ordered": (
+            broad_total is not None
+            and actionable_total is not None
+            and broad_total >= actionable_total >= 0
+        ),
+        "eligible_handoff": "marketing_eligibility=Eligible+only" in route,
+        "trace_id_present": trace_id.startswith("agent-trace-"),
+        "tool_result_hash_present": bool(_HEX64.fullmatch(tool_hash)),
+        "source_assets_present": (
+            isinstance(source_assets, list)
+            and bool(source_assets)
+            and all(_trusted_source_asset(item) for item in source_assets)
+        ),
+        "reconciliation_policy_check": _policy_check_passed(
+            response,
+            "Broad vs actionable reconciliation",
+        ),
+    }
+    return {
+        "passed": all(checks.values()),
+        "checks": checks,
+        "facts": {
+            "broad_total": broad_total,
+            "actionable_total": actionable_total,
+            "route": route,
+            "trace_id": trace_id,
+        },
+    }
+
+
+def count_reconciles(
+    *,
+    inputs: dict[str, Any] | None = None,
+    outputs: dict[str, Any] | None = None,
+    expectations: dict[str, Any] | None = None,
+    trace: Any | None = None,
+) -> bool:
+    """MLflow-compatible custom scorer for reconciled Growth Agent counts."""
+
+    _ = inputs, trace
+    response = outputs if isinstance(outputs, dict) else {}
+    case = expectations if isinstance(expectations, dict) else {}
+    return bool(score_count_reconciliation(response, case)["passed"])
 
 
 def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) -> dict[str, Any]:
@@ -68,6 +188,7 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
     expected_route_parts = [str(item) for item in case.get("expected_route_contains", [])]
     forbidden_terms = [str(item).lower() for item in case.get("forbidden_terms", [])]
 
+    count_score = score_count_reconciliation(response, case)
     checks = {
         "workflow_id": workflow.get("id") == case.get("expected_workflow_id"),
         "segment_codes": actual_segments == expected_segments,
@@ -75,6 +196,7 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
         "route_handoff": all(part in route for part in expected_route_parts),
         "no_forbidden_terms": not any(term in serialized for term in forbidden_terms),
         "no_outbound_activation": response.get("execution_mode") != "outbound_activation",
+        "count_reconciles": count_score["passed"],
     }
     passed = all(checks.values())
     return {
@@ -82,6 +204,7 @@ def score_growth_agent_response(response: dict[str, Any], case: dict[str, Any]) 
         "passed": passed,
         "score": 1.0 if passed else 0.0,
         "checks": checks,
+        "count_reconciliation": count_score,
     }
 
 

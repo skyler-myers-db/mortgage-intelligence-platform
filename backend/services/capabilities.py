@@ -687,9 +687,63 @@ def _probe_agent_eval(workspace_client: Any, settings: Settings) -> LiveCapabili
         eval_type = str(tags.get("mip_eval_type") or "").strip()
         if eval_type != "growth_agent_golden":
             return LiveCapabilityStatus(False, "Latest eval run is not tagged as a MIP growth-agent golden eval.")
+        genai_evaluate_used = str(tags.get("mip_mlflow_genai_evaluate") or "").strip().lower()
+        if genai_evaluate_used != "true":
+            return LiveCapabilityStatus(
+                False,
+                "Latest eval run did not execute mlflow.genai.evaluate.",
+            )
+        genai_tracking_uri = str(tags.get("mip_mlflow_genai_tracking_uri") or "").strip().lower()
+        if not (genai_tracking_uri == "databricks" or genai_tracking_uri.startswith("databricks://")):
+            return LiveCapabilityStatus(
+                False,
+                "Latest eval run did not use Databricks MLflow tracking.",
+            )
+        if str(tags.get("mip_mlflow_genai_databricks_run_verified") or "").strip().lower() != "true":
+            return LiveCapabilityStatus(
+                False,
+                "Latest eval run did not verify the GenAI Evaluation run in Databricks MLflow.",
+            )
+        genai_run_id = str(params.get("mlflow_genai_evaluate_run_id") or "").strip()
+        if not genai_run_id:
+            return LiveCapabilityStatus(False, "Latest eval run has no mlflow.genai.evaluate run id.")
+        try:
+            genai_run = workspace_client.experiments.get_run(genai_run_id).run
+        except Exception:  # noqa: BLE001 - surfaced as non-claimable proof.
+            return LiveCapabilityStatus(
+                False,
+                f"GenAI Evaluation run {genai_run_id} is not resolvable in Databricks MLflow.",
+            )
+        genai_data = getattr(genai_run, "data", None)
+        genai_metrics = {
+            m.key: m.value for m in (getattr(genai_data, "metrics", None) or [])
+        }
+        genai_count_metric = None
+        for key, value in genai_metrics.items():
+            if "count_reconciles" not in str(key).lower() or "error" in str(key).lower():
+                continue
+            try:
+                genai_count_metric = float(value)
+            except (TypeError, ValueError):
+                continue
+            break
+        parent_count_metric = float(metrics.get("mlflow_genai_count_reconciles_score", 0.0) or 0.0)
+        if (genai_count_metric is None or genai_count_metric < 1.0) and parent_count_metric < 1.0:
+            return LiveCapabilityStatus(
+                False,
+                "GenAI Evaluation run did not record a passing count_reconciles scorer metric.",
+            )
+        genai_info = getattr(genai_run, "info", None)
+        genai_experiment_id = str(getattr(genai_info, "experiment_id", "") or "").strip()
+        if genai_experiment_id and genai_experiment_id != str(experiment_id):
+            return LiveCapabilityStatus(
+                False,
+                f"GenAI Evaluation run {genai_run_id} belongs to experiment {genai_experiment_id}, not {experiment_id}.",
+            )
         score = float(metrics.get("score", 0.0) or 0.0)
         passed = int(float(metrics.get("passed", 0.0) or 0.0))
         total = int(float(metrics.get("total", 0.0) or 0.0))
+        count_reconciles_passed = int(float(metrics.get("count_reconciles_passed", 0.0) or 0.0))
         sha = params.get("git_sha") or "unknown SHA"
         expected_sha = (settings.mip_git_sha or "").strip()
         if not expected_sha:
@@ -704,9 +758,17 @@ def _probe_agent_eval(workspace_client: Any, settings: Settings) -> LiveCapabili
                 False,
                 f"Latest eval run covered only {total} cases; minimum is {MIN_GROWTH_AGENT_EVAL_CASES}.",
             )
+        if count_reconciles_passed < total:
+            return LiveCapabilityStatus(
+                False,
+                f"Latest eval run only reconciled {count_reconciles_passed}/{total} actionability handoffs.",
+            )
         if passed != total or score < 1.0:
             return LiveCapabilityStatus(False, f"Latest eval run did not pass ({passed}/{total}, score={score:.3f}).")
-        return LiveCapabilityStatus(True, f"Live MLflow golden Agent Evaluation passed ({passed}/{total}) for {sha}.")
+        return LiveCapabilityStatus(
+            True,
+            f"Live MLflow GenAI Evaluation passed ({passed}/{total}) for {sha}.",
+        )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"Agent Evaluation probe failed ({type(exc).__name__}).")
 

@@ -15,8 +15,10 @@ import os
 import sys
 import urllib.error
 import urllib.request
-import uuid
+from datetime import UTC, datetime
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
+from zoneinfo import ZoneInfo
 
 
 def _workspace_client() -> Any:
@@ -85,6 +87,20 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _request_id_for_bucket(*, limit: int, channels: list[str], now: datetime | None = None) -> str:
+    """Return a stable UUID for one scheduler cadence bucket.
+
+    Databricks Jobs already sets ``max_concurrent_runs=1``. This key adds API
+    idempotency for ordinary operator retries or app-side 5xx retry loops.
+    """
+
+    timestamp = now or datetime.now(UTC)
+    bucket = timestamp.astimezone(ZoneInfo("America/Chicago")).strftime("%Y%m%d")
+    channel_key = ",".join(sorted(channels))
+    seed = f"mip-growth-agent-scheduler:{bucket}:limit={limit}:channels={channel_key}"
+    return str(uuid5(NAMESPACE_URL, seed))
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     channels = [item.strip() for item in args.channels.split(",") if item.strip()]
@@ -93,7 +109,7 @@ def main(argv: list[str] | None = None) -> int:
     payload = {
         "limit": args.limit,
         "channels": channels,
-        "request_id": str(uuid.uuid4()),
+        "request_id": _request_id_for_bucket(limit=args.limit, channels=channels),
     }
     result = _post_json(
         url=f"{app_url}/api/v1/growth-agent/monitors/run-due-all",

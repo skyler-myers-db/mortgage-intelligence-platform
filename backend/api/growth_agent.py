@@ -12,7 +12,7 @@ import json
 import re
 from collections.abc import Sequence
 from typing import Annotated, Any
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -385,11 +385,13 @@ def _run_due_monitor_rows(
         row_actor = actor or str(row.get("actor_email") or "").strip().lower()
         if not row_actor:
             raise HTTPException(status_code=409, detail="saved monitor is missing an owner")
+        monitor_request_id = _monitor_request_id(request_id, row)
         run = _run_monitor_row(
             row,
             request=request,
             sql_client=sql_client,
             lakebase=lakebase,
+            request_id=monitor_request_id,
             evidence_label="Scheduled watchlist run",
             planner_label="Scheduled watchlist runner",
             fallback_reason="scheduled_monitor_run",
@@ -410,6 +412,15 @@ def _run_due_monitor_rows(
                 )
             )
     return runs, drafts
+
+
+def _monitor_request_id(base_request_id: str | None, monitor_row: dict[str, Any]) -> str | None:
+    if base_request_id is None:
+        return None
+    monitor_id = str(monitor_row.get("monitor_id") or "").strip()
+    if not monitor_id:
+        return None
+    return str(uuid5(NAMESPACE_URL, f"mip-growth-agent-monitor:{base_request_id}:{monitor_id}"))
 
 
 @router.post(
