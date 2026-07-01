@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
@@ -150,6 +151,64 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert prompt_text.lower() not in json.dumps(body).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.runs, default=str).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.audit_events, default=str).lower()
+
+
+def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_query_serving_endpoint(
+        workspace_client: object,
+        endpoint: str,
+        *,
+        prompt: str,
+        client_request_id: str | None = None,
+        task: str | None = None,
+    ) -> dict[str, Any]:
+        _ = workspace_client, endpoint, prompt, client_request_id, task
+        return {
+            "id": "resp-supervisor-1",
+            "output": [{"content": '{"workflow_id":"listing_watch","reason":"purchase intent"}'}],
+        }
+
+    monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
+    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    _enable_orchestrator(monkeypatch)
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    payload = {
+        "prompt": "show borrowers in the money for review",
+        "states": ["IL"],
+        "request_id": str(uuid4()),
+    }
+    try:
+        first = client.post(
+            "/api/growth-agent/agent/run",
+            json=payload,
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+        replay = client.post(
+            "/api/growth-agent/agent/run",
+            json=payload,
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert replay.status_code == 200, replay.text
+    assert replay.json()["run_id"] == first.json()["run_id"]
+    selection_check = next(
+        check for check in replay.json()["policy_checks"] if check["label"] == "Supervisor workflow selection"
+    )
+    assert selection_check["status"] == "review_required"
+    framework_chip = next(
+        chip for chip in replay.json()["governance_chips"] if chip["label"] == "Multi-agent framework"
+    )
+    assert framework_chip["status"] == "review_required"
+    evidence = json.loads(lakebase.runs[0]["agent_evidence"])
+    assert evidence["workflow_override_review_required"] is True
+    assert len(lakebase.runs) == 1
 
 
 def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(

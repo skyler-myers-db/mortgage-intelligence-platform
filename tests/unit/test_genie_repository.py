@@ -2865,8 +2865,33 @@ def test_in_the_money_count_direct_canonical_bypasses_genie_breaker() -> None:
     assert result.trusted_assets == ["mip.gold.borrower_360"]
     assert result.metric_value == "147,742"
     assert stub.ask_calls == []
-    assert result.trusted_assets == ["mip.gold.borrower_360"]
+
+
+def test_direct_trusted_sql_answer_keeps_idless_turn_boundaries() -> None:
+    stub = _StubClient(
+        _make_breaker("closed"),
+        response=DependencyDownError("genie", reason="direct path should not call Genie"),
+    )
+    sql = _StubSqlClient(
+        [
+            {
+                "in_the_money_borrowers": 147742,
+                "refreshed_at": "2026-05-04T22:08:34.662Z",
+            }
+        ]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond("How many borrowers are currently in-the-money?")
+
+    assert result.source == "trusted_sql"
+    assert result.conversation_id == ""
+    assert result.message_id is not None
+    assert result.message_id.startswith("trusted-sql-")
     assert result.proof is not None
+    assert result.proof.conversation_id == ""
+    assert result.proof.message_id == result.message_id
+    assert stub.ask_calls == []
     assert result.proof.trusted is True
     assert result.proof.source_assets == ["mip.gold.borrower_360"]
     assert result.proof.data_freshness

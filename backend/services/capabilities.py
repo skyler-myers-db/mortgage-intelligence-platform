@@ -31,15 +31,12 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from backend.config.settings import Settings, get_settings
+from backend.services.ai_gateway_capability_probe import probe_ai_gateway
 from backend.services.capability_serving_probes import (
-    count_inference_log_rows,
-    inference_log_table_names,
     query_serving_endpoint,
     serving_response_has_payload,
-    wait_for_inference_log_increment,
 )
 from backend.services.databricks_sql_helpers import _validate_identifier, qualify
 
@@ -814,99 +811,15 @@ def _probe_ai_gateway(
     *,
     sql_client: Any | None,
 ) -> LiveCapabilityStatus:
-    endpoint = (settings.mip_ai_gateway_endpoint or "").strip()
-    expected_table = (settings.mip_ai_gateway_inference_table or "").strip()
-    if not endpoint or not expected_table:
-        return LiveCapabilityStatus(False, "AI Gateway endpoint or inference table is not configured.")
-    if sql_client is None:
-        return LiveCapabilityStatus(False, "SQL client is required to verify AI Gateway inference log rows.")
-    try:
-        details = workspace_client.serving_endpoints.get(endpoint)
-        state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
-        gateway = getattr(details, "ai_gateway", None)
-        inference = getattr(gateway, "inference_table_config", None)
-        if state != "READY":
-            return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} is not READY ({state}).")
-        if not bool(getattr(inference, "enabled", False)):
-            return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} inference table is not enabled.")
-        actual = ".".join(
-            part
-            for part in (
-                getattr(inference, "catalog_name", None),
-                getattr(inference, "schema_name", None),
-                getattr(inference, "table_name_prefix", None),
-            )
-            if part
-        )
-        if expected_table and actual != expected_table:
-            return LiveCapabilityStatus(False, f"Gateway inference table is {actual}, expected {expected_table}.")
-        table_names = inference_log_table_names(sql_client, expected_table)
-        if not table_names:
-            return LiveCapabilityStatus(
-                False,
-                f"No AI Gateway inference tables matching {expected_table} were visible to SQL.",
-            )
-        sha = _ai_gateway_probe_sha(settings)
-        if not sha:
-            return LiveCapabilityStatus(
-                False,
-                "MIP_GIT_SHA is required to prove AI Gateway logging matches this deployment.",
-            )
-        attempted_ids: list[str] = []
-        for _attempt in range(_AI_GATEWAY_EXACT_LOG_ATTEMPTS):
-            client_request_id = f"{_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX}{sha}-{uuid4().hex[:16]}"
-            attempted_ids.append(client_request_id)
-            before_rows = count_inference_log_rows(
-                sql_client,
-                expected_table,
-                client_request_id=client_request_id,
-            )
-            response = query_serving_endpoint(
-                workspace_client,
-                endpoint,
-                prompt=(
-                    "Capability readiness check. Reply with a one-sentence acknowledgement "
-                    "for Mortgage Intelligence Platform AI Gateway logging."
-                ),
-                client_request_id=client_request_id,
-            )
-            if not serving_response_has_payload(response):
-                return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} returned no response payload.")
-            log_rows = wait_for_inference_log_increment(
-                sql_client,
-                expected_table,
-                previous_count=before_rows,
-                client_request_id=client_request_id,
-                timeout_s=_AI_GATEWAY_EXACT_LOG_WAIT_S,
-            )
-            if log_rows > before_rows:
-                return LiveCapabilityStatus(
-                    True,
-                    (
-                        "Live AI Gateway endpoint accepted a bounded query and exposed an exact "
-                        f"inference log row ({client_request_id}) at {actual}."
-                    ),
-                )
-        return LiveCapabilityStatus(
-            False,
-            (
-                "Live AI Gateway endpoint accepted bounded queries and inference logging "
-                f"is enabled/queryable at {actual}; exact probe rows {', '.join(attempted_ids)} "
-                "were not visible inside the bounded window, so row-level delivery remains "
-                "unproven and this capability is not claimable yet."
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001
-        return LiveCapabilityStatus(False, f"AI Gateway probe failed ({type(exc).__name__}).")
-
-
-def _ai_gateway_probe_sha(settings: Settings) -> str | None:
-    raw = (settings.mip_git_sha or "").strip().lower()
-    if len(raw) < 7:
-        return None
-    if not all(ch in "0123456789abcdef" for ch in raw):
-        return None
-    return raw[:12]
+    return probe_ai_gateway(
+        workspace_client,
+        settings,
+        sql_client=sql_client,
+        make_status=LiveCapabilityStatus,
+        request_prefix=_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX,
+        exact_log_wait_s=_AI_GATEWAY_EXACT_LOG_WAIT_S,
+        exact_log_attempts=_AI_GATEWAY_EXACT_LOG_ATTEMPTS,
+    )
 
 
 def _is_agent_responses_task(task: Any) -> bool:

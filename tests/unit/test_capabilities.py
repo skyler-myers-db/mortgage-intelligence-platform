@@ -63,12 +63,15 @@ class _LiveSqlClient:
         count: int = 7,
         recent_count: int = 0,
         count_sequence: list[int] | None = None,
+        count_by_request_id: dict[str, int] | None = None,
         table_names: list[str] | None = None,
     ) -> None:
         self.fail = fail
         self.count = count
         self.recent_count = recent_count
         self.count_sequence = list(count_sequence or [])
+        self.count_by_request_id = dict(count_by_request_id or {})
+        self.use_request_id_counts = count_by_request_id is not None
         self.table_names = ["mip_agent_inference_payload"] if table_names is None else list(table_names)
         self.count_calls = 0
         self.statements: list[str] = []
@@ -87,6 +90,9 @@ class _LiveSqlClient:
             self.count_calls += 1
             if self.count_sequence:
                 return [{"row_count": self.count_sequence.pop(0)}]
+            if self.use_request_id_counts and isinstance(parameters, dict):
+                request_id = str(parameters.get("client_request_id") or "")
+                return [{"row_count": self.count_by_request_id.get(request_id, 0)}]
             return [{"row_count": self.count}]
         return [{"ok": 1}]
 
@@ -701,6 +707,38 @@ def test_ai_gateway_live_probe_rejects_stale_sha_scoped_row_level_proof(
     assert "exact probe row" in statuses["ai_gateway"].detail
     assert workspace.serving_endpoints.queries
     assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
+
+
+def test_ai_gateway_live_probe_rejects_stale_row_for_different_request_id(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter([0.0, 16.0])
+    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
+    stale_request_id = f"mip-capability-{_TEST_GIT_SHA_SHORT}-stale00000000000"
+    sql = _LiveSqlClient(count_by_request_id={stale_request_id: 2})
+    workspace = _FakeWorkspaceClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=sql,
+        workspace_client=workspace,
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "exact probe row" in statuses["ai_gateway"].detail
+    query_kwargs = workspace.serving_endpoints.queries[0][1]
+    fresh_request_id = str(query_kwargs.get("client_request_id") or "")
+    assert fresh_request_id != stale_request_id
+    assert all(
+        not isinstance(params, dict) or params.get("client_request_id") != stale_request_id
+        for params in sql.parameters
+    )
 
 
 def test_ai_gateway_live_probe_rejects_without_deployed_sha() -> None:

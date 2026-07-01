@@ -215,6 +215,33 @@ def test_ask_appends_message_when_conversation_id_provided(
     assert calls[0][1] == "POST"
 
 
+def test_start_conversation_200_without_turn_ids_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock, _ = _build_urlopen_sequence([{"status": "OK", "message": {"status": "IN_PROGRESS"}}])
+    monkeypatch.setattr("backend.services.genie_client.urllib.request.urlopen", mock)
+
+    with pytest.raises(GenieClientError) as exc:
+        _make_client().ask("How many borrowers are in the money?")
+
+    assert "missing conversation_id/message_id" in str(exc.value)
+    assert exc.value.space_id == "sp-test-0001"
+
+
+def test_append_message_200_without_message_id_fails_closed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    mock, _ = _build_urlopen_sequence([{"status": "OK"}])
+    monkeypatch.setattr("backend.services.genie_client.urllib.request.urlopen", mock)
+
+    with pytest.raises(GenieClientError) as exc:
+        _make_client().ask("follow-up", conversation_id="conv-existing")
+
+    assert "missing message id" in str(exc.value)
+    assert exc.value.space_id == "sp-test-0001"
+    assert exc.value.conversation_id == "conv-existing"
+
+
 # ---------------------------------------------------------------------------
 # ask() -- error paths
 # ---------------------------------------------------------------------------

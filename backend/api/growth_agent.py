@@ -9,7 +9,6 @@ for human review. It never sends outreach or activates a connector.
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Sequence
 from typing import Annotated, Any
 from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
@@ -39,15 +38,13 @@ from backend.schemas.growth_agent import (
 )
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import resolve_actor
-from backend.services.capabilities import (
-    Capability,
-    CapabilityStatus,
-    LiveCapabilityMap,
-    probe_capabilities,
-)
 from backend.services.capability_request import collect_request_live_capability_statuses
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.growth_agent_api_helpers import (
+    payload_with_prompt_state_scope,
+    public_capability_rows,
+)
 from backend.services.growth_agent_drafts import create_notification_drafts
 from backend.services.growth_agent_ledger_sql import (
     DUE_MONITOR_LIST_ALL_SQL as _DUE_MONITOR_LIST_ALL_SQL,
@@ -117,37 +114,8 @@ from backend.services.growth_agent_workflows import (
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.rbac import require_admin
-from backend.services.state_footprint import US_STATE_NAME_BY_CODE
 
 router = APIRouter(prefix="/growth-agent", tags=["growth-agent"])
-_STATE_CODE_PATTERN = re.compile(
-    r"\b(?:in|for|state|states|scope)\s+("
-    + "|".join(re.escape(code) for code in sorted(US_STATE_NAME_BY_CODE))
-    + r")\b",
-    flags=re.IGNORECASE,
-)
-_STATE_NAME_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
-    (code, re.compile(rf"\b{re.escape(name.lower())}\b"))
-    for code, name in sorted(US_STATE_NAME_BY_CODE.items())
-)
-_PUBLIC_CAPABILITY_AVAILABLE_DETAILS = {
-    "genie_conversation_api": "Live Genie Conversation API probe passed for this workspace.",
-    "certified_metric_views": "Live certified metric-view probes passed for this workspace.",
-    "uc_function_tools": "Live reviewed SQL tool probes passed for this workspace.",
-    "agent_eval": "Live MLflow Agent Evaluation passed for this deployment.",
-    "agent_orchestrator": "Live Supervisor Agent endpoint probe passed for this workspace.",
-    "ai_gateway": "Live AI Gateway endpoint probe passed and row-level inference logging proof is present.",
-    "lakebase_sync": "Live Lakebase synced-table probes passed for MIP-owned serving tables.",
-}
-_PUBLIC_CAPABILITY_CONFIGURED_DETAILS = {
-    "genie_conversation_api": "Genie Conversation API dependencies are configured; live proof is required before claiming this row.",
-    "certified_metric_views": "Certified metric-view SQL contracts are bundled; live proof is required before claiming this row.",
-    "uc_function_tools": "Reviewed SQL tool contracts are bundled; live proof is required before claiming this row.",
-    "agent_eval": "Agent Evaluation assets are configured; a live passing evaluation is required before claiming this row.",
-    "agent_orchestrator": "Supervisor Agent configuration is present; live endpoint proof is required before claiming this row.",
-    "ai_gateway": "AI Gateway configuration is present; live endpoint and inference-log proof are required before claiming this row.",
-    "lakebase_sync": "Lakebase synced-table configuration is present; live row-count proof is required before claiming this row.",
-}
 
 SqlDep = Annotated[DatabricksSqlClient, Depends(get_sql_client)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
@@ -168,46 +136,8 @@ def growth_agent_home(
     return GrowthAgentHomeResponse(
         workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
         monitors=list_monitors(lakebase, actor=actor),
-        capabilities=_public_capability_rows(live_statuses=live_statuses),
+        capabilities=public_capability_rows(live_statuses=live_statuses),
     )
-
-
-def _public_capability_rows(
-    *,
-    live_statuses: LiveCapabilityMap | None = None,
-) -> list[dict[str, object]]:
-    """Return Growth Agent-safe capability rows.
-
-    The admin capability endpoint may expose raw proof details such as endpoint
-    names, table paths, run IDs, and deployed SHAs. The Growth Agent route is a
-    normal user surface, so it may show whether a capability is claimable but
-    must keep proof identifiers behind the admin boundary.
-    """
-
-    rows: list[dict[str, object]] = []
-    for capability in probe_capabilities(live_statuses=live_statuses):
-        row = capability.to_dict()
-        row["detail"] = _public_capability_detail(capability)
-        rows.append(row)
-    return rows
-
-
-def _public_capability_detail(capability: Capability) -> str:
-    if capability.status == CapabilityStatus.AVAILABLE and capability.claimable:
-        return _PUBLIC_CAPABILITY_AVAILABLE_DETAILS.get(
-            capability.key,
-            "Live capability proof passed for this workspace.",
-        )
-    if capability.status == CapabilityStatus.CONFIGURED:
-        return _PUBLIC_CAPABILITY_CONFIGURED_DETAILS.get(
-            capability.key,
-            "Configured for this workspace; live proof is required before claiming this row.",
-        )
-    if capability.status == CapabilityStatus.NOT_PROVISIONED:
-        return "Not provisioned for this workspace."
-    if capability.status == CapabilityStatus.PREVIEW_MIRROR:
-        return "Roadmap pattern only; not claimed as an active integration."
-    return "Hidden until enabled."
 
 
 @router.get("/monitors", response_model=list[GrowthAgentMonitor])
@@ -551,7 +481,7 @@ def run_mortgage_growth_agent(
     filters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.
     """
 
-    payload = _payload_with_prompt_state_scope(payload)
+    payload = payload_with_prompt_state_scope(payload)
     workflow, copilot_evidence = plan_growth_agent_prompt(payload)
     response = _run_workflow(
         workflow=workflow,
@@ -563,32 +493,6 @@ def run_mortgage_growth_agent(
         copilot_evidence=copilot_evidence,
     )
     return response
-
-
-def _payload_with_prompt_state_scope(payload: GrowthAgentPromptRunRequest) -> GrowthAgentPromptRunRequest:
-    if payload.states:
-        return payload
-    states = _states_from_prompt(payload.prompt)
-    if not states:
-        return payload
-    return payload.model_copy(update={"states": states})
-
-
-def _states_from_prompt(prompt: str) -> list[str]:
-    found: list[str] = []
-    lowered = prompt.lower()
-    for code, pattern in _STATE_NAME_PATTERNS:
-        if pattern.search(lowered):
-            found.append(code)
-    for match in _STATE_CODE_PATTERN.finditer(prompt):
-        code = match.group(1).upper()
-        if code in US_STATE_NAME_BY_CODE:
-            found.append(code)
-    out: list[str] = []
-    for code in found:
-        if code not in out:
-            out.append(code)
-    return out[:20]
 
 
 def _run_workflow(
