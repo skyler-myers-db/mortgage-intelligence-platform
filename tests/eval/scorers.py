@@ -145,9 +145,20 @@ def count_reconciles(
 ) -> bool:
     """MLflow-compatible custom scorer for reconciled Growth Agent counts."""
 
-    _ = inputs, trace
+    _ = trace
     response = outputs if isinstance(outputs, dict) else {}
     case = expectations if isinstance(expectations, dict) else {}
+    if not case and isinstance(inputs, dict):
+        input_case = inputs.get("case")
+        if isinstance(input_case, dict):
+            case = input_case
+        elif isinstance(input_case, str):
+            try:
+                parsed_case = json.loads(input_case)
+            except json.JSONDecodeError:
+                parsed_case = {}
+            if isinstance(parsed_case, dict):
+                case = parsed_case
     return bool(score_count_reconciliation(response, case)["passed"])
 
 

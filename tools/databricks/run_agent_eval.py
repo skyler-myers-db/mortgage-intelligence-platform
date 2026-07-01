@@ -225,19 +225,54 @@ def _log_eval_run(
 def _mlflow_genai_eval_data(
     *,
     cases: list[dict[str, Any]],
-    responses_by_case_id: dict[str, dict[str, Any]],
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for case in cases:
         case_id = str(case["id"])
         rows.append(
             {
-                "inputs": {"prompt": str(case["prompt"]), "case_id": case_id},
-                "outputs": responses_by_case_id.get(case_id, {}),
-                "expectations": dict(case),
+                "inputs": {
+                    "prompt": str(case["prompt"]),
+                    "case_id": case_id,
+                    "case": dict(case),
+                },
             }
         )
     return rows
+
+
+def _traced_replay_predict_fn(
+    *,
+    mlflow_module: Any,
+    responses_by_case_id: dict[str, dict[str, Any]],
+):
+    """Return a traced predict function for MLflow GenAI eval over live responses.
+
+    The app calls happen before MLflow evaluation so the retry/timeout behavior is
+    controlled in one place. MLflow still receives a normal traced predict_fn and
+    runs the same scorer over the returned payloads, avoiding the no-trace static
+    row path that is broken in some MLflow releases.
+    """
+
+    def replay_growth_agent_response(
+        prompt: str,
+        case_id: str,
+        case: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        _ = prompt, case
+        response = responses_by_case_id.get(str(case_id))
+        if response is None:
+            return {"error": f"missing precomputed Growth Agent response for case {case_id}"}
+        return response
+
+    trace_decorator = getattr(mlflow_module, "trace", None)
+    if not callable(trace_decorator):
+        raise RuntimeError("mlflow.trace is required to run MLflow GenAI Evaluation replay")
+    return trace_decorator(
+        replay_growth_agent_response,
+        name="mip_growth_agent_eval_replay",
+        attributes={"mip_eval": "growth_agent_golden"},
+    )
 
 
 def _is_databricks_tracking_uri(uri: str) -> bool:
@@ -373,7 +408,11 @@ def _run_mlflow_genai_evaluate(
     if hasattr(mlflow, "set_experiment"):
         mlflow.set_experiment(experiment_name)
     result = evaluate(
-        data=_mlflow_genai_eval_data(cases=cases, responses_by_case_id=responses_by_case_id),
+        data=_mlflow_genai_eval_data(cases=cases),
+        predict_fn=_traced_replay_predict_fn(
+            mlflow_module=mlflow,
+            responses_by_case_id=responses_by_case_id,
+        ),
         scorers=[decorated_count_reconciles],
     )
     run_id = str(getattr(result, "run_id", "") or getattr(result, "mlflow_run_id", "") or "")

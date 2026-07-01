@@ -251,18 +251,30 @@ def test_mlflow_genai_evaluate_runs_custom_scorer(monkeypatch) -> None:
         calls["scorer_kwargs"] = kwargs
         return func
 
-    def fake_evaluate(*, data, scorers):
+    def fake_evaluate(*, data, predict_fn, scorers):
         calls["data"] = data
         calls["scorers"] = scorers
+        calls["predict_fn"] = predict_fn
+        assert "outputs" not in data[0]
+        assert "expectations" not in data[0]
+        assert data[0]["inputs"]["case"]["id"] == "case-a"
+        outputs = predict_fn(**data[0]["inputs"])
         assert scorers[0](
             inputs=data[0]["inputs"],
-            outputs=data[0]["outputs"],
-            expectations=data[0]["expectations"],
+            outputs=outputs,
+            expectations=None,
         )
         return SimpleNamespace(run_id="genai-run-1")
 
+    def fake_trace(func=None, **kwargs):
+        calls["trace_kwargs"] = kwargs
+        if func is None:
+            return lambda wrapped: wrapped
+        return func
+
     fake_mlflow = SimpleNamespace(
         genai=SimpleNamespace(evaluate=fake_evaluate),
+        trace=fake_trace,
         set_tracking_uri=lambda uri: calls.setdefault("tracking_uri", uri),
         get_tracking_uri=lambda: calls["tracking_uri"],
         set_experiment=lambda name: calls.setdefault("experiment", name),
@@ -321,11 +333,14 @@ def test_mlflow_genai_evaluate_runs_custom_scorer(monkeypatch) -> None:
     assert result["count_reconciles_score"] == 1.0
     assert calls["experiment"] == "/Shared/mip-agent-eval"
     assert calls["scorer_kwargs"]["name"] == "count_reconciles"
+    assert calls["trace_kwargs"]["name"] == "mip_growth_agent_eval_replay"
+    assert callable(calls["predict_fn"])
 
 
 def test_mlflow_genai_evaluate_requires_count_reconciles_metric(monkeypatch) -> None:
     fake_mlflow = SimpleNamespace(
         genai=SimpleNamespace(evaluate=lambda **_kwargs: SimpleNamespace(run_id="genai-run-1")),
+        trace=lambda func=None, **_kwargs: func if func is not None else (lambda wrapped: wrapped),
         set_tracking_uri=lambda _uri: None,
         get_tracking_uri=lambda: "databricks",
         set_experiment=lambda _name: None,
@@ -405,6 +420,7 @@ def test_mlflow_genai_evaluate_rejects_local_tracking_when_required(monkeypatch)
 def test_mlflow_genai_evaluate_requires_databricks_run_lookup(monkeypatch) -> None:
     fake_mlflow = SimpleNamespace(
         genai=SimpleNamespace(evaluate=lambda **_kwargs: SimpleNamespace(run_id="missing-run")),
+        trace=lambda func=None, **_kwargs: func if func is not None else (lambda wrapped: wrapped),
         set_tracking_uri=lambda _uri: None,
         get_tracking_uri=lambda: "databricks",
         set_experiment=lambda _name: None,

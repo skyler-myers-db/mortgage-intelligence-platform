@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -131,6 +133,28 @@ def test_count_reconciles_mlflow_scorer_signature() -> None:
     response = _response_for(str(case["id"]))
 
     assert count_reconciles(inputs={"prompt": case["prompt"]}, outputs=response, expectations=case)
+
+
+def test_count_reconciles_reads_case_from_inputs_for_traced_replay() -> None:
+    case = next(case for case in load_cases() if case["id"] == "refi_objective_routes_to_daily_refi")
+    response = _response_for(str(case["id"]))
+
+    assert count_reconciles(
+        inputs={"prompt": case["prompt"], "case_id": case["id"], "case": case},
+        outputs=response,
+        expectations=None,
+    )
+
+
+def test_count_reconciles_reads_json_case_from_inputs_for_mlflow_serialization() -> None:
+    case = next(case for case in load_cases() if case["id"] == "refi_objective_routes_to_daily_refi")
+    response = _response_for(str(case["id"]))
+
+    assert count_reconciles(
+        inputs={"prompt": case["prompt"], "case_id": case["id"], "case": json.dumps(case)},
+        outputs=response,
+        expectations=None,
+    )
 
 
 def test_count_reconciliation_accepts_configured_catalog_trusted_assets() -> None:
