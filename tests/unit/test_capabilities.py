@@ -35,6 +35,8 @@ from backend.services.lakebase import get_lakebase_client
 from backend.services.resilience import TTLCache
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_TEST_GIT_SHA = "69ff206fa7667589a28498c6554779f7f6c18c08"
+_TEST_GIT_SHA_SHORT = _TEST_GIT_SHA[:12]
 
 
 def _settings(**overrides: object) -> Settings:
@@ -624,6 +626,7 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     workspace = _FakeWorkspaceClient()
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -636,7 +639,7 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     assert workspace.serving_endpoints.queries
     query_kwargs = workspace.serving_endpoints.queries[0][1]
     client_request_id = str(query_kwargs.get("client_request_id") or "")
-    assert client_request_id.startswith("mip-capability-")
+    assert client_request_id == f"mip-capability-{_TEST_GIT_SHA_SHORT}"
     assert any("system.information_schema.tables" in statement for statement in sql.statements)
     assert any("mip_agent_inference_payload" in statement for statement in sql.statements)
     assert any(
@@ -645,15 +648,74 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     )
 
 
-def test_ai_gateway_live_probe_rejects_missing_exact_log_row(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    ticks = iter([0.0, 91.0])
-    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
-    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
-    sql = _LiveSqlClient(count=0, recent_count=1)
+def test_ai_gateway_live_probe_accepts_existing_deployment_scoped_row_level_proof() -> None:
+    sql = _LiveSqlClient(count=2, recent_count=99)
+    workspace = _FakeWorkspaceClient()
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=sql,
+        workspace_client=workspace,
+    )
+
+    assert statuses["ai_gateway"].available is True
+    assert "deployment-scoped inference-log row" in statuses["ai_gateway"].detail
+    assert workspace.serving_endpoints.queries
+    assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
+
+
+def test_ai_gateway_live_probe_rejects_without_deployed_sha() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=1),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "MIP_GIT_SHA is required" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_recent_row_without_deployment_scoped_exact_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter([0.0, 16.0])
+    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    sql = _LiveSqlClient(count=0, recent_count=99)
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=sql,
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "exact probe row" in statuses["ai_gateway"].detail
+    assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
+
+
+def test_ai_gateway_live_probe_rejects_missing_row_level_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter([0.0, 16.0])
+    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    sql = _LiveSqlClient(count=0, recent_count=0)
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -665,17 +727,18 @@ def test_ai_gateway_live_probe_rejects_missing_exact_log_row(
     assert statuses["ai_gateway"].available is False
     assert "accepted a bounded query" in statuses["ai_gateway"].detail
     assert "not claimable" in statuses["ai_gateway"].detail
-    assert not any("recent_row_count" in statement for statement in sql.statements)
+    assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
 
 
 def test_ai_gateway_live_probe_rejects_queryable_table_before_exact_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    ticks = iter([0.0, 91.0])
+    ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -692,6 +755,7 @@ def test_ai_gateway_live_probe_rejects_queryable_table_before_exact_row(
 def test_ai_gateway_live_probe_rejects_missing_inference_table() -> None:
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -707,6 +771,7 @@ def test_ai_gateway_live_probe_rejects_missing_inference_table() -> None:
 def test_ai_gateway_live_probe_rejects_endpoint_not_ready() -> None:
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -722,6 +787,7 @@ def test_ai_gateway_live_probe_rejects_endpoint_not_ready() -> None:
 def test_ai_gateway_live_probe_rejects_disabled_inference_logging() -> None:
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -737,6 +803,7 @@ def test_ai_gateway_live_probe_rejects_disabled_inference_logging() -> None:
 def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="mip_app_state.mip_sync.other_gateway_prefix",
@@ -752,6 +819,7 @@ def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
 def test_ai_gateway_live_probe_rejects_malformed_inference_table_config() -> None:
     statuses = collect_live_capability_statuses(
         settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
             mip_ai_gateway=True,
             mip_ai_gateway_endpoint="mip-agent-gateway",
             mip_ai_gateway_inference_table="not-three-part",
@@ -1113,6 +1181,7 @@ def test_capabilities_live_probe_is_short_ttl_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
+        mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
         mip_ai_gateway_endpoint="mip-agent-gateway",
         mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -1152,6 +1221,7 @@ def test_capabilities_live_probe_cache_expires(
     now = [0.0]
     monkeypatch.setattr(capability_request_module, "_LIVE_CAPABILITY_CACHE", TTLCache(now=lambda: now[0]))
     settings = _settings(
+        mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
         mip_ai_gateway_endpoint="mip-agent-gateway",
         mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -1186,6 +1256,7 @@ def test_capabilities_live_probe_ttl_zero_disables_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings = _settings(
+        mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
         mip_ai_gateway_endpoint="mip-agent-gateway",
         mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
@@ -1219,12 +1290,14 @@ def test_capabilities_live_probe_cache_key_tracks_gateway_settings(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     settings_a = _settings(
+        mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
         mip_ai_gateway_endpoint="mip-agent-gateway-a",
         mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
         mip_live_capability_probe_ttl_s=60.0,
     )
     settings_b = _settings(
+        mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
         mip_ai_gateway_endpoint="mip-agent-gateway-b",
         mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",

@@ -31,7 +31,6 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 from backend.config.settings import Settings, get_settings
 from backend.services.capability_serving_probes import (
@@ -104,6 +103,8 @@ class LiveCapabilityStatus:
 
 LiveCapabilityMap = Mapping[str, LiveCapabilityStatus]
 MIN_GROWTH_AGENT_EVAL_CASES = 5
+_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX = "mip-capability-"
+_AI_GATEWAY_EXACT_LOG_WAIT_S = 15.0
 
 
 def _module_present(name: str) -> bool:
@@ -843,7 +844,13 @@ def _probe_ai_gateway(
                 False,
                 f"No AI Gateway inference tables matching {expected_table} were visible to SQL.",
             )
-        client_request_id = f"mip-capability-{uuid4()}"
+        sha = _ai_gateway_probe_sha(settings)
+        if not sha:
+            return LiveCapabilityStatus(
+                False,
+                "MIP_GIT_SHA is required to prove AI Gateway logging matches this deployment.",
+            )
+        client_request_id = f"{_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX}{sha}"
         before_rows = count_inference_log_rows(
             sql_client,
             expected_table,
@@ -860,11 +867,20 @@ def _probe_ai_gateway(
         )
         if not serving_response_has_payload(response):
             return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} returned no response payload.")
+        if before_rows > 0:
+            return LiveCapabilityStatus(
+                True,
+                (
+                    "Live AI Gateway endpoint accepted a bounded query and an exact "
+                    f"deployment-scoped inference-log row is present at {actual}."
+                ),
+            )
         log_rows = wait_for_inference_log_increment(
             sql_client,
             expected_table,
             previous_count=before_rows,
             client_request_id=client_request_id,
+            timeout_s=_AI_GATEWAY_EXACT_LOG_WAIT_S,
         )
         if log_rows <= before_rows:
             return LiveCapabilityStatus(
@@ -882,6 +898,15 @@ def _probe_ai_gateway(
         )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"AI Gateway probe failed ({type(exc).__name__}).")
+
+
+def _ai_gateway_probe_sha(settings: Settings) -> str | None:
+    raw = (settings.mip_git_sha or "").strip().lower()
+    if len(raw) < 7:
+        return None
+    if not all(ch in "0123456789abcdef" for ch in raw):
+        return None
+    return raw[:12]
 
 
 def _is_agent_responses_task(task: Any) -> bool:
