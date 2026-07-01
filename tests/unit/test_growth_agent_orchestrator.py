@@ -124,7 +124,14 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert body["workflow"]["id"] == "listing_watch"
     assert body["route"] == "/lead-queue?segment=listed&marketing_eligibility=Eligible+only&states=IL"
     assert "Supervisor Agent selected reviewed workflow" in body["interpreted_intent"]
-    assert "selected the reviewed Listed-for-Sale Purchase Watch workflow" in body["agent_reasoning"]
+    assert "deterministic fallback candidate" in body["interpreted_intent"]
+    assert "Daily Refi Opportunity Brief" in body["agent_reasoning"]
+    selection_check = next(
+        check for check in body["policy_checks"] if check["label"] == "Supervisor workflow selection"
+    )
+    assert selection_check["status"] == "review_required"
+    assert "listing_watch" in selection_check["detail"]
+    assert "daily_refi_brief" in selection_check["detail"]
     assert body["genie_trusted_assets"] == [
         "databricks.serving_endpoint.mip-supervisor-endpoint",
         "databricks.supervisor_agent.supervisor-1",
@@ -132,9 +139,14 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     framework_chip = next(
         chip for chip in body["governance_chips"] if chip["label"] == "Multi-agent framework"
     )
-    assert framework_chip["status"] == "passed"
+    assert framework_chip["status"] == "review_required"
+    assert "different reviewed workflow" in framework_chip["detail"]
     assert framework_chip["evidence_ref"] == body["genie_question_hash"]
     assert len(body["genie_question_hash"]) == 64
+    evidence = json.loads(lakebase.runs[0]["agent_evidence"])
+    assert evidence["supervisor_workflow_id"] == "listing_watch"
+    assert evidence["deterministic_workflow_id"] == "daily_refi_brief"
+    assert evidence["workflow_override_review_required"] is True
     assert prompt_text.lower() not in json.dumps(body).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.runs, default=str).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.audit_events, default=str).lower()
@@ -192,6 +204,11 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
     assert prompt_text not in calls[0]["prompt"]
     assert body["execution_mode"] == "agent_framework"
     assert body["workflow"]["id"] == "daily_refi_brief"
+    selection_check = next(
+        check for check in body["policy_checks"] if check["label"] == "Supervisor workflow selection"
+    )
+    assert selection_check["status"] == "passed"
+    assert "agreed on daily_refi_brief" in selection_check["detail"]
     assert body["criteria"]["states"] == ["IL"]
     assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
 

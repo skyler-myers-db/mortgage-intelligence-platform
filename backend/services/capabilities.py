@@ -806,12 +806,12 @@ def _probe_ai_gateway(
         )
         if log_rows <= before_rows:
             return LiveCapabilityStatus(
-                True,
+                False,
                 (
                     "Live AI Gateway endpoint accepted a bounded query and inference logging "
                     f"is enabled/queryable at {actual}; exact probe row {client_request_id} "
                     "was not visible inside the bounded window, so row-level delivery remains "
-                    "reported as asynchronous."
+                    "unproven and this capability is not claimable yet."
                 ),
             )
         return LiveCapabilityStatus(

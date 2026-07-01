@@ -68,14 +68,23 @@ def tool_steps(
     tool_result_hash: str,
     copilot_evidence: GrowthAgentCopilotEvidence,
 ) -> list[GrowthAgentToolStep]:
-    planner_detail = (
-        "Supervisor selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
-        if copilot_evidence.execution_mode == "agent_framework"
-        else "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
-    )
+    supervisor_override = bool(copilot_evidence.workflow_override_review_required)
+    if supervisor_override:
+        planner_detail = (
+            "Supervisor selected a different allowlisted workflow than the deterministic fallback; "
+            "human review is required before acting."
+        )
+    elif copilot_evidence.execution_mode == "agent_framework":
+        planner_detail = (
+            "Supervisor selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
+        )
+    else:
+        planner_detail = (
+            "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
+        )
     planner_step = GrowthAgentToolStep(
         label="Interpret mortgage-growth objective",
-        status="completed",
+        status="review_required" if supervisor_override else "completed",
         detail=planner_detail,
         source_asset=None,
         tool_name=None,
@@ -213,6 +222,7 @@ def policy_checks(
     metrics: dict[str, Any],
     *,
     saved_monitor: bool,
+    copilot_evidence: GrowthAgentCopilotEvidence | None = None,
 ) -> list[GrowthAgentPolicyCheck]:
     broad_total = int(metrics["broad_total"])
     actionable_total = int(metrics["actionable_total"])
@@ -244,6 +254,22 @@ def policy_checks(
             detail=reconciliation_detail,
         ),
     ]
+    if copilot_evidence and copilot_evidence.execution_mode == "agent_framework":
+        selected = copilot_evidence.supervisor_workflow_id or workflow.id
+        deterministic = copilot_evidence.deterministic_workflow_id or workflow.id
+        override = bool(copilot_evidence.workflow_override_review_required)
+        checks.append(
+            GrowthAgentPolicyCheck(
+                label="Supervisor workflow selection",
+                status="review_required" if override else "passed",
+                detail=(
+                    f"Supervisor selected {selected}; deterministic fallback candidate was "
+                    f"{deterministic}. Review the workflow choice before acting."
+                    if override
+                    else f"Supervisor and deterministic planner agreed on {selected}."
+                ),
+            )
+        )
     if workflow.id == "high_equity_heloc_watch":
         checks.append(
             GrowthAgentPolicyCheck(
@@ -319,6 +345,22 @@ def governance_chips(
     blocked = any(check.status == "blocked" for check in policy_checks)
     review = any(check.status == "review_required" for check in policy_checks)
     policy_status: Literal["passed", "review_required"] = "review_required" if blocked or review else "passed"
+    if copilot_evidence.workflow_override_review_required:
+        framework_status: Literal["passed", "review_required", "not_attached"] = "review_required"
+        framework_detail = (
+            "Databricks Supervisor Agent selected a different reviewed workflow than the deterministic "
+            "fallback; review the workflow choice before acting."
+        )
+    elif copilot_evidence.execution_mode == "agent_framework":
+        framework_status = "passed"
+        framework_detail = (
+            "Databricks Supervisor Agent selected a reviewed workflow; reviewed deterministic tools executed the run."
+        )
+    else:
+        framework_status = "not_attached"
+        framework_detail = (
+            "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
+        )
     chips: list[GrowthAgentGovernanceChip] = [
         GrowthAgentGovernanceChip(
             label="PII-safe output",
@@ -350,12 +392,8 @@ def governance_chips(
         ),
         GrowthAgentGovernanceChip(
             label="Multi-agent framework",
-            status="passed" if copilot_evidence.execution_mode == "agent_framework" else "not_attached",
-            detail=(
-                "Databricks Supervisor Agent selected a reviewed workflow; reviewed deterministic tools executed the run."
-                if copilot_evidence.execution_mode == "agent_framework"
-                else "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
-            ),
+            status=framework_status,
+            detail=framework_detail,
             evidence_ref=copilot_evidence.question_hash if copilot_evidence.execution_mode == "agent_framework" else None,
         ),
         GrowthAgentGovernanceChip(

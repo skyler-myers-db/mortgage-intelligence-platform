@@ -560,7 +560,7 @@ def test_agent_orchestrator_live_probe_requires_exact_agent_responses_task(task:
 
 
 def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
-    sql = _LiveSqlClient(count_sequence=[1, 2])
+    sql = _LiveSqlClient(count_sequence=[0, 1])
     workspace = _FakeWorkspaceClient()
     statuses = collect_live_capability_statuses(
         settings=_settings(
@@ -585,7 +585,7 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     )
 
 
-def test_ai_gateway_live_probe_accepts_delayed_exact_log_row(
+def test_ai_gateway_live_probe_rejects_missing_exact_log_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticks = iter([0.0, 91.0])
@@ -602,13 +602,13 @@ def test_ai_gateway_live_probe_accepts_delayed_exact_log_row(
         workspace_client=_FakeWorkspaceClient(),
     )
 
-    assert statuses["ai_gateway"].available is True
+    assert statuses["ai_gateway"].available is False
     assert "accepted a bounded query" in statuses["ai_gateway"].detail
-    assert "reported as asynchronous" in statuses["ai_gateway"].detail
+    assert "not claimable" in statuses["ai_gateway"].detail
     assert not any("recent_row_count" in statement for statement in sql.statements)
 
 
-def test_ai_gateway_live_probe_accepts_queryable_table_before_exact_row(
+def test_ai_gateway_live_probe_rejects_queryable_table_before_exact_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticks = iter([0.0, 91.0])
@@ -624,9 +624,9 @@ def test_ai_gateway_live_probe_accepts_queryable_table_before_exact_row(
         workspace_client=_FakeWorkspaceClient(),
     )
 
-    assert statuses["ai_gateway"].available is True
+    assert statuses["ai_gateway"].available is False
     assert "inference logging is enabled/queryable" in statuses["ai_gateway"].detail
-    assert "reported as asynchronous" in statuses["ai_gateway"].detail
+    assert "not claimable" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_missing_inference_table() -> None:

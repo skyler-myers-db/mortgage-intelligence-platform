@@ -571,7 +571,12 @@ def _run_workflow(
         tool_result_hash=tool_result_hash,
         copilot_evidence=copilot_evidence,
     )
-    policy_checks = _policy_checks(workflow, metrics, saved_monitor=payload.save_monitor)
+    policy_checks = _policy_checks(
+        workflow,
+        metrics,
+        saved_monitor=payload.save_monitor,
+        copilot_evidence=copilot_evidence,
+    )
     governance_chips = _governance_chips(
         workflow,
         metrics,
