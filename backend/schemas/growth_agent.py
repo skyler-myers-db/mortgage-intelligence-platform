@@ -123,6 +123,7 @@ _PROMPT_REVIEWED_LOWERCASE_PAIRS: frozenset[tuple[str, str]] = frozenset(
         ("for", "sale"),
         ("home", "equity"),
         ("prime", "refi"),
+        ("prime", "refinance"),
         ("rate", "spread"),
         ("retention", "risk"),
         ("story", "dossiers"),

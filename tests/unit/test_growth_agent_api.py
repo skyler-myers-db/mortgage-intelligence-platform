@@ -1569,6 +1569,8 @@ def test_prompt_agent_allows_safe_borrower_group_language() -> None:
     "prompt",
     [
         "top 10 prime refi candidates",
+        "show prime refinance opportunities over 75 bps in Illinois",
+        "show prime refinance borrowers over 75 bps in Illinois",
         "show 10 high equity borrowers",
         "show borrowers over 75 bps",
     ],
