@@ -31,6 +31,7 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from backend.config.settings import Settings, get_settings
 from backend.services.capability_serving_probes import (
@@ -850,7 +851,7 @@ def _probe_ai_gateway(
                 False,
                 "MIP_GIT_SHA is required to prove AI Gateway logging matches this deployment.",
             )
-        client_request_id = f"{_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX}{sha}"
+        client_request_id = f"{_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX}{sha}-{uuid4().hex[:16]}"
         before_rows = count_inference_log_rows(
             sql_client,
             expected_table,
@@ -867,14 +868,6 @@ def _probe_ai_gateway(
         )
         if not serving_response_has_payload(response):
             return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} returned no response payload.")
-        if before_rows > 0:
-            return LiveCapabilityStatus(
-                True,
-                (
-                    "Live AI Gateway endpoint accepted a bounded query and an exact "
-                    f"deployment-scoped inference-log row is present at {actual}."
-                ),
-            )
         log_rows = wait_for_inference_log_increment(
             sql_client,
             expected_table,

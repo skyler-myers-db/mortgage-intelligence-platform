@@ -639,7 +639,8 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     assert workspace.serving_endpoints.queries
     query_kwargs = workspace.serving_endpoints.queries[0][1]
     client_request_id = str(query_kwargs.get("client_request_id") or "")
-    assert client_request_id == f"mip-capability-{_TEST_GIT_SHA_SHORT}"
+    assert client_request_id.startswith(f"mip-capability-{_TEST_GIT_SHA_SHORT}-")
+    assert len(client_request_id) > len(f"mip-capability-{_TEST_GIT_SHA_SHORT}-")
     assert any("system.information_schema.tables" in statement for statement in sql.statements)
     assert any("mip_agent_inference_payload" in statement for statement in sql.statements)
     assert any(
@@ -648,7 +649,12 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     )
 
 
-def test_ai_gateway_live_probe_accepts_existing_deployment_scoped_row_level_proof() -> None:
+def test_ai_gateway_live_probe_rejects_stale_sha_scoped_row_level_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter([0.0, 16.0])
+    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
     sql = _LiveSqlClient(count=2, recent_count=99)
     workspace = _FakeWorkspaceClient()
     statuses = collect_live_capability_statuses(
@@ -662,8 +668,8 @@ def test_ai_gateway_live_probe_accepts_existing_deployment_scoped_row_level_proo
         workspace_client=workspace,
     )
 
-    assert statuses["ai_gateway"].available is True
-    assert "deployment-scoped inference-log row" in statuses["ai_gateway"].detail
+    assert statuses["ai_gateway"].available is False
+    assert "exact probe row" in statuses["ai_gateway"].detail
     assert workspace.serving_endpoints.queries
     assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
 
