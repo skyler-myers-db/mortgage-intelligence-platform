@@ -39,7 +39,13 @@ from backend.schemas.growth_agent import (
 )
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import resolve_actor
-from backend.services.capabilities import probe_capabilities
+from backend.services.capabilities import (
+    Capability,
+    CapabilityStatus,
+    LiveCapabilityMap,
+    probe_capabilities,
+)
+from backend.services.capability_request import collect_request_live_capability_statuses
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_drafts import create_notification_drafts
@@ -124,6 +130,24 @@ _STATE_NAME_PATTERNS: tuple[tuple[str, re.Pattern[str]], ...] = tuple(
     (code, re.compile(rf"\b{re.escape(name.lower())}\b"))
     for code, name in sorted(US_STATE_NAME_BY_CODE.items())
 )
+_PUBLIC_CAPABILITY_AVAILABLE_DETAILS = {
+    "genie_conversation_api": "Live Genie Conversation API probe passed for this workspace.",
+    "certified_metric_views": "Live certified metric-view probes passed for this workspace.",
+    "uc_function_tools": "Live reviewed SQL tool probes passed for this workspace.",
+    "agent_eval": "Live MLflow Agent Evaluation passed for this deployment.",
+    "agent_orchestrator": "Live Supervisor Agent endpoint probe passed for this workspace.",
+    "ai_gateway": "Live AI Gateway endpoint probe passed and row-level inference logging proof is present.",
+    "lakebase_sync": "Live Lakebase synced-table probes passed for MIP-owned serving tables.",
+}
+_PUBLIC_CAPABILITY_CONFIGURED_DETAILS = {
+    "genie_conversation_api": "Genie Conversation API dependencies are configured; live proof is required before claiming this row.",
+    "certified_metric_views": "Certified metric-view SQL contracts are bundled; live proof is required before claiming this row.",
+    "uc_function_tools": "Reviewed SQL tool contracts are bundled; live proof is required before claiming this row.",
+    "agent_eval": "Agent Evaluation assets are configured; a live passing evaluation is required before claiming this row.",
+    "agent_orchestrator": "Supervisor Agent configuration is present; live endpoint proof is required before claiming this row.",
+    "ai_gateway": "AI Gateway configuration is present; live endpoint and inference-log proof are required before claiming this row.",
+    "lakebase_sync": "Lakebase synced-table configuration is present; live row-count proof is required before claiming this row.",
+}
 
 SqlDep = Annotated[DatabricksSqlClient, Depends(get_sql_client)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
@@ -133,13 +157,57 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 def growth_agent_home(
     request: Request,
     lakebase: LakebaseDep,
+    live_capabilities: bool = False,
 ) -> GrowthAgentHomeResponse:
     actor = resolve_actor(request)
+    live_statuses = (
+        collect_request_live_capability_statuses(request)
+        if live_capabilities
+        else None
+    )
     return GrowthAgentHomeResponse(
         workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
         monitors=list_monitors(lakebase, actor=actor),
-        capabilities=[cap.to_dict() for cap in probe_capabilities()],
+        capabilities=_public_capability_rows(live_statuses=live_statuses),
     )
+
+
+def _public_capability_rows(
+    *,
+    live_statuses: LiveCapabilityMap | None = None,
+) -> list[dict[str, object]]:
+    """Return Growth Agent-safe capability rows.
+
+    The admin capability endpoint may expose raw proof details such as endpoint
+    names, table paths, run IDs, and deployed SHAs. The Growth Agent route is a
+    normal user surface, so it may show whether a capability is claimable but
+    must keep proof identifiers behind the admin boundary.
+    """
+
+    rows: list[dict[str, object]] = []
+    for capability in probe_capabilities(live_statuses=live_statuses):
+        row = capability.to_dict()
+        row["detail"] = _public_capability_detail(capability)
+        rows.append(row)
+    return rows
+
+
+def _public_capability_detail(capability: Capability) -> str:
+    if capability.status == CapabilityStatus.AVAILABLE and capability.claimable:
+        return _PUBLIC_CAPABILITY_AVAILABLE_DETAILS.get(
+            capability.key,
+            "Live capability proof passed for this workspace.",
+        )
+    if capability.status == CapabilityStatus.CONFIGURED:
+        return _PUBLIC_CAPABILITY_CONFIGURED_DETAILS.get(
+            capability.key,
+            "Configured for this workspace; live proof is required before claiming this row.",
+        )
+    if capability.status == CapabilityStatus.NOT_PROVISIONED:
+        return "Not provisioned for this workspace."
+    if capability.status == CapabilityStatus.PREVIEW_MIRROR:
+        return "Roadmap pattern only; not claimed as an active integration."
+    return "Hidden until enabled."
 
 
 @router.get("/monitors", response_model=list[GrowthAgentMonitor])

@@ -1295,7 +1295,7 @@ export const api = {
     ),
 
   growthAgent: (signal?: AbortSignal) =>
-    getJson<GrowthAgentHomeResponse>('/api/growth-agent', signal),
+    getJson<GrowthAgentHomeResponse>('/api/growth-agent?live_capabilities=1', signal),
 
   growthAgentMonitors: (signal?: AbortSignal) =>
     getJson<GrowthAgentMonitor[]>('/api/growth-agent/monitors', signal),

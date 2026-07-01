@@ -11,6 +11,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import backend.api.growth_agent as growth_agent_api
 import backend.services.capabilities as capabilities_module
 import backend.services.rbac as rbac_module
 from backend.config.settings import Settings
@@ -47,6 +48,29 @@ def _capability_settings() -> Settings:
         genie_space_id="space-abc",
         lakebase_host="lb-test",
         lakebase_user="mip_app",
+    )
+
+
+def _full_capability_settings() -> Settings:
+    return Settings(
+        databricks_host="dbc-test.cloud.databricks.com",
+        databricks_warehouse_id="wh-123",
+        genie_space_id="space-abc",
+        lakebase_host="lb-test",
+        lakebase_user="mip_app",
+        mip_git_sha="c57771c69e0f0ff7bc4e8e9e7c73abfac9c94cbb",
+        mip_agent_orchestrator=True,
+        mip_agent_supervisor_id="supervisor-123",
+        mip_agent_serving_endpoint="mas-supervisor-endpoint",
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="databricks-claude-sonnet-4-5",
+        mip_ai_gateway_inference_table="mip.audit.mip_agent_gateway_sonnet",
+        mip_agent_eval_experiment="/Shared/mip/agent-eval",
+        mip_agent_eval_run_id="91d51bf91f28494dac6781c394e28d7a",
+        mip_lakebase_sync=True,
+        mip_lakebase_sync_catalog="mip_app_state",
+        mip_lakebase_sync_schema="mip_sync",
+        mip_lakebase_sync_tables="source_readiness,segment_population,funnel_snapshot_daily",
     )
 
 
@@ -410,10 +434,60 @@ def test_growth_agent_home_lists_governed_workflows() -> None:
     assert body["monitors"] == []
 
 
-def test_growth_agent_home_ignores_live_capability_probe_query_param(
+def test_growth_agent_home_uses_static_capabilities_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(capabilities_module, "get_settings", _capability_settings)
+    monkeypatch.setattr(
+        growth_agent_api,
+        "collect_request_live_capability_statuses",
+        lambda _request: pytest.fail("live capabilities should not be probed by default"),
+    )
+    sql = _CapabilitySqlClient()
+    lakebase = _FakeLakebaseClient()
+    app.dependency_overrides[get_sql_client] = lambda: sql
+    app.dependency_overrides[get_genie_client] = lambda: _CapabilityGenieClient()
+    app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    client = TestClient(app)
+    try:
+        response = client.get(
+            "/api/growth-agent",
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    rows = {row["key"]: row for row in response.json()["capabilities"]}
+    assert rows["genie_conversation_api"]["status"] == "configured"
+    assert rows["genie_conversation_api"]["claimable"] is False
+    assert rows["certified_metric_views"]["status"] == "configured"
+    assert rows["uc_function_tools"]["status"] == "configured"
+    assert rows["lakebase_sync"]["claimable"] is False
+    assert sql.statements == []
+
+
+def test_growth_agent_home_live_capability_query_param_upgrades_capabilities(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(capabilities_module, "get_settings", _full_capability_settings)
+    live_statuses = {
+        key: capabilities_module.LiveCapabilityStatus(True, f"live proof for {key}")
+        for key in (
+            "genie_conversation_api",
+            "certified_metric_views",
+            "uc_function_tools",
+            "agent_eval",
+            "agent_orchestrator",
+            "ai_gateway",
+            "lakebase_sync",
+        )
+    }
+    monkeypatch.setattr(
+        growth_agent_api,
+        "collect_request_live_capability_statuses",
+        lambda _request: live_statuses,
+    )
     sql = _CapabilitySqlClient()
     lakebase = _FakeLakebaseClient()
     app.dependency_overrides[get_sql_client] = lambda: sql
@@ -430,12 +504,18 @@ def test_growth_agent_home_ignores_live_capability_probe_query_param(
 
     assert response.status_code == 200, response.text
     rows = {row["key"]: row for row in response.json()["capabilities"]}
-    assert rows["genie_conversation_api"]["status"] == "configured"
-    assert rows["genie_conversation_api"]["claimable"] is False
-    assert rows["certified_metric_views"]["status"] == "configured"
-    assert rows["uc_function_tools"]["status"] == "configured"
-    assert rows["lakebase_sync"]["claimable"] is False
-    assert sql.statements == []
+    for key in live_statuses:
+        assert rows[key]["status"] == "available"
+        assert rows[key]["claimable"] is True
+        detail = rows[key]["detail"]
+        assert "Live " in detail
+        assert f"live proof for {key}" not in detail
+        assert "c57771c" not in detail
+        assert "mip.audit" not in detail
+        assert "mas-" not in detail
+        assert "91d51bf" not in detail
+        assert "databricks-claude" not in detail
+        assert "supervisor-" not in detail
 
 
 def test_custom_segment_workflow_uses_reviewed_any_semantics_and_writes_audit() -> None:
