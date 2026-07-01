@@ -649,12 +649,41 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_log_rows() -> None:
     )
 
 
+def test_ai_gateway_live_probe_retries_fresh_ids_until_one_logs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ticks = iter([0.0, 16.0, 20.0])
+    monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
+    monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    sql = _LiveSqlClient(count_sequence=[0, 0, 0, 1])
+    workspace = _FakeWorkspaceClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=sql,
+        workspace_client=workspace,
+    )
+
+    assert statuses["ai_gateway"].available is True
+    assert len(workspace.serving_endpoints.queries) == 2
+    first_id = str(workspace.serving_endpoints.queries[0][1].get("client_request_id") or "")
+    second_id = str(workspace.serving_endpoints.queries[1][1].get("client_request_id") or "")
+    assert first_id.startswith(f"mip-capability-{_TEST_GIT_SHA_SHORT}-")
+    assert second_id.startswith(f"mip-capability-{_TEST_GIT_SHA_SHORT}-")
+    assert first_id != second_id
+
+
 def test_ai_gateway_live_probe_rejects_stale_sha_scoped_row_level_proof(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     sql = _LiveSqlClient(count=2, recent_count=99)
     workspace = _FakeWorkspaceClient()
     statuses = collect_live_capability_statuses(
@@ -695,6 +724,7 @@ def test_ai_gateway_live_probe_rejects_recent_row_without_deployment_scoped_exac
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     sql = _LiveSqlClient(count=0, recent_count=99)
     statuses = collect_live_capability_statuses(
         settings=_settings(
@@ -718,6 +748,7 @@ def test_ai_gateway_live_probe_rejects_missing_row_level_proof(
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     sql = _LiveSqlClient(count=0, recent_count=0)
     statuses = collect_live_capability_statuses(
         settings=_settings(
@@ -731,7 +762,7 @@ def test_ai_gateway_live_probe_rejects_missing_row_level_proof(
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "accepted a bounded query" in statuses["ai_gateway"].detail
+    assert "accepted bounded queries" in statuses["ai_gateway"].detail
     assert "not claimable" in statuses["ai_gateway"].detail
     assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
 
@@ -742,6 +773,7 @@ def test_ai_gateway_live_probe_rejects_queryable_table_before_exact_row(
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     statuses = collect_live_capability_statuses(
         settings=_settings(
             mip_git_sha=_TEST_GIT_SHA,

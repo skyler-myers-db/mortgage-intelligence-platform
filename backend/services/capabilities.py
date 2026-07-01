@@ -106,6 +106,7 @@ LiveCapabilityMap = Mapping[str, LiveCapabilityStatus]
 MIN_GROWTH_AGENT_EVAL_CASES = 5
 _AI_GATEWAY_CAPABILITY_REQUEST_PREFIX = "mip-capability-"
 _AI_GATEWAY_EXACT_LOG_WAIT_S = 15.0
+_AI_GATEWAY_EXACT_LOG_ATTEMPTS = 3
 
 
 def _module_present(name: str) -> bool:
@@ -851,43 +852,49 @@ def _probe_ai_gateway(
                 False,
                 "MIP_GIT_SHA is required to prove AI Gateway logging matches this deployment.",
             )
-        client_request_id = f"{_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX}{sha}-{uuid4().hex[:16]}"
-        before_rows = count_inference_log_rows(
-            sql_client,
-            expected_table,
-            client_request_id=client_request_id,
-        )
-        response = query_serving_endpoint(
-            workspace_client,
-            endpoint,
-            prompt=(
-                "Capability readiness check. Reply with a one-sentence acknowledgement "
-                "for Mortgage Intelligence Platform AI Gateway logging."
-            ),
-            client_request_id=client_request_id,
-        )
-        if not serving_response_has_payload(response):
-            return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} returned no response payload.")
-        log_rows = wait_for_inference_log_increment(
-            sql_client,
-            expected_table,
-            previous_count=before_rows,
-            client_request_id=client_request_id,
-            timeout_s=_AI_GATEWAY_EXACT_LOG_WAIT_S,
-        )
-        if log_rows <= before_rows:
-            return LiveCapabilityStatus(
-                False,
-                (
-                    "Live AI Gateway endpoint accepted a bounded query and inference logging "
-                    f"is enabled/queryable at {actual}; exact probe row {client_request_id} "
-                    "was not visible inside the bounded window, so row-level delivery remains "
-                    "unproven and this capability is not claimable yet."
-                ),
+        attempted_ids: list[str] = []
+        for _attempt in range(_AI_GATEWAY_EXACT_LOG_ATTEMPTS):
+            client_request_id = f"{_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX}{sha}-{uuid4().hex[:16]}"
+            attempted_ids.append(client_request_id)
+            before_rows = count_inference_log_rows(
+                sql_client,
+                expected_table,
+                client_request_id=client_request_id,
             )
+            response = query_serving_endpoint(
+                workspace_client,
+                endpoint,
+                prompt=(
+                    "Capability readiness check. Reply with a one-sentence acknowledgement "
+                    "for Mortgage Intelligence Platform AI Gateway logging."
+                ),
+                client_request_id=client_request_id,
+            )
+            if not serving_response_has_payload(response):
+                return LiveCapabilityStatus(False, f"Gateway endpoint {endpoint} returned no response payload.")
+            log_rows = wait_for_inference_log_increment(
+                sql_client,
+                expected_table,
+                previous_count=before_rows,
+                client_request_id=client_request_id,
+                timeout_s=_AI_GATEWAY_EXACT_LOG_WAIT_S,
+            )
+            if log_rows > before_rows:
+                return LiveCapabilityStatus(
+                    True,
+                    (
+                        "Live AI Gateway endpoint accepted a bounded query and exposed an exact "
+                        f"inference log row ({client_request_id}) at {actual}."
+                    ),
+                )
         return LiveCapabilityStatus(
-            True,
-            f"Live AI Gateway endpoint accepted a bounded query and exposed an inference log row at {actual}.",
+            False,
+            (
+                "Live AI Gateway endpoint accepted bounded queries and inference logging "
+                f"is enabled/queryable at {actual}; exact probe rows {', '.join(attempted_ids)} "
+                "were not visible inside the bounded window, so row-level delivery remains "
+                "unproven and this capability is not claimable yet."
+            ),
         )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"AI Gateway probe failed ({type(exc).__name__}).")
