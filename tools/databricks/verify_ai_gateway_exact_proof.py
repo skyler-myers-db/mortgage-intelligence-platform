@@ -130,6 +130,10 @@ def main(argv: list[str] | None = None) -> int:
         proof.proof_id != latest_current.proof_id for proof in verified_current
     ):
         verified_current.append(latest_current)
+    sent_verified = (
+        sent is not None
+        and any(proof.proof_id == sent.proof_id and proof.status == "verified" for proof in verified)
+    )
     summary = {
         "mode": args.mode,
         "git_sha": git_sha,
@@ -138,10 +142,14 @@ def main(argv: list[str] | None = None) -> int:
         "latest_verified": _proof_json(latest_current),
         "expired_pending": expired,
         "current_config_verified": bool(verified_current),
+        "sent_verified": sent_verified if sent else None,
     }
     _emit(summary, as_json=args.json)
-    if args.require_verified and not verified_current:
-        return 1
+    if args.require_verified:
+        if sent is not None and args.wait:
+            return 0 if sent_verified else 1
+        if not verified_current:
+            return 1
     return 0
 
 
@@ -167,7 +175,7 @@ def send_probe(
         client_request_id=client_request_id,
     )
     if not serving_response_has_payload(response):
-        raise RuntimeError(f"Gateway endpoint {endpoint} returned no response payload")
+        raise RuntimeError("Configured AI Gateway endpoint returned no response payload")
     proof = insert_pending_proof(
         lakebase,
         git_sha=git_sha,
@@ -175,10 +183,7 @@ def send_probe(
         endpoint_name=endpoint,
         inference_table=inference_table,
     )
-    print(
-        "[ai-gateway-proof] sent probe "
-        f"client_request_id={client_request_id} endpoint={endpoint} table={inference_table}"
-    )
+    print(f"[ai-gateway-proof] sent probe proof_id={proof.proof_id}")
     return proof
 
 
@@ -203,7 +208,7 @@ def verify_pending(
             )
             print(
                 "[ai-gateway-proof] verified pending "
-                f"client_request_id={updated.client_request_id} latency_s={updated.verify_latency_s:.1f}"
+                f"proof_id={updated.proof_id} latency_s={updated.verify_latency_s:.1f}"
             )
             verified.append(updated)
     return verified
@@ -227,13 +232,13 @@ def wait_for_exact_row(
             )
             print(
                 "[ai-gateway-proof] verified sent "
-                f"client_request_id={updated.client_request_id} latency_s={updated.verify_latency_s:.1f}"
+                f"proof_id={updated.proof_id} latency_s={updated.verify_latency_s:.1f}"
             )
             return [updated]
         if time.monotonic() >= deadline:
             print(
                 "[ai-gateway-proof] exact row not visible before timeout; "
-                f"left pending client_request_id={proof.client_request_id}"
+                f"left pending proof_id={proof.proof_id}"
             )
             return []
         time.sleep(interval_s)
@@ -260,14 +265,19 @@ def _proof_json(proof: AiGatewayVerifiedProof | None) -> dict[str, object] | Non
     return {
         "proof_id": proof.proof_id,
         "git_sha": proof.git_sha,
-        "client_request_id": proof.client_request_id,
-        "endpoint_name": proof.endpoint_name,
-        "inference_table": proof.inference_table,
+        "client_request_id": _redacted_ref(proof.client_request_id),
+        "endpoint_name": "<redacted>",
+        "inference_table": "<redacted>",
         "sent_at": proof.sent_at.isoformat(),
         "verified_at": proof.verified_at.isoformat() if proof.status == "verified" else None,
         "verify_latency_s": proof.verify_latency_s if proof.status == "verified" else None,
         "status": proof.status,
     }
+
+
+def _redacted_ref(value: str) -> str:
+    _ = value
+    return "<redacted>"
 
 
 def _emit(summary: dict[str, object], *, as_json: bool) -> None:
