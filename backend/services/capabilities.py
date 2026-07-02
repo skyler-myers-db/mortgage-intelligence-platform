@@ -102,8 +102,8 @@ class LiveCapabilityStatus:
 LiveCapabilityMap = Mapping[str, LiveCapabilityStatus]
 MIN_GROWTH_AGENT_EVAL_CASES = 5
 _AI_GATEWAY_CAPABILITY_REQUEST_PREFIX = "mip-capability-"
-_AI_GATEWAY_EXACT_LOG_WAIT_S = 15.0
-_AI_GATEWAY_EXACT_LOG_ATTEMPTS = 3
+_AI_GATEWAY_EXACT_LOG_WAIT_S = 90.0
+_AI_GATEWAY_EXACT_LOG_ATTEMPTS = 1
 
 
 def _module_present(name: str) -> bool:

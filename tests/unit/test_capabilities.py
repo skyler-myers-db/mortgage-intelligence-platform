@@ -661,6 +661,8 @@ def test_ai_gateway_live_probe_retries_fresh_ids_until_one_logs(
     ticks = iter([0.0, 16.0, 20.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 2)
     sql = _LiveSqlClient(count_sequence=[0, 0, 0, 1])
     workspace = _FakeWorkspaceClient()
     statuses = collect_live_capability_statuses(
@@ -689,6 +691,7 @@ def test_ai_gateway_live_probe_rejects_stale_sha_scoped_row_level_proof(
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     sql = _LiveSqlClient(count=2, recent_count=99)
     workspace = _FakeWorkspaceClient()
@@ -715,6 +718,7 @@ def test_ai_gateway_live_probe_rejects_stale_row_for_different_request_id(
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     stale_request_id = f"mip-capability-{_TEST_GIT_SHA_SHORT}-stale00000000000"
     sql = _LiveSqlClient(count_by_request_id={stale_request_id: 2})
@@ -762,6 +766,7 @@ def test_ai_gateway_live_probe_rejects_recent_row_without_deployment_scoped_exac
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     sql = _LiveSqlClient(count=0, recent_count=99)
     statuses = collect_live_capability_statuses(
@@ -786,6 +791,7 @@ def test_ai_gateway_live_probe_rejects_missing_row_level_proof(
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     sql = _LiveSqlClient(count=0, recent_count=0)
     statuses = collect_live_capability_statuses(
@@ -811,6 +817,7 @@ def test_ai_gateway_live_probe_rejects_queryable_table_before_exact_row(
     ticks = iter([0.0, 16.0])
     monkeypatch.setattr(serving_probe_module.time, "monotonic", lambda: next(ticks))
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
     statuses = collect_live_capability_statuses(
         settings=_settings(

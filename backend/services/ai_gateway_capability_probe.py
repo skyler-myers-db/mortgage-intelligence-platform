@@ -123,4 +123,4 @@ def ai_gateway_probe_sha(settings: Settings) -> str | None:
 
 def _enum_value(value: Any) -> str:
     raw = getattr(value, "value", value)
-    return str(raw or "").strip().upper()
+    return str(raw or "")
