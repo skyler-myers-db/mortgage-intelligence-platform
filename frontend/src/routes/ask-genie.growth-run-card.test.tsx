@@ -76,6 +76,31 @@ const RUN: GrowthAgentRunResponse = {
   audit_event_id: 'audit-11111111-1111-4111-8111-111111111111',
 };
 
+const PASSED_RUN: GrowthAgentRunResponse = {
+  ...RUN,
+  tool_steps: [
+    {
+      ...RUN.tool_steps[0],
+      status: 'completed',
+      detail: 'Supervisor and deterministic routing selected Daily Refi.',
+    },
+  ],
+  policy_checks: [
+    {
+      ...RUN.policy_checks[0],
+      status: 'passed',
+      detail: 'Supervisor and deterministic routing selected the same workflow.',
+    },
+  ],
+  governance_chips: [
+    {
+      ...RUN.governance_chips[0],
+      status: 'passed',
+      detail: 'Supervisor selection matched the deterministic reviewed workflow.',
+    },
+  ],
+};
+
 describe('GrowthAgentRunCard', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -93,16 +118,27 @@ describe('GrowthAgentRunCard', () => {
     container.remove();
   });
 
-  it('renders supervisor divergence as a visible review-required state', () => {
+  function renderRun(run: GrowthAgentRunResponse) {
     act(() => {
       root.render(
         <GrowthAgentRunCard
-          run={RUN}
+          run={run}
           onOpenRoute={onOpenRoute}
           renderSourceAssetChip={(asset) => <span key={asset}>{asset}</span>}
         />,
       );
     });
+  }
+
+  it('renders supervisor divergence as a visible review-required state', () => {
+    renderRun(RUN);
+
+    const policyCheck = Array.from(
+      container.querySelectorAll<HTMLElement>('.growth-agent-policy'),
+    ).find((node) => node.textContent?.includes('Supervisor workflow selection'));
+    const governanceChip = Array.from(
+      container.querySelectorAll<HTMLElement>('.growth-agent-governance-item'),
+    ).find((node) => node.textContent?.includes('Multi-agent framework'));
 
     expect(container.textContent).toContain('Agent framework');
     expect(container.textContent).toContain('Supervisor Agent');
@@ -116,7 +152,34 @@ describe('GrowthAgentRunCard', () => {
     expect(container.textContent).toContain(
       'Supervisor selected a different reviewed workflow; human review is required.',
     );
-    expect(container.textContent).toContain('Review');
     expect(container.querySelector('.growth-agent-step--review_required')).not.toBeNull();
+    expect(policyCheck).toBeTruthy();
+    expect(policyCheck?.querySelector('.chip--warning')).not.toBeNull();
+    expect(policyCheck?.querySelector('.chip--success')).toBeNull();
+    expect(governanceChip).toBeTruthy();
+    expect(governanceChip?.querySelector('.chip--warning')).not.toBeNull();
+    expect(governanceChip?.querySelector('.chip--success')).toBeNull();
+  });
+
+  it('renders aligned supervisor selection as passed across policy and governance surfaces', () => {
+    renderRun(PASSED_RUN);
+
+    const policyCheck = Array.from(
+      container.querySelectorAll<HTMLElement>('.growth-agent-policy'),
+    ).find((node) => node.textContent?.includes('Supervisor workflow selection'));
+    const governanceChip = Array.from(
+      container.querySelectorAll<HTMLElement>('.growth-agent-governance-item'),
+    ).find((node) => node.textContent?.includes('Multi-agent framework'));
+
+    expect(container.querySelector('.growth-agent-step--completed')).not.toBeNull();
+    expect(container.querySelector('.growth-agent-step--review_required')).toBeNull();
+    expect(policyCheck).toBeTruthy();
+    expect(policyCheck?.textContent).toContain('Passed');
+    expect(policyCheck?.querySelector('.chip--success')).not.toBeNull();
+    expect(policyCheck?.querySelector('.chip--warning')).toBeNull();
+    expect(governanceChip).toBeTruthy();
+    expect(governanceChip?.textContent).toContain('Passed');
+    expect(governanceChip?.querySelector('.chip--success')).not.toBeNull();
+    expect(governanceChip?.querySelector('.chip--warning')).toBeNull();
   });
 });

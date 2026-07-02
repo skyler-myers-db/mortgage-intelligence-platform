@@ -516,6 +516,9 @@ def test_growth_agent_home_live_capability_query_param_upgrades_capabilities(
         assert "91d51bf" not in detail
         assert "databricks-claude" not in detail
         assert "supervisor-" not in detail
+    ai_gateway_detail = rows["ai_gateway"]["detail"]
+    assert "exact current inference row" in ai_gateway_detail
+    assert "asynchronous recent deployment-scoped row" in ai_gateway_detail
 
 
 def test_custom_segment_workflow_uses_reviewed_any_semantics_and_writes_audit() -> None:

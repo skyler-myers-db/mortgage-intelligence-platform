@@ -29,7 +29,10 @@ _PUBLIC_CAPABILITY_AVAILABLE_DETAILS = {
     "uc_function_tools": "Live reviewed SQL tool probes passed for this workspace.",
     "agent_eval": "Live MLflow Agent Evaluation passed for this deployment.",
     "agent_orchestrator": "Live Supervisor Agent endpoint probe passed for this workspace.",
-    "ai_gateway": "Live AI Gateway endpoint probe passed and row-level inference logging proof is present.",
+    "ai_gateway": (
+        "Live AI Gateway endpoint probe passed; inference logging proof is present as "
+        "either an exact current inference row or an asynchronous recent deployment-scoped row."
+    ),
     "lakebase_sync": "Live Lakebase synced-table probes passed for MIP-owned serving tables.",
 }
 _PUBLIC_CAPABILITY_CONFIGURED_DETAILS = {

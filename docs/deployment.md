@@ -50,6 +50,14 @@ MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
 ./scripts/deploy.sh -t dev
 ```
 
+The deploy script's live smoke now requires agentic capability proof by
+default (`MIP_EXPECT_AGENTIC_CAPABILITIES=1`). If the token minted during
+deploy is not app-admin readable, provide `MIP_ADMIN_BEARER_TOKEN` for an
+app-admin principal before running the script; otherwise the
+`/api/v1/admin/capabilities?live=1` probe fails closed on 403. Do not disable
+this gate for customer-release signoff. Only override it for an explicitly
+documented partial validation where agentic capabilities are out of scope.
+
 The Entrada dev target also supports the plain Databricks bundle resource path:
 
 ```bash

@@ -1,2 +1,4 @@
 - [Module 0 real-data migration complete](project_real_data_migration_complete.md) — 10-slice migration landed 2026-04-21; CI + nightly + runbook + talk-track gate future edits.
 - [Genie regression registry format is verification-gated on ## heading count](project_genie_regression_contract.md) — regression_suite.md must be one `## ` heading per prompt (≥50), not a table; Python list sizes pinned by a cred-free test.
+- [Getting exact test counts in the non-TTY agent shell](project_test_count_capture.md) — pytest `-q` summary line is suppressed (use `--junit-xml`); vitest flakes under CPU contention — run it isolated.
+- [AI Gateway async-recent-row proof inversion (b77d28d..3256faf)](project_ai_gateway_proof_inversion.md) — one deliberate `available`→True flip (gov-reviewed separately); smoke jq guard truth-tabled sound.
