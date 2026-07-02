@@ -25,6 +25,7 @@
 # Flags:
 #   --no-genie  -- skip the /api/v1/genie/message probe (useful for cold-Genie
 #                  laptops where the space takes 30s to warm).
+#   --no-capabilities -- skip the admin live-capability probe.
 #   --boot-timeout <s> -- override the boot wait (default 20s).
 #
 # Env:
@@ -33,6 +34,11 @@
 #   MIP_FRONTEND_URL Frontend URL. Default: http://127.0.0.1:5173.
 #   MIP_BEARER_TOKEN Optional Databricks Apps OAuth bearer for deployed URLs.
 #   MIP_ADMIN_BEARER_TOKEN Optional app-admin OAuth bearer for admin-only probes.
+#   MIP_EXPECT_AGENTIC_CAPABILITIES When 1, require the deployed agentic GA
+#      capability rows (Genie API, Agent Eval, Agent Orchestrator, Lakebase
+#      Sync) to be claimable. AI Gateway is only claimable with exact row proof.
+#   MIP_REQUIRE_AI_GATEWAY_CLAIMABLE When 1, fail unless AI Gateway is available
+#      with exact inference-log proof.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -46,6 +52,9 @@ ADMIN_AUTH_TOKEN="${MIP_ADMIN_BEARER_TOKEN:-}"
 BOOT_TIMEOUT=20
 REMOTE_BOOT_TIMEOUT="${MIP_REMOTE_BOOT_TIMEOUT:-240}"
 SKIP_GENIE=0
+SKIP_CAPABILITIES=0
+EXPECT_AGENTIC_CAPABILITIES="${MIP_EXPECT_AGENTIC_CAPABILITIES:-0}"
+REQUIRE_AI_GATEWAY_CLAIMABLE="${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}"
 BOOT_LOCAL=0
 BACKEND_PID=""
 FRONTEND_PID=""
@@ -61,6 +70,7 @@ fi
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --no-genie) SKIP_GENIE=1; shift ;;
+    --no-capabilities) SKIP_CAPABILITIES=1; shift ;;
     --boot-timeout) BOOT_TIMEOUT="$2"; shift 2 ;;
     -h|--help)
       sed -n '3,30p' "$0"; exit 0 ;;
@@ -295,6 +305,57 @@ if probe_admin_or_forbidden "source readiness" "$API_PREFIX/admin/sources"; then
     and all($rows[]; if .synthetic_demo == true then .status == "demo_synthetic" else true end)
   ' /tmp/mip-smoke-out.json >/dev/null; then
     echo "[smoke] source readiness failed core-live/synthetic-disclosure checks" >&2
+    cat /tmp/mip-smoke-out.json >&2 || true
+    exit 1
+  fi
+fi
+
+if [[ "$SKIP_CAPABILITIES" == "0" ]]; then
+  if probe_admin_or_forbidden "live capability readiness" "$API_PREFIX/admin/capabilities?live=1"; then
+    if ! jq -e '(.capabilities // .items // []) | length > 0' /tmp/mip-smoke-out.json >/dev/null; then
+      echo "[smoke] capability readiness payload did not return capability rows" >&2
+      cat /tmp/mip-smoke-out.json >&2 || true
+      exit 1
+    fi
+    if [[ "$EXPECT_AGENTIC_CAPABILITIES" == "1" ]]; then
+      if ! jq -e '
+        (.capabilities // .items // []) as $rows
+        | all(["genie_conversation_api","agent_eval","agent_orchestrator","lakebase_sync"][]; . as $key
+            | any($rows[]; .key == $key and .status == "available" and .claimable == true))
+      ' /tmp/mip-smoke-out.json >/dev/null; then
+        echo "[smoke] agentic GA capability rows are not all live-claimable" >&2
+        cat /tmp/mip-smoke-out.json >&2 || true
+        exit 1
+      fi
+    fi
+    if ! jq -e '
+      (.capabilities // .items // []) as $rows
+      | any($rows[]; .key == "ai_gateway")
+      and all($rows[]; if .key == "ai_gateway" then
+          (
+            (.status == "available" and .claimable == true and ((.detail // "") | test("exact inference log row")))
+            or
+            (.status == "configured" and .claimable == false and ((.detail // "") | test("not claimable|not visible|unproven|Live probe did not pass")))
+          )
+        else true end)
+    ' /tmp/mip-smoke-out.json >/dev/null; then
+      echo "[smoke] AI Gateway capability row overclaims or lacks exact-row proof detail" >&2
+      cat /tmp/mip-smoke-out.json >&2 || true
+      exit 1
+    fi
+    if [[ "$REQUIRE_AI_GATEWAY_CLAIMABLE" == "1" ]]; then
+      if ! jq -e '
+        (.capabilities // .items // [])
+        | any(.[]; .key == "ai_gateway" and .status == "available" and .claimable == true and ((.detail // "") | test("exact inference log row")))
+      ' /tmp/mip-smoke-out.json >/dev/null; then
+        echo "[smoke] AI Gateway is configured but not claimable with exact inference-row proof" >&2
+        cat /tmp/mip-smoke-out.json >&2 || true
+        exit 1
+      fi
+    fi
+    echo "[smoke] ok · live capability readiness"
+  elif [[ "$EXPECT_AGENTIC_CAPABILITIES" == "1" || "$REQUIRE_AI_GATEWAY_CLAIMABLE" == "1" ]]; then
+    echo "[smoke] live capability readiness requires an admin-readable payload when agentic capability proof is expected" >&2
     cat /tmp/mip-smoke-out.json >&2 || true
     exit 1
   fi

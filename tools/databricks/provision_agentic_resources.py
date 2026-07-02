@@ -30,11 +30,11 @@ from databricks.sdk.service.database import (
 
 REPO = Path(__file__).resolve().parents[2]
 DEFAULT_SYNC_TABLES = (
-    ("source_readiness", "mip.gold.source_readiness", ("source_name",)),
-    ("segment_population", "mip.gold.segment_population", ("segment_code", "state")),
+    ("source_readiness", "source_readiness", ("source_name",)),
+    ("segment_population", "segment_population", ("segment_code", "state")),
     (
         "funnel_snapshot_daily",
-        "mip.gold.funnel_snapshot_daily",
+        "funnel_snapshot_daily",
         ("snapshot_date", "state", "segment_code"),
     ),
 )
@@ -106,6 +106,10 @@ def _target_table(catalog: str, schema: str, table: str) -> str:
     return f"{catalog}.{schema}.{table}"
 
 
+def _source_gold_table(catalog: str, table: str) -> str:
+    return f"{catalog}.gold.{table}"
+
+
 def _enum_value(value: object) -> str:
     raw = getattr(value, "value", value)
     return str(raw or "")
@@ -116,9 +120,59 @@ def _synced_table_is_ready(state: str) -> bool:
     return "ONLINE" in normalized or normalized.endswith("NO_PENDING_UPDATE")
 
 
+def _field(value: object, name: str) -> object:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _validate_existing_synced_table(
+    table: object,
+    *,
+    name: str,
+    source: str,
+    keys: tuple[str, ...],
+    storage_catalog: str,
+    storage_schema: str,
+) -> None:
+    spec = _field(table, "spec")
+    source_table = _field(spec, "source_table_full_name") if spec is not None else None
+    primary_keys = _field(spec, "primary_key_columns") if spec is not None else None
+    scheduling_policy = _enum_value(_field(spec, "scheduling_policy") if spec is not None else "")
+    new_pipeline_spec = _field(spec, "new_pipeline_spec") if spec is not None else None
+
+    if source_table != source:
+        raise RuntimeError(
+            f"{name} exists but syncs from {source_table or '<unknown>'}; expected {source}. "
+            "Drop and recreate the synced table before claiming agentic Lakebase Sync."
+        )
+    if list(primary_keys or []) != list(keys):
+        raise RuntimeError(
+            f"{name} exists with primary keys {list(primary_keys or [])}; expected {list(keys)}."
+        )
+    if scheduling_policy != SyncedTableSchedulingPolicy.SNAPSHOT.value:
+        raise RuntimeError(
+            f"{name} exists with scheduling policy {scheduling_policy or '<unknown>'}; "
+            f"expected {SyncedTableSchedulingPolicy.SNAPSHOT.value}."
+        )
+    # Databricks currently omits new_pipeline_spec on get_synced_database_table
+    # responses for existing tables. Validate it when present, and keep the
+    # create path pinned to the configured storage catalog/schema below.
+    if new_pipeline_spec is not None:
+        existing_storage_catalog = _field(new_pipeline_spec, "storage_catalog")
+        existing_storage_schema = _field(new_pipeline_spec, "storage_schema")
+        if (existing_storage_catalog, existing_storage_schema) != (storage_catalog, storage_schema):
+            raise RuntimeError(
+                f"{name} exists with pipeline storage "
+                f"{existing_storage_catalog or '<unknown>'}.{existing_storage_schema or '<unknown>'}; "
+                f"expected {storage_catalog}.{storage_schema}."
+            )
+
+
 def ensure_synced_tables(
     workspace: WorkspaceClient,
     *,
+    source_catalog: str,
     catalog: str,
     schema: str,
     database_instance: str,
@@ -128,10 +182,19 @@ def ensure_synced_tables(
     timeout_s: int,
 ) -> tuple[str, ...]:
     synced: list[str] = []
-    for table, source, keys in DEFAULT_SYNC_TABLES:
+    for table, source_table, keys in DEFAULT_SYNC_TABLES:
         name = _target_table(catalog, schema, table)
+        source = _source_gold_table(source_catalog, source_table)
         try:
-            workspace.database.get_synced_database_table(name)
+            existing = workspace.database.get_synced_database_table(name)
+            _validate_existing_synced_table(
+                existing,
+                name=name,
+                source=source,
+                keys=keys,
+                storage_catalog=storage_catalog,
+                storage_schema=storage_schema,
+            )
             print(f"[agentic] synced table exists: {name}")
         except (NotFound, ResourceDoesNotExist):
             print(f"[agentic] creating synced table: {name} <- {source}")
@@ -370,6 +433,7 @@ def main(argv: list[str] | None = None) -> int:
     workspace = WorkspaceClient()
     tables = ensure_synced_tables(
         workspace,
+        source_catalog=args.catalog,
         catalog=args.lakebase_catalog,
         schema=args.lakebase_schema,
         database_instance=args.database_instance,
