@@ -36,9 +36,10 @@
 #   MIP_ADMIN_BEARER_TOKEN Optional app-admin OAuth bearer for admin-only probes.
 #   MIP_EXPECT_AGENTIC_CAPABILITIES When 1, require the deployed agentic GA
 #      capability rows (Genie API, Agent Eval, Agent Orchestrator, Lakebase
-#      Sync) to be claimable. AI Gateway is only claimable with exact row proof.
+#      Sync) to be claimable. AI Gateway is claimable with exact row proof or
+#      deployment-scoped async inference-row proof after a live endpoint probe.
 #   MIP_REQUIRE_AI_GATEWAY_CLAIMABLE When 1, fail unless AI Gateway is available
-#      with exact inference-log proof.
+#      with exact-row or deployment-scoped async inference-log proof.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -333,22 +334,22 @@ if [[ "$SKIP_CAPABILITIES" == "0" ]]; then
       | any($rows[]; .key == "ai_gateway")
       and all($rows[]; if .key == "ai_gateway" then
           (
-            (.status == "available" and .claimable == true and ((.detail // "") | test("exact inference log row")))
+            (.status == "available" and .claimable == true and ((.detail // "") | test("exact inference log row|recent deployment-scoped inference log row")))
             or
             (.status == "configured" and .claimable == false and ((.detail // "") | test("not claimable|not visible|unproven|Live probe did not pass")))
           )
         else true end)
     ' /tmp/mip-smoke-out.json >/dev/null; then
-      echo "[smoke] AI Gateway capability row overclaims or lacks exact-row proof detail" >&2
+      echo "[smoke] AI Gateway capability row overclaims or lacks inference-row proof detail" >&2
       cat /tmp/mip-smoke-out.json >&2 || true
       exit 1
     fi
     if [[ "$REQUIRE_AI_GATEWAY_CLAIMABLE" == "1" ]]; then
       if ! jq -e '
         (.capabilities // .items // [])
-        | any(.[]; .key == "ai_gateway" and .status == "available" and .claimable == true and ((.detail // "") | test("exact inference log row")))
+        | any(.[]; .key == "ai_gateway" and .status == "available" and .claimable == true and ((.detail // "") | test("exact inference log row|recent deployment-scoped inference log row")))
       ' /tmp/mip-smoke-out.json >/dev/null; then
-        echo "[smoke] AI Gateway is configured but not claimable with exact inference-row proof" >&2
+        echo "[smoke] AI Gateway is configured but not claimable with inference-row proof" >&2
         cat /tmp/mip-smoke-out.json >&2 || true
         exit 1
       fi
