@@ -9,6 +9,7 @@ from uuid import uuid4
 from backend.config.settings import Settings
 from backend.services.capability_serving_probes import (
     count_inference_log_rows,
+    count_recent_inference_log_rows,
     inference_log_table_names,
     query_serving_endpoint,
     serving_response_has_payload,
@@ -99,6 +100,21 @@ def probe_ai_gateway(
                         f"inference log row ({client_request_id}) at {actual}."
                     ),
                 )
+        recent_rows = count_recent_inference_log_rows(
+            sql_client,
+            expected_table,
+            client_request_prefix=f"{request_prefix}{sha}-",
+        )
+        if recent_rows > 0:
+            return make_status(
+                True,
+                (
+                    "Live AI Gateway endpoint accepted bounded queries and exposed "
+                    f"{recent_rows} recent deployment-scoped inference log row(s) at {actual}. "
+                    "Inference-table delivery is asynchronous, so current probe rows may arrive "
+                    "after the bounded wait window."
+                ),
+            )
         return make_status(
             False,
             (

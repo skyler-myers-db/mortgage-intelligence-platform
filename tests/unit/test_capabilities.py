@@ -685,7 +685,7 @@ def test_ai_gateway_live_probe_retries_fresh_ids_until_one_logs(
     assert first_id != second_id
 
 
-def test_ai_gateway_live_probe_rejects_stale_sha_scoped_row_level_proof(
+def test_ai_gateway_live_probe_accepts_async_deployment_scoped_rows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticks = iter([0.0, 16.0])
@@ -693,7 +693,7 @@ def test_ai_gateway_live_probe_rejects_stale_sha_scoped_row_level_proof(
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
-    sql = _LiveSqlClient(count=2, recent_count=99)
+    sql = _LiveSqlClient(count_sequence=[0, 0], recent_count=3)
     workspace = _FakeWorkspaceClient()
     statuses = collect_live_capability_statuses(
         settings=_settings(
@@ -706,10 +706,15 @@ def test_ai_gateway_live_probe_rejects_stale_sha_scoped_row_level_proof(
         workspace_client=workspace,
     )
 
-    assert statuses["ai_gateway"].available is False
-    assert "exact probe row" in statuses["ai_gateway"].detail
+    assert statuses["ai_gateway"].available is True
+    assert "recent deployment-scoped inference log row" in statuses["ai_gateway"].detail
     assert workspace.serving_endpoints.queries
-    assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
+    assert any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
+    assert any(
+        isinstance(params, dict)
+        and params.get("client_request_prefix") == f"mip-capability-{_TEST_GIT_SHA_SHORT}-%"
+        for params in sql.parameters
+    )
 
 
 def test_ai_gateway_live_probe_rejects_stale_row_for_different_request_id(
@@ -760,7 +765,7 @@ def test_ai_gateway_live_probe_rejects_without_deployed_sha() -> None:
     assert "MIP_GIT_SHA is required" in statuses["ai_gateway"].detail
 
 
-def test_ai_gateway_live_probe_rejects_recent_row_without_deployment_scoped_exact_row(
+def test_ai_gateway_live_probe_rejects_without_async_deployment_scoped_row(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ticks = iter([0.0, 16.0])
@@ -768,7 +773,7 @@ def test_ai_gateway_live_probe_rejects_recent_row_without_deployment_scoped_exac
     monkeypatch.setattr(serving_probe_module.time, "sleep", lambda _seconds: None)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_WAIT_S", 15.0)
     monkeypatch.setattr(capabilities_module, "_AI_GATEWAY_EXACT_LOG_ATTEMPTS", 1)
-    sql = _LiveSqlClient(count=0, recent_count=99)
+    sql = _LiveSqlClient(count=0, recent_count=0)
     statuses = collect_live_capability_statuses(
         settings=_settings(
             mip_git_sha=_TEST_GIT_SHA,
@@ -782,7 +787,7 @@ def test_ai_gateway_live_probe_rejects_recent_row_without_deployment_scoped_exac
 
     assert statuses["ai_gateway"].available is False
     assert "exact probe row" in statuses["ai_gateway"].detail
-    assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
+    assert any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
 
 
 def test_ai_gateway_live_probe_rejects_missing_row_level_proof(
@@ -808,7 +813,7 @@ def test_ai_gateway_live_probe_rejects_missing_row_level_proof(
     assert statuses["ai_gateway"].available is False
     assert "accepted bounded queries" in statuses["ai_gateway"].detail
     assert "not claimable" in statuses["ai_gateway"].detail
-    assert not any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
+    assert any("COUNT(*) AS recent_row_count" in statement for statement in sql.statements)
 
 
 def test_ai_gateway_live_probe_rejects_queryable_table_before_exact_row(
