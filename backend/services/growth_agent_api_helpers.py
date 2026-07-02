@@ -30,8 +30,8 @@ _PUBLIC_CAPABILITY_AVAILABLE_DETAILS = {
     "agent_eval": "Live MLflow Agent Evaluation passed for this deployment.",
     "agent_orchestrator": "Live Supervisor Agent endpoint probe passed for this workspace.",
     "ai_gateway": (
-        "Live AI Gateway endpoint probe passed; inference logging proof is present as "
-        "either an exact current inference row or an asynchronous recent deployment-scoped row."
+        "Live AI Gateway endpoint probe passed; a freshness-bounded exact inference row "
+        "has been verified in the deployment proof ledger."
     ),
     "lakebase_sync": "Live Lakebase synced-table probes passed for MIP-owned serving tables.",
 }
@@ -41,7 +41,7 @@ _PUBLIC_CAPABILITY_CONFIGURED_DETAILS = {
     "uc_function_tools": "Reviewed SQL tool contracts are bundled; live proof is required before claiming this row.",
     "agent_eval": "Agent Evaluation assets are configured; a live passing evaluation is required before claiming this row.",
     "agent_orchestrator": "Supervisor Agent configuration is present; live endpoint proof is required before claiming this row.",
-    "ai_gateway": "AI Gateway configuration is present; live endpoint and inference-log proof are required before claiming this row.",
+    "ai_gateway": "AI Gateway configuration is present; live endpoint proof and a fresh exact-row proof-ledger entry are required before claiming this row.",
     "lakebase_sync": "Lakebase synced-table configuration is present; live row-count proof is required before claiming this row.",
 }
 

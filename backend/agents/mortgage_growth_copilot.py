@@ -16,6 +16,7 @@ from typing import Any, Literal, cast
 
 from backend.config.settings import Settings, get_settings
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest, GrowthAgentWorkflowId
+from backend.services.ai_gateway_proof_ledger import normalize_gateway_sha
 from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
@@ -51,6 +52,7 @@ class GrowthAgentCopilotEvidence:
     supervisor_workflow_id: str | None = None
     deterministic_workflow_id: str | None = None
     workflow_override_review_required: bool = False
+    gateway_client_request_id: str | None = None
 
     def criteria_json(self) -> dict[str, object]:
         """Bounded, non-PII representation safe for Lakebase criteria."""
@@ -74,6 +76,7 @@ class GrowthAgentCopilotEvidence:
             "supervisor_workflow_id": self.supervisor_workflow_id,
             "deterministic_workflow_id": self.deterministic_workflow_id,
             "workflow_override_review_required": self.workflow_override_review_required,
+            "gateway_client_request_id": self.gateway_client_request_id,
         }
         payload.update({key: value for key, value in optional.items() if value not in (None, [], "")})
         return payload
@@ -136,6 +139,7 @@ def _agent_framework_plan(
         task = _agent_task_if_ready(workspace_client, endpoint)
         if task is None:
             return None
+        gateway_client_request_id = _gateway_client_request_id(payload, settings=settings, endpoint=endpoint)
         response = query_serving_endpoint(
             workspace_client,
             endpoint,
@@ -145,7 +149,8 @@ def _agent_framework_plan(
                 deterministic_workflow=deterministic_workflow,
                 interpreted_intent=deterministic_intent,
             ),
-            client_request_id=f"mip-growth-agent-{_prompt_hash(payload.prompt)[:20]}",
+            client_request_id=gateway_client_request_id
+            or f"mip-growth-agent-{_prompt_hash(payload.prompt)[:20]}",
         )
         if not serving_response_has_payload(response):
             return None
@@ -195,7 +200,25 @@ def _agent_framework_plan(
         supervisor_workflow_id=selected.id,
         deterministic_workflow_id=deterministic_workflow.id,
         workflow_override_review_required=diverged,
+        gateway_client_request_id=gateway_client_request_id,
     )
+
+
+def _gateway_client_request_id(
+    payload: GrowthAgentPromptRunRequest,
+    *,
+    settings: Settings,
+    endpoint: str,
+) -> str | None:
+    if not settings.mip_ai_gateway:
+        return None
+    if (settings.mip_ai_gateway_endpoint or "").strip() != endpoint:
+        return None
+    sha = normalize_gateway_sha(settings.mip_git_sha)
+    if sha is None:
+        return None
+    run_scope = payload.request_id or payload.prompt
+    return f"mip-agent-run-{sha}-{_text_hash(run_scope)[:16]}"
 
 
 def _supervisor_prompt(

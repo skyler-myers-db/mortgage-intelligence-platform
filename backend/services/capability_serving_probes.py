@@ -95,26 +95,33 @@ def count_inference_log_rows(
     return total
 
 
-def count_recent_inference_log_rows(
+def count_inference_log_rows_by_prefixes(
     sql_client: Any,
     expected_table_prefix: str,
     *,
-    client_request_prefix: str,
+    client_request_prefixes: list[str],
 ) -> int:
+    if not client_request_prefixes:
+        return 0
     catalog, schema, _table_prefix = _split_three_part_relation(expected_table_prefix)
     total = 0
     for table_name in inference_log_table_names(sql_client, expected_table_prefix):
+        parts: list[str] = []
+        params: dict[str, str] = {}
+        for index, prefix in enumerate(client_request_prefixes):
+            key = f"prefix_{index}"
+            parts.append(f"client_request_id LIKE :{key}")
+            params[key] = f"{prefix}%"
         rows = sql_client.execute(
             f"""
-            SELECT COUNT(*) AS recent_row_count
+            SELECT COUNT(*) AS row_count
             FROM {catalog}.{schema}.{table_name}
-            WHERE client_request_id LIKE :client_request_prefix
-              AND request_time >= current_timestamp() - INTERVAL 2 HOURS
+            WHERE {" OR ".join(parts)}
             """,
-            {"client_request_prefix": f"{client_request_prefix}%"},
+            params,
         )
         if rows:
-            total += int(rows[0].get("recent_row_count") or rows[0].get("n") or 0)
+            total += int(rows[0].get("row_count") or rows[0].get("n") or 0)
     return total
 
 

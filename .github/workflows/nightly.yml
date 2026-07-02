@@ -162,6 +162,35 @@ jobs:
           BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
         run: databricks bundle run mip_refresh_scores -t dev --profile DEFAULT
+      - name: Verify AI Gateway exact proof ledger
+        # AI Gateway is claimable only when the deployment verifier has marked
+        # an exact inference-log row for the current SHA in Lakebase. This
+        # on-demand gate is intentionally tied to the checked-out commit: if a
+        # deploy did not run `verify_ai_gateway_exact_proof.py send --wait` for
+        # this SHA, the live validation fails instead of accepting historical
+        # or prefix-count evidence.
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+          MIP_GIT_SHA: ${{ github.sha }}
+          MIP_AI_GATEWAY_ENDPOINT: ${{ secrets.MIP_AI_GATEWAY_ENDPOINT }}
+          MIP_AI_GATEWAY_INFERENCE_TABLE: ${{ secrets.MIP_AI_GATEWAY_INFERENCE_TABLE }}
+        run: |
+          missing=""
+          for v in MIP_AI_GATEWAY_ENDPOINT MIP_AI_GATEWAY_INFERENCE_TABLE; do
+            if [ -z "${!v}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required AI Gateway proof secrets:$missing"
+            exit 1
+          fi
+          python tools/databricks/verify_ai_gateway_exact_proof.py \
+            verify-pending \
+            --require-verified \
+            --git-sha "$MIP_GIT_SHA" \
+            --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+            --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
       - name: SQL <-> Python parity
         run: pytest -q tests/integration/test_sql_python_parity.py
       - name: Lakeview widgets resolve (dashboards)

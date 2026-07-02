@@ -22,7 +22,8 @@
 #   10. Provision / rebind the Genie space via
 #       tools/databricks/provision_genie_space.py.
 #   11. Provision MIP-owned agentic resources: Lakebase synced tables,
-#       Supervisor Agent orchestration, and AI Gateway inference logging.
+#       Supervisor Agent orchestration, AI Gateway inference logging, and
+#       AI Gateway exact-row proof ledger verification.
 #   12. Redeploy with agentic env, run live golden Agent Evaluation, then
 #       redeploy with the eval run id.
 #   13. Smoke-check the live API via scripts/smoke_live.sh (optional; fail-loud by default).
@@ -661,6 +662,19 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
       --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
       --principal "$APP_SP_CLIENT_ID"
+    step "verify AI Gateway exact inference-row proof"
+    AI_GATEWAY_PROOF_ARGS=(
+      tools/databricks/verify_ai_gateway_exact_proof.py
+      send
+      --wait
+      --git-sha "$APP_GIT_SHA"
+      --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+      --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
+    )
+    if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
+      AI_GATEWAY_PROOF_ARGS+=(--require-verified)
+    fi
+    run "$PYTHON" "${AI_GATEWAY_PROOF_ARGS[@]}"
   fi
 fi
 

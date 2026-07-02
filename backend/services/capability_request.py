@@ -32,7 +32,8 @@ def collect_request_live_capability_statuses(
     settings = get_settings()
     ttl_s = float(getattr(settings, "mip_live_capability_probe_ttl_s", 60.0) or 0.0)
     cache_key = _cache_key(request, settings=settings, include_lakebase=include_lakebase)
-    if ttl_s > 0:
+    cacheable = ttl_s > 0 and not settings.mip_ai_gateway
+    if cacheable:
         cached = _LIVE_CAPABILITY_CACHE.get(cache_key)
         if isinstance(cached, dict) and all(
             isinstance(value, LiveCapabilityStatus) for value in cached.values()
@@ -65,7 +66,7 @@ def collect_request_live_capability_statuses(
             workspace_client=workspace_client,
         )
     )
-    if ttl_s > 0:
+    if cacheable:
         _LIVE_CAPABILITY_CACHE.set(cache_key, dict(statuses), ttl_s)
     return statuses
 
@@ -94,6 +95,7 @@ def _cache_key(request: Request, *, settings: Settings, include_lakebase: bool) 
         settings.mip_ai_gateway,
         settings.mip_ai_gateway_endpoint,
         settings.mip_ai_gateway_inference_table,
+        settings.mip_ai_gateway_proof_freshness_s,
         settings.mip_agent_eval_experiment,
         settings.mip_agent_eval_run_id,
         settings.mip_lakebase_sync,

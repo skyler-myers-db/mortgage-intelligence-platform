@@ -397,6 +397,24 @@ def governance_chips(
             evidence_ref=copilot_evidence.question_hash if copilot_evidence.execution_mode == "agent_framework" else None,
         ),
         GrowthAgentGovernanceChip(
+            label="AI Gateway",
+            status=(
+                "review_required"
+                if copilot_evidence.execution_mode == "agent_framework"
+                and copilot_evidence.gateway_client_request_id
+                else "not_attached"
+            ),
+            detail=(
+                "Supervisor call was routed through the configured AI Gateway endpoint; "
+                "deployment-level exact inference-row proof is required before AI Gateway is claimable. "
+                "This run card does not claim per-run row landing."
+                if copilot_evidence.execution_mode == "agent_framework"
+                and copilot_evidence.gateway_client_request_id
+                else "No AI Gateway-routed Supervisor request is attached to this run."
+            ),
+            evidence_ref=None,
+        ),
+        GrowthAgentGovernanceChip(
             label="MLflow trace/eval",
             status="not_attached",
             detail="No MLflow trace URL or Agent Evaluation result is attached to this run.",

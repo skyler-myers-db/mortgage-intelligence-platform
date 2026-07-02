@@ -46,6 +46,8 @@ var.
 | `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*` and run statements on the dev warehouse. It is not treated as an app-admin token. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
+| `MIP_AI_GATEWAY_ENDPOINT` | Serving endpoint governed by AI Gateway for Mortgage Growth Agent Supervisor traffic. | Usually the Supervisor Agent serving endpoint produced by `tools/databricks/provision_agentic_resources.py`; must match the deployed app env. |
+| `MIP_AI_GATEWAY_INFERENCE_TABLE` | Three-part Unity Catalog prefix for the AI Gateway inference log table. | Usually `mip.audit.mip_agent_gateway_sonnet`; live validation uses it to verify the exact proof ledger for the checked-out SHA. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
 | `DATABRICKS_CLIENT_SECRET` | Secret for the non-admin OAuth client. Live validation fails if this is absent; it must not fall back to the admin PAT. | Rotate with the same cadence as the workspace token. |
 

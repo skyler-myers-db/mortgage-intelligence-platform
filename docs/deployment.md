@@ -57,6 +57,13 @@ app-admin principal before running the script; otherwise the
 `/api/v1/admin/capabilities?live=1` probe fails closed on 403. Do not disable
 this gate for customer-release signoff. Only override it for an explicitly
 documented partial validation where agentic capabilities are out of scope.
+AI Gateway claimability is stricter than endpoint/table configuration: deploy
+runs `tools/databricks/verify_ai_gateway_exact_proof.py send --wait` after
+agentic provisioning, and the runtime capability row becomes available only
+when Lakebase contains a fresh `mip_app.ai_gateway_proof_ledger` row proving
+an exact inference-log row for the current `MIP_GIT_SHA`. Set
+`MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=1` for release signoff when the deploy must
+fail if that exact proof has not landed yet.
 
 The Entrada dev target also supports the plain Databricks bundle resource path:
 

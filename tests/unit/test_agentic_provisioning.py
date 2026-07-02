@@ -191,3 +191,128 @@ def test_grant_app_can_query_serving_endpoint_skips_builtin_without_endpoint_id(
     )
 
     assert all(call[0][:2] != ["serving-endpoints", "update-permissions"] for call in calls)
+
+
+def test_ensure_ai_gateway_on_endpoint_configures_inference_table_and_user_rate_limit(monkeypatch) -> None:
+    calls: list[tuple[list[str], dict[str, Any] | None]] = []
+
+    def fake_run(args: list[str], *, input_json: dict[str, Any] | None = None) -> dict[str, Any]:
+        calls.append((args, input_json))
+        if args == ["serving-endpoints", "put-ai-gateway", "mip-supervisor-endpoint"]:
+            assert input_json == {
+                "inference_table_config": {
+                    "enabled": True,
+                    "catalog_name": "mip",
+                    "schema_name": "audit",
+                    "table_name_prefix": "mip_agent_gateway_sonnet",
+                },
+                "rate_limits": [
+                    {
+                        "key": "user",
+                        "calls": 42,
+                        "renewal_period": "minute",
+                    }
+                ],
+            }
+            return {"ok": True}
+        if args == ["serving-endpoints", "get", "mip-supervisor-endpoint"]:
+            return {"state": {"ready": "READY", "config_update": "NOT_UPDATING"}}
+        raise AssertionError(f"unexpected databricks call: {args}")
+
+    monkeypatch.setattr(provision_agentic_resources, "_run", fake_run)
+
+    table = provision_agentic_resources.ensure_ai_gateway_on_endpoint(
+        endpoint="mip-supervisor-endpoint",
+        catalog="mip",
+        schema="audit",
+        table_prefix="mip_agent_gateway_sonnet",
+        per_user_calls_per_minute=42,
+        timeout="1s",
+    )
+
+    assert table == "mip.audit.mip_agent_gateway_sonnet"
+    assert calls[0][0] == ["serving-endpoints", "put-ai-gateway", "mip-supervisor-endpoint"]
+
+
+def test_ensure_ai_gateway_on_endpoint_rejects_non_positive_rate_limit() -> None:
+    with pytest.raises(ValueError, match="per-user rate limit"):
+        provision_agentic_resources.ensure_ai_gateway_on_endpoint(
+            endpoint="mip-supervisor-endpoint",
+            catalog="mip",
+            schema="audit",
+            table_prefix="mip_agent_gateway_sonnet",
+            per_user_calls_per_minute=0,
+            timeout="1s",
+        )
+
+
+def test_main_defaults_ai_gateway_to_supervisor_endpoint(monkeypatch, tmp_path) -> None:
+    gateway_calls: list[dict[str, object]] = []
+    out_env = tmp_path / "agentic.env"
+
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "WorkspaceClient",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_synced_tables",
+        lambda *_args, **_kwargs: ("source_readiness", "segment_population"),
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_supervisor_agent",
+        lambda **_kwargs: ("supervisor-1", "mip-supervisor-endpoint"),
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "_wait_serving_endpoint_ready",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "_grant_app_can_query_serving_endpoint",
+        lambda *_args, **_kwargs: None,
+    )
+
+    def fake_ensure_ai_gateway(**kwargs: object) -> str:
+        gateway_calls.append(kwargs)
+        return "mip.audit.mip_agent_gateway_sonnet"
+
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_ai_gateway_on_endpoint",
+        fake_ensure_ai_gateway,
+    )
+
+    assert (
+        provision_agentic_resources.main(
+            [
+                "--genie-space-id",
+                "space-123",
+                "--gateway-per-user-calls-per-minute",
+                "37",
+                "--out-env",
+                str(out_env),
+            ]
+        )
+        == 0
+    )
+
+    assert gateway_calls == [
+        {
+            "endpoint": "mip-supervisor-endpoint",
+            "catalog": "mip",
+            "schema": "audit",
+            "table_prefix": "mip_agent_gateway_sonnet",
+            "per_user_calls_per_minute": 37,
+            "timeout": "900s",
+        }
+    ]
+    assert "MIP_AGENT_SERVING_ENDPOINT=mip-supervisor-endpoint" in out_env.read_text(
+        encoding="utf-8"
+    )
+    assert "MIP_AI_GATEWAY_ENDPOINT=mip-supervisor-endpoint" in out_env.read_text(
+        encoding="utf-8"
+    )

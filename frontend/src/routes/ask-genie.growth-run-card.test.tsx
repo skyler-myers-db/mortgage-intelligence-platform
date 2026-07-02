@@ -69,6 +69,13 @@ const RUN: GrowthAgentRunResponse = {
       detail: 'Supervisor selected a different reviewed workflow; human review is required.',
       evidence_ref: 'agent-trace-11111111-1111-4111-8111-111111111111',
     },
+    {
+      label: 'AI Gateway',
+      status: 'review_required',
+      detail:
+        'Supervisor call was routed through the configured AI Gateway endpoint; deployment-level exact inference-row proof is required before AI Gateway is claimable. This run card does not claim per-run row landing.',
+      evidence_ref: null,
+    },
   ],
   interpreted_intent: 'Supervisor Agent selected a reviewed workflow.',
   agent_reasoning: 'The deterministic fallback selected Daily Refi.',
@@ -139,6 +146,9 @@ describe('GrowthAgentRunCard', () => {
     const governanceChip = Array.from(
       container.querySelectorAll<HTMLElement>('.growth-agent-governance-item'),
     ).find((node) => node.textContent?.includes('Multi-agent framework'));
+    const gatewayChip = Array.from(
+      container.querySelectorAll<HTMLElement>('.growth-agent-governance-item'),
+    ).find((node) => node.textContent?.includes('AI Gateway'));
 
     expect(container.textContent).toContain('Agent framework');
     expect(container.textContent).toContain('Supervisor Agent');
@@ -152,6 +162,12 @@ describe('GrowthAgentRunCard', () => {
     expect(container.textContent).toContain(
       'Supervisor selected a different reviewed workflow; human review is required.',
     );
+    expect(container.textContent).toContain('AI Gateway');
+    expect(container.textContent).toContain(
+      'Supervisor call was routed through the configured AI Gateway endpoint',
+    );
+    expect(container.textContent).toContain('does not claim per-run row landing');
+    expect(container.textContent).not.toContain('mip-agent-run-');
     expect(container.querySelector('.growth-agent-step--review_required')).not.toBeNull();
     expect(policyCheck).toBeTruthy();
     expect(policyCheck?.querySelector('.chip--warning')).not.toBeNull();
@@ -159,6 +175,9 @@ describe('GrowthAgentRunCard', () => {
     expect(governanceChip).toBeTruthy();
     expect(governanceChip?.querySelector('.chip--warning')).not.toBeNull();
     expect(governanceChip?.querySelector('.chip--success')).toBeNull();
+    expect(gatewayChip).toBeTruthy();
+    expect(gatewayChip?.querySelector('.chip--warning')).not.toBeNull();
+    expect(gatewayChip?.querySelector('.chip--success')).toBeNull();
   });
 
   it('renders aligned supervisor selection as passed across policy and governance surfaces', () => {

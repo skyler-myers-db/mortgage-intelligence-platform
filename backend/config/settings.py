@@ -183,6 +183,13 @@ class Settings(BaseSettings):
     mip_agent_serving_endpoint: str | None = None
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
+    mip_ai_gateway_proof_freshness_s: float = Field(
+        default=26 * 60 * 60,
+        validation_alias=AliasChoices(
+            "MIP_AI_GATEWAY_PROOF_FRESHNESS_S",
+            "AI_GATEWAY_PROOF_FRESHNESS_S",
+        ),
+    )
     mip_agent_eval_experiment: str | None = None
     mip_agent_eval_run_id: str | None = None
     mip_agent_supervisor_id: str | None = None
@@ -389,9 +396,9 @@ class Settings(BaseSettings):
     # warehouse gold-refresh cadence.
     mip_cache_ttl_s: float = 300.0
     # Live capability checks can execute real Databricks work (including a
-    # bounded AI Gateway inference + inference-log polling). Cache the admin
-    # request-scoped live snapshot briefly so repeated page refreshes do not
-    # spam billable endpoints. Set to 0 to disable for tests/debugging.
+    # bounded AI Gateway inference + exact proof-ledger lookup). Cache the
+    # admin request-scoped live snapshot briefly so repeated page refreshes do
+    # not spam billable endpoints. Set to 0 to disable for tests/debugging.
     mip_live_capability_probe_ttl_s: float = 60.0
     # 2026-06-11 audit P1-6: refresh-ahead interval for the default lead
     # page (the slowest hot-path query, 3.6-6.6s cold). backend.main warms

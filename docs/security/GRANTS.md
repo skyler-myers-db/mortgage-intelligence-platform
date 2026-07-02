@@ -129,9 +129,11 @@ Gateway provisioning to discover the concrete prefixed table names and
 grant `SELECT` on those tables only.
 
 **What breaks if missing.** The AI Gateway capability row remains
-`configured` / non-claimable because the app cannot prove that its
-bounded Gateway probe wrote an inference-log row. This does not break the
-rest of the app; it prevents claiming AI Gateway governance live.
+`configured` / non-claimable because the deployment verifier cannot mark a
+fresh `mip_app.ai_gateway_proof_ledger` row as verified for the current
+`MIP_GIT_SHA`, and the runtime probe cannot corroborate current deployment
+Gateway traffic. This does not break the rest of the app; it prevents
+claiming AI Gateway governance live.
 
 **What not to grant.** Do not grant `SELECT ON SCHEMA mip.audit` to the
 running app service principal. That would expose every current and future

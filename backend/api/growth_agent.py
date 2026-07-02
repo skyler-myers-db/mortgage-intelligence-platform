@@ -482,6 +482,8 @@ def run_mortgage_growth_agent(
     """
 
     payload = payload_with_prompt_state_scope(payload)
+    if payload.request_id is None:
+        payload = payload.model_copy(update={"request_id": str(uuid4())})
     workflow, copilot_evidence = plan_growth_agent_prompt(payload)
     response = _run_workflow(
         workflow=workflow,

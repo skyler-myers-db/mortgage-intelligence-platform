@@ -243,9 +243,12 @@ def ensure_ai_gateway_on_endpoint(
     catalog: str,
     schema: str,
     table_prefix: str,
+    per_user_calls_per_minute: int,
     timeout: str,
 ) -> str:
     print(f"[agentic] configuring AI Gateway on serving endpoint: {endpoint}")
+    if per_user_calls_per_minute <= 0:
+        raise ValueError("AI Gateway per-user rate limit must be positive")
     _run(
         ["serving-endpoints", "put-ai-gateway", endpoint],
         input_json={
@@ -254,7 +257,14 @@ def ensure_ai_gateway_on_endpoint(
                 "catalog_name": catalog,
                 "schema_name": schema,
                 "table_name_prefix": table_prefix,
-            }
+            },
+            "rate_limits": [
+                {
+                    "key": "user",
+                    "calls": per_user_calls_per_minute,
+                    "renewal_period": "minute",
+                }
+            ],
         },
     )
     _wait_serving_endpoint_ready(endpoint, timeout=timeout)
@@ -411,12 +421,21 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--storage-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_STORAGE_SCHEMA", "app"))
     parser.add_argument(
         "--gateway-endpoint",
-        default=os.environ.get("MIP_AI_GATEWAY_ENDPOINT", "databricks-claude-sonnet-4-5"),
+        default=None,
+        help=(
+            "Serving endpoint to govern with AI Gateway. Defaults to the Supervisor Agent endpoint "
+            "created/reused in this run so real product traffic is logged."
+        ),
     )
     parser.add_argument("--gateway-schema", default=os.environ.get("MIP_AI_GATEWAY_SCHEMA", "audit"))
     parser.add_argument(
         "--gateway-table-prefix",
         default=os.environ.get("MIP_AI_GATEWAY_TABLE_PREFIX", "mip_agent_gateway_sonnet"),
+    )
+    parser.add_argument(
+        "--gateway-per-user-calls-per-minute",
+        type=int,
+        default=int(os.environ.get("MIP_AI_GATEWAY_PER_USER_CALLS_PER_MINUTE", "60")),
     )
     parser.add_argument("--supervisor-name", default=os.environ.get("MIP_AGENT_SUPERVISOR_NAME", "Mortgage Growth Agent"))
     parser.add_argument("--app-name", default=os.environ.get("MIP_APP_NAME", "mip-app"))
@@ -468,6 +487,7 @@ def main(argv: list[str] | None = None) -> int:
             catalog=args.catalog,
             schema=args.gateway_schema,
             table_prefix=args.gateway_table_prefix,
+            per_user_calls_per_minute=args.gateway_per_user_calls_per_minute,
             timeout=f"{args.timeout_s}s",
         )
     resources = ProvisionedResources(

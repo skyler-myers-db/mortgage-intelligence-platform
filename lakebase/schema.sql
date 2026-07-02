@@ -868,6 +868,40 @@ VALUES (
 )
 ON CONFLICT (version) DO NOTHING;
 
+-- AI Gateway exact-row proof ledger -----------------------------------
+-- Written only by deploy/nightly verifier tooling. Runtime capability
+-- probes read this table to decide whether AI Gateway can be claimed for
+-- the current deployment SHA; public/user-facing routes must not write it.
+CREATE TABLE IF NOT EXISTS mip_app.ai_gateway_proof_ledger (
+    proof_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    git_sha             TEXT NOT NULL CHECK (git_sha ~ '^[0-9a-f]{40}$'),
+    client_request_id   TEXT NOT NULL UNIQUE CHECK (client_request_id ~ '^mip-capability-[0-9a-f]{40}-[0-9a-f]{16}$'),
+    endpoint_name       TEXT NOT NULL CHECK (length(endpoint_name) BETWEEN 3 AND 255),
+    inference_table     TEXT NOT NULL CHECK (inference_table ~ '^[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*\.[A-Za-z_][A-Za-z0-9_]*$'),
+    sent_at             TIMESTAMPTZ NOT NULL,
+    verified_at         TIMESTAMPTZ,
+    verify_latency_s    DOUBLE PRECISION CHECK (verify_latency_s IS NULL OR verify_latency_s >= 0),
+    status              TEXT NOT NULL CHECK (status IN ('pending','verified','failed','expired')),
+    CONSTRAINT ck_ai_gateway_proof_verified_fields
+      CHECK (
+        (status = 'verified' AND verified_at IS NOT NULL AND verify_latency_s IS NOT NULL)
+        OR
+        (status <> 'verified')
+      )
+);
+CREATE INDEX IF NOT EXISTS idx_ai_gateway_proof_sha_status
+    ON mip_app.ai_gateway_proof_ledger (git_sha, status, verified_at DESC);
+CREATE INDEX IF NOT EXISTS idx_ai_gateway_proof_pending
+    ON mip_app.ai_gateway_proof_ledger (status, sent_at)
+    WHERE status = 'pending';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_02_ai_gateway_exact_proof_ledger',
+    'Add AI Gateway exact inference-row proof ledger for strict capability claims'
+)
+ON CONFLICT (version) DO NOTHING;
+
 -- Feedback ------------------------------------------------------------
 -- Thumbs-up / thumbs-down + free-text from the in-app feedback control.
 CREATE TABLE IF NOT EXISTS mip_app.feedback (

@@ -385,7 +385,8 @@ def probe_capabilities(
             configured=True,
             configured_detail=(
                 "AI Gateway endpoint and inference-table config are present; a live "
-                "serving endpoint probe must pass before this row is claimable."
+                "serving endpoint probe plus fresh proof-ledger exact row must pass "
+                "before this row is claimable."
             ),
             not_provisioned_detail="Gateway endpoint or inference-table config missing.",
             live_statuses=live_statuses,
@@ -502,10 +503,11 @@ def collect_live_capability_statuses(
     The probes are intentionally conservative. They only upgrade a row to
     ``available`` when the exact deployed dependencies respond to a functional
     check. They never write MIP business state, but some checks intentionally
-    create provider-side proof artifacts (for example a Genie conversation turn,
-    a serving endpoint query, or an AI Gateway inference-log row). Any exception
-    is captured as a non-claimable ``configured`` row instead of failing the
-    admin surface or implying the dependency works.
+    create provider-side proof artifacts (for example a Genie conversation turn
+    or a bounded serving endpoint query). AI Gateway row proof is read from the
+    deployment verifier's Lakebase ledger, not written by runtime probes. Any
+    exception is captured as a non-claimable ``configured`` row instead of
+    failing the admin surface or implying the dependency works.
     """
 
     statuses: dict[str, LiveCapabilityStatus] = {}
@@ -526,7 +528,12 @@ def collect_live_capability_statuses(
     if workspace_client is not None and s.mip_agent_orchestrator:
         statuses["agent_orchestrator"] = _probe_agent_orchestrator(workspace_client, s)
     if workspace_client is not None and s.mip_ai_gateway:
-        statuses["ai_gateway"] = _probe_ai_gateway(workspace_client, s, sql_client=sql_client)
+        statuses["ai_gateway"] = _probe_ai_gateway(
+            workspace_client,
+            s,
+            sql_client=sql_client,
+            lakebase=lakebase,
+        )
     return statuses
 
 
@@ -810,11 +817,13 @@ def _probe_ai_gateway(
     settings: Settings,
     *,
     sql_client: Any | None,
+    lakebase: Any | None,
 ) -> LiveCapabilityStatus:
     return probe_ai_gateway(
         workspace_client,
         settings,
         sql_client=sql_client,
+        lakebase=lakebase,
         make_status=LiveCapabilityStatus,
         request_prefix=_AI_GATEWAY_CAPABILITY_REQUEST_PREFIX,
         exact_log_wait_s=_AI_GATEWAY_EXACT_LOG_WAIT_S,

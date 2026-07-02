@@ -15,6 +15,8 @@ from tests.unit.test_growth_agent_api import (
     _FakeSqlClient,
 )
 
+_TEST_GATEWAY_SHA = "75ea6680b7f04bbaa6d0bbf38d7676218ae6c1cc"
+
 
 class _ReadyWorkspace:
     def __init__(self, *, ready: bool = True, task: str = "agent/v1/responses") -> None:
@@ -43,9 +45,12 @@ def _enable_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
         copilot_module,
         "get_settings",
         lambda: Settings(
+            mip_git_sha=_TEST_GATEWAY_SHA,
             mip_agent_orchestrator=True,
             mip_agent_serving_endpoint="mip-supervisor-endpoint",
             mip_agent_supervisor_id="supervisor-1",
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-supervisor-endpoint",
         ),
     )
 
@@ -112,7 +117,7 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert len(calls) == 1
     assert calls[0]["endpoint"] == "mip-supervisor-endpoint"
     assert calls[0]["task"] == "agent/v1/responses"
-    assert calls[0]["client_request_id"].startswith("mip-growth-agent-")
+    assert calls[0]["client_request_id"].startswith(f"mip-agent-run-{_TEST_GATEWAY_SHA}-")
     assert "Reviewed objective signals:" in calls[0]["prompt"]
     assert prompt_text not in calls[0]["prompt"]
     assert "Objective hash:" in calls[0]["prompt"]
@@ -143,11 +148,17 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert framework_chip["status"] == "review_required"
     assert "different reviewed workflow" in framework_chip["detail"]
     assert framework_chip["evidence_ref"] == body["genie_question_hash"]
+    gateway_chip = next(chip for chip in body["governance_chips"] if chip["label"] == "AI Gateway")
+    assert gateway_chip["status"] == "review_required"
+    assert "Supervisor call was routed through the configured AI Gateway endpoint" in gateway_chip["detail"]
+    assert "does not claim per-run row landing" in gateway_chip["detail"]
+    assert str(calls[0]["client_request_id"]) not in json.dumps(body)
     assert len(body["genie_question_hash"]) == 64
     evidence = json.loads(lakebase.runs[0]["agent_evidence"])
     assert evidence["supervisor_workflow_id"] == "listing_watch"
     assert evidence["deterministic_workflow_id"] == "daily_refi_brief"
     assert evidence["workflow_override_review_required"] is True
+    assert evidence["gateway_client_request_id"] == calls[0]["client_request_id"]
     assert prompt_text.lower() not in json.dumps(body).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.runs, default=str).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.audit_events, default=str).lower()
@@ -156,6 +167,8 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
 def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    calls: list[dict[str, Any]] = []
+
     def fake_query_serving_endpoint(
         workspace_client: object,
         endpoint: str,
@@ -164,7 +177,14 @@ def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
         client_request_id: str | None = None,
         task: str | None = None,
     ) -> dict[str, Any]:
-        _ = workspace_client, endpoint, prompt, client_request_id, task
+        _ = workspace_client, prompt
+        calls.append(
+            {
+                "endpoint": endpoint,
+                "client_request_id": client_request_id,
+                "task": task,
+            }
+        )
         return {
             "id": "resp-supervisor-1",
             "output": [{"content": '{"workflow_id":"listing_watch","reason":"purchase intent"}'}],
@@ -206,6 +226,9 @@ def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
         chip for chip in replay.json()["governance_chips"] if chip["label"] == "Multi-agent framework"
     )
     assert framework_chip["status"] == "review_required"
+    assert len(calls) == 2
+    assert calls[0]["client_request_id"] == calls[1]["client_request_id"]
+    assert str(calls[0]["client_request_id"]).startswith(f"mip-agent-run-{_TEST_GATEWAY_SHA}-")
     evidence = json.loads(lakebase.runs[0]["agent_evidence"])
     assert evidence["workflow_override_review_required"] is True
     assert len(lakebase.runs) == 1
