@@ -74,9 +74,17 @@ def test_route_default_request_hits_warmed_cache() -> None:
     )
 
 
-def test_rewarm_interval_default_stays_below_cache_ttl() -> None:
-    """Refresh-ahead only works if the warm cadence beats expiry."""
+def test_rewarm_interval_defaults_to_disabled_for_idle_cost_control() -> None:
+    """Refresh-ahead must be opt-in so idle Apps can auto-stop."""
     from backend.config.settings import Settings
 
     fresh = Settings(_env_file=None)
+    assert fresh.mip_leads_warm_interval_s == 0
+
+
+def test_positive_rewarm_interval_stays_below_cache_ttl() -> None:
+    """When enabled, refresh-ahead only works if warm cadence beats expiry."""
+    from backend.config.settings import Settings
+
+    fresh = Settings(_env_file=None, mip_leads_warm_interval_s=120)
     assert 0 < fresh.mip_leads_warm_interval_s < fresh.mip_cache_ttl_s

@@ -24,6 +24,13 @@ APP_ENV_DEFAULT = "sandbox"
 CATALOG_DEFAULT = "mip"
 SCHEMA_DEFAULT = "gold"
 
+SAFE_RUNTIME_DEFAULTS = {
+    # Databricks Apps deployment env_vars are a full replacement for app.yaml.
+    # Keep this idle-cost control in the deployment payload even when the
+    # operator does not export it, otherwise the runtime falls back to code.
+    "MIP_LEADS_WARM_INTERVAL_S": "0",
+}
+
 NON_SECRET_OPERATOR_VARS = (
     "MIP_LENDER_NAME",
     "MIP_TENANT_ID",
@@ -140,7 +147,11 @@ def build_payload(
     ]
 
     for name in NON_SECRET_OPERATOR_VARS:
-        _append_value(env_vars, name, _env_value(name, dotenv))
+        _append_value(
+            env_vars,
+            name,
+            _env_value(name, dotenv) or SAFE_RUNTIME_DEFAULTS.get(name, ""),
+        )
     for name in SECRET_OPERATOR_VARS:
         _append_value(env_vars, name, _secret_value(name, dotenv))
 

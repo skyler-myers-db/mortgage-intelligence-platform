@@ -261,6 +261,14 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
             rewarm_task = asyncio.create_task(
                 _lead_cache_rewarm_loop(settings.mip_leads_warm_interval_s)
             )
+        else:
+            emit(
+                log,
+                "lead_cache_rewarm_disabled",
+                dependency="warehouse",
+                outcome="skipped",
+                interval_s=settings.mip_leads_warm_interval_s,
+            )
     try:
         yield
     finally:

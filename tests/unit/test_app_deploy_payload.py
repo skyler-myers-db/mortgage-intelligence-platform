@@ -61,6 +61,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_SILVER_REFRESH_JOB_ID"]["value_from"] == "silver_refresh_job"
     assert env["MIP_GOLD_REFRESH_JOB_ID"]["value_from"] == "gold_refresh_job"
     assert env["MIP_DEFAULT_CATALOG"]["value"] == "acme_mip"
+    assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "0"
     assert env["MIP_LENDER_NAME"]["value"] == "Acme Mortgage"
     assert env["MIP_TRUST_FORWARDED_HEADERS"]["value"] == "false"
     assert env["MIP_RUM_ENABLED"]["value"] == "1"
@@ -119,6 +120,15 @@ def test_payload_includes_explicit_admin_operator_vars(monkeypatch) -> None:
 
     assert env["MIP_ADMIN_EMAILS"]["value"] == "admin@example.com"
     assert env["MIP_ADMIN_GROUP_NAME"]["value"] == "risk-admin"
+
+
+def test_payload_allows_operator_to_enable_lead_rewarm(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_LEADS_WARM_INTERVAL_S", "120")
+
+    payload = build_payload(source_code_path="/Workspace/app/files", target="dev")
+    env = _env_map(payload)
+
+    assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "120"
 
 
 def test_payload_includes_cotality_mask_secret(monkeypatch) -> None:

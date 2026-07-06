@@ -406,7 +406,7 @@ class Settings(BaseSettings):
     # seconds only when the value is positive. MUST stay below
     # `mip_cache_ttl_s` when enabled. Deployed Apps set this to 0 for idle
     # cost control; operators can temporarily enable it for staffed demos.
-    mip_leads_warm_interval_s: float = 240.0
+    mip_leads_warm_interval_s: float = 0.0
     # Shorter TTL for Lakebase sales workflow read-through state (assignment,
     # disposition, approval rollups). Mutating sales-state paths clear this
     # process-local cache immediately; the TTL covers out-of-band updates.
