@@ -183,7 +183,7 @@ test.describe('Module 0 — golden path', () => {
     const segmentRequests: string[] = [];
     page.on('request', (request) => {
       const url = request.url();
-      if (url.includes('/api/leads') || url.includes('/api/geo/state-rollups')) {
+      if (url.includes('/api/leads') || url.includes('/api/geo/state-rollups') || url.includes('/api/segments')) {
         segmentRequests.push(url);
       }
     });
@@ -236,6 +236,16 @@ test.describe('Module 0 — golden path', () => {
         ),
       )
       .toBe(true);
+    await expect
+      .poll(() =>
+        segmentRequests.some(
+          (url) =>
+            url.includes('/api/segments') &&
+            url.includes('segment_codes=') &&
+            url.includes('segment_mode=any'),
+        ),
+      )
+      .toBe(true);
 
     await page.getByRole('button', { name: /All selected/ }).click();
     const allUrl = new URL(page.url());
@@ -248,6 +258,16 @@ test.describe('Module 0 — golden path', () => {
         segmentRequests.some(
           (url) =>
             url.includes('/api/leads') &&
+            url.includes('segment_codes=') &&
+            url.includes('segment_mode=all'),
+        ),
+      )
+      .toBe(true);
+    await expect
+      .poll(() =>
+        segmentRequests.some(
+          (url) =>
+            url.includes('/api/segments') &&
             url.includes('segment_codes=') &&
             url.includes('segment_mode=all'),
         ),

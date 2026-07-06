@@ -161,6 +161,15 @@ export function formatSelectedSegmentLabel(
   return `${labels.slice(0, -1).join(', ')}, ${conjunction} ${labels[labels.length - 1]}`;
 }
 
+export function segmentCardQuerySelection(
+  segments: SegmentCode[],
+  mode: SegmentFilterMode,
+): { segmentCodes?: SegmentCode[]; segmentMode: SegmentFilterMode } {
+  return segments.length > 0
+    ? { segmentCodes: segments, segmentMode: mode }
+    : { segmentCodes: undefined, segmentMode: 'any' };
+}
+
 export function lenderFiltersFromSearch(
   searchParams: URLSearchParams,
   targetLenderOptions: readonly string[] = [],
@@ -314,10 +323,16 @@ export default function SegmentIntelligence() {
     chipFilters.targetLenderRef,
   ]);
   const activeSegsKey = activeSegs.join(',');
+  const hasSelectedSegments = activeSegs.length > 0;
 
-  // Cold-start warming-up — segments + leads fetch independently so one
+  // Cold-start warming-up — segment cards + leads fetch independently so one
   // tile warming doesn't block the other (per-tile isolation, following
   // home.tsx). Each hook runs 6 retries / 5s apart = 30s total.
+  const {
+    segmentCodes: segmentCardCodes,
+    segmentMode: segmentCardMode,
+  } = segmentCardQuerySelection(activeSegs, segmentMode);
+
   const {
     data: segmentsData,
     warmingUp: segmentsWarming,
@@ -327,14 +342,16 @@ export default function SegmentIntelligence() {
     (signal) =>
       api.segments(
         signal,
-        undefined,
-        'all',
+        segmentCardCodes,
+        segmentCardMode,
         secondaryPortfolioCriteria,
       ),
-    [secondaryPortfolioCriteria],
+    [activeSegsKey, segmentCardCodes, segmentCardMode, secondaryPortfolioCriteria],
     {
       queryKey: queryKeys.segments([
-        'standalone',
+        hasSelectedSegments ? 'selected-cohort' : 'standalone',
+        activeSegsKey,
+        segmentCardMode,
         JSON.stringify(secondaryPortfolioCriteria),
       ]),
     },
@@ -449,6 +466,12 @@ export default function SegmentIntelligence() {
     }
     return out;
   }, [leads, chipFilters]);
+  const uniqueCohortTotal = totalMatching ?? filtered.length;
+  const segmentCountScopeCopy = hasSelectedSegments
+    ? segmentMode === 'all'
+      ? 'Card counts now show borrowers inside the All-selected intersection. Each selected card count should match the same unique borrower cohort.'
+      : 'Card counts now show borrowers inside the Any-selected OR cohort. The cohort is de-duplicated before counting.'
+    : 'Card counts are standalone segment memberships after filters. Borrowers can belong to more than one segment, so do not add the cards together.';
 
   const writeSegmentSearchParams = useCallback(
     (segments: SegmentCode[], mode: SegmentFilterMode) => {
@@ -525,10 +548,14 @@ export default function SegmentIntelligence() {
       eyebrow="Segments"
       title={
         segments.length > 0
-          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · standalone counts`
-          : 'Borrower segments · standalone counts'
+          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · ${
+              hasSelectedSegments ? 'selected cohort counts' : 'standalone counts'
+            }`
+          : `Borrower segments · ${hasSelectedSegments ? 'selected cohort counts' : 'standalone counts'}`
       }
-      lede="Cards show standalone counts after filters. Select cards, then choose Any selected for a de-duplicated OR cohort or All selected for borrowers in every selected segment."
+      lede={hasSelectedSegments
+        ? 'Card counts, the map, and the ranked table are using the same selected segment mode. Any selected is a de-duplicated OR cohort; All selected is the borrower intersection.'
+        : 'Cards show standalone segment membership counts after filters. Select cards, then choose Any selected for a de-duplicated OR cohort or All selected for borrowers in every selected segment.'}
       heroRight={
         <Button
           size="sm"
@@ -603,6 +630,13 @@ export default function SegmentIntelligence() {
             <div className="muted fs-12">
               Any selected is a de-duplicated OR cohort. All selected is the AND intersection where each borrower must appear in every selected segment.
             </div>
+            {hasSelectedSegments && !leadsRefreshing && (
+              <div className="segment-mode-control__total">
+                <span className="eyebrow">Selected cohort</span>
+                <span className="num">{uniqueCohortTotal.toLocaleString()}</span>
+                <span className="muted fs-12">unique ranked borrowers</span>
+              </div>
+            )}
           </div>
           <div className="segmented segmented--inline" role="group" aria-label="Segment match mode">
             {SEGMENT_MODE_OPTIONS.map((option) => (
@@ -693,7 +727,7 @@ export default function SegmentIntelligence() {
         <div
           className="filter-row__hint filter-row__hint--full muted"
         >
-          Segment card counts are standalone and should not be added together.
+          {segmentCountScopeCopy}{' '}
           Selected cards {segmentMode === 'all' ? 'must all match the same borrower' : 'stack into one de-duplicated OR cohort'} for the table, map, and lead-queue drilldown.
           Listed-for-sale is
           backed by live Cotality MLS rows. HELOC intent is

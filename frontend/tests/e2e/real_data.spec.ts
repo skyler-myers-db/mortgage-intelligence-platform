@@ -535,12 +535,20 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const geoResponse = page.waitForResponse((response) =>
       isAnyModeSegmentResponse(response.url(), '/api/geo/state-rollups'),
     );
+    const segmentCardsResponse = page.waitForResponse((response) =>
+      isAnyModeSegmentResponse(response.url(), '/api/segments'),
+    );
 
     await clickSegmentCard(page, 'Home Equity Candidate');
 
-    const [leads, geo] = await Promise.all([leadsResponse, geoResponse]);
+    const [leads, geo, segmentCards] = await Promise.all([
+      leadsResponse,
+      geoResponse,
+      segmentCardsResponse,
+    ]);
     expect(leads.status(), 'ranked list segment any-mode response').toBe(200);
     expect(geo.status(), 'map segment any-mode response').toBe(200);
+    expect(segmentCards.status(), 'segment card any-mode response').toBe(200);
     const segmentUrl = new URL(page.url());
     expect((segmentUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'itm']);
     expect(segmentUrl.searchParams.get('segment_mode')).toBe('any');
@@ -573,8 +581,18 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
         codes.includes('equity')
       );
     });
+    const allModeSegments = page.waitForResponse((response) => {
+      if (response.status() !== 200 || !urlIncludesApiPath(response.url(), '/api/segments')) return false;
+      const parsed = new URL(response.url());
+      const codes = parsed.searchParams.get('segment_codes') ?? '';
+      return (
+        parsed.searchParams.get('segment_mode') === 'all' &&
+        codes.includes('itm') &&
+        codes.includes('equity')
+      );
+    });
     await page.getByRole('button', { name: /All selected/i }).click();
-    await allModeLeads;
+    await Promise.all([allModeLeads, allModeSegments]);
     const segmentUrl = new URL(page.url());
     expect((segmentUrl.searchParams.get('segment_codes') ?? '').split(',').sort()).toEqual(['equity', 'itm']);
     expect(segmentUrl.searchParams.get('segment_mode')).toBe('all');

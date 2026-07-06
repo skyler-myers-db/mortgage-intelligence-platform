@@ -2895,6 +2895,19 @@ kbd {
 .segment-mode-control .segmented button.is-active .segmented__meta {
   color: currentColor;
 }
+.segment-mode-control__total {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: var(--sp-2);
+  margin-top: var(--sp-2);
+  color: var(--text-2);
+}
+.segment-mode-control__total .num {
+  color: var(--text-1);
+  font-size: var(--fs-18);
+  font-weight: 650;
+}
 /* Inline "Save build" naming form. Re-audit #3 P1 (2026-06-12): replaces
    window.prompt(), whose synchronous native dialog froze the renderer
    under automation and broke the enterprise-product posture. */

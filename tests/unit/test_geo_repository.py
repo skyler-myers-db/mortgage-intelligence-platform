@@ -106,6 +106,27 @@ def test_segment_list_expired_cache_failure_propagates() -> None:
         raise AssertionError("expired segment cache must not mask refresh failures")
 
 
+def test_segment_filtered_rollup_counts_distinct_clips() -> None:
+    """Selected segment cards must count borrowers, not exploded memberships.
+
+    A borrower can belong to several segments, and a malformed upstream array
+    must not let one CLIP inflate a selected-cohort card count.
+    """
+    client = _FakeSqlClient()
+    repo = DatabricksSegmentRepository(client, cache_ttl_s=10.0)
+
+    repo.list(None, segment_codes=["itm", "equity"], segment_mode="all")
+
+    assert client.calls
+    statement, params = client.calls[-1]
+    normalized = " ".join(statement.split())
+    assert "SELECT clip, segment_codes, opportunity_score" in normalized
+    assert "SELECT DISTINCT clip, sc AS segment_code, opportunity_score" in normalized
+    assert "COUNT(DISTINCT clip)" in normalized
+    assert "array_contains(segment_codes, :segment_0) AND array_contains(segment_codes, :segment_1)" in normalized
+    assert set(params.values()) == {"itm", "equity"}
+
+
 # ---------------------------------------------------------------------------
 # state_rollups
 # ---------------------------------------------------------------------------

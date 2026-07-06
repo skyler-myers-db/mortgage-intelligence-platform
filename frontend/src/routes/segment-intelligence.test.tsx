@@ -4,6 +4,7 @@ import {
   activeSegmentsFromSearch,
   formatSelectedSegmentLabel,
   lenderFiltersFromSearch,
+  segmentCardQuerySelection,
   segmentModeFromSearch,
   segmentSearchParamsForState,
 } from './segment-intelligence';
@@ -93,6 +94,21 @@ describe('segment intelligence lender overlay URL state', () => {
     expect(emptyIntersection.get('segment')).toBeNull();
     expect(emptyIntersection.get('segment_codes')).toBeNull();
     expect(emptyIntersection.get('segment_mode')).toBeNull();
+  });
+
+  it('uses selected-cohort segment counts only after cards are selected', () => {
+    expect(segmentCardQuerySelection([], 'all')).toEqual({
+      segmentCodes: undefined,
+      segmentMode: 'any',
+    });
+    expect(segmentCardQuerySelection(['itm', 'equity'], 'any')).toEqual({
+      segmentCodes: ['itm', 'equity'],
+      segmentMode: 'any',
+    });
+    expect(segmentCardQuerySelection(['itm', 'equity'], 'all')).toEqual({
+      segmentCodes: ['itm', 'equity'],
+      segmentMode: 'all',
+    });
   });
 
   it('formats selected segment labels with mode-specific conjunctions', () => {
