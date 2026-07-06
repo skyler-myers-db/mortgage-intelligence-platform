@@ -356,14 +356,20 @@ def test_health_returns_cached_value_during_stale_window(
 # ---------------------------------------------------------------------------
 
 
-def test_health_anonymous_returns_minimal_body(monkeypatch: pytest.MonkeyPatch) -> None:
+def _fail_if_probe_runs() -> bool:
+    raise AssertionError("anonymous /api/health must not run dependency probes")
+
+
+def test_health_anonymous_returns_minimal_liveness_without_probes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An unauthenticated caller (no X-Forwarded-Email) must only see
     ``{status, mode}`` so an attacker probing the public Databricks Apps
     URL doesn't get breaker state, app_env, or identity-fallback counters
-    for free."""
-    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    for free. It also must not wake billable dependencies."""
+    monkeypatch.setattr(health_probes, "probe_warehouse", _fail_if_probe_runs)
+    monkeypatch.setattr(health_probes, "probe_lakebase", _fail_if_probe_runs)
+    monkeypatch.setattr(health_probes, "probe_genie", _fail_if_probe_runs)
 
     res = client.get("/api/health")
     assert res.status_code == 200
@@ -375,18 +381,17 @@ def test_health_anonymous_returns_minimal_body(monkeypatch: pytest.MonkeyPatch) 
     assert body["mode"] == "live"
 
 
-def test_health_anonymous_degraded_still_minimal(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Degraded anonymous probes stay 200 with the minimal body. The LB
-    contract is preserved (degraded != unhealthy)."""
-    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: False)
-    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+def test_health_anonymous_ignores_open_breakers_for_liveness() -> None:
+    """The LB contract is process liveness, not dependency readiness."""
+    cb = resilience.get_breaker("warehouse", failure_threshold=1, cooldown_s=60)
+    cb.record_failure()
+    assert cb.state == "open"
 
     res = client.get("/api/health")
     assert res.status_code == 200
     body = res.json()
     assert set(body.keys()) == {"status", "mode"}
-    assert body["status"] == "degraded"
+    assert body["status"] == "ok"
 
 
 def test_health_authenticated_returns_runtime_status_only(
@@ -537,9 +542,9 @@ def test_health_actor_cache_key_changes_by_actor(
 def test_health_ignores_forwarded_actor_when_headers_are_untrusted(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
-    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
-    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_warehouse", _fail_if_probe_runs)
+    monkeypatch.setattr(health_probes, "probe_lakebase", _fail_if_probe_runs)
+    monkeypatch.setattr(health_probes, "probe_genie", _fail_if_probe_runs)
     monkeypatch.setattr(health_mod.settings, "trust_forwarded_headers", False)
 
     res = client.get("/api/health", headers={"X-Forwarded-Email": "spoofed@example.com"})
@@ -567,7 +572,7 @@ def test_health_forces_sync_reprobe_after_hard_ttl(
     monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
 
     # Seed the cache.
-    client.get("/api/health")
+    client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
     assert counts["n"] == 1
 
     # Force hard-TTL expiry by setting both expiries into the past.

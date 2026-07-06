@@ -10,10 +10,11 @@ transfer), so the fix is to make the DEFAULT page shape never be cold:
 * ``warm_default_lead_page`` executes the exact repository calls the
   ``GET /api/leads`` route issues for a default request (no filters,
   default limit), populating the same singleton cache the route reads.
-* ``backend.main`` runs it once at startup (after the warehouse warm) and
-  then every ``settings.mip_leads_warm_interval_s`` seconds — below the
-  ``mip_cache_ttl_s`` default (300s) so the entry is refreshed *ahead* of
-  expiry and booth/demo loads always hit cache.
+* ``backend.main`` runs it once at startup (after the warehouse warm). When
+  ``settings.mip_leads_warm_interval_s`` is positive, it then re-runs below
+  the ``mip_cache_ttl_s`` default (300s) so the entry is refreshed *ahead*
+  of expiry and booth/demo loads always hit cache. Deployed Apps override
+  that interval to 0 by default so idle workspaces can auto-stop.
 
 Cache-key parity between this module and the route is pinned by
 ``tests/unit/test_lead_warm.py``: it warms through a counting fake SQL

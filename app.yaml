@@ -83,6 +83,13 @@ env:
   - name: MIP_DEFAULT_SCHEMA
     value: gold
 
+  # Cost-control default: the backend still warms the hot lead queue once
+  # at startup, but the deployed app must not keep re-querying the warehouse
+  # every few minutes while no one is using it. Operators can override this
+  # to a positive value before a staffed walkthrough block.
+  - name: MIP_LEADS_WARM_INTERVAL_S
+    value: "0"
+
 # Note: there is no MIP_MOCK_MODE runtime toggle (CLAUDE.md §8). The app
 # runs against the live Unity Catalog / Lakebase path in every
 # environment and fails visibly at process startup if any required

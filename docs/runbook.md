@@ -38,8 +38,12 @@ cold-start problems — and their one-line recovery commands — are:
 
 ### 1.1 Warehouse cold / `warehouse: down` in `/api/v1/health`
 
-The 2X-Small serverless warehouse auto-stops after 15 min idle. First
-query after a cold window is 30–60 s.
+The 2X-Small serverless warehouse auto-stops after 10 min idle. First
+query after a cold window is 30–60 s. This idle stop is intentional:
+deployed Apps disable the periodic lead-cache rewarm loop by default
+(`MIP_LEADS_WARM_INTERVAL_S=0`) so a quiet workspace can actually reach
+auto-stop. Only set a positive rewarm interval for a staffed walkthrough
+block where warm-route latency matters more than idle cost.
 
 ```bash
 databricks warehouses start "$DATABRICKS_WAREHOUSE_ID"

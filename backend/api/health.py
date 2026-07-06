@@ -23,11 +23,13 @@ A degraded response STILL returns HTTP 200 so the Databricks App load
 balancer doesn't yank the container. Degraded state is carried in the
 body, which the frontend reads to show the banner.
 
-Each dependency probe is a lightweight ping with a 1-second timeout.
-Warehouse / Lakebase probes issue ``SELECT 1``; Genie probes hit
-``GET /spaces/{id}``. Failures do not raise; they flip the dependency
-status to ``down`` and bump the breaker's failure counter. The
-frontend's degraded banner auto-retries until ``status == "ok"``.
+Authenticated dependency probes are lightweight pings with a 1-second
+timeout. Warehouse / Lakebase probes issue ``SELECT 1``; Genie probes
+hit ``GET /spaces/{id}``. Failures do not raise; they flip the
+dependency status to ``down`` and bump the breaker's failure counter.
+Anonymous load-balancer/liveness requests intentionally do not run those
+probes, so external monitoring cannot keep billable dependencies warm.
+The frontend's degraded banner auto-retries until ``status == "ok"``.
 """
 from __future__ import annotations
 
@@ -221,18 +223,24 @@ def health(request: Request) -> dict[str, Any]:
     HTTP status stays 200 in both shapes even when ``status=="degraded"``
     so the LB probe contract (degraded != unhealthy) is preserved.
     """
-    status, deps = probe_snapshot()
-    breakers = breaker_states()
-    status, deps = _apply_breaker_degraded(status, deps, breakers)
-
     # Anonymous caller (LB / external probe): minimal body only. Use the
     # same trust boundary as audit actor resolution without calling
     # resolve_actor(), so routine probes never bump the fallback counter
     # and untrusted proxy deployments cannot spoof diagnostic access.
+    #
+    # Cost boundary: anonymous liveness must not issue dependency probes.
+    # Otherwise a Databricks App load balancer, uptime monitor, or public
+    # scanner can keep the SQL warehouse/Lakebase/Genie path hot forever.
+    # Authenticated browsers and /api/admin/health still get full dependency
+    # truth for the degraded-state UI.
     actor_email = _trusted_health_actor(request)
     authenticated = bool(actor_email)
     if not authenticated:
-        return {"status": status, "mode": "live"}
+        return {"status": "ok", "mode": "live"}
+
+    status, deps = probe_snapshot()
+    breakers = breaker_states()
+    status, deps = _apply_breaker_degraded(status, deps, breakers)
 
     status, deps, forced_degraded = _apply_browser_forced_degraded(request, status, deps)
     body = {

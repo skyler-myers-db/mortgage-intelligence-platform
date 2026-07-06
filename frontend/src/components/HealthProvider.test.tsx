@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
+// @vitest-environment happy-dom
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import { createRoot, type Root } from 'react-dom/client';
 import {
   HealthProvider,
   applyDownUpDebounce,
@@ -154,6 +158,73 @@ describe('applyDownUpDebounce', () => {
     const priorDown = { warehouse: { filtered: 'down' as const, pendingUpSince: null } };
     const { payload } = applyDownUpDebounce(RAW_UP, priorDown, 1000, 0);
     expect(payload.dependencies?.warehouse).toBe('up');
+  });
+});
+
+describe('HealthProvider browser polling', () => {
+  let container: HTMLDivElement;
+  let root: Root;
+  let visibilityState = 'visible';
+  const originalVisibility = Object.getOwnPropertyDescriptor(
+    Document.prototype,
+    'visibilityState',
+  );
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    visibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', {
+      configurable: true,
+      get: () => visibilityState,
+    });
+    container = document.createElement('div');
+    document.body.appendChild(container);
+    root = createRoot(container);
+  });
+
+  afterEach(() => {
+    act(() => {
+      root.unmount();
+    });
+    container.remove();
+    if (originalVisibility) {
+      Object.defineProperty(document, 'visibilityState', originalVisibility);
+    } else {
+      Reflect.deleteProperty(document, 'visibilityState');
+    }
+    vi.useRealTimers();
+  });
+
+  it('pauses health polling while the tab is hidden and probes on return', async () => {
+    const fetchHealth = vi.fn(async () => ({
+      status: 'ok' as const,
+      mode: 'live',
+      dependencies: { warehouse: 'up', lakebase: 'up', genie: 'up' },
+    }));
+
+    await act(async () => {
+      root.render(
+        <HealthProvider pollIntervalOkMs={8000} fetchHealth={fetchHealth}>
+          <span>ready</span>
+        </HealthProvider>,
+      );
+    });
+    expect(fetchHealth).toHaveBeenCalledTimes(1);
+
+    visibilityState = 'hidden';
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    await act(async () => {
+      vi.advanceTimersByTime(60_000);
+    });
+    expect(fetchHealth).toHaveBeenCalledTimes(1);
+
+    visibilityState = 'visible';
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
+    expect(fetchHealth).toHaveBeenCalledTimes(2);
   });
 });
 

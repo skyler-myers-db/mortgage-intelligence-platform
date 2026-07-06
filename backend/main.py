@@ -179,11 +179,11 @@ def _warm_hot_lead_cache() -> None:
 
     2026-06-11 audit P1-6: the default lead page is the slowest hot-path
     query (3.6-6.6s cold) and fronts both hero routes. Warming it at
-    startup — and re-warming on a cadence below the cache TTL via
-    ``_lead_cache_rewarm_loop`` — means booth/demo loads always hit the
-    repository cache (~sub-second). Same log-and-continue posture as
-    ``_warm_warehouse``: a failed warm degrades to the pre-existing
-    cold-query behaviour, never a boot refusal.
+    startup improves the first route load after a process start; an
+    optional positive ``MIP_LEADS_WARM_INTERVAL_S`` can also re-warm on
+    a cadence below the cache TTL for staffed walkthrough blocks. Same
+    log-and-continue posture as ``_warm_warehouse``: a failed warm
+    degrades to the pre-existing cold-query behaviour, never a boot refusal.
     """
     from backend.services.lead_warm import warm_default_lead_page
 
@@ -236,9 +236,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
       breakers + the frontend degraded banner cover the gap.
 
     2026-06-11 audit P1-6:
-    * Warm the default `/api/leads` page (slowest hot-path query) and
-      keep it warm with a refresh-ahead loop so hero-route loads hit
-      the repository cache instead of a 3.6-6.6s cold warehouse query.
+    * Warm the default `/api/leads` page (slowest hot-path query) once at
+      startup. When ``MIP_LEADS_WARM_INTERVAL_S`` is positive, keep it warm
+      with a refresh-ahead loop for demo/performance-critical sessions; the
+      deployed app default sets this to 0 so idle workspaces can auto-stop.
     """
     rewarm_task: asyncio.Task[None] | None = None
     if not _running_under_pytest():

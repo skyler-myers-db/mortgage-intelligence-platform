@@ -264,7 +264,7 @@ resources:
       warehouse_type: PRO
       enable_serverless_compute: true
       cluster_size: 2X-Small
-      auto_stop_mins: 15
+      auto_stop_mins: 10
 
   jobs:
     # Slice 2 real-data migration: refresh silver by running the Lakeflow

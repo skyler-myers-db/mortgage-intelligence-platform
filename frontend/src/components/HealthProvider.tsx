@@ -184,8 +184,30 @@ export function HealthProvider({
     const ctrl = new AbortController();
     let timer: ReturnType<typeof setTimeout> | null = null;
     let cancelled = false;
+    let inFlight = false;
+
+    const isHidden = () =>
+      typeof document !== 'undefined' && document.visibilityState === 'hidden';
+
+    const clearTimer = () => {
+      if (timer !== null) {
+        clearTimeout(timer);
+        timer = null;
+      }
+    };
+
+    const scheduleNext = () => {
+      clearTimer();
+      if (cancelled || isHidden()) return;
+      const delay = degradedRef.current ? pollIntervalDegradedMs : pollIntervalOkMs;
+      timer = setTimeout(() => {
+        void tick();
+      }, delay);
+    };
 
     const tick = async () => {
+      if (cancelled || isHidden() || inFlight) return;
+      inFlight = true;
       const t0 = performance.now();
       try {
         const rawPayload = await fetchHealth(ctrl.signal);
@@ -226,19 +248,30 @@ export function HealthProvider({
         setProbeMs(null);
         setFetchedAt(new Date().toISOString());
         degradedRef.current = true;
+      } finally {
+        inFlight = false;
       }
-      if (cancelled) return;
-      const delay = degradedRef.current ? pollIntervalDegradedMs : pollIntervalOkMs;
-      timer = setTimeout(() => {
-        void tick();
-      }, delay);
+      scheduleNext();
     };
 
     void tick();
+    const onVisibilityChange = () => {
+      if (isHidden()) {
+        clearTimer();
+      } else {
+        void tick();
+      }
+    };
+    if (typeof document !== 'undefined') {
+      document.addEventListener('visibilitychange', onVisibilityChange);
+    }
     return () => {
       cancelled = true;
       ctrl.abort();
-      if (timer !== null) clearTimeout(timer);
+      clearTimer();
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+      }
     };
   }, [fetchHealth, pollIntervalDegradedMs, pollIntervalOkMs, debounceUpMs]);
 

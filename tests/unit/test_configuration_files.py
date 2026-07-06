@@ -21,6 +21,24 @@ def test_app_yaml_contains_required_runtime_bindings():
         assert token in content
 
 
+def test_app_yaml_disables_idle_lead_rewarm_by_default():
+    """Deployed Apps must not keep the SQL warehouse warm while idle."""
+    content = (REPO / "app.yaml").read_text(encoding="utf-8")
+    assert re.search(
+        r"(?ms)- name: MIP_LEADS_WARM_INTERVAL_S\s+value: \"0\"",
+        content,
+    ), "app.yaml must disable periodic lead-cache rewarm by default"
+
+
+def test_bundle_sql_warehouse_uses_minimal_idle_timeout():
+    """The bundle-managed SQL warehouse should auto-stop quickly when idle."""
+    content = (REPO / "databricks.yml").read_text(encoding="utf-8")
+    assert re.search(
+        r"(?ms)mip_serverless_sql:.*?auto_stop_mins: 10",
+        content,
+    ), "mip_serverless_sql should use a 10 minute auto-stop"
+
+
 def test_databricks_yml_contains_required_resource_names():
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
     for token in [

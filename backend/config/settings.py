@@ -400,12 +400,12 @@ class Settings(BaseSettings):
     # admin request-scoped live snapshot briefly so repeated page refreshes do
     # not spam billable endpoints. Set to 0 to disable for tests/debugging.
     mip_live_capability_probe_ttl_s: float = 60.0
-    # 2026-06-11 audit P1-6: refresh-ahead interval for the default lead
-    # page (the slowest hot-path query, 3.6-6.6s cold). backend.main warms
-    # the default `/api/leads` list + count at startup and re-warms every
-    # this-many seconds. MUST stay below `mip_cache_ttl_s` so the cache
-    # entry is refreshed before it expires and hero-route loads never pay
-    # the cold query. Set to 0 to disable the re-warm loop (tests do).
+    # Optional refresh-ahead interval for the default lead page (the slowest
+    # hot-path query, 3.6-6.6s cold). backend.main warms the default
+    # `/api/leads` list + count at startup, then re-warms every this-many
+    # seconds only when the value is positive. MUST stay below
+    # `mip_cache_ttl_s` when enabled. Deployed Apps set this to 0 for idle
+    # cost control; operators can temporarily enable it for staffed demos.
     mip_leads_warm_interval_s: float = 240.0
     # Shorter TTL for Lakebase sales workflow read-through state (assignment,
     # disposition, approval rollups). Mutating sales-state paths clear this

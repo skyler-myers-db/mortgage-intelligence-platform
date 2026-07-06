@@ -230,7 +230,7 @@ evidence chip to prove the drawer opens and cites `mip.gold.*` rows.
 
 ### 6.1 Warehouse warm-start (~30 s)
 
-The 2X-Small serverless warehouse auto-stops after 15 min idle. The
+The 2X-Small serverless warehouse auto-stops after 10 min idle. The
 first query after deploy is a cold start — 30–60 s. `/api/v1/health` may
 flap `warehouse: "down"` → `"up"` during this window; the circuit
 breaker opens and closes once. **Do not redeploy.** The retry loop in §5
