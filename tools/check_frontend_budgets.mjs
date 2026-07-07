@@ -63,8 +63,13 @@ const budgets = {
   // workflow cards, broad-vs-actionable reconciliation, tool timeline,
   // policy checks, and saved-monitor affordances. Measured post-feature
   // actual: CSS 125.45 / gzip 21.63; reset raw with ~5% headroom.
-  initialCssBytes: 132 * KiB, // actual 125.45
-  initialCssGzipBytes: 22 * KiB, // actual 20.56
+  // Re-baselined 2026-07-07 for the segment-cohort-count + filter-layout
+  // slices and the Genie enhancement surface (native follow-up chips,
+  // native-viz Beta badge, reasoning-trace proof section, feedback control,
+  // staged progress). Measured post-feature actual: CSS 131.93 / gzip 22.60;
+  // raw had only 0.07 KiB headroom left (flake territory). ~4-6% headroom.
+  initialCssBytes: 138 * KiB, // actual 131.93
+  initialCssGzipBytes: 24 * KiB, // actual 22.60
   // Re-baselined 2026-06-12: the Buyer-Wow epic + "Your book today" summary
   // (Feature A) + LO-assignment/follow-up routing (Feature C) grew total JS
   // from the stale 832.42 baseline to 875.99 / gzip 288.42, tipping the old
