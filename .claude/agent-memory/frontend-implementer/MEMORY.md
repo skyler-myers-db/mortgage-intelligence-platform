@@ -4,3 +4,4 @@
 - [Footprint context is source of truth](project_footprint_context.md) — FootprintProvider hydrates /api/config/footprint; drives map drill + segment LOCATION + portfolio GEO.
 - [A11y/race patterns](project_a11y_patterns.md) — dialog focus-trap mirrors EvidenceDrawer; hotkeys check activeElement; async handlers need useRef latch.
 - [Warming-up retry pattern](project_warming_up_pattern.md) — cold-start 503s use useWarmingUpRetry + WarmingUpBlock; ApiError carries dependency/correlationId.
+- [CSS gzip budget red on main](project_css_budget_gzip_red.md) — initial-CSS gzip budget already fails on clean main; don't self-bump, reuse BEM primitives to fit raw headroom.

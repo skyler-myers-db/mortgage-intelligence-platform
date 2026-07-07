@@ -7,3 +7,4 @@
 - [Slice-13 OTEL follow-up](project_slice13_otel_followup.md) — MIP_OTEL_ENDPOINT env-gates OTLP export; deps are optional; counters stay process-local by design
 - [dependency_overrides.pop danger](feedback_dependency_override_pop.md) — test-local overrides must snapshot/restore, never pop; conftest.py registers session-wide bindings; reset breakers when intentionally tripping them
 - [R5 governance fixes](project_r5_governance_fixes.md) — R5-01 request_id idempotency, R5-09 trust boundary flag, R5-18 broadened audit-write except, R5-23 no-body-in-logs test
+- [No Pydantic validation on PII fields](feedback_no_pydantic_validation_on_pii_fields.md) — 422 echoes raw input; validate PII fields in the route via HTTPException, not Pydantic validators
