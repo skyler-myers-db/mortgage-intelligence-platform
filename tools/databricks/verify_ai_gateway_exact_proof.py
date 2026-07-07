@@ -26,6 +26,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from databricks.sdk import WorkspaceClient
+from pydantic import SecretStr
 
 from backend.config.settings import get_settings
 from backend.services.ai_gateway_proof_ledger import (
@@ -71,10 +72,27 @@ def ensure_lakebase_env(workspace_factory: Any = WorkspaceClient) -> bool:
     ``LAKEBASE_HOST`` is unset, resolve the instance DNS and a short-lived
     OAuth database credential via the same workspace identity every other
     deploy step already uses — no .env.local hand-editing required. Explicit
-    env always wins. Returns True when env was minted here.
+    env pointing at a real host always wins; localhost/127.0.0.1 values
+    (stale local-postgres leftovers in .env.local) are treated as absent,
+    because the proof ledger can only live in the real Lakebase instance.
+    Returns True when env was minted here.
     """
-    if (os.environ.get("LAKEBASE_HOST") or "").strip():
+    def _is_real_host(value: str | None) -> bool:
+        host = (value or "").strip().lower()
+        return bool(host) and host not in {"localhost", "127.0.0.1", "::1"}
+
+    if _is_real_host(os.environ.get("LAKEBASE_HOST")):
         return False
+    stale = get_settings()
+    if _is_real_host(stale.lakebase_host):
+        # A real host from .env.local is fine; only absent or localhost-ish
+        # resolution needs minting.
+        return False
+    if (stale.lakebase_host or "").strip():
+        print(
+            "[ai-gateway-verify] ignoring localhost Lakebase config from .env.local — "
+            "the proof ledger must live in the real mip-app-state instance."
+        )
     instance = (os.environ.get("MIP_LAKEBASE_INSTANCE") or "mip-app-state").strip()
     workspace = workspace_factory()
     dns = workspace.database.get_database_instance(instance).read_write_dns
@@ -99,6 +117,17 @@ def ensure_lakebase_env(workspace_factory: Any = WorkspaceClient) -> bool:
     os.environ["LAKEBASE_PASSWORD"] = str(credential.token)
     os.environ.setdefault("LAKEBASE_DATABASE", "mip_app_state")
     os.environ.setdefault("LAKEBASE_SSLMODE", "require")
+    # The import-time settings singleton (bound by backend.services.lakebase
+    # at module import) may carry truthy stale .env.local values such as
+    # localhost/mip/mip, which shadow every PG* fallback in the resolver.
+    # cache_clear() only affects future get_settings() calls, so overwrite
+    # the live object the resolver actually reads.
+    stale.lakebase_host = str(dns)
+    stale.lakebase_port = 5432
+    stale.lakebase_database = os.environ["LAKEBASE_DATABASE"]
+    stale.lakebase_user = str(user_name)
+    stale.lakebase_password = SecretStr(str(credential.token))
+    stale.lakebase_sslmode = os.environ["LAKEBASE_SSLMODE"]
     get_settings.cache_clear()
     print(f"[ai-gateway-verify] minted Lakebase credentials for {instance} ({user_name})")
     return True

@@ -480,17 +480,48 @@ def test_mlflow_genai_evaluate_requires_databricks_run_lookup(monkeypatch) -> No
         raise AssertionError("expected unresolved Databricks GenAI eval run to fail closed")
 
 
-def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
-    """Deploy laptops / CI runners have no Lakebase env; the verifier mints it
-    from the workspace identity (observed failure: deploy step 18, 2026-07-07)."""
+_LAKEBASE_ENV_KEYS = (
+    "LAKEBASE_HOST",
+    "LAKEBASE_USER",
+    "LAKEBASE_PASSWORD",
+    "LAKEBASE_DATABASE",
+    "LAKEBASE_SSLMODE",
+    "PGHOST",
+    "PGUSER",
+    "PGPASSWORD",
+    "PGDATABASE",
+)
+
+_LAKEBASE_SETTINGS_FIELDS = (
+    "lakebase_host",
+    "lakebase_port",
+    "lakebase_database",
+    "lakebase_user",
+    "lakebase_password",
+    "lakebase_sslmode",
+)
+
+
+def _isolate_lakebase_state(monkeypatch, verifier):
+    """Clear Lakebase env for the test and register teardown restoration.
+
+    ``ensure_lakebase_env`` mutates os.environ and the settings singleton
+    directly; setenv-then-delenv makes monkeypatch record the pre-test value
+    for every key so teardown erases whatever the function wrote.
+    """
+    for key in _LAKEBASE_ENV_KEYS:
+        monkeypatch.setenv(key, "isolate-marker")
+        monkeypatch.delenv(key)
+    singleton = verifier.get_settings()
+    for field in _LAKEBASE_SETTINGS_FIELDS:
+        monkeypatch.setattr(singleton, field, getattr(singleton, field))
+    return singleton
+
+
+def _fake_lakebase_workspace():
     from types import SimpleNamespace
 
-    from tools.databricks import verify_ai_gateway_exact_proof as verifier
-
-    for key in ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD", "PGHOST", "PGUSER", "PGPASSWORD"):
-        monkeypatch.delenv(key, raising=False)
-
-    fake = SimpleNamespace(
+    return SimpleNamespace(
         database=SimpleNamespace(
             get_database_instance=lambda name: SimpleNamespace(
                 read_write_dns=f"{name}.db.example"
@@ -501,8 +532,21 @@ def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
         ),
         current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="op@entrada.ai")),
     )
-    assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is True
+
+
+def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
+    """Deploy laptops / CI runners have no Lakebase env; the verifier mints it
+    from the workspace identity (observed failure: deploy step 18, 2026-07-07)."""
     import os as _os
+
+    from tools.databricks import verify_ai_gateway_exact_proof as verifier
+
+    singleton = _isolate_lakebase_state(monkeypatch, verifier)
+    monkeypatch.setattr(singleton, "lakebase_host", None)
+    monkeypatch.setattr(singleton, "lakebase_user", None)
+
+    fake = _fake_lakebase_workspace()
+    assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is True
 
     assert _os.environ["PGHOST"] == "mip-app-state.db.example"
     assert _os.environ["PGPASSWORD"] == "short-lived-token"
@@ -511,3 +555,46 @@ def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
     assert _os.environ["LAKEBASE_PASSWORD"] == "short-lived-token"
     # Explicit env wins: second call is a no-op.
     assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is False
+
+
+def test_verifier_overrides_stale_localhost_lakebase_settings(monkeypatch) -> None:
+    """A stale .env.local (LAKEBASE_HOST=localhost, user/db=mip) is truthy on
+    the import-time settings singleton, so the resolver in
+    backend.services.lakebase never falls back to minted PG* env (observed:
+    deploy step 18 dialed localhost:5432 three times, 2026-07-07). The
+    verifier must treat localhost as absent AND overwrite the live singleton,
+    because cache_clear() cannot reach already-bound module references."""
+    from tools.databricks import verify_ai_gateway_exact_proof as verifier
+
+    singleton = _isolate_lakebase_state(monkeypatch, verifier)
+    monkeypatch.setattr(singleton, "lakebase_host", "localhost")
+    monkeypatch.setattr(singleton, "lakebase_user", "mip")
+    monkeypatch.setattr(singleton, "lakebase_database", "mip")
+    monkeypatch.setattr(singleton, "lakebase_password", None)
+
+    fake = _fake_lakebase_workspace()
+    assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is True
+
+    # The exact object backend.services.lakebase holds must now resolve real.
+    assert singleton.lakebase_host == "mip-app-state.db.example"
+    assert singleton.lakebase_user == "op@entrada.ai"
+    assert singleton.lakebase_database == "mip_app_state"
+    assert singleton.lakebase_password is not None
+    assert singleton.lakebase_password.get_secret_value() == "short-lived-token"
+    assert singleton.lakebase_sslmode == "require"
+
+
+def test_verifier_respects_real_lakebase_host_in_settings(monkeypatch) -> None:
+    """A real (non-localhost) host from .env.local is operator intent — the
+    verifier must not overwrite it with minted credentials."""
+    from tools.databricks import verify_ai_gateway_exact_proof as verifier
+
+    singleton = _isolate_lakebase_state(monkeypatch, verifier)
+    monkeypatch.setattr(singleton, "lakebase_host", "customer-real.db.example")
+    monkeypatch.setattr(singleton, "lakebase_user", "operator")
+
+    def _explode():
+        raise AssertionError("workspace client must not be constructed")
+
+    assert verifier.ensure_lakebase_env(workspace_factory=_explode) is False
+    assert singleton.lakebase_host == "customer-real.db.example"
