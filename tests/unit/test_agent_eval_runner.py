@@ -598,3 +598,95 @@ def test_verifier_respects_real_lakebase_host_in_settings(monkeypatch) -> None:
 
     assert verifier.ensure_lakebase_env(workspace_factory=_explode) is False
     assert singleton.lakebase_host == "customer-real.db.example"
+
+
+def test_verifier_query_retries_through_cold_start_timeouts(monkeypatch) -> None:
+    """Scale-to-zero gateway endpoints hold cold requests past the SDK read
+    timeout (observed: deploy step 18 died after the SDK's 5-minute retry
+    budget, 2026-07-07). Timeout-shaped failures retry inside the warmup
+    budget; the eventual warm response is returned."""
+    from tools.databricks import verify_ai_gateway_exact_proof as verifier
+
+    calls = {"n": 0}
+
+    class _WarmingServingEndpoints:
+        def query(self, endpoint: str, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise TimeoutError("Timed out after 0:05:00")
+            return {"choices": [{"message": {"content": "warm"}}]}
+
+    class _Workspace:
+        serving_endpoints = _WarmingServingEndpoints()
+
+    naps: list[float] = []
+    response = verifier.query_with_cold_start_patience(
+        _Workspace(),
+        "mip-agent-gateway",
+        prompt="ping",
+        client_request_id="mip-capability-z",
+        task="llm/v1/chat",
+        warmup_timeout_s=600.0,
+        interval_s=5.0,
+        sleep=naps.append,
+    )
+    assert calls["n"] == 3
+    assert naps == [5.0, 5.0]
+    assert response["choices"]
+
+
+def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
+    """A 400/permission failure will never heal by waiting — no retries."""
+    from tools.databricks import verify_ai_gateway_exact_proof as verifier
+
+    calls = {"n": 0}
+
+    class _RejectingServingEndpoints:
+        def query(self, endpoint: str, **kwargs):
+            calls["n"] += 1
+            raise ValueError("Encountered an unexpected error while evaluating the model")
+
+    class _Workspace:
+        serving_endpoints = _RejectingServingEndpoints()
+
+    try:
+        verifier.query_with_cold_start_patience(
+            _Workspace(),
+            "mip-agent-gateway",
+            prompt="ping",
+            client_request_id="mip-capability-z",
+            task="llm/v1/chat",
+            warmup_timeout_s=600.0,
+            sleep=lambda _s: None,
+        )
+    except ValueError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected the model rejection to raise")
+    assert calls["n"] == 1
+
+
+def test_verifier_query_gives_up_after_warmup_budget() -> None:
+    from tools.databricks import verify_ai_gateway_exact_proof as verifier
+
+    class _ForeverColdServingEndpoints:
+        def query(self, endpoint: str, **kwargs):
+            raise TimeoutError("Timed out after 0:05:00")
+
+    class _Workspace:
+        serving_endpoints = _ForeverColdServingEndpoints()
+
+    try:
+        verifier.query_with_cold_start_patience(
+            _Workspace(),
+            "mip-agent-gateway",
+            prompt="ping",
+            client_request_id="mip-capability-z",
+            task="llm/v1/chat",
+            warmup_timeout_s=0.0,
+            sleep=lambda _s: None,
+        )
+    except TimeoutError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("expected timeout to propagate once the budget is spent")

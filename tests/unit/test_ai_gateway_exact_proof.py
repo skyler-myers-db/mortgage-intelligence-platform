@@ -273,7 +273,7 @@ def test_verifier_send_wait_records_exact_verified_row(monkeypatch) -> None:
     lakebase = _ProofLakebase()
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1))
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -305,7 +305,7 @@ def test_verifier_require_verified_accepts_existing_current_sha_proof(monkeypatc
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=0))
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -335,7 +335,7 @@ def test_verifier_require_verified_rejects_wrong_endpoint_pending_false_pass(mon
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1))
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -373,7 +373,7 @@ def test_verifier_requires_exact_client_request_id(monkeypatch) -> None:
         "get_sql_client",
         lambda: _ProofSql(counts_by_request_id={other_id: 1}),
     )
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -454,7 +454,7 @@ def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
         "get_sql_client",
         lambda: _ProofSql(counts_by_request_id={}),
     )
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [

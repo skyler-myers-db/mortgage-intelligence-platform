@@ -151,7 +151,10 @@ def main(argv: list[str] | None = None) -> int:
 
     lakebase = get_lakebase_client()
     sql_client = get_sql_client()
-    workspace = WorkspaceClient()
+    # Scale-to-zero gateway endpoints hold cold-start requests longer than
+    # the SDK's 60s default read timeout (observed 2026-07-07: deploy step 18
+    # died in the SDK's 5-minute retry budget while llama warmed).
+    workspace = WorkspaceClient(http_timeout_seconds=300)
     expired = mark_expired_pending_proofs(
         lakebase,
         older_than=datetime.now(UTC) - timedelta(seconds=max(1, args.expiry_s)),
@@ -226,6 +229,67 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+_COLD_START_MARKERS = (
+    "timed out",
+    "timeout",
+    "temporarily unavailable",
+    "service unavailable",
+    "503",
+    "scaling from zero",
+    "no server available",
+)
+
+
+def _is_cold_start_error(exc: BaseException) -> bool:
+    if isinstance(exc, TimeoutError):
+        return True
+    message = str(exc).lower()
+    return any(marker in message for marker in _COLD_START_MARKERS)
+
+
+def query_with_cold_start_patience(
+    workspace: Any,
+    endpoint: str,
+    *,
+    prompt: str,
+    client_request_id: str,
+    task: str,
+    warmup_timeout_s: float | None = None,
+    interval_s: float = 20.0,
+    sleep: Any = time.sleep,
+) -> Any:
+    """Query the endpoint, riding out scale-to-zero cold starts.
+
+    A cold llama endpoint can take minutes to warm; the platform holds the
+    request until the SDK read timeout trips (observed 2026-07-07, deploy
+    step 18). Retry timeout-shaped failures until the warmup budget is
+    spent; non-timeout errors raise immediately — a 400/permission error
+    will never heal by waiting.
+    """
+    if warmup_timeout_s is None:
+        warmup_timeout_s = float(os.environ.get("MIP_AI_GATEWAY_WARMUP_TIMEOUT_S", "600"))
+    deadline = time.monotonic() + max(0.0, warmup_timeout_s)
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return query_serving_endpoint(
+                workspace,
+                endpoint,
+                task=task,
+                prompt=prompt,
+                client_request_id=client_request_id,
+            )
+        except Exception as exc:  # noqa: BLE001 - classified below, re-raised when not cold-start
+            if not _is_cold_start_error(exc) or time.monotonic() >= deadline:
+                raise
+            print(
+                f"[ai-gateway-verify] endpoint {endpoint} looks cold "
+                f"(attempt {attempt}: {type(exc).__name__}); retrying in {int(interval_s)}s"
+            )
+            sleep(interval_s)
+
+
 def send_probe(
     *,
     lakebase: Any,
@@ -237,7 +301,7 @@ def send_probe(
     details = workspace.serving_endpoints.get(endpoint)
     task = getattr(details, "task", None)
     client_request_id = f"mip-capability-{git_sha}-{uuid4().hex[:16]}"
-    response = query_serving_endpoint(
+    response = query_with_cold_start_patience(
         workspace,
         endpoint,
         task=str(task or ""),
