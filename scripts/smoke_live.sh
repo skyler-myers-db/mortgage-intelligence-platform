@@ -223,11 +223,26 @@ probe() {
 
 probe_admin_or_forbidden() {
   local label="$1"; local path="$2"
-  local code
+  local code attempt
 
+  # Cold-start grace (2026-07-07): the ?live=1 capability sweep runs real
+  # probes (Genie turn, serving-endpoint query) and, seconds after an app
+  # restart, can cross the Databricks Apps proxy 60s ceiling — observed as
+  # a 504 in deploy step 22 that a warmed rerun passed cleanly. Only
+  # infrastructure-timeout codes (503/504) are retried; every content
+  # assertion stays strict.
   if [[ -z "$ADMIN_AUTH_TOKEN" ]]; then
-    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
-      "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
+    for attempt in 1 2 3; do
+      code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
+        "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
+      if [[ "$code" != "503" && "$code" != "504" ]]; then
+        break
+      fi
+      if [[ "$attempt" -lt 3 ]]; then
+        echo "[smoke] $label returned $code (likely cold start) — retrying in 20s"
+        sleep 20
+      fi
+    done
     # Posture-aware (2026-06-11): the default bearer's identity may or may
     # not be in the deployed MIP_ADMIN_EMAILS allowlist — both are valid
     # operator decisions. 403 proves the deny path; 200 means the deployer
@@ -248,8 +263,17 @@ probe_admin_or_forbidden() {
     exit 1
   fi
 
-  code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
-    "${CURL_ADMIN_AUTH_ARGS[@]}" "$APP_URL$path")
+  for attempt in 1 2 3; do
+    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
+      "${CURL_ADMIN_AUTH_ARGS[@]}" "$APP_URL$path")
+    if [[ "$code" != "503" && "$code" != "504" ]]; then
+      break
+    fi
+    if [[ "$attempt" -lt 3 ]]; then
+      echo "[smoke] $label returned $code (likely cold start) — retrying in 20s"
+      sleep 20
+    fi
+  done
   if [[ "$code" != "200" ]]; then
     echo "[smoke] $label ($path) returned $code with admin bearer" >&2
     cat /tmp/mip-smoke-out.json >&2 || true
