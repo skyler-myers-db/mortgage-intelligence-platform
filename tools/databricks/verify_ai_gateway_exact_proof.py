@@ -83,6 +83,17 @@ def ensure_lakebase_env(workspace_factory: Any = WorkspaceClient) -> bool:
         request_id=str(uuid4()),
     )
     user_name = workspace.current_user.me().user_name
+    # PG* is the load-bearing set: backend.services.lakebase resolves
+    # ``settings.lakebase_host or PGHOST`` (etc.) against a module-level
+    # settings singleton bound at import time, so freshly-minted LAKEBASE_*
+    # values are invisible to it (observed 2026-07-07: minting succeeded but
+    # psycopg still dialed localhost). The PG* fallbacks read live os.environ
+    # through that same stale object, which is exactly the Apps pathway.
+    os.environ["PGHOST"] = str(dns)
+    os.environ["PGUSER"] = str(user_name)
+    os.environ["PGPASSWORD"] = str(credential.token)
+    os.environ.setdefault("PGDATABASE", "mip_app_state")
+    # LAKEBASE_* kept for subprocesses and freshly-imported settings.
     os.environ["LAKEBASE_HOST"] = str(dns)
     os.environ["LAKEBASE_USER"] = str(user_name)
     os.environ["LAKEBASE_PASSWORD"] = str(credential.token)

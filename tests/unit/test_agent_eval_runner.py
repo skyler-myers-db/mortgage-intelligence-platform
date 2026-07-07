@@ -487,7 +487,7 @@ def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
 
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
-    for key in ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD"):
+    for key in ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD", "PGHOST", "PGUSER", "PGPASSWORD"):
         monkeypatch.delenv(key, raising=False)
 
     fake = SimpleNamespace(
@@ -504,6 +504,8 @@ def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
     assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is True
     import os as _os
 
+    assert _os.environ["PGHOST"] == "mip-app-state.db.example"
+    assert _os.environ["PGPASSWORD"] == "short-lived-token"
     assert _os.environ["LAKEBASE_HOST"] == "mip-app-state.db.example"
     assert _os.environ["LAKEBASE_USER"] == "op@entrada.ai"
     assert _os.environ["LAKEBASE_PASSWORD"] == "short-lived-token"
