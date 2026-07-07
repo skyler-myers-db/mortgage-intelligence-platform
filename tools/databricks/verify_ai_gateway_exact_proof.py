@@ -61,12 +61,45 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
+def ensure_lakebase_env(workspace_factory: Any = WorkspaceClient) -> bool:
+    """Mint Lakebase connection env from the Databricks identity when absent.
+
+    The proof ledger lives in Lakebase. On Databricks Apps the platform
+    injects connection env; on a deploy laptop or a CI runner nothing does,
+    and the settings default (localhost:5432) fails closed with a confusing
+    connection error (observed 2026-07-07, deploy step 18). When
+    ``LAKEBASE_HOST`` is unset, resolve the instance DNS and a short-lived
+    OAuth database credential via the same workspace identity every other
+    deploy step already uses — no .env.local hand-editing required. Explicit
+    env always wins. Returns True when env was minted here.
+    """
+    if (os.environ.get("LAKEBASE_HOST") or "").strip():
+        return False
+    instance = (os.environ.get("MIP_LAKEBASE_INSTANCE") or "mip-app-state").strip()
+    workspace = workspace_factory()
+    dns = workspace.database.get_database_instance(instance).read_write_dns
+    credential = workspace.database.generate_database_credential(
+        instance_names=[instance],
+        request_id=str(uuid4()),
+    )
+    user_name = workspace.current_user.me().user_name
+    os.environ["LAKEBASE_HOST"] = str(dns)
+    os.environ["LAKEBASE_USER"] = str(user_name)
+    os.environ["LAKEBASE_PASSWORD"] = str(credential.token)
+    os.environ.setdefault("LAKEBASE_DATABASE", "mip_app_state")
+    os.environ.setdefault("LAKEBASE_SSLMODE", "require")
+    get_settings.cache_clear()
+    print(f"[ai-gateway-verify] minted Lakebase credentials for {instance} ({user_name})")
+    return True
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     if args.timeout_s > 3600:
         raise ValueError("MIP_AI_GATEWAY_VERIFY_TIMEOUT_S must not exceed 3600 seconds")
     if args.interval_s <= 0:
         raise ValueError("MIP_AI_GATEWAY_VERIFY_INTERVAL_S must be positive")
+    ensure_lakebase_env()
     settings = get_settings()
     git_sha = _resolved_sha(args.git_sha or settings.mip_git_sha)
     endpoint = (args.endpoint or settings.mip_ai_gateway_endpoint or "").strip()

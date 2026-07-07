@@ -478,3 +478,34 @@ def test_mlflow_genai_evaluate_requires_databricks_run_lookup(monkeypatch) -> No
         assert "not resolvable in Databricks" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected unresolved Databricks GenAI eval run to fail closed")
+
+
+def test_verifier_mints_lakebase_env_when_absent(monkeypatch) -> None:
+    """Deploy laptops / CI runners have no Lakebase env; the verifier mints it
+    from the workspace identity (observed failure: deploy step 18, 2026-07-07)."""
+    from types import SimpleNamespace
+
+    from tools.databricks import verify_ai_gateway_exact_proof as verifier
+
+    for key in ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD"):
+        monkeypatch.delenv(key, raising=False)
+
+    fake = SimpleNamespace(
+        database=SimpleNamespace(
+            get_database_instance=lambda name: SimpleNamespace(
+                read_write_dns=f"{name}.db.example"
+            ),
+            generate_database_credential=lambda instance_names, request_id: SimpleNamespace(
+                token="short-lived-token"
+            ),
+        ),
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="op@entrada.ai")),
+    )
+    assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is True
+    import os as _os
+
+    assert _os.environ["LAKEBASE_HOST"] == "mip-app-state.db.example"
+    assert _os.environ["LAKEBASE_USER"] == "op@entrada.ai"
+    assert _os.environ["LAKEBASE_PASSWORD"] == "short-lived-token"
+    # Explicit env wins: second call is a no-op.
+    assert verifier.ensure_lakebase_env(workspace_factory=lambda: fake) is False
