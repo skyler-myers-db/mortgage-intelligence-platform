@@ -102,6 +102,22 @@ def serving_response_has_payload(response: Any) -> bool:
     )
 
 
+def _inference_table_columns(
+    sql_client: Any, catalog: str, schema: str, table_name: str
+) -> set[str]:
+    rows = sql_client.execute(
+        """
+        SELECT column_name
+        FROM system.information_schema.columns
+        WHERE table_catalog = :catalog
+          AND table_schema = :schema
+          AND table_name = :table_name
+        """,
+        {"catalog": catalog, "schema": schema, "table_name": table_name},
+    )
+    return {str(row.get("column_name") or "").strip().lower() for row in rows}
+
+
 def count_inference_log_rows(
     sql_client: Any,
     expected_table_prefix: str,
@@ -111,9 +127,26 @@ def count_inference_log_rows(
     catalog, schema, _table_prefix = _split_three_part_relation(expected_table_prefix)
     total = 0
     for table_name in inference_log_table_names(sql_client, expected_table_prefix):
+        # Gateway payload tables are created as a stub and evolve their real
+        # schema on the first payload flush (observed live 2026-07-07:
+        # mip_agent_gateway_llama_payload had only databricks_request_id and
+        # zero rows minutes after a successful call). Introspect columns per
+        # poll: equality on client_request_id when the evolved schema has
+        # it, else content-match the UUID-grade nonce inside the logged
+        # request body, else the stub has logged nothing yet — count zero
+        # and let callers keep polling.
+        columns = _inference_table_columns(sql_client, catalog, schema, table_name)
+        if "client_request_id" in columns:
+            predicate = "client_request_id = :client_request_id"
+            params: dict[str, str] = {"client_request_id": client_request_id}
+        elif "request" in columns:
+            predicate = "request LIKE :client_request_marker"
+            params = {"client_request_marker": f"%{client_request_id}%"}
+        else:
+            continue
         rows = sql_client.execute(
-            f"SELECT COUNT(*) AS row_count FROM {catalog}.{schema}.{table_name} WHERE client_request_id = :client_request_id",
-            {"client_request_id": client_request_id},
+            f"SELECT COUNT(*) AS row_count FROM {catalog}.{schema}.{table_name} WHERE {predicate}",
+            params,
         )
         if rows:
             total += int(rows[0].get("row_count") or rows[0].get("n") or 0)
@@ -131,12 +164,19 @@ def count_inference_log_rows_by_prefixes(
     catalog, schema, _table_prefix = _split_three_part_relation(expected_table_prefix)
     total = 0
     for table_name in inference_log_table_names(sql_client, expected_table_prefix):
+        columns = _inference_table_columns(sql_client, catalog, schema, table_name)
+        if "client_request_id" in columns:
+            column, value_template = "client_request_id", "{prefix}%"
+        elif "request" in columns:
+            column, value_template = "request", "%{prefix}%"
+        else:
+            continue
         parts: list[str] = []
         params: dict[str, str] = {}
         for index, prefix in enumerate(client_request_prefixes):
             key = f"prefix_{index}"
-            parts.append(f"client_request_id LIKE :{key}")
-            params[key] = f"{prefix}%"
+            parts.append(f"{column} LIKE :{key}")
+            params[key] = value_template.format(prefix=prefix)
         rows = sql_client.execute(
             f"""
             SELECT COUNT(*) AS row_count

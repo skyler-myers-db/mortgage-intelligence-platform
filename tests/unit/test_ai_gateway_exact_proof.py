@@ -106,6 +106,7 @@ class _ProofLakebase:
 
 class _ProofSql:
     table_names = ["mip_agent_gateway_llama_payload"]
+    column_names = ["client_request_id", "request", "databricks_request_id"]
 
     def __init__(
         self,
@@ -117,6 +118,8 @@ class _ProofSql:
         self.counts_by_request_id = counts_by_request_id
 
     def execute(self, statement: str, parameters: object | None = None) -> list[dict[str, Any]]:
+        if "system.information_schema.columns" in statement:
+            return [{"column_name": column_name} for column_name in self.column_names]
         if "system.information_schema.tables" in statement:
             return [{"table_name": table_name} for table_name in self.table_names]
         if "COUNT(*) AS row_count" in statement:

@@ -64,6 +64,7 @@ class _LiveSqlClient:
         count_sequence: list[int] | None = None,
         count_by_request_id: dict[str, int] | None = None,
         table_names: list[str] | None = None,
+        column_names: list[str] | None = None,
         ) -> None:
         self.fail = fail
         self.count = count
@@ -71,6 +72,11 @@ class _LiveSqlClient:
         self.count_by_request_id = dict(count_by_request_id or {})
         self.use_request_id_counts = count_by_request_id is not None
         self.table_names = ["mip_agent_inference_payload"] if table_names is None else list(table_names)
+        self.column_names = (
+            ["client_request_id", "request", "databricks_request_id"]
+            if column_names is None
+            else list(column_names)
+        )
         self.count_calls = 0
         self.statements: list[str] = []
         self.parameters: list[object | None] = []
@@ -80,6 +86,8 @@ class _LiveSqlClient:
         self.parameters.append(parameters)
         if self.fail:
             raise RuntimeError("probe failed")
+        if "system.information_schema.columns" in statement:
+            return [{"column_name": column_name} for column_name in self.column_names]
         if "system.information_schema.tables" in statement:
             return [{"table_name": table_name} for table_name in self.table_names]
         if "COUNT(*) AS row_count" in statement:
@@ -1679,3 +1687,70 @@ def test_serving_response_has_payload_accepts_list_response() -> None:
 
     assert serving_response_has_payload([{"output": "ok"}]) is True
     assert serving_response_has_payload([]) is False
+
+
+def test_count_inference_log_rows_content_matches_when_no_client_request_id_column() -> None:
+    """Gateway payload tables evolve their schema on first flush; when the
+    evolved schema lacks client_request_id, the nonce embedded in the logged
+    request body is the exact-row binding."""
+    from backend.services.capability_serving_probes import count_inference_log_rows
+
+    sql = _LiveSqlClient(
+        count=3,
+        table_names=["mip_agent_gateway_llama_payload"],
+        column_names=["databricks_request_id", "request", "response"],
+    )
+    total = count_inference_log_rows(
+        sql,
+        "mip.audit.mip_agent_gateway_llama",
+        client_request_id="mip-capability-abc123",
+    )
+    assert total == 3
+    count_statement = next(s for s in sql.statements if "COUNT(*)" in s)
+    assert "request LIKE :client_request_marker" in count_statement
+    assert "client_request_id =" not in count_statement
+    count_params = next(p for p in sql.parameters if isinstance(p, dict) and "client_request_marker" in p)
+    assert count_params["client_request_marker"] == "%mip-capability-abc123%"
+
+
+def test_count_inference_log_rows_returns_zero_for_preflush_stub_table() -> None:
+    """Freshly-provisioned payload tables carry only databricks_request_id
+    until the first flush (observed live 2026-07-07). Nothing is logged yet:
+    report zero without issuing an unresolvable COUNT query so wait loops
+    keep polling instead of crashing through the resilience layer."""
+    from backend.services.capability_serving_probes import count_inference_log_rows
+
+    sql = _LiveSqlClient(
+        count=99,
+        table_names=["mip_agent_gateway_llama_payload"],
+        column_names=["databricks_request_id"],
+    )
+    total = count_inference_log_rows(
+        sql,
+        "mip.audit.mip_agent_gateway_llama",
+        client_request_id="mip-capability-abc123",
+    )
+    assert total == 0
+    assert not any("COUNT(*)" in s for s in sql.statements)
+
+
+def test_count_inference_log_rows_by_prefixes_content_matches_without_column() -> None:
+    from backend.services.capability_serving_probes import (
+        count_inference_log_rows_by_prefixes,
+    )
+
+    sql = _LiveSqlClient(
+        count=2,
+        table_names=["mip_agent_gateway_llama_payload"],
+        column_names=["databricks_request_id", "request"],
+    )
+    total = count_inference_log_rows_by_prefixes(
+        sql,
+        "mip.audit.mip_agent_gateway_llama",
+        client_request_prefixes=["mip-capability-abc"],
+    )
+    assert total == 2
+    count_statement = next(s for s in sql.statements if "COUNT(*)" in s)
+    assert "request LIKE :prefix_0" in count_statement
+    count_params = next(p for p in sql.parameters if isinstance(p, dict) and "prefix_0" in p)
+    assert count_params["prefix_0"] == "%mip-capability-abc%"
