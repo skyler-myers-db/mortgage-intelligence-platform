@@ -237,6 +237,16 @@ def _wait_synced_table_online(workspace: WorkspaceClient, name: str, *, timeout_
     raise TimeoutError(f"{name} did not become online in {timeout_s}s: {last_state} {last_message}")
 
 
+# Databricks rejects per-endpoint AI Gateway config for endpoint types outside
+# its eligibility list (observed 2026-07-07 on the managed Supervisor Agent
+# endpoint, which accepted the same PUT on 2026-07-02 — the platform tightened
+# classification and wiped the prior config). This phrase is the stable part
+# of that platform error; matching it lets provisioning degrade honestly
+# (warn + skip) instead of aborting the whole deploy. The capability probe's
+# own pre-checks then report AI Gateway as non-claimable, which is the truth.
+_AI_GATEWAY_INELIGIBLE_MARKER = "AI Gateway is currently only supported for"
+
+
 def ensure_ai_gateway_on_endpoint(
     *,
     endpoint: str,
@@ -245,28 +255,40 @@ def ensure_ai_gateway_on_endpoint(
     table_prefix: str,
     per_user_calls_per_minute: int,
     timeout: str,
-) -> str:
+) -> str | None:
     print(f"[agentic] configuring AI Gateway on serving endpoint: {endpoint}")
     if per_user_calls_per_minute <= 0:
         raise ValueError("AI Gateway per-user rate limit must be positive")
-    _run(
-        ["serving-endpoints", "put-ai-gateway", endpoint],
-        input_json={
-            "inference_table_config": {
-                "enabled": True,
-                "catalog_name": catalog,
-                "schema_name": schema,
-                "table_name_prefix": table_prefix,
+    try:
+        _run(
+            ["serving-endpoints", "put-ai-gateway", endpoint],
+            input_json={
+                "inference_table_config": {
+                    "enabled": True,
+                    "catalog_name": catalog,
+                    "schema_name": schema,
+                    "table_name_prefix": table_prefix,
+                },
+                "rate_limits": [
+                    {
+                        "key": "user",
+                        "calls": per_user_calls_per_minute,
+                        "renewal_period": "minute",
+                    }
+                ],
             },
-            "rate_limits": [
-                {
-                    "key": "user",
-                    "calls": per_user_calls_per_minute,
-                    "renewal_period": "minute",
-                }
-            ],
-        },
-    )
+        )
+    except RuntimeError as exc:
+        if _AI_GATEWAY_INELIGIBLE_MARKER not in str(exc):
+            raise
+        print(
+            "[agentic] WARNING: the workspace rejects AI Gateway config for this "
+            f"endpoint type ({endpoint}). Skipping gateway provisioning; the "
+            "ai_gateway capability will honestly report non-claimable until an "
+            "eligible endpoint is configured. Platform message: "
+            f"{str(exc)[-200:]}"
+        )
+        return None
     _wait_serving_endpoint_ready(endpoint, timeout=timeout)
     return ".".join([catalog, schema, table_prefix])
 

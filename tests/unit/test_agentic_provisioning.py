@@ -316,3 +316,57 @@ def test_main_defaults_ai_gateway_to_supervisor_endpoint(monkeypatch, tmp_path) 
     assert "MIP_AI_GATEWAY_ENDPOINT=mip-supervisor-endpoint" in out_env.read_text(
         encoding="utf-8"
     )
+
+
+def test_ensure_ai_gateway_on_endpoint_skips_when_platform_rejects_endpoint_type(
+    monkeypatch, capsys
+) -> None:
+    """Platform-ineligible endpoint types degrade honestly: warn + None, no raise.
+
+    Observed live 2026-07-07: `put-ai-gateway` on the managed Supervisor Agent
+    endpoint returns "AI Gateway is currently only supported for External
+    Models, Provisioned Throughput and Custom or Agent Model endpoints." The
+    deploy must continue and the capability must self-report non-claimable —
+    the gate itself is never relaxed.
+    """
+
+    def fake_run(args: list[str], *, input_json: dict[str, Any] | None = None) -> dict[str, Any]:
+        assert args[:2] == ["serving-endpoints", "put-ai-gateway"]
+        raise RuntimeError(
+            "databricks serving-endpoints put-ai-gateway mas-x failed: Error: "
+            "AI Gateway is currently only supported for External Models, "
+            "Provisioned Throughput and Custom or Agent Model endpoints."
+        )
+
+    monkeypatch.setattr(provision_agentic_resources, "_run", fake_run)
+    result = provision_agentic_resources.ensure_ai_gateway_on_endpoint(
+        endpoint="mas-x",
+        catalog="mip",
+        schema="audit",
+        table_prefix="mip_agent_gateway_sonnet",
+        per_user_calls_per_minute=60,
+        timeout="60s",
+    )
+    assert result is None
+    out = capsys.readouterr().out
+    assert "WARNING" in out and "non-claimable" in out
+
+
+def test_ensure_ai_gateway_on_endpoint_still_raises_on_other_errors(monkeypatch) -> None:
+    def fake_run(args: list[str], *, input_json: dict[str, Any] | None = None) -> dict[str, Any]:
+        raise RuntimeError("databricks serving-endpoints put-ai-gateway mas-x failed: PERMISSION_DENIED")
+
+    monkeypatch.setattr(provision_agentic_resources, "_run", fake_run)
+    try:
+        provision_agentic_resources.ensure_ai_gateway_on_endpoint(
+            endpoint="mas-x",
+            catalog="mip",
+            schema="audit",
+            table_prefix="mip_agent_gateway_sonnet",
+            per_user_calls_per_minute=60,
+            timeout="60s",
+        )
+    except RuntimeError as exc:
+        assert "PERMISSION_DENIED" in str(exc)
+    else:  # pragma: no cover - the assertion above must fire
+        raise AssertionError("non-eligibility errors must still raise")
