@@ -21,7 +21,6 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.api import genie_guardrails as prompt_guardrails
 from backend.config.settings import settings
-from backend.schemas.common import validate_public_free_comment
 from backend.services.audit_store import (
     AuditStore,
     get_audit_store,
@@ -44,8 +43,8 @@ from backend.services.genie_client import (
     ResilientGenieClient,
     get_genie_client,
 )
-from backend.services.genie_feedback import record_genie_feedback
 from backend.services.genie_sales_ops import sales_ops_genie_response
+from backend.services.genie_session_guard import assert_genie_conversation_owned
 from backend.services.genie_source_gaps import source_gap_answer
 from backend.services.genie_trusted_assets import trusted_assets
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
@@ -90,37 +89,6 @@ class GenieMessageRequest(BaseModel):
         if not normalized:
             raise ValueError("question is required")
         return normalized
-
-
-class GenieFeedbackRequest(BaseModel):
-    conversation_id: str = Field(min_length=1, max_length=128)
-    message_id: str = Field(min_length=1, max_length=128)
-    helpful: bool
-    # NOTE: no Pydantic length/format validation on ``comment``. Pydantic
-    # validation errors surface as a 422 whose ``input`` field echoes the raw
-    # value -- unacceptable for a field that may contain PII. The comment is
-    # validated in the route via ``validate_public_free_comment`` which raises
-    # an HTTPException with a fixed, non-echoing message.
-    comment: str | None = None
-
-
-class GenieFeedbackResponse(BaseModel):
-    accepted: bool
-    audit_event_id: str
-
-
-def _validated_feedback_comment(comment: str | None) -> str | None:
-    """Return a public-safe comment or raise 422 without echoing the input."""
-    if comment is None:
-        return None
-    stripped = comment.strip()
-    if not stripped:
-        return None
-    try:
-        return validate_public_free_comment(stripped, max_len=280)
-    except ValueError as exc:
-        # Do NOT include the offending text: reflecting it would echo PII.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _safe_genie_audit_entity_id(
@@ -178,14 +146,6 @@ ORDER BY updated_at DESC
 LIMIT 1
 """
 
-_GENIE_SESSION_OWNERSHIP_SQL = """
-SELECT conversation_id
-FROM mip_app.genie_sessions
-WHERE actor_email = %(actor_email)s
-  AND conversation_id = %(conversation_id)s
-  AND source NOT IN ('degraded', 'policy_blocked', 'refused', 'data_gap', 'out_of_footprint')
-LIMIT 1
-"""
 
 _GENIE_SESSION_UPSERT_SQL = """
 INSERT INTO mip_app.genie_sessions (
@@ -263,34 +223,6 @@ def _latest_genie_conversation(
         return None
     conversation_id = row.get("conversation_id")
     return str(conversation_id) if conversation_id else None
-
-
-def _assert_genie_conversation_owned(
-    lakebase: LakebaseClient,
-    *,
-    actor: str,
-    conversation_id: str | None,
-) -> None:
-    if not conversation_id:
-        return
-    try:
-        row = lakebase.fetchone(
-            _GENIE_SESSION_OWNERSHIP_SQL,
-            {
-                "actor_email": actor,
-                "conversation_id": conversation_id,
-            },
-        )
-    except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=safe_dependency_detail("lakebase"),
-        ) from exc
-    if row is None:
-        raise HTTPException(
-            status_code=403,
-            detail="conversation_id is not owned by the current actor",
-        )
 
 
 def _record_genie_session(
@@ -455,7 +387,7 @@ def genie_message(
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> GenieMessageResponse:
     actor = resolve_actor(request)
-    _assert_genie_conversation_owned(
+    assert_genie_conversation_owned(
         lakebase,
         actor=actor,
         conversation_id=payload.conversation_id,
@@ -932,48 +864,6 @@ def genie_message(
         event_type="RUN_GENIE",
     )
     return _finalize_genie_response(lakebase, actor=actor, response=result)  # type: ignore[arg-type]
-
-
-@router.post("/feedback", response_model=GenieFeedbackResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
-def genie_feedback(
-    payload: GenieFeedbackRequest,
-    request: Request,
-    genie: GenieClientDep,
-    lakebase: LakebaseDep,
-    _: Annotated[None, Depends(require_json_content_type)],
-) -> GenieFeedbackResponse:
-    """Record thumbs up/down feedback for a Genie answer.
-
-    Guards: JSON content type, the genie rate-limit lane (applied by the
-    backpressure middleware for ``/api/genie/*``), and a conversation
-    ownership check. Side effects: a best-effort Genie message comment (a
-    failure here does not fail the request) and a required ``GENIE_FEEDBACK``
-    audit row written in a Lakebase transaction. The caller comment is
-    validated public-safe (422 on PII) and never stored verbatim.
-    """
-    actor = resolve_actor(request)
-    safe_comment = _validated_feedback_comment(payload.comment)
-    _assert_genie_conversation_owned(
-        lakebase,
-        actor=actor,
-        conversation_id=payload.conversation_id,
-    )
-    try:
-        audit_event_id = record_genie_feedback(
-            lakebase,
-            genie,
-            actor=actor,
-            conversation_id=payload.conversation_id,
-            message_id=payload.message_id,
-            helpful=payload.helpful,
-            comment=safe_comment,
-        )
-    except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=safe_dependency_detail("lakebase"),
-        ) from exc
-    return GenieFeedbackResponse(accepted=True, audit_event_id=audit_event_id)
 
 
 @router.post("/actions", response_model=GenieActionResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
