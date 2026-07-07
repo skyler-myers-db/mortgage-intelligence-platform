@@ -26,6 +26,7 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.core import Config
 from pydantic import SecretStr
 
 from backend.config.settings import get_settings
@@ -153,8 +154,9 @@ def main(argv: list[str] | None = None) -> int:
     sql_client = get_sql_client()
     # Scale-to-zero gateway endpoints hold cold-start requests longer than
     # the SDK's 60s default read timeout (observed 2026-07-07: deploy step 18
-    # died in the SDK's 5-minute retry budget while llama warmed).
-    workspace = WorkspaceClient(http_timeout_seconds=300)
+    # died in the SDK's 5-minute retry budget while llama warmed). This SDK
+    # version only accepts the timeout via Config, not as a direct kwarg.
+    workspace = WorkspaceClient(config=Config(http_timeout_seconds=300))
     expired = mark_expired_pending_proofs(
         lakebase,
         older_than=datetime.now(UTC) - timedelta(seconds=max(1, args.expiry_s)),
