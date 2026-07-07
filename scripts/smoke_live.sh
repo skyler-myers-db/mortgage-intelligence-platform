@@ -337,6 +337,12 @@ if [[ "$SKIP_CAPABILITIES" == "0" ]]; then
             (.status == "available" and .claimable == true and ((.detail // "") | test("exact inference-row round-trip verified")))
             or
             (.status == "configured" and .claimable == false and ((.detail // "") | test("not claimable|not visible|unproven|Live probe did not pass")))
+            or
+            # Honest fully-unprovisioned state: the workspace rejects AI Gateway
+            # config on the current endpoint type (platform eligibility change,
+            # 2026-07-07), so provisioning skips and the flag stays off. More
+            # conservative than "configured"; strict mode below still fails it.
+            (.status == "not_provisioned" and .claimable == false and ((.detail // "") | test("Disabled|not provisioned|missing")))
           )
         else true end)
     ' /tmp/mip-smoke-out.json >/dev/null; then
