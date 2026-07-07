@@ -180,13 +180,13 @@ def test_grant_app_can_query_serving_endpoint_skips_builtin_without_endpoint_id(
         if args == ["apps", "get", "mip-app"]:
             return {"service_principal_client_id": "app-sp-123"}
         if args == ["serving-endpoints", "list"]:
-            return [{"name": "databricks-claude-sonnet-4-5", "id": None}]
+            return [{"name": "mip-agent-gateway", "id": None}]
         raise AssertionError(f"unexpected databricks call: {args}")
 
     monkeypatch.setattr(provision_agentic_resources, "_run", fake_run)
 
     provision_agentic_resources._grant_app_can_query_serving_endpoint(
-        endpoint="databricks-claude-sonnet-4-5",
+        endpoint="mip-agent-gateway",
         app_name="mip-app",
     )
 
@@ -204,7 +204,7 @@ def test_ensure_ai_gateway_on_endpoint_configures_inference_table_and_user_rate_
                     "enabled": True,
                     "catalog_name": "mip",
                     "schema_name": "audit",
-                    "table_name_prefix": "mip_agent_gateway_sonnet",
+                    "table_name_prefix": "mip_agent_gateway_llama",
                 },
                 "rate_limits": [
                     {
@@ -225,12 +225,12 @@ def test_ensure_ai_gateway_on_endpoint_configures_inference_table_and_user_rate_
         endpoint="mip-supervisor-endpoint",
         catalog="mip",
         schema="audit",
-        table_prefix="mip_agent_gateway_sonnet",
+        table_prefix="mip_agent_gateway_llama",
         per_user_calls_per_minute=42,
         timeout="1s",
     )
 
-    assert table == "mip.audit.mip_agent_gateway_sonnet"
+    assert table == "mip.audit.mip_agent_gateway_llama"
     assert calls[0][0] == ["serving-endpoints", "put-ai-gateway", "mip-supervisor-endpoint"]
 
 
@@ -240,7 +240,7 @@ def test_ensure_ai_gateway_on_endpoint_rejects_non_positive_rate_limit() -> None
             endpoint="mip-supervisor-endpoint",
             catalog="mip",
             schema="audit",
-            table_prefix="mip_agent_gateway_sonnet",
+            table_prefix="mip_agent_gateway_llama",
             per_user_calls_per_minute=0,
             timeout="1s",
         )
@@ -351,7 +351,7 @@ def test_ensure_ai_gateway_on_endpoint_skips_when_platform_rejects_endpoint_type
         endpoint="mas-x",
         catalog="mip",
         schema="audit",
-        table_prefix="mip_agent_gateway_sonnet",
+        table_prefix="mip_agent_gateway_llama",
         per_user_calls_per_minute=60,
         timeout="60s",
     )
@@ -370,7 +370,7 @@ def test_ensure_ai_gateway_on_endpoint_still_raises_on_other_errors(monkeypatch)
             endpoint="mas-x",
             catalog="mip",
             schema="audit",
-            table_prefix="mip_agent_gateway_sonnet",
+            table_prefix="mip_agent_gateway_llama",
             per_user_calls_per_minute=60,
             timeout="60s",
         )

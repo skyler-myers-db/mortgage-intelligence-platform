@@ -1590,3 +1590,37 @@ def test_capabilities_endpoint_requires_admin() -> None:
     client = TestClient(app)
     resp = client.get("/api/admin/capabilities", headers={"X-Forwarded-Groups": ""})
     assert resp.status_code == 403
+
+
+def test_query_serving_endpoint_chat_path_omits_temperature() -> None:
+    """system.ai HF-served FMs reject temperature=0.0 ("has to be a strictly
+    positive float"); the probe must not send temperature at all (observed
+    live on mip-agent-gateway / llama_v3_2_3b_instruct, 2026-07-07). The
+    proof only needs a bounded round-trip, so the model default is fine."""
+    from backend.services.capability_serving_probes import query_serving_endpoint
+
+    class _RecordingServingEndpoints:
+        def __init__(self) -> None:
+            self.calls: list[tuple[str, dict]] = []
+
+        def query(self, endpoint: str, **kwargs):
+            self.calls.append((endpoint, kwargs))
+            return {"choices": [{"message": {"content": "ok"}}]}
+
+    class _Workspace:
+        def __init__(self) -> None:
+            self.serving_endpoints = _RecordingServingEndpoints()
+
+    workspace = _Workspace()
+    query_serving_endpoint(
+        workspace,
+        "mip-agent-gateway",
+        prompt="ping",
+        client_request_id="mip-capability-x",
+        task="llm/v1/chat",
+    )
+    endpoint, kwargs = workspace.serving_endpoints.calls[0]
+    assert endpoint == "mip-agent-gateway"
+    assert "temperature" not in kwargs
+    assert kwargs["max_tokens"] == 64
+    assert kwargs["client_request_id"] == "mip-capability-x"

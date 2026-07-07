@@ -58,25 +58,25 @@ def test_grant_gateway_table_access_grants_only_concrete_app_owned_prefix(
 ) -> None:
     workspace = _FakeWorkspace(
         [
-            ["mip_agent_gateway_sonnet_payload"],
-            ["mip_agent_gateway_sonnet_assessment"],
+            ["mip_agent_gateway_llama_payload"],
+            ["mip_agent_gateway_llama_assessment"],
         ]
     )
     monkeypatch.setattr(grant_module, "WorkspaceClient", lambda: workspace)
 
     granted = grant_module.grant_gateway_table_access(
         warehouse_id="wh-1",
-        relation_prefix="mip.audit.mip_agent_gateway_sonnet",
+        relation_prefix="mip.audit.mip_agent_gateway_llama",
         principal="app-sp-1",
     )
 
     assert granted == [
-        "mip.audit.mip_agent_gateway_sonnet_payload",
-        "mip.audit.mip_agent_gateway_sonnet_assessment",
+        "mip.audit.mip_agent_gateway_llama_payload",
+        "mip.audit.mip_agent_gateway_llama_assessment",
     ]
     statements = "\n".join(workspace.statement_execution.statements)
     assert "GRANT USE SCHEMA ON SCHEMA `mip`.`audit` TO `app-sp-1`" in statements
-    assert "GRANT SELECT ON TABLE `mip`.`audit`.`mip_agent_gateway_sonnet_payload`" in statements
+    assert "GRANT SELECT ON TABLE `mip`.`audit`.`mip_agent_gateway_llama_payload`" in statements
     assert "GRANT SELECT ON SCHEMA" not in statements
     assert "mip_other_table" not in statements
 
@@ -111,7 +111,7 @@ def test_grant_gateway_table_access_fails_when_no_prefixed_tables_visible(
     with pytest.raises(RuntimeError, match="No AI Gateway inference tables"):
         grant_module.grant_gateway_table_access(
             warehouse_id="wh-1",
-            relation_prefix="mip.audit.mip_agent_gateway_sonnet",
+            relation_prefix="mip.audit.mip_agent_gateway_llama",
             principal="app-sp-1",
             timeout_s=0,
         )

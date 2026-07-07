@@ -45,10 +45,13 @@ def query_serving_endpoint(
         messages: list[Any] = [ChatMessage(role=ChatMessageRole.USER, content=prompt)]
     except Exception:  # noqa: BLE001 - keep tests/lightweight clients decoupled from SDK internals
         messages = [{"role": "user", "content": prompt}]
+    # No temperature: HF-served foundation models (e.g. system.ai llama)
+    # reject 0.0 ("has to be a strictly positive float") and the probe only
+    # needs a bounded round-trip that lands in the inference table, so the
+    # model default is fine for every endpoint family.
     kwargs: dict[str, Any] = {
         "messages": messages,
         "max_tokens": 64,
-        "temperature": 0.0,
     }
     if client_request_id:
         kwargs["client_request_id"] = client_request_id

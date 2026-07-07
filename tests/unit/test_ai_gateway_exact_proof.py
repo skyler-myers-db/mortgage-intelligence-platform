@@ -20,7 +20,7 @@ from tools.databricks import verify_ai_gateway_exact_proof
 _TEST_GIT_SHA = "75ea6680b7f04bbaa6d0bbf38d7676218ae6c1cc"
 _OTHER_GIT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 _ENDPOINT = "mip-supervisor-endpoint"
-_INFERENCE_TABLE = "mip.audit.mip_agent_gateway_sonnet"
+_INFERENCE_TABLE = "mip.audit.mip_agent_gateway_llama"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -105,7 +105,7 @@ class _ProofLakebase:
 
 
 class _ProofSql:
-    table_names = ["mip_agent_gateway_sonnet_payload"]
+    table_names = ["mip_agent_gateway_llama_payload"]
 
     def __init__(
         self,
