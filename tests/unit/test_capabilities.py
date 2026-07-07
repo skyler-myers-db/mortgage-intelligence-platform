@@ -94,16 +94,40 @@ class _LiveSqlClient:
 
 
 class _LiveGenieClient:
-    def __init__(self, *, ok: bool = True, conversation_id: str = "conv-live", message_id: str | None = "msg-live") -> None:
+    def __init__(
+        self,
+        *,
+        ok: bool = True,
+        conversation_id: str = "conv-live",
+        message_id: str | None = "msg-live",
+        native_visualization: dict[str, object] | None = None,
+        download_ok: bool = False,
+    ) -> None:
         self.ok = ok
         self.conversation_id = conversation_id
         self.message_id = message_id
+        self.native_visualization = native_visualization
+        self.download_ok = download_ok
+        self.download_calls: list[tuple[str, str, str]] = []
 
     def ask(self, question: str) -> object:
         _ = question
         if not self.ok:
             raise RuntimeError("genie unavailable")
-        return SimpleNamespace(conversation_id=self.conversation_id, message_id=self.message_id)
+        return SimpleNamespace(
+            conversation_id=self.conversation_id,
+            message_id=self.message_id,
+            native_visualization=self.native_visualization,
+        )
+
+    def download_native_visualization(
+        self,
+        conversation_id: str,
+        message_id: str,
+        attachment_id: str,
+    ) -> bool:
+        self.download_calls.append((conversation_id, message_id, attachment_id))
+        return self.download_ok
 
 
 class _LiveLakebase:
@@ -535,6 +559,72 @@ def test_genie_live_probe_requires_conversation_and_message_ids() -> None:
 
     assert statuses["genie_conversation_api"].available is False
     assert "conversation and message id" in statuses["genie_conversation_api"].detail
+
+
+def test_genie_native_visualization_configured_not_claimed_by_default() -> None:
+    """Genie configured but no live probe -> native-viz row is configured only."""
+    cap = _by_key(probe_capabilities(_settings()), "genie_native_visualization")
+    assert cap.ga is False
+    assert cap.status is CapabilityStatus.CONFIGURED
+    assert cap.claimable is False
+    assert "live probe" in cap.detail.lower()
+
+
+def test_genie_native_visualization_live_probe_available_when_download_ok() -> None:
+    """A viz attachment on the probe turn + a 200 download -> AVAILABLE."""
+    genie = _LiveGenieClient(
+        ok=True,
+        native_visualization={"attachment_id": "viz-1", "query_attachment_id": "q-1"},
+        download_ok=True,
+    )
+    statuses = collect_live_capability_statuses(
+        sql_client=_LiveSqlClient(),
+        genie_client=genie,
+        lakebase=_LiveLakebase(),
+    )
+
+    assert statuses["genie_native_visualization"].available is True
+    # The download was attempted against the exact probe-turn attachment.
+    assert genie.download_calls == [("conv-live", "msg-live", "viz-1")]
+    # And no SECOND Genie question was issued for the viz row (one ask total).
+    caps = probe_capabilities(_settings(), live_statuses=statuses)
+    viz = _by_key(caps, "genie_native_visualization")
+    assert viz.status is CapabilityStatus.AVAILABLE
+    assert viz.claimable is True
+
+
+def test_genie_native_visualization_live_probe_configured_when_download_404() -> None:
+    """A viz attachment but the Beta download endpoint 404s -> configured only."""
+    genie = _LiveGenieClient(
+        ok=True,
+        native_visualization={"attachment_id": "viz-1", "query_attachment_id": "q-1"},
+        download_ok=False,
+    )
+    statuses = collect_live_capability_statuses(
+        sql_client=_LiveSqlClient(),
+        genie_client=genie,
+        lakebase=_LiveLakebase(),
+    )
+
+    assert statuses["genie_native_visualization"].available is False
+    assert "not yet available" in statuses["genie_native_visualization"].detail
+    caps = probe_capabilities(_settings(), live_statuses=statuses)
+    viz = _by_key(caps, "genie_native_visualization")
+    assert viz.status is CapabilityStatus.CONFIGURED
+    assert viz.claimable is False
+
+
+def test_genie_native_visualization_live_probe_no_attachment_stays_configured() -> None:
+    """No viz attachment on the probe turn -> not available, no download attempt."""
+    genie = _LiveGenieClient(ok=True, native_visualization=None)
+    statuses = collect_live_capability_statuses(
+        sql_client=_LiveSqlClient(),
+        genie_client=genie,
+        lakebase=_LiveLakebase(),
+    )
+
+    assert statuses["genie_native_visualization"].available is False
+    assert genie.download_calls == []
 
 
 def test_lakebase_sync_live_probe_requires_synced_table_metadata() -> None:

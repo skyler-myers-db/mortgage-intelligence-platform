@@ -498,7 +498,33 @@ def _parser() -> argparse.ArgumentParser:
         in {"1", "true", "yes"},
         help="Fail if mlflow.genai.evaluate cannot run.",
     )
+    parser.add_argument(
+        "--live-invocation-case",
+        action="store_true",
+        default=os.environ.get("MIP_LIVE_INVOCATION_CASE", "").lower()
+        in {"1", "true", "yes"},
+        help=(
+            "Append ONE extra case that is scored from a fresh, second live "
+            "invocation of /agent/run at scoring time (not a replay of the first "
+            "call). Default off so the deploy gate case set is unchanged."
+        ),
+    )
     return parser
+
+
+def live_invocation_case(cases: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Return a cloned case for a fresh second live invocation, or None.
+
+    The clone reuses the first golden case's prompt and expectations but gets a
+    distinct id so ``score_batch`` scores it as its own row. It is invoked live
+    a second time (a new ``request_id`` is minted per ``_call_growth_agent``),
+    proving the endpoint answers a genuinely fresh call -- not a replayed one.
+    """
+    if not cases:
+        return None
+    template = dict(cases[0])
+    template["id"] = f"{template['id']}__live_invocation"
+    return template
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -508,6 +534,11 @@ def main(argv: list[str] | None = None) -> int:
     if not args.token:
         raise ValueError("--token or MIP_BEARER_TOKEN is required")
     cases = load_cases(args.cases)
+    if args.live_invocation_case:
+        extra = live_invocation_case(cases)
+        if extra is not None:
+            cases = [*cases, extra]
+            print(f"[agent-eval] live-invocation case enabled: {extra['id']}")
     responses: dict[str, dict[str, Any]] = {}
     for case in cases:
         case_id = str(case["id"])

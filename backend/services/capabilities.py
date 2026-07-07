@@ -34,6 +34,10 @@ from typing import Any
 
 from backend.config.settings import Settings, get_settings
 from backend.services.ai_gateway_capability_probe import probe_ai_gateway
+from backend.services.capability_genie_probe import (
+    probe_genie_turn,
+    probe_native_visualization,
+)
 from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
@@ -261,6 +265,17 @@ def probe_capabilities(
         not_provisioned_detail="Needs databricks-sdk, warehouse creds, and a Genie space id.",
         live_statuses=live_statuses,
     )
+    genie_viz_status, genie_viz_detail = _status_from_live(
+        key="genie_native_visualization",
+        configured=sdk and warehouse and genie_configured,
+        configured_detail=(
+            "Genie returns a native-visualization attachment in-band; the Beta "
+            "download endpoint must return content in a live probe before this "
+            "row is claimable."
+        ),
+        not_provisioned_detail="Needs databricks-sdk, warehouse creds, and a Genie space id.",
+        live_statuses=live_statuses,
+    )
     certified_status, certified_detail = _status_from_live(
         key="certified_metric_views",
         configured=warehouse and certified_metric_contract,
@@ -307,6 +322,19 @@ def probe_capabilities(
             ga=True,
             status=genie_status,
             detail=genie_detail,
+        )
+    )
+    # ga=False -> the UI renders a "· preview" suffix. The Beta download
+    # endpoint that would make native visualizations fully consumable is not
+    # rolled out on this workspace, so this can only reach AVAILABLE when a
+    # live probe actually downloads a viz attachment.
+    caps.append(
+        Capability(
+            key="genie_native_visualization",
+            label="Genie native visualizations",
+            ga=False,
+            status=genie_viz_status,
+            detail=genie_viz_detail,
         )
     )
     caps.append(
@@ -512,7 +540,17 @@ def collect_live_capability_statuses(
 
     statuses: dict[str, LiveCapabilityStatus] = {}
     if genie_client is not None:
-        statuses["genie_conversation_api"] = _probe_genie(genie_client)
+        # One real Genie turn feeds BOTH the Conversation API row and the
+        # native-visualization row -- no extra Genie question is issued (the
+        # space rate limit is ~5/min). ``ask()`` already sends
+        # ``enable_visualization`` so the same turn can carry a viz attachment.
+        conversation_status, response = probe_genie_turn(
+            genie_client, make_status=LiveCapabilityStatus
+        )
+        statuses["genie_conversation_api"] = conversation_status
+        statuses["genie_native_visualization"] = probe_native_visualization(
+            genie_client, response, make_status=LiveCapabilityStatus
+        )
     if sql_client is not None:
         statuses["certified_metric_views"] = _probe_metric_views(sql_client)
         statuses["uc_function_tools"] = _probe_uc_functions(sql_client)
@@ -535,29 +573,6 @@ def collect_live_capability_statuses(
             lakebase=lakebase,
         )
     return statuses
-
-
-def _probe_genie(genie_client: Any) -> LiveCapabilityStatus:
-    try:
-        ask = getattr(genie_client, "ask", None)
-        if not callable(ask):
-            return LiveCapabilityStatus(
-                False,
-                "Genie client does not expose a Conversation API turn probe.",
-            )
-        response = ask(
-            "Capability readiness check: reply with one short sentence about the Mortgage Lead Intelligence trusted assets."
-        )
-    except Exception as exc:  # noqa: BLE001 - probe must not fail the surface
-        return LiveCapabilityStatus(False, f"Genie Conversation API turn raised {type(exc).__name__}.")
-    conversation_id = str(getattr(response, "conversation_id", "") or "").strip()
-    message_id = str(getattr(response, "message_id", "") or "").strip()
-    if conversation_id and message_id:
-        return LiveCapabilityStatus(
-            True,
-            "Live Genie Conversation API turn completed for this workspace.",
-        )
-    return LiveCapabilityStatus(False, "Genie turn did not return a conversation and message id.")
 
 
 def _probe_metric_views(sql_client: Any) -> LiveCapabilityStatus:

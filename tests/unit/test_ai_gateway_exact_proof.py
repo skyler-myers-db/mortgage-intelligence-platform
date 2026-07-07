@@ -390,6 +390,34 @@ def test_verifier_requires_exact_client_request_id(monkeypatch) -> None:
     assert lakebase.rows[0]["status"] == "pending"
 
 
+def test_wait_for_exact_row_ignores_row_under_a_different_request_id() -> None:
+    """A logged inference row under some OTHER client_request_id must not
+    verify this pending proof -- the exact-id match is what makes the proof
+    trustworthy, so a wrong-id row leaves the proof pending."""
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-1111111111111111",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        sent_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+    other_request_id = f"mip-capability-{_TEST_GIT_SHA}-2222222222222222"
+
+    verified = verify_ai_gateway_exact_proof.wait_for_exact_row(
+        lakebase=lakebase,
+        sql_client=_ProofSql(counts_by_request_id={other_request_id: 5}),
+        proof=proof,
+        timeout_s=0,
+        interval_s=1,
+    )
+
+    assert verified == []
+    assert lakebase.rows[0]["proof_id"] == proof.proof_id
+    assert lakebase.rows[0]["status"] == "pending"
+
+
 def test_wait_for_exact_row_timeout_leaves_pending() -> None:
     lakebase = _ProofLakebase()
     proof = insert_pending_proof(

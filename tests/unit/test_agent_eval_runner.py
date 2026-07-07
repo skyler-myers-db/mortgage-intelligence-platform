@@ -9,6 +9,35 @@ from typing import Any
 from tools.databricks import run_agent_eval
 
 
+def test_live_invocation_case_flag_defaults_off(monkeypatch) -> None:
+    # Default off so the deploy gate case set is unchanged.
+    monkeypatch.delenv("MIP_LIVE_INVOCATION_CASE", raising=False)
+    default_off = run_agent_eval._parser().parse_args(
+        ["--app-url", "https://x.test", "--token", "t"]
+    )
+    assert default_off.live_invocation_case is False
+    enabled = run_agent_eval._parser().parse_args(
+        ["--app-url", "https://x.test", "--token", "t", "--live-invocation-case"]
+    )
+    assert enabled.live_invocation_case is True
+
+
+def test_live_invocation_case_clones_first_case_with_distinct_id() -> None:
+    cases = [
+        {"id": "case-a", "prompt": "Find prime refinance opportunities.", "expected_workflow_id": "daily_refi_brief"},
+        {"id": "case-b", "prompt": "Something else."},
+    ]
+    extra = run_agent_eval.live_invocation_case(cases)
+    assert extra is not None
+    # Distinct id so score_batch scores it as its own row; prompt/expectation reused.
+    assert extra["id"] == "case-a__live_invocation"
+    assert extra["prompt"] == "Find prime refinance opportunities."
+    assert extra["expected_workflow_id"] == "daily_refi_brief"
+    # The template case is not mutated.
+    assert cases[0]["id"] == "case-a"
+    assert run_agent_eval.live_invocation_case([]) is None
+
+
 def test_call_growth_agent_uses_json_content_type_and_uuid_request_id(monkeypatch) -> None:
     captured: dict[str, Any] = {}
 
