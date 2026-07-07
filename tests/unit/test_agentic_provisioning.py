@@ -392,12 +392,12 @@ def test_ensure_gateway_serving_endpoint_creates_when_missing(monkeypatch) -> No
     monkeypatch.setattr(provision_agentic_resources, "_run", fake_run)
     provision_agentic_resources.ensure_gateway_serving_endpoint(
         name="mip-agent-gateway",
-        entity_name="system.ai.llama_v3_3_70b_instruct",
+        entity_name="system.ai.llama_v3_2_3b_instruct",
         entity_version="1",
     )
     create = next(c for c in calls if c[0][:2] == ["serving-endpoints", "create"])
     entity = create[1]["config"]["served_entities"][0]
-    assert entity["entity_name"] == "system.ai.llama_v3_3_70b_instruct"
+    assert entity["entity_name"] == "system.ai.llama_v3_2_3b_instruct"
     assert entity["entity_version"] == "1"
     assert entity["scale_to_zero_enabled"] is True
 
@@ -412,7 +412,7 @@ def test_ensure_gateway_serving_endpoint_reuses_existing(monkeypatch) -> None:
     monkeypatch.setattr(provision_agentic_resources, "_run", fake_run)
     provision_agentic_resources.ensure_gateway_serving_endpoint(
         name="mip-agent-gateway",
-        entity_name="system.ai.llama_v3_3_70b_instruct",
+        entity_name="system.ai.llama_v3_2_3b_instruct",
         entity_version="1",
     )
     assert all(c[:2] != ["serving-endpoints", "create"] for c in calls)

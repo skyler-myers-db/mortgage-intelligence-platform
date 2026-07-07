@@ -503,7 +503,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--gateway-endpoint-entity",
-        default=os.environ.get("MIP_AI_GATEWAY_ENTITY", "system.ai.llama_v3_3_70b_instruct"),
+        default=os.environ.get("MIP_AI_GATEWAY_ENTITY", "system.ai.llama_v3_2_3b_instruct"),
         help="system.ai entity served by the dedicated gateway endpoint (must be a servable FM).",
     )
     parser.add_argument(
