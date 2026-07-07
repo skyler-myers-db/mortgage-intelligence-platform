@@ -535,21 +535,23 @@ async def _request_validation_handler(
     """Mirror FastAPI's 422 shape while adding the request correlation id.
 
     Operators usually receive pasted JSON bodies in incident threads, not
-    response headers. Keeping ``detail`` unchanged preserves existing client
-    parsing, and the top-level ``correlation_id`` gives support a direct log
-    join key for malformed request probes.
+    response headers; the top-level ``correlation_id`` gives support a
+    direct log join key for malformed request probes.
+
+    PII posture: pydantic's per-error ``input`` (and sometimes ``ctx``)
+    reflect the raw submitted value, and any route can receive PII in a
+    malformed body — observed live on /api/genie/message echoing a
+    street-address question (2026-07-07). The reflection is stripped
+    app-wide, not just for growth-agent routes; ``loc``/``msg``/``type``
+    keep the error actionable.
     """
 
-    detail = jsonable_encoder(exc.errors())
-    if _request.url.path.startswith(f"{CANONICAL_API_PREFIX}/growth-agent") or _request.url.path.startswith(
-        f"{COMPAT_API_PREFIX}/growth-agent"
-    ):
-        detail = [
-            {key: value for key, value in item.items() if key != "input"}
-            if isinstance(item, dict)
-            else item
-            for item in detail
-        ]
+    detail = [
+        {key: value for key, value in item.items() if key not in ("input", "ctx", "url")}
+        if isinstance(item, dict)
+        else item
+        for item in jsonable_encoder(exc.errors())
+    ]
 
     return JSONResponse(
         status_code=422,

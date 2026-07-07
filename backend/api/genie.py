@@ -425,7 +425,7 @@ def genie_message(
             ),
             known_gap=(
                 "prompt refused before Genie execution due protected-class "
-                f"term: {protected_term}"
+                "term in the prompt"
             ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
@@ -539,7 +539,7 @@ def genie_message(
                 "for aggregated counts or masked borrower IDs with score, segment, "
                 "offer, and evidence instead."
             ),
-            known_gap=f"prompt refused before Genie execution due PII request pattern: {pii_match}",
+            known_gap="prompt refused before Genie execution due PII request pattern",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
     scope_bypass_match = prompt_guardrails.scope_bypass_prompt_match(payload.question)
@@ -574,8 +574,7 @@ def genie_message(
                 "segment, geography, trigger, or offer question instead."
             ),
             known_gap=(
-                "prompt refused before Genie execution due scope-bypass pattern: "
-                f"{scope_bypass_match}"
+                "prompt refused before Genie execution due scope-bypass pattern"
             ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
@@ -657,7 +656,7 @@ def genie_message(
                 "triggers, and offers across the current Cotality data coverage. "
                 "That request is outside the Module 0 mortgage analytics scope."
             ),
-            known_gap=f"prompt refused before Genie execution due off-topic pattern: {off_topic_match}",
+            known_gap="prompt refused before Genie execution due off-topic pattern",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
     cross_lender_match = prompt_guardrails.cross_lender_prompt_match(payload.question)
@@ -694,7 +693,7 @@ def genie_message(
             ),
             known_gap=(
                 "prompt refused before Genie execution due cross-lender customer-list "
-                f"pattern: {cross_lender_match}"
+                "pattern"
             ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)

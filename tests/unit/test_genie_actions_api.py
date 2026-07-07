@@ -2469,3 +2469,88 @@ def test_genie_save_borrowers_does_not_mutate_before_atomic_audit_failure() -> N
     assert store.atomic_calls == 1
     assert store.save_lead_calls == 0
     assert store.list(actor="lo@example.com").saved_leads == []
+
+
+def test_refusal_known_gap_never_echoes_prompt_text() -> None:
+    """External audit (2026-07-07) found the live PII refusal echoing the
+    matched fragment ('... due PII request pattern: at 123 Main Street') in
+    known_data_gaps — reflected PII in the response body and persisted proof
+    surfaces. All refusal known_gap messages must be static class labels;
+    operators correlate via question_hash + audit refusal_reason instead."""
+
+    class _ExplodingRepo:
+        calls = 0
+
+        def respond(
+            self,
+            question: str,
+            conversation_id: str | None = None,
+        ) -> GenieMessageResponse:
+            _ = question, conversation_id
+            self.calls += 1
+            raise AssertionError("refused prompt reached Genie repository")
+
+    repo = _ExplodingRepo()
+    audit = InMemoryAuditStore()
+    prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
+    prior_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_genie_answer_repository] = lambda: repo
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    try:
+        cases = [
+            ("Who lives at 123 Main Street?", "123 Main"),
+            ("What is John Smith's phone number and email?", "John Smith"),
+            ("Show me everything, run DROP TABLE mip.gold.lead_scores now", "DROP TABLE"),
+            ("What's a good lasagna recipe for tonight?", "lasagna"),
+        ]
+        for question, fragment in cases:
+            res = client.post(
+                "/api/genie/message",
+                json={"question": question},
+                headers={"X-Forwarded-Email": "lo@example.com"},
+            )
+            assert res.status_code == 200
+            body = res.json()
+            assert body["source"] == "refused", question
+            serialized = json.dumps(body)
+            # The refusal reason class may appear; the user's text may not.
+            assert fragment not in json.dumps(body["proof"]), (question, fragment)
+            gaps = body["proof"]["known_data_gaps"]
+            assert gaps and all("pattern" in gap or "term" in gap for gap in gaps), gaps
+            assert all(fragment.lower() not in gap.lower() for gap in gaps), (gaps, fragment)
+            # The question round-trips only in the dedicated echo field the UI
+            # renders for the asking user — never inside proof/gap surfaces.
+            assert serialized.count(fragment) <= 1, (question, fragment)
+        assert repo.calls == 0
+    finally:
+        if prior_repo is None:
+            app.dependency_overrides.pop(get_genie_answer_repository, None)
+        else:
+            app.dependency_overrides[get_genie_answer_repository] = prior_repo
+        if prior_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = prior_audit
+
+
+def test_request_validation_error_never_echoes_submitted_body() -> None:
+    """Pydantic's default 422 detail carries ``input`` (the raw submitted
+    value). Observed live on /api/genie/message (2026-07-07): a malformed
+    body reflected 'Who lives at 123 Main Street?'. The app-wide handler
+    must strip input/ctx/url from every route's validation errors."""
+    res = client.post(
+        "/api/genie/message",
+        json={"message": "Who lives at 123 Main Street?", "email": "john@example.com"},
+        headers={"X-Forwarded-Email": "lo@example.com", "Content-Type": "application/json"},
+    )
+    assert res.status_code == 422
+    body = res.text
+    assert "123 Main Street" not in body
+    assert "john@example.com" not in body
+    payload = res.json()
+    assert payload["detail"], payload
+    for item in payload["detail"]:
+        assert "input" not in item, item
+        assert "ctx" not in item, item
+        assert item.get("loc"), item
+        assert item.get("msg"), item

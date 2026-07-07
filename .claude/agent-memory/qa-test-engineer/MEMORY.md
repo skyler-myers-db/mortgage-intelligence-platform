@@ -2,3 +2,5 @@
 - [Genie regression registry format is verification-gated on ## heading count](project_genie_regression_contract.md) — regression_suite.md must be one `## ` heading per prompt (≥50), not a table; Python list sizes pinned by a cred-free test.
 - [Getting exact test counts in the non-TTY agent shell](project_test_count_capture.md) — pytest `-q` summary line is suppressed (use `--junit-xml`); vitest flakes under CPU contention — run it isolated.
 - [AI Gateway async-recent-row proof inversion (b77d28d..3256faf)](project_ai_gateway_proof_inversion.md) — one deliberate `available`→True flip (gov-reviewed separately); smoke jq guard truth-tabled sound.
+- [Live API-layer signoff recipe for deployed mip-app](project_live_signoff_recipe.md) — auth mint + exact Genie-enhancement/feedback/capabilities/growth-agent contracts; UI is OAuth-gated for headless.
+- [Reconciling confusing pytest count deltas](project_count_delta_reconciliation.md) — diff JUnit test-id SETS (not counts) + check baseline commit's graph position; separates new/removed/skip-flip/pre-baseline effects.
