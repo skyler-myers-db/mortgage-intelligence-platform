@@ -258,12 +258,19 @@ def genie_reasoning_trace_from_thoughts(
 
 
 def genie_follow_up_questions(suggested: list[str] | None) -> list[str]:
-    """Scrub + dedupe Genie-suggested follow-up questions for the response."""
+    """Scrub + dedupe Genie-suggested follow-up questions for the response.
+
+    Defensive cap: the client already limits its field to five entries, but a
+    future caller must not be able to widen the surfaced list past that
+    contract, so the cap is re-applied here.
+    """
     out: list[str] = []
     for raw in suggested or []:
         text = scrub_free_text(str(raw).strip()).strip()
         if text and text not in out:
             out.append(text)
+        if len(out) >= 5:
+            break
     return out
 
 

@@ -41,7 +41,10 @@ def probe_genie_turn(
                 None,
             )
         response = ask(
-            "Capability readiness check: reply with one short sentence about the Mortgage Lead Intelligence trusted assets."
+            # Aggregate-shaped so Genie has a fair chance to attach a native
+            # visualization on the same single probe turn (the viz capability
+            # stays non-claimable unless the Beta download also succeeds).
+            "Capability readiness check: how many marketing eligible borrowers are there in each state?"
         )
     except Exception as exc:  # noqa: BLE001 - probe must not fail the surface
         return (
