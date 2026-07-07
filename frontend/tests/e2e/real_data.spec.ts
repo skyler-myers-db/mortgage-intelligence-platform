@@ -510,7 +510,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByRole('button', { name: /Any selected/i })).toHaveAttribute('aria-pressed', 'true');
 
     const rankedHeader = page
-      .locator('.section-hdr', { hasText: 'Ranked borrowers · selected segment cohort' })
+      .locator('.section-hdr', { hasText: 'Ranked borrowers' })  // eyebrow is conditional since 192d5d6: '· full eligible queue' before selection, '· selected segment cohort' after
       .locator('.h-2')
       .first();
     await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
@@ -563,7 +563,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await gotoApp(page, '/segment-intelligence');
 
     const rankedHeader = page
-      .locator('.section-hdr', { hasText: 'Ranked borrowers · selected segment cohort' })
+      .locator('.section-hdr', { hasText: 'Ranked borrowers' })  // eyebrow is conditional since 192d5d6: '· full eligible queue' before selection, '· selected segment cohort' after
       .locator('.h-2')
       .first();
     await expect(rankedHeader).toContainText(/ranked borrowers/, { timeout: 45_000 });
