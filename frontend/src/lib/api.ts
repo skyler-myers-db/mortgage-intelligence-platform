@@ -141,6 +141,19 @@ export interface GenieResult {
   metric_value?: string | null;
   table_rows?: Record<string, unknown>[] | null;
   follow_up_questions?: string[];
+  // Frozen Genie payload extensions (2026-07). All optional/empty-safe.
+  native_visualization?: {
+    attachment_id: string;
+    query_attachment_id?: string | null;
+    title?: string | null;
+  } | null;
+  reasoning_trace?: Array<{ kind: string; content: string }>;
+  genie_status?: string | null;
+}
+
+export interface GenieFeedbackResult {
+  accepted: boolean;
+  audit_event_id?: string | null;
 }
 
 export interface AuditEventRow {
@@ -1293,6 +1306,33 @@ export const api = {
       },
       signal,
     ),
+
+  /**
+   * Record thumbs-up/down feedback on a Genie answer. Writes a governed
+   * audit row on the backend. The comment is optional and must never
+   * contain PII — the backend rejects PII with 422 and we surface the
+   * `detail` verbatim WITHOUT echoing the rejected comment text back.
+   * A wrong content-type yields 415. Both flow through `_throwFromResponse`
+   * so the ApiError carries the backend `detail`.
+   */
+  genieFeedback: (
+    payload: {
+      conversation_id: string;
+      message_id: string;
+      helpful: boolean;
+      comment?: string;
+    },
+    signal?: AbortSignal,
+  ) =>
+    postJson<
+      GenieFeedbackResult,
+      {
+        conversation_id: string;
+        message_id: string;
+        helpful: boolean;
+        comment?: string;
+      }
+    >('/api/genie/feedback', payload, signal),
 
   growthAgent: (signal?: AbortSignal) =>
     getJson<GrowthAgentHomeResponse>('/api/growth-agent', signal),

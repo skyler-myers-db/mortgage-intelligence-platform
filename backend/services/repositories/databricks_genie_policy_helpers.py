@@ -8,9 +8,10 @@ from typing import Any
 
 from backend.config.settings import settings
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.genie_answers import GenieNativeVisualization, GenieReasoningStep
 from backend.services.genie_client import GenieResponse
 from backend.services.observability import emit
-from backend.services.pii_redaction import _FORBIDDEN_OUTPUT_KEYS
+from backend.services.pii_redaction import _FORBIDDEN_OUTPUT_KEYS, scrub_free_text
 from backend.services.repositories.databricks_genie_canonical import (
     _retention_risk_question,
 )
@@ -218,3 +219,67 @@ def _answer_text_contains_pii(text: str | None) -> bool:
     if not text:
         return False
     return any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS)
+
+
+# ---------------------------------------------------------------------------
+# Genie enhancement fields (2026-07). The live Genie turn can carry a native
+# visualization reference, model-suggested follow-up questions, and an exposed
+# planning trace. Each string that ships in the response body is routed through
+# ``scrub_free_text`` -- the same output-guard the answer text is checked
+# against -- so a drifting Space cannot leak PII through a suggestion, a viz
+# title, or a reasoning step. Deterministic trusted_sql / refused paths do NOT
+# call these builders; they emit empty list / None (no fabrication).
+# ---------------------------------------------------------------------------
+
+# Cap the exposed planning trace so a runaway thoughts array can't bloat the
+# response body; length-cap each step so one step stays a sentence.
+_GENIE_MAX_REASONING_STEPS = 12
+_GENIE_REASONING_CONTENT_MAX_LEN = 500
+
+
+def genie_reasoning_trace_from_thoughts(
+    thoughts: list[dict[str, str]] | None,
+) -> list[GenieReasoningStep]:
+    """Scrub + bound the exposed Genie planning trace for the response body."""
+    steps: list[GenieReasoningStep] = []
+    for raw in thoughts or []:
+        if not isinstance(raw, dict):
+            continue
+        content = scrub_free_text(str(raw.get("content") or "").strip())[
+            :_GENIE_REASONING_CONTENT_MAX_LEN
+        ].strip()
+        if not content:
+            continue
+        kind = scrub_free_text(str(raw.get("kind") or "thought").strip()) or "thought"
+        steps.append(GenieReasoningStep(kind=kind, content=content))
+        if len(steps) >= _GENIE_MAX_REASONING_STEPS:
+            break
+    return steps
+
+
+def genie_follow_up_questions(suggested: list[str] | None) -> list[str]:
+    """Scrub + dedupe Genie-suggested follow-up questions for the response."""
+    out: list[str] = []
+    for raw in suggested or []:
+        text = scrub_free_text(str(raw).strip()).strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def genie_native_visualization(
+    native: dict[str, Any] | None,
+) -> GenieNativeVisualization | None:
+    """Adapt the client's native-visualization dict into the wire model."""
+    if not isinstance(native, dict):
+        return None
+    attachment_id = native.get("attachment_id")
+    if not attachment_id:
+        return None
+    title = native.get("title")
+    query_attachment_id = native.get("query_attachment_id")
+    return GenieNativeVisualization(
+        attachment_id=str(attachment_id),
+        query_attachment_id=str(query_attachment_id) if query_attachment_id else None,
+        title=scrub_free_text(str(title)).strip() or None if title else None,
+    )

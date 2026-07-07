@@ -30,10 +30,8 @@ Design notes:
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
-import re
 import time
 import urllib.error
 import urllib.parse
@@ -43,61 +41,17 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal
 
+from backend.services.genie_client_parsing import (
+    _GENIE_MAX_SUGGESTED_QUESTIONS,
+    _collect_uc_refs,
+    _extend_unique,
+    _parse_native_visualization,
+    _parse_suggested_questions,
+    _question_hash,
+)
 from backend.services.observability import emit
 
 log = logging.getLogger(__name__)
-
-_UC_REF_RE = re.compile(
-    r"\b([A-Za-z_][\w-]*)\s*\.\s*([A-Za-z_][\w-]*)\s*\.\s*([A-Za-z_][\w-]*)\b"
-)
-
-
-def _question_hash(q: str) -> str:
-    """SHA1 prefix of the question text.
-
-    Genie questions are user-authored natural language and may contain
-    borrower or property details; we log the hash, not the text, so
-    operators can group "all instances of the same question" for
-    latency analysis without leaking content.
-    """
-    return hashlib.sha1(q.encode("utf-8")).hexdigest()[:16]  # noqa: S324 -- not a secret
-
-
-def _normalise_uc_ref(raw: str) -> str:
-    return raw.replace("`", "").replace(" ", "").lower()
-
-
-def _collect_uc_refs(value: Any) -> list[str]:
-    """Collect three-part UC refs from arbitrary Genie metadata.
-
-    The Genie API can declare trusted data sources inside query text,
-    natural-language source notes, `query.parameters`, or exposed query
-    thoughts. This helper is intentionally generic so a minor response-shape
-    change does not turn a valid answer into `policy_blocked`.
-    """
-    refs: list[str] = []
-    if value is None:
-        return refs
-    if isinstance(value, str):
-        for match in _UC_REF_RE.finditer(value):
-            ref = _normalise_uc_ref(".".join(match.groups()))
-            if ref not in refs:
-                refs.append(ref)
-        return refs
-    if isinstance(value, dict):
-        for child in value.values():
-            _extend_unique(refs, _collect_uc_refs(child))
-        return refs
-    if isinstance(value, list | tuple | set):
-        for child in value:
-            _extend_unique(refs, _collect_uc_refs(child))
-    return refs
-
-
-def _extend_unique(target: list[str], values: list[str]) -> None:
-    for value in values:
-        if value not in target:
-            target.append(value)
 
 # Terminal Genie message states. The API docs list COMPLETED as the
 # happy path; FAILED / CANCELED / EXPIRED are terminal errors; SUBMITTED
@@ -155,6 +109,19 @@ class GenieResponse:
     trusted_assets: list[str] = field(default_factory=list)
     query_attachment_id: str | None = None
     thoughts: list[dict[str, str]] = field(default_factory=list)
+    #: Terminal Genie message status for this turn (``COMPLETED`` on success).
+    #: Surfaced so the API can show the real staged status; the ask is a single
+    #: blocking call so only the terminal state is captured, never faked stages.
+    genie_status: str | None = None
+    #: Deduped Genie-suggested follow-up questions parsed from the
+    #: ``suggested_questions`` attachment (``enable_visualization`` turns).
+    #: Empty on older API shapes that omit the attachment.
+    suggested_questions: list[str] = field(default_factory=list)
+    #: First native-visualization attachment reference, when Genie emits one
+    #: on an ``enable_visualization`` turn. ``None`` when absent. The Beta
+    #: download endpoint is not consumed here -- this only carries the ids
+    #: so the response layer can advertise the attachment honestly.
+    native_visualization: dict[str, Any] | None = None
 
 
 class GenieClient:
@@ -238,6 +205,7 @@ class GenieClient:
                 msg_id = self._append_message(conv_id, question)
 
             message = self._poll_message(conv_id, msg_id)
+            genie_status = str(message.get("status") or message.get("state") or "") or None
             extracted = self._extract_message_payload(message)
             sql_rows: list[dict[str, Any]] | None = None
             if extracted["sql_query"]:
@@ -292,7 +260,68 @@ class GenieClient:
                 else None
             ),
             thoughts=list(extracted["thoughts"]),
+            genie_status=genie_status,
+            suggested_questions=list(extracted["suggested_questions"]),
+            native_visualization=extracted["native_visualization"],
         )
+
+    def post_message_comment(
+        self,
+        conversation_id: str,
+        message_id: str,
+        content: str,
+    ) -> bool:
+        """Best-effort: post a governed comment on a Genie message.
+
+        Wire shape matches the SDK ``GenieAPI.create_message_comment`` --
+        ``POST .../conversations/{cid}/messages/{mid}/comments`` with a
+        ``{"content": ...}`` body. This is a side-effect on the feedback path,
+        not the answer path: a failure returns ``False`` (the caller logs and
+        continues) rather than raising, and it deliberately does NOT go through
+        the circuit breaker.
+        """
+        url = (
+            f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
+            f"/conversations/{conversation_id}/messages/{message_id}/comments"
+        )
+        try:
+            self._post(url, {"content": content})
+        except (GenieClientError, urllib.error.URLError, OSError):
+            return False
+        return True
+
+    def download_native_visualization(
+        self,
+        conversation_id: str,
+        message_id: str,
+        attachment_id: str,
+    ) -> bool:
+        """Best-effort: probe the Beta native-visualization download endpoint.
+
+        ``GET .../conversations/{cid}/messages/{mid}/attachments/{id}/visualization``.
+        Returns ``True`` only when the endpoint responds 200 with a non-empty
+        body. On this workspace the endpoint currently returns 404 ("No API
+        found"), in which case this returns ``False`` -- the capability probe
+        keeps the row honest ("configured", not claimable). Never raises.
+        """
+        url = (
+            f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
+            f"/conversations/{conversation_id}/messages/{message_id}"
+            f"/attachments/{attachment_id}/visualization"
+        )
+        bearer = self._token_provider()
+        req = urllib.request.Request(
+            url,
+            method="GET",
+            headers={"Authorization": f"Bearer {bearer}"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=float(self._timeout_s + 5)) as resp:
+                if resp.status != 200:
+                    return False
+                return bool(resp.read())
+        except (urllib.error.URLError, OSError):
+            return False
 
     def ping(self) -> bool:
         """Lightweight liveness probe.
@@ -318,7 +347,10 @@ class GenieClient:
 
     def _start_conversation(self, question: str) -> tuple[str, str]:
         url = f"{self._host}/api/2.0/genie/spaces/{self._space_id}/start-conversation"
-        resp = self._post(url, {"content": question})
+        # ``enable_visualization`` opts this turn into the native-visualization
+        # + suggested-questions attachments. Older workspaces ignore the flag
+        # and simply omit those attachments, so this stays backward compatible.
+        resp = self._post(url, {"content": question, "enable_visualization": True})
         conv_id = resp.get("conversation_id") or (resp.get("conversation") or {}).get("id")
         message = resp.get("message") or {}
         msg_id = message.get("id") or message.get("message_id") or resp.get("message_id")
@@ -334,7 +366,7 @@ class GenieClient:
             f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
             f"/conversations/{conversation_id}/messages"
         )
-        resp = self._post(url, {"content": question})
+        resp = self._post(url, {"content": question, "enable_visualization": True})
         msg_id = resp.get("id") or resp.get("message_id")
         if not msg_id:
             raise GenieClientError(
@@ -463,7 +495,12 @@ class GenieClient:
         query_attachment_id: str | None = None
         thoughts: list[dict[str, str]] = []
         trusted_assets: list[str] = []
+        suggested_questions: list[str] = []
+        native_visualization: dict[str, Any] | None = None
         for att in attachments:
+            if native_visualization is None:
+                native_visualization = _parse_native_visualization(att)
+            _extend_unique(suggested_questions, _parse_suggested_questions(att))
             text = att.get("text") or {}
             if isinstance(text, dict) and text.get("content"):
                 content = str(text["content"]).strip()
@@ -507,6 +544,8 @@ class GenieClient:
             "query_attachment_id": query_attachment_id,
             "trusted_assets": trusted_assets,
             "thoughts": thoughts,
+            "suggested_questions": suggested_questions[:_GENIE_MAX_SUGGESTED_QUESTIONS],
+            "native_visualization": native_visualization,
         }
 
     # ------------------------------------------------------------------
@@ -611,6 +650,28 @@ class ResilientGenieClient:
         )
         return self._resilient.call(
             lambda: self._client.ask(question, conversation_id=conversation_id)
+        )
+
+    def post_message_comment(
+        self,
+        conversation_id: str,
+        message_id: str,
+        content: str,
+    ) -> bool:
+        # Best-effort side effect on the feedback path; not the answer path.
+        # Bypasses the breaker so posting feedback never trips or is blocked
+        # by the answer-path breaker state.
+        return self._client.post_message_comment(conversation_id, message_id, content)
+
+    def download_native_visualization(
+        self,
+        conversation_id: str,
+        message_id: str,
+        attachment_id: str,
+    ) -> bool:
+        # Capability probe helper; best-effort, breaker-free.
+        return self._client.download_native_visualization(
+            conversation_id, message_id, attachment_id
         )
 
     def ping(self) -> bool:

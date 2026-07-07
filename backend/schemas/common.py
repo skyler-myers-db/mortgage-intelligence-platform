@@ -175,6 +175,39 @@ def validate_public_campaign_label(value: str, *, field_name: str = "variant_nam
     return label
 
 
+def validate_public_free_comment(
+    value: str,
+    *,
+    max_len: int = 280,
+    field_name: str = "comment",
+) -> str:
+    """Validate a short public-safe free-text comment (e.g. Genie feedback).
+
+    Reuses the same PII / human-name / street-address / placeholder guards the
+    campaign-label validator applies, but allows normal sentence punctuation
+    and a caller-supplied length cap. Rejects (raises ``ValueError``) rather
+    than echoing the offending text, so a 422 never reflects PII back.
+    """
+
+    text = re.sub(r"\s+", " ", str(value).strip())
+    if not text:
+        raise ValueError(f"{field_name} must not be blank")
+    if len(text) > max_len:
+        raise ValueError(f"{field_name} must be at most {max_len} characters")
+    if (
+        contains_pii_marker(text)
+        or _STREET_ADDRESS_PATTERN.search(text)
+        or _UNRESOLVED_PLACEHOLDER_PATTERN.search(text)
+    ):
+        raise ValueError(f"{field_name} must not contain PII, raw identifiers, or placeholders")
+    name_scan = text
+    for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
+        name_scan = name_scan.replace(phrase, "")
+    if _HUMAN_NAME_SHAPE_PATTERN.search(name_scan):
+        raise ValueError(f"{field_name} must not contain human-name-shaped text")
+    return text
+
+
 def validate_public_audit_text(value: str, *, field_name: str = "value") -> str:
     """Validate short top-level audit identifiers such as entity labels.
 

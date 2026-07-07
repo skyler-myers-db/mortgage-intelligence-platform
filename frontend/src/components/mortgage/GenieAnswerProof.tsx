@@ -98,6 +98,30 @@ export function GenieProofPanel({
           <pre className="genie-proof__sql">{proof.sql_query}</pre>
         </div>
       )}
+      {/* Top-level Genie reasoning (Public Preview). Distinct from the
+          trusted "Genie query trace" above (proof.reasoning_trace). Collapsed
+          by default via <details>; rows are muted, escaped plain text only —
+          React escapes {content} so no markup or PII is interpreted. */}
+      {payload.reasoning_trace && payload.reasoning_trace.length > 0 && (
+        <details className="genie-proof__section genie-proof__reasoning">
+          <summary className="genie-proof__reasoning-summary">
+            <span className="eyebrow">Genie reasoning · Public Preview</span>
+          </summary>
+          <div className="genie-proof__trace genie-proof__reasoning-body">
+            {payload.reasoning_trace.map((step, i) => (
+              <div
+                key={`${step.kind}-${i}`}
+                className="genie-proof__trace-step genie-proof__reasoning-row"
+              >
+                <div className="genie-proof__trace-kind">{step.kind}</div>
+                <div className="genie-proof__trace-content genie-proof__reasoning-content">
+                  {step.content}
+                </div>
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

@@ -234,6 +234,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "conversation_id",
         "message_id",
         "question_hash",
+        # Genie answer feedback (thumbs up/down). ``helpful`` is a bool;
+        # ``comment_present`` records only whether a sanitized free-text note
+        # accompanied the feedback -- the note itself is scrubbed and posted as
+        # a Genie comment, never stored verbatim in audit metadata.
+        "helpful",
+        "comment_present",
         "row_count",
         "saved_count",
         "campaign_id",
@@ -784,6 +790,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
         if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
             raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")
+    for field, value in _metadata_values_for(metadata, {"helpful", "comment_present"}):
+        if value is not None and not isinstance(value, bool):
+            raise AuditMetadataValueViolation(field, "must be a boolean")
     for field, value in _metadata_values_for(metadata, {"source_assets"}):
         if value is None:
             continue

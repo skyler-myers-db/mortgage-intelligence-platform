@@ -88,6 +88,9 @@ from backend.services.repositories.databricks_genie_policy_helpers import (
     _redact_genie_rows,
     _sql_uses_impossible_retention_conjunction,  # noqa: F401 - compatibility re-export
     _trusted_sql_repair_prompt,
+    genie_follow_up_questions,
+    genie_native_visualization,
+    genie_reasoning_trace_from_thoughts,
 )
 from backend.services.repositories.databricks_genie_strategy import (
     _canonical_strategy_board_answer,
@@ -386,6 +389,10 @@ def _adapt_genie_response(
             trusted_assets=trusted_assets,
             reasoning_trace=[],
         )
+    # Genie enhancement fields (2026-07): scrub once, share between the proof
+    # trace and the top-level response fields so every emitted string clears
+    # the same output PII guard the answer text is held to.
+    reasoning_trace = genie_reasoning_trace_from_thoughts(result.thoughts)
     proof = _build_genie_proof(
         sql_query=result.sql_query,
         trusted_assets=trusted_assets,
@@ -394,7 +401,7 @@ def _adapt_genie_response(
         conversation_id=result.conversation_id,
         message_id=result.message_id,
         elapsed_ms=result.elapsed_ms,
-        reasoning_trace=result.thoughts,
+        reasoning_trace=[step.model_dump() for step in reasoning_trace],
     )
     visualization = _plan_genie_visualization(question, rows)
     actions = _suggest_genie_actions(
@@ -422,6 +429,10 @@ def _adapt_genie_response(
         visualization=visualization,
         actions=actions,
         table_rows=rows,
+        follow_up_questions=genie_follow_up_questions(result.suggested_questions),
+        native_visualization=genie_native_visualization(result.native_visualization),
+        reasoning_trace=reasoning_trace,
+        genie_status=result.genie_status,
     )
 
 

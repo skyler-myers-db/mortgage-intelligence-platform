@@ -26,6 +26,19 @@ class GenieReasoningStep(BaseModel):
     content: str
 
 
+class GenieNativeVisualization(BaseModel):
+    """Reference to a Genie-authored native visualization attachment.
+
+    Carries only the attachment ids and optional title. MIP does not fetch
+    the Beta download endpoint (not rolled out on this workspace, returns
+    404); the frontend uses these ids to advertise/label the native chart.
+    """
+
+    attachment_id: str
+    query_attachment_id: str | None = None
+    title: str | None = None
+
+
 class GenieProof(BaseModel):
     sql_query: str | None = None
     source_assets: list[str] = Field(default_factory=list)
@@ -111,6 +124,20 @@ class GenieMessageResponse(BaseModel):
     metric_value: str | None = None
     table_rows: list[dict[str, Any]] | None = None
     follow_up_questions: list[str] = Field(default_factory=list)
+    #: Genie-authored native visualization reference for this turn (from the
+    #: ``enable_visualization`` attachment). ``None`` on deterministic
+    #: trusted_sql / refused / degraded paths and older API shapes.
+    native_visualization: GenieNativeVisualization | None = None
+    #: Exposed Genie planning trace (from the query attachment ``thoughts``),
+    #: PII-scrubbed and bounded. Empty on deterministic trusted_sql / refused
+    #: paths (no fabrication). Mirrors ``proof.reasoning_trace`` for turns that
+    #: carry one.
+    reasoning_trace: list[GenieReasoningStep] = Field(default_factory=list)
+    #: Terminal Genie message status for the polled turn (e.g. ``COMPLETED``).
+    #: The ask is a single blocking backend call, so only the terminal status
+    #: is surfaced -- intermediate stages (FILTERING_CONTEXT, EXECUTING_QUERY)
+    #: are not faked. ``None`` on deterministic / degraded paths.
+    genie_status: str | None = None
 
 
 _SAMPLE_QUESTIONS_CACHE: tuple[list[str], ...] | None = None

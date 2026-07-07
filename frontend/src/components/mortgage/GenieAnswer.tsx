@@ -17,6 +17,7 @@ import {
 import { MarkdownAnswer, stripQuestionRestatement } from './GenieAnswer.markdown';
 import { normalizeGenieAnswerLanguage } from '../../lib/genieAnswerLanguage';
 import { GenieProofPanel } from './GenieAnswerProof';
+import { GenieAnswerFeedback } from './GenieAnswerFeedback';
 import {
   buildFallbackFollowUps,
   buildPinFromAnswer,
@@ -136,6 +137,22 @@ export function GenieAnswer({
       )}
     </div>
   ) : null;
+  // Native visualization marker. Genie generated a native chart attachment
+  // for this answer, but in-app native rendering only activates once the
+  // workspace enables the Beta download API. This is a NEUTRAL marker chip —
+  // never a success/proven-capability tone — and we NEVER render a chart from
+  // it. The heuristic table/chart layer above/below is unchanged.
+  const nativeVizBadge = payload.native_visualization ? (
+    <div className="genie-answer__native-viz">
+      <span
+        className="chip chip--neutral genie-answer__native-viz-chip"
+        title="Genie generated a native visualization for this answer; in-app native rendering activates when the workspace enables the Beta download API."
+      >
+        <Icon name="bolt" size={10} />
+        <span className="chip__label">Native chart · Beta</span>
+      </span>
+    </div>
+  ) : null;
 
   useFocusTrap({
     open: showProof,
@@ -154,6 +171,7 @@ export function GenieAnswer({
         </div>
       )}
       {proofToggle}
+      {nativeVizBadge}
       {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} />}
       {/* FIX Δ3: chart renders BEFORE the underlying table so the user
           sees the visual summary first; the table stays as the
@@ -255,7 +273,7 @@ export function GenieAnswer({
       )}
       {onFollowUp && effectiveFollowUps.length > 0 && (
         <div className="genie-answer__followups">
-          {effectiveFollowUps.slice(0, 3).map((q) => (
+          {effectiveFollowUps.slice(0, 5).map((q) => (
             <button
               key={q}
               type="button"
@@ -284,6 +302,16 @@ export function GenieAnswer({
       )}
       {actions && actions.length > 0 && onAction && (
         <GenieActions actions={actions} onAction={onAction} />
+      )}
+      {/* Feedback only on genuine, trusted answers — a thumbs vote on a
+          governed refusal or degraded caveat rates the guardrail, not the
+          analysis. GenieAnswerFeedback additionally no-ops when the payload
+          lacks a conversation_id / message_id to attribute the vote to. */}
+      {isTrustedGenieSource(payload.source) && (
+        <GenieAnswerFeedback
+          conversationId={payload.conversation_id}
+          messageId={payload.message_id}
+        />
       )}
     </div>
   );
