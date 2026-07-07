@@ -228,14 +228,14 @@ probe_admin_or_forbidden() {
   # Cold-start grace (2026-07-07): the ?live=1 capability sweep runs real
   # probes (Genie turn, serving-endpoint query) and, seconds after an app
   # restart, can cross the Databricks Apps proxy 60s ceiling — observed as
-  # a 504 in deploy step 22 that a warmed rerun passed cleanly. Only
+  # a 504 (gw5) and a 502 (gw10) in deploy step 22 that warmed reruns passed cleanly. Only
   # infrastructure-timeout codes (503/504) are retried; every content
   # assertion stays strict.
   if [[ -z "$ADMIN_AUTH_TOKEN" ]]; then
     for attempt in 1 2 3; do
       code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
         "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
-      if [[ "$code" != "503" && "$code" != "504" ]]; then
+      if [[ "$code" != "502" && "$code" != "503" && "$code" != "504" ]]; then
         break
       fi
       if [[ "$attempt" -lt 3 ]]; then
@@ -266,7 +266,7 @@ probe_admin_or_forbidden() {
   for attempt in 1 2 3; do
     code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
       "${CURL_ADMIN_AUTH_ARGS[@]}" "$APP_URL$path")
-    if [[ "$code" != "503" && "$code" != "504" ]]; then
+    if [[ "$code" != "502" && "$code" != "503" && "$code" != "504" ]]; then
       break
     fi
     if [[ "$attempt" -lt 3 ]]; then
