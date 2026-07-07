@@ -55,7 +55,25 @@ def query_serving_endpoint(
     }
     if client_request_id:
         kwargs["client_request_id"] = client_request_id
-    return workspace_client.serving_endpoints.query(endpoint, **kwargs)
+    try:
+        return workspace_client.serving_endpoints.query(endpoint, **kwargs)
+    except (AttributeError, TypeError):
+        # databricks-sdk's QueryEndpointResponse.from_dict AttributeErrors
+        # when a custom FM endpoint answers with a JSON list body (observed
+        # live on mip-agent-gateway / system.ai llama_v3_2_3b_instruct,
+        # 2026-07-07: "'list' object has no attribute 'get'"). The HTTP
+        # round-trip itself succeeded, so re-issue the same bounded request
+        # through the raw REST client, which returns untyped JSON. Same
+        # client_request_id: the inference-table binding stays intact.
+        body: dict[str, Any] = {
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 64,
+        }
+        if client_request_id:
+            body["client_request_id"] = client_request_id
+        return workspace_client.api_client.do(
+            "POST", f"/serving-endpoints/{endpoint}/invocations", body=body
+        )
 
 
 def serving_response_has_payload(response: Any) -> bool:
@@ -69,6 +87,10 @@ def serving_response_has_payload(response: Any) -> bool:
                 break
             except Exception:  # noqa: BLE001 - fall back to attribute checks
                 pass
+    if isinstance(response, list):
+        # Custom FM endpoints (e.g. HF-served system.ai llama) may answer
+        # with a bare JSON array of generations; non-empty is a payload.
+        return len(response) > 0
     if isinstance(response, dict):
         return any(
             bool(response.get(key))

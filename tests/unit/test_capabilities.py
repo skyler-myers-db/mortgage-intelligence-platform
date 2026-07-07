@@ -1624,3 +1624,58 @@ def test_query_serving_endpoint_chat_path_omits_temperature() -> None:
     assert "temperature" not in kwargs
     assert kwargs["max_tokens"] == 64
     assert kwargs["client_request_id"] == "mip-capability-x"
+
+
+def test_query_serving_endpoint_falls_back_to_raw_invocations_on_sdk_parse_failure() -> None:
+    """databricks-sdk's typed QueryEndpointResponse.from_dict raises
+    AttributeError when a custom FM endpoint answers with a JSON list body
+    (observed live on mip-agent-gateway / llama_v3_2_3b_instruct,
+    2026-07-07). The probe must re-issue the bounded request via the raw
+    REST client with the same client_request_id so the inference-table
+    binding survives."""
+    from backend.services.capability_serving_probes import (
+        query_serving_endpoint,
+        serving_response_has_payload,
+    )
+
+    class _ParseFailingServingEndpoints:
+        def query(self, endpoint: str, **kwargs):
+            raise AttributeError("'list' object has no attribute 'get'")
+
+    class _RecordingApiClient:
+        def __init__(self) -> None:
+            self.requests: list[tuple[str, str, dict]] = []
+
+        def do(self, method: str, path: str, body=None):
+            self.requests.append((method, path, body))
+            return [{"output": "ok"}]
+
+    class _Workspace:
+        def __init__(self) -> None:
+            self.serving_endpoints = _ParseFailingServingEndpoints()
+            self.api_client = _RecordingApiClient()
+
+    workspace = _Workspace()
+    response = query_serving_endpoint(
+        workspace,
+        "mip-agent-gateway",
+        prompt="ping",
+        client_request_id="mip-capability-y",
+        task="llm/v1/chat",
+    )
+
+    method, path, body = workspace.api_client.requests[0]
+    assert method == "POST"
+    assert path == "/serving-endpoints/mip-agent-gateway/invocations"
+    assert body["messages"] == [{"role": "user", "content": "ping"}]
+    assert body["max_tokens"] == 64
+    assert body["client_request_id"] == "mip-capability-y"
+    assert "temperature" not in body
+    assert serving_response_has_payload(response) is True
+
+
+def test_serving_response_has_payload_accepts_list_response() -> None:
+    from backend.services.capability_serving_probes import serving_response_has_payload
+
+    assert serving_response_has_payload([{"output": "ok"}]) is True
+    assert serving_response_has_payload([]) is False
