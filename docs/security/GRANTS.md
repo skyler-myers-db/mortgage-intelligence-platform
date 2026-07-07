@@ -116,14 +116,14 @@ The `refresh_run_state` read fails silently and every gold table's
 ```sql
 GRANT USE SCHEMA ON SCHEMA mip.audit TO `mip-app`;
 -- Table prefix comes from MIP_AI_GATEWAY_INFERENCE_TABLE. The default
--- provisioner value is mip.audit.mip_agent_gateway_sonnet, which usually
--- materializes at least mip.audit.mip_agent_gateway_sonnet_payload.
-GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_sonnet_payload TO `mip-app`;
+-- provisioner value is mip.audit.mip_agent_gateway_llama, which usually
+-- materializes at least mip.audit.mip_agent_gateway_llama_payload.
+GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload TO `mip-app`;
 ```
 
 **Objects covered.** Only the MIP-owned AI Gateway inference-log tables
 whose names match the configured prefix `MIP_AI_GATEWAY_INFERENCE_TABLE`
-(default prefix `mip.audit.mip_agent_gateway_sonnet`). `scripts/deploy.sh`
+(default prefix `mip.audit.mip_agent_gateway_llama`). `scripts/deploy.sh`
 runs `tools/databricks/grant_ai_gateway_inference_table.py` after AI
 Gateway provisioning to discover the concrete prefixed table names and
 grant `SELECT` on those tables only.
@@ -319,7 +319,7 @@ SHOW GRANTS `mip-app` ON CATALOG mip;
 SHOW GRANTS `mip-app` ON SCHEMA mip.gold;
 SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
 SHOW GRANTS `mip-app` ON SCHEMA mip.audit;
-SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_sonnet_payload;
+SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_llama_payload;
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.public;
 
 -- Cotality share (catalog name depends on customer) -- ETL/deploy identity only
@@ -331,7 +331,7 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 -- Concrete round-trip
 SELECT COUNT(*) FROM mip.gold.borrower_360;     -- expect > 0 after refresh
 SELECT COUNT(*) FROM mip.ref.offer_rules_config; -- expect > 0 after seed
-SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_sonnet_payload
+SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_llama_payload
 WHERE client_request_id LIKE 'mip-capability-%'; -- expect > 0 after live capability probe
 -- Optional ETL-only proof; run as `sp-mip-etl`, not `mip-app`.
 SELECT COUNT(*) FROM mip.silver.property_master;

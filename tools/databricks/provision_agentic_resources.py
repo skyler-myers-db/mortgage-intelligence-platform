@@ -247,6 +247,46 @@ def _wait_synced_table_online(workspace: WorkspaceClient, name: str, *, timeout_
 _AI_GATEWAY_INELIGIBLE_MARKER = "AI Gateway is currently only supported for"
 
 
+def ensure_gateway_serving_endpoint(
+    *,
+    name: str,
+    entity_name: str,
+    entity_version: str,
+) -> None:
+    """Create the dedicated MIP-owned gateway FM endpoint if it is missing.
+
+    Eligibility fact (live-verified 2026-07-07): `put-ai-gateway` succeeds on a
+    workspace-created endpoint serving a system.ai foundation model, while the
+    managed Supervisor Agent endpoint is rejected. This endpoint exists so MIP
+    owns a gateway-eligible model door for governed probe/product traffic;
+    scale-to-zero keeps idle cost at zero.
+    """
+    try:
+        _run(["serving-endpoints", "get", name])
+        print(f"[agentic] gateway serving endpoint exists: {name}")
+        return
+    except RuntimeError as exc:
+        if "does not exist" not in str(exc) and "RESOURCE_DOES_NOT_EXIST" not in str(exc):
+            raise
+    print(f"[agentic] creating gateway serving endpoint: {name} ({entity_name} v{entity_version})")
+    _run(
+        ["serving-endpoints", "create", "--no-wait"],
+        input_json={
+            "name": name,
+            "config": {
+                "served_entities": [
+                    {
+                        "entity_name": entity_name,
+                        "entity_version": entity_version,
+                        "scale_to_zero_enabled": True,
+                        "workload_size": "Small",
+                    }
+                ]
+            },
+        },
+    )
+
+
 def ensure_ai_gateway_on_endpoint(
     *,
     endpoint: str,
@@ -289,7 +329,17 @@ def ensure_ai_gateway_on_endpoint(
             f"{str(exc)[-200:]}"
         )
         return None
-    _wait_serving_endpoint_ready(endpoint, timeout=timeout)
+    try:
+        _wait_serving_endpoint_ready(endpoint, timeout=timeout)
+    except RuntimeError as exc:
+        # First-time FM endpoints can take longer than the deploy budget to go
+        # READY (GPU provisioning). The gateway config is already applied; the
+        # capability/verifier pre-checks handle NOT_READY honestly, so a slow
+        # warm-up must not abort the deploy.
+        print(
+            f"[agentic] WARNING: gateway endpoint {endpoint} not READY within {timeout} "
+            f"({exc}); gateway config is applied and readiness will complete in the background."
+        )
     return ".".join([catalog, schema, table_prefix])
 
 
@@ -443,16 +493,27 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--storage-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_STORAGE_SCHEMA", "app"))
     parser.add_argument(
         "--gateway-endpoint",
-        default=None,
+        default=os.environ.get("MIP_AI_GATEWAY_ENDPOINT", "mip-agent-gateway"),
         help=(
-            "Serving endpoint to govern with AI Gateway. Defaults to the Supervisor Agent endpoint "
-            "created/reused in this run so real product traffic is logged."
+            "Serving endpoint to govern with AI Gateway. Defaults to the dedicated "
+            "MIP-owned FM endpoint (created here if missing). Managed Supervisor "
+            "Agent endpoints are excluded from per-endpoint AI Gateway by the "
+            "Databricks eligibility rules observed 2026-07-07."
         ),
+    )
+    parser.add_argument(
+        "--gateway-endpoint-entity",
+        default=os.environ.get("MIP_AI_GATEWAY_ENTITY", "system.ai.llama_v3_3_70b_instruct"),
+        help="system.ai entity served by the dedicated gateway endpoint (must be a servable FM).",
+    )
+    parser.add_argument(
+        "--gateway-endpoint-entity-version",
+        default=os.environ.get("MIP_AI_GATEWAY_ENTITY_VERSION", "1"),
     )
     parser.add_argument("--gateway-schema", default=os.environ.get("MIP_AI_GATEWAY_SCHEMA", "audit"))
     parser.add_argument(
         "--gateway-table-prefix",
-        default=os.environ.get("MIP_AI_GATEWAY_TABLE_PREFIX", "mip_agent_gateway_sonnet"),
+        default=os.environ.get("MIP_AI_GATEWAY_TABLE_PREFIX", "mip_agent_gateway_llama"),
     )
     parser.add_argument(
         "--gateway-per-user-calls-per-minute",
@@ -504,6 +565,11 @@ def main(argv: list[str] | None = None) -> int:
             raise ValueError(
                 "AI Gateway provisioning needs --gateway-endpoint or a Supervisor Agent endpoint"
             )
+        ensure_gateway_serving_endpoint(
+            name=gateway_endpoint,
+            entity_name=args.gateway_endpoint_entity,
+            entity_version=args.gateway_endpoint_entity_version,
+        )
         gateway_table = ensure_ai_gateway_on_endpoint(
             endpoint=gateway_endpoint,
             catalog=args.catalog,
@@ -512,6 +578,8 @@ def main(argv: list[str] | None = None) -> int:
             per_user_calls_per_minute=args.gateway_per_user_calls_per_minute,
             timeout=f"{args.timeout_s}s",
         )
+        if gateway_table:
+            _grant_app_can_query_serving_endpoint(endpoint=gateway_endpoint, app_name=args.app_name)
     resources = ProvisionedResources(
         lakebase_sync_catalog=args.lakebase_catalog,
         lakebase_sync_schema=args.lakebase_schema,

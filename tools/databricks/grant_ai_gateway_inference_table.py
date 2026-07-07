@@ -2,7 +2,7 @@
 """Grant the app service principal least-privilege AI Gateway log access.
 
 AI Gateway inference logging is configured with a Unity Catalog table prefix
-such as ``mip.audit.mip_agent_gateway_sonnet``. Databricks materializes one or
+such as ``mip.audit.mip_agent_gateway_llama``. Databricks materializes one or
 more concrete tables with that prefix. The running app only needs SELECT on
 those concrete prefixed tables so it can verify capability-probe log rows; it
 does not need schema-wide SELECT on ``mip.audit``.

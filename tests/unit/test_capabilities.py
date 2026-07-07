@@ -1340,7 +1340,7 @@ def test_ai_gateway_audit_grant_is_table_scoped() -> None:
     assert "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit" not in deploy
     assert "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit" in deploy
     assert "grant_ai_gateway_inference_table.py" in deploy
-    assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_sonnet_payload" in grants
+    assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload" in grants
     assert "Do not grant `SELECT ON SCHEMA mip.audit`" in grants
 
 
