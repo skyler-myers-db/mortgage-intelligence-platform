@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from 'react';
-import { useQuery, type QueryKey } from '@tanstack/react-query';
+import { keepPreviousData, useQuery, type QueryKey } from '@tanstack/react-query';
 import {
   ApiError,
   isWarmingUpError,
@@ -85,6 +85,8 @@ export interface UseWarmingUpRetryResult<T> {
    * Gate on `isFetching` for anything that must not race an in-flight load.
    */
   isFetching: boolean;
+  /** True when the rendered data is the previous key's payload during a refetch. */
+  isPlaceholderData: boolean;
 }
 
 export interface UseWarmingUpRetryOpts {
@@ -100,6 +102,8 @@ export interface UseWarmingUpRetryOpts {
   staleTime?: number;
   /** Override focus refetch for expensive one-shot calls such as Genie answers. */
   refetchOnWindowFocus?: boolean;
+  /** Preserve the previous payload while a changed query key refetches. */
+  keepPreviousData?: boolean;
 }
 
 export function useWarmingUpRetry<T>(
@@ -119,6 +123,7 @@ export function useWarmingUpRetry<T>(
     queryFn: ({ signal }) => fetcher(signal),
     staleTime: opts.staleTime ?? DEFAULT_QUERY_STALE_MS,
     refetchOnWindowFocus: opts.refetchOnWindowFocus,
+    placeholderData: opts.keepPreviousData ? keepPreviousData : undefined,
     retry: (failureCount, err) => {
       if (!isWarmingUpError(err)) return false;
       const plan = planForReason(err.reason, err.dependency, {
@@ -139,7 +144,7 @@ export function useWarmingUpRetry<T>(
 
   const failureReason = query.failureReason;
   const warmingUp = useMemo<WarmingUpState | null>(() => {
-    if (query.data !== undefined) return null;
+    if (query.data !== undefined && !query.isPlaceholderData) return null;
     if (!isWarmingUpError(failureReason)) return null;
     const plan = planForReason(failureReason.reason, failureReason.dependency, {
       intervalMs,
@@ -153,7 +158,7 @@ export function useWarmingUpRetry<T>(
       maxAttempts: plan.maxAttempts,
       correlationId: failureReason.correlationId,
     };
-  }, [failureReason, intervalMs, maxAttempts, query.data, query.failureCount]);
+  }, [failureReason, intervalMs, maxAttempts, query.data, query.failureCount, query.isPlaceholderData]);
 
   const manualRetry = useCallback(() => {
     void query.refetch();
@@ -165,5 +170,6 @@ export function useWarmingUpRetry<T>(
     error: query.error ?? null,
     manualRetry,
     isFetching: query.isFetching,
+    isPlaceholderData: query.isPlaceholderData,
   };
 }

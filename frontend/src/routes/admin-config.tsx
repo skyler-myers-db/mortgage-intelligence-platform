@@ -208,6 +208,8 @@ export default function AdminConfig() {
     data: auditExplorerEvents,
     warmingUp: auditExplorerWarming,
     error: auditExplorerErrorObj,
+    isFetching: auditExplorerFetching,
+    isPlaceholderData: auditExplorerPlaceholder,
   } = useWarmingUpRetry(
     (signal) => api.auditEvents(25, signal, {
       entity_id: auditEntityValue && !auditEntityIsBorrower ? auditEntityValue : null,
@@ -224,8 +226,17 @@ export default function AdminConfig() {
         auditActionFilter,
         auditEventTypeFilter,
       ]),
+      keepPreviousData: true,
     },
   );
+  const auditExplorerUpdating =
+    auditExplorerEvents !== null &&
+    (auditExplorerFetching || auditExplorerPlaceholder || Boolean(auditExplorerWarming));
+  const auditExplorerStatusLabel = auditExplorerUpdating
+    ? auditExplorerWarming
+      ? `${auditExplorerWarming.label} (${auditExplorerWarming.attempt}/${auditExplorerWarming.maxAttempts})`
+      : 'Updating audit rows'
+    : '';
   const auditExplorerError = auditExplorerErrorObj
     ? auditExplorerErrorObj instanceof Error
       ? auditExplorerErrorObj.message
@@ -491,6 +502,8 @@ export default function AdminConfig() {
           <Chip variant={auditExplorerError ? 'warning' : auditExplorerFiltersActive ? 'success' : 'neutral'}>
             {auditExplorerError
               ? 'reconnecting'
+              : auditExplorerUpdating
+                ? 'updating'
               : auditExplorerFiltersActive
                 ? auditExplorerEvents === null
                   ? 'filtering…'
@@ -541,8 +554,13 @@ export default function AdminConfig() {
               </button>
             </div>
           </form>
-          {auditExplorerFiltersActive && (
-            <div className="chip-row mt-3" aria-label="Applied audit filters">
+          <div
+            className={`audit-filter-chip-lane chip-row mt-3 ${auditExplorerFiltersActive ? '' : 'is-empty'}`}
+            aria-label="Applied audit filters"
+            aria-hidden={!auditExplorerFiltersActive}
+          >
+            {auditExplorerFiltersActive && (
+              <>
               {auditEntityFilter.trim() && (
                 <Chip variant="neutral">entity = {auditEntityFilter.trim()}</Chip>
               )}
@@ -555,9 +573,10 @@ export default function AdminConfig() {
               <span className="muted fs-12">
                 Showing the latest 25 rows that match the applied filters.
               </span>
-            </div>
-          )}
-          {auditExplorerWarming && (
+              </>
+            )}
+          </div>
+          {auditExplorerWarming && auditExplorerEvents === null && (
             <div className="mt-3">
               <WarmingUpBlock state={auditExplorerWarming} title="Audit explorer loading" compact />
             </div>
@@ -590,8 +609,12 @@ export default function AdminConfig() {
               </div>
             )}
           </div>
-          {!auditExplorerWarming && !auditExplorerError && (
-            <div className="admin-audit-list mt-3">
+          {auditExplorerEvents !== null && !auditExplorerError && (
+            <div
+              className={`admin-audit-list stable-refresh-region stable-refresh-region--table mt-3 ${auditExplorerUpdating ? 'is-updating' : ''}`}
+              aria-busy={auditExplorerUpdating}
+              data-status={auditExplorerStatusLabel}
+            >
               {(auditExplorerEvents ?? []).map((event) => (
                 <div key={event.event_id} className="admin-audit-row">
                   <span className="mono fs-12">{event.event_type ?? event.action}</span>

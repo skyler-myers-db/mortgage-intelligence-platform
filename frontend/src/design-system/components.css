@@ -838,6 +838,19 @@ kbd {
   border-color: var(--seg-color, var(--accent));
   box-shadow: 0 0 0 1px var(--seg-color, var(--accent)), 0 10px 30px -12px color-mix(in oklab, var(--seg-color, var(--accent)) 40%, transparent);
 }
+.seg-card.is-updating {
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 18%, transparent);
+}
+.seg-card--skeleton {
+  cursor: default;
+  pointer-events: none;
+}
+.seg-card--skeleton::before {
+  background: var(--line-2);
+}
+.seg-card--skeleton::after {
+  opacity: 0;
+}
 .seg-card__hdr {
   display: flex;
   align-items: flex-start;
@@ -853,6 +866,9 @@ kbd {
   font-size: 13px;
   flex: 0 0 26px;
 }
+.seg-card__badge--skeleton {
+  background: var(--bg-3);
+}
 .seg-card__title {
   min-inline-size: 0;
   font-size: var(--fs-14);
@@ -861,11 +877,21 @@ kbd {
   line-height: var(--lh-snug);
   overflow-wrap: anywhere;
 }
+.seg-card__title-skeleton {
+  inline-size: min(72%, calc(var(--sp-16) * 2));
+  block-size: var(--fs-18);
+  margin-block-start: var(--sp-1);
+}
 .seg-card__count {
   font-family: var(--font-sans); font-weight: 600;
   font-size: var(--fs-28); letter-spacing: var(--tracking-tight);
   color: var(--text-1); font-variant-numeric: tabular-nums; line-height: var(--lh-tight);
   overflow-wrap: anywhere;
+}
+.seg-card__count-skeleton {
+  inline-size: min(70%, calc(var(--sp-16) * 2 + var(--sp-8)));
+  block-size: var(--fs-36);
+  margin-block: var(--sp-4) var(--sp-3);
 }
 .seg-card__sub {
   margin-top: 6px;
@@ -873,6 +899,14 @@ kbd {
   color: var(--text-3);
   line-height: var(--lh-snug);
   overflow-wrap: anywhere;
+}
+.seg-card__sub-skeleton {
+  inline-size: 88%;
+  block-size: var(--fs-13);
+  margin-block-start: var(--sp-2);
+}
+.seg-card__sub-skeleton--short {
+  inline-size: 64%;
 }
 .seg-card__meta {
   display: flex;
@@ -886,6 +920,13 @@ kbd {
   overflow-wrap: anywhere;
 }
 .seg-card__meta .up { color: var(--signal-success); }
+.seg-card__meta-skeleton {
+  inline-size: calc(var(--sp-16) * 2);
+  block-size: var(--fs-11);
+}
+.seg-card__meta-skeleton--short {
+  inline-size: var(--sp-12);
+}
 [data-theme="light"] .seg-card { --seg-ink: var(--text-1); }
 
 /* Pending-source variant — see SegmentCard.tsx + the gold rollup CTAS
@@ -2814,6 +2855,10 @@ kbd {
   display: flex; flex-wrap: wrap; gap: var(--sp-2) var(--sp-3);
   align-items: flex-start;
 }
+.filter-row--lead-queue {
+  min-block-size: calc(var(--sp-10) * 3 + var(--sp-2) * 2);
+  align-content: flex-start;
+}
 .filter-row--stacked {
   flex-direction: column;
   flex-wrap: nowrap;
@@ -3633,6 +3678,47 @@ kbd {
 }
 .section-hdr { display: flex; align-items: baseline; justify-content: space-between; margin: 28px 0 12px; gap: var(--sp-4); }
 .section-hdr .h-2 { margin: 0; }
+.section-hdr__titleline {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--sp-2);
+  min-block-size: calc(var(--sp-10) + var(--sp-2));
+}
+.stable-refresh-region {
+  position: relative;
+}
+.stable-refresh-region.is-updating {
+  transition: filter var(--dur-base) var(--ease);
+  filter: saturate(0.9);
+}
+.stable-refresh-region--table.is-updating::before {
+  content: attr(data-status);
+  position: absolute;
+  inset-block-start: var(--sp-3);
+  inset-inline-end: var(--sp-4);
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--sp-6);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+.stable-status-chip.is-idle {
+  visibility: hidden;
+}
+.stable-status-chip {
+  justify-content: center;
+  min-inline-size: calc(var(--sp-16) * 3);
+}
 
 /* Segment grid — 6 cards is the design-target ≥ 1440px band.
    Below that the auto-fit in the container-query stepdowns
@@ -3655,6 +3741,27 @@ kbd {
   gap: var(--sp-2);
   align-items: center;
   flex-shrink: 0;
+  min-inline-size: 0;
+  max-inline-size: min(42vw, calc(var(--sp-16) * 24));
+}
+.page-filter-chips {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: var(--sp-2);
+  min-block-size: var(--sp-10);
+  block-size: var(--sp-10);
+  min-inline-size: 0;
+  max-inline-size: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.page-filter-chips.is-empty {
+  visibility: hidden;
+}
+.page-filter-chips .chip {
+  max-inline-size: calc(var(--sp-16) * 8);
 }
 
 /* 2026-05-04 fix (Ranked Borrowers alignment): defensively guarantee
@@ -4030,8 +4137,14 @@ kbd {
 .lead-queue-scope {
   display: flex;
   flex-wrap: wrap;
+  align-content: flex-start;
   gap: var(--sp-2);
   margin-block-end: var(--sp-3);
+  block-size: calc(var(--sp-16) * 4);
+  overflow: auto;
+}
+.lead-queue-scope.is-empty {
+  visibility: hidden;
 }
 .lead-queue-scope__pill {
   display: inline-flex;
@@ -4091,6 +4204,19 @@ kbd {
   .layoutA-grid { grid-template-columns: 1fr; }
   .layoutA-grid.analytics-grid--wide-left { grid-template-columns: 1fr; }
   .proto-hero   { flex-direction: column; align-items: flex-start; }
+  .proto-hero__actions,
+  .page-filter-chips {
+    inline-size: 100%;
+    min-inline-size: 0;
+    max-inline-size: 100%;
+  }
+  .page-filter-chips {
+    justify-content: flex-start;
+  }
+  .filter-row--lead-queue {
+    block-size: calc(var(--sp-10) * 13);
+    overflow-y: auto;
+  }
   .growth-agent-monitor { grid-template-columns: 1fr; }
   .growth-agent-monitor__actions { justify-content: flex-start; }
 }
@@ -5018,6 +5144,12 @@ kbd {
   display: flex;
   align-items: flex-end;
   gap: var(--sp-2);
+}
+.audit-filter-chip-lane {
+  min-block-size: calc(var(--sp-6) + var(--sp-1));
+}
+.audit-filter-chip-lane.is-empty {
+  visibility: hidden;
 }
 .admin-audit-list {
   display: grid;

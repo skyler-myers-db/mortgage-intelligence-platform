@@ -62,6 +62,17 @@ export function LoadState<T>({
   title: string;
   children: (data: T) => ReactNode;
 }) {
+  if (query.data) {
+    const updating = query.isFetching || Boolean(query.warmingUp);
+    return (
+      <div
+        className={`stable-refresh-region ${updating ? 'is-updating' : ''}`}
+        aria-busy={updating ? true : undefined}
+      >
+        {children(query.data)}
+      </div>
+    );
+  }
   if (query.warmingUp) {
     return <WarmingUpBlock state={query.warmingUp} title={title} compact />;
   }
@@ -83,8 +94,7 @@ export function LoadState<T>({
       </div>
     );
   }
-  if (!query.data) return <LoadingPanel title={title} />;
-  return children(query.data);
+  return <LoadingPanel title={title} />;
 }
 
 export function SectionHeader({ title, action }: { title: string; action?: ReactNode }) {

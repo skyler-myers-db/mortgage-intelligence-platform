@@ -24,10 +24,11 @@ import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
 interface SegmentCardProps {
   segment: SegmentSummary;
   selected?: boolean;
+  updating?: boolean;
   onClick?: () => void;
 }
 
-export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
+export function SegmentCard({ segment, selected, updating, onClick }: SegmentCardProps) {
   const icon = segmentIcon(segment.code);
   const presentation = segmentByCode(segment.code);
   const displayName = presentation?.name ?? segment.name;
@@ -54,10 +55,11 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
   return (
     <button
       type="button"
-      className={`seg-card ${selected ? 'is-selected' : ''}`}
+      className={`seg-card ${selected ? 'is-selected' : ''} ${updating ? 'is-updating' : ''}`}
       style={{ '--seg-color': displayColor } as CSSProperties}
       onClick={onClick}
       aria-pressed={selected}
+      aria-busy={updating || undefined}
     >
       {selected && emanateKey > 0 && (
         <span key={emanateKey} className="seg-card__emanate" aria-hidden="true" />
@@ -81,5 +83,23 @@ export function SegmentCard({ segment, selected, onClick }: SegmentCardProps) {
         {!hasNoBorrowers && <span>avg {segment.avg_score}</span>}
       </div>
     </button>
+  );
+}
+
+export function SegmentCardSkeleton() {
+  return (
+    <div className="seg-card seg-card--skeleton" aria-hidden="true">
+      <div className="seg-card__hdr">
+        <div className="seg-card__badge seg-card__badge--skeleton skeleton" />
+        <div className="seg-card__title-skeleton skeleton" />
+      </div>
+      <div className="seg-card__count-skeleton skeleton" />
+      <div className="seg-card__sub-skeleton skeleton" />
+      <div className="seg-card__sub-skeleton seg-card__sub-skeleton--short skeleton" />
+      <div className="seg-card__meta">
+        <span className="seg-card__meta-skeleton skeleton" />
+        <span className="seg-card__meta-skeleton seg-card__meta-skeleton--short skeleton" />
+      </div>
+    </div>
   );
 }

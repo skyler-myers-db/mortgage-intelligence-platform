@@ -144,7 +144,7 @@ export default function PortfolioBuilder() {
   } = useWarmingUpRetry<PortfolioPreview>(
     (signal) => api.portfolioPreview(buildPreviewCriteria(committedFilters, committedStateCodes), signal),
     [committedKey],
-    { queryKey: queryKeys.portfolioPreview([committedKey]) },
+    { queryKey: queryKeys.portfolioPreview([committedKey]), keepPreviousData: true },
   );
   const building = preview === null && warmingUp === null && error === null;
   // Re-audit #3 P1 (2026-06-12): `building` is false during a background
@@ -445,13 +445,20 @@ export default function PortfolioBuilder() {
             </div>
           )}
 
-          {warmingUp && (
+          {warmingUp && preview === null && (
             <div className="mt-4">
               <WarmingUpBlock
                 state={warmingUp}
                 title="Portfolio preview loading"
                 compact
               />
+            </div>
+          )}
+          {warmingUp && preview !== null && (
+            <div className="mt-4">
+              <span className="chip chip--neutral chip--compact stable-status-chip">
+                {warmingUp.label} ({warmingUp.attempt}/{warmingUp.maxAttempts})
+              </span>
             </div>
           )}
           {previewError && !warmingUp && (

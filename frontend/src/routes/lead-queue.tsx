@@ -259,6 +259,7 @@ export default function LeadQueue() {
     warmingUp,
     error,
     manualRetry,
+    isFetching: leadsFetching,
   } = useWarmingUpRetry<LeadsPageResult>(
     (signal) => api.leadsPage(
       segment,
@@ -327,9 +328,15 @@ export default function LeadQueue() {
         assignedTo ?? '',
         agedDays ?? '',
       ]),
+      keepPreviousData: true,
     },
   );
   const loading = leadsData === null && warmingUp === null && error === null;
+  const queueRefetchWarming = leadsData !== null && warmingUp !== null;
+  const queueUpdating = leadsData !== null && (leadsFetching || queueRefetchWarming);
+  const queueStatusLabel = queueRefetchWarming
+    ? `${warmingUp.label} (${warmingUp.attempt}/${warmingUp.maxAttempts})`
+    : 'updating';
   const loadError = error ? formatLeadQueueLoadError(error) : null;
 
   // Resolve `?county=FFFFF` → set of ZIPs via /api/geo/zip-rollups for an
@@ -410,6 +417,63 @@ export default function LeadQueue() {
     refreshedAt: exportRefreshedAt,
     rulesVersion,
   };
+  const heroFiltersActive = Boolean(
+    segment
+      || segmentCodes.length > 0
+      || stateFilter
+      || zipFilter
+      || stateFilters.length > 0
+      || zipFilters.length > 0
+      || borrowerIdFilters.length > 0
+      || countyFilter
+      || countyFilters.length > 0
+      || targetLenderRef
+      || portfolioCriteria
+      || cohortId
+      || funnelStage
+      || approvalStatus !== 'any'
+      || outreachStatus !== 'any'
+      || assignedTo
+      || agedDays,
+  );
+  const heroFilterChips: Array<{ key: string; variant: 'neutral' | 'success'; label: string }> = [];
+  if (segment) heroFilterChips.push({ key: 'segment', variant: 'neutral', label: `segment = ${segmentDisplayLabel(segment)}` });
+  if (segmentCodes.length > 0) {
+    heroFilterChips.push({
+      key: 'segments',
+      variant: 'neutral',
+      label: `segments = ${segmentCodes.map(segmentDisplayLabel).join(', ')} (${segmentMode === 'all' ? 'all selected' : 'any selected'})`,
+    });
+  }
+  if (stateFilter) heroFilterChips.push({ key: 'state', variant: 'neutral', label: `state = ${stateFilter}` });
+  if (zipFilter) heroFilterChips.push({ key: 'zip', variant: 'neutral', label: `zip = ${zipFilter}` });
+  if (stateFilters.length > 0) heroFilterChips.push({ key: 'states', variant: 'neutral', label: `states = ${stateFilters.join(', ')}` });
+  if (zipFilters.length > 0) heroFilterChips.push({ key: 'zips', variant: 'neutral', label: `zips = ${zipFilters.length} selected` });
+  if (borrowerIdFilters.length > 0) heroFilterChips.push({ key: 'borrowers', variant: 'neutral', label: `borrowers = ${borrowerIdFilters.length} selected` });
+  if (countyFilter) heroFilterChips.push({ key: 'county', variant: 'neutral', label: `county = ${countyFilter}` });
+  if (countyFilters.length > 0) heroFilterChips.push({ key: 'counties', variant: 'neutral', label: `counties = ${countyFilters.length} selected` });
+  if (targetLenderRef) heroFilterChips.push({ key: 'lender', variant: 'neutral', label: `lender = ${targetLenderRef}` });
+  if (funnelStage) heroFilterChips.push({ key: 'stage', variant: 'success', label: `stage = ${FUNNEL_STAGE_LABELS[funnelStage]}` });
+  for (const filter of portfolioFilters) {
+    heroFilterChips.push({ key: `portfolio-${filter.key}`, variant: 'neutral', label: `${filter.label} = ${filter.value}` });
+  }
+  if (approvalStatus !== 'any') heroFilterChips.push({ key: 'approval', variant: 'neutral', label: `approval = ${approvalStatus}` });
+  if (outreachStatus !== 'any') heroFilterChips.push({ key: 'outreach', variant: 'neutral', label: `outreach = ${outreachStatus}` });
+  if (assignedTo) heroFilterChips.push({ key: 'assigned', variant: 'neutral', label: `assigned = ${assignedTo}` });
+  if (agedDays) heroFilterChips.push({ key: 'aged', variant: 'neutral', label: `aged > ${agedDays}d` });
+  if (cohortId) heroFilterChips.push({ key: 'cohort', variant: 'success', label: 'Genie cohort' });
+  const visibleHeroFilterChips = heroFilterChips.slice(0, 3);
+  const hiddenHeroFilterCount = Math.max(heroFilterChips.length - visibleHeroFilterChips.length, 0);
+  const scopeFiltersActive = Boolean(
+    funnelStage
+      || zipFilter
+      || countyFilter
+      || countyFilters.length > 0
+      || stateFilter
+      || stateFilters.length > 0
+      || zipFilters.length > 0
+      || borrowerIdFilters.length > 0,
+  );
 
   return (
     <PageShell
@@ -417,36 +481,21 @@ export default function LeadQueue() {
       title="Ranked borrowers"
       lede="Click a row to expand the borrower preview. Approve, reject, assign to LOs, log call outcomes, or open Borrower 360 for the full dossier. Keyboard: while the expanded row is still pending, A approves and R rejects."
       heroRight={
-    segment || segmentCodes.length > 0 || stateFilter || zipFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0 || countyFilter || countyFilters.length > 0 || targetLenderRef || portfolioCriteria || cohortId || funnelStage || approvalStatus !== 'any' || outreachStatus !== 'any' || assignedTo || agedDays ? (
+        <div
+          className={`page-filter-chips ${heroFiltersActive ? '' : 'is-empty'}`}
+          aria-hidden={!heroFiltersActive || undefined}
+        >
+          {heroFiltersActive ? (
           <>
-            {segment && <Chip variant="neutral">segment = {segmentDisplayLabel(segment)}</Chip>}
-            {segmentCodes.length > 0 && (
-              <Chip variant="neutral">
-                segments = {segmentCodes.map(segmentDisplayLabel).join(', ')}
-                {' '}({segmentMode === 'all' ? 'all selected' : 'any selected'})
-              </Chip>
-            )}
-            {stateFilter && <Chip variant="neutral">state = {stateFilter}</Chip>}
-            {zipFilter && <Chip variant="neutral">zip = {zipFilter}</Chip>}
-            {stateFilters.length > 0 && <Chip variant="neutral">states = {stateFilters.join(', ')}</Chip>}
-            {zipFilters.length > 0 && <Chip variant="neutral">zips = {zipFilters.length} selected</Chip>}
-            {borrowerIdFilters.length > 0 && <Chip variant="neutral">borrowers = {borrowerIdFilters.length} selected</Chip>}
-            {countyFilter && <Chip variant="neutral">county = {countyFilter}</Chip>}
-            {countyFilters.length > 0 && <Chip variant="neutral">counties = {countyFilters.length} selected</Chip>}
-            {targetLenderRef && <Chip variant="neutral">lender = {targetLenderRef}</Chip>}
-            {funnelStage && <Chip variant="success">stage = {FUNNEL_STAGE_LABELS[funnelStage]}</Chip>}
-            {portfolioFilters.map((filter) => (
-              <Chip key={filter.key} variant="neutral">
-                {filter.label} = {filter.value}
+            {visibleHeroFilterChips.map((chip) => (
+              <Chip key={chip.key} variant={chip.variant}>
+                {chip.label}
               </Chip>
             ))}
-            {approvalStatus !== 'any' && <Chip variant="neutral">approval = {approvalStatus}</Chip>}
-            {outreachStatus !== 'any' && <Chip variant="neutral">outreach = {outreachStatus}</Chip>}
-            {assignedTo && <Chip variant="neutral">assigned = {assignedTo}</Chip>}
-            {agedDays && <Chip variant="neutral">aged &gt; {agedDays}d</Chip>}
-            {cohortId && <Chip variant="success">Genie cohort</Chip>}
+            {hiddenHeroFilterCount > 0 && <Chip variant="neutral">+{hiddenHeroFilterCount} filters</Chip>}
           </>
-        ) : undefined
+          ) : null}
+        </div>
       }
     >
       <div className="surface mb-grid">
@@ -468,8 +517,13 @@ export default function LeadQueue() {
           </button>
         </div>
         <div className="surface__body">
-          {(funnelStage || zipFilter || countyFilter || countyFilters.length > 0 || stateFilter || stateFilters.length > 0 || zipFilters.length > 0 || borrowerIdFilters.length > 0) && (
-            <div className="lead-queue-scope" aria-label="Active analytics drilldown filters">
+          <div
+            className={`lead-queue-scope ${scopeFiltersActive ? '' : 'is-empty'}`}
+            aria-label="Active analytics drilldown filters"
+            aria-hidden={!scopeFiltersActive || undefined}
+          >
+            {scopeFiltersActive ? (
+              <>
               {funnelStage && (
                 <span className="lead-queue-scope__pill">Stage: {FUNNEL_STAGE_LABELS[funnelStage]}</span>
               )}
@@ -489,9 +543,10 @@ export default function LeadQueue() {
                 geography&apos;s marketable borrowers — intentionally smaller than
                 the map tile&apos;s population count.
               </span>
-            </div>
-          )}
-          <div className="filter-row">
+              </>
+            ) : null}
+          </div>
+          <div className="filter-row filter-row--lead-queue">
             <FilterSelect
               label="STATE"
               value={stateFilterDisplay}
@@ -709,7 +764,7 @@ export default function LeadQueue() {
           </div>
         </div>
       </div>
-      {warmingUp && (
+      {warmingUp && leadsData === null && (
         <WarmingUpBlock state={warmingUp} title="Ranked borrowers loading" compact />
       )}
       {loadError && !warmingUp && (
@@ -755,13 +810,19 @@ export default function LeadQueue() {
         </div>
       )}
       {!loading && (
-        <LeadTable
-          leads={visibleLeads}
-          totalMatching={leadsData?.totalMatching ?? null}
-          truncatedAt={leadsData?.truncatedAt ?? null}
-          exportContext={exportContext}
-          salesTeam={salesTeam}
-        />
+        <div
+          className={`stable-refresh-region stable-refresh-region--table ${queueUpdating ? 'is-updating' : ''}`}
+          aria-busy={queueUpdating}
+          data-status={queueStatusLabel}
+        >
+          <LeadTable
+            leads={visibleLeads}
+            totalMatching={leadsData?.totalMatching ?? null}
+            truncatedAt={leadsData?.truncatedAt ?? null}
+            exportContext={exportContext}
+            salesTeam={salesTeam}
+          />
+        </div>
       )}
     </PageShell>
   );

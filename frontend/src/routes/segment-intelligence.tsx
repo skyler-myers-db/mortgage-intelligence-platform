@@ -4,7 +4,7 @@ import { api, type LeadsPageResult, type SegmentFilterMode } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { LeadSummary, SegmentCode, SegmentSummary } from '../types';
 import { PageShell } from '../components/layout/PageShell';
-import { SegmentCard } from '../components/mortgage/SegmentCard';
+import { SegmentCard, SegmentCardSkeleton } from '../components/mortgage/SegmentCard';
 import { LeadTable } from '../components/mortgage/LeadTable';
 import {
   USChoroplethMap,
@@ -338,6 +338,7 @@ export default function SegmentIntelligence() {
     warmingUp: segmentsWarming,
     error: segmentsError,
     manualRetry: retrySegments,
+    isFetching: segmentsFetching,
   } = useWarmingUpRetry<SegmentSummary[]>(
     (signal) =>
       api.segments(
@@ -354,6 +355,7 @@ export default function SegmentIntelligence() {
         segmentCardMode,
         JSON.stringify(secondaryPortfolioCriteria),
       ]),
+      keepPreviousData: true,
     },
   );
   const serverGeo = useMemo(
@@ -369,6 +371,7 @@ export default function SegmentIntelligence() {
     warmingUp: leadsWarming,
     error: leadsError,
     manualRetry: retryLeads,
+    isFetching: leadsFetching,
   } = useWarmingUpRetry<LeadsPageResult>(
     (signal) =>
       api.leadsPage(undefined, signal, serverGeo, {
@@ -387,6 +390,7 @@ export default function SegmentIntelligence() {
         serverGeo.county ?? '',
         serverGeo.zip ?? '',
       ]),
+      keepPreviousData: true,
     },
   );
   const segments = useMemo(() => segmentsData ?? [], [segmentsData]);
@@ -401,7 +405,21 @@ export default function SegmentIntelligence() {
     },
     [activeSegs, segmentLabelByCode, segmentMode],
   );
-  const leadsRefreshing = leadsData === null && !leadsWarming && !leadsError;
+  const segmentsInitialLoading = segmentsData === null && !segmentsWarming && !segmentsError;
+  const leadsInitialLoading = leadsData === null && !leadsWarming && !leadsError;
+  const segmentsRefetchWarming = segmentsData !== null && segmentsWarming !== null;
+  const leadsRefetchWarming = leadsData !== null && leadsWarming !== null;
+  const segmentsUpdating = segmentsData !== null && (segmentsFetching || segmentsRefetchWarming);
+  const leadsUpdating = leadsData !== null && (leadsFetching || leadsRefetchWarming);
+  const pageUpdating = segmentsUpdating || leadsUpdating;
+  const pageStatusLabel = segmentsRefetchWarming
+    ? `${segmentsWarming.label} (${segmentsWarming.attempt}/${segmentsWarming.maxAttempts})`
+    : leadsRefetchWarming
+      ? `${leadsWarming.label} (${leadsWarming.attempt}/${leadsWarming.maxAttempts})`
+      : 'updating';
+  const leadsStatusLabel = leadsRefetchWarming
+    ? `${leadsWarming.label} (${leadsWarming.attempt}/${leadsWarming.maxAttempts})`
+    : 'updating';
   const leads = useMemo(() => leadsData?.leads ?? [], [leadsData]);
   const totalMatching = leadsData?.totalMatching ?? null;
   const truncatedAt = leadsData?.truncatedAt ?? null;
@@ -467,6 +485,12 @@ export default function SegmentIntelligence() {
     return out;
   }, [leads, chipFilters]);
   const uniqueCohortTotal = totalMatching ?? filtered.length;
+  const rankedScopeEyebrow = hasSelectedSegments
+    ? 'Ranked borrowers · selected segment cohort'
+    : 'Ranked borrowers · full eligible queue';
+  const rankedScopeCopy = hasSelectedSegments
+    ? 'Showing the highest-ranked returned rows; segment cards remain standalone counts, while the table and map show the selected, de-duplicated segment cohort and geography drill-downs.'
+    : 'No segment card is selected, so the table shows the full ranked lead queue after the secondary filters. Segment cards are standalone memberships and are not meant to add up to this queue total.';
   const segmentCountScopeCopy = hasSelectedSegments
     ? segmentMode === 'all'
       ? 'Card counts now show borrowers inside the All-selected intersection. Each selected card count should match the same unique borrower cohort.'
@@ -547,8 +571,8 @@ export default function SegmentIntelligence() {
     <PageShell
       eyebrow="Segments"
       title={
-        segments.length > 0
-          ? `${segments.length} borrower ${segments.length === 1 ? 'segment' : 'segments'} · ${
+        (segments.length || VALID_SEGMENT_CODES.length) > 0
+          ? `${segments.length || VALID_SEGMENT_CODES.length} borrower ${(segments.length || VALID_SEGMENT_CODES.length) === 1 ? 'segment' : 'segments'} · ${
               hasSelectedSegments ? 'selected cohort counts' : 'standalone counts'
             }`
           : `Borrower segments · ${hasSelectedSegments ? 'selected cohort counts' : 'standalone counts'}`
@@ -569,24 +593,19 @@ export default function SegmentIntelligence() {
         </Button>
       }
     >
-      {segmentsWarming && (
+      {segmentsWarming && segmentsData === null && (
         <WarmingUpBlock
           state={segmentsWarming}
           title="Segment catalog loading"
           compact
         />
       )}
-      {leadsWarming && !segmentsWarming && (
+      {leadsWarming && leadsData === null && !segmentsWarming && (
         <WarmingUpBlock
           state={leadsWarming}
           title="Ranked borrowers loading"
           compact
         />
-      )}
-      {leadsRefreshing && !segmentsWarming && (
-        <div className="status-callout">
-          Refreshing ranked borrowers for the selected filters…
-        </div>
       )}
       {loadErrorMsg && !segmentsWarming && !leadsWarming && (
         <div
@@ -604,20 +623,28 @@ export default function SegmentIntelligence() {
           </button>
         </div>
       )}
-      {segments.length === 0 && !loadErrorMsg && !segmentsWarming && (
+      {segments.length === 0 && !loadErrorMsg && !segmentsWarming && !segmentsInitialLoading && (
         <div className="muted body mb-grid">
           Loading segments…
         </div>
       )}
-      <div className="seg-grid">
-        {segments.map((s) => (
-          <SegmentCard
-            key={s.code}
-            segment={s}
-            selected={activeSegs.includes(s.code)}
-            onClick={() => toggleSeg(s.code)}
-          />
-        ))}
+      <div
+        className={`seg-grid stable-refresh-region ${segmentsUpdating ? 'is-updating' : ''}`}
+        aria-busy={segmentsUpdating || segmentsInitialLoading}
+      >
+        {segments.length > 0
+          ? segments.map((s) => (
+              <SegmentCard
+                key={s.code}
+                segment={s}
+                selected={activeSegs.includes(s.code)}
+                updating={segmentsUpdating}
+                onClick={() => toggleSeg(s.code)}
+              />
+            ))
+          : Array.from({ length: VALID_SEGMENT_CODES.length }).map((_, index) => (
+              <SegmentCardSkeleton key={index} />
+            ))}
       </div>
 
       <div
@@ -630,11 +657,17 @@ export default function SegmentIntelligence() {
             <div className="muted fs-12">
               Any selected is a de-duplicated OR cohort. All selected is the AND intersection where each borrower must appear in every selected segment.
             </div>
-            {hasSelectedSegments && !leadsRefreshing && (
+            {totalMatching !== null && (
               <div className="segment-mode-control__total">
-                <span className="eyebrow">Selected cohort</span>
+                <span className="eyebrow">{hasSelectedSegments ? 'Selected cohort' : 'Ranked queue'}</span>
                 <span className="num">{uniqueCohortTotal.toLocaleString()}</span>
                 <span className="muted fs-12">unique ranked borrowers</span>
+                <span
+                  className={`chip chip--neutral chip--compact stable-status-chip ${pageUpdating ? '' : 'is-idle'}`}
+                  aria-hidden={!pageUpdating}
+                >
+                  {pageStatusLabel}
+                </span>
               </div>
             )}
           </div>
@@ -738,35 +771,44 @@ export default function SegmentIntelligence() {
 
       <div className="section-hdr">
         <div>
-          <div className="eyebrow">Ranked borrowers · selected segment cohort</div>
-          <div className="h-2">
-            {leadsRefreshing ? (
-              'Refreshing ranked borrowers'
+          <div className="eyebrow">{rankedScopeEyebrow}</div>
+          <div className="h-2 section-hdr__titleline">
+            {leadsInitialLoading ? (
+              <>Ranked borrowers loading</>
             ) : (
               <>
                 {truncatedAt ? 'Top ' : ''}
                 {filtered.length} ranked borrowers
                 {totalMatching !== null && totalMatching !== filtered.length && (
                   <> of {totalMatching.toLocaleString()} total matching filters</>
-                )}{' '}
-                {activeSegs.length > 0 && (
-                  <span className="muted fs-14">
-                    · segment filter: {selectedSegmentLabel}
-                    {activeSegs.length > 1
-                      ? segmentMode === 'all'
-                        ? ' · all selected segments'
-                        : ' · any selected segment, de-duplicated'
-                      : ''}
-                  </span>
                 )}
               </>
+            )}{' '}
+            {activeSegs.length > 0 && (
+              <span className="muted fs-14">
+                · segment filter: {selectedSegmentLabel}
+                {activeSegs.length > 1
+                  ? segmentMode === 'all'
+                    ? ' · all selected segments'
+                    : ' · any selected segment, de-duplicated'
+                  : ''}
+              </span>
             )}
+            <span
+              className={`chip chip--neutral chip--compact stable-status-chip ${leadsUpdating ? '' : 'is-idle'}`}
+              aria-hidden={!leadsUpdating}
+            >
+              {leadsStatusLabel}
+            </span>
           </div>
-          {!leadsRefreshing && truncatedAt && (
+          {leadsInitialLoading && (
             <div className="muted fs-14">
-              Showing the highest-ranked returned rows; segment cards remain
-              standalone counts, while the table and map show the selected,
-              de-duplicated segment cohort and geography drill-downs.
+              Fetching the ranked borrower cohort with the selected filters.
+            </div>
+          )}
+          {truncatedAt && (
+            <div className="muted fs-14">
+              {rankedScopeCopy}
             </div>
           )}
           {(mapSelection.state || mapSelection.county || mapSelection.zip) && (
@@ -803,7 +845,10 @@ export default function SegmentIntelligence() {
         </Link>
       </div>
 
-      <div className="layoutA-grid layoutA-grid--segment-workbench">
+      <div
+        className={`layoutA-grid layoutA-grid--segment-workbench stable-refresh-region ${leadsUpdating ? 'is-updating' : ''}`}
+        aria-busy={leadsUpdating || leadsInitialLoading}
+      >
         <LeadTable
           leads={filtered}
           totalMatching={totalMatching}

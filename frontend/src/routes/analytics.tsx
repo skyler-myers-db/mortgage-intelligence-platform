@@ -156,27 +156,52 @@ export default function AnalyticsRoute() {
   const executive = useWarmingUpRetry<ExecutiveAnalyticsResponse>(
     (signal) => api.analyticsExecutive(signal, baseFilters),
     ['analytics', 'executive', ...baseCriteria],
-    { enabled: tab === 'executive', queryKey: queryKeys.analytics('executive', baseCriteria), staleTime: 60_000 },
+    {
+      enabled: tab === 'executive',
+      queryKey: queryKeys.analytics('executive', baseCriteria),
+      keepPreviousData: true,
+      staleTime: 60_000,
+    },
   );
   const geography = useWarmingUpRetry<GeographyAnalyticsResponse>(
     (signal) => api.analyticsGeography(signal, baseFilters),
     ['analytics', 'geography', ...baseCriteria],
-    { enabled: tab === 'geography', queryKey: queryKeys.analytics('geography', baseCriteria), staleTime: 60_000 },
+    {
+      enabled: tab === 'geography',
+      queryKey: queryKeys.analytics('geography', baseCriteria),
+      keepPreviousData: true,
+      staleTime: 60_000,
+    },
   );
   const economics = useWarmingUpRetry<EconomicsAnalyticsResponse>(
     (signal) => api.analyticsEconomics(signal, baseFilters),
     ['analytics', 'economics', ...baseCriteria],
-    { enabled: tab === 'economics', queryKey: queryKeys.analytics('economics', baseCriteria), staleTime: 60_000 },
+    {
+      enabled: tab === 'economics',
+      queryKey: queryKeys.analytics('economics', baseCriteria),
+      keepPreviousData: true,
+      staleTime: 60_000,
+    },
   );
   const segments = useWarmingUpRetry<SegmentAnalyticsResponse>(
     (signal) => api.analyticsSegments(signal, baseFilters),
     ['analytics', 'segments', ...baseCriteria],
-    { enabled: tab === 'segments', queryKey: queryKeys.analytics('segments', baseCriteria), staleTime: 60_000 },
+    {
+      enabled: tab === 'segments',
+      queryKey: queryKeys.analytics('segments', baseCriteria),
+      keepPreviousData: true,
+      staleTime: 60_000,
+    },
   );
   const signals = useWarmingUpRetry<SignalAnalyticsResponse>(
     (signal) => api.analyticsSignals(signal, signalFilters),
     ['analytics', 'signals', ...signalCriteria],
-    { enabled: tab === 'signals', queryKey: queryKeys.analytics('signals', signalCriteria), staleTime: 60_000 },
+    {
+      enabled: tab === 'signals',
+      queryKey: queryKeys.analytics('signals', signalCriteria),
+      keepPreviousData: true,
+      staleTime: 60_000,
+    },
   );
 
   return (
