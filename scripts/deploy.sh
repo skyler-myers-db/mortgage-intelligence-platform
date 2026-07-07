@@ -134,6 +134,30 @@ run() {
   "$@"
 }
 
+# For idempotent bundle job runs only. The CLI long-polls the run status,
+# and a laptop network flap (VPN reconnect, Wi-Fi handoff) kills that poll
+# with "read: can't assign requested address" while the job itself keeps
+# succeeding server-side (observed twice on 2026-07-07, deploy step 7, on
+# two different local IPs). Re-running the job is safe by design; a real
+# job failure still fails the deploy after the retries.
+run_job_with_retry() {
+  local attempt
+  echo "${DIM}\$ $*${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  for attempt in 1 2 3; do
+    if "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" -lt 3 ]]; then
+      echo "[deploy] job run attempt $attempt failed (likely a local network flap) — retrying in 15s" >&2
+      sleep 15
+    fi
+  done
+  return 1
+}
+
 on_error() {
   local rc=$?
   echo
@@ -425,7 +449,7 @@ run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 # wait_for_app_deployable() poll below usually finds a clear runway.
 # Requires only step 4 (the bundle apply defines the job + Lakebase instance).
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
-run databricks bundle run mip_lakebase_migrate -t "$TARGET"
+run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
 
 # -----------------------------------------------------------------------------
 # Step 4c: UC grants for the app service principal (audit P1-3, zero-click)
@@ -613,10 +637,10 @@ if [[ "$SKIP_SILVER" -eq 1 ]]; then
   step "silver refresh — SKIPPED (--skip-silver)"
 else
   step "refresh silver — FRED MORTGAGE30US rates"
-  run databricks bundle run mip_fred_rates_ingest -t "$TARGET"
+  run_job_with_retry databricks bundle run mip_fred_rates_ingest -t "$TARGET"
 
   step "refresh silver — Cotality share (data-driven geography coverage)"
-  run databricks bundle run mip_refresh_silver -t "$TARGET"
+  run_job_with_retry databricks bundle run mip_refresh_silver -t "$TARGET"
 fi
 
 # -----------------------------------------------------------------------------
@@ -627,7 +651,7 @@ fi
 # Step 8: gold refresh (CTAS chain, ends with refresh_semantics_views)
 # -----------------------------------------------------------------------------
 step "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*"
-run databricks bundle run mip_refresh_scores -t "$TARGET"
+run_job_with_retry databricks bundle run mip_refresh_scores -t "$TARGET"
 
 # -----------------------------------------------------------------------------
 # Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)
