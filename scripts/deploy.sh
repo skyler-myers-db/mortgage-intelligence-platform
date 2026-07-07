@@ -628,6 +628,22 @@ if [[ -z "$APP_SOURCE_PATH" ]]; then
   echo "${RED}[deploy] bundle summary did not expose the uploaded app source path.${RST}" >&2
   exit 1
 fi
+
+# Roll-forward env continuity (external audits 2026-07-07 tripped on this
+# twice): the first snapshot deploy used to ship WITHOUT the agentic env,
+# leaving a window until the post-provisioning redeploy where the live app
+# reported ai_gateway/agent_* as not provisioned. The agentic provisioner's
+# --out-env is persisted under .databricks/ (gitignored) at the end of each
+# run; source it here so a re-deploy never forgets what is already
+# provisioned. First-ever deploys have no file and keep the two-phase flow.
+AGENTIC_ENV_CACHE=".databricks/mip-agentic.env"
+if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" ]]; then
+  echo "[deploy] carrying forward agentic env from $AGENTIC_ENV_CACHE (last provisioning)"
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_CACHE"
+  set +a
+fi
 deploy_app_snapshot "deploy Databricks App snapshot from uploaded bundle source"
 
 # -----------------------------------------------------------------------------
@@ -679,6 +695,11 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # shellcheck disable=SC1090
   . "$AGENTIC_ENV_FILE"
   set +a
+  # Persist for the next roll-forward's first snapshot deploy (env
+  # continuity — see AGENTIC_ENV_CACHE above). Values only name resources
+  # (endpoint/table/supervisor/experiment ids); no secrets are written.
+  mkdir -p .databricks
+  cp "$AGENTIC_ENV_FILE" "$AGENTIC_ENV_CACHE"
   if [[ -n "${MIP_AI_GATEWAY_INFERENCE_TABLE:-}" && -n "${MIP_AI_GATEWAY_ENDPOINT:-}" ]]; then
     step "grant least-privilege AI Gateway inference-table access to the app service principal"
     run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \

@@ -324,9 +324,13 @@ def _refused_genie_response(
     answer: str,
     known_gap: str,
 ) -> GenieMessageResponse:
+    # PII posture (external audit 2026-07-07): a refused prompt is not
+    # round-tripped. The UI renders the question it already holds locally,
+    # so the response carries only the hash — nothing typed by the user
+    # appears anywhere in a refusal body.
     return GenieMessageResponse(
         conversation_id=payload.conversation_id or "",
-        question=payload.question,
+        question="",
         answer=answer,
         source="refused",
         trusted_assets=[],

@@ -2518,9 +2518,11 @@ def test_refusal_known_gap_never_echoes_prompt_text() -> None:
             gaps = body["proof"]["known_data_gaps"]
             assert gaps and all("pattern" in gap or "term" in gap for gap in gaps), gaps
             assert all(fragment.lower() not in gap.lower() for gap in gaps), (gaps, fragment)
-            # The question round-trips only in the dedicated echo field the UI
-            # renders for the asking user — never inside proof/gap surfaces.
-            assert serialized.count(fragment) <= 1, (question, fragment)
+            # A refusal round-trips NOTHING the user typed: the question field
+            # is blanked (the UI renders its own local copy) and only the
+            # question_hash identifies the prompt.
+            assert fragment not in serialized, (question, fragment)
+            assert body["question"] == ""
         assert repo.calls == 0
     finally:
         if prior_repo is None:

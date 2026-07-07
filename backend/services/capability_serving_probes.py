@@ -65,14 +65,14 @@ def query_serving_endpoint(
         # round-trip itself succeeded, so re-issue the same bounded request
         # through the raw REST client, which returns untyped JSON. Same
         # client_request_id: the inference-table binding stays intact.
-        body: dict[str, Any] = {
+        fallback_body: dict[str, Any] = {
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": 64,
         }
         if client_request_id:
-            body["client_request_id"] = client_request_id
+            fallback_body["client_request_id"] = client_request_id
         return workspace_client.api_client.do(
-            "POST", f"/serving-endpoints/{endpoint}/invocations", body=body
+            "POST", f"/serving-endpoints/{endpoint}/invocations", body=fallback_body
         )
 
 
