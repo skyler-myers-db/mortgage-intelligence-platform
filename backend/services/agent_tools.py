@@ -21,6 +21,7 @@ AgentToolName = Literal[
     "fn_lead_queue_url",
     "fn_offer_compare",
     "fn_borrower_dossier_evidence",
+    "fn_property_loan_lookup",
     "fn_source_readiness",
     "source_readiness_status_rollup",
     "open_admin_data_operations",
@@ -29,6 +30,7 @@ AgentToolName = Literal[
 _BORROWER_360 = qualify("gold", "borrower_360")
 _BORROWER_DOSSIER = qualify("gold", "borrower_dossier")
 _EVIDENCE_EVENTS = qualify("gold", "evidence_events")
+_ADDRESS_LOOKUP = qualify("gold", "address_lookup")
 _SOURCE_READINESS = qualify("gold", "source_readiness")
 
 
@@ -104,6 +106,13 @@ _TOOLS: dict[AgentToolName, AgentTool] = {
         source_asset=_BORROWER_DOSSIER,
         specialists=("borrower_dossier_agent",),
         description="Reads the pre-joined borrower dossier evidence surface without exposing identities.",
+    ),
+    "fn_property_loan_lookup": AgentTool(
+        name="fn_property_loan_lookup",
+        label="Look up property loan by address",
+        source_asset=_ADDRESS_LOOKUP,
+        specialists=("borrower_dossier_agent",),
+        description="Resolves an address + ZIP to a masked CLIP and loan facts via the governed address_lookup spine. Share-scoped exact match; no fuzzy resolution, no raw address exposure.",
     ),
     "fn_source_readiness": AgentTool(
         name="fn_source_readiness",

@@ -160,6 +160,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "distribute_leads": ("store.distribute(",),
     "log_disposition": ("store.log_disposition(",),
     "record_lead_outcome": ("store.record_outcome(",),
+    "property_loan_lookup": ("lookup_property_loan(",),
     "genie_message": ("_required_audit_write",),
     "genie_action": ("handle_genie_action(",),
     "genie_feedback": ("record_genie_feedback(",),

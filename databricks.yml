@@ -596,6 +596,21 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_state_top_segment.sql
+        # Governed property loan lookup spine (address -> CLIP -> loan). Reads
+        # the SAME raw share sources silver_property_master + silver_lien_current
+        # read (ETL identity), plus mip.ref.refresh_run_state for the anchor, so
+        # its only hard predecessor is capture_refresh_timestamp -- it runs in
+        # parallel with the borrower_360 scoring chain. CREATE OR REPLACE, so
+        # re-running is idempotent. Backs /api/v1/lookup/property-loan + the
+        # Growth Agent dossier specialist tool fn_property_loan_lookup.
+        - task_key: ctas_address_lookup
+          description: "Rebuild mip.gold.address_lookup via CTAS (governed property loan lookup spine)."
+          depends_on:
+            - task_key: capture_refresh_timestamp
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_address_lookup.sql
         - task_key: ctas_source_readiness
           description: "Rebuild mip.gold.source_readiness via CTAS so the app Admin panel reads gold, not silver."
           depends_on:

@@ -20,6 +20,7 @@ def test_growth_agent_tool_registry_is_reviewed_and_deterministic() -> None:
         "fn_segment_counts",
         "fn_lead_queue_url",
         "fn_borrower_dossier_evidence",
+        "fn_property_loan_lookup",
         "fn_source_readiness",
         "source_readiness_status_rollup",
         "open_admin_data_operations",
@@ -46,6 +47,16 @@ def test_growth_agent_tool_registry_rejects_unknown_or_wrong_specialist_tools() 
         "borrower_dossier_agent",
     )
     assert tool.source_asset == "mip.gold.borrower_dossier"
+
+    # Property loan lookup is reviewed for the dossier specialist only and
+    # binds to the governed address_lookup spine (never silver / raw share).
+    lookup_tool = assert_tool_allowed_for_specialist(
+        "fn_property_loan_lookup",
+        "borrower_dossier_agent",
+    )
+    assert lookup_tool.source_asset == "mip.gold.address_lookup"
+    with pytest.raises(ValueError):
+        assert_tool_allowed_for_specialist("fn_property_loan_lookup", "campaign_agent")
 
 
 def test_growth_agent_runtime_refuses_state_writing_tool(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -253,6 +253,13 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "sql_hash",
         "requested_state",
         "footprint_states",
+        # Governed property loan lookup (address -> CLIP -> loan). The audit
+        # payload carries the FIRST 16 HEX of the address_hash only (never the
+        # full hash, never the raw street address), the 5-digit ZIP, a hit
+        # boolean, and a masked clip ref on hit.
+        "address_hash",
+        "zip5",
+        "hit",
         # Mortgage Growth Agent read/monitor workflows. These are
         # reviewed workflow ids, counts, route filters, and proof-step
         # summaries only -- no raw prompt text or borrower identities.
@@ -790,9 +797,17 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
         if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
             raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")
-    for field, value in _metadata_values_for(metadata, {"helpful", "comment_present"}):
+    for field, value in _metadata_values_for(metadata, {"helpful", "comment_present", "hit"}):
         if value is not None and not isinstance(value, bool):
             raise AuditMetadataValueViolation(field, "must be a boolean")
+    for field, value in _metadata_values_for(metadata, {"address_hash"}):
+        if value is not None and not re.fullmatch(r"[0-9a-f]{16}", str(value)):
+            raise AuditMetadataValueViolation(
+                field, "must be the first 16 lowercase hex chars of the address hash"
+            )
+    for field, value in _metadata_values_for(metadata, {"zip5"}):
+        if value is not None and not re.fullmatch(r"\d{5}", str(value)):
+            raise AuditMetadataValueViolation(field, "must be a 5-digit ZIP")
     for field, value in _metadata_values_for(metadata, {"source_assets"}):
         if value is None:
             continue

@@ -77,11 +77,23 @@ GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `mip-app`;
 `borrower_dossier`, `evidence_events`, `property_owner_bridge`,
 `county_rollup`, `zip_rollup`, `state_top_segment`, `lockin_cohort`,
 `segment_population`, `borrower_lifecycle_state`,
-`funnel_snapshot_daily`, and the UC SQL functions
+`funnel_snapshot_daily`, `address_lookup`, and the UC SQL functions
 `fn_lead_score`, `fn_in_the_money`, `fn_rate_spread`,
 `fn_next_best_offer`, plus the reviewed Growth Agent read-only helper
 functions `fn_build_cohort`, `fn_segment_counts`, and
 `fn_lead_queue_url`.
+
+**Governed property loan lookup.** `mip.gold.address_lookup` (added by the
+property-loan-lookup slice) is covered by the schema-level
+`GRANT SELECT ON SCHEMA mip.gold` above — no per-table grant is required.
+It is the address→CLIP→loan lookup spine keyed on a salt-free
+`sha2(canonicalized_address || '|' || zip5, 256)`. The app SP reads only
+this gold table; it never reads the raw Cotality share. The hash column is
+built at ETL refresh time by `ctas_address_lookup` (which runs under the
+ETL/deploy identity that already holds §5/§7 share access), and the raw
+street address is never projected into the table — only its hash. This
+preserves the §5 boundary: the running app cannot see raw/silver street
+addresses.
 
 **What breaks if missing.** Every customer-visible page is empty.
 Portfolio preview returns 503, `/api/leads` returns 500, the map

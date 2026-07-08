@@ -33,6 +33,7 @@ _ALLOWED_RELATIONS: frozenset[tuple[str, str]] = frozenset(
         ("first_party", "loan_applications"),
         ("first_party", "product_balances"),
         ("first_party", "servicing_portfolio"),
+        ("gold", "address_lookup"),
         ("gold", "borrower_360"),
         ("gold", "borrower_dossier"),
         ("gold", "borrower_lifecycle_state"),

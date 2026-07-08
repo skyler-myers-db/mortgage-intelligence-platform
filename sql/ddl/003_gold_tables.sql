@@ -713,3 +713,45 @@ TBLPROPERTIES (
   'delta.autoOptimize.optimizeWrite' = 'true',
   'delta.autoOptimize.autoCompact'   = 'true'
 );
+
+-- -----------------------------------------------------------------------------
+-- 15. mip.gold.address_lookup
+--     Governed "property loan lookup" spine. One row per address_hash =
+--     sha2(canonicalized_street_address || '|' || zip5, 256). Backs the
+--     /api/v1/lookup/property-loan endpoint, the Growth Agent dossier
+--     specialist tool fn_property_loan_lookup, and future org agents.
+--
+--     Populated by the CTAS at sql/transformations/gold_address_lookup.sql,
+--     which reads the SAME raw-share sources silver_property_master +
+--     silver_lien_current read (ETL identity runs it). Mirror schema (column
+--     order + types) with that SELECT list.
+--
+--     PII invariant: `situs_street_address` EXISTS in the raw share but is
+--     NEVER a column here — only its hash. The raw street address is read only
+--     inside the CTAS `hashed` CTE and dropped at the outer SELECT. clip /
+--     owner_link_id are raw in gold and masked at the app/audit boundary.
+--     v1 is EXACT-after-canonicalization against the refreshed share only
+--     (no fuzzy match, no CLIP mastering).
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.address_lookup (
+  address_hash              STRING    NOT NULL COMMENT 'PK. sha2(CONCAT(normalized_address, "|", zip5), 256), lowercase hex. Normalization: UPPER, TRIM, collapse whitespace runs, strip . , # (no abbreviation expansion). Mirrors backend/services/address_normalization.py. Street address not recoverable from this hash.',
+  zip5                      STRING             COMMENT '5-digit situs ZIP used in the hash.',
+  situs_city                STRING             COMMENT 'Situs city (already in silver/gold; safe to display).',
+  situs_state               STRING             COMMENT 'Situs state (already in silver/gold; safe to display).',
+  clip                      STRING    NOT NULL COMMENT 'Cotality CLIP for the matched property. Raw in gold; masked to clip_ref_* at the app/audit boundary.',
+  owner_link_id             STRING             COMMENT 'Cotality Owner Link id when present. Raw in gold; masked to owner_link_ref_* at egress.',
+  has_open_lien             BOOLEAN   NOT NULL COMMENT 'TRUE when the lien spine shows any open mortgage lien for this CLIP.',
+  current_lien_balance      BIGINT    NOT NULL COMMENT 'USD total_amount_of_open_mortgage_liens (COALESCE 0). Same source as borrower_360.current_lien_balance.',
+  ltv                       INT       NOT NULL COMMENT 'Display LTV int from estimated_combined_ltv_loan_to_value (>=0, not upper-capped). 0 when no CLTV signal.',
+  first_pos_lender_current  STRING             COMMENT 'Raw first-position currently-assigned servicer string. Generalized to a public-safe alias at the app boundary; never displayed raw.',
+  current_rate              DOUBLE    NOT NULL COMMENT 'First-position mortgage rate in PERCENT form (5.75), bounded 1-15% as in silver. 0.0 when no rate signal.',
+  refreshed_at              TIMESTAMP NOT NULL COMMENT 'Deterministic refresh anchor from mip.ref.refresh_run_state.'
+)
+USING DELTA
+CLUSTER BY (address_hash)
+COMMENT 'Governed property loan lookup spine. One row per address_hash. Share-scoped EXACT-after-canonicalization lookup (NOT Cotality CLIP mastering; no fuzzy match). Raw street address is NEVER stored — only its hash. Consumed by the property-loan-lookup API, the Growth Agent dossier specialist, and future org agents.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
