@@ -182,11 +182,13 @@ def test_genie_repairs_impossible_current_customer_competitor_lien_retention_que
 
     assert response.source == "trusted_sql"
     assert response.metric_value == "6,638"
-    # Voice-first: Genie's narrative is preserved; the verified gold-grain count
-    # is appended as a correction note rather than replacing the text.
-    assert response.answer.startswith("There are 0 current Summit customers at risk.")
-    assert "Verified against" in response.answer
+    # Trust boundary (external audit 2026-07-08): the model's zero claim
+    # contradicts the verified 6,638 — the governed figure leads and the wrong
+    # zero is disclosed as a superseded draft, never presented as fact.
+    assert not response.answer.startswith("There are 0 current Summit customers")
     assert "6,638" in response.answer
+    assert response.proof is not None
+    assert any("superseded" in gap for gap in response.proof.known_data_gaps)
     assert "is_competitor_lien = TRUE" not in (response.sql_query or "")
     assert "array_contains(segment_codes, 'retention')" in (response.sql_query or "")
     assert sql.sql == response.sql_query

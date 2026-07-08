@@ -183,6 +183,11 @@ def build_validated_plan(
                 endpoint=endpoint,
             )
         tool = get_agent_tool(tool_name)
+        if not tool.planner_exposed:
+            return _invalid(
+                f"{tool_name} is not available to the plan composer.",
+                endpoint=endpoint,
+            )
         try:
             params = tool.validate_params(raw.get("params"))
         except AgentToolParamError as exc:
@@ -251,8 +256,10 @@ def composer_prompt(payload: ComposePlanRequest, *, repair_note: str | None = No
         "- Tools marked REQUIRES HUMAN APPROVAL end the executable portion of the plan; "
         "place any such handoff step last.\n"
         f"- Use between 1 and {MAX_PLAN_STEPS} steps.\n\n"
-        f"The operator objective already passed PII, protected-class, raw-identifier, and "
-        f"injection validation. Objective hash: {objective_hash}. State scope: {state_scope}.\n\n"
+        "Operator objective (already validated PII-free, protected-class-free, and "
+        "injection-guarded by the request schema; compose the plan FOR this objective):\n"
+        f"{scrub_free_text(payload.objective)[:500]}\n\n"
+        f"Objective hash: {objective_hash}. State scope: {state_scope}.\n\n"
         "Reviewed tool registry:\n"
         f"{tool_catalog_for_planner()}\n\n"
         "Return STRICT JSON only, no prose, with exactly this shape:\n"

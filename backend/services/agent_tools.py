@@ -89,6 +89,14 @@ class AgentTool:
     description: str
     requires_human_review: bool = False
     writes_state: bool = False
+    # Composed-plan exposure. False keeps a tool OUT of the planner catalog
+    # and out of validated plans while staying fully available to specialists
+    # and the direct API surface. Use for tools whose params could carry PII
+    # a reviewed objective can never legitimately supply (external audit
+    # 2026-07-08: fn_property_loan_lookup's address_line was a composed-plan
+    # PII egress path — objectives are validated address-free, so any address
+    # in a plan is hallucinated or injected, never legitimate).
+    planner_exposed: bool = True
     params: tuple[AgentToolParam, ...] = field(default_factory=tuple)
 
     @property
@@ -303,6 +311,7 @@ _TOOLS: dict[AgentToolName, AgentTool] = {
         label="Look up property loan by address",
         source_asset=_ADDRESS_LOOKUP,
         specialists=("borrower_dossier_agent",),
+        planner_exposed=False,
         description=(
             "Resolves an address + ZIP to a masked CLIP and loan facts via the governed "
             "address_lookup spine. Share-scoped exact match; no fuzzy resolution, no raw "
@@ -384,6 +393,8 @@ def tool_catalog_for_planner() -> str:
 
     lines: list[str] = []
     for tool in _TOOLS.values():
+        if not tool.planner_exposed:
+            continue
         gate = " [REQUIRES HUMAN APPROVAL — stops the run]" if tool.gates_run else ""
         params = "; ".join(spec.spec_summary() for spec in tool.params) or "no params"
         lines.append(f"- {tool.name}{gate}: {tool.description} Params: {params}")

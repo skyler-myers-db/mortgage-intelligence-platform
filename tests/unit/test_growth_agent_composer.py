@@ -355,3 +355,49 @@ def test_composer_still_invalid_after_repair_stays_invalid() -> None:
     assert outcome.status == "invalid"
     assert "does not accept params" in (outcome.message or "")
     assert len(client.api_client.prompts) == 2
+
+
+def test_composer_prompt_carries_the_validated_objective_text() -> None:
+    """External audit blocker (2026-07-08): the planner received only the
+    objective's HASH, so composed plans were generic tool-chains, never
+    grounded in the operator's actual ask. The validated (PII-free) objective
+    text must be in the prompt."""
+    from backend.services.growth_agent_composer import composer_prompt
+
+    req = _request(
+        "Find investor owners in Illinois with high equity and stage a handoff"
+    )
+    prompt = composer_prompt(req)
+    assert "investor owners in Illinois with high equity" in prompt
+    assert "Objective hash:" in prompt  # correlation id retained
+
+
+def test_planner_catalog_excludes_pii_param_tools_and_composer_rejects_them() -> None:
+    """External audit blocker (2026-07-08): fn_property_loan_lookup's
+    address_line was a composed-plan PII egress path. Objectives are validated
+    address-free, so any address in a plan is hallucinated or injected — the
+    tool is planner-hidden and any plan naming it is invalid, while remaining
+    fully available to the dossier specialist surface."""
+    from backend.services.agent_tools import get_agent_tool, tool_catalog_for_planner
+
+    assert "fn_property_loan_lookup" not in tool_catalog_for_planner()
+    assert get_agent_tool("fn_property_loan_lookup").specialists == (
+        "borrower_dossier_agent",
+    )
+
+    parsed = {
+        "objective_summary": "s",
+        "steps": [
+            {
+                "step_id": "step-1",
+                "tool": "fn_property_loan_lookup",
+                "params": {"address_line": "742 Evergreen Terrace", "zip5": "62704"},
+                "rationale": "r",
+            }
+        ],
+        "expected_outcome": "o",
+        "risk_notes": "n",
+    }
+    outcome = build_validated_plan(parsed, _request(), endpoint="mas-x")
+    assert outcome.status == "invalid"
+    assert "not available to the plan composer" in (outcome.message or "")

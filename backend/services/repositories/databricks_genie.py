@@ -547,6 +547,50 @@ def _default_verification_note(
     return f"Verified against {asset} at the trusted gold grain."
 
 
+def _parse_metric_value(metric: object) -> float | None:
+    """Normalize a canonical metric (often a pre-formatted string) to float."""
+    if metric is None:
+        return None
+    try:
+        return float(str(metric).replace(",", "").strip())
+    except ValueError:
+        return None
+
+
+def _narrative_contradicts_metric(
+    narrative: str, metric: object
+) -> tuple[bool, str | None]:
+    """Detect a numeric claim in model prose that the verified metric disproves.
+
+    Conservative by design: only same-scale numbers count as claims (a "35%"
+    threshold in prose must not contradict a 122,598 count), zero counts as a
+    claim against large metrics (the classic wrong-zero turn), and a claim
+    within 1% of the metric is treated as agreement (rounding/formatting).
+    Returns (contradicted, first_conflicting_claim_formatted).
+    """
+    metric_parsed = _parse_metric_value(metric)
+    if metric_parsed is None or not narrative:
+        return False, None
+    metric_f = metric_parsed
+    raw = [t.replace(",", "") for t in re.findall(r"\d[\d,]*\.?\d*", narrative)]
+    try:
+        nums = [float(t) for t in raw if t]
+    except ValueError:  # pragma: no cover - regex only yields numeric tokens
+        return False, None
+    if metric_f >= 1000:
+        claims = [n for n in nums if n == 0 or n >= 1000]
+    else:
+        claims = [n for n in nums if metric_f / 10 <= n <= metric_f * 10]
+    if not claims:
+        return False, None
+    tolerance = max(1.0, 0.01 * abs(metric_f))
+    if any(abs(n - metric_f) <= tolerance for n in claims):
+        return False, None
+    worst = claims[0]
+    formatted = f"{worst:,.0f}" if worst == int(worst) else f"{worst:,}"
+    return True, formatted
+
+
 def _restore_live_voice(
     canonical: GenieMessageResponse,
     result: GenieResponse,
@@ -571,7 +615,26 @@ def _restore_live_voice(
     proof = canonical.proof
     narrative = (result.answer_text or "").strip()
     updates: dict[str, Any] = {}
-    if narrative:
+    contradicted, claimed = _narrative_contradicts_metric(narrative, canonical.metric_value)
+    if narrative and contradicted:
+        # Trust boundary (external audit 2026-07-08): never lead a
+        # ``trusted_sql`` answer with model prose asserting a figure the
+        # governed recomputation disproves. The verified deterministic
+        # statement leads; the discrepancy is disclosed as a gap, not
+        # displayed as fact. Live-intelligence fields still carry through —
+        # the turn was genuinely live, only its numeric claim lost.
+        updates["answer"] = canonical.answer
+        if proof is not None:
+            gap = (
+                f"Genie's draft narrative stated {claimed}; the governed "
+                f"recomputation returned {canonical.metric_value} and "
+                "superseded it."
+            )
+            if gap not in proof.known_data_gaps:
+                proof = proof.model_copy(
+                    update={"known_data_gaps": [*proof.known_data_gaps, gap]}
+                )
+    elif narrative:
         note = _default_verification_note(
             canonical.trusted_assets,
             canonical.metric_value,

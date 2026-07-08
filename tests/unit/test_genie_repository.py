@@ -2852,11 +2852,16 @@ def test_in_the_money_count_uses_canonical_gold_grain() -> None:
     result = repo.respond("How many borrowers are currently in-the-money?")
 
     assert result.source == "trusted_sql"
-    # Voice-first: Genie's own narrative (its 277,139 figure) is preserved, and
-    # the re-executed gold-grain count is APPENDED as a verification note rather
-    # than the narrative being replaced with canned template phrasing.
-    assert result.answer.startswith("There are 277,139 borrowers currently in-the-money.")
-    assert "Verified against mip.gold.borrower_360: 147,742" in result.answer
+    # Trust boundary (external audit 2026-07-08): the model's 277,139 claim
+    # CONTRADICTS the governed recomputation (147,742), so the verified
+    # deterministic statement leads and the wrong figure never appears in the
+    # answer. The discrepancy is disclosed as a proof gap, not shown as fact.
+    assert "277,139" not in result.answer
+    assert "147,742" in result.answer
+    assert result.proof is not None
+    assert any(
+        "277,139" in gap and "superseded" in gap for gap in result.proof.known_data_gaps
+    )
     assert result.table_rows == [
         {
             "in_the_money_borrowers": 147742,
@@ -3068,10 +3073,12 @@ def test_in_the_money_count_applies_state_scope_when_present() -> None:
 
     result = repo.respond("How many borrowers in Illinois are in the money?")
 
-    # Voice-first: Genie's narrative leads; the re-executed state-scoped count is
-    # appended as a verification note.
-    assert result.answer.startswith("There are 277,139 borrowers currently in-the-money.")
-    assert "Verified against mip.gold.borrower_360: 70,939" in result.answer
+    # The model's all-footprint 277,139 contradicts the state-scoped verified
+    # count: the governed figure leads, the wrong figure is disclosed as a gap.
+    assert "277,139" not in result.answer
+    assert "70,939" in result.answer
+    assert result.proof is not None
+    assert any("superseded" in gap for gap in result.proof.known_data_gaps)
     assert result.table_rows == [
         {
             "in_the_money_borrowers": 70939,
@@ -3176,10 +3183,20 @@ def test_in_the_money_count_applies_city_scope_when_present(
 
     result = repo.respond(question)
 
-    # Voice-first: Genie's narrative leads; the re-executed city-scoped count is
-    # appended as a verification note that sharpens the all-footprint figure.
-    assert result.answer.startswith("Genie returned the all-footprint count: 147,742.")
-    assert f"Verified against mip.gold.borrower_360: {count:,}" in result.answer
+    if count >= 1000:
+        # The model's all-footprint 147,742 contradicts the city-scoped
+        # verified count -> governed figure leads, draft figure superseded.
+        assert "147,742" not in result.answer
+        assert f"{count:,}" in result.answer
+        assert result.proof is not None
+        assert any("superseded" in gap for gap in result.proof.known_data_gaps)
+    else:
+        # Sub-1000 verified counts sit outside the model claim's magnitude
+        # band, so no contradiction fires: voice leads, verification appends.
+        assert result.answer.startswith(
+            "Genie returned the all-footprint count: 147,742."
+        )
+        assert f"Verified against mip.gold.borrower_360: {count:,}" in result.answer
     assert result.table_rows == [
         {
             "city": city,
@@ -3594,12 +3611,12 @@ def test_live_first_false_restores_interceptor_first_ordering(
 
 def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> None:
     live = GenieResponse(
-        answer_text="There are roughly 277,139 borrowers in the money right now.",
+        answer_text="There are roughly 147,742 borrowers in the money right now.",
         sql_query=(
             "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 "
             "WHERE in_the_money = true"
         ),
-        sql_result_rows=[{"borrowers": 277139}],
+        sql_result_rows=[{"borrowers": 147742}],
         conversation_id="conv-voice",
         message_id="msg-voice",
         thoughts=[{"kind": "planning", "content": "Filtering to in-the-money borrowers."}],
@@ -3620,7 +3637,7 @@ def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> N
     assert result.source == "trusted_sql"
     # Genie's own narrative leads (not replaced by canned template phrasing).
     assert result.answer.startswith(
-        "There are roughly 277,139 borrowers in the money right now."
+        "There are roughly 147,742 borrowers in the money right now."
     )
     # Live-intelligence fields carried through exactly like the generic path.
     assert result.genie_status == "COMPLETED"
@@ -3640,12 +3657,12 @@ def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> N
 
 def test_recognized_shape_verification_note_appends_not_replaces() -> None:
     live = GenieResponse(
-        answer_text="There are about 277,139 borrowers in the money.",
+        answer_text="There are about 147,742 borrowers in the money.",
         sql_query=(
             "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 "
             "WHERE in_the_money = true"
         ),
-        sql_result_rows=[{"borrowers": 277139}],
+        sql_result_rows=[{"borrowers": 147742}],
         conversation_id="conv-append",
         message_id="msg-append",
     )
@@ -3659,10 +3676,11 @@ def test_recognized_shape_verification_note_appends_not_replaces() -> None:
         sql_client=sql,  # type: ignore[arg-type]
     )
 
-    # Genie's own figure remains AND the verified gold-grain figure is appended.
-    assert "277,139" in result.answer
+    # Agreeing figures: Genie's own narrative remains AND the verified
+    # gold-grain figure is appended after it.
+    assert result.answer.startswith("There are about 147,742 borrowers in the money.")
     assert "Verified against mip.gold.borrower_360: 147,742" in result.answer
-    assert result.answer.index("277,139") < result.answer.index("Verified against")
+    assert result.answer.index("about 147,742") < result.answer.index("Verified against")
 
 
 def test_recognized_shape_empty_narrative_falls_back_with_honest_gap() -> None:
