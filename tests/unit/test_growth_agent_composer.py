@@ -250,3 +250,43 @@ def test_composer_prompt_lists_registry_and_demands_json() -> None:
     assert "REQUIRES HUMAN APPROVAL" in prompt
     assert "STRICT JSON" in prompt
     assert "never invent a tool" in prompt
+
+
+def test_reviewed_objective_accepts_natural_compose_phrasings() -> None:
+    """Live false refusal (2026-07-07): 'for those signals' was flagged as a
+    human name by the lowercase-name heuristic and 422'd a legitimate compose
+    objective. Closed-class English words never begin personal names."""
+    from backend.schemas.growth_agent import assert_reviewed_growth_objective
+
+    objectives = [
+        (
+            "Find investor owners in Illinois with high equity whose properties "
+            "recently listed, check our data freshness for those signals, size "
+            "the opportunity, and stage a lead queue handoff for the strongest cohort"
+        ),
+        "Review retention risk for these segments and rank counties by recapture upside",
+        "Compare equity distributions for all cohorts and flag any stale sources",
+        "Build a briefing for our strongest markets using every trusted signal",
+        "Check freshness for several feeds and summarize which segments grew most",
+    ]
+    for objective in objectives:
+        assert assert_reviewed_growth_objective(objective)
+
+
+def test_reviewed_objective_still_rejects_human_names() -> None:
+    from backend.schemas.growth_agent import assert_reviewed_growth_objective
+
+    # NOTE: lowercase names after verbs outside the action list (e.g.
+    # "prioritize maria garcia") are a known pre-existing gap documented at
+    # _PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE -- widening the verb list
+    # false-refuses ordinary analytics phrasings; a real name-detection pass
+    # is the follow-up, not more regex.
+    for bad in [
+        "Pull everything for john smith in Chicago",
+        "Call Robert Johnson about his rate",
+    ]:
+        try:
+            assert_reviewed_growth_objective(bad)
+        except ValueError:
+            continue
+        raise AssertionError(f"should have refused: {bad}")

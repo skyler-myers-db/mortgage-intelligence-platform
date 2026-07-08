@@ -80,6 +80,13 @@ _PROMPT_LOWERCASE_NAME_AFTER_GROUP_RE = re.compile(
     r"([a-z]{2,30})\s+(?:[a-z]\s+)?([a-z]{2,30})\b"
 )
 _PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE = re.compile(
+    # Deliberately lowercase-only and verb-scoped: widening the verb list or
+    # making it case-insensitive false-refuses ordinary analytics phrasings
+    # ("Find listed purchase opportunities" reads ("listed","purchase") as a
+    # name). Capitalized proper nouns are _PROMPT_HUMAN_NAME_RE territory;
+    # lowercase names after verbs outside this list (e.g. "prioritize maria
+    # garcia") are a known gap awaiting a real name-detection pass, not more
+    # regex.
     r"\b(?:for|find|show|review|run(?:\s+this)?\s+for|build\b.{0,80}\bfor)\s+"
     r"([a-z]{2,30})\s+(?:[a-z]\s+)?([a-z]{2,30})\b"
 )
@@ -111,6 +118,43 @@ _PROMPT_LOWERCASE_NAME_SKIP_FIRST: frozenset[str] = frozenset(
         "whose",
         "with",
         "without",
+        # Closed-class English words that can never begin a personal name.
+        # "for those signals" was flagged as a human name and 422'd a
+        # legitimate compose objective (live false refusal, 2026-07-07).
+        "these",
+        "those",
+        "this",
+        "them",
+        "they",
+        "their",
+        "our",
+        "your",
+        "all",
+        "any",
+        "some",
+        "most",
+        "more",
+        "fewer",
+        "each",
+        "every",
+        "few",
+        "many",
+        "much",
+        "several",
+        "such",
+        "other",
+        "another",
+        "which",
+        "what",
+        "its",
+        "new",
+        "top",
+        "high",
+        "low",
+        "strong",
+        "strongest",
+        "recent",
+        "active",
     }
 )
 _PROMPT_REVIEWED_LOWERCASE_PAIRS: frozenset[tuple[str, str]] = frozenset(
