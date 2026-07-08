@@ -208,7 +208,7 @@ QUALIFY ROW_NUMBER() OVER (
 -- be byte-identical to the COMMENT strings in sql/ddl/003_gold_tables.sql (the
 -- test_gold_column_comment_guard drift guard pins both directions).
 COMMENT ON TABLE mip.gold.address_lookup IS 'Governed property loan lookup spine. One row per address_hash. Share-scoped EXACT-after-canonicalization lookup (NOT Cotality CLIP mastering; no fuzzy match). Raw street address is NEVER stored — only its hash. Consumed by the property-loan-lookup API, the Growth Agent dossier specialist, and future org agents.';
-COMMENT ON COLUMN mip.gold.address_lookup.address_hash IS 'PK. sha2(CONCAT(normalized_address, "|", zip5), 256), lowercase hex. Normalization: UPPER, TRIM, collapse whitespace runs, strip . , # (no abbreviation expansion). Mirrors backend/services/address_normalization.py. Street address not recoverable from this hash.';
+COMMENT ON COLUMN mip.gold.address_lookup.address_hash IS 'PK. sha2(CONCAT(normalized_address, "|", zip5), 256), lowercase hex. Normalization: UPPER, TRIM, collapse whitespace runs, strip . , # (no abbreviation expansion). Mirrors backend/services/address_normalization.py. The raw street address is not stored; note this is a salt-free join key, so a privileged UC reader holding candidate addresses can test membership by hashing them — the audit ledger uses a tenant-secret HMAC token instead, and a keyed gold join key is the documented customer-deploy hardening.';
 COMMENT ON COLUMN mip.gold.address_lookup.zip5 IS '5-digit situs ZIP used in the hash.';
 COMMENT ON COLUMN mip.gold.address_lookup.situs_city IS 'Situs city (already in silver/gold; safe to display).';
 COMMENT ON COLUMN mip.gold.address_lookup.situs_state IS 'Situs state (already in silver/gold; safe to display).';

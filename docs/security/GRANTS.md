@@ -95,6 +95,18 @@ street address is never projected into the table — only its hash. This
 preserves the §5 boundary: the running app cannot see raw/silver street
 addresses.
 
+Threat-model honesty (external audit, 2026-07-08): because the gold join
+key is a **salt-free** hash, a privileged UC reader who already possesses
+candidate street addresses can test membership by hashing them. That
+adversary must already hold address data, so the key does not *leak*
+addresses — but do not describe it as "not recoverable." The audit ledger
+never stores this hash (it records a tenant-secret HMAC token via
+`pii_redaction.mask_address_for_audit`). Customer-deploy hardening: derive
+the gold key with the tenant secret as well (keyed hash computed by the
+ETL via a secret-scope lookup), which removes the dictionary vector for
+any reader lacking the secret; tracked as the companion requirement to
+`MIP_COTALITY_ID_MASK_SECRET` being mandatory outside dev/sandbox.
+
 **What breaks if missing.** Every customer-visible page is empty.
 Portfolio preview returns 503, `/api/leads` returns 500, the map
 renders blank, the segment cards show zeros. Not a degraded banner —

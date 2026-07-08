@@ -734,7 +734,7 @@ TBLPROPERTIES (
 --     (no fuzzy match, no CLIP mastering).
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.address_lookup (
-  address_hash              STRING    NOT NULL COMMENT 'PK. sha2(CONCAT(normalized_address, "|", zip5), 256), lowercase hex. Normalization: UPPER, TRIM, collapse whitespace runs, strip . , # (no abbreviation expansion). Mirrors backend/services/address_normalization.py. Street address not recoverable from this hash.',
+  address_hash              STRING    NOT NULL COMMENT 'PK. sha2(CONCAT(normalized_address, "|", zip5), 256), lowercase hex. Normalization: UPPER, TRIM, collapse whitespace runs, strip . , # (no abbreviation expansion). Mirrors backend/services/address_normalization.py. The raw street address is not stored; note this is a salt-free join key, so a privileged UC reader holding candidate addresses can test membership by hashing them — the audit ledger uses a tenant-secret HMAC token instead, and a keyed gold join key is the documented customer-deploy hardening.',
   zip5                      STRING             COMMENT '5-digit situs ZIP used in the hash.',
   situs_city                STRING             COMMENT 'Situs city (already in silver/gold; safe to display).',
   situs_state               STRING             COMMENT 'Situs state (already in silver/gold; safe to display).',
