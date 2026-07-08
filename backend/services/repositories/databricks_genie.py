@@ -133,6 +133,57 @@ _SOURCE_LINE_RE = re.compile(
     r"(?im)^\s*source\s*:\s*`?[A-Za-z_][\w-]*\.[A-Za-z_]\w*\.[A-Za-z_]\w*`?\.?\s*$"
 )
 
+# Honest degraded-mode disclosure appended to a reviewed canonical fallback
+# answer when live Genie is unavailable. It is added to the proof's
+# known_data_gaps and prefixed to the answer text so the fallback is never
+# presented as a live Genie turn. The wording follows the existing degraded
+# conventions (name the dependency, name the substitute) without the
+# "No data was generated" clause, because the fallback DID execute governed SQL.
+_DEGRADED_FALLBACK_DISCLOSURE = (
+    "Live Genie is temporarily unavailable, so this answer comes from the "
+    "reviewed deterministic fallback (governed asset-scoped SQL) rather than a "
+    "live Genie turn."
+)
+
+
+def _annotate_degraded_fallback(
+    response: GenieMessageResponse,
+    *,
+    kind: str,
+) -> GenieMessageResponse:
+    """Stamp the honest degraded disclosure onto a canonical fallback answer.
+
+    The reviewed canonical answers keep their ``trusted_sql`` source (reviewed,
+    executed SQL over gold assets) but must disclose that they stood in for an
+    unavailable live Genie turn. We prepend the disclosure to the answer text
+    and add it to ``proof.known_data_gaps`` so no surface presents the fallback
+    as live. The circuit-breaker ``kind`` is accepted for symmetry with the
+    honest-message path but does not change the disclosure wording.
+
+    Only data-bearing ``trusted_sql`` answers are stamped. Guide and source-gap
+    fallbacks make no live-data claim (they carry no SQL, rows, or counts), so
+    the SQL-specific disclosure would misdescribe them; they are returned as-is.
+    """
+    _ = kind
+    if response.source != "trusted_sql":
+        return response
+    updates: dict[str, object] = {}
+    answer = response.answer or ""
+    if _DEGRADED_FALLBACK_DISCLOSURE not in answer:
+        updates["answer"] = (
+            f"{_DEGRADED_FALLBACK_DISCLOSURE}\n\n{answer}" if answer
+            else _DEGRADED_FALLBACK_DISCLOSURE
+        )
+    proof = response.proof
+    if proof is not None:
+        gaps = list(proof.known_data_gaps)
+        if _DEGRADED_FALLBACK_DISCLOSURE not in gaps:
+            gaps = [_DEGRADED_FALLBACK_DISCLOSURE, *gaps]
+            updates["proof"] = proof.model_copy(update={"known_data_gaps": gaps})
+    if not updates:
+        return response
+    return response.model_copy(update=updates)
+
 
 class DatabricksGenieRepository:
     """Real Genie, then an honest warming-up message when the breaker opens.
@@ -172,9 +223,18 @@ class DatabricksGenieRepository:
         question: str,
         conversation_id: str | None = None,
     ) -> GenieMessageResponse:
-        direct_canonical = direct_canonical_response(question, self._sql_client)
-        if direct_canonical is not None:
-            return direct_canonical
+        # Product posture (mip_genie_live_first=True): LIVE Genie is the primary
+        # answer path for every guardrail-passing question so the answer is
+        # genuinely generated rather than replayed from a hand-authored catalog.
+        # The reviewed deterministic canonical answers are demoted to an honest
+        # degraded-mode fallback consulted only inside `_degraded` (breaker open
+        # or a dependency-down live turn). Legacy/emergency posture
+        # (mip_genie_live_first=False) restores interceptor-first ordering for
+        # offline or rate-limited booth operation.
+        if not settings.mip_genie_live_first:
+            direct_canonical = direct_canonical_response(question, self._sql_client)
+            if direct_canonical is not None:
+                return direct_canonical
         breaker_state = self._genie.resilient.breaker.state
         if breaker_state == "open":
             return self._degraded(
@@ -235,12 +295,24 @@ class DatabricksGenieRepository:
         *,
         kind: str = DependencyDownError.KIND_WARMING_UP,
     ) -> GenieMessageResponse:
-        """Honest dependency-down message with no fabricated content.
+        """Degraded gateway: reviewed deterministic fallback, else honest message.
 
-        Prompt suggestions are questions only. The degraded path does not
-        inspect local analytics and cannot return rows, counts, or
+        In the product posture (``mip_genie_live_first``) live Genie is primary,
+        so when it is unavailable this path tries the reviewed canonical
+        trusted-SQL answers as an honest fallback. The fallback answer keeps its
+        asset-scoped ``trusted_sql`` source (its SQL is reviewed and executed
+        against gold tables) but is annotated with an explicit disclosure gap so
+        it is never presented as a live Genie answer. When the canonical layer
+        cannot answer -- or in the legacy interceptor-first posture, where it was
+        already consulted before the live turn -- we fall back to the honest
+        dependency-down message with no fabricated content. Prompt suggestions
+        are questions only; the honest message returns no rows, counts, or
         borrower examples.
         """
+        if settings.mip_genie_live_first:
+            fallback = direct_canonical_response(question, self._sql_client)
+            if fallback is not None:
+                return _annotate_degraded_fallback(fallback, kind=kind)
         if kind == DependencyDownError.KIND_BREAKER_OPEN:
             answer = self._BREAKER_OPEN_MESSAGE
         elif kind == DependencyDownError.KIND_RETRIES_EXHAUSTED:

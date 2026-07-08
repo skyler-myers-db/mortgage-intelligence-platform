@@ -96,12 +96,14 @@ class _SqlClient:
 
 
 class _GenieClient:
-    def __init__(self, responses: list[GenieResponse]) -> None:
+    def __init__(
+        self, responses: list[GenieResponse], breaker_state: str = "closed"
+    ) -> None:
         self.responses = responses
         self.questions: list[str] = []
 
         class _Breaker:
-            state = "closed"
+            state = breaker_state
 
         class _Resilient:
             breaker = _Breaker()
@@ -285,7 +287,9 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
     )
 
     sql = _SqlClient()
-    client = _GenieClient([result, repaired_result])
+    # Live-first posture: the canonical competitor-lien SQL is now the honest
+    # degraded fallback, exercised here with the breaker open (live Genie down).
+    client = _GenieClient([result, repaired_result], breaker_state="open")
     repo = DatabricksGenieRepository(client, sql)  # type: ignore[arg-type]
     response = repo.respond(question)
 
@@ -315,6 +319,11 @@ def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
     assert "in illinois" in response.answer.lower()
     assert "There are 304 retention-list borrowers" in response.answer
     assert client.questions == []
+    assert response.proof is not None
+    assert any(
+        "Live Genie is temporarily unavailable" in gap
+        for gap in response.proof.known_data_gaps
+    )
     cohort_action = next(action for action in response.actions if action.id == "open-cohort")
     assert "borrower_ids=B-102FL7THC6Q3L" in (cohort_action.route or "")
     assert "lender_relationship=Competitor" not in (cohort_action.route or "")
@@ -385,7 +394,9 @@ def test_genie_retention_risk_repairs_wrong_evidence_enums() -> None:
 
     assert _needs_genie_sql_repair(question, bad_result) is True
     sql = _SqlClient()
-    client = _GenieClient([bad_result, repaired_result])
+    # Live-first posture: canonical retention-risk SQL is the degraded fallback,
+    # exercised with the breaker open (live Genie unavailable).
+    client = _GenieClient([bad_result, repaired_result], breaker_state="open")
     repo = DatabricksGenieRepository(client, sql)  # type: ignore[arg-type]
     response = repo.respond(question)
 
@@ -404,3 +415,7 @@ def test_genie_retention_risk_repairs_wrong_evidence_enums() -> None:
     assert response.proof.trusted is True
     assert sql.sql == response.sql_query
     assert client.questions == []
+    assert any(
+        "Live Genie is temporarily unavailable" in gap
+        for gap in response.proof.known_data_gaps
+    )

@@ -465,6 +465,17 @@ class Settings(BaseSettings):
     # LLM calls swamp the warehouse/Lakebase lanes. Customer targets can
     # raise this with MIP_GENIE_CONCURRENCY_LIMIT after quota review.
     mip_genie_concurrency_limit: int = 6
+    # Genie routing posture (env MIP_GENIE_LIVE_FIRST). True is the PRODUCT
+    # posture: every guardrail-passing question goes to LIVE Genie first so the
+    # answer is genuinely generated, not scripted. The reviewed deterministic
+    # canonical answers are then consulted ONLY as an honest degraded-mode
+    # fallback -- when the Genie circuit breaker is open or a live turn raises a
+    # dependency-down error -- and those fallback answers disclose that live
+    # Genie was unavailable. False is the LEGACY / EMERGENCY booth posture:
+    # the canonical interceptors are consulted BEFORE live Genie so an offline
+    # or rate-limited booth still answers demo-typical questions deterministically
+    # with zero LLM latency. No other behavior differs between the two settings.
+    mip_genie_live_first: bool = True
     # Lakebase connection pooling. Connections use short-lived workspace
     # OAuth credentials in Databricks Apps, so reuse is bounded by a max
     # lifetime comfortably below the token expiry. The default max size

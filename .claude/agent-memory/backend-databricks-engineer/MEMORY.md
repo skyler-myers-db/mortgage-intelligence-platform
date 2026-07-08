@@ -8,3 +8,4 @@
 - [dependency_overrides.pop danger](feedback_dependency_override_pop.md) — test-local overrides must snapshot/restore, never pop; conftest.py registers session-wide bindings; reset breakers when intentionally tripping them
 - [R5 governance fixes](project_r5_governance_fixes.md) — R5-01 request_id idempotency, R5-09 trust boundary flag, R5-18 broadened audit-write except, R5-23 no-body-in-logs test
 - [No Pydantic validation on PII fields](feedback_no_pydantic_validation_on_pii_fields.md) — 422 echoes raw input; validate PII fields in the route via HTTPException, not Pydantic validators
+- [Genie live-first routing](project_genie_live_first.md) — live Genie primary; canonical interceptors are a disclosed degraded fallback gated by mip_genie_live_first

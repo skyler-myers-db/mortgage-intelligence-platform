@@ -76,8 +76,25 @@ _SCOPE_BYPASS_PROMPT_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"\b(?:show\s+tables|information_schema|system\.|cotality_mortgage_data\.|hive_metastore\.|mip\.raw\.|mip\.silver\.)\b",
         re.IGNORECASE,
     ),
+    # SQL DDL/DML injection. Narrowed 2026-07-08: the previous bare-verb form
+    # (\b(?:drop|create|alter|insert|update|delete|merge|truncate|grant|revoke|
+    # use|set|exec|execute)\b) false-positived on ordinary analytics English --
+    # "which offer should we USE", "CREATE a shortlist", "give me an UPDATE",
+    # "should we MERGE these segments", "SET aside low scores". The guardrail
+    # battery (tests/unit/test_genie_guardrail_battery.py) pins that those
+    # phrasings must NOT refuse. Each verb now requires its SQL object/syntax so
+    # a real "DROP TABLE ...", "DELETE FROM ...", "UPDATE x SET ..." still fires.
     re.compile(
-        r"\b(?:drop|create|alter|insert|update|delete|merge|truncate|grant|revoke|use|set|exec|execute)\b",
+        r"\b(?:drop|alter|truncate)\s+(?:table|view|schema|database|catalog|function|index|external\s+location|volume)\b"
+        r"|\bcreate\s+(?:or\s+replace\s+)?(?:table|view|schema|database|catalog|function|temp(?:orary)?|external|materialized|volume)\b"
+        r"|\binsert\s+into\b"
+        r"|\bdelete\s+from\b"
+        r"|\bupdate\s+[\w.\"'`]+\s+set\b"
+        r"|\bmerge\s+into\b"
+        r"|\b(?:grant|revoke)\s+(?:all|select|insert|update|delete|create|drop|alter|usage|modify|execute|ownership|read|write)\b"
+        r"|\b(?:exec|execute)\s+(?:immediate\b|sp_|xp_)"
+        r"|\buse\s+(?:catalog|schema|database)\b"
+        r"|\bset\s+(?:catalog|schema|search_path|session|role|tblproperties)\b",
         re.IGNORECASE,
     ),
     re.compile(r"\bunion\s+select\b|\bxp_cmdshell\b", re.IGNORECASE),

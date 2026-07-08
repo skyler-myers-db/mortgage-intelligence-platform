@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from backend.config.settings import settings
 from backend.services.genie_answers import GenieMessageResponse, load_sample_questions
 from backend.services.genie_client import GenieClientError, GenieResponse
 from backend.services.repositories.databricks_genie_canonical import (
@@ -1127,7 +1128,9 @@ def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() ->
         conversation_id="repair-conv",
         message_id="repair-msg",
     )
-    stub = _StubClient(_make_breaker("closed"), response=[text_only, still_text_only])
+    # Live-first posture: canonical trusted SQL is the DEGRADED fallback now, so
+    # this exercises the breaker-open path where live Genie is unavailable.
+    stub = _StubClient(_make_breaker("open"), response=[text_only, still_text_only])
     sql = _StubSqlClient(
         [
             {
@@ -1152,6 +1155,11 @@ def test_top_zip_question_uses_direct_canonical_gold_sql_without_genie_call() ->
 
     assert result.source == "trusted_sql"
     assert stub.ask_calls == []
+    assert result.proof is not None
+    assert any(
+        "Live Genie is temporarily unavailable" in gap
+        for gap in result.proof.known_data_gaps
+    )
     assert result.conversation_id == ""
     assert result.sql_query is not None
     assert "FROM mip.gold.borrower_360" in result.sql_query
@@ -1283,8 +1291,10 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
     sql_marker: str,
     expected_phrase: str,
 ) -> None:
+    # Live-first posture: canonical trusted SQL answers as the honest degraded
+    # fallback when live Genie is unavailable (breaker open), with a disclosure.
     stub = _StubClient(
-        _make_breaker("closed"),
+        _make_breaker("open"),
         response=DependencyDownError("genie", reason="test should not call Genie"),
     )
     sql = _StubSqlClient(rows)
@@ -1301,6 +1311,10 @@ def test_eval_canonical_questions_use_direct_trusted_sql_without_genie_call(
     assert result.table_rows == rows
     assert result.proof is not None
     assert result.proof.trusted is True
+    assert any(
+        "Live Genie is temporarily unavailable" in gap
+        for gap in result.proof.known_data_gaps
+    )
 
 
 @pytest.mark.parametrize(
@@ -1502,8 +1516,9 @@ def test_global_direct_sample_routes_do_not_answer_geography_scoped_questions(
 
 
 def test_city_count_question_uses_direct_trusted_sql_without_genie_call() -> None:
+    # Live-first posture: canonical city-count SQL is the degraded fallback.
     stub = _StubClient(
-        _make_breaker("closed"),
+        _make_breaker("open"),
         response=DependencyDownError("genie", reason="test should not call Genie"),
     )
     sql = _StubSqlClient(
@@ -1825,7 +1840,9 @@ def test_canonical_zip_question_prefers_direct_trusted_sql_over_untrusted_genie_
         conversation_id="conv-canonical-policy",
         message_id="msg-canonical-policy",
     )
-    stub = _StubClient(_make_breaker("closed"), response=live)
+    # Live-first posture: with the breaker open, live Genie's untrusted SQL is
+    # never consulted; the canonical trusted SQL answers as the degraded fallback.
+    stub = _StubClient(_make_breaker("open"), response=live)
     sql = _StubSqlClient([{"zip": "60617", "state": "IL", "in_the_money_borrowers": 1503}])
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
@@ -2576,7 +2593,8 @@ def test_state_breakdown_uses_direct_canonical_gold_sql_without_genie_call() -> 
         conversation_id="conv-replay",
         message_id="msg-replay",
     )
-    stub = _StubClient(_make_breaker("closed"), response=live)
+    # Live-first posture: canonical state-breakdown SQL is the degraded fallback.
+    stub = _StubClient(_make_breaker("open"), response=live)
     sql = _StubSqlClient([{"state": "IL", "in_the_money_borrowers": 70939}])
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
@@ -2617,7 +2635,7 @@ def test_in_the_money_typo_avg_spread_uses_direct_canonical_sql() -> None:
 
 
 def test_listed_purchase_question_uses_direct_canonical_sql() -> None:
-    stub = _StubClient(_make_breaker("closed"), response=AssertionError("Genie should not be called"))
+    stub = _StubClient(_make_breaker("open"), response=AssertionError("Genie should not be called"))
     sql = _StubSqlClient(
         [
             {
@@ -2652,7 +2670,7 @@ def test_listed_purchase_question_uses_direct_canonical_sql() -> None:
 
 
 def test_listed_days_on_market_by_state_uses_direct_canonical_sql() -> None:
-    stub = _StubClient(_make_breaker("closed"), response=AssertionError("Genie should not be called"))
+    stub = _StubClient(_make_breaker("open"), response=AssertionError("Genie should not be called"))
     sql = _StubSqlClient(
         [
             {
@@ -2748,8 +2766,10 @@ def test_broad_module0_free_text_uses_trusted_sql_when_genie_is_unavailable(
     sql_marker: str,
     answer_phrase: str,
 ) -> None:
+    # Live-first posture: these broad free-text questions resolve to canonical
+    # trusted SQL as the honest degraded fallback when live Genie is unavailable.
     stub = _StubClient(
-        _make_breaker("closed"),
+        _make_breaker("open"),
         response=DependencyDownError("genie", reason="raw Genie should not be called"),
     )
     sql = _StubSqlClient(rows)
@@ -2761,6 +2781,11 @@ def test_broad_module0_free_text_uses_trusted_sql_when_genie_is_unavailable(
     assert stub.ask_calls == []
     assert result.sql_query is not None
     assert sql_marker in result.sql_query
+    assert result.proof is not None
+    assert any(
+        "Live Genie is temporarily unavailable" in gap
+        for gap in result.proof.known_data_gaps
+    )
     assert answer_phrase in result.answer
     assert result.table_rows == rows
     assert result.proof is not None
@@ -2768,8 +2793,10 @@ def test_broad_module0_free_text_uses_trusted_sql_when_genie_is_unavailable(
 
 
 def test_genie_help_question_returns_guide_without_calling_raw_genie() -> None:
+    # Live-first posture: the guide/help response is served as a degraded
+    # fallback (no live-data claim, so no SQL disclosure) when Genie is down.
     stub = _StubClient(
-        _make_breaker("closed"),
+        _make_breaker("open"),
         response=DependencyDownError("genie", reason="raw Genie should not be called"),
     )
     repo = DatabricksGenieRepository(stub)  # type: ignore[arg-type]
@@ -2868,8 +2895,10 @@ def test_in_the_money_count_direct_canonical_bypasses_genie_breaker() -> None:
 
 
 def test_direct_trusted_sql_answer_keeps_idless_turn_boundaries() -> None:
+    # Live-first posture: canonical trusted SQL fallback keeps its id-less turn
+    # boundaries when serving in degraded mode (breaker open).
     stub = _StubClient(
-        _make_breaker("closed"),
+        _make_breaker("open"),
         response=DependencyDownError("genie", reason="direct path should not call Genie"),
     )
     sql = _StubSqlClient(
@@ -3156,6 +3185,8 @@ def test_in_the_money_count_applies_city_scope_when_present(
 
 
 def test_mean_lead_score_by_msa_uses_direct_sql_before_genie() -> None:
+    # Live-first posture: with the breaker open, live Genie's untrusted MSA
+    # lookup is never consulted; canonical CBSA SQL answers as the fallback.
     live = GenieResponse(
         answer_text="Genie tried to use an unsupported MSA lookup.",
         sql_query="SELECT count(*) FROM mip_app.saved_leads",
@@ -3200,7 +3231,7 @@ def test_mean_lead_score_by_msa_uses_direct_sql_before_genie() -> None:
             "refreshed_at": "2026-05-04T22:08:34.662Z",
         },
     ]
-    stub = _StubClient(_make_breaker("closed"), response=live)
+    stub = _StubClient(_make_breaker("open"), response=live)
     sql = _StubSqlClient(rows)
     repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
 
@@ -3215,6 +3246,10 @@ def test_mean_lead_score_by_msa_uses_direct_sql_before_genie() -> None:
     assert result.proof is not None
     assert result.proof.trusted is True
     assert stub.ask_calls == []
+    assert any(
+        "Live Genie is temporarily unavailable" in gap
+        for gap in result.proof.known_data_gaps
+    )
     assert sql.statements == [result.sql_query]
 
 
@@ -3414,3 +3449,122 @@ def test_end_to_end_with_real_resilient_wrapper() -> None:
     second = repo.respond("show me the in the money segment")
     assert second.source == "degraded"
     assert "circuit breaker is open" in second.answer.lower()
+
+
+# ---------------------------------------------------------------------------
+# Live-first routing posture (mip_genie_live_first). LIVE Genie is the primary
+# answer path; the reviewed deterministic canonical answers are an honest
+# degraded-mode fallback that discloses live Genie was unavailable.
+# ---------------------------------------------------------------------------
+
+_ITM_COUNT_QUESTION = "How many borrowers are currently in-the-money?"
+_DEGRADED_DISCLOSURE_MARKER = "Live Genie is temporarily unavailable"
+
+
+def test_live_first_calls_live_genie_even_for_canonical_scoped_question() -> None:
+    # A canonical-scoped question still hits LIVE Genie first under the product
+    # posture; the interceptor no longer front-runs the live turn.
+    live = GenieResponse(
+        answer_text="There are 512 borrowers currently in the money.",
+        sql_query=(
+            "SELECT COUNT(*) AS in_the_money_borrowers FROM mip.gold.borrower_360 "
+            "WHERE in_the_money = TRUE"
+        ),
+        sql_result_rows=[{"in_the_money_borrowers": 512}],
+        conversation_id="conv-live-canonical",
+        message_id="msg-live-canonical",
+    )
+    stub = _StubClient(_make_breaker("closed"), response=live)
+    sql = _StubSqlClient(
+        [{"in_the_money_borrowers": 999, "refreshed_at": "2026-06-15T00:00:00Z"}]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(_ITM_COUNT_QUESTION)
+
+    # Live Genie WAS consulted first even though the question is canonical-scoped.
+    assert stub.ask_calls == [_ITM_COUNT_QUESTION]
+    assert result.proof is not None
+    # A healthy live answer never carries the degraded fallback disclosure.
+    assert all(
+        _DEGRADED_DISCLOSURE_MARKER not in gap for gap in result.proof.known_data_gaps
+    )
+    assert _DEGRADED_DISCLOSURE_MARKER not in result.answer
+
+
+def test_breaker_open_serves_canonical_fallback_with_disclosure() -> None:
+    stub = _StubClient(
+        _make_breaker("open"),
+        response=GenieClientError("breaker open; live Genie must not be called"),
+    )
+    sql = _StubSqlClient(
+        [{"in_the_money_borrowers": 77, "refreshed_at": "2026-06-15T00:00:00Z"}]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(_ITM_COUNT_QUESTION)
+
+    # Fallback surfaces as trusted_sql (reviewed, executed SQL) WITH the
+    # disclosure gap -- never silently presented as a live Genie answer.
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.metric_value == "77"
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert any(
+        _DEGRADED_DISCLOSURE_MARKER in gap for gap in result.proof.known_data_gaps
+    )
+    assert "reviewed deterministic fallback" in result.answer
+
+
+def test_live_exception_serves_canonical_fallback_with_disclosure() -> None:
+    # The live turn is attempted (breaker closed) and raises a dependency-down
+    # error; the canonical fallback then answers, disclosing the substitution.
+    stub = _StubClient(
+        _make_breaker("closed"),
+        response=DependencyDownError("genie", reason="live turn failed mid-flight"),
+    )
+    sql = _StubSqlClient(
+        [{"in_the_money_borrowers": 321, "refreshed_at": "2026-06-15T00:00:00Z"}]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(_ITM_COUNT_QUESTION)
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == [_ITM_COUNT_QUESTION]  # live WAS attempted first
+    assert result.metric_value == "321"
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert any(
+        _DEGRADED_DISCLOSURE_MARKER in gap for gap in result.proof.known_data_gaps
+    )
+
+
+def test_live_first_false_restores_interceptor_first_ordering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Legacy/emergency booth posture: canonical interceptor answers BEFORE the
+    # live Genie turn, so live Genie is never called and there is no disclosure
+    # (this is not a degraded fallback -- it is the configured primary path).
+    monkeypatch.setattr(settings, "mip_genie_live_first", False)
+    stub = _StubClient(
+        _make_breaker("closed"),
+        response=GenieClientError("legacy mode must not call live Genie"),
+    )
+    sql = _StubSqlClient(
+        [{"in_the_money_borrowers": 55, "refreshed_at": "2026-06-15T00:00:00Z"}]
+    )
+    repo = DatabricksGenieRepository(stub, sql)  # type: ignore[arg-type]
+
+    result = repo.respond(_ITM_COUNT_QUESTION)
+
+    assert result.source == "trusted_sql"
+    assert stub.ask_calls == []
+    assert result.metric_value == "55"
+    assert result.proof is not None
+    assert result.proof.trusted is True
+    assert all(
+        _DEGRADED_DISCLOSURE_MARKER not in gap for gap in result.proof.known_data_gaps
+    )
+    assert _DEGRADED_DISCLOSURE_MARKER not in result.answer
