@@ -61,9 +61,9 @@ def test_lifecycle_sync_rejects_unsafe_catalog_identifier() -> None:
 
 
 def test_warehouse_lifecycle_sync_keeps_same_filter_contract() -> None:
-    from backend.services.lifecycle_sync import _build_lifecycle_ctas
+    from backend.services.lifecycle_sync import _build_lifecycle_insert_overwrite
 
-    sql = _build_lifecycle_ctas(
+    sql = _build_lifecycle_insert_overwrite(
         [
             {
                 "borrower_id": "B-123",

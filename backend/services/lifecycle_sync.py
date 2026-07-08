@@ -44,7 +44,7 @@ def sync_lifecycle_state_via_warehouse(
     rows = _fetch_lakebase_rows(_resolve_connection())
     lifecycle_table = _qualified_uc_table(resolved_catalog, "gold", "borrower_lifecycle_state")
 
-    client.execute(_build_lifecycle_ctas(rows, catalog=resolved_catalog))
+    client.execute(_build_lifecycle_insert_overwrite(rows, catalog=resolved_catalog))
     _apply_column_comments(client, lifecycle_table)
 
     mirrored = client.execute_one(f"SELECT COUNT(*) AS n FROM {lifecycle_table}")
@@ -69,19 +69,17 @@ def sync_lifecycle_state_via_warehouse(
     )
 
 
-def _build_lifecycle_ctas(rows: list[dict[str, Any]], *, catalog: str) -> str:
+def _build_lifecycle_insert_overwrite(rows: list[dict[str, Any]], *, catalog: str) -> str:
     borrower_table = _qualified_uc_table(catalog, "gold", "borrower_360")
     lifecycle_table = _qualified_uc_table(catalog, "gold", "borrower_lifecycle_state")
     lakebase_rows = _lakebase_rows_cte(rows)
+    # INSERT OVERWRITE, not CTAS (external audit 2026-07-08): the app service
+    # principal fires this mirror after approvals under a scoped MODIFY grant
+    # on this one pre-created table (sql/ddl/003_gold_tables.sql). CTAS needs
+    # CREATE/ownership the app deliberately does not hold and 403'd live
+    # (PERMISSION_DENIED on MODIFY was the visible symptom). Atomic on Delta.
     return f"""
-    CREATE OR REPLACE TABLE {lifecycle_table}
-    CLUSTER BY (borrower_id)
-    TBLPROPERTIES (
-      'delta.enableChangeDataFeed' = 'false',
-      'delta.autoOptimize.optimizeWrite' = 'true',
-      'delta.autoOptimize.autoCompact'   = 'true'
-    )
-    AS
+    INSERT OVERWRITE TABLE {lifecycle_table}
     WITH lakebase_rows AS (
       {lakebase_rows}
     ),

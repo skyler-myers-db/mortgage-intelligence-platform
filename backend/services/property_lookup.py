@@ -7,9 +7,12 @@ hash up in ``mip.gold.address_lookup`` (built at ETL refresh time).
 
 Governance invariants (all enforced here + in tests):
   * The raw street address is NEVER stored, logged, echoed, or written to the
-    audit ledger. Only the hash (and, in audit, its first 16 hex) travel.
+    audit ledger. The gold join key is the plain sha2; the ledger stores a
+    tenant-secret HMAC token (payload [:16], miss entity [:32]) — never the
+    plain hash at any truncation.
   * A REQUIRED audit row is written on BOTH hit and miss (governance §4:
-    "who looked up which property"). The payload carries address_hash[:16],
+    "who looked up which property"). The payload carries the HMAC audit
+    token's first 16 hex (mask_address_for_audit),
     the 5-digit ZIP, a ``hit`` boolean, and -- on a hit only -- the masked CLIP
     ref. Never the raw address, never the full hash.
   * ``clip`` / ``owner_link_id`` are masked at egress via
@@ -131,9 +134,9 @@ def lookup_property_loan(
             segment = [str(code) for code in raw_segments]
             dossier_path = f"/borrower-360/{borrower_id}"
 
-    # REQUIRED audit write (hit AND miss). Payload carries the hash PREFIX only,
-    # the ZIP, a hit boolean, and (on hit) the masked CLIP ref. Never the raw
-    # address, never the full hash. The write returns the AuditEvent so the
+    # REQUIRED audit write (hit AND miss). Payload carries the HMAC audit
+    # token's first 16 hex, the ZIP, a hit boolean, and (on hit) the masked
+    # CLIP ref. Never the raw address, never the plain sha2 at any length. The write returns the AuditEvent so the
     # response can echo its id; audit failures propagate to the caller (router
     # translates to 503) rather than dropping the governance record.
     payload: dict[str, Any] = {

@@ -572,7 +572,13 @@ def _narrative_contradicts_metric(
     if metric_parsed is None or not narrative:
         return False, None
     metric_f = metric_parsed
-    raw = [t.replace(",", "") for t in re.findall(r"\d[\d,]*\.?\d*", narrative)]
+    # Identifier guard (external audit 2026-07-08): digits embedded in asset
+    # or column names (mip.gold.borrower_360) are not numeric claims — a
+    # number only counts when not attached to word characters or dots.
+    raw = [
+        t.replace(",", "")
+        for t in re.findall(r"(?<![\w.])\d[\d,]*\.?\d*(?![\w])", narrative)
+    ]
     try:
         nums = [float(t) for t in raw if t]
     except ValueError:  # pragma: no cover - regex only yields numeric tokens
@@ -580,7 +586,10 @@ def _narrative_contradicts_metric(
     if metric_f >= 1000:
         claims = [n for n in nums if n == 0 or n >= 1000]
     else:
-        claims = [n for n in nums if metric_f / 10 <= n <= metric_f * 10]
+        # An asserted zero contradicts ANY positive verified metric (external
+        # audit 2026-07-08: "0 matching borrowers" vs verified 304 slipped
+        # through the magnitude band).
+        claims = [n for n in nums if n == 0 or metric_f / 10 <= n <= metric_f * 10]
     if not claims:
         return False, None
     tolerance = max(1.0, 0.01 * abs(metric_f))

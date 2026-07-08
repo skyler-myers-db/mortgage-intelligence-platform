@@ -488,7 +488,10 @@ def genie_message(
         )
         response = GenieMessageResponse(
             conversation_id=payload.conversation_id or "",
-            question=payload.question,
+            # Refusals never round-trip the prompt (external audit 2026-07-08:
+            # this inline block predated _refused_genie_response and kept the
+            # echo the helper-built refusals had already dropped).
+            question="",
             answer=(
                 "Use governed outreach workflow for borrower communications. "
                 "Genie can size the cohort, explain why borrowers qualify, and "

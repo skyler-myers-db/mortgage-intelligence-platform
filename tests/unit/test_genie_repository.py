@@ -3712,3 +3712,35 @@ def test_recognized_shape_empty_narrative_falls_back_with_honest_gap() -> None:
     assert any(
         "Genie returned no narrative" in gap for gap in result.proof.known_data_gaps
     )
+
+
+def test_contradiction_detector_zero_claim_and_identifier_guard() -> None:
+    """External audit (2026-07-08): (a) an asserted zero must contradict ANY
+    positive verified metric, not only metrics >= 1000 ('0 matching borrowers'
+    vs verified 304 slipped the magnitude band); (b) digits inside asset names
+    (mip.gold.borrower_360) are identifiers, not numeric claims."""
+    from backend.services.repositories.databricks_genie import (
+        _narrative_contradicts_metric,
+    )
+
+    contradicted, claimed = _narrative_contradicts_metric(
+        "There are 0 matching borrowers.", "304"
+    )
+    assert contradicted is True
+    assert claimed == "0"
+
+    contradicted, _ = _narrative_contradicts_metric(
+        "I checked mip.gold.borrower_360 for the cohort.", "304"
+    )
+    assert contradicted is False
+
+    contradicted, _ = _narrative_contradicts_metric(
+        "There are 304 matching borrowers in mip.gold.borrower_360.", "304"
+    )
+    assert contradicted is False
+
+    # Percent-scale prose still never false-triggers against counts.
+    contradicted, _ = _narrative_contradicts_metric(
+        "Borrowers with equity >= 35% qualify; 0.5% margin applies.", "122598"
+    )
+    assert contradicted is False

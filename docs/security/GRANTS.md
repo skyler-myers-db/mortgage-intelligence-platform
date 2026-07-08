@@ -83,6 +83,16 @@ GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `mip-app`;
 functions `fn_build_cohort`, `fn_segment_counts`, and
 `fn_lead_queue_url`.
 
+**Lifecycle mirror write (single-table MODIFY exception).** The app service
+principal holds `MODIFY` on exactly one gold table:
+`mip.gold.borrower_lifecycle_state`. The post-approval lifecycle mirror is
+event-triggered from the app (see `backend/services/job_trigger.py` for why
+event-triggered beats scheduled here) and writes via atomic
+`INSERT OVERWRITE` into the DDL-created table — never CTAS, so no CREATE or
+ownership rights are needed (external audit 2026-07-08: the earlier CTAS
+path 403'd with PERMISSION_DENIED under the SELECT-only schema grant). Every
+other gold object remains read-only to the app.
+
 **Governed property loan lookup.** `mip.gold.address_lookup` (added by the
 property-loan-lookup slice) is covered by the schema-level
 `GRANT SELECT ON SCHEMA mip.gold` above — no per-table grant is required.
