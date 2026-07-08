@@ -135,6 +135,60 @@ export interface GrowthAgentRunResponse {
   created_at?: string | null;
 }
 
+export interface ComposePlanRequest {
+  objective: string;
+  execute?: boolean;
+  states?: string[];
+  request_id?: string | null;
+}
+
+export interface PlanStep {
+  step_id: string;
+  tool: string;
+  params: Record<string, unknown>;
+  rationale: string;
+}
+
+export interface ComposedPlan {
+  objective_summary: string;
+  steps: PlanStep[];
+  expected_outcome: string;
+  risk_notes: string;
+  requires_approval: boolean;
+}
+
+export interface PlanStepTrace {
+  step_id: string;
+  tool: string;
+  label: string;
+  status: 'pending' | 'completed' | 'review_required' | 'blocked';
+  detail: string;
+  duration_ms: number;
+  row_summary: number | null;
+  result_hash: string | null;
+  source_asset: string | null;
+  approval_gate: boolean;
+  audit_event_id: string | null;
+}
+
+export interface ComposePlanResponse {
+  status: 'composed' | 'degraded' | 'invalid';
+  planner: 'supervisor_composed';
+  model_endpoint: string | null;
+  plan: ComposedPlan | null;
+  trace: PlanStepTrace[];
+  approval_required: boolean;
+  approval_gate_step_id: string | null;
+  executed: boolean;
+  plan_id: string | null;
+  interpreted_intent: string | null;
+  reasoning_summary: string | null;
+  degraded_reason: string | null;
+  message: string | null;
+  fallback_workflows: GrowthAgentWorkflow[];
+  audit_event_ids: string[];
+}
+
 export interface GrowthAgentNotificationDraft {
   draft_id: string;
   monitor_id: string;

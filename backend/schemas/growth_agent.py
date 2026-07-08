@@ -241,6 +241,36 @@ def default_growth_agent_cadences() -> list[GrowthAgentCadence]:
     return ["daily", "weekly"]
 
 
+def assert_reviewed_growth_objective(value: str) -> str:
+    """Normalize + reject a natural-language mortgage-growth objective.
+
+    Shared by the selection path (``GrowthAgentPromptRunRequest.prompt``) and the
+    composition path (``ComposePlanRequest.objective``) so both surfaces enforce
+    the identical PII, protected-class, raw-identifier, and prompt-injection
+    guards before any model planner sees the text. Returns the whitespace-
+    normalized objective; raises ``ValueError`` when the text is not reviewed.
+    """
+
+    clean = re.sub(r"\s+", " ", value.strip())
+    if (
+        contains_pii_marker(clean)
+        or _RAW_IDENTIFIER_RE.search(clean)
+        or _PROMPT_STREET_ADDRESS_RE.search(clean)
+        or _contains_street_address_without_suffix(clean)
+        or _PROMPT_HUMAN_NAME_RE.search(clean)
+        or _PROMPT_COMMON_NAME_RE.search(clean)
+        or _PROMPT_LEADING_HUMAN_NAME_RE.search(clean)
+        or _contains_lowercase_name_after_group(clean)
+        or _PROMPT_PROTECTED_CLASS_RE.search(clean)
+        or _PROMPT_PROTECTED_AGE_PROXY_RE.search(clean)
+        or _PROMPT_JAILBREAK_RE.search(clean)
+        or _PROMPT_UNAVAILABLE_SOURCE_RE.search(clean)
+        or _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(clean)
+    ):
+        raise ValueError("prompt must use reviewed, non-PII mortgage-growth criteria")
+    return clean
+
+
 class GrowthAgentWorkflow(BaseModel):
     id: GrowthAgentWorkflowId
     title: str
@@ -408,24 +438,7 @@ class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
     @field_validator("prompt")
     @classmethod
     def _prompt(cls, value: str) -> str:
-        clean = re.sub(r"\s+", " ", value.strip())
-        if (
-            contains_pii_marker(clean)
-            or _RAW_IDENTIFIER_RE.search(clean)
-            or _PROMPT_STREET_ADDRESS_RE.search(clean)
-            or _contains_street_address_without_suffix(clean)
-            or _PROMPT_HUMAN_NAME_RE.search(clean)
-            or _PROMPT_COMMON_NAME_RE.search(clean)
-            or _PROMPT_LEADING_HUMAN_NAME_RE.search(clean)
-            or _contains_lowercase_name_after_group(clean)
-            or _PROMPT_PROTECTED_CLASS_RE.search(clean)
-            or _PROMPT_PROTECTED_AGE_PROXY_RE.search(clean)
-            or _PROMPT_JAILBREAK_RE.search(clean)
-            or _PROMPT_UNAVAILABLE_SOURCE_RE.search(clean)
-            or _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(clean)
-        ):
-            raise ValueError("prompt must use reviewed, non-PII mortgage-growth criteria")
-        return clean
+        return assert_reviewed_growth_objective(value)
 
     @field_validator("segment_codes")
     @classmethod

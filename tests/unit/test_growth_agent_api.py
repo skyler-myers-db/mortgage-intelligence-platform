@@ -16,8 +16,10 @@ import backend.services.capabilities as capabilities_module
 import backend.services.rbac as rbac_module
 from backend.config.settings import Settings
 from backend.main import app
+from backend.schemas.agent_plan import ComposedPlan, PlanStep
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_client import get_genie_client
+from backend.services.growth_agent_composer import ComposeOutcome
 from backend.services.growth_agent_workflows import custom_workflow
 from backend.services.lakebase import get_lakebase_client
 
@@ -2283,3 +2285,187 @@ def test_growth_agent_openapi_documents_unsupported_content_type() -> None:
         "/api/growth-agent/monitors/run-due-all",
     ):
         assert paths[path]["post"]["responses"]["415"]["description"] == "Unsupported content type"
+
+
+# --------------------------------------------------------------------------
+# Plan composition endpoint (/agent/compose)
+# --------------------------------------------------------------------------
+
+
+def _composed_outcome(*, steps: list[PlanStep], requires_approval: bool) -> ComposeOutcome:
+    plan = ComposedPlan(
+        objective_summary="Composed test plan.",
+        steps=steps,
+        expected_outcome="",
+        risk_notes="",
+        requires_approval=requires_approval,
+    )
+    return ComposeOutcome(
+        status="composed",
+        endpoint="mas-supervisor-endpoint",
+        plan=plan,
+        interpreted_intent="Supervisor composed a plan.",
+        reasoning_summary="Deterministic tools own execution.",
+    )
+
+
+def _compose(
+    monkeypatch: pytest.MonkeyPatch,
+    outcome: ComposeOutcome,
+    *,
+    body: dict[str, Any],
+    lakebase: Any | None = None,
+) -> Any:
+    monkeypatch.setattr(growth_agent_api, "compose_growth_agent_plan", lambda payload: outcome)
+    sql = _FakeSqlClient()
+    lakebase = lakebase or _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        return client.post(
+            "/api/growth-agent/agent/compose",
+            json=body,
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+
+def test_compose_returns_plan_without_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    outcome = _composed_outcome(
+        steps=[PlanStep(step_id="step-1", tool="fn_build_cohort", params={}, rationale="broad")],
+        requires_approval=False,
+    )
+    response = _compose(
+        monkeypatch,
+        outcome,
+        body={"objective": "Compose a refi growth plan for review.", "execute": False},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "composed"
+    assert payload["planner"] == "supervisor_composed"
+    assert payload["model_endpoint"] == "mas-supervisor-endpoint"
+    assert payload["executed"] is False
+    assert payload["trace"] == []
+    assert payload["approval_required"] is False
+    assert payload["plan"]["steps"][0]["tool"] == "fn_build_cohort"
+
+
+def test_compose_executes_read_plan_and_records_trace(monkeypatch: pytest.MonkeyPatch) -> None:
+    outcome = _composed_outcome(
+        steps=[
+            PlanStep(step_id="step-1", tool="fn_build_cohort", params={}, rationale="broad"),
+            PlanStep(step_id="step-2", tool="fn_segment_counts", params={}, rationale="gate"),
+        ],
+        requires_approval=False,
+    )
+    lakebase = _FakeLakebaseClient()
+    response = _compose(
+        monkeypatch,
+        outcome,
+        body={"objective": "Compose a refi growth plan for review.", "execute": True},
+        lakebase=lakebase,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "composed"
+    assert payload["executed"] is True
+    assert payload["plan_id"]
+    assert [step["status"] for step in payload["trace"]] == ["completed", "completed"]
+    # Two per-step audit rows + one compose summary row landed in Lakebase.
+    assert len(payload["audit_event_ids"]) == 3
+    audit_actions = {json.loads(row.get("metadata", "{}")).get("action") for row in lakebase.audit_events}
+    assert "growth_agent.plan_step" in audit_actions
+    assert "growth_agent.compose" in audit_actions
+
+
+def test_compose_execution_stops_at_approval_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    outcome = _composed_outcome(
+        steps=[
+            PlanStep(step_id="step-1", tool="fn_build_cohort", params={}, rationale="broad"),
+            PlanStep(step_id="step-2", tool="fn_lead_queue_url", params={"segment_codes": ["itm"]}),
+        ],
+        requires_approval=True,
+    )
+    response = _compose(
+        monkeypatch,
+        outcome,
+        body={"objective": "Compose a lead queue handoff plan.", "execute": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["approval_required"] is True
+    assert payload["approval_gate_step_id"] == "step-2"
+    assert payload["trace"][-1]["status"] == "review_required"
+    assert payload["trace"][-1]["approval_gate"] is True
+
+
+def test_compose_degrades_and_offers_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
+    outcome = ComposeOutcome(
+        status="degraded",
+        endpoint="mas-supervisor-endpoint",
+        degraded_reason="orchestrator_not_ready",
+        message="Plan composition is temporarily unavailable.",
+    )
+    response = _compose(
+        monkeypatch,
+        outcome,
+        body={"objective": "Compose a refi growth plan for review.", "execute": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "degraded"
+    assert payload["degraded_reason"] == "orchestrator_not_ready"
+    assert payload["plan"] is None
+    assert len(payload["fallback_workflows"]) >= 1
+
+
+def test_compose_invalid_plan_has_no_canned_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    outcome = ComposeOutcome(
+        status="invalid",
+        endpoint="mas-supervisor-endpoint",
+        message="The composed plan named an unregistered tool: fn_made_up.",
+    )
+    response = _compose(
+        monkeypatch,
+        outcome,
+        body={"objective": "Compose a refi growth plan for review.", "execute": True},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "invalid"
+    assert payload["plan"] is None
+    assert payload["fallback_workflows"] == []
+    assert "unregistered tool" in payload["message"]
+
+
+def test_compose_rejects_non_json_content_type() -> None:
+    sql = _FakeSqlClient()
+    client = _client(sql, _FakeLakebaseClient())
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/compose",
+            content="objective=x",
+            headers={
+                "X-Forwarded-Email": "operator@example.com",
+                "Content-Type": "application/x-www-form-urlencoded",
+            },
+        )
+    finally:
+        _clear_overrides()
+    assert response.status_code == 415
+
+
+def test_compose_rejects_pii_objective_without_echo() -> None:
+    sql = _FakeSqlClient()
+    client = _client(sql, _FakeLakebaseClient())
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/compose",
+            json={"objective": "Run this for John Smith refi opportunities."},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+    assert response.status_code == 422
+    assert "John Smith" not in response.text

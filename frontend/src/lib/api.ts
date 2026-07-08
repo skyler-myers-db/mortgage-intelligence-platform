@@ -44,6 +44,8 @@ import type {
   GrowthAgentMonitor,
   GrowthAgentMonitorDraftRequest,
   GrowthAgentNotificationDraft,
+  ComposePlanRequest,
+  ComposePlanResponse,
   GrowthAgentCustomRunRequest,
   GrowthAgentPromptRunRequest,
   GrowthAgentRunRequest,
@@ -1433,6 +1435,21 @@ export const api = {
     };
     return postJson<GrowthAgentRunResponse, GrowthAgentPromptRunRequest>(
       '/api/growth-agent/agent/run',
+      body,
+      signal,
+    );
+  },
+
+  composeMortgageGrowthAgentPlan: (
+    payload: ComposePlanRequest,
+    signal?: AbortSignal,
+  ) => {
+    const body: ComposePlanRequest = {
+      ...payload,
+      request_id: payload.request_id ?? _newRequestId(),
+    };
+    return postJson<ComposePlanResponse, ComposePlanRequest>(
+      '/api/growth-agent/agent/compose',
       body,
       signal,
     );

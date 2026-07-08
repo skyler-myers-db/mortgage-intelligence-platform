@@ -167,6 +167,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "run_growth_agent_workflow": ("_run_workflow(",),
     "run_custom_growth_agent_workflow": ("_run_workflow(",),
     "run_mortgage_growth_agent": ("plan_growth_agent_prompt(", "_run_workflow("),
+    "compose_mortgage_growth_agent_plan": ("compose_growth_agent_plan(", "execute_plan("),
     "rerun_growth_agent_monitor": ("_run_monitor_row(",),
     "run_due_growth_agent_monitors": ("_run_due_monitor_rows(",),
     "run_due_growth_agent_monitors_all_actors": ("_run_due_monitor_rows(",),

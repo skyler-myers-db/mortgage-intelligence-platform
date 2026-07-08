@@ -405,3 +405,12 @@ def _workspace_client() -> object:
     from databricks.sdk import WorkspaceClient
 
     return WorkspaceClient()
+
+
+# Public re-exports so the plan composer reuses the exact same Supervisor
+# query, readiness probe, and defensive JSON extraction as the selection path.
+workspace_client = _workspace_client
+agent_task_if_ready = _agent_task_if_ready
+extract_response_text = _extract_response_text
+parse_json_object = _parse_json_object
+prompt_hash = _prompt_hash

@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { ApiError, api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {
+  ComposePlanResponse,
   GenieActionSuggestion,
   GenieAnswer as GenieAnswerShape,
   GrowthAgentCadence,
@@ -33,6 +34,7 @@ import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
 import { GrowthAgentCapabilityPanel } from './ask-genie.growth-agent-capabilities';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
+import { ComposePlanCard } from './ask-genie.compose-plan-card';
 import { GrowthAgentRunCard, formatGrowthAgentCount } from './ask-genie.growth-run-card';
 import { SavedGrowthAgentMonitors } from './ask-genie.saved-monitors';
 import {
@@ -88,10 +90,13 @@ export default function AskGenie() {
   const [latestGrowthDrafts, setLatestGrowthDrafts] = useState<GrowthAgentNotificationDraft[]>([]);
   const [customSegments, setCustomSegments] = useState<GrowthAgentSegmentCode[]>(['itm', 'listed']);
   const [customMode, setCustomMode] = useState<GrowthAgentSegmentMode>('any');
+  const [composePlan, setComposePlan] = useState<ComposePlanResponse | null>(null);
+  const [composePending, setComposePending] = useState<'compose' | 'execute' | null>(null);
 
   function clearGrowthAgentFeedback() {
     setLatestGrowthRun(null);
     setLatestGrowthDrafts([]);
+    setComposePlan(null);
     setGrowthAgentError(null);
   }
 
@@ -284,6 +289,36 @@ export default function AskGenie() {
     }
   }
 
+  async function composeGrowthAgentPlan(execute: boolean) {
+    const parsed = parseGrowthAgentStateInput(agentStateText);
+    const objective = agentPrompt.trim();
+    if (parsed.invalid.length > 0) {
+      setComposePlan(null);
+      setGrowthAgentError(`Use two-letter state codes only: ${parsed.invalid.join(', ')}`);
+      return;
+    }
+    if (objective.length < 3) {
+      setComposePlan(null);
+      setGrowthAgentError('Enter a borrower-growth objective for the agent.');
+      return;
+    }
+    setComposePending(execute ? 'execute' : 'compose');
+    setComposePlan(null);
+    setGrowthAgentError(null);
+    try {
+      const result = await api.composeMortgageGrowthAgentPlan({
+        objective,
+        execute,
+        states: parsed.states,
+      });
+      setComposePlan(result);
+    } catch (err) {
+      setGrowthAgentError(err instanceof Error ? err.message : 'Compose plan failed.');
+    } finally {
+      setComposePending(null);
+    }
+  }
+
   async function runCustomGrowthAgentWorkflow(saveMonitor: boolean) {
     const parsed = parseGrowthAgentStateInput(agentStateText);
     if (parsed.invalid.length > 0) {
@@ -433,7 +468,7 @@ export default function AskGenie() {
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
   const workflows = growthAgentQuery.data?.workflows ?? growthAgentCapabilitiesQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? growthAgentCapabilitiesQuery.data?.monitors ?? [];
-  const agentBusy = growthAgentPending !== null || promptAgentPending || monitorPending !== null || monitorDraftPending !== null;
+  const agentBusy = growthAgentPending !== null || promptAgentPending || composePending !== null || monitorPending !== null || monitorDraftPending !== null;
   const capabilityRows = (
     visibleGrowthAgentCapabilities(
       growthAgentCapabilitiesQuery.data?.capabilities ?? growthAgentQuery.data?.capabilities,
@@ -501,6 +536,24 @@ export default function AskGenie() {
                 disabled={agentBusy || stateParsePreview.invalid.length > 0}
               >
                 {promptAgentPending && promptAgentPendingAction === 'save' ? 'Saving…' : 'Save reviewed watchlist'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="sparkle"
+                onClick={() => composeGrowthAgentPlan(false)}
+                disabled={agentBusy || stateParsePreview.invalid.length > 0}
+              >
+                {composePending === 'compose' ? 'Composing…' : 'Compose plan'}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="bolt"
+                onClick={() => composeGrowthAgentPlan(true)}
+                disabled={agentBusy || stateParsePreview.invalid.length > 0}
+              >
+                {composePending === 'execute' ? 'Executing…' : 'Execute plan'}
               </Button>
             </div>
           </section>
@@ -685,6 +738,14 @@ export default function AskGenie() {
           {latestGrowthRun && (
             <GrowthAgentRunCard
               run={latestGrowthRun}
+              onOpenRoute={(route) => navigate(route)}
+              renderSourceAssetChip={renderSourceAssetChip}
+            />
+          )}
+
+          {composePlan && (
+            <ComposePlanCard
+              response={composePlan}
               onOpenRoute={(route) => navigate(route)}
               renderSourceAssetChip={renderSourceAssetChip}
             />
