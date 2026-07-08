@@ -18,12 +18,9 @@ import type {
 } from '../types';
 import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
-import { Button, Chip, EvidenceChip } from '../components/Primitives';
+import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
-import { GenieAnswer } from '../components/mortgage/GenieAnswer';
-import { GenieProgress } from '../components/mortgage/GenieProgress';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
-import { descriptorFor, drawerForAsset } from '../lib/drawerSources';
+import { descriptorFor } from '../lib/drawerSources';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
   clearGenieConversationState,
@@ -34,6 +31,7 @@ import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
 import { GrowthAgentCapabilityPanel } from './ask-genie.growth-agent-capabilities';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
+import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 import { ComposePlanCard } from './ask-genie.compose-plan-card';
 import { GrowthAgentRunCard, formatGrowthAgentCount } from './ask-genie.growth-run-card';
 import { SavedGrowthAgentMonitors } from './ask-genie.saved-monitors';
@@ -437,34 +435,6 @@ export default function AskGenie() {
     }
   }
 
-  const sourceLabel = payload?.source ?? '';
-  // The backend emits "genie" for live answers, or governed refusal/degraded
-  // source values when it intentionally stops before showing data.
-  const isDegraded = sourceLabel === 'degraded';
-  const isBlocked =
-    sourceLabel === 'policy_blocked' ||
-    sourceLabel === 'refused' ||
-    sourceLabel === 'data_gap' ||
-    sourceLabel === 'out_of_footprint';
-  const sourceChip = isDegraded
-    ? 'Genie reconnecting'
-    : isBlocked
-      ? sourceLabel === 'refused'
-        ? 'Prompt refused'
-        : sourceLabel === 'data_gap'
-          ? 'Source pending'
-          : sourceLabel === 'out_of_footprint'
-            ? 'Outside footprint'
-          : 'Policy blocked'
-      : payload?.trusted_assets?.[0] || sourceLabel || '';
-  const sourceChipTitle = isDegraded
-    ? 'The Genie answer path is temporarily unavailable. Live answers will resume after health recovers.'
-    : isBlocked
-      ? 'The answer was not displayed because it did not meet the governed Genie policy.'
-    : undefined;
-  const sourceChipVariant: 'warning' | undefined = isDegraded || isBlocked ? 'warning' : undefined;
-  const drawerForSource = sourceChip ? drawerForAsset(sourceChip) : null;
-  const composerSampleQuestions = sampleQuestions.slice(0, 4);
   const stateParsePreview = parseGrowthAgentStateInput(agentStateText);
   const workflows = growthAgentQuery.data?.workflows ?? growthAgentCapabilitiesQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? growthAgentCapabilitiesQuery.data?.monitors ?? [];
@@ -766,168 +736,26 @@ export default function AskGenie() {
       </div>
 
       <div className="layoutA-grid">
-        <div className="surface">
-          <div className="surface__hdr">
-            <Icon name="sparkle" size={14} className="icon-accent" />
-            <div className="h-4">Ask a question</div>
-          </div>
-          <div className="surface__body">
-            <textarea
-              ref={questionRef}
-              aria-label="Ask Genie — question"
-              value={question}
-              onChange={(e) => {
-                setQuestion(e.target.value);
-                setActiveAssetPath(null);
-              }}
-              onKeyDown={(e) => {
-                // 2026-05-04 (FIX Δ1): standard chat keymap — Enter
-                // submits, Shift+Enter inserts a newline. Match how
-                // Slack / GitHub PRs behave so the keyboard-first user
-                // doesn't have to mouse over to the Ask Genie button.
-                // The submit-disabled guard mirrors the button's
-                // `disabled` prop so a stray Enter during a warming-up
-                // request can't double-fire.
-                if (
-                  e.key === 'Enter' &&
-                  !e.shiftKey &&
-                  !e.metaKey &&
-                  !e.ctrlKey &&
-                  !e.altKey
-                ) {
-                  e.preventDefault();
-                  if (!loading && warmingUp === null && question.trim().length > 0) {
-                    ask(question);
-                  }
-                }
-              }}
-              className="route-textarea route-textarea--genie"
-            />
-            {composerSampleQuestions.length > 0 && (
-              <div className="genie-composer__samples" aria-label="Suggested Genie questions">
-                {composerSampleQuestions.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    className="filter filter--question"
-                    onClick={() => ask(q)}
-                  >
-                    <Icon name="sparkle" size={11} />
-                    <span className="filter__text">{q}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            <div className="section-actions">
-              <Button
-                variant="primary"
-                icon="send"
-                onClick={() => ask(question)}
-                disabled={loading || warmingUp !== null || question.trim().length === 0}
-              >
-                {loading || warmingUp !== null ? 'Asking…' : 'Ask Genie'}
-              </Button>
-              <Button
-                variant="ghost"
-                icon="chat"
-                onClick={newConversation}
-                disabled={loading || warmingUp !== null}
-              >
-                New thread
-              </Button>
-            </div>
-            {warmingUp && (
-              <div className="mt-4">
-                <WarmingUpBlock state={warmingUp} title="Asking Genie" compact />
-              </div>
-            )}
-            {loading && !warmingUp && (
-              <div className="surface surface--inset mt-4">
-                <div className="surface__body">
-                  <GenieProgress />
-                </div>
-              </div>
-            )}
-            {errorMsg && !warmingUp && (
-              <div
-                className="surface surface--inset surface--danger mt-4"
-                role="alert"
-              >
-                <div className="surface__body status-callout--danger">
-                  <span>{errorMsg}</span>
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={manualRetry}
-                    disabled={loading}
-                    aria-label="Retry Genie question"
-                  >
-                    Retry
-                  </button>
-                </div>
-              </div>
-            )}
-            {!payload && !loading && !warmingUp && !errorMsg && (
-              <div className="surface surface--inset mt-4">
-                <div className="surface__body genie-empty">
-                  <div className="genie-empty__icon">
-                    <Icon name="sparkle" size={16} />
-                  </div>
-                  <div>
-                    <div className="genie-empty__title">Ready for governed analysis</div>
-                    <p className="genie-empty__copy">
-                      Trusted SQL, source assets, freshness, and approval-safe actions appear with each answer.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-            {payload && (
-              <div
-                className="surface surface--inset mt-4"
-              >
-                <div className="surface__body">
-                  {sourceChip && (
-                    <div className="chip-row mb-3">
-                      <span className="muted fs-11">Source:</span>
-                      {sourceChipVariant === 'warning' ? (
-                        // Degraded: warning chip with tooltip so the user
-                        // knows Genie is reconnecting. Not clickable.
-                        <Chip
-                          variant="warning"
-                          icon="info"
-                          title={sourceChipTitle}
-                        >
-                          {sourceChip}
-                        </Chip>
-                      ) : drawerForSource ? (
-                        // Specific UC asset → open the matching drawer entry.
-                        <EvidenceChip source={drawerForSource}>{sourceChip}</EvidenceChip>
-                      ) : (
-                        // Generic / unknown source → inert chip so a click
-                        // doesn't open the wrong drawer. (Prior code
-                        // defaulted to NBO and was misleading.)
-                        <Chip variant="neutral" title={`Source: ${sourceChip}`}>
-                          {sourceChip}
-                        </Chip>
-                      )}
-                    </div>
-                  )}
-                  {/* withChart=true: opt this deep-dive view in to the
-                      auto-detected bar chart for top-N / per-state-style
-                      table_rows payloads. The floating bubble does NOT
-                      pass this prop, so its compact form is unchanged. */}
-                  <GenieAnswer payload={payload} question={submittedQuestion ?? undefined} onFollowUp={ask} onAction={runAction} withChart />
-                  {actionStatus && (
-                    <div className="status-callout status-callout--info mt-3">
-                      {actionStatus}
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
+        <AskGenieAnswerPanel
+          questionRef={questionRef}
+          question={question}
+          onQuestionChange={(value) => {
+            setQuestion(value);
+            setActiveAssetPath(null);
+          }}
+          onAsk={ask}
+          onNewThread={newConversation}
+          loading={loading}
+          warmingUp={warmingUp}
+          errorMsg={errorMsg}
+          onRetry={manualRetry}
+          sampleQuestions={sampleQuestions}
+          payload={payload}
+          submittedQuestion={submittedQuestion}
+          onFollowUp={ask}
+          onAction={runAction}
+          actionStatus={actionStatus}
+        />
 
         <div className="stack-grid">
           <div className="surface">

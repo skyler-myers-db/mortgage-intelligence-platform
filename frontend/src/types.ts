@@ -504,6 +504,12 @@ export interface OfferRecommendation {
 export * from './types/genie';
 
 export type {
+  PropertyLoanLookupLoan,
+  PropertyLoanLookupRequest,
+  PropertyLoanLookupResponse,
+} from './types/propertyLookup';
+
+export type {
   GrowthAgentCadence,
   GrowthAgentCustomRunRequest,
   GrowthAgentDueMonitorRunRequest,

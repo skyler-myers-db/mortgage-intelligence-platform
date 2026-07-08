@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import { useApp, type Accent, type Density, type Theme } from '../AppContext';
 import { Icon } from '../Icon';
 import { Chip } from '../Primitives';
+import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
 
 /**
@@ -102,6 +103,10 @@ export function Console() {
               </button>
             ))}
           </div>
+        </div>
+        <div className="tweak-row">
+          <label>Property lookup</label>
+          <PropertyLookupPanel compact onNavigate={() => setConsoleOpen(false)} />
         </div>
         <div className="tweak-row">
           <label>Configured tenant</label>

@@ -21,6 +21,8 @@ import type {
   OfferRecommendation,
   PortfolioCreateResponse,
   PortfolioPreview,
+  PropertyLoanLookupRequest,
+  PropertyLoanLookupResponse,
   SegmentCode,
   SegmentSummary,
   SalesTeamMember,
@@ -1573,4 +1575,25 @@ export const api = {
 
   configOptions: (signal?: AbortSignal) =>
     getJson<ConfigOptions>('/api/config/options', signal),
+
+  /**
+   * Governed property loan lookup. Resolves a caller-supplied street
+   * address + ZIP to a masked CLIP and its loan facts, deep-linking to the
+   * governed borrower dossier when the property maps to a scored borrower.
+   *
+   * Boundary: SHARE-SCOPED, EXACT-after-canonicalization — NOT Cotality's
+   * fuzzy CLIP mastering. The response NEVER echoes `address_line`; the
+   * caller must not persist the address either (component state only). A
+   * 422 carries a fixed sanitized detail; a 503 flows through the standard
+   * dependency-down path so callers render the degraded-state UI.
+   */
+  propertyLookup: (
+    payload: PropertyLoanLookupRequest,
+    signal?: AbortSignal,
+  ) =>
+    postJson<PropertyLoanLookupResponse, PropertyLoanLookupRequest>(
+      '/api/lookup/property-loan',
+      payload,
+      signal,
+    ),
 };

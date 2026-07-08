@@ -7,6 +7,7 @@ import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { PortfolioPreview, SalesAgingLead, SalesConversionResponse, SalesOutcomeSummaryResponse, SalesStandupResponse, SalesTeamMember } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { LeadTable } from '../components/mortgage/LeadTable';
+import { PropertyLookupPanel } from '../components/mortgage/PropertyLookupPanel';
 import { Chip } from '../components/Primitives';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { FilterSelect } from '../components/ui/FilterSelect';
@@ -498,6 +499,9 @@ export default function LeadQueue() {
         </div>
       }
     >
+      <div className="mb-grid">
+        <PropertyLookupPanel />
+      </div>
       <div className="surface mb-grid">
         <div className="surface__hdr surface__hdr--split">
           <div className="surface__hdr-main">
