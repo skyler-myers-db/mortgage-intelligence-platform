@@ -290,3 +290,68 @@ def test_reviewed_objective_still_rejects_human_names() -> None:
         except ValueError:
             continue
         raise AssertionError(f"should have refused: {bad}")
+
+
+class _SequentialApiClient:
+    """Returns queued responses-route bodies in order and captures prompts."""
+
+    def __init__(self, bodies: list[Any]) -> None:
+        self._bodies = list(bodies)
+        self.prompts: list[str] = []
+
+    def do(self, _method: str, _path: str, body: dict[str, Any] | None = None) -> Any:
+        messages = (body or {}).get("input") or []
+        self.prompts.append(str((messages[0] if messages else {}).get("content", "")))
+        return self._bodies.pop(0)
+
+
+def _sequential_client(bodies: list[Any]) -> _FakeServingClient:
+    client = _FakeServingClient()
+    client.api_client = _SequentialApiClient(bodies)
+    return client
+
+
+_BAD_PARAMS_PLAN = (
+    '{"objective_summary":"s","steps":[{"step_id":"step-1","tool":"fn_build_cohort",'
+    '"params":{"segment_codes":["itm"]},"rationale":"r"}],'
+    '"expected_outcome":"o","risk_notes":"n"}'
+)
+_GOOD_PLAN = (
+    '{"objective_summary":"s","steps":[{"step_id":"step-1","tool":"fn_build_cohort",'
+    '"params":{"states":["IL"]},"rationale":"r"}],'
+    '"expected_outcome":"o","risk_notes":"n"}'
+)
+
+
+def test_composer_repairs_invalid_plan_once_with_error_feedback() -> None:
+    """Live finding (2026-07-08): the Supervisor composed a plan putting
+    fn_segment_counts params on fn_build_cohort; hard validation rejected it
+    honestly but the endpoint gave up. One bounded repair turn (mirroring the
+    Genie SQL-repair precedent) feeds the validation error back; a corrected
+    second plan composes."""
+    client = _sequential_client(
+        [_responses_body(_BAD_PARAMS_PLAN), _responses_body(_GOOD_PLAN)]
+    )
+    outcome = compose_growth_agent_plan(
+        _request(), settings=_compose_settings(), serving_client=client
+    )
+    assert outcome.status == "composed", outcome.message
+    assert outcome.plan is not None
+    assert outcome.plan.steps[0].params == {"states": ["IL"]}
+    assert len(client.api_client.prompts) == 2
+    assert "failed validation" in client.api_client.prompts[1]
+    assert "does not accept params" in client.api_client.prompts[1]
+    # First prompt carries no repair block.
+    assert "failed validation" not in client.api_client.prompts[0]
+
+
+def test_composer_still_invalid_after_repair_stays_invalid() -> None:
+    client = _sequential_client(
+        [_responses_body(_BAD_PARAMS_PLAN), _responses_body(_BAD_PARAMS_PLAN)]
+    )
+    outcome = compose_growth_agent_plan(
+        _request(), settings=_compose_settings(), serving_client=client
+    )
+    assert outcome.status == "invalid"
+    assert "does not accept params" in (outcome.message or "")
+    assert len(client.api_client.prompts) == 2

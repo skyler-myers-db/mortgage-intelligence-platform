@@ -110,27 +110,43 @@ def compose_growth_agent_plan(
     if task is None:
         return _degraded("orchestrator_not_ready", endpoint=endpoint)
 
-    try:
-        response = query_serving_endpoint(
-            client,
-            endpoint,
-            task=task,
-            prompt=composer_prompt(payload),
-            client_request_id=f"mip-compose-{prompt_hash(payload.objective)[:20]}",
-        )
-    except Exception:  # noqa: BLE001 - a failed call degrades to the catalog
-        return _degraded("orchestrator_call_failed", endpoint=endpoint)
-    if not serving_response_has_payload(response):
-        return _degraded("orchestrator_empty_response", endpoint=endpoint)
+    # One bounded repair turn, mirroring the Genie SQL-repair precedent: a
+    # first invalid plan (hallucinated params, unknown tool, bad shape) is fed
+    # back to the model verbatim with the validation error so it can
+    # self-correct. Still-invalid after repair surfaces honestly as invalid —
+    # never a silent canned fallback.
+    repair_note: str | None = None
+    outcome: ComposeOutcome | None = None
+    for attempt in range(2):
+        try:
+            response = query_serving_endpoint(
+                client,
+                endpoint,
+                task=task,
+                prompt=composer_prompt(payload, repair_note=repair_note),
+                client_request_id=(
+                    f"mip-compose-{prompt_hash(payload.objective)[:18]}-{attempt}"
+                ),
+            )
+        except Exception:  # noqa: BLE001 - a failed call degrades to the catalog
+            return _degraded("orchestrator_call_failed", endpoint=endpoint)
+        if not serving_response_has_payload(response):
+            return _degraded("orchestrator_empty_response", endpoint=endpoint)
 
-    text = extract_response_text(response)
-    parsed = parse_json_object(text)
-    if parsed is None:
-        return _invalid(
-            "The planning model did not return a valid plan JSON object.",
-            endpoint=endpoint,
-        )
-    return build_validated_plan(parsed, payload, endpoint=endpoint)
+        text = extract_response_text(response)
+        parsed = parse_json_object(text)
+        if parsed is None:
+            outcome = _invalid(
+                "The planning model did not return a valid plan JSON object.",
+                endpoint=endpoint,
+            )
+        else:
+            outcome = build_validated_plan(parsed, payload, endpoint=endpoint)
+        if outcome.status != "invalid":
+            return outcome
+        repair_note = outcome.message
+    assert outcome is not None  # loop body always assigns; keeps mypy exact
+    return outcome
 
 
 def build_validated_plan(
@@ -208,19 +224,29 @@ def build_validated_plan(
     )
 
 
-def composer_prompt(payload: ComposePlanRequest) -> str:
+def composer_prompt(payload: ComposePlanRequest, *, repair_note: str | None = None) -> str:
     """Build the strict-JSON planning prompt shown to the Supervisor model."""
 
     state_scope = ", ".join(payload.states) if payload.states else "current configured coverage"
     objective_hash = prompt_hash(payload.objective)
+    repair_block = (
+        "Your previous plan failed validation with this error: "
+        f"{repair_note} — correct the plan. Params belong to the exact tool "
+        "named in that step; never reuse another tool's params.\n\n"
+        if repair_note
+        else ""
+    )
     return (
         "You are the Mortgage Intelligence Platform Growth Agent planner for Module 0 "
         "(top-of-funnel lead generation and borrower segmentation). Compose a specialized, "
         "multi-step plan that answers the operator's objective by chaining ONLY the reviewed "
         "deterministic tools below.\n\n"
+        f"{repair_block}"
         "Hard rules:\n"
         "- Use ONLY tools from the registry; never invent a tool or write SQL.\n"
-        "- Every step's params must match that tool's param spec exactly.\n"
+        "- Every step's params must match THAT step's tool param spec exactly; params from "
+        "one tool are never valid on another (fn_build_cohort takes only `states`; "
+        "segment filters belong to fn_segment_counts).\n"
         "- Do not name borrowers, expose identities, or activate outreach.\n"
         "- Tools marked REQUIRES HUMAN APPROVAL end the executable portion of the plan; "
         "place any such handoff step last.\n"
