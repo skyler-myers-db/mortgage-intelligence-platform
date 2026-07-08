@@ -305,6 +305,31 @@ expected.
 > here: build the right lead population from governed data, explain the ranking,
 > and turn a trusted answer into an auditable action."
 
+## Buyer-goal mapping (prospect language → demo proof)
+
+When a prospect frames goals in these words, land each one on a live surface:
+
+1. **"Speed wins the business / fast turn-around."** Precomputed gold tables +
+   Lakebase-synced hot aggregates + short-TTL cache + circuit breakers.
+   Proof: portfolio, leads, dossier, and governed Genie answers return in
+   under ~2 seconds on live Unity Catalog data; deploys are one command.
+2. **"Reduce human interaction and resource overhead."** The Growth Agent runs
+   objective → reviewed workflow → cohort → ranked leads → offer → Lead Queue
+   automatically; monitors re-run on schedule; Genie replaces analyst tickets.
+   Say it straight: *analysis is 100% automated; the send decision stays
+   human, and every approval writes an audit row* — that is the fair-lending
+   posture lenders buy, not a gap.
+3. **"Reusable address → CLIP → loan lookup other AI/agent use cases can
+   consume."** `POST /api/v1/lookup/property-loan` — governed lookup spine in
+   `mip.gold.address_lookup` (hash-keyed at ETL time; the raw street address
+   is never stored, returned, or logged), answering with masked CLIP /
+   owner-link refs, loan facts, and a dossier deep link. Consumable today by
+   the app, the Growth Agent dossier specialist (`fn_property_loan_lookup`),
+   and any future org agent through the same governed pattern. Boundary to
+   state: v1 is exact-match after canonicalization against the refreshed
+   share — street-level fuzzy mastering is Cotality's CLIP resolution
+   service, which is the "better together" upsell, not something we imitate.
+
 ## Known Data Dependencies
 
 - Cotality MLS/Listings is connected through `mip.silver.listing_activity` and

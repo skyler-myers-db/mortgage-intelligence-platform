@@ -25,14 +25,19 @@ caller passes in, so warehouse flakiness surfaces as a ``DependencyDownError``
 from __future__ import annotations
 
 import logging
+import re as _re
 from typing import Any, Protocol
 
 from backend.schemas.lookup import PropertyLoanLookupLoan, PropertyLoanLookupResponse
-from backend.services.address_normalization import address_lookup_hash
+from backend.services.address_normalization import address_lookup_hash, normalize_address
 from backend.services.audit_store import AuditStore
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.observability import emit
-from backend.services.pii_redaction import generalize_lender, mask_cotality_id
+from backend.services.pii_redaction import (
+    generalize_lender,
+    mask_address_for_audit,
+    mask_cotality_id,
+)
 
 log = logging.getLogger(__name__)
 
@@ -88,9 +93,13 @@ def lookup_property_loan(
     """
     _ = (city, state)  # accepted for request parity; not part of the v1 hash key
     address_hash = address_lookup_hash(address_line, zip5)
-    audit_hash_prefix = address_hash[:16]
-    # ZIP as stored in gold: first 5 digits (mirrors the hash + gold contract).
-    zip_digits = "".join(ch for ch in (zip5 or "") if ch.isdigit())[:5]
+    # ASCII digits only, byte-identical to the hash's ZIP normalization —
+    # unicode digits (e.g. fullwidth) must not diverge between the join key
+    # and the audit record (governance review FU-3, 2026-07-07).
+    zip_digits = _re.sub(r"[^0-9]", "", zip5 or "")[:5]
+    # Audit-side token is HMAC'd with the tenant mask secret; the plain sha2
+    # never enters the ledger (governance review FU-1, 2026-07-07).
+    audit_token = mask_address_for_audit(normalize_address(address_line), zip_digits)
 
     row = sql_client.execute_one(_LOOKUP_SQL, {"address_hash": address_hash})
 
@@ -128,17 +137,21 @@ def lookup_property_loan(
     # response can echo its id; audit failures propagate to the caller (router
     # translates to 503) rather than dropping the governance record.
     payload: dict[str, Any] = {
-        "address_hash": audit_hash_prefix,
-        "zip5": zip_digits,
+        "address_hash": audit_token[:16],
         "hit": matched,
     }
+    if _re.fullmatch(r"[0-9]{5}", zip_digits):
+        # Defense-in-depth: the router already rejects non-5-ASCII-digit ZIPs;
+        # if a caller bypasses it, the audit row records the lookup without a
+        # malformed zip5 rather than tripping the value policy (FU-3).
+        payload["zip5"] = zip_digits
     if clip_ref is not None:
         payload["source_record_ref"] = clip_ref
     event = audit.write(
         actor=actor,
         action="property_lookup",
         entity_type="property_lookup",
-        entity_id=borrower_id if borrower_id is not None else f"auto-{address_hash[:32]}",
+        entity_id=borrower_id if borrower_id is not None else f"auto-{audit_token[:32]}",
         payload_json=payload,
         event_type="PROPERTY_LOOKUP",
         subject_clip=row.get("clip") if row is not None else None,

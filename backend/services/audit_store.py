@@ -803,10 +803,10 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"address_hash"}):
         if value is not None and not re.fullmatch(r"[0-9a-f]{16}", str(value)):
             raise AuditMetadataValueViolation(
-                field, "must be the first 16 lowercase hex chars of the address hash"
+                field, "must be a 16-lowercase-hex address audit token"
             )
     for field, value in _metadata_values_for(metadata, {"zip5"}):
-        if value is not None and not re.fullmatch(r"\d{5}", str(value)):
+        if value is not None and not re.fullmatch(r"[0-9]{5}", str(value)):
             raise AuditMetadataValueViolation(field, "must be a 5-digit ZIP")
     for field, value in _metadata_values_for(metadata, {"source_assets"}):
         if value is None:

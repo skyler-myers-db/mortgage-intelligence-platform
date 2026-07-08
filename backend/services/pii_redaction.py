@@ -372,6 +372,23 @@ def _id_mask_secret() -> str:
     )
 
 
+def mask_address_for_audit(normalized_address: str, zip5: str) -> str:
+    """HMAC-derived audit token (64 hex) for a property-lookup address.
+
+    The gold join key stays plain sha2 so the ETL SQL can compute it; the
+    AUDIT ledger stores this tenant-secret token instead, so an insider
+    holding the ledger cannot run an offline zip-scoped dictionary attack
+    against a salt-free truncated hash (governance review FU-1,
+    2026-07-07). Callers truncate: payload carries [:16], the miss-path
+    entity id carries [:32] to satisfy PUBLIC_SERVER_ID_PATTERN. Repeated
+    identical lookups share a token by design — the audit trail is meant
+    to link re-probes of the same target.
+    """
+    secret = _id_mask_secret()
+    message = f"addr:{normalized_address}|{zip5}".encode()
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
 def mask_cotality_id(kind: str, raw: Any) -> str:
     """Return a stable display-safe surrogate for a Cotality identifier.
 

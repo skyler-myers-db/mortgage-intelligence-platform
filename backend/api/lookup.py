@@ -16,6 +16,7 @@ authenticated workspace user, not admin-gated.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -63,7 +64,9 @@ def property_loan_lookup(
     # In-route ZIP digit validation with a FIXED message so a bad value is
     # never reflected back through the error body (defence in depth on top of
     # the app-wide 422 input stripping).
-    if not payload.zip5.isdigit():
+    if not re.fullmatch(r"[0-9]{5}", payload.zip5):
+        # ASCII-only: unicode digits pass str.isdigit() but diverge from the
+        # hash normalization (governance review FU-3, 2026-07-07).
         raise HTTPException(status_code=422, detail="zip5 must be 5 digits")
 
     actor = resolve_actor(request)
