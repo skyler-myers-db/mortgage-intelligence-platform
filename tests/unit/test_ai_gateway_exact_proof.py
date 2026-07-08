@@ -24,6 +24,20 @@ _INFERENCE_TABLE = "mip.audit.mip_agent_gateway_llama"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_lakebase_env(monkeypatch):
+    """Keep main()-driving tests fully offline (CI has no Databricks auth).
+
+    A real-shaped LAKEBASE_HOST makes ensure_lakebase_env early-return, so
+    no WorkspaceClient is ever constructed and no credential resolution can
+    leak into these tests (CI run 28945210525 failure, 2026-07-08). Fakes
+    supplied per-test still exercise the mint path explicitly elsewhere.
+    """
+    monkeypatch.setenv("LAKEBASE_HOST", "unit-test-lakebase.database.example")
+    monkeypatch.setenv("LAKEBASE_USER", "unit-test@example.com")
+    monkeypatch.setenv("LAKEBASE_PASSWORD", "unit-test-token")
+
+
 class _ProofLakebase:
     def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
         self.rows = list(rows or [])
@@ -273,7 +287,7 @@ def test_verifier_send_wait_records_exact_verified_row(monkeypatch) -> None:
     lakebase = _ProofLakebase()
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1))
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -305,7 +319,7 @@ def test_verifier_require_verified_accepts_existing_current_sha_proof(monkeypatc
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=0))
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -335,7 +349,7 @@ def test_verifier_require_verified_rejects_wrong_endpoint_pending_false_pass(mon
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1))
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -373,7 +387,7 @@ def test_verifier_requires_exact_client_request_id(monkeypatch) -> None:
         "get_sql_client",
         lambda: _ProofSql(counts_by_request_id={other_id: 1}),
     )
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
@@ -454,7 +468,7 @@ def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
         "get_sql_client",
         lambda: _ProofSql(counts_by_request_id={}),
     )
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", lambda **_kwargs: _Workspace())
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [

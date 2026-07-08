@@ -20,10 +20,6 @@ from backend.agents.mortgage_growth_copilot import (
     GrowthAgentCopilotEvidence,
     plan_growth_agent_prompt,
 )
-from backend.schemas.agent_plan import (
-    ComposePlanRequest,
-    ComposePlanResponse,
-)
 from backend.schemas.growth_agent import (
     GrowthAgentCustomRunRequest,
     GrowthAgentDueMonitorRunRequest,
@@ -41,7 +37,7 @@ from backend.schemas.growth_agent import (
     GrowthAgentWorkflowId,
 )
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
-from backend.services.audit_store import get_audit_store, resolve_actor
+from backend.services.audit_store import resolve_actor
 from backend.services.capability_request import collect_request_live_capability_statuses
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.error_sanitizer import safe_dependency_detail
@@ -49,7 +45,6 @@ from backend.services.growth_agent_api_helpers import (
     payload_with_prompt_state_scope,
     public_capability_rows,
 )
-from backend.services.growth_agent_composer import compose_growth_agent_plan
 from backend.services.growth_agent_drafts import create_notification_drafts
 from backend.services.growth_agent_ledger_sql import (
     DUE_MONITOR_LIST_ALL_SQL as _DUE_MONITOR_LIST_ALL_SQL,
@@ -86,7 +81,6 @@ from backend.services.growth_agent_monitors import (
     stored_monitor_name,
     workflow_from_monitor,
 )
-from backend.services.growth_agent_plan_executor import execute_plan
 from backend.services.growth_agent_runtime import (
     criteria_for as _criteria_for,
 )
@@ -501,74 +495,6 @@ def run_mortgage_growth_agent(
         copilot_evidence=copilot_evidence,
     )
     return response
-
-
-@router.post("/agent/compose", response_model=ComposePlanResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
-def compose_mortgage_growth_agent_plan(
-    payload: ComposePlanRequest,
-    request: Request,
-    _: Annotated[None, Depends(require_json_content_type)],
-    sql_client: SqlDep,
-    lakebase: LakebaseDep,
-) -> ComposePlanResponse:
-    """Compose a specialized multi-step plan from the governed tool registry.
-
-    Unlike ``/agent/run`` (which selects one reviewed workflow), this endpoint
-    asks the Supervisor serving endpoint to *compose* a plan whose every step is
-    validated against the reviewed deterministic tool registry, then — when
-    ``execute`` is set — runs the validated steps deterministically with the
-    existing per-step audit and approval rails. Every composed response is
-    labelled ``planner="supervisor_composed"`` and carries the model endpoint, so
-    nothing composed can masquerade as a reviewed catalog workflow. When the
-    Supervisor host is unavailable the response degrades honestly and offers the
-    reviewed catalog workflows as a labelled fallback; when the model answers but
-    the plan fails validation the response is ``invalid`` with no canned plan.
-    """
-
-    actor = resolve_actor(request)
-    outcome = compose_growth_agent_plan(payload)
-    if outcome.status == "degraded":
-        return ComposePlanResponse(
-            status="degraded",
-            model_endpoint=outcome.endpoint,
-            degraded_reason=outcome.degraded_reason,
-            message=outcome.message,
-            fallback_workflows=[workflow.schema() for workflow in _WORKFLOWS.values()],
-        )
-    if outcome.status == "invalid" or outcome.plan is None:
-        return ComposePlanResponse(
-            status="invalid",
-            model_endpoint=outcome.endpoint,
-            message=outcome.message or "The composed plan failed governed validation.",
-        )
-    plan = outcome.plan
-    response = ComposePlanResponse(
-        status="composed",
-        model_endpoint=outcome.endpoint,
-        plan=plan,
-        approval_required=plan.requires_approval,
-        interpreted_intent=outcome.interpreted_intent,
-        reasoning_summary=outcome.reasoning_summary,
-    )
-    if not payload.execute:
-        return response
-    execution = execute_plan(
-        plan,
-        sql_client=sql_client,
-        lakebase=lakebase,
-        audit_store=get_audit_store(),
-        actor=actor,
-        request_id=payload.request_id,
-    )
-    return response.model_copy(
-        update={
-            "executed": True,
-            "trace": execution.trace,
-            "plan_id": execution.plan_id,
-            "approval_gate_step_id": execution.approval_gate_step_id,
-            "audit_event_ids": execution.audit_event_ids,
-        }
-    )
 
 
 def _run_workflow(

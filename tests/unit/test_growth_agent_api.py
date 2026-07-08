@@ -12,6 +12,7 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 import backend.api.growth_agent as growth_agent_api
+import backend.api.growth_agent_compose_routes as growth_agent_compose_api
 import backend.services.capabilities as capabilities_module
 import backend.services.rbac as rbac_module
 from backend.config.settings import Settings
@@ -2316,7 +2317,7 @@ def _compose(
     body: dict[str, Any],
     lakebase: Any | None = None,
 ) -> Any:
-    monkeypatch.setattr(growth_agent_api, "compose_growth_agent_plan", lambda payload: outcome)
+    monkeypatch.setattr(growth_agent_compose_api, "compose_growth_agent_plan", lambda payload: outcome)
     sql = _FakeSqlClient()
     lakebase = lakebase or _FakeLakebaseClient()
     client = _client(sql, lakebase)

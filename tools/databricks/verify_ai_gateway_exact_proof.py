@@ -63,8 +63,29 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def ensure_lakebase_env(workspace_factory: Any = WorkspaceClient) -> bool:
+def _workspace_client() -> Any:
+    """Late-bound client factory — the test seam.
+
+    Scale-to-zero gateway endpoints hold cold-start requests longer than the
+    SDK's 60s default read timeout, so the real client gets a 300s Config
+    (this SDK only accepts the timeout via Config, not a direct kwarg). Both
+    the Config and the client resolve credentials at CONSTRUCTION, so this
+    must never run under test fakes — tests monkeypatch this factory, not
+    WorkspaceClient (CI run 28945210525: patching the class still left the
+    real Config argument evaluating and dialing auth).
+    """
+    return WorkspaceClient(config=Config(http_timeout_seconds=300))
+
+
+def ensure_lakebase_env(workspace_factory: Any = None) -> bool:
     """Mint Lakebase connection env from the Databricks identity when absent.
+
+    ``workspace_factory`` late-binds to the module's ``WorkspaceClient`` at
+    call time: a def-time default froze the real class, so monkeypatched
+    fakes never reached the mint path and unit tests silently performed
+    LIVE workspace calls wherever ambient CLI auth existed — red in CI
+    (no credentials), green-by-accident locally (CI run 28945210525,
+    2026-07-08).
 
     The proof ledger lives in Lakebase. On Databricks Apps the platform
     injects connection env; on a deploy laptop or a CI runner nothing does,
@@ -95,7 +116,8 @@ def ensure_lakebase_env(workspace_factory: Any = WorkspaceClient) -> bool:
             "the proof ledger must live in the real mip-app-state instance."
         )
     instance = (os.environ.get("MIP_LAKEBASE_INSTANCE") or "mip-app-state").strip()
-    workspace = workspace_factory()
+    factory = workspace_factory if workspace_factory is not None else WorkspaceClient
+    workspace = factory()
     dns = workspace.database.get_database_instance(instance).read_write_dns
     credential = workspace.database.generate_database_credential(
         instance_names=[instance],
@@ -152,11 +174,7 @@ def main(argv: list[str] | None = None) -> int:
 
     lakebase = get_lakebase_client()
     sql_client = get_sql_client()
-    # Scale-to-zero gateway endpoints hold cold-start requests longer than
-    # the SDK's 60s default read timeout (observed 2026-07-07: deploy step 18
-    # died in the SDK's 5-minute retry budget while llama warmed). This SDK
-    # version only accepts the timeout via Config, not as a direct kwarg.
-    workspace = WorkspaceClient(config=Config(http_timeout_seconds=300))
+    workspace = _workspace_client()
     expired = mark_expired_pending_proofs(
         lakebase,
         older_than=datetime.now(UTC) - timedelta(seconds=max(1, args.expiry_s)),
