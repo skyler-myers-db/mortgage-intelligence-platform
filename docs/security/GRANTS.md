@@ -83,9 +83,14 @@ GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `mip-app`;
 functions `fn_build_cohort`, `fn_segment_counts`, and
 `fn_lead_queue_url`.
 
-**Lifecycle mirror write (single-table MODIFY exception).** The app service
-principal holds `MODIFY` on exactly one gold table:
-`mip.gold.borrower_lifecycle_state`. The post-approval lifecycle mirror is
+**Lifecycle mirror writes (two-table MODIFY exception).** The app service
+principal holds `MODIFY` on exactly two gold tables:
+`mip.gold.borrower_lifecycle_state` (atomic `INSERT OVERWRITE`) and
+`mip.gold.funnel_snapshot_daily` (idempotent `MERGE INTO` keyed on
+snapshot_date/state/segment) — the pair the event-triggered post-approval
+sync writes. The second table surfaced live only after the first grant
+landed (2026-07-08): the sync fails at its first missing permission, so
+sibling gaps hide behind the leading one. The post-approval lifecycle mirror is
 event-triggered from the app (see `backend/services/job_trigger.py` for why
 event-triggered beats scheduled here) and writes via atomic
 `INSERT OVERWRITE` into the DDL-created table — never CTAS, so no CREATE or
