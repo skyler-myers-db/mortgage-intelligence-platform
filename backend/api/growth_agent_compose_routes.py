@@ -15,7 +15,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, Request
 
 from backend.schemas.agent_plan import ComposePlanRequest, ComposePlanResponse
-from backend.services.audit_store import get_audit_store, resolve_actor
+from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from backend.services.growth_agent_composer import compose_growth_agent_plan
 from backend.services.growth_agent_plan_executor import execute_plan
@@ -36,6 +36,7 @@ def compose_mortgage_growth_agent_plan(
     _: Annotated[None, Depends(require_json_content_type)],
     sql_client: SqlDep,
     lakebase: LakebaseDep,
+    audit_store: Annotated[AuditStore, Depends(get_audit_store)],
 ) -> ComposePlanResponse:
     """Compose a specialized multi-step plan from the governed tool registry.
 
@@ -82,7 +83,7 @@ def compose_mortgage_growth_agent_plan(
         plan,
         sql_client=sql_client,
         lakebase=lakebase,
-        audit_store=get_audit_store(),
+        audit_store=audit_store,
         actor=actor,
         request_id=payload.request_id,
     )

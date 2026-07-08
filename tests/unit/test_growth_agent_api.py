@@ -18,11 +18,13 @@ import backend.services.rbac as rbac_module
 from backend.config.settings import Settings
 from backend.main import app
 from backend.schemas.agent_plan import ComposedPlan, PlanStep
+from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_client import get_genie_client
 from backend.services.growth_agent_composer import ComposeOutcome
 from backend.services.growth_agent_workflows import custom_workflow
 from backend.services.lakebase import get_lakebase_client
+from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 
 class _FakeSqlClient:
@@ -398,6 +400,10 @@ class _FailingLakebaseClient:
 def _client(sql: _FakeSqlClient, lakebase: Any) -> TestClient:
     app.dependency_overrides[get_sql_client] = lambda: sql
     app.dependency_overrides[get_lakebase_client] = lambda: lakebase
+    # Compose's audit store is injected (never built inline): without this
+    # override CI dies resolving Lakebase credentials it doesn't have
+    # (CI failure at 04f7ffa, 2026-07-08).
+    app.dependency_overrides[get_audit_store] = lambda: InMemoryAuditStore()
     return TestClient(app)
 
 
@@ -405,6 +411,7 @@ def _clear_overrides() -> None:
     app.dependency_overrides.pop(get_sql_client, None)
     app.dependency_overrides.pop(get_genie_client, None)
     app.dependency_overrides.pop(get_lakebase_client, None)
+    app.dependency_overrides.pop(get_audit_store, None)
 
 
 def test_growth_agent_home_lists_governed_workflows() -> None:

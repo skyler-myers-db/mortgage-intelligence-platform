@@ -77,8 +77,13 @@ const budgets = {
   // Bumped 2026-06-26 for the Mortgage Growth Agent route/API/types and run
   // presentation. Measured post-feature actual: total JS 927.79 / gzip 303.79;
   // reset to measured actual + ~5% per this file's policy.
-  totalJsBytes: 975 * KiB, // actual 927.79
-  totalJsGzipBytes: 319 * KiB, // actual 303.79
+  // Re-baselined 2026-07-08 for the property-lookup UI consumer (external
+  // audit blocker: the governed lookup needed a real app surface) + the
+  // ask-genie answer-panel split: actuals 979.88 / 319.36 after adding the
+  // lazy PropertyLookupPanel chunk. Headroom stays deliberately thin so the
+  // next growth is a conscious decision, not drift.
+  totalJsBytes: 990 * KiB, // actual 979.88
+  totalJsGzipBytes: 324 * KiB, // actual 319.36
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy
