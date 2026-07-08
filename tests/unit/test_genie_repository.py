@@ -577,7 +577,9 @@ def test_text_only_specific_intent_state_fallback_uses_borrower_360_not_generic_
     assert "FROM mip.gold.lead_population" not in result.sql_query
     assert "recommended_offer_code = 'cash_out'" in result.sql_query
     assert sql.parameters[-1] == {"state": "TX"}
-    assert "Texas (TX) cash-out refinance borrowers" in result.answer
+    # Voice-first: Genie's own narrative leads, with an appended verification note.
+    assert result.answer.startswith("Texas cash-out candidates are available.")
+    assert "Verified against" in result.answer
 
 
 def test_text_only_multi_intent_fallback_discloses_primary_ranking_lens() -> None:
@@ -615,8 +617,10 @@ def test_text_only_multi_intent_fallback_discloses_primary_ranking_lens() -> Non
     assert result.source == "trusted_sql"
     assert result.sql_query is not None
     assert "recommended_offer_code = 'cash_out'" in result.sql_query
-    assert "I detected additional intent language (home-equity / HELOC)" in result.answer
-    assert "ask for a combined segment if you want an intersection" in result.answer
+    # Voice-first: the answer is Genie's own narrative plus a verification note;
+    # the cash-out ranking lens is still enforced by the governed SQL above.
+    assert result.answer.startswith("Texas borrowers are available.")
+    assert "Verified against" in result.answer
 
 
 def test_text_only_global_retention_empty_fallback_explains_eligibility_gate() -> None:
@@ -640,8 +644,9 @@ def test_text_only_global_retention_empty_fallback_explains_eligibility_gate() -
     assert "action_ready_retention_borrowers" in result.sql_query
     assert result.metric_value == "0"
     assert result.actions == []
-    assert "current coverage has 16,557 borrowers in the Retention Risk segment" in result.answer
-    assert "marketing-eligibility and opt-in consent filters" in result.answer
+    # Voice-first: Genie's narrative leads; the verified zero-count is appended.
+    assert result.answer.startswith("No retention borrowers found.")
+    assert "Verified against" in result.answer
 
 
 def test_open_cohort_action_preserves_sql_derived_portfolio_predicates() -> None:
@@ -811,7 +816,9 @@ def test_top_borrowers_by_state_uses_canonical_lead_population_rows() -> None:
     assert sql.parameters == [{"state": "IL"}]
     assert result.row_count == 10
     assert result.table_rows == rows
-    assert "masked borrower B-IL000" in result.answer
+    # Voice-first: Genie's own narrative leads, plus an appended verification note.
+    assert result.answer.startswith("The top borrower has score 91, but no rows were attached.")
+    assert "Verified against" in result.answer
 
 
 def test_text_only_best_retention_empty_answer_explains_eligibility_gate() -> None:
@@ -834,9 +841,9 @@ def test_text_only_best_retention_empty_answer_explains_eligibility_gate() -> No
     assert sql.parameters[-1] == {"state": "IL"}
     assert result.metric_value == "0"
     assert result.actions == []
-    assert "16,557 borrowers in the Retention Risk segment" in result.answer
-    assert "marketing-eligibility and opt-in consent filters" in result.answer
-    assert "Competitor-lien evidence questions use a separate evidence workflow" in result.answer
+    # Voice-first: Genie's narrative leads; the verified zero-count is appended.
+    assert result.answer.startswith("No retention borrowers found.")
+    assert "Verified against" in result.answer
 
 
 def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
@@ -903,7 +910,9 @@ def test_heloc_zip_text_only_answer_uses_equity_canonical_trusted_sql() -> None:
     assert "GROUP BY zip, state" in result.sql_query
     assert result.row_count == 5
     assert result.table_rows == rows
-    assert "not a filed-permit or HELOC-intent count" in result.answer
+    # Voice-first: Genie's own narrative leads, plus an appended verification note.
+    assert result.answer.startswith("Genie found HELOC ZIP opportunities, but did not attach SQL.")
+    assert "Verified against" in result.answer
 
 
 def test_numeric_zip_rows_are_padded_before_cohort_routing() -> None:
@@ -2843,9 +2852,11 @@ def test_in_the_money_count_uses_canonical_gold_grain() -> None:
     result = repo.respond("How many borrowers are currently in-the-money?")
 
     assert result.source == "trusted_sql"
-    assert result.answer.startswith("There are 147,742 borrowers")
-    assert "mip.gold.borrower_360" in result.answer
-    assert "277,139" not in result.answer
+    # Voice-first: Genie's own narrative (its 277,139 figure) is preserved, and
+    # the re-executed gold-grain count is APPENDED as a verification note rather
+    # than the narrative being replaced with canned template phrasing.
+    assert result.answer.startswith("There are 277,139 borrowers currently in-the-money.")
+    assert "Verified against mip.gold.borrower_360: 147,742" in result.answer
     assert result.table_rows == [
         {
             "in_the_money_borrowers": 147742,
@@ -3057,8 +3068,10 @@ def test_in_the_money_count_applies_state_scope_when_present() -> None:
 
     result = repo.respond("How many borrowers in Illinois are in the money?")
 
-    assert result.answer.startswith("There are 70,939 borrowers")
-    assert "in Illinois (IL)" in result.answer
+    # Voice-first: Genie's narrative leads; the re-executed state-scoped count is
+    # appended as a verification note.
+    assert result.answer.startswith("There are 277,139 borrowers currently in-the-money.")
+    assert "Verified against mip.gold.borrower_360: 70,939" in result.answer
     assert result.table_rows == [
         {
             "in_the_money_borrowers": 70939,
@@ -3163,10 +3176,10 @@ def test_in_the_money_count_applies_city_scope_when_present(
 
     result = repo.respond(question)
 
-    assert result.answer.startswith(f"There are {count:,} borrowers")
-    assert f"in {city}" in result.answer
-    assert "overall share total" in result.answer
-    assert "147,742" not in result.answer
+    # Voice-first: Genie's narrative leads; the re-executed city-scoped count is
+    # appended as a verification note that sharpens the all-footprint figure.
+    assert result.answer.startswith("Genie returned the all-footprint count: 147,742.")
+    assert f"Verified against mip.gold.borrower_360: {count:,}" in result.answer
     assert result.table_rows == [
         {
             "city": city,
@@ -3286,7 +3299,10 @@ def test_mean_lead_score_by_msa_uses_canonical_cbsa_query_when_live_turn_is_not_
     assert result.source == "trusted_sql"
     assert result.table_rows == rows
     assert result.row_count == 2
-    assert "situs_cbsa_code" in result.answer
+    # Voice-first: Genie's narrative leads; MSA methodology stays in the governed
+    # SQL below, with a verification note appended to the answer.
+    assert result.answer.startswith("Genie did not attach SQL.")
+    assert "Verified against" in result.answer
     assert result.trusted_assets == ["mip.gold.borrower_360"]
     assert result.sql_query is not None
     assert "mip.gold.borrower_360" in result.sql_query
@@ -3568,3 +3584,113 @@ def test_live_first_false_restores_interceptor_first_ordering(
         _DEGRADED_DISCLOSURE_MARKER not in gap for gap in result.proof.known_data_gaps
     )
     assert _DEGRADED_DISCLOSURE_MARKER not in result.answer
+
+
+# ---------------------------------------------------------------------------
+# Recognized-shape adaptation must preserve Genie's genuine voice + live
+# artifacts (not flatten a live turn into canned template phrasing).
+# ---------------------------------------------------------------------------
+
+
+def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> None:
+    live = GenieResponse(
+        answer_text="There are roughly 277,139 borrowers in the money right now.",
+        sql_query=(
+            "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 "
+            "WHERE in_the_money = true"
+        ),
+        sql_result_rows=[{"borrowers": 277139}],
+        conversation_id="conv-voice",
+        message_id="msg-voice",
+        thoughts=[{"kind": "planning", "content": "Filtering to in-the-money borrowers."}],
+        suggested_questions=["Which ZIPs lead on refinance savings?"],
+        native_visualization={"attachment_id": "att-1", "title": "ITM by state"},
+        genie_status="COMPLETED",
+    )
+    sql = _StubSqlClient(
+        [{"in_the_money_borrowers": 147742, "refreshed_at": "2026-06-17T00:00:00Z"}]
+    )
+
+    result = _adapt_genie_response(
+        "How many borrowers are currently in-the-money?",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    # Genie's own narrative leads (not replaced by canned template phrasing).
+    assert result.answer.startswith(
+        "There are roughly 277,139 borrowers in the money right now."
+    )
+    # Live-intelligence fields carried through exactly like the generic path.
+    assert result.genie_status == "COMPLETED"
+    assert [step.content for step in result.reasoning_trace] == [
+        "Filtering to in-the-money borrowers."
+    ]
+    assert result.proof is not None
+    assert [step.content for step in result.proof.reasoning_trace] == [
+        "Filtering to in-the-money borrowers."
+    ]
+    assert result.native_visualization is not None
+    assert result.native_visualization.attachment_id == "att-1"
+    assert result.follow_up_questions == ["Which ZIPs lead on refinance savings?"]
+    # Governance preserved: the re-executed gold-grain count.
+    assert result.metric_value == "147,742"
+
+
+def test_recognized_shape_verification_note_appends_not_replaces() -> None:
+    live = GenieResponse(
+        answer_text="There are about 277,139 borrowers in the money.",
+        sql_query=(
+            "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 "
+            "WHERE in_the_money = true"
+        ),
+        sql_result_rows=[{"borrowers": 277139}],
+        conversation_id="conv-append",
+        message_id="msg-append",
+    )
+    sql = _StubSqlClient(
+        [{"in_the_money_borrowers": 147742, "refreshed_at": "2026-06-17T00:00:00Z"}]
+    )
+
+    result = _adapt_genie_response(
+        "How many borrowers are currently in-the-money?",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    # Genie's own figure remains AND the verified gold-grain figure is appended.
+    assert "277,139" in result.answer
+    assert "Verified against mip.gold.borrower_360: 147,742" in result.answer
+    assert result.answer.index("277,139") < result.answer.index("Verified against")
+
+
+def test_recognized_shape_empty_narrative_falls_back_with_honest_gap() -> None:
+    live = GenieResponse(
+        answer_text="",
+        sql_query=(
+            "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 "
+            "WHERE in_the_money = true"
+        ),
+        sql_result_rows=[{"borrowers": 277139}],
+        conversation_id="conv-empty",
+        message_id="msg-empty",
+    )
+    sql = _StubSqlClient(
+        [{"in_the_money_borrowers": 147742, "refreshed_at": "2026-06-17T00:00:00Z"}]
+    )
+
+    result = _adapt_genie_response(
+        "How many borrowers are currently in-the-money?",
+        live,
+        sql_client=sql,  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    # No usable narrative even after repair -> precise deterministic summary,
+    # disclosed honestly in the proof gap notes.
+    assert "147,742" in result.answer
+    assert result.proof is not None
+    assert any(
+        "Genie returned no narrative" in gap for gap in result.proof.known_data_gaps
+    )

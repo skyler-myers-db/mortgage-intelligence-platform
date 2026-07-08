@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
+from typing import Any
 
 from backend.config.settings import settings
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
@@ -402,7 +403,12 @@ def _adapt_genie_response(
             sql_client=sql_client,
         )
         if canonical is not None:
-            return canonical
+            # Governance (re-executed counts, trusted-asset policy, proof,
+            # visualization, actions, scrubbing) is done. Restore Genie's own
+            # narrative and live-intelligence fields so a recognized-shape turn
+            # is not flattened into canned phrasing with the live artifacts
+            # dropped.
+            return _restore_live_voice(canonical, result)
     if text_contains_pii or lacks_trusted_proof or unsafe_live_sql or depends_on_pending_feeds:
         if depends_on_pending_feeds:
             gaps = _known_data_gaps_for_result(
@@ -518,6 +524,76 @@ def _ensure_answer_cites_source(answer: str | None, trusted_assets: list[str]) -
     if not text:
         return f"Source: {source}"
     return f"{text}\n\nSource: {source}"
+
+
+def _default_verification_note(
+    trusted_assets: list[str],
+    metric_value: str | None,
+    row_count: int,
+) -> str:
+    """A short, honest note that the recognized-shape count was re-verified.
+
+    This is appended to Genie's own narrative -- it sharpens/corroborates the
+    live text with the re-executed gold-grain figure rather than replacing it.
+    """
+    asset = trusted_assets[0] if trusted_assets else "the trusted gold tables"
+    if metric_value is not None:
+        return f"Verified against {asset}: {metric_value} at the trusted gold grain."
+    if row_count:
+        return (
+            f"Verified against {asset}: {row_count:,} rows recomputed at the "
+            "trusted gold grain."
+        )
+    return f"Verified against {asset} at the trusted gold grain."
+
+
+def _restore_live_voice(
+    canonical: GenieMessageResponse,
+    result: GenieResponse,
+) -> GenieMessageResponse:
+    """Keep a recognized-shape trusted answer's governance but restore voice.
+
+    ``_canonical_genie_answer`` re-executes the count, builds proof, plans the
+    visualization, and suggests actions -- all governance we keep. What it used
+    to also do was overwrite Genie's narrative with hand-authored template
+    phrasing and drop the live-intelligence fields. Here we:
+
+    * Lead with Genie's own (already PII-gated) narrative and APPEND a short
+      verification note instead of replacing it. When the live turn has no
+      usable narrative even after the repair loop, we fall back to the precise
+      deterministic template already on ``canonical.answer`` and disclose that
+      honestly in ``proof.known_data_gaps``.
+    * Carry through ``genie_status``, ``reasoning_trace``,
+      ``native_visualization`` and ``follow_up_questions`` from the live result
+      exactly like the generic adaptation path does.
+    """
+    reasoning_trace = genie_reasoning_trace_from_thoughts(result.thoughts)
+    proof = canonical.proof
+    narrative = (result.answer_text or "").strip()
+    updates: dict[str, Any] = {}
+    if narrative:
+        note = _default_verification_note(
+            canonical.trusted_assets,
+            canonical.metric_value,
+            len(canonical.table_rows or []),
+        )
+        answer = narrative
+        if note and note not in answer:
+            answer = f"{answer}\n\n{note}"
+        updates["answer"] = _ensure_answer_cites_source(answer, canonical.trusted_assets)
+    elif proof is not None:
+        gap = "Genie returned no narrative; presenting the verified deterministic summary."
+        if gap not in proof.known_data_gaps:
+            proof = proof.model_copy(
+                update={"known_data_gaps": [*proof.known_data_gaps, gap]}
+            )
+    if proof is not None:
+        updates["proof"] = proof.model_copy(update={"reasoning_trace": reasoning_trace})
+    updates["reasoning_trace"] = reasoning_trace
+    updates["follow_up_questions"] = genie_follow_up_questions(result.suggested_questions)
+    updates["native_visualization"] = genie_native_visualization(result.native_visualization)
+    updates["genie_status"] = result.genie_status
+    return canonical.model_copy(update=updates)
 
 
 def _canonical_genie_answer(

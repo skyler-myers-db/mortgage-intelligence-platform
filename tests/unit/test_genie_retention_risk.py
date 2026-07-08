@@ -122,7 +122,9 @@ def test_genie_strategy_board_uses_canonical_marketable_offer_lanes() -> None:
         "outreach touches this week, and why?"
     )
     result = GenieResponse(
-        answer_text="Use a segment strategy board.",
+        answer_text=(
+            "Prioritize the next outreach touches by state, segment, and offer lane."
+        ),
         sql_query=None,
         sql_result_rows=[],
         trusted_assets=[],
@@ -144,6 +146,11 @@ def test_genie_strategy_board_uses_canonical_marketable_offer_lanes() -> None:
     assert response.proof.trusted is True
     assert response.visualization is not None
     assert response.visualization.kind == "strategy_board"
+    # Voice-first: Genie's own narrative leads, plus an appended verification note.
+    assert response.answer.startswith(
+        "Prioritize the next outreach touches by state, segment, and offer lane."
+    )
+    assert "Verified against" in response.answer
     answer_lc = response.answer.lower()
     assert "state" in answer_lc
     assert "segment" in answer_lc
@@ -175,7 +182,11 @@ def test_genie_repairs_impossible_current_customer_competitor_lien_retention_que
 
     assert response.source == "trusted_sql"
     assert response.metric_value == "6,638"
-    assert "retention-risk cohort" in response.answer
+    # Voice-first: Genie's narrative is preserved; the verified gold-grain count
+    # is appended as a correction note rather than replacing the text.
+    assert response.answer.startswith("There are 0 current Summit customers at risk.")
+    assert "Verified against" in response.answer
+    assert "6,638" in response.answer
     assert "is_competitor_lien = TRUE" not in (response.sql_query or "")
     assert "array_contains(segment_codes, 'retention')" in (response.sql_query or "")
     assert sql.sql == response.sql_query
@@ -249,8 +260,10 @@ def test_genie_retention_list_uses_canonical_row_lookup_not_count_metric() -> No
         }
     ]
     assert response.metric_value == "304"
-    assert "There are 304 retention-list borrowers" in response.answer
-    assert "showing the first 1" in response.answer
+    # Voice-first: Genie's narrative leads; the verified total is appended.
+    assert response.answer.startswith("Rows.")
+    assert "Verified against" in response.answer
+    assert "304" in response.answer
 
 
 def test_genie_retention_list_uses_canonical_competitor_lien_signal() -> None:
