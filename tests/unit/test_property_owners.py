@@ -220,8 +220,13 @@ def test_lakeflow_pipeline_embeds_classifier_contract() -> None:
     for value in ALL_CONFIDENCES:
         assert str(value) in text
     assert 'name="property_owners"' in text
-    for i in range(1, MAX_OWNER_SLOTS + 1):
-        assert f"owner_{i}_identifier" in text
+    # The DLT path builds the slot column families from a template; the
+    # explode must cover every slot up to MAX_OWNER_SLOTS.
+    assert 'F.col(f"owner_{position}_identifier")' in text
+    assert 'F.col(f"owner_{position}_full_name")' in text
+    assert 'F.col(f"owner_{position}_corporate_indicator")' in text
+    assert "MAX_OWNER_SLOTS = 4" in text
+    assert "range(1, MAX_OWNER_SLOTS + 1)" in text
     assert "owner_1_original_trust_name" in text
 
 

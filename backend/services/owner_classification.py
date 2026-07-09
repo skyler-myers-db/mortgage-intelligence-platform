@@ -29,8 +29,9 @@ owner_name_hash, the classification, and the opaque Owner Link.
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, Mapping
+from typing import Literal
 
 OwnerEntityType = Literal["individual", "trust", "llc", "unresolved"]
 

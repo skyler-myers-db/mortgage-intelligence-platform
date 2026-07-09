@@ -337,6 +337,18 @@ resources:
             # a full refresh so ZIP/lender/PII transformation fixes reprocess
             # existing rows instead of leaving stale Delta output behind.
             full_refresh: true
+        # S1.1 multi-owner: single-owner compatibility projection of
+        # silver.property_owners (owner_position = 1). CREATE OR REPLACE VIEW
+        # is idempotent; it runs after the pipeline so the base table exists
+        # on first deploy.
+        - task_key: init_property_owners_primary_view
+          description: "CREATE OR REPLACE mip.silver.property_owners_primary compatibility view (S1.1 multi-owner)."
+          depends_on:
+            - task_key: refresh_silver_pipeline
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/silver_property_owners_primary_view.sql
     # Slice13-accuracy: standalone ref-data seed job. Mirrors the two
     # tasks baked into mip_refresh_silver so analysts / ops can re-run
     # the lender-dictionary seed without kicking the full silver pipeline.
