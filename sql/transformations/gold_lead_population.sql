@@ -95,6 +95,8 @@ WITH ranked AS (
     b.refi_propensity_score,
     b.refi_propensity_run_date,
     b.has_refi_propensity_trigger,
+    b.loan_product_type,
+    b.origination_channel,
     b.marketing_eligible,
     b.consent_status,
     b.suppression_reason,
@@ -149,6 +151,8 @@ SELECT
   refi_propensity_score,
   refi_propensity_run_date,
   has_refi_propensity_trigger,
+  loan_product_type,
+  origination_channel,
   marketing_eligible,
   consent_status,
   suppression_reason,
@@ -213,6 +217,8 @@ COMMENT ON COLUMN mip.gold.lead_population.has_heloc_propensity_trigger IS 'TRUE
 COMMENT ON COLUMN mip.gold.lead_population.refi_propensity_score IS 'Cotality refinance propensity score, 0..999 in the current feed.';
 COMMENT ON COLUMN mip.gold.lead_population.refi_propensity_run_date IS 'Cotality refinance propensity model run date.';
 COMMENT ON COLUMN mip.gold.lead_population.has_refi_propensity_trigger IS 'TRUE when refi_propensity_score >= 700. Adds intent score context.';
+COMMENT ON COLUMN mip.gold.lead_population.loan_product_type IS 'From gold.borrower_360; conventional / jumbo / fha / va / other, NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter.';
+COMMENT ON COLUMN mip.gold.lead_population.origination_channel IS 'From gold.borrower_360; LOS channel of the most recent funded first-party application, NULL when unknown. Drives the ORIGINATION CHANNEL filter.';
 COMMENT ON COLUMN mip.gold.lead_population.marketing_eligible IS 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.';
 COMMENT ON COLUMN mip.gold.lead_population.consent_status IS 'From gold.borrower_360; opt_in / opt_out / unknown.';
 COMMENT ON COLUMN mip.gold.lead_population.suppression_reason IS 'From gold.borrower_360; controlled suppression reason.';

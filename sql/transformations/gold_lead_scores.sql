@@ -49,7 +49,7 @@ AS
 WITH evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events
-  WHERE signal_type NOT IN ('permit', 'loan_type_fit')
+  WHERE signal_type NOT IN ('permit', 'loan_type_fit', 'product_type', 'origination_channel')
   GROUP BY clip
 ),
 -- Historical tenant-lender relationships per owner_link_id for the

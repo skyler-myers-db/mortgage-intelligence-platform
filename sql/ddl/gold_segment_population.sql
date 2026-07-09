@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   avg_score       INT       NOT NULL COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',
   description     STRING    NOT NULL COMMENT 'Static description per segment_code.',
   color           STRING    NOT NULL COMMENT 'Hex color for segment tile.',
+  loan_product_mix ARRAY<STRUCT<value: STRING, count: INT>>
+                            NOT NULL COMMENT 'Loan product-type facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. value is conventional / jumbo / fha / va / other / unknown. Backs SegmentCard facets.',
+  origination_channel_mix ARRAY<STRUCT<value: STRING, count: INT>>
+                            NOT NULL COMMENT 'Origination-channel facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. unknown aggregates borrowers with no funded first-party application. Backs SegmentCard facets.',
   refreshed_at    TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
 )
 USING DELTA

@@ -455,6 +455,12 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/uc_functions/fn_next_best_offer.sql
+        - task_key: init_fn_loan_product_type
+          description: "CREATE OR REPLACE mip.gold.fn_loan_product_type before any scoring CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_loan_product_type.sql
         - task_key: init_gold_ddl
           description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
           depends_on:
@@ -463,6 +469,7 @@ resources:
             - task_key: init_fn_in_the_money
             - task_key: init_fn_lead_score
             - task_key: init_fn_next_best_offer
+            - task_key: init_fn_loan_product_type
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -502,6 +509,9 @@ resources:
           description: "Rebuild mip.gold.evidence_events via CTAS."
           depends_on:
             - task_key: ctas_property_owner_bridge
+            # S1.6: origination_channel evidence cites mip.first_party.loan_applications;
+            # sequence after the seed so evidence never reads a mid-rebuild feed.
+            - task_key: seed_demo_first_party_feeds
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:

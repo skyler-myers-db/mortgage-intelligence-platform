@@ -208,12 +208,15 @@ SELECT
   b.current_lender_ref,
   b.second_pos_amount,
   b.first_pos_loan_type,
+  b.loan_product_type,
+  b.origination_channel,
   b.owner_name_hash,
   b.min_spread_bps_applied,
   b.min_equity_pct_applied,
   b.heloc_equity_min_applied,
   b.cashout_equity_min_applied,
   b.retention_min_spread_applied,
+  b.conforming_loan_limit_applied,
   b.in_the_money,
   b.trigger_timeline_json,
   -- New dossier-only columns: pre-joined evidence payload.
@@ -292,12 +295,15 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.eligible_recontact_at IS 'From borro
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_lender_ref IS 'Public-demo-safe current-servicer reference.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.second_pos_amount IS 'For "equity" segment predicate.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.first_pos_loan_type IS 'For fit sub-score.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.loan_product_type IS 'From borrower_360; conventional / jumbo / fha / va / other, NULL when unknown.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.origination_channel IS 'From borrower_360; funded first-party application channel, NULL when unknown.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.owner_name_hash IS 'sha2 hash from silver; internal only, router strips.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.min_spread_bps_applied IS 'Threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.min_equity_pct_applied IS 'Threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.heloc_equity_min_applied IS 'HELOC equity threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.cashout_equity_min_applied IS 'Cash-out equity threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.retention_min_spread_applied IS 'Retention spread threshold this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.conforming_loan_limit_applied IS 'Conforming loan limit (USD) applied this refresh for jumbo classification.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.in_the_money IS 'fn_in_the_money output.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.trigger_timeline_json IS 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).';
 COMMENT ON COLUMN mip.gold.borrower_dossier.evidence_events IS 'Full evidence array (capped at 20 per CLIP) sorted by signal_rank.';

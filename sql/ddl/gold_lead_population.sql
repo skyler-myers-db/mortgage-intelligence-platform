@@ -89,6 +89,8 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   refi_propensity_score     INT                COMMENT 'Cotality refinance propensity score, 0..999 in the current feed.',
   refi_propensity_run_date  DATE               COMMENT 'Cotality refinance propensity model run date.',
   has_refi_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when refi_propensity_score >= 700. Adds intent score context.',
+  loan_product_type         STRING             COMMENT 'From gold.borrower_360; conventional / jumbo / fha / va / other, NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter.',
+  origination_channel       STRING             COMMENT 'From gold.borrower_360; LOS channel of the most recent funded first-party application, NULL when unknown. Drives the ORIGINATION CHANNEL filter.',
   marketing_eligible        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.',
   consent_status            STRING    NOT NULL COMMENT 'From gold.borrower_360; opt_in / opt_out / unknown.',
   suppression_reason        STRING             COMMENT 'From gold.borrower_360; controlled suppression reason.',

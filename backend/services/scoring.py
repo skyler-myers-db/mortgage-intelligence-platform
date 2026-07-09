@@ -22,6 +22,11 @@ golden-fixture JSON that the SQL side validates against the same inputs:
                             + ``tests/fixtures/next_best_offer_golden.json``
                             (case_12 pins the fixture refi_plus_heloc shift;
                             cases 09/10 pin the HELOC-equity boundary).
+- ``loan_product_type``  -> ``sql/uc_functions/fn_loan_product_type.sql``
+                            + ``tests/fixtures/loan_product_type_golden.json``
+                            (boundary case pins "exactly at the conforming
+                            limit is conforming, not jumbo"; NULL code
+                            returns None -- unknown never guesses).
 
 Weights for ``lead_score`` (non-negotiable): 0.35 / 0.30 / 0.15 / 0.10 / 0.10.
 NULL (``None``) score components coerce to 0. ``in_the_money`` returns
@@ -70,6 +75,31 @@ NBO_PRODUCT_LABELS: dict[str, str] = {
     "nurture": "Nurture",
 }
 
+# Canonical loan product-type vocabulary emitted by fn_loan_product_type /
+# gold.borrower_360.loan_product_type. Order matters: it is the reviewed
+# filter-option order on the segments / lead-queue surfaces.
+LOAN_PRODUCT_TYPES: tuple[str, ...] = ("conventional", "jumbo", "fha", "va", "other")
+
+LOAN_PRODUCT_DISPLAY_LABELS: dict[str, str] = {
+    "conventional": "Conventional",
+    "jumbo": "Jumbo",
+    "fha": "FHA",
+    "va": "VA",
+    "other": "Other",
+}
+
+# Origination-channel vocabulary from the governed first-party LOS feed
+# (mip.first_party.loan_applications.application_channel; funded rows only).
+# NULL gold values render as "Unknown" -- the app never invents a channel.
+ORIGINATION_CHANNELS: tuple[str, ...] = ("loan_officer", "digital", "branch", "call_center")
+
+ORIGINATION_CHANNEL_DISPLAY_LABELS: dict[str, str] = {
+    "loan_officer": "Loan officer",
+    "digital": "Digital",
+    "branch": "Branch",
+    "call_center": "Call center",
+}
+
 OFFER_DISPLAY_LABELS: dict[str, str] = {
     "purchase": "Next-home purchase loan",
     "refi_plus_heloc": "Refinance + home-equity review",
@@ -114,6 +144,7 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.gold.fn_in_the_money":     "Refinance economics screen",
     "mip.gold.fn_next_best_offer":  "Primary offer rules",
     "mip.gold.fn_lead_score":       "Opportunity score",
+    "mip.gold.fn_loan_product_type": "Loan product classification",
     # UC table evidence
     "mip.gold.borrower_360":        "Borrower dossier",
     "mip.gold.borrower_dossier":    "Borrower dossier",
@@ -124,12 +155,16 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.silver.listing_activity":  "MLS listing activity",
     "mip.silver.heloc_propensity":  "HELOC propensity",
     "mip.silver.refi_propensity":   "Refi propensity",
+    "mip.silver.lien_current":      "Voluntary lien snapshot",
+    "mip.first_party.loan_applications": "First-party loan applications",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
     "fn_estimated_upb":             "Estimated UPB amortization",
     "fn_in_the_money":              "Refinance economics screen",
     "fn_next_best_offer":           "Primary offer rules",
     "fn_lead_score":                "Opportunity score",
+    "fn_loan_product_type":         "Loan product classification",
+    "loan_applications":            "First-party loan applications",
     "rules.itm_v3":                 "Refinance economics screen",
     "mlflow.mtg_nbo_v3":            "Primary offer rules v3",
     "permits.building":             "Building permit signal",
@@ -382,3 +417,40 @@ def next_best_offer(
     if customer and (spread >= retention_min or competitor_lien):
         return "retention"
     return "nurture"
+
+
+def loan_product_type(
+    loan_type_code: str | None,
+    original_loan_amount: int | None,
+    conforming_limit_usd: int | None,
+) -> str | None:
+    """Return the canonical loan product-type bucket, or ``None`` if unknown.
+
+    Mirrors ``mip.gold.fn_loan_product_type`` EXACTLY. The Cotality
+    first-position loan type code (CONV / FHA / VA / other codes) maps to
+    the lowercase vocabulary in ``LOAN_PRODUCT_TYPES``; a conventional
+    first lien whose ORIGINAL amount is strictly greater than the governed
+    conforming loan limit classifies as ``'jumbo'``. A loan exactly at the
+    limit is conforming (FHFA definition -- golden fixture pins the
+    boundary). ``None``/blank code returns ``None``: an unknown source
+    code must read as "unknown", never a guessed product. ``None`` amount
+    or limit only disables the jumbo branch.
+    """
+    if loan_type_code is None:
+        return None
+    code = loan_type_code.strip().upper()
+    if not code:
+        return None
+    if code == "CONV":
+        if (
+            original_loan_amount is not None
+            and conforming_limit_usd is not None
+            and original_loan_amount > conforming_limit_usd
+        ):
+            return "jumbo"
+        return "conventional"
+    if code == "FHA":
+        return "fha"
+    if code == "VA":
+        return "va"
+    return "other"

@@ -572,7 +572,9 @@ def test_evidence_event_source_table_literals_are_uc_paths() -> None:
 
     assert source_table_literals, "gold.evidence_events must emit source_table literals."
     for literal in source_table_literals:
-        assert re.fullmatch(r"mip\.(silver|gold|ref)\.[a-z0-9_]+", literal), (
+        # first_party joined the allowed schemas in S1.6: origination_channel
+        # evidence cites the governed mip.first_party.loan_applications feed.
+        assert re.fullmatch(r"mip\.(silver|gold|ref|first_party)\.[a-z0-9_]+", literal), (
             f"source_table literal must be one real UC path, got {literal!r}."
         )
 
@@ -664,8 +666,11 @@ def test_fit_loan_type_parity_and_explainability_contract() -> None:
     assert re.search(parity_pattern, lead_scores_sql)
     assert "'loan_type_fit'                                  AS signal_type" in evidence_sql
     assert "first_pos_loan_type IN ('CONV','FHA','VA')" in evidence_sql
-    assert "signal_type NOT IN ('permit', 'loan_type_fit')" in borrower_sql
-    assert "signal_type NOT IN ('permit', 'loan_type_fit')" in lead_scores_sql
+    # S1.6 extended the explainability-only exclusion list: product_type and
+    # origination_channel rows must never retune the evidence sub-score.
+    exclusion = "signal_type NOT IN ('permit', 'loan_type_fit', 'product_type', 'origination_channel')"
+    assert exclusion in borrower_sql
+    assert exclusion in lead_scores_sql
     assert "CONV/FHA/VA parity is a contract" in docs
     assert "customer compliance team should explicitly review" in re.sub(r"\s+", " ", docs)
 
