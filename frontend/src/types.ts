@@ -95,6 +95,13 @@ export interface LeadSummary {
   suppression_reason?: string | null;
   last_touch_at?: string | null;
   eligible_recontact_at?: string | null;
+  /** Explicit do-not-contact suppression flag (S1.4). */
+  dnc?: boolean;
+  /**
+   * Provenance of the consent/eligibility fields: 'synthetic_seed' for the
+   * governed demo feed, else a connected CRM/CDP connector id (S4.1).
+   */
+  eligibility_source?: string;
   assigned_to_email?: string | null;
   assigned_to_label?: string | null;
   assigned_at?: string | null;

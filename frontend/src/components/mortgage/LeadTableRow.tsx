@@ -103,8 +103,19 @@ export function LeadTableRow({
         <td>
           <div className="chip-stack">
             <Chip variant={relationshipVariant(lead)}>{relationshipLabel(lead)}</Chip>
-            {lead.marketing_eligible === false && (
-              <Chip variant="warning">
+            {lead.dnc === true && (
+              <Chip
+                variant="danger"
+                title={`Do-not-contact suppression. Synthetic-by-design consent signal · source: ${lead.eligibility_source ?? 'synthetic_seed'}`}
+              >
+                DNC
+              </Chip>
+            )}
+            {lead.marketing_eligible === false && lead.dnc !== true && (
+              <Chip
+                variant="warning"
+                title={`Synthetic-by-design consent signal · source: ${lead.eligibility_source ?? 'synthetic_seed'}`}
+              >
                 Suppressed{lead.suppression_reason ? `: ${lead.suppression_reason}` : ''}
               </Chip>
             )}

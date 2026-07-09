@@ -334,7 +334,6 @@ def _enforce_contact_eligibility(
     borrower: Any,
     *,
     audit: AuditStore,
-    background: BackgroundTasks,
     actor: str,
     surface: str,
     request_id: str | None = None,
@@ -345,12 +344,15 @@ def _enforce_contact_eligibility(
     this function branches only on the decision (never raw borrower
     fields), audits every suppression, and preserves the pinned HTTP
     contract: 422 for consent/suppression, 409 for frequency caps.
+
+    The suppression audit write is synchronous (safe, non-raising):
+    FastAPI drops BackgroundTasks when the handler raises HTTPException,
+    so a background write would silently lose the suppression row.
     """
     decision = get_eligibility_service().evaluate(borrower)
     if decision.eligible:
         return decision
-    background.add_task(
-        safe_write_suppression_audit,
+    safe_write_suppression_audit(
         audit,
         actor=actor,
         borrower_id=str(getattr(borrower, "borrower_id", "") or ""),
@@ -533,7 +535,6 @@ def draft_outreach(
     _enforce_contact_eligibility(
         b,
         audit=audit,
-        background=background,
         actor=resolve_actor(request),
         surface="outreach_draft",
     )
@@ -640,7 +641,6 @@ def approve_outreach(
     _enforce_contact_eligibility(
         borrower,
         audit=audit,
-        background=background,
         actor=actor,
         surface="outreach_approve",
         request_id=effective_request_id,
