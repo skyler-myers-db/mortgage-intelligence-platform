@@ -777,7 +777,11 @@ def _blank_to_null(col):  # pragma: no cover -- Databricks-runtime only
     "owner_entity_type <> 'unresolved' OR is_contact_eligible = FALSE",
 )
 def silver_property_owners() -> DataFrame:  # pragma: no cover
-    src = _read_share_table(_SHARE_PROPERTY_V3)
+    # Batch read (not streaming): this table needs ROW_NUMBER windows for the
+    # per-CLIP dedup and the duplicate-Owner-Link collapse, and non-watermarked
+    # window functions are not supported on streaming DataFrames. The pipeline
+    # runs full_refresh=true, so a snapshot read is the correct posture.
+    src = _read_share_table(_SHARE_PROPERTY_V3, streaming=False)
     # Same per-CLIP dedup tiebreak as silver_property_master (audit P2-10)
     # so the (clip, owner_position) grain stays unique on duplicate share rows.
     dedup_window = Window.partitionBy("clip").orderBy(
