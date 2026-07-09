@@ -144,7 +144,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   has_refi_propensity_heuristic_trigger BOOLEAN NOT NULL COMMENT 'S1.3 refi_propensity segment flag: refi_propensity_heuristic >= 60.',
   tenant_payoff_date        DATE               COMMENT 'S1.3: most recent released tenant-lender lien date from silver.mortgage_events joined to ref.lender_dictionary.',
   is_payoff_loss            BOOLEAN   NOT NULL COMMENT 'S1.3 payoff_loss_leads segment flag: tenant lien released within 24 months AND the property now carries a competitor lien. Also feeds the future S2.7 competitive view.',
-  itm_on_related_property   BOOLEAN   NOT NULL COMMENT 'S1.3 itm_on_related_property segment flag: any Owner Link on this CLIP (S1.1 silver.property_owners, all slots) also holds a DIFFERENT clip that is in the money under this refresh thresholds.',
+  itm_on_related_property   BOOLEAN   NOT NULL COMMENT 'S1.3 itm_on_related_property segment flag: any Owner Link on this CLIP (S1.1 silver.property_owners, all slots) also holds a DIFFERENT clip that is in the money under the same refresh thresholds.',
   related_itm_property_count INT      NOT NULL COMMENT 'S1.3: count of OTHER in-the-money clips on the strongest Owner Link for this CLIP. Evidence display for itm_on_related_property.',
   first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',
   owner_name_hash           STRING    NOT NULL COMMENT 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.',

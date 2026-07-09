@@ -238,7 +238,7 @@ LEFT JOIN prior     AS p USING (segment_code, state);
 -- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
 -- asset-page comments refresh-stable; the SQL file task executes the
 -- statements in order.
-COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention + S1.3 overlays second_lien_itm / heloc_draw_to_payback / home_equity_history / refi_propensity / itm_on_related_property / payoff_loss_leads / permit_activity. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent while permit_activity is the true filed-permit segment (gated until the source lands).';
+COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention + S1.3 overlays second_lien_itm / heloc_draw_to_payback / home_equity_history / refi_propensity / itm_on_related_property / payoff_loss_leads / permit_activity. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
 COMMENT ON COLUMN mip.gold.segment_population.state IS '2-char state code from refreshed source coverage or "_ALL" for national rollup.';
 COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "Prime Refi Candidates").';
 COMMENT ON COLUMN mip.gold.segment_population.count IS 'Member count for this (segment, state) cell.';
