@@ -123,6 +123,8 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   suppression_reason      STRING             COMMENT 'Controlled first-party CRM suppression reason, e.g. do_not_contact or recent_contact_cap.',
   last_touch_at           TIMESTAMP          COMMENT 'Most recent first-party marketing/contact touch timestamp used for frequency-cap enforcement.',
   eligible_recontact_at   TIMESTAMP          COMMENT 'Earliest timestamp the borrower can be contacted again when a frequency cap is active.',
+  dnc                     BOOLEAN   NOT NULL COMMENT 'TRUE when a first-party do_not_contact suppression exists. Synthetic-by-design consent signal; the backend EligibilityService fails closed on TRUE.',
+  eligibility_source      STRING    NOT NULL COMMENT 'Provenance of the consent/eligibility fields: synthetic_seed for the governed demo feed, else the connected CRM/CDP connector id (source_system).',
   current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.',
   second_pos_amount         BIGINT             COMMENT '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.',
   first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',

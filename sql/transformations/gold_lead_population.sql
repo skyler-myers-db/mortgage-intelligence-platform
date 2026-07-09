@@ -100,6 +100,8 @@ WITH ranked AS (
     b.suppression_reason,
     b.last_touch_at,
     b.eligible_recontact_at,
+    b.dnc,
+    b.eligibility_source,
     DENSE_RANK() OVER (ORDER BY b.opportunity_score DESC, b.clip) AS rank_overall,
     DENSE_RANK() OVER (PARTITION BY b.state
                        ORDER BY b.opportunity_score DESC, b.clip) AS rank_within_state,
@@ -154,6 +156,8 @@ SELECT
   suppression_reason,
   last_touch_at,
   eligible_recontact_at,
+  dnc,
+  eligibility_source,
   rank_overall,
   rank_within_state,
   CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1') AS population_version,
@@ -218,6 +222,8 @@ COMMENT ON COLUMN mip.gold.lead_population.consent_status IS 'From gold.borrower
 COMMENT ON COLUMN mip.gold.lead_population.suppression_reason IS 'From gold.borrower_360; controlled suppression reason.';
 COMMENT ON COLUMN mip.gold.lead_population.last_touch_at IS 'From gold.borrower_360; most recent first-party marketing/contact touch.';
 COMMENT ON COLUMN mip.gold.lead_population.eligible_recontact_at IS 'From gold.borrower_360; earliest permitted re-contact time when capped.';
+COMMENT ON COLUMN mip.gold.lead_population.dnc IS 'From gold.borrower_360; TRUE when a first-party do_not_contact suppression exists. Synthetic-by-design consent signal.';
+COMMENT ON COLUMN mip.gold.lead_population.eligibility_source IS 'From gold.borrower_360; provenance of the consent/eligibility fields. synthetic_seed until a CRM/CDP connector supplies it.';
 COMMENT ON COLUMN mip.gold.lead_population.rank_overall IS 'DENSE_RANK OVER (ORDER BY opportunity_score DESC, clip). 1 = highest.';
 COMMENT ON COLUMN mip.gold.lead_population.rank_within_state IS 'DENSE_RANK OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip). 1 = highest in state.';
 COMMENT ON COLUMN mip.gold.lead_population.population_version IS 'CONCAT(DATE_FORMAT(refreshed_at, "yyyyMMdd"), "-v1"). EvidenceDrawer footer uses this as a provenance chip.';
