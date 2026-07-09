@@ -167,6 +167,39 @@ export function segmentFilterDisplayValue(
   return 'All segments';
 }
 
+// S1.6 — deep links may carry the backend's lowercase/snake_case tokens
+// (e.g. ?loan_product=jumbo, ?origination_channel=loan_officer) instead of
+// the display labels. Mirrors _LOAN_PRODUCT_ALIASES / _ORIGINATION_CHANNEL_ALIASES
+// in backend/schemas/portfolio.py; keys are lowercased with spaces -> underscores.
+const LOAN_PRODUCT_VALUE_ALIASES: Record<string, string> = {
+  all: 'All loan products',
+  all_loan_products: 'All loan products',
+  conventional: 'Conventional',
+  jumbo: 'Jumbo',
+  fha: 'FHA',
+  va: 'VA',
+  other: 'Other',
+  unknown: 'Unknown',
+};
+const ORIGINATION_CHANNEL_VALUE_ALIASES: Record<string, string> = {
+  all: 'All channels',
+  all_channels: 'All channels',
+  loan_officer: 'Loan officer',
+  digital: 'Digital',
+  branch: 'Branch',
+  call_center: 'Call center',
+  unknown: 'Unknown',
+};
+const PORTFOLIO_FILTER_VALUE_ALIASES: Partial<Record<PortfolioFilterKey, Record<string, string>>> = {
+  loan_product: LOAN_PRODUCT_VALUE_ALIASES,
+  origination_channel: ORIGINATION_CHANNEL_VALUE_ALIASES,
+};
+
+function resolvePortfolioValueAlias(key: PortfolioFilterKey, value: string): string {
+  const aliases = PORTFOLIO_FILTER_VALUE_ALIASES[key];
+  return aliases?.[value.toLowerCase().replace(/ /g, '_')] ?? value;
+}
+
 const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string>>> = {
   occupancy: new Set(['Owner-occupied', 'Non-owner-occupied', 'All']),
   lien_status: new Set(['Any', 'Open 1st lien', 'Open first lien', 'Open HELOC', 'Free & clear', 'Free and clear']),
@@ -194,10 +227,11 @@ function sanitizePortfolioCriteria(
 ): Record<string, string> | undefined {
   const criteria: Record<string, string> = {};
   for (const key of PORTFOLIO_FILTER_KEYS) {
-    const value = key === 'purchase_intent'
+    const trimmed = key === 'purchase_intent'
       ? normalizePurchaseIntent(raw[key]?.trim() ?? '')
       : raw[key]?.trim();
-    if (!value) continue;
+    if (!trimmed) continue;
+    const value = resolvePortfolioValueAlias(key, trimmed);
     if (key === 'target_lender_ref' && !isPublicLenderRef(value, allowedLenderRefs)) continue;
     const allowedValues = PORTFOLIO_FILTER_VALUE_SETS[key];
     if (allowedValues && !allowedValues.has(value)) continue;

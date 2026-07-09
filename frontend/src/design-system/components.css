@@ -996,8 +996,8 @@ kbd {
   color: var(--text-1);
 }
 .seg-card__facet-chip:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
 }
 
 /* ============================================================

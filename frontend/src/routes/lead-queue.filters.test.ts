@@ -109,4 +109,24 @@ describe('S1.6 loan-product and origination-channel filters', () => {
     const sp = new URLSearchParams({ loan_product: 'Reverse', origination_channel: 'Carrier pigeon' });
     expect(parsePortfolioCriteria(sp, [])).toBeUndefined();
   });
+
+  it('accepts backend lowercase/snake_case aliases in deep links', () => {
+    const sp = new URLSearchParams({ loan_product: 'jumbo', origination_channel: 'loan_officer' });
+    expect(parsePortfolioCriteria(sp, [])).toMatchObject({
+      loan_product: 'Jumbo',
+      origination_channel: 'Loan officer',
+    });
+    expect(parsePortfolioCriteria(new URLSearchParams({ loan_product: 'fha' }), []))
+      .toMatchObject({ loan_product: 'FHA' });
+    expect(parsePortfolioCriteria(new URLSearchParams({ origination_channel: 'call_center' }), []))
+      .toMatchObject({ origination_channel: 'Call center' });
+  });
+
+  it('treats aliased "all" sentinels and unknown-token aliases as no-ops or rejects', () => {
+    // Aliased no-op sentinels resolve to the display sentinel and drop out.
+    expect(parsePortfolioCriteria(new URLSearchParams({ loan_product: 'all_loan_products' }), [])).toBeUndefined();
+    expect(parsePortfolioCriteria(new URLSearchParams({ origination_channel: 'all_channels' }), [])).toBeUndefined();
+    // Unreviewed snake_case tokens are still rejected, not passed through.
+    expect(parsePortfolioCriteria(new URLSearchParams({ origination_channel: 'carrier_pigeon' }), [])).toBeUndefined();
+  });
 });
