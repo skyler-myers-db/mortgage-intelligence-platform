@@ -241,21 +241,34 @@ def estimated_upb(
     0; months at or beyond term return 0. The final dollar amount is
     banker's-rounded to stay in parity with SQL ``BROUND``.
     """
-    if original_upb is None or original_upb <= 0:
+    import math
+
+    try:
+        principal = float(original_upb)
+    except (TypeError, ValueError):
+        return 0
+    if not math.isfinite(principal) or principal <= 0:
         return 0
 
-    principal = float(original_upb)
-    elapsed = 0 if months_elapsed is None else int(months_elapsed)
-    elapsed = max(0, min(_STANDARD_MORTGAGE_TERM_MONTHS, elapsed))
+    try:
+        elapsed_raw = 0 if months_elapsed is None else int(months_elapsed)
+    except (TypeError, ValueError):
+        elapsed_raw = 0
+    elapsed = max(0, min(_STANDARD_MORTGAGE_TERM_MONTHS, elapsed_raw))
     if elapsed >= _STANDARD_MORTGAGE_TERM_MONTHS:
         return 0
 
-    if estimated_rate is None or estimated_rate <= 0:
+    try:
+        rate = None if estimated_rate is None else float(estimated_rate)
+    except (TypeError, ValueError):
+        rate = None
+
+    if rate is None or not math.isfinite(rate) or rate <= 0:
         balance = principal * (_STANDARD_MORTGAGE_TERM_MONTHS - elapsed)
         balance /= _STANDARD_MORTGAGE_TERM_MONTHS
     else:
-        monthly_rate = float(estimated_rate) / 12.0
-        if monthly_rate <= 0:
+        monthly_rate = rate / 12.0
+        if not math.isfinite(monthly_rate) or monthly_rate <= 0:
             balance = principal * (_STANDARD_MORTGAGE_TERM_MONTHS - elapsed)
             balance /= _STANDARD_MORTGAGE_TERM_MONTHS
         else:

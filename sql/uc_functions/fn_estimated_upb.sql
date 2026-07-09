@@ -48,7 +48,7 @@ RETURN
     ELSE CAST(GREATEST(0.0, BROUND(
       CASE
         WHEN LEAST(360, GREATEST(0, COALESCE(months_elapsed, 0))) >= 360 THEN 0.0
-        WHEN estimated_rate IS NULL OR estimated_rate <= 0 THEN
+        WHEN estimated_rate IS NULL OR isnan(estimated_rate) OR estimated_rate <= 0 THEN
           CAST(original_upb AS DOUBLE)
           * (360 - LEAST(360, GREATEST(0, COALESCE(months_elapsed, 0))))
           / 360.0
