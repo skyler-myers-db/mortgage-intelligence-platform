@@ -463,7 +463,27 @@ export interface PortfolioCreateResponse {
   campaign_id?: string | null;
   name: string;
   marketable_population: number;
+  household_summary?: HouseholdDedupSummary;
   audit_event_id?: string | null;
+}
+
+export interface HouseholdDedupConfig {
+  enabled: boolean;
+  dedupe_unit: 'borrower' | 'household';
+  primary_contact_strategy: 'highest_opportunity_eligible';
+}
+
+export interface HouseholdDedupSummary {
+  enabled: boolean;
+  candidate_borrower_count: number;
+  selected_primary_count: number;
+  suppressed_co_owner_count: number;
+  household_count: number;
+  owner_link_household_count: number;
+  mailing_address_household_count: number;
+  singleton_household_count: number;
+  primary_contact_strategy: 'highest_opportunity_eligible';
+  source_assets: string[];
 }
 
 export interface CampaignSummary {
@@ -478,6 +498,8 @@ export interface CampaignSummary {
   send_window?: Record<string, unknown>;
   holdout?: Record<string, unknown> | null;
   roi_assumptions?: Record<string, unknown> | null;
+  household_dedup?: HouseholdDedupConfig;
+  household_summary?: HouseholdDedupSummary;
   created_at?: string | null;
   updated_at?: string | null;
 }

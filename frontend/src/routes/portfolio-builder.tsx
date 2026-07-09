@@ -9,6 +9,7 @@ import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -46,6 +47,7 @@ import {
 
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
+  const { setDrawer } = useApp();
   const footprint = useFootprint();
   const configOptionsQuery = useConfigOptionsQuery();
   const targetLenderOptions = useMemo(() => {
@@ -159,9 +161,15 @@ export default function PortfolioBuilder() {
     : null;
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
-  const setCampaignField = (key: keyof CampaignSetupState) => (
+  const setCampaignField = (key: Exclude<keyof CampaignSetupState, 'marketHouseholdTogether'>) => (
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => setCampaignSetup((current) => ({ ...current, [key]: event.target.value }));
+  const toggleHouseholdDedup = useCallback(() => {
+    setCampaignSetup((current) => ({
+      ...current,
+      marketHouseholdTogether: !current.marketHouseholdTogether,
+    }));
+  }, []);
   const buildDirty = useMemo(
     () =>
       JSON.stringify({ filters, stateCodes }) !==
@@ -674,6 +682,24 @@ export default function PortfolioBuilder() {
                 onChange={setCampaignField('mailCost')}
               />
             </label>
+            <div className="campaign-setup__field campaign-setup__field--wide">
+              <div className="campaign-setup__toggle">
+                <div className="campaign-setup__toggle-copy">
+                  <span>market the household together</span>
+                  <p>
+                    One eligible primary contact per household enters the campaign;
+                    suppressed co-owners are counted in the summary.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className={`switch ${campaignSetup.marketHouseholdTogether ? 'on' : ''}`}
+                  onClick={toggleHouseholdDedup}
+                  aria-pressed={campaignSetup.marketHouseholdTogether}
+                  aria-label="market the household together"
+                />
+              </div>
+            </div>
           </div>
           <div className="campaign-setup__meta">
             <span>Email → SMS after 3 days → direct mail after 10 days</span>
@@ -718,15 +744,35 @@ export default function PortfolioBuilder() {
                 <span>{campaigns.length.toLocaleString()} saved</span>
                 <span>eligible-only policy required before approval</span>
               </div>
-              {campaigns.slice(0, 8).map((campaign) => (
-                <div key={campaign.campaign_id} className="saved-workspace__item">
-                  <span className="status-dot status-dot--ok" aria-hidden="true" />
-                  <div className="saved-workspace__body">
-                    <span className="text-1">{campaign.name}</span>
-                    <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
+              {campaigns.slice(0, 8).map((campaign) => {
+                const householdEnabled = campaign.household_dedup?.enabled === true;
+                const suppressedCount = campaign.household_summary?.suppressed_co_owner_count ?? 0;
+                return (
+                  <div key={campaign.campaign_id} className="saved-workspace__item">
+                    <span className="status-dot status-dot--ok" aria-hidden="true" />
+                    <div className="saved-workspace__body">
+                      <span className="text-1">{campaign.name}</span>
+                      <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
+                      {householdEnabled && (
+                        <div className="saved-workspace__proof">
+                          <span className="chip chip--warning">
+                            {suppressedCount.toLocaleString()} co-owner
+                            {suppressedCount === 1 ? '' : 's'} suppressed
+                          </span>
+                          <button
+                            type="button"
+                            className="evidence-chip"
+                            onClick={() => setDrawer(DRAWER_SOURCES.householdRollup)}
+                          >
+                            <Icon name="link" size={9} className="e-ico" />
+                            <span className="evidence-chip__label">household_rollup</span>
+                          </button>
+                        </div>
+                      )}
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

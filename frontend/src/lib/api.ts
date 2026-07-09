@@ -760,6 +760,7 @@ export const api = {
       send_window: Record<string, unknown>;
       holdout: Record<string, unknown>;
       roi_assumptions: Record<string, unknown>;
+      household_dedup: Record<string, unknown>;
     }> = {},
     signal?: AbortSignal,
   ) =>
@@ -772,6 +773,7 @@ export const api = {
       send_window: Record<string, unknown>;
       holdout: Record<string, unknown>;
       roi_assumptions: Record<string, unknown>;
+      household_dedup: Record<string, unknown>;
     }>(
       '/api/portfolio/create',
       {
@@ -787,6 +789,11 @@ export const api = {
         send_window: config.send_window ?? { days: ['Tuesday', 'Wednesday', 'Thursday'], start_local: '09:00', end_local: '16:00' },
         holdout: config.holdout ?? { method: 'hash_modulo', size_pct: 10 },
         roi_assumptions: config.roi_assumptions ?? { source: 'operator_required_before_live_send' },
+        household_dedup: config.household_dedup ?? {
+          enabled: false,
+          dedupe_unit: 'borrower',
+          primary_contact_strategy: 'highest_opportunity_eligible',
+        },
       },
       signal,
     ),

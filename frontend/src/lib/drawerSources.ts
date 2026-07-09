@@ -7,6 +7,7 @@ const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.gold.borrower_360': 'borrower_360',
   'mip.gold.borrower_dossier': 'borrower_dossier',
   'mip.gold.evidence_events': 'evidence_events',
+  'mip.gold.household_rollup': 'household_rollup',
   'mip.gold.source_readiness': 'source_readiness',
   'mip.gold.lockin_cohort': 'lockin_cohort',
   'mip.gold.funnel_snapshot_daily': 'funnel_snapshot_daily',
@@ -85,6 +86,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('lead_population')) return enrichAsset(DRAWER_SOURCES.leadPopulation);
   if (key.includes('segment_population')) return enrichAsset(DRAWER_SOURCES.segmentPopulation);
   if (key.includes('borrower_dossier')) return enrichAsset(DRAWER_SOURCES.borrowerDossier);
+  if (key.includes('household_rollup')) return enrichAsset(DRAWER_SOURCES.householdRollup);
   if (key.includes('borrower_360')) return enrichAsset(DRAWER_SOURCES.borrower360);
   if (key.includes('evidence_events')) return enrichAsset(DRAWER_SOURCES.evidenceStream);
   if (key.includes('source_readiness')) return enrichAsset(DRAWER_SOURCES.sourceReadiness);
@@ -263,6 +265,29 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { label: 'Property identity', source: 'mip.silver.property_master.clip', value: 'masked CLIP ref' },
       { label: 'Owner relationship', source: 'mip.gold.property_owner_bridge.owner_link_id', value: 'masked Owner Link ref' },
       { label: 'Investor signal', source: 'borrower_360.related_property_count', value: '2+ related properties' },
+    ],
+  },
+
+  householdRollup: {
+    title: 'Household rollup',
+    short: 'Household rollup',
+    assetKey: 'household_rollup',
+    assetPath: 'mip.gold.household_rollup',
+    usedIn: ['Portfolio Builder campaign summary'],
+    notExposed: 'Raw CLIPs, Owner Links, owner names, mailing street addresses, emails, phones, and destination send paths.',
+    description:
+      'Opt-in campaign-time household grouping. Borrower remains the default unit; this rollup supplies one eligible primary contact per household only when the campaign builder enables household dedup.',
+    lineage: [
+      { layer: 'SILVER', name: 'mip.silver.property_owners', meta: 'S1.1 owner slots and shared Owner Links' },
+      { layer: 'SILVER', name: 'mip.silver.property_master', meta: 'mailing city/state heuristic; no mailing street address' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'synthetic borrower ids, score, marketing eligibility' },
+      { layer: 'GOLD', name: 'mip.gold.household_rollup', meta: 'household id, eligible primary rank, suppression count source' },
+    ],
+    signals: [
+      { label: 'Default unit', source: 'campaign.household_dedup.enabled', value: 'borrower unless explicitly enabled' },
+      { label: 'Primary contact', source: 'household_rollup.household_rank', value: 'eligible first, score desc, borrower id asc' },
+      { label: 'Suppressed co-owners', source: 'household_rollup.suppressed_by_household_dedup', value: 'counted in campaign summary' },
+      { label: 'Derivation evidence', source: 'household_rollup.derivation_source_tables', value: 'UC row lineage' },
     ],
   },
 
