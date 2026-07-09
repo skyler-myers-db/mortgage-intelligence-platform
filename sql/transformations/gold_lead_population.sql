@@ -97,6 +97,7 @@ WITH ranked AS (
     b.has_refi_propensity_trigger,
     b.loan_product_type,
     b.origination_channel,
+    b.conforming_loan_limit_applied,
     b.marketing_eligible,
     b.consent_status,
     b.suppression_reason,
@@ -153,6 +154,7 @@ SELECT
   has_refi_propensity_trigger,
   loan_product_type,
   origination_channel,
+  conforming_loan_limit_applied,
   marketing_eligible,
   consent_status,
   suppression_reason,
@@ -219,6 +221,7 @@ COMMENT ON COLUMN mip.gold.lead_population.refi_propensity_run_date IS 'Cotality
 COMMENT ON COLUMN mip.gold.lead_population.has_refi_propensity_trigger IS 'TRUE when refi_propensity_score >= 700. Adds intent score context.';
 COMMENT ON COLUMN mip.gold.lead_population.loan_product_type IS 'From gold.borrower_360; conventional / jumbo / fha / va / other, NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter.';
 COMMENT ON COLUMN mip.gold.lead_population.origination_channel IS 'From gold.borrower_360; LOS channel of the most recent funded first-party application, NULL when unknown. Drives the ORIGINATION CHANNEL filter.';
+COMMENT ON COLUMN mip.gold.lead_population.conforming_loan_limit_applied IS 'From gold.borrower_360; conforming loan limit (USD) applied this refresh when classifying jumbo via fn_loan_product_type. Provenance for loan_product_type.';
 COMMENT ON COLUMN mip.gold.lead_population.marketing_eligible IS 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.';
 COMMENT ON COLUMN mip.gold.lead_population.consent_status IS 'From gold.borrower_360; opt_in / opt_out / unknown.';
 COMMENT ON COLUMN mip.gold.lead_population.suppression_reason IS 'From gold.borrower_360; controlled suppression reason.';

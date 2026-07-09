@@ -383,7 +383,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `second_pos_amount` | BIGINT | Y | `lien_current.second_pos_amount` | `second_pos_amount` | 2nd-lien balance. `NULL` and `0` both mean no active second-position balance for the equity segment predicate. |
 | `first_pos_loan_type` | STRING | Y | `lien_current.first_pos_loan_type` | — | Feeds `fit`. |
 | `loan_product_type` | STRING | Y | `mip.gold.fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied)` | `loan_product_type` | Controlled vocab `conventional` / `jumbo` / `fha` / `va` / `other`; NULL when the source loan type code is missing (unknown never guesses). Drives the PRODUCT TYPE filter and SegmentCard facets. |
-| `origination_channel` | STRING | Y | `MAX_BY(LOWER(TRIM(application_channel)), application_at)` over funded `first_party.loan_applications` rows | `origination_channel` | LOS channel of the most recent funded first-party application (`loan_officer` / `digital` / `branch` / `call_center` in the demo feed); NULL when no funded application resolves — rendered "Unknown", never invented. |
+| `origination_channel` | STRING | Y | `MAX_BY(LOWER(TRIM(application_channel)), application_at)` over funded `first_party.loan_applications` rows with a non-blank channel (`NULLIF(TRIM(..), '') IS NOT NULL`) | `origination_channel` | LOS channel of the most recent funded first-party application (`loan_officer` / `digital` / `branch` / `call_center` in the demo feed); NULL when no funded application resolves or the channel is blank/whitespace — rendered "Unknown", never invented. |
 | `owner_name_hash` | STRING | N | `property_master.owner_name_hash` | — | See §7. |
 | `min_spread_bps_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_spread_bps']`, fallback `75` | — | Threshold provenance for WhyPanel and offer proof. |
 | `min_equity_pct_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_equity_pct']`, fallback `15` | — | Threshold provenance for WhyPanel and offer proof. |
@@ -463,7 +463,7 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 
 | Column | Type | Null | Source | Definition |
 |---|---|---|---|---|
-| (inherits all `LeadSummary` fields from `borrower_360`, including `loan_product_type` and `origination_channel`) | — | — | — | Served directly via `SELECT *` projection. |
+| (inherits all `LeadSummary` fields from `borrower_360`, including `loan_product_type`, `origination_channel`, and the `conforming_loan_limit_applied` provenance column) | — | — | — | Served directly via `SELECT *` projection. |
 | `rank_overall` | INT | N | `DENSE_RANK() OVER (ORDER BY opportunity_score DESC, clip)` | |
 | `rank_within_state` | INT | N | `DENSE_RANK() OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip)` | |
 | `population_version` | STRING | N | `CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1')` | Used in the EvidenceDrawer footer as a provenance chip. |

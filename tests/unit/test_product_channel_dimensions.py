@@ -38,6 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_PATH = REPO_ROOT / "tests" / "fixtures" / "loan_product_type_golden.json"
 VALIDATION_SQL_PATH = REPO_ROOT / "sql" / "fixtures" / "loan_product_type_validation.sql"
 TRANSFORM_DIR = REPO_ROOT / "sql" / "transformations"
+METRIC_VIEW_DIR = REPO_ROOT / "sql" / "metric_views"
+DDL_DIR = REPO_ROOT / "sql" / "ddl"
 
 with GOLDEN_PATH.open() as f:
     GOLDEN = json.load(f)
@@ -318,6 +320,25 @@ def test_product_channel_gold_columns_carried_through_models() -> None:
         text = (TRANSFORM_DIR / name).read_text(encoding="utf-8")
         assert "loan_product_type" in text, name
         assert "origination_channel" in text, name
+        # Jumbo-classification provenance travels with the dimension it
+        # explains -- every surface that shows loan_product_type can cite
+        # the conforming limit that produced it.
+        assert "conforming_loan_limit_applied" in text, name
+
+
+def test_product_channel_metric_views_expose_dimensions_and_provenance() -> None:
+    """The Genie/dashboard semantic surface (plain view, certified metric
+    view, and the 005 deploy manifest copy) must expose the S1.6 dimensions
+    plus the conforming-limit provenance column."""
+    targets = (
+        METRIC_VIEW_DIR / "borrower_opportunity_metric_view.sql",
+        METRIC_VIEW_DIR / "certified_borrower_opportunity_metric_view.sql",
+        DDL_DIR / "005_semantics_views.sql",
+    )
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        for col in ("loan_product_type", "origination_channel", "conforming_loan_limit_applied"):
+            assert col in text, f"{path.name} missing `{col}`"
 
 
 def test_product_channel_borrower_360_uses_frozen_udf_and_governed_limit() -> None:
@@ -336,6 +357,22 @@ def test_product_channel_origination_channel_is_funded_applications_only() -> No
         r"FILTER \(WHERE application_status = 'funded'",
         text,
     )
+
+
+def test_product_channel_blank_application_channel_resolves_to_unknown() -> None:
+    """A blank or whitespace-only application_channel must fall into the NULL
+    -> 'unknown' bucket, never survive as '' in the channel vocabulary. Both
+    channel derivations (borrower_360 and evidence_events) guard with
+    NULLIF(TRIM(..), '') so gold_segment_population's COALESCE(.., 'unknown')
+    stays the single catch-all."""
+    guard = r"NULLIF\(TRIM\(application_channel\),\s*''\)\s+IS NOT NULL"
+    for name in ("gold_borrower_360.sql", "gold_evidence_events.sql"):
+        text = (TRANSFORM_DIR / name).read_text(encoding="utf-8")
+        assert re.search(guard, text), f"{name} must treat blank/whitespace channels as NULL"
+        assert not re.search(
+            r"FILTER \(WHERE application_status = 'funded' AND application_channel IS NOT NULL\)",
+            text,
+        ), f"{name} still uses the IS NOT NULL-only filter that lets '' through"
 
 
 def test_product_channel_evidence_rows_are_explainability_only() -> None:

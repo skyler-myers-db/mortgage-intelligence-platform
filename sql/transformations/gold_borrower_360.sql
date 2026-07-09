@@ -299,9 +299,13 @@ first_party_applications AS (
     -- Funded-only is deliberate -- "origination channel" describes how a loan
     -- actually originated, not how a withdrawn/declined inquiry arrived.
     -- NULL when no funded application resolves to this borrower; the app
-    -- renders NULL as "Unknown" and never invents a channel.
+    -- renders NULL as "Unknown" and never invents a channel. Blank or
+    -- whitespace-only channel strings are treated as NULL (unknown) --
+    -- NULLIF(TRIM(..), '') keeps '' out of the channel vocabulary so the
+    -- segment facet 'unknown' bucket stays the single catch-all.
     MAX_BY(LOWER(TRIM(application_channel)), application_at)
-      FILTER (WHERE application_status = 'funded' AND application_channel IS NOT NULL)
+      FILTER (WHERE application_status = 'funded'
+              AND NULLIF(TRIM(application_channel), '') IS NOT NULL)
       AS latest_funded_channel,
     COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
   FROM mip.first_party.loan_applications

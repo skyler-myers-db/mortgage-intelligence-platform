@@ -526,10 +526,14 @@ origination_channel_rows AS (
   JOIN (
     SELECT
       borrower_id,
+      -- Blank/whitespace-only channels count as NULL (unknown) -- matches
+      -- gold_borrower_360 so evidence never cites an empty-string channel.
       MAX_BY(LOWER(TRIM(application_channel)), application_at)
-        FILTER (WHERE application_status = 'funded' AND application_channel IS NOT NULL) AS latest_funded_channel,
+        FILTER (WHERE application_status = 'funded'
+                AND NULLIF(TRIM(application_channel), '') IS NOT NULL) AS latest_funded_channel,
       MAX(application_at)
-        FILTER (WHERE application_status = 'funded' AND application_channel IS NOT NULL) AS latest_funded_at
+        FILTER (WHERE application_status = 'funded'
+                AND NULLIF(TRIM(application_channel), '') IS NOT NULL) AS latest_funded_at
     FROM mip.first_party.loan_applications
     GROUP BY borrower_id
   ) AS fa
