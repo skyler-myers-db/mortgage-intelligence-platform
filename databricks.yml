@@ -431,6 +431,12 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/uc_functions/fn_rate_spread.sql
+        - task_key: init_fn_estimated_upb
+          description: "CREATE OR REPLACE mip.gold.fn_estimated_upb before borrower equity CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_estimated_upb.sql
         - task_key: init_fn_in_the_money
           description: "CREATE OR REPLACE mip.gold.fn_in_the_money before any scoring CTAS."
           sql_task:
@@ -453,6 +459,7 @@ resources:
           description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
           depends_on:
             - task_key: init_fn_rate_spread
+            - task_key: init_fn_estimated_upb
             - task_key: init_fn_in_the_money
             - task_key: init_fn_lead_score
             - task_key: init_fn_next_best_offer
