@@ -748,6 +748,16 @@ def test_borrower_360_market_rate_matches_latest_fred(
     )
 
 
+def _borrower_360_has_s13_columns(host: str, token: str, warehouse_id: str) -> bool:
+    """True when the deployed gold.borrower_360 carries the S1.3 overlay
+    columns. A pre-S1.3 table (deploy ordering: this branch's refresh job
+    has not run yet) makes the overlay checks meaningless, so they skip
+    with an operational message instead of reporting false drift."""
+    rows = _run_sql(host, token, warehouse_id, "DESCRIBE TABLE mip.gold.borrower_360")
+    columns = {str(r[0]) for r in rows}
+    return "second_lien_itm" in columns and "refi_propensity_heuristic" in columns
+
+
 @pytest.fixture(scope="module")
 def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int]]]:
     """Returns ``counts[segment][path][state] -> int``.
@@ -769,8 +779,16 @@ def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int
         "second_lien_itm": _second_lien_itm_reference_sql(mortgage30us_fraction),
     }
 
+    segments = SEGMENTS
+    if not _borrower_360_has_s13_columns(host, token, wh):
+        logger.warning(
+            "gold.borrower_360 pre-dates S1.3 overlay columns; skipping "
+            "second_lien_itm parity until mip_refresh_scores runs on this branch"
+        )
+        segments = tuple(s for s in SEGMENTS if s != "second_lien_itm")
+
     out: dict[str, dict[str, dict[str, int]]] = {}
-    for seg in SEGMENTS:
+    for seg in segments:
         ref: dict[str, int] = {}
         if seg in reference_sqls:
             t0 = time.time()
@@ -793,8 +811,8 @@ def test_segment_count_parity(
     counts: dict[str, dict[str, dict[str, int]]],
 ) -> None:
     """One assertion path per discovered (segment, state)."""
-    assert any(counts[seg]["ref"] or counts[seg]["gold"] for seg in SEGMENTS)
-    for segment in SEGMENTS:
+    assert any(paths["ref"] or paths["gold"] for paths in counts.values())
+    for segment in counts:
         ref_map = counts[segment]["ref"]
         gold_map = counts[segment]["gold"]
 
@@ -911,6 +929,11 @@ def test_overlay_segment_flags_match_membership(
     refactor cannot silently decouple the two, and it pins permit_activity
     at zero members until a true filed-permit source lands."""
     host, token, wh = warehouse
+    if not _borrower_360_has_s13_columns(host, token, wh):
+        pytest.skip(
+            "gold.borrower_360 pre-dates the S1.3 overlay columns; run "
+            "mip_refresh_scores from this branch before overlay reconciliation"
+        )
     overlay_predicates = {
         "second_lien_itm": "second_lien_itm",
         "heloc_draw_to_payback": "has_heloc_draw_ending",
