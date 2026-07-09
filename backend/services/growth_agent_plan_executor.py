@@ -303,9 +303,7 @@ def _impl_segment_counts(ctx: ToolExecutionContext, params: dict[str, Any]) -> P
         f"""
 SELECT COUNT(DISTINCT b.clip) AS row_count
 FROM {BORROWER_360} b
-WHERE {_B_ELIGIBLE}
-  AND b.consent_status = 'opt_in'
-  AND b.suppression_reason IS NULL{segment_clause}{state_clause}
+WHERE {_B_ELIGIBLE}{segment_clause}{state_clause}
 """,
         sql_params,
     )

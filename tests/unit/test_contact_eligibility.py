@@ -128,9 +128,81 @@ def test_get_eligibility_service_returns_singleton_gold_impl() -> None:
 
 
 def test_sql_predicates_are_canonical_and_fail_closed() -> None:
-    assert eligible_sql_predicate() == "marketing_eligible = TRUE"
-    assert eligible_sql_predicate("b") == "b.marketing_eligible = TRUE"
-    assert suppressed_sql_predicate() == "marketing_eligible = FALSE"
+    predicate = eligible_sql_predicate()
+    assert predicate.startswith("(") and predicate.endswith(")")
+    assert "marketing_eligible = TRUE" in predicate
+    assert "consent_status = 'opt_in'" in predicate
+    assert "suppression_reason IS NULL" in predicate
+    assert "COALESCE(dnc, FALSE) = FALSE" in predicate
+    aliased = eligible_sql_predicate("b")
+    assert "b.marketing_eligible = TRUE" in aliased
+    assert "COALESCE(b.dnc, FALSE) = FALSE" in aliased
+    assert suppressed_sql_predicate() == f"NOT {predicate}"
+
+
+def test_sql_predicate_covers_every_decision_field() -> None:
+    """Lockstep pin: the set-based predicate must mention every field the
+    row-level ``EligibilityDecision`` is derived from, so the two
+    enforcement planes cannot drift apart silently."""
+    predicate = eligible_sql_predicate()
+    for field_name in (
+        "marketing_eligible",
+        "consent_status",
+        "suppression_reason",
+        "dnc",
+        "eligible_recontact_at",
+        "last_touch_at",
+    ):
+        assert field_name in predicate, f"predicate lost decision field {field_name}"
+
+
+def _normalize_sql(text: str) -> str:
+    return " ".join(text.split())
+
+
+def test_fn_segment_counts_gate_matches_python_predicate() -> None:
+    """The deployed UC function (reviewed agent tool) applies the same
+    fail-closed gate as ``eligible_sql_predicate("b")`` -- whitespace-
+    normalized containment, following the repo's fn_* <-> Python parity
+    conventions."""
+    fn_text = (REPO_ROOT / "sql/uc_functions/fn_segment_counts.sql").read_text()
+    assert _normalize_sql(eligible_sql_predicate("b")) in _normalize_sql(fn_text)
+
+
+def test_stale_true_marketing_eligible_rows_are_still_blocked() -> None:
+    """marketing_eligible=True must not win when consent, suppression,
+    dnc, or the frequency cap disagree -- row-level and set-based planes
+    both fail closed on the stale-true combinations."""
+    predicate = eligible_sql_predicate()
+    stale_cases: list[tuple[dict[str, Any], str]] = [
+        ({"dnc": True}, REASON_SUPPRESSED),
+        (
+            {"consent_status": "opt_out"},
+            REASON_CONSENT_NOT_OPT_IN,
+        ),
+        (
+            {"suppression_reason": "recent_contact_cap"},
+            REASON_SUPPRESSED,
+        ),
+        (
+            {"eligible_recontact_at": datetime.now(UTC) + timedelta(days=7)},
+            REASON_FREQUENCY_CAP,
+        ),
+    ]
+    for update, expected_reason in stale_cases:
+        borrower = mock_population.BORROWERS[0].model_copy(
+            update={"marketing_eligible": True, **update},
+        )
+        decision = SERVICE.evaluate(borrower)
+        assert decision.eligible is False, update
+        assert decision.reason_code == expected_reason, update
+    # The SQL plane rejects the same combinations: each stale-true field
+    # is guarded independently of marketing_eligible in the predicate.
+    assert "AND consent_status = 'opt_in'" in predicate
+    assert "AND suppression_reason IS NULL" in predicate
+    assert "AND COALESCE(dnc, FALSE) = FALSE" in predicate
+    assert "eligible_recontact_at <= CURRENT_TIMESTAMP()" in predicate
+    assert "last_touch_at < CURRENT_TIMESTAMP() - INTERVAL '30' DAYS" in predicate
 
 
 def test_growth_agent_workflow_predicates_read_single_interface() -> None:
@@ -156,6 +228,76 @@ def test_campaign_preview_predicates_read_single_interface() -> None:
         state_sets={},
     )
     assert suppressed_sql_predicate() in where_suppressed
+
+
+# ---------------------------------------------------------------------------
+# Redaction boundary: UC row -> API egress keeps the real values.
+# ---------------------------------------------------------------------------
+
+
+def test_redact_lead_row_carries_real_dnc_and_connected_source() -> None:
+    from backend.services.pii_redaction import redact_lead_row
+
+    row = {
+        "borrower_id": "B-0000000000001",
+        "display_name": "Owner anon",
+        "segment_codes": ["itm"],
+        "marketing_eligible": False,
+        "consent_status": "opt_out",
+        "suppression_reason": "do_not_contact",
+        "dnc": True,
+        "eligibility_source": "customer_crm_connector",
+    }
+    output = redact_lead_row(row)
+    assert output["dnc"] is True
+    assert output["eligibility_source"] == "customer_crm_connector"
+
+
+def test_redact_borrower_row_carries_real_dnc_and_connected_source() -> None:
+    from backend.services.pii_redaction import redact_borrower_row
+
+    row = {
+        "borrower_id": "B-0000000000002",
+        "marketing_eligible": False,
+        "consent_status": "opt_out",
+        "suppression_reason": "do_not_contact",
+        "dnc": True,
+        "eligibility_source": "customer_crm_connector",
+    }
+    output = redact_borrower_row(row)
+    assert output["dnc"] is True
+    assert output["eligibility_source"] == "customer_crm_connector"
+
+
+def test_redactors_fail_closed_when_provenance_columns_missing() -> None:
+    """Older gold rows without the S1.4 columns: dnc derives from the
+    do_not_contact suppression and the source falls back to the synthetic
+    default -- never a schema-default masking a real suppression."""
+    from backend.services.pii_redaction import redact_borrower_row, redact_lead_row
+
+    suppressed = {
+        "borrower_id": "B-0000000000003",
+        "marketing_eligible": False,
+        "consent_status": "opt_out",
+        "suppression_reason": "do_not_contact",
+    }
+    for redactor in (redact_lead_row, redact_borrower_row):
+        output = redactor(dict(suppressed))
+        assert output["dnc"] is True
+        assert output["eligibility_source"] == DEFAULT_ELIGIBILITY_SOURCE
+
+    clean = {"borrower_id": "B-0000000000004", "marketing_eligible": True}
+    assert redact_lead_row(dict(clean))["dnc"] is False
+
+
+def test_redactor_sanitizes_free_text_eligibility_source() -> None:
+    from backend.services.pii_redaction import redact_lead_row
+
+    row = {
+        "borrower_id": "B-0000000000005",
+        "eligibility_source": "Call Jane Smith at 555-867-5309",
+    }
+    assert redact_lead_row(row)["eligibility_source"] == DEFAULT_ELIGIBILITY_SOURCE
 
 
 # ---------------------------------------------------------------------------

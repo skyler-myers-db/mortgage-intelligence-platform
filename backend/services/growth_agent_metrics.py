@@ -65,8 +65,6 @@ WITH broad AS (
       FROM {BORROWER_360} b
       WHERE {workflow.actionable_predicate}
         AND {_B_ELIGIBLE}
-        AND b.consent_status = 'opt_in'
-        AND b.suppression_reason IS NULL
         {actionable_state_clause}
     )
 SELECT
@@ -114,8 +112,6 @@ actionable AS (
   FROM {BORROWER_DOSSIER} d
   WHERE d.opportunity_score >= 75
     AND {_D_ELIGIBLE}
-    AND d.consent_status = 'opt_in'
-    AND d.suppression_reason IS NULL
     {actionable_state_clause}
 )
 SELECT
@@ -156,8 +152,6 @@ FROM {BORROWER_360} b
 LEFT JOIN {qualify("gold", "borrower_lifecycle_state")} ls
   ON ls.borrower_id = b.borrower_id
 WHERE {_B_ELIGIBLE}
-  AND b.consent_status = 'opt_in'
-  AND b.suppression_reason IS NULL
   AND COALESCE(ls.approval_status, 'pending') = 'approved'
   AND ls.approved_at <= current_timestamp() - INTERVAL 7 DAYS
   AND ls.outreach_at IS NULL

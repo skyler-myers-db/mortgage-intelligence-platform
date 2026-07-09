@@ -181,15 +181,39 @@ class GoldEligibilityService:
 
 
 def eligible_sql_predicate(alias: str = "") -> str:
-    """Canonical fail-closed warehouse predicate for eligible-only reads."""
-    prefix = f"{alias}." if alias else ""
-    return f"{prefix}marketing_eligible = TRUE"
+    """Canonical fail-closed warehouse predicate for eligible-only reads.
+
+    The FULL set-based equivalent of ``EligibilityDecision``: a row where
+    ``marketing_eligible`` is stale-true but consent, suppression, dnc, or
+    the frequency cap disagree must be excluded exactly as ``evaluate``
+    would block it. ``tests/unit/test_contact_eligibility.py`` pins every
+    decision field into this text and keeps the deployed
+    ``fn_segment_counts`` UC function in lockstep -- change all three
+    together.
+    """
+    p = f"{alias}." if alias else ""
+    return (
+        f"({p}marketing_eligible = TRUE"
+        f" AND {p}consent_status = 'opt_in'"
+        f" AND {p}suppression_reason IS NULL"
+        f" AND COALESCE({p}dnc, FALSE) = FALSE"
+        f" AND ({p}eligible_recontact_at IS NULL"
+        f" OR {p}eligible_recontact_at <= CURRENT_TIMESTAMP())"
+        f" AND ({p}last_touch_at IS NULL"
+        # ANSI quoted-interval form: the Genie trusted-SQL policy lexer
+        # treats a bare digit between two string literals as a potential
+        # raw-identifier literal, so the cap value must stay quoted.
+        f" OR {p}last_touch_at < CURRENT_TIMESTAMP() - INTERVAL '{FREQUENCY_CAP_DAYS}' DAYS))"
+    )
 
 
 def suppressed_sql_predicate(alias: str = "") -> str:
-    """Warehouse predicate for admin-gated suppressed-only analytics."""
-    prefix = f"{alias}." if alias else ""
-    return f"{prefix}marketing_eligible = FALSE"
+    """Warehouse predicate for admin-gated suppressed-only analytics.
+
+    Defined as the exact negation of ``eligible_sql_predicate`` so the
+    two set-based views partition the population without drift.
+    """
+    return f"NOT {eligible_sql_predicate(alias)}"
 
 
 def write_suppression_audit(
