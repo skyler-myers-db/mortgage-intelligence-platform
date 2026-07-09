@@ -114,6 +114,20 @@ rules AS (
 -- Intent_trigger itself is computed in gold.lead_scores, not here, but the
 -- AVM-uplift evidence signal reads from recent AVMs; we expose the raw
 -- counts on borrower_360 so WhyPanel can cite them without a fresh join.
+-- S1.1 multi-owner rollup per CLIP from silver.property_owners (owner-slot
+-- grain, max 4). owner_count / has_unresolved_owner / primary_owner_entity_
+-- type feed the multi-owner caveat UI and the unresolved-owner contact
+-- suppression below. Classification is ROADMAP-TEMPORARY (classify + caveat
+-- + suppress pending Cotality entity resolution) — data-contract §2.6.
+owner_rollup AS (
+  SELECT
+    clip,
+    CAST(COUNT(*) AS INT)                                        AS owner_count,
+    COUNT_IF(owner_entity_type = 'unresolved') > 0               AS has_unresolved_owner,
+    MAX(CASE WHEN owner_position = 1 THEN owner_entity_type END) AS primary_owner_entity_type
+  FROM mip.silver.property_owners
+  GROUP BY clip
+),
 base AS (
   SELECT
     lc.clip,
@@ -170,12 +184,20 @@ base AS (
       ELSE UPPER(TRIM(lc.first_pos_lender_current))
     END                                 AS lender_raw_key,
     lc.second_pos_amount,
-    COALESCE(pob.related_property_count, 1) AS related_property_count
+    COALESCE(pob.related_property_count, 1) AS related_property_count,
+    COALESCE(orl.owner_count, 0)            AS owner_count,
+    -- Fail closed: a CLIP with no owner rows at all (no name AND no Owner
+    -- Link in any source slot) cannot be resolved to a contactable party,
+    -- so it is treated exactly like an unresolved classification.
+    COALESCE(orl.has_unresolved_owner, TRUE) AS has_unresolved_owner,
+    orl.primary_owner_entity_type
   FROM mip.silver.lien_current AS lc
   LEFT JOIN mip.silver.property_master AS pm
     ON pm.clip = lc.clip
   LEFT JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
+  LEFT JOIN owner_rollup AS orl
+    ON orl.clip = lc.clip
   -- Coverage is data-driven. If the Cotality share expands or contracts,
   -- borrower_360 follows the refreshed silver source rows instead of a
   -- tenant/demo state seed.
@@ -830,6 +852,9 @@ SELECT
   CAST(COALESCE(w.first_pos_rate * 100, 0.0) AS DOUBLE)                              AS current_rate,
   w.ltv,
   w.related_property_count,
+  w.owner_count,
+  w.has_unresolved_owner,
+  w.primary_owner_entity_type,
   w.is_owner_occupied,
   COALESCE(w.is_absentee, FALSE)                                                     AS is_absentee,
   COALESCE(w.owner_is_corporate, FALSE)                                              AS is_corporate_owner,
@@ -857,9 +882,16 @@ SELECT
   CAST(COALESCE(w.fp_recent_positive_interactions, 0) AS INT)                            AS first_party_recent_interactions,
   COALESCE(w.fp_has_recent_application, FALSE)                                           AS first_party_recent_application,
   COALESCE(w.fp_synthetic_demo, FALSE)                                                   AS first_party_synthetic_demo,
-  COALESCE(w.fp_marketing_eligible, FALSE)                                                AS marketing_eligible,
+  -- S1.1: unresolved owners are excluded from every contact-eligible
+  -- population. marketing_eligible fails closed when any owner slot on the
+  -- CLIP is unresolved (AND NOT has_unresolved_owner); first-party CRM
+  -- suppression reasons keep precedence over the owner-resolution gate.
+  (COALESCE(w.fp_marketing_eligible, FALSE) AND NOT w.has_unresolved_owner)               AS marketing_eligible,
   COALESCE(w.fp_consent_status, 'unknown')                                                AS consent_status,
-  w.fp_suppression_reason                                                                 AS suppression_reason,
+  COALESCE(
+    w.fp_suppression_reason,
+    CASE WHEN w.has_unresolved_owner THEN 'unresolved_owner' END
+  )                                                                                       AS suppression_reason,
   w.fp_last_touch_at                                                                      AS last_touch_at,
   w.fp_eligible_recontact_at                                                              AS eligible_recontact_at,
   w.current_lender_ref,
@@ -914,6 +946,9 @@ COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'Estimated curre
 COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.';
 COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int from estimated current lien balance divided by AVM when AVM is present; not upper-capped, so underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(property_owner_bridge.related_property_count, 1).';
+COMMENT ON COLUMN mip.gold.borrower_360.owner_count IS 'S1.1: occupied owner slots on this CLIP in silver.property_owners (max 4, duplicate Owner Links collapsed). 0 when the source record has no owner information. Drives the multi-owner caveat chip.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_unresolved_owner IS 'S1.1: TRUE when any owner slot classifies unresolved OR no owner rows exist. Fails marketing_eligible closed with suppression_reason unresolved_owner. ROADMAP-TEMPORARY classify+caveat+suppress scope pending Cotality entity resolution (data-contract §2.6).';
+COMMENT ON COLUMN mip.gold.borrower_360.primary_owner_entity_type IS 'S1.1: owner_entity_type of the slot-1 owner (individual | trust | llc | unresolved). NULL when no owner rows exist.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_owner_occupied IS 'owner_occupancy_code = "O". Feeds fit sub-score.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_absentee IS 'property_master.is_absentee. Feeds investor branch.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_corporate_owner IS 'property_master.owner_is_corporate. Feeds investor branch.';
@@ -941,9 +976,9 @@ COMMENT ON COLUMN mip.gold.borrower_360.first_party_relationship_depth IS 'Bound
 COMMENT ON COLUMN mip.gold.borrower_360.first_party_recent_interactions IS 'Recent call-center/digital interaction count resolved through first-party feeds.';
 COMMENT ON COLUMN mip.gold.borrower_360.first_party_recent_application IS 'TRUE when a recent LOS/application event exists.';
 COMMENT ON COLUMN mip.gold.borrower_360.first_party_synthetic_demo IS 'TRUE only when resolved first-party rows come from the Summit demo_synthetic seed.';
-COMMENT ON COLUMN mip.gold.borrower_360.marketing_eligible IS 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, and the 30-day touch cap is clear. Campaign and draft APIs fail closed on FALSE.';
+COMMENT ON COLUMN mip.gold.borrower_360.marketing_eligible IS 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, the 30-day touch cap is clear, AND no owner slot is unresolved (S1.1). Campaign and draft APIs fail closed on FALSE.';
 COMMENT ON COLUMN mip.gold.borrower_360.consent_status IS 'Controlled first-party CRM consent enum: opt_in / opt_out / unknown. No raw contact data.';
-COMMENT ON COLUMN mip.gold.borrower_360.suppression_reason IS 'Controlled first-party CRM suppression reason, e.g. do_not_contact or recent_contact_cap.';
+COMMENT ON COLUMN mip.gold.borrower_360.suppression_reason IS 'Controlled suppression reason: do_not_contact / recent_contact_cap (first-party CRM, takes precedence) or unresolved_owner (S1.1 owner-resolution gate).';
 COMMENT ON COLUMN mip.gold.borrower_360.last_touch_at IS 'Most recent first-party marketing/contact touch timestamp used for frequency-cap enforcement.';
 COMMENT ON COLUMN mip.gold.borrower_360.eligible_recontact_at IS 'Earliest timestamp the borrower can be contacted again when a frequency cap is active.';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lender_ref IS 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.';

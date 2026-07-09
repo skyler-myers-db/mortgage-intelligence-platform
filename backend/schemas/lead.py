@@ -11,6 +11,11 @@ from backend.schemas.common import EvidenceEvent
 from backend.schemas.why import WhyPanel
 
 SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
+# S1.1 multi-owner: entity classification of an owner slot. Classify +
+# caveat + suppress only (ROADMAP-TEMPORARY pending Cotality entity
+# resolution). `unresolved` owners are excluded from contact-eligible
+# populations upstream in gold.borrower_360.
+OwnerEntityType = Literal["individual", "trust", "llc", "unresolved"]
 # Round-4 hole-finder R4-19: `hold` is a valid 4th state — jobs/sync_lifecycle_state.py
 # writes it; Lakebase CHECK constraint accepts it; gold DDL documents it. The Literal
 # used to reject it, which would 500 `/api/leads` the moment the lead_population CTAS
@@ -69,6 +74,13 @@ class LeadSummary(BaseModel):
     is_former_customer: bool = False
     is_competitor_lien: bool = False
     related_property_count: int = 1
+    # S1.1 multi-owner caveat fields (from silver.property_owners via
+    # gold.borrower_360). Defaults are single-resolved-owner so older cached
+    # rows and fixtures keep validating; has_unresolved_owner=True rows are
+    # never marketing_eligible upstream.
+    owner_count: int = 1
+    has_unresolved_owner: bool = False
+    primary_owner_entity_type: OwnerEntityType | None = None
     current_lien_balance: int = 0
     second_pos_amount: int = 0
     has_permit: bool = False

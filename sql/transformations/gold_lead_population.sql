@@ -78,6 +78,12 @@ WITH ranked AS (
     b.is_former_customer,
     b.is_competitor_lien,
     b.related_property_count,
+    -- S1.1 multi-owner caveat columns. has_unresolved_owner rows are already
+    -- marketing_eligible = FALSE upstream; carrying the flags lets the UI
+    -- show the multi-owner / unresolved-owner caveat chips without a join.
+    b.owner_count,
+    b.has_unresolved_owner,
+    b.primary_owner_entity_type,
     b.current_lien_balance,
     b.second_pos_amount,
     b.has_permit,
@@ -132,6 +138,9 @@ SELECT
   is_former_customer,
   is_competitor_lien,
   related_property_count,
+  owner_count,
+  has_unresolved_owner,
+  primary_owner_entity_type,
   current_lien_balance,
   second_pos_amount,
   has_permit,
@@ -196,6 +205,9 @@ COMMENT ON COLUMN mip.gold.lead_population.is_current_customer IS 'From gold.bor
 COMMENT ON COLUMN mip.gold.lead_population.is_former_customer IS 'From gold.borrower_360; historical tenant-lender relationship with no current tenant lien.';
 COMMENT ON COLUMN mip.gold.lead_population.is_competitor_lien IS 'From gold.borrower_360; current servicer is known and not the tenant lender.';
 COMMENT ON COLUMN mip.gold.lead_population.related_property_count IS 'From gold.borrower_360; drives /segment-intelligence OWNER LINK filter.';
+COMMENT ON COLUMN mip.gold.lead_population.owner_count IS 'From gold.borrower_360 (S1.1); occupied owner slots on the CLIP (max 4). Drives the multi-owner caveat chip.';
+COMMENT ON COLUMN mip.gold.lead_population.has_unresolved_owner IS 'From gold.borrower_360 (S1.1); TRUE when any owner slot is unresolved. Such rows are never marketing_eligible (suppression_reason unresolved_owner).';
+COMMENT ON COLUMN mip.gold.lead_population.primary_owner_entity_type IS 'From gold.borrower_360 (S1.1); slot-1 owner entity type: individual | trust | llc | unresolved.';
 COMMENT ON COLUMN mip.gold.lead_population.current_lien_balance IS 'From gold.borrower_360; drives /segment-intelligence LIEN filter.';
 COMMENT ON COLUMN mip.gold.lead_population.second_pos_amount IS 'From gold.borrower_360; nullable (no second-position lien).';
 COMMENT ON COLUMN mip.gold.lead_population.has_permit IS 'Filed building-permit flag. FALSE until a true Cotality Building Permits source table is present.';
