@@ -155,7 +155,6 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.silver.listing_activity":  "MLS listing activity",
     "mip.silver.heloc_propensity":  "HELOC propensity",
     "mip.silver.refi_propensity":   "Refi propensity",
-    "mip.silver.lien_current":      "Voluntary lien snapshot",
     "mip.first_party.loan_applications": "First-party loan applications",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",

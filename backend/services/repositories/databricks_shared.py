@@ -11,6 +11,7 @@ import json
 from typing import Any
 
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.lead import DimensionFacetCount
 from backend.services.pii_redaction import redact_evidence_row
 
 _BORROWER_360_COLUMNS: str = (
@@ -19,7 +20,7 @@ _BORROWER_360_COLUMNS: str = (
     "opportunity_score, confidence, recommended_offer_code, recommended_offer, "
     "why_now, evidence_ids, approval_status, owner_link_id, subject_property, "
     "avm_value, current_lien_balance, current_rate, ltv, related_property_count, "
-    "situs_cbsa_code, first_pos_loan_type, "
+    "situs_cbsa_code, first_pos_loan_type, loan_product_type, origination_channel, "
     "is_owner_occupied, is_absentee, is_corporate_owner, is_investor, "
     "is_current_customer, is_former_customer, "
     "is_competitor_lien, has_permit, listed_for_sale, listing_status_category, "
@@ -53,6 +54,7 @@ _LEAD_POPULATION_COLUMNS: str = (
     "listing_status_date, listing_price, listing_days_on_market, listing_service, "
     "heloc_propensity_score, heloc_propensity_run_date, has_heloc_propensity_trigger, "
     "refi_propensity_score, refi_propensity_run_date, has_refi_propensity_trigger, "
+    "loan_product_type, origination_channel, "
     "marketing_eligible, consent_status, suppression_reason, last_touch_at, "
     "eligible_recontact_at"
 )
@@ -72,6 +74,7 @@ _LEAD_POPULATION_SELECT_FROM_LP: str = (
     "lp.listing_status_date, lp.listing_price, lp.listing_days_on_market, lp.listing_service, "
     "lp.heloc_propensity_score, lp.heloc_propensity_run_date, lp.has_heloc_propensity_trigger, "
     "lp.refi_propensity_score, lp.refi_propensity_run_date, lp.has_refi_propensity_trigger, "
+    "lp.loan_product_type, lp.origination_channel, "
     "lp.marketing_eligible, lp.consent_status, lp.suppression_reason, lp.last_touch_at, "
     "lp.eligible_recontact_at"
 )
@@ -93,6 +96,7 @@ _LEAD_POPULATION_SELECT_FROM_B360: str = (
     "b.listing_status_date, b.listing_price, b.listing_days_on_market, b.listing_service, "
     "b.heloc_propensity_score, b.heloc_propensity_run_date, b.has_heloc_propensity_trigger, "
     "b.refi_propensity_score, b.refi_propensity_run_date, b.has_refi_propensity_trigger, "
+    "b.loan_product_type, b.origination_channel, "
     "b.marketing_eligible, b.consent_status, b.suppression_reason, b.last_touch_at, "
     "b.eligible_recontact_at"
 )
@@ -103,7 +107,8 @@ _EVIDENCE_COLUMNS: str = (
 )
 
 _SEGMENT_COLUMNS: str = (
-    "segment_code, name, count, delta_vs_prior, avg_score, description, color"
+    "segment_code, name, count, delta_vs_prior, avg_score, description, color, "
+    "loan_product_mix, origination_channel_mix"
 )
 
 
@@ -156,6 +161,38 @@ def _redact_evidence_list(raw: Any) -> list[EvidenceEvent]:
             continue
         events.append(EvidenceEvent(**redact_evidence_row(r)))
     return events
+
+
+def _parse_facet_mix(raw: Any) -> list[DimensionFacetCount]:
+    """Parse an ARRAY<STRUCT<value, count>> facet-mix column (S1.6).
+
+    The warehouse client returns Delta struct arrays as list-of-dicts;
+    defensively accept a JSON string too (older client paths stringify
+    complex columns). Malformed cells drop to [] -- a missing facet mix
+    must never fail the whole segments read.
+    """
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except json.JSONDecodeError:
+            return []
+    if not isinstance(raw, list):
+        return []
+    cells: list[DimensionFacetCount] = []
+    for r in raw:
+        if not isinstance(r, dict):
+            continue
+        value = str(r.get("value") or "").strip()
+        if not value:
+            continue
+        try:
+            count = max(0, int(r.get("count") or 0))
+        except (TypeError, ValueError):
+            continue
+        cells.append(DimensionFacetCount(value=value, count=count))
+    return cells
 
 
 def _coerce_bool(value: Any) -> bool:

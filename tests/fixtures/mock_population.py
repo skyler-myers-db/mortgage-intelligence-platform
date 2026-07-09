@@ -40,6 +40,7 @@ from backend.services.scoring import (
     NBO_PRODUCT_LABELS,
     in_the_money,
     lead_score,
+    loan_product_type,
     next_best_offer,
     rate_spread_bps,
 )
@@ -52,6 +53,10 @@ _CASHOUT_MIN = settings.mip_cashout_equity_min_pct
 _RETENTION_MIN = settings.mip_retention_min_spread_bps
 
 _WHY_SOURCES = ["mip.gold.fn_rate_spread", "mip.gold.fn_in_the_money"]
+
+# Governed conforming loan limit default -- mirrors the
+# mip_conforming_loan_limit_usd seed row in sql/ref/offer_rules_config_seed.sql.
+_CONFORMING_LIMIT_USD = 806_500
 
 
 # ---------------------------------------------------------------------------
@@ -300,6 +305,21 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
     has_heloc_intent = bool(spec.get("heloc_intent", spec["permit"]))
     has_filed_permit = bool(spec.get("filed_permit", False))
 
+    # S1.6 dimensions -- derived through the frozen primitive, never
+    # hardcoded. Fixture specs may pin loan_type_code / original_amount /
+    # origination_channel; defaults give a CONV owner book with the current
+    # lien as the original-amount proxy, and a loan-officer channel for
+    # current customers (they have first-party history) vs unknown for
+    # everyone else.
+    product_type = loan_product_type(
+        spec.get("loan_type_code", "CONV"),
+        spec.get("original_amount", lien),
+        _CONFORMING_LIMIT_USD,
+    )
+    origination_channel = spec.get(
+        "origination_channel", "loan_officer" if spec["customer"] else None
+    )
+
     code = next_best_offer(
         spread, equity,
         has_heloc_intent, spec["listed"], spec["investor"],
@@ -362,6 +382,8 @@ def _build_borrower(spec: dict) -> tuple[Borrower360, dict]:
         refi_propensity_run_date="2026-06-09" if itm else None,
         has_refi_propensity_trigger=itm,
         second_pos_amount=0,
+        loan_product_type=product_type,
+        origination_channel=origination_channel,
         clip_id=clip_demo,
         owner_link_id=f"ol_demo_{spec['bid'].replace('B-', '')}",
         subject_property=f"Synthetic property · {spec['city']}, {spec['state']} {spec['zip']}",

@@ -21,7 +21,7 @@ from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
 from backend.services.observability import emit
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
-from backend.services.repositories.databricks_shared import _SEGMENT_COLUMNS
+from backend.services.repositories.databricks_shared import _SEGMENT_COLUMNS, _parse_facet_mix
 from backend.services.resilience import TTLCache
 
 log = logging.getLogger("backend.services.repositories.databricks_repo")
@@ -54,17 +54,27 @@ class DatabricksSegmentRepository:
         "ORDER BY count DESC"
     )
 
+    # S1.6: facet-mix lambda shared by the two dynamic mix CTEs below. Same
+    # sort contract as the gold_segment_population CTAS: count desc then value.
+    _FACET_MIX_EXPR = (
+        "TRANSFORM(ARRAY_SORT(COLLECT_LIST(STRUCT(cnt, value)), "
+        "(a, b) -> CASE WHEN a.cnt > b.cnt THEN -1 WHEN a.cnt < b.cnt THEN 1 "
+        "WHEN a.value < b.value THEN -1 WHEN a.value > b.value THEN 1 ELSE 0 END), "
+        "x -> STRUCT(x.value AS value, x.cnt AS count))"
+    )
+
     _LIST_FILTERED_SQL_TPL = (
         "WITH meta AS ( "
         f"  SELECT {_SEGMENT_COLUMNS} "
         f"  FROM {qualify('gold', 'segment_population')} "
         "  WHERE state = '_ALL' "
         "), base AS ( "
-        "  SELECT clip, segment_codes, opportunity_score "
+        "  SELECT clip, segment_codes, opportunity_score, loan_product_type, origination_channel "
         f"  FROM {qualify('gold', 'borrower_360')} "
         "  WHERE {filter_clause} "
         "), exploded_segments AS ( "
-        "  SELECT DISTINCT clip, sc AS segment_code, opportunity_score "
+        "  SELECT DISTINCT clip, sc AS segment_code, opportunity_score, "
+        "    loan_product_type, origination_channel "
         "  FROM base "
         "  LATERAL VIEW EXPLODE(segment_codes) s AS sc "
         "  WHERE sc IS NOT NULL "
@@ -75,6 +85,22 @@ class DatabricksSegmentRepository:
         "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_score "
         "  FROM exploded_segments "
         "  GROUP BY segment_code "
+        "), product_mix AS ( "
+        f"  SELECT segment_code, {_FACET_MIX_EXPR} AS loan_product_mix "
+        "  FROM ( "
+        "    SELECT segment_code, COALESCE(loan_product_type, 'unknown') AS value, "
+        "      CAST(COUNT(DISTINCT clip) AS INT) AS cnt "
+        "    FROM exploded_segments "
+        "    GROUP BY segment_code, COALESCE(loan_product_type, 'unknown') "
+        "  ) GROUP BY segment_code "
+        "), channel_mix AS ( "
+        f"  SELECT segment_code, {_FACET_MIX_EXPR} AS origination_channel_mix "
+        "  FROM ( "
+        "    SELECT segment_code, COALESCE(origination_channel, 'unknown') AS value, "
+        "      CAST(COUNT(DISTINCT clip) AS INT) AS cnt "
+        "    FROM exploded_segments "
+        "    GROUP BY segment_code, COALESCE(origination_channel, 'unknown') "
+        "  ) GROUP BY segment_code "
         ") "
         "SELECT "
         "  m.segment_code, "
@@ -83,9 +109,13 @@ class DatabricksSegmentRepository:
         "  m.delta_vs_prior, "
         "  COALESCE(r.avg_score, 0) AS avg_score, "
         "  m.description, "
-        "  m.color "
+        "  m.color, "
+        "  COALESCE(pm.loan_product_mix, CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>)) AS loan_product_mix, "
+        "  COALESCE(cm.origination_channel_mix, CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>)) AS origination_channel_mix "
         "FROM meta AS m "
-        "LEFT JOIN rollup AS r ON r.segment_code = m.segment_code"
+        "LEFT JOIN rollup AS r ON r.segment_code = m.segment_code "
+        "LEFT JOIN product_mix AS pm ON pm.segment_code = m.segment_code "
+        "LEFT JOIN channel_mix AS cm ON cm.segment_code = m.segment_code"
     )
 
     # Canonical FE display order matching the prototype's seg-grid layout
@@ -158,6 +188,8 @@ class DatabricksSegmentRepository:
                     avg_score=int(row.get("avg_score") or 0),
                     description=row.get("description") or "",
                     color=row.get("color") or "#999999",
+                    loan_product_mix=_parse_facet_mix(row.get("loan_product_mix")),
+                    origination_channel_mix=_parse_facet_mix(row.get("origination_channel_mix")),
                 )
                 for row in rows
             ]

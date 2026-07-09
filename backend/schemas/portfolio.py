@@ -25,6 +25,35 @@ _LENDER_RELATIONSHIP_LABELS: frozenset[str] = frozenset(
 _PRODUCT_LABELS: frozenset[str] = frozenset(
     {"All products", "Refi", "HELOC", "Cash-out", "Purchase", "Retention"},
 )
+# S1.6: loan product-type dimension (gold.borrower_360.loan_product_type).
+# Distinct from `product`, which filters the RECOMMENDED OFFER product.
+_LOAN_PRODUCT_LABELS: frozenset[str] = frozenset(
+    {"All loan products", "Conventional", "Jumbo", "FHA", "VA", "Other", "Unknown"},
+)
+_LOAN_PRODUCT_ALIASES: dict[str, str] = {
+    "all": "All loan products",
+    "all_loan_products": "All loan products",
+    "conventional": "Conventional",
+    "jumbo": "Jumbo",
+    "fha": "FHA",
+    "va": "VA",
+    "other": "Other",
+    "unknown": "Unknown",
+}
+# S1.6: origination-channel dimension (gold.borrower_360.origination_channel,
+# sourced from funded first-party LOS applications; Unknown = NULL).
+_ORIGINATION_CHANNEL_LABELS: frozenset[str] = frozenset(
+    {"All channels", "Loan officer", "Digital", "Branch", "Call center", "Unknown"},
+)
+_ORIGINATION_CHANNEL_ALIASES: dict[str, str] = {
+    "all": "All channels",
+    "all_channels": "All channels",
+    "loan_officer": "Loan officer",
+    "digital": "Digital",
+    "branch": "Branch",
+    "call_center": "Call center",
+    "unknown": "Unknown",
+}
 _EQUITY_LABELS: frozenset[str] = frozenset({"≥ 15%", "≥ 25%", "≥ 40%", "Any"})
 _OWNER_LINK_LABELS: frozenset[str] = frozenset(
     {"All", "Single-property owner", "Multi-property (2-4)", "Portfolio investor (5+)"}
@@ -245,6 +274,8 @@ class PortfolioCriteria(BaseModel):
     lien_status: str | None = None
     lender_relationship: str | None = None
     product: str | None = None
+    loan_product: str | None = None
+    origination_channel: str | None = None
     target_lender_ref: str | None = None
     min_equity_pct: float | None = None
     owner_link: str | None = None
@@ -327,6 +358,26 @@ class PortfolioCriteria(BaseModel):
     @classmethod
     def _product_is_reviewed_label(cls, value: str | None) -> str | None:
         return _validate_optional_label(value, allowed=_PRODUCT_LABELS, field_name="product")
+
+    @field_validator("loan_product")
+    @classmethod
+    def _loan_product_is_reviewed_label(cls, value: str | None) -> str | None:
+        return _normalise_reviewed_alias(
+            value,
+            allowed=_LOAN_PRODUCT_LABELS,
+            aliases=_LOAN_PRODUCT_ALIASES,
+            field_name="loan_product",
+        )
+
+    @field_validator("origination_channel")
+    @classmethod
+    def _origination_channel_is_reviewed_label(cls, value: str | None) -> str | None:
+        return _normalise_reviewed_alias(
+            value,
+            allowed=_ORIGINATION_CHANNEL_LABELS,
+            aliases=_ORIGINATION_CHANNEL_ALIASES,
+            field_name="origination_channel",
+        )
 
     @field_validator("min_equity_pct_label")
     @classmethod
@@ -438,6 +489,10 @@ class PortfolioCriteria(BaseModel):
         if target_lender_ref and target_lender_ref != "all":
             return True
         if self.product and self.product != "All products":
+            return True
+        if self.loan_product and self.loan_product != "All loan products":
+            return True
+        if self.origination_channel and self.origination_channel != "All channels":
             return True
         if self.min_equity_pct is not None and self.min_equity_pct > 0:
             return True

@@ -798,6 +798,28 @@ def build_preview_predicates(
             for i, code in enumerate(codes):
                 params[f"product_{i}"] = code
 
+    # S1.6 loan product-type dimension. "Unknown" matches the NULL bucket
+    # (missing Cotality loan type code); named labels match the frozen
+    # fn_loan_product_type vocabulary exactly.
+    loan_product = (criteria.loan_product or "").strip()
+    if loan_product and loan_product != "All loan products":
+        if loan_product == "Unknown":
+            clauses.append("loan_product_type IS NULL")
+        else:
+            clauses.append("loan_product_type = :loan_product_type")
+            params["loan_product_type"] = loan_product.lower()
+
+    # S1.6 origination-channel dimension. "Unknown" matches borrowers with no
+    # funded first-party application (NULL); named labels map to the governed
+    # LOS feed vocabulary.
+    origination_channel = (criteria.origination_channel or "").strip()
+    if origination_channel and origination_channel != "All channels":
+        if origination_channel == "Unknown":
+            clauses.append("origination_channel IS NULL")
+        else:
+            clauses.append("origination_channel = :origination_channel")
+            params["origination_channel"] = origination_channel.lower().replace(" ", "_")
+
     equity_floor: int | None = None
     if criteria.min_equity_pct is not None:
         equity_floor = int(criteria.min_equity_pct)
