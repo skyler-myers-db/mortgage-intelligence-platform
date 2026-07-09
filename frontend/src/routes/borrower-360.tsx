@@ -327,7 +327,20 @@ export default function Borrower360() {
                   )
                 }
               />
-              <Field k="Current lien" v={`${currency(b.current_lien_balance)} · ${b.current_rate}%`} mono />
+              <Field
+                k={<GlossaryTerm term="estimatedUpb">Current lien</GlossaryTerm>}
+                v=""
+                childEl={
+                  <div>
+                    <div className="field__value mono num">{`${currency(b.current_lien_balance)} · ${b.current_rate}%`}</div>
+                    <div className="field__sub">
+                      <Chip variant="warning" className="chip--compact" icon="info">
+                        Estimated UPB
+                      </Chip>
+                    </div>
+                  </div>
+                }
+              />
               <Field
                 k={<><GlossaryTerm term="ltv">LTV</GlossaryTerm> / Equity</>}
                 v=""

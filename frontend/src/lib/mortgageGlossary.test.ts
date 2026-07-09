@@ -6,6 +6,7 @@ const REQUIRED_TERMS = [
   'bps',
   'clip',
   'ltv',
+  'estimatedUpb',
   'heloc',
   'helocIntent',
   'mlsListings',

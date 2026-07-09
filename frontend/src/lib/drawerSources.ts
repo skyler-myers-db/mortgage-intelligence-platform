@@ -74,6 +74,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   const key = rawSource.toLowerCase();
 
   if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
+  if (key.includes('fn_estimated_upb')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('rate_spread')) return enrichAsset(DRAWER_SOURCES.rateSpread);
   if (key.includes('fn_in_the_money') || key.includes('itm')) return enrichAsset(DRAWER_SOURCES.itm);
   if (key.includes('fn_lead_score') || key.includes('lead_scores')) return enrichAsset(DRAWER_SOURCES.leadScore);
@@ -342,12 +343,13 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
         meta: 'Cotality Delta Share',
       },
       { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'current lien snapshot' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb', meta: 'UC SQL parity-pinned to scoring.py' },
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'current_lien_balance, current_rate, lender relationship' },
       { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'rate_spread and competitor_lien evidence rows' },
     ],
     signals: [
       { label: 'Lien rate', source: 'lien_current.first_pos_rate', value: 'per borrower' },
-      { label: 'Open lien balance', source: 'lien_current.total_open_lien_balance', value: 'per borrower' },
+      { label: 'Estimated UPB', source: 'fn_estimated_upb', value: 'amortized from original UPB' },
       { label: 'Lender relationship', source: 'mip.ref.lender_dictionary', value: 'tenant / competitor / other' },
     ],
   },
@@ -474,14 +476,15 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       'AVM-backed property value and lien-balance math used to estimate borrower equity, CLTV/LTV, and the equity leg of refinance and HELOC eligibility.',
     lineage: [
       { layer: 'SOURCE', name: 'cotality.lien_status_marketing.avm_fields', meta: 'estimated value and confidence fields' },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'avm_value, confidence, as-of date, open-lien balance' },
+      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'avm_value, confidence, original UPB, note rate' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb', meta: 'amortized current lien estimate' },
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'equity_estimate, equity_pct, ltv' },
       { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'equity evidence rows' },
     ],
     signals: [
       { label: 'AVM value', source: 'lien_current.avm_value', value: 'per borrower' },
-      { label: 'Equity estimate', source: 'borrower_360.equity_estimate', value: 'AVM minus open liens' },
-      { label: 'Equity %', source: 'borrower_360.equity_pct', value: 'CLTV preferred, AVM fallback' },
+      { label: 'Equity estimate', source: 'borrower_360.equity_estimate', value: 'AVM minus estimated current lien' },
+      { label: 'Equity %', source: 'borrower_360.equity_pct', value: 'AVM and estimated current lien' },
     ],
   },
 
