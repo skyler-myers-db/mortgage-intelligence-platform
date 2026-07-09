@@ -178,6 +178,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "suppression_reason",
         "last_touch_at",
         "eligible_recontact_at",
+        # S1.4 contact-eligibility enforcement: do-not-contact flag and the
+        # consent-provenance slug (synthetic_seed or a CRM/CDP connector id).
+        # Both are controlled machine values, never free text.
+        "dnc",
+        "eligibility_source",
         "disclosure_version",
         "disclosure_state",
         "disclosure_channel",

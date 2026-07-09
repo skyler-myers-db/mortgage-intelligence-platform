@@ -8,6 +8,7 @@ from fastapi import HTTPException
 
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.eligibility import eligible_sql_predicate
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_workflows import (
     BORROWER_360,
@@ -16,6 +17,10 @@ from backend.services.growth_agent_workflows import (
     SOURCE_READINESS,
     GrowthAgentWorkflowDef,
 )
+
+# S1.4: canonical fail-closed contactability predicates (single interface).
+_B_ELIGIBLE = eligible_sql_predicate("b")
+_D_ELIGIBLE = eligible_sql_predicate("d")
 
 
 def load_growth_agent_metrics(
@@ -59,7 +64,7 @@ WITH broad AS (
         ROUND(AVG(CAST(b.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score
       FROM {BORROWER_360} b
       WHERE {workflow.actionable_predicate}
-        AND b.marketing_eligible = TRUE
+        AND {_B_ELIGIBLE}
         AND b.consent_status = 'opt_in'
         AND b.suppression_reason IS NULL
         {actionable_state_clause}
@@ -108,7 +113,7 @@ actionable AS (
     ROUND(AVG(CAST(d.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score
   FROM {BORROWER_DOSSIER} d
   WHERE d.opportunity_score >= 75
-    AND d.marketing_eligible = TRUE
+    AND {_D_ELIGIBLE}
     AND d.consent_status = 'opt_in'
     AND d.suppression_reason IS NULL
     {actionable_state_clause}
@@ -150,7 +155,7 @@ SELECT
 FROM {BORROWER_360} b
 LEFT JOIN {qualify("gold", "borrower_lifecycle_state")} ls
   ON ls.borrower_id = b.borrower_id
-WHERE b.marketing_eligible = TRUE
+WHERE {_B_ELIGIBLE}
   AND b.consent_status = 'opt_in'
   AND b.suppression_reason IS NULL
   AND COALESCE(ls.approval_status, 'pending') = 'approved'

@@ -29,6 +29,7 @@ from backend.services.audit_lakebase_store import write_audit_event_in_transacti
 from backend.services.audit_store import AuditStore
 from backend.services.databricks_sql import DatabricksSqlClient, DatabricksSqlError
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.eligibility import eligible_sql_predicate
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_workflows import (
     BORROWER_360,
@@ -37,6 +38,9 @@ from backend.services.growth_agent_workflows import (
 )
 from backend.services.lakebase import LakebaseClient, LakebaseError
 from backend.services.property_lookup import lookup_property_loan
+
+# S1.4: canonical fail-closed contactability predicate (single interface).
+_B_ELIGIBLE = eligible_sql_predicate("b")
 
 
 @dataclass(frozen=True)
@@ -299,7 +303,7 @@ def _impl_segment_counts(ctx: ToolExecutionContext, params: dict[str, Any]) -> P
         f"""
 SELECT COUNT(DISTINCT b.clip) AS row_count
 FROM {BORROWER_360} b
-WHERE b.marketing_eligible = TRUE
+WHERE {_B_ELIGIBLE}
   AND b.consent_status = 'opt_in'
   AND b.suppression_reason IS NULL{segment_clause}{state_clause}
 """,
@@ -323,7 +327,7 @@ def _impl_offer_compare(ctx: ToolExecutionContext, params: dict[str, Any]) -> Pl
         f"""
 SELECT COUNT(DISTINCT b.clip) AS row_count
 FROM {BORROWER_360} b
-WHERE b.marketing_eligible = TRUE
+WHERE {_B_ELIGIBLE}
   AND b.in_the_money = TRUE{state_clause}
 """,
         sql_params,

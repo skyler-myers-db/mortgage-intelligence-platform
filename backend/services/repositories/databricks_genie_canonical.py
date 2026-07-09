@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.eligibility import eligible_sql_predicate
 
 
 @dataclass(frozen=True)
@@ -78,6 +79,9 @@ def _retention_eligibility_fallback_from_summary(
         metric_value=f"{action_ready_count:,}",
     )
 
+# S1.4: canonical fail-closed contactability predicates (single interface).
+_ELIGIBLE = eligible_sql_predicate()
+_B_ELIGIBLE = eligible_sql_predicate("b")
 _BORROWER_360 = qualify("gold", "borrower_360")
 _EVIDENCE_EVENTS = qualify("gold", "evidence_events")
 _FUNNEL_SNAPSHOT_DAILY = qualify("gold", "funnel_snapshot_daily")
@@ -187,7 +191,7 @@ _CANONICAL_ADDRESSABLE_MARKET_SQL = f"""
 SELECT COUNT(*) AS marketable_population
      , MAX(refreshed_at) AS refreshed_at
 FROM {_BORROWER_360}
-WHERE marketing_eligible = TRUE
+WHERE {_ELIGIBLE}
   AND is_owner_occupied = TRUE
   AND current_lien_balance > 0
   AND COALESCE(second_pos_amount, 0) = 0
@@ -198,7 +202,7 @@ _CANONICAL_RANKED_LEAD_POPULATION_SQL = f"""
 SELECT COUNT(*) AS ranked_leads
      , MAX(refreshed_at) AS refreshed_at
 FROM {_LEAD_POPULATION}
-WHERE marketing_eligible = TRUE
+WHERE {_ELIGIBLE}
 """.strip()
 
 _CANONICAL_ITM_COUNT_BY_STATE_SQL = f"""
@@ -240,7 +244,7 @@ SELECT zip
      , MAX(refreshed_at) AS refreshed_at
 FROM {_LEAD_POPULATION}
 WHERE array_contains(segment_codes, 'itm')
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
   AND zip IS NOT NULL
   AND TRIM(zip) <> ''
@@ -267,7 +271,7 @@ lead_queue AS (
        , COUNT(*) AS lead_queue_borrowers
   FROM {_BORROWER_360}
   WHERE array_contains(segment_codes, 'itm')
-    AND marketing_eligible = TRUE
+    AND {_ELIGIBLE}
     AND state IS NOT NULL
     AND TRIM(state) <> ''
   GROUP BY state
@@ -326,7 +330,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE listed_for_sale = TRUE
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -388,7 +392,7 @@ SELECT CAST(COUNT(*) AS BIGINT) AS marketable_borrowers
      , CAST(COUNT_IF(has_heloc_propensity_trigger = TRUE) AS BIGINT) AS heloc_propensity_triggers
      , MAX(refreshed_at) AS refreshed_at
 FROM {_BORROWER_360}
-WHERE marketing_eligible = TRUE
+WHERE {_ELIGIBLE}
   AND consent_status = 'opt_in'
 """.strip()
 
@@ -400,7 +404,7 @@ SELECT e.signal_type
 FROM {_BORROWER_360} AS b
 JOIN {_EVIDENCE_EVENTS} AS e
   ON e.clip = b.clip
-WHERE b.marketing_eligible = TRUE
+WHERE {_B_ELIGIBLE}
   AND b.consent_status = 'opt_in'
   AND b.recommended_offer_code IN ('refi', 'refi_plus_heloc')
   AND e.signal_type IN (
@@ -429,7 +433,7 @@ SELECT CAST(COUNT(*) AS BIGINT) AS marketable_borrowers
          AS avg_top_tier_score
      , MAX(refreshed_at) AS refreshed_at
 FROM {_BORROWER_360}
-WHERE marketing_eligible = TRUE
+WHERE {_ELIGIBLE}
   AND consent_status = 'opt_in'
 """.strip()
 
@@ -444,7 +448,7 @@ WITH exploded_segments AS (
        , refreshed_at
   FROM {_BORROWER_360}
   LATERAL VIEW explode(segment_codes) seg AS segment_code
-  WHERE marketing_eligible = TRUE
+  WHERE {_ELIGIBLE}
     AND consent_status = 'opt_in'
     AND state IS NOT NULL
     AND TRIM(state) <> ''
@@ -520,7 +524,7 @@ SELECT borrower_id
      , rank_overall
      , refreshed_at
 FROM {_LEAD_POPULATION}
-WHERE marketing_eligible = TRUE
+WHERE {_ELIGIBLE}
 ORDER BY opportunity_score DESC, rank_overall ASC, borrower_id ASC
 LIMIT 10
 """.strip()
@@ -540,7 +544,7 @@ SELECT borrower_id
 FROM {_BORROWER_360}
 WHERE state = :state
   AND in_the_money = TRUE
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
 LIMIT 10
@@ -561,7 +565,7 @@ SELECT borrower_id
 FROM {_BORROWER_360}
 WHERE state = :state
   AND recommended_offer_code = 'cash_out'
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -587,7 +591,7 @@ WHERE state = :state
     OR has_heloc_propensity_trigger = TRUE
     OR array_contains(segment_codes, 'permit')
   )
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY heloc_propensity_score DESC NULLS LAST, equity_estimate DESC, opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -607,7 +611,7 @@ SELECT borrower_id
 FROM {_BORROWER_360}
 WHERE state = :state
   AND listed_for_sale = TRUE
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -627,7 +631,7 @@ SELECT borrower_id
 FROM {_BORROWER_360}
 WHERE state = :state
   AND (array_contains(segment_codes, 'investor') OR is_investor = TRUE)
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY related_property_count DESC NULLS LAST, opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -647,7 +651,7 @@ SELECT borrower_id
 FROM {_BORROWER_360}
 WHERE state = :state
   AND array_contains(segment_codes, 'retention')
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
 LIMIT 10
@@ -656,11 +660,11 @@ LIMIT 10
 _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_BY_STATE_SQL = f"""
 SELECT CAST(COUNT_IF(array_contains(segment_codes, 'retention')) AS BIGINT)
          AS retention_segment_borrowers
-     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND marketing_eligible = TRUE) AS BIGINT)
+     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND {_ELIGIBLE}) AS BIGINT)
          AS marketing_eligible_retention_borrowers
      , CAST(COUNT_IF(
          array_contains(segment_codes, 'retention')
-         AND marketing_eligible = TRUE
+         AND {_ELIGIBLE}
          AND consent_status = 'opt_in'
        ) AS BIGINT) AS action_ready_retention_borrowers
      , MAX(refreshed_at) AS refreshed_at
@@ -691,7 +695,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE in_the_money = TRUE
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
 LIMIT 10
@@ -711,7 +715,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE recommended_offer_code = 'cash_out'
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -736,7 +740,7 @@ WHERE (
     OR has_heloc_propensity_trigger = TRUE
     OR array_contains(segment_codes, 'permit')
   )
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY heloc_propensity_score DESC NULLS LAST, equity_estimate DESC, opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -755,7 +759,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE listed_for_sale = TRUE
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -774,7 +778,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE (array_contains(segment_codes, 'investor') OR is_investor = TRUE)
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY related_property_count DESC NULLS LAST, opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -793,7 +797,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE array_contains(segment_codes, 'retention')
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, rate_spread_bps DESC, borrower_id ASC
 LIMIT 10
@@ -802,11 +806,11 @@ LIMIT 10
 _CANONICAL_RETENTION_ELIGIBILITY_SUMMARY_GLOBAL_SQL = f"""
 SELECT CAST(COUNT_IF(array_contains(segment_codes, 'retention')) AS BIGINT)
          AS retention_segment_borrowers
-     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND marketing_eligible = TRUE) AS BIGINT)
+     , CAST(COUNT_IF(array_contains(segment_codes, 'retention') AND {_ELIGIBLE}) AS BIGINT)
          AS marketing_eligible_retention_borrowers
      , CAST(COUNT_IF(
          array_contains(segment_codes, 'retention')
-         AND marketing_eligible = TRUE
+         AND {_ELIGIBLE}
          AND consent_status = 'opt_in'
        ) AS BIGINT) AS action_ready_retention_borrowers
      , MAX(refreshed_at) AS refreshed_at
@@ -836,7 +840,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE recommended_offer_code IN ('cash_out', 'heloc', 'refi_plus_heloc')
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY equity_estimate DESC, opportunity_score DESC, borrower_id ASC
 LIMIT 10
@@ -856,7 +860,7 @@ SELECT borrower_id
 FROM {_BORROWER_360}
 WHERE array_contains(segment_codes, 'investor')
   AND related_property_count >= 2
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
 ORDER BY related_property_count DESC, opportunity_score DESC, borrower_id ASC
 LIMIT 20
 """.strip()
@@ -977,7 +981,7 @@ SELECT borrower_id
      , refreshed_at
 FROM {_BORROWER_360}
 WHERE recommended_offer_code IN ('heloc', 'refi_plus_heloc')
-  AND marketing_eligible = TRUE
+  AND {_ELIGIBLE}
   AND consent_status = 'opt_in'
 ORDER BY opportunity_score DESC, equity_estimate DESC, borrower_id ASC
 LIMIT 50
