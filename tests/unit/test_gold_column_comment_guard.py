@@ -208,12 +208,16 @@ def test_borrower_360_display_ltv_can_exceed_100_while_equity_clamps() -> None:
         r"AS INT\) AS ltv",
         text,
     )
-    assert "GREATEST(0, LEAST(100, CASE" not in re.search(
+    ltv_match = re.search(
         r"-- LTV: display truth\..*?AS INT\) AS ltv",
         text,
         re.DOTALL,
-    ).group(0), "display LTV is upper-capped again"
-    equity_block = re.search(r"-- Equity %.*?END AS INT\) AS equity_pct", text, re.DOTALL).group(0)
+    )
+    assert ltv_match is not None, "LTV display-truth block not found in gold_borrower_360.sql"
+    assert "GREATEST(0, LEAST(100, CASE" not in ltv_match.group(0), "display LTV is upper-capped again"
+    equity_match = re.search(r"-- Equity %.*?END AS INT\) AS equity_pct", text, re.DOTALL)
+    assert equity_match is not None, "Equity % block not found in gold_borrower_360.sql"
+    equity_block = equity_match.group(0)
     assert equity_block.index("b.avm_value IS NOT NULL") < equity_block.index("b.estimated_cltv"), (
         "Cotality estimated_cltv must remain only a no-AVM fallback; primary "
         "equity math uses estimated current lien balance."
