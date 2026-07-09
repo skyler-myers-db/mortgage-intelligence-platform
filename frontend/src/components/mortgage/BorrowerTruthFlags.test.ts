@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LeadSummary } from '../../types';
-import { truthFlagLabels } from './BorrowerTruthFlags';
+import { ownerCaveatLabels, truthFlagLabels } from './BorrowerTruthFlags';
 
 const baseBorrower: LeadSummary = {
   borrower_id: 'B-102FL7THC6Q3L',
@@ -73,5 +73,44 @@ describe('truthFlagLabels', () => {
 
     expect(labels).toContain('Absentee owner');
     expect(labels).toContain('Corporate owner');
+  });
+});
+
+describe('ownerCaveatLabels', () => {
+  it('renders no caveats for a default single-owner resolved lead', () => {
+    expect(ownerCaveatLabels(baseBorrower)).toEqual([]);
+    // A borrower with owner_count=1 and no entity/unresolved signal is also clean.
+    expect(
+      ownerCaveatLabels({ ...baseBorrower, owner_count: 1, primary_owner_entity_type: 'individual' }),
+    ).toEqual([]);
+  });
+
+  it('renders a neutral multi-owner caveat when owner_count > 1', () => {
+    const caveats = ownerCaveatLabels({ ...baseBorrower, owner_count: 3 });
+    const multi = caveats.find((c) => c.label === 'Multi-owner (3)');
+    expect(multi).toBeDefined();
+    expect(multi?.variant).toBe('neutral');
+  });
+
+  it('renders neutral trust-held and llc/entity-held caveats by entity type', () => {
+    expect(
+      ownerCaveatLabels({ ...baseBorrower, primary_owner_entity_type: 'trust' }).map((c) => c.label),
+    ).toContain('Trust-held');
+    expect(
+      ownerCaveatLabels({ ...baseBorrower, primary_owner_entity_type: 'llc' }).map((c) => c.label),
+    ).toContain('LLC/entity-held');
+  });
+
+  it('renders a warning suppression caveat when has_unresolved_owner is true', () => {
+    const caveats = ownerCaveatLabels({
+      ...baseBorrower,
+      has_unresolved_owner: true,
+      primary_owner_entity_type: 'unresolved',
+      marketing_eligible: false,
+      suppression_reason: 'unresolved_owner',
+    });
+    const suppressed = caveats.find((c) => c.label === 'Owner unresolved — outreach suppressed');
+    expect(suppressed).toBeDefined();
+    expect(suppressed?.variant).toBe('warning');
   });
 });

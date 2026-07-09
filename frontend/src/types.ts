@@ -93,6 +93,14 @@ export interface LeadSummary {
   marketing_eligible?: boolean;
   consent_status?: 'opt_in' | 'opt_out' | 'unknown';
   suppression_reason?: string | null;
+  /** Owner-resolution caveats (S1.1). `owner_count` is occupied owner slots on
+   *  the property (max 4). `has_unresolved_owner` rows are never
+   *  marketing_eligible — gold stamps suppression_reason='unresolved_owner'.
+   *  Display-only; suppression is enforced in the gold/backend layer. All
+   *  optional with safe defaults so older cached payloads still parse. */
+  owner_count?: number;
+  has_unresolved_owner?: boolean;
+  primary_owner_entity_type?: 'individual' | 'trust' | 'llc' | 'unresolved' | null;
   last_touch_at?: string | null;
   eligible_recontact_at?: string | null;
   assigned_to_email?: string | null;
