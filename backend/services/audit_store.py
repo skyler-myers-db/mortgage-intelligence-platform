@@ -15,7 +15,6 @@ from fastapi import Request
 
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
-from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.schemas.common import (
     contains_pii_marker,
     validate_internal_staff_email,
@@ -28,6 +27,7 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.services.agent_tools import registered_agent_tool_names
 from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_metadata_value_policy import (
