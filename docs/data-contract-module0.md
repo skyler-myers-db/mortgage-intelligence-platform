@@ -530,6 +530,40 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 | `color` | STRING | N | static map | `color` | Hex. |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | — | |
 
+### 3.7 `mip.gold.household_rollup`
+
+- **Grain:** one row per `borrower_360.borrower_id` / CLIP.
+- **Source:** `gold.borrower_360`, S1.1 `silver.property_owners`, and `silver.property_master`.
+- **PK:** `borrower_id`.
+- **Clustering:** `(household_id, borrower_id)`.
+- **Refresh:** daily, downstream of `borrower_360`; read only when campaign household dedup is explicitly enabled.
+- **Default unit:** BORROWER remains the default everywhere. Household is opt-in at campaign creation only.
+
+Deterministic derivation order:
+
+1. **Owner Link:** group CLIPs through shared `silver.property_owners.owner_link_id` rows, including co-owner links on CLIPs reached through one shared Owner-Link hop. The canonical key is the lexicographically smallest reachable Owner Link and is hashed before landing.
+2. **Mailing-address heuristic:** if no Owner Link exists, group by salted `owner_name_hash` plus normalized `mailing_city` / `mailing_state`. `mailing_street_address` never lands in silver or gold, so this heuristic is intentionally conservative.
+3. **Singleton:** if neither signal exists, the borrower is its own household.
+
+Primary-contact ranking is deterministic: contact-eligible members (`marketing_eligible=true` and `has_unresolved_owner=false`) rank before ineligible members, then `opportunity_score DESC`, then `borrower_id ASC`. A campaign can suppress co-owners only after this rank is computed; an ineligible member is never promoted to primary.
+
+| Column | Type | Null | Source | Definition |
+|---|---|---|---|---|
+| `clip` | STRING | N | `borrower_360.clip` | Below API redaction boundary. |
+| `borrower_id` | STRING | N | `borrower_360.borrower_id` | Synthetic `B-[0-9A-Z]{13}` id. |
+| `household_id` | STRING | N | `HH-` + sha2 suffix over the derivation key | Public household id. |
+| `household_derivation_method` | STRING | N | derivation branch | `owner_link`, `mailing_address`, or `singleton`. |
+| `household_derivation_key_hash` | STRING | N | sha2 over non-PII key | Audit reconciliation only; raw Owner Links and mailing city/state are not emitted. |
+| `derivation_source_tables` | ARRAY<STRING> | N | literal UC paths | EvidenceDrawer lineage for surfaced household counts. |
+| `household_member_count` | INT | N | window count | Members assigned to the household id. |
+| `eligible_member_count` | INT | N | window count | Members eligible to be a campaign contact. |
+| `household_rank` | INT | N | window rank | Eligible-first primary rank. |
+| `is_household_primary` | BOOLEAN | N | rank + eligibility | TRUE only for the eligible rank-1 member. |
+| `primary_borrower_id` | STRING | Y | rank result | Synthetic borrower id for the selected primary contact. |
+| `suppressed_by_household_dedup` | BOOLEAN | N | rank + eligibility | TRUE for eligible co-owners suppressed by opt-in household dedup. |
+| `owner_link_reachable_count` | INT | N | `silver.property_owners` | Count of reachable Owner Links used by the owner-link branch. |
+| `refreshed_at` | TIMESTAMP | N | `mip.ref.refresh_run_state.refresh_at` | Shared gold refresh timestamp. |
+
 ---
 
 ## 4. Segment Membership (SQL definitions)
