@@ -55,9 +55,10 @@
 -- `market` -- every borrower reads the same par rate at refresh time.
 --
 -- Estimated UPB: first-lien current balance is derived in gold via
--- mip.gold.fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed)
--- plus any second-position amount. This closes gap A5 and keeps current lien,
--- equity dollars, equity_pct, and display LTV on the same amortized estimate.
+-- mip.gold.fn_estimated_upb_confidence_band(first_pos_amount, first_pos_rate,
+-- months_elapsed) plus any second-position amount. This closes gap A5 and keeps
+-- current lien, confidence band, equity dollars, equity_pct, and display LTV on
+-- the same amortized estimate.
 --
 -- trigger_timeline_json: materialized via SUBQUERY + to_json(collect_list(...))
 -- of the top-3 evidence_events ORDER BY signal_rank. Prevents per-row fan-out
@@ -151,14 +152,8 @@ base AS (
     -- Fractional mortgage rate after source-quality bounding. The synthetic
     -- Cotality seed can emit rare long-tail values above 1000 bps of spread
     -- (for example 84.56%). Those are generator artifacts, not mortgage
-    -- economics. Keep the scoring path inside a defensible 1%-15% APR range:
-    -- invalid lows become NULL (no rate signal), invalid highs clamp to 15%.
-    CASE
-      WHEN lc.first_pos_rate IS NULL THEN NULL
-      WHEN lc.first_pos_rate < 0.01 THEN NULL
-      WHEN lc.first_pos_rate > 0.15 THEN 0.15
-      ELSE lc.first_pos_rate
-    END                                 AS first_pos_rate,
+    -- economics. Keep the scoring path inside the canonical bounded contract.
+    mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate,
     lc.first_pos_loan_type,
     lc.first_pos_lender_current,
     -- Normalised lender raw_key for the JOIN to mip.ref.lender_dictionary.
@@ -182,24 +177,43 @@ base AS (
   WHERE lc.situs_state IS NOT NULL
     AND lc.clip IS NOT NULL
 ),
+upb_inputs AS (
+  SELECT
+    b.*,
+    CASE
+      WHEN b.first_pos_date IS NULL THEN NULL
+      ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), b.first_pos_date)) AS INT)
+    END AS first_pos_months_elapsed,
+    mip.gold.fn_estimated_upb_confidence_band(
+      b.first_pos_amount,
+      b.first_pos_rate,
+      CASE
+        WHEN b.first_pos_date IS NULL THEN NULL
+        ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), b.first_pos_date)) AS INT)
+      END
+    ) AS first_lien_upb_band
+  FROM base AS b
+  CROSS JOIN refresh_anchor AS ra
+),
 upb_estimates AS (
   SELECT
     b.*,
     CAST(CASE
       WHEN b.first_pos_amount IS NOT NULL AND b.first_pos_amount > 0 THEN
-        mip.gold.fn_estimated_upb(
-          b.first_pos_amount,
-          b.first_pos_rate,
-          CASE
-            WHEN b.first_pos_date IS NULL THEN NULL
-            ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), b.first_pos_date)) AS INT)
-          END
-        )
-        + COALESCE(b.second_pos_amount, 0)
+        b.first_lien_upb_band.estimate_upb + COALESCE(b.second_pos_amount, 0)
       ELSE COALESCE(b.total_open_lien_balance, 0)
-    END AS BIGINT) AS estimated_current_lien_balance
-  FROM base AS b
-  CROSS JOIN refresh_anchor AS ra
+    END AS BIGINT) AS estimated_current_lien_balance,
+    CAST(CASE
+      WHEN b.first_pos_amount IS NOT NULL AND b.first_pos_amount > 0 THEN
+        b.first_lien_upb_band.lower_upb + COALESCE(b.second_pos_amount, 0)
+      ELSE COALESCE(b.total_open_lien_balance, 0)
+    END AS BIGINT) AS estimated_current_lien_balance_low,
+    CAST(CASE
+      WHEN b.first_pos_amount IS NOT NULL AND b.first_pos_amount > 0 THEN
+        b.first_lien_upb_band.upper_upb + COALESCE(b.second_pos_amount, 0)
+      ELSE COALESCE(b.total_open_lien_balance, 0)
+    END AS BIGINT) AS estimated_current_lien_balance_high
+  FROM upb_inputs AS b
 ),
 latest_listing AS (
   SELECT *
@@ -826,6 +840,8 @@ SELECT
          w.state, ' ', COALESCE(w.zip, '00000'))                                      AS subject_property,
   CAST(COALESCE(w.avm_value, 0) AS BIGINT)                                           AS avm_value,
   CAST(COALESCE(w.estimated_current_lien_balance, 0) AS BIGINT)                      AS current_lien_balance,
+  CAST(COALESCE(w.estimated_current_lien_balance_low, w.estimated_current_lien_balance, 0) AS BIGINT) AS current_lien_balance_low,
+  CAST(COALESCE(w.estimated_current_lien_balance_high, w.estimated_current_lien_balance, 0) AS BIGINT) AS current_lien_balance_high,
   -- current_rate in PERCENT form (5.75), matches Pydantic + mock_data.
   CAST(COALESCE(w.first_pos_rate * 100, 0.0) AS DOUBLE)                              AS current_rate,
   w.ltv,
@@ -911,6 +927,8 @@ COMMENT ON COLUMN mip.gold.borrower_360.owner_link_id IS 'Cotality Owner Link id
 COMMENT ON COLUMN mip.gold.borrower_360.subject_property IS 'Synthetic city/state/ZIP5 string. No street address.';
 COMMENT ON COLUMN mip.gold.borrower_360.avm_value IS 'COALESCE(avm_value, 0).';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'Estimated current lien balance in USD: fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present; otherwise COALESCE(total_open_lien_balance, 0).';
+COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance_low IS 'Lower bound of the estimated current lien balance confidence band in USD: fn_estimated_upb_confidence_band lower_upb plus second-position amount when first-lien inputs are present; otherwise equals current_lien_balance.';
+COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance_high IS 'Upper bound of the estimated current lien balance confidence band in USD: fn_estimated_upb_confidence_band upper_upb plus second-position amount when first-lien inputs are present; otherwise equals current_lien_balance.';
 COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.';
 COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int from estimated current lien balance divided by AVM when AVM is present; not upper-capped, so underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(property_owner_bridge.related_property_count, 1).';

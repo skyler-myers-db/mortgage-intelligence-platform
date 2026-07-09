@@ -15,6 +15,11 @@ golden-fixture JSON that the SQL side validates against the same inputs:
                             + ``tests/fixtures/estimated_upb_golden.json``
                             (case_04 pins unknown-rate fallback; case_06
                             pins near-payoff behavior).
+- ``estimated_upb_confidence_band``
+                         -> ``sql/uc_functions/fn_estimated_upb_confidence_band.sql``
+                            + ``tests/fixtures/estimated_upb_confidence_band_golden.json``
+                            (pins lower/point/upper range from bounded
+                            mortgage-rate uncertainty).
 - ``in_the_money``       -> ``sql/uc_functions/fn_in_the_money.sql``
                             + ``tests/fixtures/in_the_money_golden.json``
                             (cases 04/05 pin the inclusive ``>=`` boundary).
@@ -38,6 +43,8 @@ _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
 _STANDARD_MORTGAGE_TERM_MONTHS = 360
 _MAX_AMORTIZATION_RATE = 10.0
+_MIN_BOUNDED_MORTGAGE_RATE = 0.01
+_MAX_BOUNDED_MORTGAGE_RATE = 0.15
 
 # fn_lead_score weights as EXACT decimals. Spark parses the SQL literals
 # (0.35 etc.) as DECIMAL, so the UDF computes the weighted sum exactly and
@@ -110,7 +117,9 @@ def offer_display_label(code: str | None, fallback: str | None = None) -> str:
 SOURCE_DISPLAY_LABELS: dict[str, str] = {
     # UC function evidence
     "mip.gold.fn_rate_spread":      "Market rate comparison",
+    "mip.gold.fn_bounded_mortgage_rate": "Mortgage rate quality bound",
     "mip.gold.fn_estimated_upb":    "Estimated UPB amortization",
+    "mip.gold.fn_estimated_upb_confidence_band": "Estimated UPB confidence band",
     "mip.gold.fn_in_the_money":     "Refinance economics screen",
     "mip.gold.fn_next_best_offer":  "Primary offer rules",
     "mip.gold.fn_lead_score":       "Opportunity score",
@@ -126,7 +135,9 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.silver.refi_propensity":   "Refi propensity",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
+    "fn_bounded_mortgage_rate":     "Mortgage rate quality bound",
     "fn_estimated_upb":             "Estimated UPB amortization",
+    "fn_estimated_upb_confidence_band": "Estimated UPB confidence band",
     "fn_in_the_money":              "Refinance economics screen",
     "fn_next_best_offer":           "Primary offer rules",
     "fn_lead_score":                "Opportunity score",
@@ -293,6 +304,64 @@ def estimated_upb(
                         balance = straight_line_balance()
 
     return max(0, int(round(balance)))
+
+
+def bounded_mortgage_rate(raw_rate: float | None) -> float | None:
+    """Return the governed source-quality bound for mortgage rates.
+
+    Mirrors ``mip.gold.fn_bounded_mortgage_rate``. Rates are fractional
+    annual APR values. ``None`` and values below 1% return ``None`` because
+    they are treated as missing/no-signal in gold. Values above 15% clamp to
+    15% so source or synthetic generator outliers remain visible without
+    dominating mortgage economics.
+    """
+    import math
+
+    try:
+        rate = None if raw_rate is None else float(raw_rate)
+    except (TypeError, ValueError):
+        return None
+    if rate is None or not math.isfinite(rate) or rate < _MIN_BOUNDED_MORTGAGE_RATE:
+        return None
+    if rate > _MAX_BOUNDED_MORTGAGE_RATE:
+        return _MAX_BOUNDED_MORTGAGE_RATE
+    return rate
+
+
+def estimated_upb_confidence_band(
+    original_upb: int | float | None,
+    estimated_rate: float | None,
+    months_elapsed: int | None,
+) -> dict[str, int]:
+    """Return lower/point/upper estimated-UPB dollars.
+
+    Mirrors ``mip.gold.fn_estimated_upb_confidence_band``. The point estimate
+    is ``estimated_upb`` using the canonical bounded mortgage rate. The band
+    recomputes ``estimated_upb`` at the same plausible rate floor/ceiling used
+    by the gold rate-quality bound. The final range is expanded to include the
+    point estimate so unknown-rate straight-line fallback rows still produce a
+    valid ``lower <= estimate <= upper`` contract.
+    """
+    estimate = estimated_upb(
+        original_upb,
+        bounded_mortgage_rate(estimated_rate),
+        months_elapsed,
+    )
+    lower_at_floor = estimated_upb(
+        original_upb,
+        bounded_mortgage_rate(_MIN_BOUNDED_MORTGAGE_RATE),
+        months_elapsed,
+    )
+    upper_at_ceiling = estimated_upb(
+        original_upb,
+        bounded_mortgage_rate(_MAX_BOUNDED_MORTGAGE_RATE),
+        months_elapsed,
+    )
+    return {
+        "lower_upb": min(lower_at_floor, estimate, upper_at_ceiling),
+        "estimate_upb": estimate,
+        "upper_upb": max(lower_at_floor, estimate, upper_at_ceiling),
+    }
 
 
 def in_the_money(

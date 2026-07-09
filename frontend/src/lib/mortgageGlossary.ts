@@ -57,11 +57,13 @@ export const mortgageGlossary = {
   estimatedUpb: {
     id: 'estimated-upb',
     term: 'Estimated UPB',
-    aliases: ['estimated unpaid principal balance', 'amortized balance'],
+    aliases: ['estimated unpaid principal balance', 'amortized balance', 'confidence band'],
     category: 'mortgage',
-    short: 'An amortized current-lien balance estimate from original UPB, note rate, and elapsed months.',
-    appContext: 'Shown as a caveated current lien value in Borrower 360 and used in gold to derive equity dollars, equity percent, and display LTV.',
-    proof: 'Proof traces to fn_estimated_upb and the gold borrower refresh; unknown rates use the documented straight-line fallback.',
+    short: 'An amortized current-lien balance estimate from original UPB, note rate, elapsed months, and a deterministic rate-bound confidence band.',
+    appContext:
+      'Shown as a caveated current lien value in Borrower 360 and used in gold to derive equity dollars, equity percent, and display LTV. Methodology: for a 360-month term, remaining principal equals original_upb * ((1 + monthly_rate)^360 - (1 + monthly_rate)^months_elapsed) / ((1 + monthly_rate)^360 - 1), rounded to the nearest dollar.',
+    proof:
+      'Proof traces to fn_estimated_upb, fn_bounded_mortgage_rate, and fn_estimated_upb_confidence_band. Missing or below-1% rates use the documented straight-line fallback; source rates above 15% clamp to 15%; months_elapsed clamps to 0..360; the confidence band recomputes the UPB at the 1% and 15% plausible rate bounds and expands to include the point estimate.',
   },
   heloc: {
     id: 'heloc',

@@ -74,6 +74,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   const key = rawSource.toLowerCase();
 
   if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
+  if (key.includes('fn_estimated_upb_confidence_band')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('fn_estimated_upb')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('rate_spread')) return enrichAsset(DRAWER_SOURCES.rateSpread);
   if (key.includes('fn_in_the_money') || key.includes('itm')) return enrichAsset(DRAWER_SOURCES.itm);
@@ -343,13 +344,18 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
         meta: 'Cotality Delta Share',
       },
       { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'current lien snapshot' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_bounded_mortgage_rate', meta: '1%-15% rate-quality bound' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb', meta: 'UC SQL parity-pinned to scoring.py' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb_confidence_band', meta: 'low/estimate/high range' },
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'current_lien_balance, current_rate, lender relationship' },
       { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'rate_spread and competitor_lien evidence rows' },
     ],
     signals: [
+      { label: 'Original UPB', source: 'lien_current.first_pos_amount', value: 'per borrower' },
       { label: 'Lien rate', source: 'lien_current.first_pos_rate', value: 'per borrower' },
+      { label: 'Elapsed months', source: 'months_between(refresh_at, first_pos_date)', value: 'gold refresh' },
       { label: 'Estimated UPB', source: 'fn_estimated_upb', value: 'amortized from original UPB' },
+      { label: 'Confidence band', source: 'fn_estimated_upb_confidence_band', value: '1%-15% rate-bound range' },
       { label: 'Lender relationship', source: 'mip.ref.lender_dictionary', value: 'tenant / competitor / other' },
     ],
   },

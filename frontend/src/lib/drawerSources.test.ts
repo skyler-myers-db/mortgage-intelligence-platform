@@ -109,6 +109,7 @@ describe('descriptorFor', () => {
     expect(drawerForAsset('mip.gold.source_readiness')).toBe(DRAWER_SOURCES.sourceReadiness);
     expect(drawerForAsset('mip.gold.lockin_cohort')).toBe(DRAWER_SOURCES.lockinCohort);
     expect(drawerForAsset('mip.gold.fn_rate_spread')).toBe(DRAWER_SOURCES.marketRate);
+    expect(drawerForAsset('mip.gold.fn_estimated_upb_confidence_band')).toBe(DRAWER_SOURCES.lien);
     expect(drawerForAsset('mip.gold.evidence_events.rate_spread')).toBe(DRAWER_SOURCES.rateSpread);
     expect(drawerForAsset('mip.semantics.lead_generation_metric_view')).toBe(DRAWER_SOURCES.leadGenerationView);
     expect(drawerForAsset('mip.semantics.segment_performance_metric_view')).toBe(DRAWER_SOURCES.segmentPerformanceView);
@@ -126,6 +127,17 @@ describe('descriptorFor', () => {
     expect(assetHrefForSource('mip.silver.heloc_propensity')).toBe('/data-estate/assets/heloc_propensity');
     expect(assetKeyForSource('mip.silver.lien_current')).toBeNull();
     expect(assetHrefForSource('mip.first_party.loan_applications')).toBeNull();
+  });
+
+  it('documents estimated UPB confidence-band lineage and inputs', () => {
+    const lineageNames = DRAWER_SOURCES.lien.lineage?.map((node) => node.name) ?? [];
+    const signalSources = DRAWER_SOURCES.lien.signals?.map((signal) => signal.source) ?? [];
+
+    expect(lineageNames).toContain('mip.gold.fn_bounded_mortgage_rate');
+    expect(lineageNames).toContain('mip.gold.fn_estimated_upb_confidence_band');
+    expect(signalSources).toContain('lien_current.first_pos_amount');
+    expect(signalSources).toContain('months_between(refresh_at, first_pos_date)');
+    expect(signalSources).toContain('fn_estimated_upb_confidence_band');
   });
 
   it('carries event timestamps as event dates, not source freshness', () => {
