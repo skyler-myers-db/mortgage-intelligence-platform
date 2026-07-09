@@ -58,6 +58,7 @@ flowchart LR
 
   subgraph UDF["UC SQL functions (frozen signatures)"]
     F_RS["fn_rate_spread"]
+    F_UPB["fn_estimated_upb"]
     F_ITM["fn_in_the_money"]
     F_LS["fn_lead_score"]
     F_NBO["fn_next_best_offer"]
@@ -83,6 +84,8 @@ flowchart LR
   S_OT --> G_EE
   S_LC --> G_EE
 
+  G_B360 --> F_UPB
+  G_EE --> F_UPB
   G_B360 --> F_RS
   G_B360 --> F_ITM
   G_B360 --> F_NBO
@@ -345,8 +348,8 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `situs_cbsa_code` | STRING | Y | `property_master.situs_cbsa_code` | — | Gold-only; used for geography drill-down. |
 | `county_fips_5` | STRING | Y | `property_master.fips_county_code` | — | Gold-only; used for county/ZIP rollups. |
 | `segment_codes` | ARRAY<STRING> | N | derived: see §4 | `segment_codes` | Ordered list of `SegmentCode` Literals. |
-| `equity_estimate` | BIGINT | N | `GREATEST(0, COALESCE(avm_value, 0) - COALESCE(total_open_lien_balance, 0))` | `equity_estimate` | USD integer. |
-| `equity_pct` | INT | N | `GREATEST(0, LEAST(100, CASE WHEN estimated_cltv > 0 THEN ROUND(100 - estimated_cltv) WHEN avm_value > 0 THEN ROUND(100.0 * (avm_value - total_open_lien_balance) / avm_value) ELSE 0 END))` | — | Feeds `fn_in_the_money` / `fn_next_best_offer`; Cotality CLTV wins when present. |
+| `equity_estimate` | BIGINT | N | `GREATEST(0, COALESCE(avm_value, 0) - estimated_current_lien_balance)` where `estimated_current_lien_balance = fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) + COALESCE(second_pos_amount, 0)` when first-lien inputs are present | `equity_estimate` | USD integer; gold-derived estimated equity for gap A5. |
+| `equity_pct` | INT | N | `GREATEST(0, LEAST(100, 100 - ROUND(100.0 * estimated_current_lien_balance / avm_value)))` when AVM is present; falls back to `estimated_cltv` only when AVM is missing | — | Feeds `fn_in_the_money` / `fn_next_best_offer`; uses the same estimated lien balance as `current_lien_balance`. |
 | `rate_spread_bps` | INT | N | `mip.gold.fn_rate_spread(first_pos_rate, market_rates_weekly.rate_fraction)` | `rate_spread_bps` | UDF output; rates are fractional on both sides. |
 | `market_rate_fraction` | DOUBLE | N | `market_rates_weekly.rate_fraction` (where `is_latest`) | `why_panel.market_rate` | |
 | `opportunity_score` | INT | N | `mip.gold.fn_lead_score(economic_incentive, intent_trigger, fit, relationship, evidence)` | `opportunity_score` | Computed in `borrower_360`; `lead_scores` is the parallel scoring audit surface. |
@@ -359,9 +362,9 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `owner_link_id` | STRING | Y | `property_master.owner_link_id` | `owner_link_id` | API emits `owner_link_ref_*` by default; raw Owner Link remains below the redaction boundary. |
 | `subject_property` | STRING | N | `CONCAT('Synthetic property · ', situs_city, ', ', situs_state, ' ', situs_zip_code)` | `subject_property` | **No raw street address.** |
 | `avm_value` | BIGINT | N | `COALESCE(lien_current.avm_value, 0)` | `avm_value` | 0 when AVM coverage gap. |
-| `current_lien_balance` | BIGINT | N | `COALESCE(lien_current.total_open_lien_balance, 0)` | `current_lien_balance` | |
+| `current_lien_balance` | BIGINT | N | `fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) + COALESCE(second_pos_amount, 0)` when first-lien inputs are present; otherwise `COALESCE(lien_current.total_open_lien_balance, 0)` | `current_lien_balance` | Caveated as estimated UPB in Borrower 360. |
 | `current_rate` | DOUBLE | N | `COALESCE(first_pos_rate * 100, 0.0)` | `current_rate` | **Percent form** (5.75, not 0.0575) — matches Pydantic `current_rate: float` and `mock_data` convention. |
-| `ltv` | INT | N | `CASE WHEN estimated_cltv > 0 THEN ROUND(estimated_cltv) WHEN avm_value>0 THEN ROUND(100.0 * total_open_lien_balance / avm_value) ELSE 0 END` | `ltv` | Display LTV is not upper-capped; underwater borrowers may exceed 100 while `equity_pct` remains capped for scoring. |
+| `ltv` | INT | N | `CASE WHEN avm_value>0 THEN ROUND(100.0 * estimated_current_lien_balance / avm_value) WHEN estimated_cltv > 0 THEN ROUND(estimated_cltv) ELSE 0 END` | `ltv` | Display LTV is not upper-capped; underwater borrowers may exceed 100 while `equity_pct` remains capped for scoring. |
 | `related_property_count` | INT | N | `COALESCE(property_owner_bridge.related_property_count, 1)` | `related_property_count` | |
 | `is_owner_occupied` | BOOLEAN | N | `owner_occupancy_code = 'O'` | — | Feeds `fit`. |
 | `is_absentee` | BOOLEAN | N | `property_master.is_absentee` | — | Feeds investor branch. |

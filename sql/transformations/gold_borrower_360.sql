@@ -54,6 +54,11 @@
 -- and series_id='MORTGAGE30US'. This is a CROSS-like join via the CTE
 -- `market` -- every borrower reads the same par rate at refresh time.
 --
+-- Estimated UPB: first-lien current balance is derived in gold via
+-- mip.gold.fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed)
+-- plus any second-position amount. This closes gap A5 and keeps current lien,
+-- equity dollars, equity_pct, and display LTV on the same amortized estimate.
+--
 -- trigger_timeline_json: materialized via SUBQUERY + to_json(collect_list(...))
 -- of the top-3 evidence_events ORDER BY signal_rank. Prevents per-row fan-out
 -- when the dossier renders.
@@ -141,6 +146,8 @@ base AS (
     lc.avm_value,
     lc.total_open_lien_balance,
     lc.estimated_cltv,
+    lc.first_pos_date,
+    lc.first_pos_amount,
     -- Fractional mortgage rate after source-quality bounding. The synthetic
     -- Cotality seed can emit rare long-tail values above 1000 bps of spread
     -- (for example 84.56%). Those are generator artifacts, not mortgage
@@ -174,6 +181,24 @@ base AS (
   -- tenant/demo state seed.
   WHERE lc.situs_state IS NOT NULL
     AND lc.clip IS NOT NULL
+),
+upb_estimates AS (
+  SELECT
+    b.*,
+    CAST(CASE
+      WHEN b.first_pos_amount IS NOT NULL AND b.first_pos_amount > 0 THEN
+        mip.gold.fn_estimated_upb(
+          b.first_pos_amount,
+          b.first_pos_rate,
+          CASE
+            WHEN b.first_pos_date IS NULL THEN NULL
+            ELSE CAST(FLOOR(months_between(DATE((SELECT refresh_at FROM refresh_anchor)), b.first_pos_date)) AS INT)
+          END
+        )
+        + COALESCE(b.second_pos_amount, 0)
+      ELSE COALESCE(b.total_open_lien_balance, 0)
+    END AS BIGINT) AS estimated_current_lien_balance
+  FROM base AS b
 ),
 latest_listing AS (
   SELECT *
@@ -346,34 +371,36 @@ enriched AS (
     m.market_rate_fraction,
     -- Rate spread via frozen UDF. Both sides fractional.
     mip.gold.fn_rate_spread(b.first_pos_rate, m.market_rate_fraction) AS rate_spread_bps,
-    -- Equity % is the capped available-equity companion to display LTV:
-    -- an underwater borrower can display LTV > 100 while equity_pct stays
-    -- at 0 for scoring / outreach gating. The no-signal default stays 0,
-    -- NOT the complement -- "no data" must never read as "free and clear"
-    -- on a contact-prioritization surface.
+    -- Equity % is the capped available-equity companion to display LTV.
+    -- Prefer the gold-estimated current lien balance so equity dollars,
+    -- equity_pct, display LTV, and current_lien_balance all read from the
+    -- same amortized UPB estimate. An underwater borrower can display LTV
+    -- > 100 while equity_pct stays at 0 for scoring / outreach gating.
+    -- The no-signal default stays 0, NOT the complement -- "no data" must
+    -- never read as "free and clear" on a contact-prioritization surface.
     CAST(CASE
-      WHEN (b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0)
-        OR (b.avm_value IS NOT NULL AND b.avm_value > 0)
+      WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
       THEN GREATEST(0, LEAST(100, 100 - GREATEST(0, CASE
-        WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
-          THEN ROUND(b.estimated_cltv)
-        ELSE ROUND(100.0 * COALESCE(b.total_open_lien_balance, 0) / b.avm_value)
+        WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
+          THEN ROUND(100.0 * COALESCE(b.estimated_current_lien_balance, 0) / b.avm_value)
       END)))
+      WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
+      THEN GREATEST(0, LEAST(100, 100 - GREATEST(0, ROUND(b.estimated_cltv))))
       ELSE 0
     END AS INT) AS equity_pct,
-    CAST(GREATEST(0, COALESCE(b.avm_value, 0) - COALESCE(b.total_open_lien_balance, 0)) AS BIGINT)
+    CAST(GREATEST(0, COALESCE(b.avm_value, 0) - COALESCE(b.estimated_current_lien_balance, 0)) AS BIGINT)
       AS equity_estimate,
-    -- LTV: display truth. Prefer Cotality-modeled estimated_cltv when
-    -- present and positive; fall back to AVM/lien math. Do not cap the
-    -- upper bound: underwater borrowers should show LTV > 100 instead of
-    -- a misleading 100% cap. Keep the CASE branches here and in equity_pct
-    -- identical when editing.
+    -- LTV: display truth. Prefer AVM / gold-estimated lien math so the
+    -- shown LTV ties to current_lien_balance and equity_estimate; fall
+    -- back to Cotality-modeled estimated_cltv only when AVM is missing.
+    -- Do not cap the upper bound: underwater borrowers should show LTV
+    -- > 100 instead of a misleading 100% cap.
     CAST(
       GREATEST(0, CASE
+        WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
+          THEN ROUND(100.0 * COALESCE(b.estimated_current_lien_balance, 0) / b.avm_value)
         WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
           THEN ROUND(b.estimated_cltv)
-        WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
-          THEN ROUND(100.0 * COALESCE(b.total_open_lien_balance, 0) / b.avm_value)
         ELSE 0
       END)
     AS INT) AS ltv,
@@ -468,7 +495,7 @@ enriched AS (
     rp.refi_propensity_score,
     rp.refi_propensity_run_date,
     COALESCE(rp.refi_propensity_score, 0) >= 700 AS has_refi_propensity_trigger
-  FROM base AS b
+  FROM upb_estimates AS b
   CROSS JOIN market AS m
   CROSS JOIN tenant_display AS td
   LEFT JOIN lender_ref AS lr
@@ -794,7 +821,7 @@ SELECT
   CONCAT('Synthetic property · ', COALESCE(w.city, 'Unknown'), ', ',
          w.state, ' ', COALESCE(w.zip, '00000'))                                      AS subject_property,
   CAST(COALESCE(w.avm_value, 0) AS BIGINT)                                           AS avm_value,
-  CAST(COALESCE(w.total_open_lien_balance, 0) AS BIGINT)                             AS current_lien_balance,
+  CAST(COALESCE(w.estimated_current_lien_balance, 0) AS BIGINT)                      AS current_lien_balance,
   -- current_rate in PERCENT form (5.75), matches Pydantic + mock_data.
   CAST(COALESCE(w.first_pos_rate * 100, 0.0) AS DOUBLE)                              AS current_rate,
   w.ltv,
@@ -865,8 +892,8 @@ COMMENT ON COLUMN mip.gold.borrower_360.zip IS '5-digit situs ZIP.';
 COMMENT ON COLUMN mip.gold.borrower_360.situs_cbsa_code IS 'CBSA metro code. Gold-only; used for geography drill-down.';
 COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.';
 COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention) this borrower belongs to.';
-COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - total_open_lien_balance).';
-COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100 int available-equity percentage. Underwater borrowers clamp to 0 for scoring while display LTV can exceed 100; 0 when no CLTV/AVM signal. Feeds fn_in_the_money + fn_next_best_offer.';
+COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - estimated current lien balance). Current lien uses fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present.';
+COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100 int available-equity percentage from AVM and estimated current lien balance; falls back to Cotality estimated_cltv only when AVM is missing. Underwater borrowers clamp to 0 for scoring while display LTV can exceed 100. Feeds fn_in_the_money + fn_next_best_offer.';
 COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction). Positive = above market = refi opportunity.';
 COMMENT ON COLUMN mip.gold.borrower_360.market_rate_fraction IS 'Fractional market rate from silver.market_rates_weekly WHERE is_latest=TRUE. Router maps to WhyPanel.market_rate.';
 COMMENT ON COLUMN mip.gold.borrower_360.opportunity_score IS 'fn_lead_score output. 0..100.';
@@ -879,9 +906,9 @@ COMMENT ON COLUMN mip.gold.borrower_360.approval_status IS 'Default "pending"; L
 COMMENT ON COLUMN mip.gold.borrower_360.owner_link_id IS 'Cotality Owner Link id. Opaque Cotality identifier; not a direct PII risk.';
 COMMENT ON COLUMN mip.gold.borrower_360.subject_property IS 'Synthetic city/state/ZIP5 string. No street address.';
 COMMENT ON COLUMN mip.gold.borrower_360.avm_value IS 'COALESCE(avm_value, 0).';
-COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'COALESCE(total_open_lien_balance, 0).';
+COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'Estimated current lien balance in USD: fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present; otherwise COALESCE(total_open_lien_balance, 0).';
 COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.';
-COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int. Mirrors equity_pct source preference but is not upper-capped; underwater borrowers may exceed 100.';
+COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int from estimated current lien balance divided by AVM when AVM is present; not upper-capped, so underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(property_owner_bridge.related_property_count, 1).';
 COMMENT ON COLUMN mip.gold.borrower_360.is_owner_occupied IS 'owner_occupancy_code = "O". Feeds fit sub-score.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_absentee IS 'property_master.is_absentee. Feeds investor branch.';
