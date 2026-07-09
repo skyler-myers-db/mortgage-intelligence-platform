@@ -106,6 +106,70 @@ def test_segment_list_expired_cache_failure_propagates() -> None:
         raise AssertionError("expired segment cache must not mask refresh failures")
 
 
+def _segment_row(code: str, count: int = 0) -> dict[str, Any]:
+    return {
+        "segment_code": code,
+        "name": code,
+        "count": count,
+        "delta_vs_prior": "+0%",
+        "avg_score": 0,
+        "description": "",
+        "color": "#000000",
+    }
+
+
+def test_segment_list_applies_three_state_source_gates() -> None:
+    """S1.3: segments with a mapped source resolve connected / not_connected /
+    not_licensed from gold.source_readiness; core-spine segments stay
+    connected with no source_name."""
+    client = _FakeSqlClient()
+    client.responses = [
+        (
+            ".gold.segment_population",
+            [
+                _segment_row("itm", 10),
+                _segment_row("listed", 5),
+                _segment_row("permit_activity", 0),
+                _segment_row("second_lien_itm", 3),
+            ],
+        ),
+        (
+            ".gold.source_readiness",
+            [
+                {"source_name": "MLS Listings", "status": "live"},
+                {"source_name": "Building Permits", "status": "roadmap"},
+                {"source_name": "Voluntary Lien", "status": "permission_denied"},
+            ],
+        ),
+    ]
+    repo = DatabricksSegmentRepository(client, cache_ttl_s=10.0)
+
+    by_code = {s.code: s for s in repo.list(None)}
+    assert by_code["itm"].source_status == "connected"
+    assert by_code["itm"].source_name is None
+    assert by_code["listed"].source_status == "connected"
+    assert by_code["listed"].source_name == "MLS Listings"
+    assert by_code["permit_activity"].source_status == "not_connected"
+    assert by_code["permit_activity"].source_name == "Building Permits"
+    assert by_code["second_lien_itm"].source_status == "not_licensed"
+    assert by_code["second_lien_itm"].source_name == "Voluntary Lien"
+
+
+def test_segment_list_skips_gating_when_readiness_unavailable() -> None:
+    """A failed/empty gold.source_readiness read must never wrongly gate a
+    live segment -- everything defaults to connected."""
+    client = _FakeSqlClient()
+    client.responses = [
+        (".gold.segment_population", [_segment_row("listed", 5)]),
+        # No source_readiness marker -> fake client returns [] for that read.
+    ]
+    repo = DatabricksSegmentRepository(client, cache_ttl_s=10.0)
+
+    (listed,) = repo.list(None)
+    assert listed.source_status == "connected"
+    assert listed.source_name is None
+
+
 def test_segment_filtered_rollup_counts_distinct_clips() -> None:
     """Selected segment cards must count borrowers, not exploded memberships.
 
@@ -118,7 +182,14 @@ def test_segment_filtered_rollup_counts_distinct_clips() -> None:
     repo.list(None, segment_codes=["itm", "equity"], segment_mode="all")
 
     assert client.calls
-    statement, params = client.calls[-1]
+    # S1.3: a trailing gold.source_readiness read powers the three-state
+    # segment gate, so locate the filtered rollup statement instead of
+    # assuming it is the last call.
+    statement, params = next(
+        (stmt, prms)
+        for stmt, prms in client.calls
+        if "segment_codes" in stmt
+    )
     normalized = " ".join(statement.split())
     assert "SELECT clip, segment_codes, opportunity_score" in normalized
     assert "SELECT DISTINCT clip, sc AS segment_code, opportunity_score" in normalized

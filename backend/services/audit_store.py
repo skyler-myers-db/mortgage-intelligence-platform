@@ -15,6 +15,7 @@ from fastapi import Request
 
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
+from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.schemas.common import (
     contains_pii_marker,
     validate_internal_staff_email,
@@ -423,7 +424,7 @@ _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
 _DECISION_INPUT_KEYS: frozenset[str] = frozenset(DECISION_INPUT_KEYS)
 
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     {
         "addressable",
