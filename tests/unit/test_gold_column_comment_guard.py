@@ -198,20 +198,29 @@ def test_borrower_360_display_ltv_can_exceed_100_while_equity_clamps() -> None:
     fail-closed at 0 for scoring and offer routing.
     """
     text = (TRANSFORMS / "gold_borrower_360.sql").read_text(encoding="utf-8")
+    assert "estimated_current_lien_balance" in text
+    assert "mip.gold.fn_estimated_upb" in text
     assert re.search(
-        r"THEN GREATEST\(0, LEAST\(100, 100 - GREATEST\(0, CASE", text
-    ), "equity_pct no longer clamps available equity while preserving underwater zero"
+        r"THEN ROUND\(100\.0 \* COALESCE\(b\.estimated_current_lien_balance, 0\) / b\.avm_value\)",
+        text,
+    ), "equity_pct no longer derives from the estimated current lien balance"
     assert re.search(
         r"AS INT\) AS ltv",
         text,
     )
-    assert "GREATEST(0, LEAST(100, CASE" not in re.search(
+    ltv_match = re.search(
         r"-- LTV: display truth\..*?AS INT\) AS ltv",
         text,
         re.DOTALL,
-    ).group(0), "display LTV is upper-capped again"
-    assert "ROUND(100 - b.estimated_cltv)" not in text, (
-        "independent equity rounding reintroduced (exact-.5 CLTV sums to 101)"
+    )
+    assert ltv_match is not None, "LTV display-truth block not found in gold_borrower_360.sql"
+    assert "GREATEST(0, LEAST(100, CASE" not in ltv_match.group(0), "display LTV is upper-capped again"
+    equity_match = re.search(r"-- Equity %.*?END AS INT\) AS equity_pct", text, re.DOTALL)
+    assert equity_match is not None, "Equity % block not found in gold_borrower_360.sql"
+    equity_block = equity_match.group(0)
+    assert equity_block.index("b.avm_value IS NOT NULL") < equity_block.index("b.estimated_cltv"), (
+        "Cotality estimated_cltv must remain only a no-AVM fallback; primary "
+        "equity math uses estimated current lien balance."
     )
 
 

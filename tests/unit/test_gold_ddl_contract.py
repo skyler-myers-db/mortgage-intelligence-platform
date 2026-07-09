@@ -463,12 +463,14 @@ def test_uc_functions_are_wired_before_gold_ctas() -> None:
     """
     expected_tasks = (
         "init_fn_rate_spread",
+        "init_fn_estimated_upb",
         "init_fn_in_the_money",
         "init_fn_lead_score",
         "init_fn_next_best_offer",
     )
     expected_rendered_paths = (
         "sql/_rendered/uc_functions/fn_rate_spread.sql",
+        "sql/_rendered/uc_functions/fn_estimated_upb.sql",
         "sql/_rendered/uc_functions/fn_in_the_money.sql",
         "sql/_rendered/uc_functions/fn_lead_score.sql",
         "sql/_rendered/uc_functions/fn_next_best_offer.sql",

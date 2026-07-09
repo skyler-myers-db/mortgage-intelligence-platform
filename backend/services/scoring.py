@@ -11,6 +11,10 @@ golden-fixture JSON that the SQL side validates against the same inputs:
 - ``rate_spread_bps``    -> ``sql/uc_functions/fn_rate_spread.sql``
                             + ``tests/fixtures/rate_spread_golden.json``
                             (case_05 pins round-half-to-even at 162.5).
+- ``estimated_upb``      -> ``sql/uc_functions/fn_estimated_upb.sql``
+                            + ``tests/fixtures/estimated_upb_golden.json``
+                            (case_04 pins unknown-rate fallback; case_06
+                            pins near-payoff behavior).
 - ``in_the_money``       -> ``sql/uc_functions/fn_in_the_money.sql``
                             + ``tests/fixtures/in_the_money_golden.json``
                             (cases 04/05 pin the inclusive ``>=`` boundary).
@@ -32,6 +36,8 @@ from decimal import ROUND_HALF_EVEN, Decimal
 
 _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
+_STANDARD_MORTGAGE_TERM_MONTHS = 360
+_MAX_AMORTIZATION_RATE = 10.0
 
 # fn_lead_score weights as EXACT decimals. Spark parses the SQL literals
 # (0.35 etc.) as DECIMAL, so the UDF computes the weighted sum exactly and
@@ -104,6 +110,7 @@ def offer_display_label(code: str | None, fallback: str | None = None) -> str:
 SOURCE_DISPLAY_LABELS: dict[str, str] = {
     # UC function evidence
     "mip.gold.fn_rate_spread":      "Market rate comparison",
+    "mip.gold.fn_estimated_upb":    "Estimated UPB amortization",
     "mip.gold.fn_in_the_money":     "Refinance economics screen",
     "mip.gold.fn_next_best_offer":  "Primary offer rules",
     "mip.gold.fn_lead_score":       "Opportunity score",
@@ -119,6 +126,7 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.silver.refi_propensity":   "Refi propensity",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
+    "fn_estimated_upb":             "Estimated UPB amortization",
     "fn_in_the_money":              "Refinance economics screen",
     "fn_next_best_offer":           "Primary offer rules",
     "fn_lead_score":                "Opportunity score",
@@ -214,6 +222,77 @@ def rate_spread_bps(
     if current_rate is None or market_rate is None:
         return 0
     return max(_INT32_MIN, min(_INT32_MAX, round((current_rate - market_rate) * 10000)))
+
+
+def estimated_upb(
+    original_upb: int | float | None,
+    estimated_rate: float | None,
+    months_elapsed: int | None,
+) -> int:
+    """Return the amortized current unpaid principal balance estimate.
+
+    Mirrors ``mip.gold.fn_estimated_upb``. Inputs are original first-lien
+    UPB in dollars, annual note-rate estimate as a fraction, and elapsed
+    whole months since origination. Module 0 uses a governed 30-year
+    amortization convention because the primitive signature is intentionally
+    limited to the three source fields available across the Cotality lien
+    feed. Missing/invalid rates fall back to straight-line amortization,
+    which is conservative and deterministic for unknown-rate rows. Missing
+    original UPB returns 0; missing/negative elapsed months are treated as
+    0; months at or beyond term return 0. The final dollar amount is
+    banker's-rounded to stay in parity with SQL ``BROUND``.
+    """
+    import math
+
+    if original_upb is None:
+        return 0
+    principal = float(original_upb)
+    if not math.isfinite(principal) or principal <= 0:
+        return 0
+
+    try:
+        elapsed_raw = 0 if months_elapsed is None else int(months_elapsed)
+    except (TypeError, ValueError):
+        elapsed_raw = 0
+    elapsed = max(0, min(_STANDARD_MORTGAGE_TERM_MONTHS, elapsed_raw))
+    if elapsed >= _STANDARD_MORTGAGE_TERM_MONTHS:
+        return 0
+
+    try:
+        rate = None if estimated_rate is None else float(estimated_rate)
+    except (TypeError, ValueError):
+        rate = None
+
+    def straight_line_balance() -> float:
+        return principal * (_STANDARD_MORTGAGE_TERM_MONTHS - elapsed) / _STANDARD_MORTGAGE_TERM_MONTHS
+
+    if rate is None or not math.isfinite(rate) or rate <= 0 or rate > _MAX_AMORTIZATION_RATE:
+        balance = straight_line_balance()
+    else:
+        monthly_rate = rate / 12.0
+        if not math.isfinite(monthly_rate) or monthly_rate <= 0:
+            balance = straight_line_balance()
+        else:
+            try:
+                term_growth = (1.0 + monthly_rate) ** _STANDARD_MORTGAGE_TERM_MONTHS
+                elapsed_growth = (1.0 + monthly_rate) ** elapsed
+            except OverflowError:
+                balance = straight_line_balance()
+            else:
+                denominator = term_growth - 1.0
+                if (
+                    not math.isfinite(term_growth)
+                    or not math.isfinite(elapsed_growth)
+                    or not math.isfinite(denominator)
+                    or denominator == 0.0
+                ):
+                    balance = straight_line_balance()
+                else:
+                    balance = principal * (term_growth - elapsed_growth) / denominator
+                    if not math.isfinite(balance):
+                        balance = straight_line_balance()
+
+    return max(0, int(round(balance)))
 
 
 def in_the_money(

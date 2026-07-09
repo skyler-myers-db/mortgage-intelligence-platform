@@ -79,6 +79,12 @@ WITH market AS (
   WHERE series_id = 'MORTGAGE30US' AND is_latest = TRUE
   LIMIT 1
 ),
+refresh_anchor AS (
+  SELECT refresh_at
+  FROM mip.ref.refresh_run_state
+  ORDER BY captured_at DESC
+  LIMIT 1
+),
 borrower_spine AS (
   -- Match gold.borrower_360's silver lien spine without reading gold output.
   -- This keeps evidence_events buildable before borrower_360 in the refresh DAG.
@@ -99,6 +105,35 @@ rate_spread_inputs AS (
       ELSE lc.first_pos_rate
     END AS first_pos_rate
   FROM mip.silver.lien_current AS lc
+),
+equity_inputs AS (
+  SELECT
+    lc.clip,
+    lc.avm_value,
+    lc.avm_confidence,
+    lc.avm_as_of_date,
+    lc.ingest_ts,
+    lc.situs_state,
+    CAST(CASE
+      WHEN lc.first_pos_amount IS NOT NULL AND lc.first_pos_amount > 0 THEN
+        mip.gold.fn_estimated_upb(
+          lc.first_pos_amount,
+          CASE
+            WHEN lc.first_pos_rate IS NULL THEN NULL
+            WHEN lc.first_pos_rate < 0.01 THEN NULL
+            WHEN lc.first_pos_rate > 0.15 THEN 0.15
+            ELSE lc.first_pos_rate
+          END,
+          CASE
+            WHEN lc.first_pos_date IS NULL THEN NULL
+            ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), lc.first_pos_date)) AS INT)
+          END
+        )
+        + COALESCE(lc.second_pos_amount, 0)
+      ELSE COALESCE(lc.total_open_lien_balance, 0)
+    END AS BIGINT) AS estimated_current_lien_balance
+  FROM mip.silver.lien_current AS lc
+  CROSS JOIN refresh_anchor AS ra
 ),
 -- 1. rate_spread (per CLIP, requires a borrower with a 1st-pos rate).
 rate_spread_rows AS (
@@ -134,9 +169,9 @@ equity_rows AS (
     'equity'                                         AS signal_type,
     CONCAT('$',
            CAST(ROUND(
-             GREATEST(0, COALESCE(lc.avm_value, 0) - COALESCE(lc.total_open_lien_balance, 0)) / 1000.0
+             GREATEST(0, COALESCE(lc.avm_value, 0) - COALESCE(lc.estimated_current_lien_balance, 0)) / 1000.0
            ) AS STRING), 'K')                        AS signal_value,
-    'AVM-backed equity estimate.'                    AS display_text,
+    'AVM-backed equity estimate using amortized UPB.' AS display_text,
     LEAST(1.0, GREATEST(0.0,
       CASE
         WHEN lc.avm_confidence IS NULL THEN 0.85
@@ -146,10 +181,10 @@ equity_rows AS (
     ))                                               AS confidence,
     CAST(COALESCE(lc.avm_as_of_date, DATE(lc.ingest_ts)) AS STRING) AS `timestamp`,
     2                                                AS signal_rank
-  FROM mip.silver.lien_current AS lc
+  FROM equity_inputs AS lc
   WHERE lc.avm_value IS NOT NULL
     AND lc.avm_value > 0
-    AND (COALESCE(lc.avm_value, 0) - COALESCE(lc.total_open_lien_balance, 0)) > 0
+    AND (COALESCE(lc.avm_value, 0) - COALESCE(lc.estimated_current_lien_balance, 0)) > 0
     AND lc.situs_state IS NOT NULL
 ),
 -- 3. market_trend: one evidence row per CLIP describing latest par rate.

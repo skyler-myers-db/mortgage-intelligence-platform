@@ -1,0 +1,67 @@
+{
+  "standard_term_months": 360,
+  "rate_unit": "fractional annual note rate; 0.06 means 6.00%",
+  "rounding": "banker's rounding to the nearest dollar, matching Databricks BROUND",
+  "cases": [
+    {
+      "id": "case_01_no_elapsed",
+      "inputs": {"original_upb": 300000, "estimated_rate": 0.06, "months_elapsed": 0},
+      "expected_upb": 300000,
+      "note": "New loan: zero elapsed months returns original UPB."
+    },
+    {
+      "id": "case_02_one_year_fixed_rate",
+      "inputs": {"original_upb": 360000, "estimated_rate": 0.06, "months_elapsed": 12},
+      "expected_upb": 355579,
+      "note": "Standard 30-year amortization after 12 payments at 6%."
+    },
+    {
+      "id": "case_03_five_years_fixed_rate",
+      "inputs": {"original_upb": 300000, "estimated_rate": 0.06, "months_elapsed": 60},
+      "expected_upb": 279163,
+      "note": "Five-year seasoning with ordinary positive-rate amortization."
+    },
+    {
+      "id": "case_04_unknown_rate_linear_fallback",
+      "inputs": {"original_upb": 360000, "estimated_rate": null, "months_elapsed": 120},
+      "expected_upb": 240000,
+      "note": "Unknown rate falls back to straight-line principal amortization over 360 months."
+    },
+    {
+      "id": "case_05_zero_rate_linear_fallback",
+      "inputs": {"original_upb": 180000, "estimated_rate": 0.0, "months_elapsed": 180},
+      "expected_upb": 90000,
+      "note": "Zero/invalid rate uses the same fallback as an unknown rate."
+    },
+    {
+      "id": "case_06_near_payoff",
+      "inputs": {"original_upb": 240000, "estimated_rate": 0.04, "months_elapsed": 359},
+      "expected_upb": 1142,
+      "note": "Near-payoff loan leaves only the final amortizing balance, not a negative or zero early."
+    },
+    {
+      "id": "case_07_past_term_clamps_to_zero",
+      "inputs": {"original_upb": 200000, "estimated_rate": 0.055, "months_elapsed": 420},
+      "expected_upb": 0,
+      "note": "Elapsed months beyond the 30-year term clamp to paid off."
+    },
+    {
+      "id": "case_08_null_original_upb",
+      "inputs": {"original_upb": null, "estimated_rate": 0.06, "months_elapsed": 12},
+      "expected_upb": 0,
+      "note": "Missing original UPB cannot be amortized and must fail closed."
+    },
+    {
+      "id": "case_09_null_months_treats_as_new_loan",
+      "inputs": {"original_upb": 250000, "estimated_rate": 0.05, "months_elapsed": null},
+      "expected_upb": 250000,
+      "note": "Missing origination date/month count means no elapsed amortization is applied."
+    },
+    {
+      "id": "case_10_implausibly_high_rate_linear_fallback",
+      "inputs": {"original_upb": 360000, "estimated_rate": 1000000000.0, "months_elapsed": 120},
+      "expected_upb": 240000,
+      "note": "Implausibly high rates fail closed to straight-line amortization instead of overflowing compound growth."
+    }
+  ]
+}

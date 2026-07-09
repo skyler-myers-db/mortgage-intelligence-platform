@@ -54,6 +54,15 @@ export const mortgageGlossary = {
     appContext: 'Lower LTV usually means more available equity; underwater borrowers can show LTV above 100%.',
     proof: 'Proof shows current lien divided by AVM. Equity scoring clamps underwater values to 0.',
   },
+  estimatedUpb: {
+    id: 'estimated-upb',
+    term: 'Estimated UPB',
+    aliases: ['estimated unpaid principal balance', 'amortized balance'],
+    category: 'mortgage',
+    short: 'An amortized current-lien balance estimate from original UPB, note rate, and elapsed months.',
+    appContext: 'Shown as a caveated current lien value in Borrower 360 and used in gold to derive equity dollars, equity percent, and display LTV.',
+    proof: 'Proof traces to fn_estimated_upb and the gold borrower refresh; unknown rates use the documented straight-line fallback.',
+  },
   heloc: {
     id: 'heloc',
     term: 'HELOC',

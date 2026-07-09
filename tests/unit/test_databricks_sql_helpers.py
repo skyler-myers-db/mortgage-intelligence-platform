@@ -41,6 +41,7 @@ def test_qualify_accepts_explicit_catalog() -> None:
             "certified_borrower_opportunity_metric_view",
             "mip.semantics.certified_borrower_opportunity_metric_view",
         ),
+        ("gold", "fn_estimated_upb", "mip.gold.fn_estimated_upb"),
         ("gold", "fn_next_best_offer", "mip.gold.fn_next_best_offer"),
         ("gold", "fn_build_cohort", "mip.gold.fn_build_cohort"),
         ("gold", "fn_segment_counts", "mip.gold.fn_segment_counts"),

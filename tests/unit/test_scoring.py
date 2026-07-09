@@ -1,8 +1,13 @@
-"""Parity tests for backend.services.scoring.lead_score.
+"""Parity tests for backend.services.scoring lead-score primitives.
 
 Fixtures in tests/fixtures/lead_score_golden.json are the contract;
 the SQL UDF mip.gold.fn_lead_score is validated against the same
 set by sql/fixtures/lead_score_golden_validation.sql.
+
+Fixtures in tests/fixtures/estimated_upb_golden.json are the contract
+for mip.gold.fn_estimated_upb. The SQL validation fixture expresses the
+same cases in sql/fixtures/estimated_upb_validation.sql, so Python and
+UC SQL stay in lockstep for the estimated-UPB gap A5 math.
 """
 
 from __future__ import annotations
@@ -12,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.scoring import lead_score, source_display_label
+from backend.services.scoring import estimated_upb, lead_score, source_display_label
 
 FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -20,9 +25,18 @@ FIXTURE_PATH = (
     / "fixtures"
     / "lead_score_golden.json"
 )
+ESTIMATED_UPB_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "estimated_upb_golden.json"
+)
 
 with FIXTURE_PATH.open() as f:
     GOLDEN_CASES = json.load(f)
+
+with ESTIMATED_UPB_FIXTURE_PATH.open() as f:
+    ESTIMATED_UPB_CASES = json.load(f)["cases"]
 
 
 @pytest.mark.parametrize(
@@ -50,6 +64,28 @@ def test_lead_score_is_importable_from_services() -> None:
     from backend.services import scoring
 
     assert callable(scoring.lead_score)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ESTIMATED_UPB_CASES,
+    ids=[c["id"] for c in ESTIMATED_UPB_CASES],
+)
+def test_estimated_upb_matches_golden_fixture(case: dict) -> None:
+    """Every golden case must produce the SQL-pinned expected_upb.
+
+    This pins the Python mirror of ``mip.gold.fn_estimated_upb``. The
+    matching SQL validation fixture carries the same rows so the amortized
+    estimated-UPB semantics stay locked across engines.
+    """
+    assert estimated_upb(**case["inputs"]) == case["expected_upb"], case.get("note", "")
+
+
+def test_estimated_upb_is_importable_from_services() -> None:
+    """The estimated-UPB primitive must live beside the other scoring mirrors."""
+    from backend.services import scoring
+
+    assert callable(scoring.estimated_upb)
 
 
 # ---------------------------------------------------------------------------

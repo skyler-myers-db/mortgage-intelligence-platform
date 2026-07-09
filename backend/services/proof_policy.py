@@ -40,6 +40,7 @@ def borrower_proof_assets() -> list[str]:
         qualify("gold", "lead_scores"),
         qualify("gold", "evidence_events"),
         qualify("gold", "fn_lead_score"),
+        qualify("gold", "fn_estimated_upb"),
         qualify("gold", "fn_rate_spread"),
         qualify("gold", "fn_in_the_money"),
         qualify("gold", "fn_next_best_offer"),
