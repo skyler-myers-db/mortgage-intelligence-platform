@@ -25,10 +25,10 @@
 --
 -- NULLs:     Missing/nonpositive original UPB -> 0 because no principal can be
 --            amortized. Missing/negative elapsed months -> 0 elapsed months.
---            Elapsed months at/past term -> 0. Missing/nonpositive rate uses
---            straight-line amortization over 360 months; this is the governed
---            unknown-rate fallback and prevents a NULL rate from erasing the
---            lien or inventing interest.
+--            Elapsed months at/past term -> 0. Missing/nonpositive or
+--            implausibly high rates use straight-line amortization over 360
+--            months; this is the governed fallback and prevents a bad rate
+--            from erasing the lien, inventing interest, or overflowing POWER.
 --
 -- Determinism: Pure arithmetic, no nondeterministic calls. Safe for use in
 --            gold materializations and metric views.
@@ -41,14 +41,14 @@ CREATE OR REPLACE FUNCTION mip.gold.fn_estimated_upb(
 )
 RETURNS BIGINT
 DETERMINISTIC
-COMMENT 'Module 0 canonical estimated-current-UPB primitive. Estimates amortized current principal from original UPB, fractional annual note rate, and elapsed months using a 360-month convention. Unknown/nonpositive rates use straight-line fallback; missing/nonpositive original UPB returns 0. See tests/fixtures/estimated_upb_golden.json for parity fixtures.'
+COMMENT 'Module 0 canonical estimated-current-UPB primitive. Estimates amortized current principal from original UPB, fractional annual note rate, and elapsed months using a 360-month convention. Unknown/nonpositive or implausibly high rates use straight-line fallback; missing/nonpositive original UPB returns 0. See tests/fixtures/estimated_upb_golden.json for parity fixtures.'
 RETURN
   CASE
     WHEN original_upb IS NULL OR original_upb <= 0 THEN 0
     ELSE CAST(GREATEST(0.0, BROUND(
       CASE
         WHEN LEAST(360, GREATEST(0, COALESCE(months_elapsed, 0))) >= 360 THEN 0.0
-        WHEN estimated_rate IS NULL OR isnan(estimated_rate) OR estimated_rate <= 0 THEN
+        WHEN estimated_rate IS NULL OR isnan(estimated_rate) OR estimated_rate <= 0 OR estimated_rate > 10.0 THEN
           CAST(original_upb AS DOUBLE)
           * (360 - LEAST(360, GREATEST(0, COALESCE(months_elapsed, 0))))
           / 360.0

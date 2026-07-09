@@ -24,7 +24,8 @@ WITH golden (id, original_upb, estimated_rate, months_elapsed, expected_upb) AS 
     ('case_06_near_payoff',                    240000L, 0.04D, 359, 1142L),
     ('case_07_past_term_clamps_to_zero',       200000L, 0.055D, 420, 0L),
     ('case_08_null_original_upb',              CAST(NULL AS BIGINT), 0.06D, 12, 0L),
-    ('case_09_null_months_treats_as_new_loan', 250000L, 0.05D, CAST(NULL AS INT), 250000L)
+    ('case_09_null_months_treats_as_new_loan', 250000L, 0.05D, CAST(NULL AS INT), 250000L),
+    ('case_10_implausibly_high_rate_linear_fallback', 360000L, 1000000000.0D, 120, 240000L)
 )
 SELECT
   id,

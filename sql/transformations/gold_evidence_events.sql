@@ -126,13 +126,14 @@ equity_inputs AS (
           END,
           CASE
             WHEN lc.first_pos_date IS NULL THEN NULL
-            ELSE CAST(FLOOR(months_between(DATE((SELECT refresh_at FROM refresh_anchor)), lc.first_pos_date)) AS INT)
+            ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), lc.first_pos_date)) AS INT)
           END
         )
         + COALESCE(lc.second_pos_amount, 0)
       ELSE COALESCE(lc.total_open_lien_balance, 0)
     END AS BIGINT) AS estimated_current_lien_balance
   FROM mip.silver.lien_current AS lc
+  CROSS JOIN refresh_anchor AS ra
 ),
 -- 1. rate_spread (per CLIP, requires a borrower with a 1st-pos rate).
 rate_spread_rows AS (

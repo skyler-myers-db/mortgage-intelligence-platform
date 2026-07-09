@@ -192,13 +192,14 @@ upb_estimates AS (
           b.first_pos_rate,
           CASE
             WHEN b.first_pos_date IS NULL THEN NULL
-            ELSE CAST(FLOOR(months_between(DATE((SELECT refresh_at FROM refresh_anchor)), b.first_pos_date)) AS INT)
+            ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), b.first_pos_date)) AS INT)
           END
         )
         + COALESCE(b.second_pos_amount, 0)
       ELSE COALESCE(b.total_open_lien_balance, 0)
     END AS BIGINT) AS estimated_current_lien_balance
   FROM base AS b
+  CROSS JOIN refresh_anchor AS ra
 ),
 latest_listing AS (
   SELECT *
@@ -380,10 +381,13 @@ enriched AS (
     -- never read as "free and clear" on a contact-prioritization surface.
     CAST(CASE
       WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
-      THEN GREATEST(0, LEAST(100, 100 - GREATEST(0, CASE
-        WHEN b.avm_value IS NOT NULL AND b.avm_value > 0
-          THEN ROUND(100.0 * COALESCE(b.estimated_current_lien_balance, 0) / b.avm_value)
-      END)))
+      THEN GREATEST(
+        0,
+        LEAST(
+          100,
+          100 - GREATEST(0, ROUND(100.0 * COALESCE(b.estimated_current_lien_balance, 0) / b.avm_value))
+        )
+      )
       WHEN b.estimated_cltv IS NOT NULL AND b.estimated_cltv > 0
       THEN GREATEST(0, LEAST(100, 100 - GREATEST(0, ROUND(b.estimated_cltv))))
       ELSE 0

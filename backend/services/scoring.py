@@ -37,6 +37,7 @@ from decimal import ROUND_HALF_EVEN, Decimal
 _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
 _STANDARD_MORTGAGE_TERM_MONTHS = 360
+_MAX_AMORTIZATION_RATE = 10.0
 
 # fn_lead_score weights as EXACT decimals. Spark parses the SQL literals
 # (0.35 etc.) as DECIMAL, so the UDF computes the weighted sum exactly and
@@ -243,10 +244,9 @@ def estimated_upb(
     """
     import math
 
-    try:
-        principal = float(original_upb)
-    except (TypeError, ValueError):
+    if original_upb is None:
         return 0
+    principal = float(original_upb)
     if not math.isfinite(principal) or principal <= 0:
         return 0
 
@@ -263,18 +263,34 @@ def estimated_upb(
     except (TypeError, ValueError):
         rate = None
 
-    if rate is None or not math.isfinite(rate) or rate <= 0:
-        balance = principal * (_STANDARD_MORTGAGE_TERM_MONTHS - elapsed)
-        balance /= _STANDARD_MORTGAGE_TERM_MONTHS
+    def straight_line_balance() -> float:
+        return principal * (_STANDARD_MORTGAGE_TERM_MONTHS - elapsed) / _STANDARD_MORTGAGE_TERM_MONTHS
+
+    if rate is None or not math.isfinite(rate) or rate <= 0 or rate > _MAX_AMORTIZATION_RATE:
+        balance = straight_line_balance()
     else:
         monthly_rate = rate / 12.0
         if not math.isfinite(monthly_rate) or monthly_rate <= 0:
-            balance = principal * (_STANDARD_MORTGAGE_TERM_MONTHS - elapsed)
-            balance /= _STANDARD_MORTGAGE_TERM_MONTHS
+            balance = straight_line_balance()
         else:
-            term_growth = (1.0 + monthly_rate) ** _STANDARD_MORTGAGE_TERM_MONTHS
-            elapsed_growth = (1.0 + monthly_rate) ** elapsed
-            balance = principal * (term_growth - elapsed_growth) / (term_growth - 1.0)
+            try:
+                term_growth = (1.0 + monthly_rate) ** _STANDARD_MORTGAGE_TERM_MONTHS
+                elapsed_growth = (1.0 + monthly_rate) ** elapsed
+            except OverflowError:
+                balance = straight_line_balance()
+            else:
+                denominator = term_growth - 1.0
+                if (
+                    not math.isfinite(term_growth)
+                    or not math.isfinite(elapsed_growth)
+                    or not math.isfinite(denominator)
+                    or denominator == 0.0
+                ):
+                    balance = straight_line_balance()
+                else:
+                    balance = principal * (term_growth - elapsed_growth) / denominator
+                    if not math.isfinite(balance):
+                        balance = straight_line_balance()
 
     return max(0, int(round(balance)))
 

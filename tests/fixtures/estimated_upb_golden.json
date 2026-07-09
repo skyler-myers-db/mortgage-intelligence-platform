@@ -56,6 +56,12 @@
       "inputs": {"original_upb": 250000, "estimated_rate": 0.05, "months_elapsed": null},
       "expected_upb": 250000,
       "note": "Missing origination date/month count means no elapsed amortization is applied."
+    },
+    {
+      "id": "case_10_implausibly_high_rate_linear_fallback",
+      "inputs": {"original_upb": 360000, "estimated_rate": 1000000000.0, "months_elapsed": 120},
+      "expected_upb": 240000,
+      "note": "Implausibly high rates fail closed to straight-line amortization instead of overflowing compound growth."
     }
   ]
 }
