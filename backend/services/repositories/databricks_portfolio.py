@@ -14,6 +14,7 @@ from backend.schemas.portfolio import (
     CampaignListResponse,
     CampaignStatusPatchRequest,
     CampaignSummary,
+    HouseholdDedupSummary,
     KpiTrend,
     PortfolioCreateRequest,
     PortfolioCreateResponse,
@@ -93,6 +94,52 @@ class DatabricksPortfolioRepository:
         f"FROM {qualify('gold', 'borrower_360')} "
         "{where}"
     )
+
+    _HOUSEHOLD_DEDUP_SUMMARY_SQL_TEMPLATE = """
+    WITH filtered_borrowers AS (
+      SELECT *
+      FROM {borrower_table}
+      {where}
+    ),
+    eligible_candidates AS (
+      SELECT
+        b.borrower_id,
+        b.opportunity_score,
+        COALESCE(
+          h.household_id,
+          CONCAT('HH-', SUBSTR(sha2(CONCAT('singleton:', b.borrower_id), 256), 1, 16))
+        ) AS household_id,
+        COALESCE(h.household_derivation_method, 'singleton') AS household_derivation_method
+      FROM filtered_borrowers AS b
+      LEFT JOIN {household_table} AS h
+        ON h.borrower_id = b.borrower_id
+      WHERE b.marketing_eligible = TRUE
+        AND COALESCE(b.has_unresolved_owner, FALSE) = FALSE
+    ),
+    ranked AS (
+      SELECT
+        *,
+        ROW_NUMBER() OVER (
+          PARTITION BY household_id
+          ORDER BY opportunity_score DESC, borrower_id ASC
+        ) AS campaign_household_rank
+      FROM eligible_candidates
+    )
+    SELECT
+      CAST(COUNT(*) AS INT) AS candidate_borrower_count,
+      CAST(COALESCE(SUM(CASE WHEN campaign_household_rank = 1 THEN 1 ELSE 0 END), 0) AS INT)
+        AS selected_primary_count,
+      CAST(COALESCE(SUM(CASE WHEN campaign_household_rank > 1 THEN 1 ELSE 0 END), 0) AS INT)
+        AS suppressed_co_owner_count,
+      CAST(COUNT(DISTINCT household_id) AS INT) AS household_count,
+      CAST(COUNT(DISTINCT CASE WHEN household_derivation_method = 'owner_link' THEN household_id END) AS INT)
+        AS owner_link_household_count,
+      CAST(COUNT(DISTINCT CASE WHEN household_derivation_method = 'mailing_address' THEN household_id END) AS INT)
+        AS mailing_address_household_count,
+      CAST(COUNT(DISTINCT CASE WHEN household_derivation_method = 'singleton' THEN household_id END) AS INT)
+        AS singleton_household_count
+    FROM ranked
+    """
 
     # Translate display labels from the portfolio-builder UI into
     # mip.gold.borrower_360 predicates. Every value is a short enum the
@@ -212,13 +259,14 @@ class DatabricksPortfolioRepository:
       INSERT INTO mip_app.campaigns (
         name, owner_email, status, criteria, suppression_policy,
         message_variants, channel_cascade, send_window, holdout,
-        roi_assumptions, updated_at
+        roi_assumptions, household_dedup, household_summary, updated_at
       )
       VALUES (
         %(name)s, %(owner_email)s, 'draft', %(criteria)s::jsonb,
         %(suppression_policy)s::jsonb, %(message_variants)s::jsonb,
         %(channel_cascade)s::jsonb, %(send_window)s::jsonb,
-        %(holdout)s::jsonb, %(roi_assumptions)s::jsonb, now()
+        %(holdout)s::jsonb, %(roi_assumptions)s::jsonb,
+        %(household_dedup)s::jsonb, %(household_summary)s::jsonb, now()
       )
       RETURNING campaign_id
     ),
@@ -270,7 +318,7 @@ class DatabricksPortfolioRepository:
     _CAMPAIGN_LIST_SQL = """
     SELECT campaign_id::text, name, owner_email, status, criteria,
            suppression_policy, message_variants, channel_cascade, send_window,
-           holdout, roi_assumptions, created_at, updated_at
+           holdout, roi_assumptions, household_dedup, household_summary, created_at, updated_at
     FROM mip_app.campaigns
     WHERE (%(owner_email)s::text IS NULL OR owner_email = %(owner_email)s::text)
       AND (
@@ -286,7 +334,7 @@ class DatabricksPortfolioRepository:
     _CAMPAIGN_GET_SQL = """
     SELECT campaign_id::text, name, owner_email, status, criteria,
            suppression_policy, message_variants, channel_cascade, send_window,
-           holdout, roi_assumptions, created_at, updated_at
+           holdout, roi_assumptions, household_dedup, household_summary, created_at, updated_at
     FROM mip_app.campaigns
     WHERE campaign_id = %(campaign_id)s::uuid
     LIMIT 1
@@ -299,7 +347,7 @@ class DatabricksPortfolioRepository:
       WHERE campaign_id = %(campaign_id)s::uuid
       RETURNING campaign_id::text, name, owner_email, status, criteria,
                 suppression_policy, message_variants, channel_cascade, send_window,
-                holdout, roi_assumptions, created_at, updated_at
+                holdout, roi_assumptions, household_dedup, household_summary, created_at, updated_at
     ),
     inserted_audit AS (
       INSERT INTO mip_app.action_audit (
@@ -556,6 +604,31 @@ class DatabricksPortfolioRepository:
             )
         return build()
 
+    def _load_household_dedup_summary(
+        self,
+        payload: PortfolioCreateRequest,
+    ) -> HouseholdDedupSummary:
+        if not payload.household_dedup.enabled:
+            return HouseholdDedupSummary(enabled=False)
+
+        where_clause, params = self._build_preview_predicates(payload.criteria)
+        sql = self._HOUSEHOLD_DEDUP_SUMMARY_SQL_TEMPLATE.format(
+            borrower_table=qualify("gold", "borrower_360"),
+            household_table=qualify("gold", "household_rollup"),
+            where=where_clause,
+        )
+        row = self._client.execute_one(sql, params) or {}
+        return HouseholdDedupSummary(
+            enabled=True,
+            candidate_borrower_count=int(row.get("candidate_borrower_count") or 0),
+            selected_primary_count=int(row.get("selected_primary_count") or 0),
+            suppressed_co_owner_count=int(row.get("suppressed_co_owner_count") or 0),
+            household_count=int(row.get("household_count") or 0),
+            owner_link_household_count=int(row.get("owner_link_household_count") or 0),
+            mailing_address_household_count=int(row.get("mailing_address_household_count") or 0),
+            singleton_household_count=int(row.get("singleton_household_count") or 0),
+        )
+
     def create(
         self,
         payload: PortfolioCreateRequest,
@@ -563,6 +636,9 @@ class DatabricksPortfolioRepository:
         actor: str | None = None,
     ) -> PortfolioCreateResponse:
         preview = self.preview(PortfolioPreviewRequest(criteria=payload.criteria))
+        household_summary = self._load_household_dedup_summary(payload)
+        household_summary_dict = household_summary.model_dump()
+        household_dedup_dict = payload.household_dedup.model_dump()
         row = _get_lakebase_client().fetchone(
             self._CAMPAIGN_INSERT_SQL,
             {
@@ -579,6 +655,8 @@ class DatabricksPortfolioRepository:
                 "roi_assumptions": json.dumps(payload.roi_assumptions, sort_keys=True)
                 if payload.roi_assumptions is not None
                 else "null",
+                "household_dedup": json.dumps(household_dedup_dict, sort_keys=True),
+                "household_summary": json.dumps(household_summary_dict, sort_keys=True),
                 "request_id": f"portfolio-create-{uuid.uuid4()}",
                 "correlation_id": get_correlation_id(),
                 "metadata": json.dumps(
@@ -592,6 +670,29 @@ class DatabricksPortfolioRepository:
                             "holdout": payload.holdout,
                             "roi_assumptions": payload.roi_assumptions,
                             "marketable_population": preview.marketable_population,
+                            "dedupe_unit": payload.household_dedup.dedupe_unit,
+                            "household_dedup_enabled": payload.household_dedup.enabled,
+                            "household_primary_strategy": (
+                                payload.household_dedup.primary_contact_strategy
+                            ),
+                            "household_candidate_count": (
+                                household_summary.candidate_borrower_count
+                            ),
+                            "household_primary_count": household_summary.selected_primary_count,
+                            "household_suppressed_count": (
+                                household_summary.suppressed_co_owner_count
+                            ),
+                            "household_household_count": household_summary.household_count,
+                            "household_owner_link_count": (
+                                household_summary.owner_link_household_count
+                            ),
+                            "household_mailing_address_count": (
+                                household_summary.mailing_address_household_count
+                            ),
+                            "household_singleton_count": (
+                                household_summary.singleton_household_count
+                            ),
+                            "source_assets": household_summary.source_assets,
                         },
                         action="portfolio.create",
                     ),
@@ -623,6 +724,7 @@ class DatabricksPortfolioRepository:
             campaign_id=campaign_id,
             name=payload.name,
             marketable_population=preview.marketable_population,
+            household_summary=household_summary,
             audit_event_id=str(row["audit_id"]) if row.get("audit_id") else None,
         )
 
@@ -928,6 +1030,8 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
     send_window = json_value(row.get("send_window"), {})
     holdout = json_value(row.get("holdout"), None)
     roi_assumptions = json_value(row.get("roi_assumptions"), None)
+    household_dedup = json_value(row.get("household_dedup"), {})
+    household_summary = json_value(row.get("household_summary"), {})
     return CampaignSummary(
         campaign_id=str(row.get("campaign_id")),
         name=str(row.get("name") or "Campaign"),
@@ -943,6 +1047,12 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
             roi_assumptions
             if isinstance(roi_assumptions, dict) or roi_assumptions is None
             else None
+        ),
+        household_dedup=(
+            household_dedup if isinstance(household_dedup, dict) else {}
+        ),
+        household_summary=(
+            household_summary if isinstance(household_summary, dict) else {}
         ),
         created_at=coerce_utc_datetime(row.get("created_at")),
         updated_at=coerce_utc_datetime(row.get("updated_at")),
