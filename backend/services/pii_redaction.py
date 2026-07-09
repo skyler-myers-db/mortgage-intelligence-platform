@@ -335,6 +335,23 @@ def _consent_status(raw: Any) -> str:
     return value if value in _CONSENT_STATUS_VALUES else "unknown"
 
 
+_ELIGIBILITY_SOURCE_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]{0,63}")
+
+
+def _eligibility_source(raw: Any) -> str:
+    """Machine-safe consent-provenance slug; falls back to synthetic_seed.
+
+    S1.4: gold defaults ``eligibility_source`` to ``synthetic_seed``; a
+    connected CRM/CDP connector supplies its id (S4.1). Anything that is
+    not a lowercase machine token fails back to the synthetic default so
+    a bad feed value can never smuggle free text through the API.
+    """
+    value = str(raw or "").strip().lower()
+    if value and _ELIGIBILITY_SOURCE_PATTERN.fullmatch(value):
+        return value
+    return "synthetic_seed"
+
+
 def _optional_int(raw: Any) -> int | None:
     if raw is None or raw == "":
         return None
@@ -582,6 +599,13 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "suppression_reason": row.get("suppression_reason") or None,
         "last_touch_at": row.get("last_touch_at"),
         "eligible_recontact_at": row.get("eligible_recontact_at"),
+        # S1.4: dnc fails closed to the suppression-derived value so a
+        # missing gold column can never un-flag a do-not-contact row.
+        "dnc": bool(
+            row.get("dnc") is True
+            or (row.get("suppression_reason") or None) == "do_not_contact"
+        ),
+        "eligibility_source": _eligibility_source(row.get("eligibility_source")),
         "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
     }
     _enforce_no_forbidden_keys(output)
@@ -671,6 +695,13 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "suppression_reason": row.get("suppression_reason") or None,
         "last_touch_at": row.get("last_touch_at"),
         "eligible_recontact_at": row.get("eligible_recontact_at"),
+        # S1.4: dnc fails closed to the suppression-derived value so a
+        # missing gold column can never un-flag a do-not-contact row.
+        "dnc": bool(
+            row.get("dnc") is True
+            or (row.get("suppression_reason") or None) == "do_not_contact"
+        ),
+        "eligibility_source": _eligibility_source(row.get("eligibility_source")),
         "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
     }
     _enforce_no_forbidden_keys(output)
