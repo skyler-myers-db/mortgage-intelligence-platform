@@ -467,6 +467,12 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/uc_functions/fn_next_best_offer.sql
+        - task_key: init_fn_refi_propensity_heuristic
+          description: "CREATE OR REPLACE mip.gold.fn_refi_propensity_heuristic (S1.3 transparent overlay-segment heuristic) before borrower_360 CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_refi_propensity_heuristic.sql
         - task_key: init_gold_ddl
           description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
           depends_on:
@@ -475,6 +481,7 @@ resources:
             - task_key: init_fn_in_the_money
             - task_key: init_fn_lead_score
             - task_key: init_fn_next_best_offer
+            - task_key: init_fn_refi_propensity_heuristic
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:

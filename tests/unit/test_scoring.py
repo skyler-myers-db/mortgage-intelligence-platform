@@ -17,7 +17,12 @@ from pathlib import Path
 
 import pytest
 
-from backend.services.scoring import estimated_upb, lead_score, source_display_label
+from backend.services.scoring import (
+    estimated_upb,
+    lead_score,
+    refi_propensity_heuristic,
+    source_display_label,
+)
 
 FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -31,12 +36,21 @@ ESTIMATED_UPB_FIXTURE_PATH = (
     / "fixtures"
     / "estimated_upb_golden.json"
 )
+REFI_PROPENSITY_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "refi_propensity_heuristic_golden.json"
+)
 
 with FIXTURE_PATH.open() as f:
     GOLDEN_CASES = json.load(f)
 
 with ESTIMATED_UPB_FIXTURE_PATH.open() as f:
     ESTIMATED_UPB_CASES = json.load(f)["cases"]
+
+with REFI_PROPENSITY_FIXTURE_PATH.open() as f:
+    REFI_PROPENSITY_CASES = json.load(f)["cases"]
 
 
 @pytest.mark.parametrize(
@@ -86,6 +100,30 @@ def test_estimated_upb_is_importable_from_services() -> None:
     from backend.services import scoring
 
     assert callable(scoring.estimated_upb)
+
+
+@pytest.mark.parametrize(
+    "case",
+    REFI_PROPENSITY_CASES,
+    ids=[c["id"] for c in REFI_PROPENSITY_CASES],
+)
+def test_refi_propensity_heuristic_matches_golden_fixture(case: dict) -> None:
+    """Every golden case must produce the SQL-pinned expected_score.
+
+    Pins the Python mirror of ``mip.gold.fn_refi_propensity_heuristic``
+    (S1.3 transparent overlay-segment heuristic). The matching SQL
+    validation fixture carries the same rows so the published points table
+    stays locked across engines and matches the glossary methodology entry.
+    """
+    assert (
+        refi_propensity_heuristic(**case["inputs"]) == case["expected_score"]
+    ), case.get("note", "")
+
+
+def test_refi_propensity_heuristic_is_bounded_0_100() -> None:
+    """The published points table cannot exceed 100 or go negative."""
+    assert refi_propensity_heuristic(10_000, 48, 100, 10_000_000, False) == 100
+    assert refi_propensity_heuristic(-500, -10, -5, -100, True) == 0
 
 
 # ---------------------------------------------------------------------------
