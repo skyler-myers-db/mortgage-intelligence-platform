@@ -99,6 +99,31 @@ describe('descriptorFor', () => {
     ).toBe(DRAWER_SOURCES.refiPropensity);
   });
 
+  it('routes S1.6 product-type and origination-channel evidence to their curated drawers', () => {
+    // product_type shares the Voluntary Lien source product with rate/lien
+    // signals; the specific signal_type must win over the generic lien route.
+    expect(
+      descriptorForEvidence({
+        source_product: 'Voluntary Lien',
+        source_table: 'mip.silver.lien_current',
+        signal_type: 'product_type',
+      }),
+    ).toBe(DRAWER_SOURCES.loanProductType);
+    expect(
+      descriptorForEvidence({
+        source_product: 'First-Party LOS',
+        source_table: 'mip.first_party.loan_applications',
+        signal_type: 'origination_channel',
+      }),
+    ).toBe(DRAWER_SOURCES.originationChannel);
+  });
+
+  it('keeps S1.6 dimension drawers resolvable to a registered asset key', () => {
+    expect(assetKeyForSource(DRAWER_SOURCES.loanProductType.assetPath)).toBe('borrower_360');
+    expect(DRAWER_SOURCES.loanProductType.assetKey).toBe('borrower_360');
+    expect(DRAWER_SOURCES.originationChannel.assetKey).toBe('borrower_360');
+  });
+
   it('maps Genie trusted assets to specific curated drawers', () => {
     expect(drawerForAsset('mip.gold.segment_population')).toBe(DRAWER_SOURCES.segmentPopulation);
     expect(drawerForAsset('mip.gold.lead_population')).toBe(DRAWER_SOURCES.leadPopulation);

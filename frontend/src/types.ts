@@ -24,6 +24,15 @@ export interface ProofEvidenceEvent {
   timestamp: string;
 }
 
+/** One value/count pair in a borrower-dimension mix (S1.6). Values are the
+ *  lowercase tokens emitted by gold (product = conventional|jumbo|fha|va|
+ *  other|unknown; channel = loan_officer|digital|branch|call_center|unknown).
+ *  Sorted by count descending at the API boundary. */
+export interface DimensionFacetCount {
+  value: string;
+  count: number;
+}
+
 export interface SegmentSummary {
   code: SegmentCode;
   name: string;
@@ -32,6 +41,11 @@ export interface SegmentSummary {
   avg_score: number;
   description: string;
   color: string;
+  /** Loan-product-type composition of the segment (S1.6). Optional so older
+   *  cached payloads still parse; treat a missing/empty array as "no facet". */
+  loan_product_mix?: DimensionFacetCount[];
+  /** Origination-channel composition of the segment (S1.6). */
+  origination_channel_mix?: DimensionFacetCount[];
 }
 
 export interface LeadSummary {
@@ -103,6 +117,14 @@ export interface LeadSummary {
   latest_disposition_at?: string | null;
   latest_callback_at?: string | null;
   aging_days?: number | null;
+  /** Loan product dimension (S1.6). Lowercase token from
+   *  gold.fn_loan_product_type: conventional|jumbo|fha|va|other|unknown.
+   *  null renders Unknown — the app never invents a product type. */
+  loan_product_type?: string | null;
+  /** Origination channel (S1.6). Lowercase token from the most recent funded
+   *  application in the connected LOS feed: loan_officer|digital|branch|
+   *  call_center|unknown. null renders Unknown. */
+  origination_channel?: string | null;
 }
 
 export interface SalesTeamMember {

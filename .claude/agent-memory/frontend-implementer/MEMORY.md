@@ -5,3 +5,5 @@
 - [A11y/race patterns](project_a11y_patterns.md) — dialog focus-trap mirrors EvidenceDrawer; hotkeys check activeElement; async handlers need useRef latch.
 - [Warming-up retry pattern](project_warming_up_pattern.md) — cold-start 503s use useWarmingUpRetry + WarmingUpBlock; ApiError carries dependency/correlationId.
 - [CSS gzip budget red on main](project_css_budget_gzip_red.md) — initial-CSS gzip budget already fails on clean main; don't self-bump, reuse BEM primitives to fit raw headroom.
+- [Lead-queue filter plumbing](project_lead_queue_filter_plumbing.md) — a new portfolio filter needs 4 parallel structures in lead-queue.filters.ts; API pass-through is generic.
+- [Component test context mock](project_component_test_context_mock.md) — mock ../AppContext useApp for setDrawer; run tests via npm --prefix frontend (not npx --root) or babel breaks.

@@ -21,6 +21,8 @@ import {
   CONTACTABILITY_FILTER_OPTIONS,
   CONSENT_FILTER_OPTIONS,
   FUNNEL_STAGE_LABELS,
+  LOAN_PRODUCT_FILTER_OPTIONS,
+  ORIGINATION_CHANNEL_FILTER_OPTIONS,
   OWNER_LINK_FILTER_OPTIONS,
   OUTREACH_FILTER_OPTIONS,
   PRODUCT_FILTER_OPTIONS,
@@ -141,6 +143,8 @@ export default function LeadQueue() {
   }, [footprint.ready, footprint.states, footprint.usingFallback]);
   const relationshipFilter = portfolioCriteria?.lender_relationship ?? 'All';
   const productFilter = portfolioCriteria?.product ?? 'All products';
+  const loanProductFilter = portfolioCriteria?.loan_product ?? 'All loan products';
+  const originationChannelFilter = portfolioCriteria?.origination_channel ?? 'All channels';
   const ownerLinkFilter = portfolioCriteria?.owner_link ?? 'All';
   const purchaseIntentFilter = portfolioCriteria?.purchase_intent ?? 'All';
   const contactabilityFilter = portfolioCriteria?.marketing_eligibility ?? 'Eligible only';
@@ -599,6 +603,18 @@ export default function LeadQueue() {
               value={productFilter}
               options={[...PRODUCT_FILTER_OPTIONS]}
               onChange={(v) => updateParam('product', v)}
+            />
+            <FilterSelect
+              label="PRODUCT TYPE"
+              value={loanProductFilter}
+              options={[...LOAN_PRODUCT_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('loan_product', v === 'All loan products' ? null : v)}
+            />
+            <FilterSelect
+              label="CHANNEL"
+              value={originationChannelFilter}
+              options={[...ORIGINATION_CHANNEL_FILTER_OPTIONS]}
+              onChange={(v) => updateParam('origination_channel', v === 'All channels' ? null : v)}
             />
             <FilterSelect
               label="CONTACTABILITY"

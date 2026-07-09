@@ -30,6 +30,11 @@ export const SEGMENT_OPTION_TO_CODE: Record<string, SegmentCode | null> = {
   [SEGMENT_CODE_LABELS.retention]: 'retention',
 };
 export const PRODUCT_FILTER_OPTIONS = ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] as const;
+// S1.6 — borrower loan-product-type and origination-channel dimensions. Values
+// are the reviewed display labels the backend accepts as query-param values
+// (the API maps them to the lowercase gold tokens). "All ..." is the no-op.
+export const LOAN_PRODUCT_FILTER_OPTIONS = ['All loan products', 'Conventional', 'Jumbo', 'FHA', 'VA', 'Other', 'Unknown'] as const;
+export const ORIGINATION_CHANNEL_FILTER_OPTIONS = ['All channels', 'Loan officer', 'Digital', 'Branch', 'Call center', 'Unknown'] as const;
 export const OWNER_LINK_FILTER_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;
 export const PURCHASE_INTENT_FILTER_OPTIONS = ['All', 'Listed for sale', 'HELOC intent', 'Both'] as const;
 export const CONTACTABILITY_FILTER_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
@@ -55,6 +60,8 @@ const PORTFOLIO_FILTER_KEYS = [
   'lender_relationship',
   'target_lender_ref',
   'product',
+  'loan_product',
+  'origination_channel',
   'min_equity_pct_label',
   'owner_link',
   'purchase_intent',
@@ -165,6 +172,8 @@ const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string
   lien_status: new Set(['Any', 'Open 1st lien', 'Open first lien', 'Open HELOC', 'Free & clear', 'Free and clear']),
   lender_relationship: new Set([...LENDER_RELATIONSHIP_OPTIONS, 'Competitor']),
   product: new Set(['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention']),
+  loan_product: new Set(LOAN_PRODUCT_FILTER_OPTIONS),
+  origination_channel: new Set(ORIGINATION_CHANNEL_FILTER_OPTIONS),
   min_equity_pct_label: new Set(['Any', '>= 15%', '>= 25%', '>= 40%', '≥ 15%', '≥ 25%', '≥ 40%']),
   owner_link: new Set(OWNER_LINK_FILTER_OPTIONS),
   purchase_intent: new Set(PURCHASE_INTENT_FILTER_OPTIONS),
@@ -214,6 +223,8 @@ const PORTFOLIO_FILTER_LABELS: Record<string, string> = {
   lender_relationship: 'relationship',
   target_lender_ref: 'lender',
   product: 'product',
+  loan_product: 'Product type',
+  origination_channel: 'Origination channel',
   min_equity_pct_label: 'equity',
   owner_link: 'owner link',
   purchase_intent: 'purchase intent',

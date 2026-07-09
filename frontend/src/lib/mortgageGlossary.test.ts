@@ -12,6 +12,8 @@ const REQUIRED_TERMS = [
   'mlsListings',
   'listedForSale',
   'buildingPermits',
+  'loanProductType',
+  'originationChannel',
   'inTheMoney',
   'nextBestOffer',
   'opportunityScore',

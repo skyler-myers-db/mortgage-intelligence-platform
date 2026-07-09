@@ -13,12 +13,12 @@ export const mockPortfolio: PortfolioPreview = {
 };
 
 export const mockSegments: SegmentSummary[] = [
-  { code: 'itm', name: 'Prime Refi Candidates', count: 12840, delta: '+18%', avg_score: 82, description: 'Lien rate ≥ 75 bps above par and equity ≥ 15%.', color: 'var(--seg-itm)' },
-  { code: 'listed', name: 'Listed for Sale', count: 1840, delta: '+9%', avg_score: 77, description: 'Current active or under-contract Cotality MLS listing.', color: 'var(--seg-listed)' },
-  { code: 'permit', name: 'HELOC Intent', count: 2405, delta: '+11%', avg_score: 80, description: 'Cotality HELOC propensity score indicates equity-credit demand.', color: 'var(--seg-permit)' },
-  { code: 'investor', name: 'Investor / Multi-Property', count: 1892, delta: '+6%', avg_score: 79, description: 'Owner Link shows 2+ properties or repeat behavior.', color: 'var(--seg-investor)' },
-  { code: 'equity', name: 'Home Equity Candidate', count: 6320, delta: '+14%', avg_score: 76, description: 'Strong equity and prior cash-out/HELOC propensity.', color: 'var(--seg-equity)' },
-  { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', color: 'var(--seg-retention)' }
+  { code: 'itm', name: 'Prime Refi Candidates', count: 12840, delta: '+18%', avg_score: 82, description: 'Lien rate ≥ 75 bps above par and equity ≥ 15%.', color: 'var(--seg-itm)', loan_product_mix: [{ value: 'conventional', count: 7420 }, { value: 'fha', count: 3110 }, { value: 'jumbo', count: 1560 }, { value: 'va', count: 520 }, { value: 'unknown', count: 230 }], origination_channel_mix: [{ value: 'loan_officer', count: 8010 }, { value: 'digital', count: 3120 }, { value: 'branch', count: 1090 }, { value: 'unknown', count: 620 }] },
+  { code: 'listed', name: 'Listed for Sale', count: 1840, delta: '+9%', avg_score: 77, description: 'Current active or under-contract Cotality MLS listing.', color: 'var(--seg-listed)', loan_product_mix: [{ value: 'conventional', count: 1010 }, { value: 'jumbo', count: 480 }, { value: 'fha', count: 260 }, { value: 'unknown', count: 90 }], origination_channel_mix: [{ value: 'loan_officer', count: 1180 }, { value: 'digital', count: 410 }, { value: 'unknown', count: 250 }] },
+  { code: 'permit', name: 'HELOC Intent', count: 2405, delta: '+11%', avg_score: 80, description: 'Cotality HELOC propensity score indicates equity-credit demand.', color: 'var(--seg-permit)', loan_product_mix: [{ value: 'conventional', count: 1520 }, { value: 'fha', count: 540 }, { value: 'va', count: 210 }, { value: 'unknown', count: 135 }], origination_channel_mix: [{ value: 'loan_officer', count: 1440 }, { value: 'call_center', count: 560 }, { value: 'unknown', count: 405 }] },
+  { code: 'investor', name: 'Investor / Multi-Property', count: 1892, delta: '+6%', avg_score: 79, description: 'Owner Link shows 2+ properties or repeat behavior.', color: 'var(--seg-investor)', loan_product_mix: [{ value: 'conventional', count: 960 }, { value: 'jumbo', count: 620 }, { value: 'other', count: 210 }, { value: 'unknown', count: 102 }], origination_channel_mix: [{ value: 'loan_officer', count: 1210 }, { value: 'branch', count: 430 }, { value: 'unknown', count: 252 }] },
+  { code: 'equity', name: 'Home Equity Candidate', count: 6320, delta: '+14%', avg_score: 76, description: 'Strong equity and prior cash-out/HELOC propensity.', color: 'var(--seg-equity)', loan_product_mix: [{ value: 'conventional', count: 3810 }, { value: 'fha', count: 1420 }, { value: 'jumbo', count: 720 }, { value: 'unknown', count: 370 }], origination_channel_mix: [{ value: 'loan_officer', count: 3980 }, { value: 'digital', count: 1610 }, { value: 'unknown', count: 730 }] },
+  { code: 'retention', name: 'Retention Risk', count: 3471, delta: '+4%', avg_score: 88, description: 'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', color: 'var(--seg-retention)', loan_product_mix: [{ value: 'conventional', count: 2210 }, { value: 'fha', count: 640 }, { value: 'va', count: 380 }, { value: 'unknown', count: 241 }], origination_channel_mix: [{ value: 'loan_officer', count: 2510 }, { value: 'call_center', count: 620 }, { value: 'unknown', count: 341 }] }
 ];
 
 // icon keyed by segment code — matches the prototype's SEGMENTS icon column
@@ -47,6 +47,7 @@ export const mockBorrowers: Borrower360[] = [
     segment_codes: ['itm', 'equity'], equity_estimate: 285000, rate_spread_bps: 88, opportunity_score: 94, confidence: 88,
     recommended_offer: 'Refinance + HELOC', why_now: 'Lien matures in 4 months, strong equity, and local refi activity is rising.', evidence_ids: ['ev-001', 'ev-002', 'ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48291', owner_link_id: 'ol_demo_48291', subject_property: 'Synthetic property · Chicago, IL 60611', avm_value: 625000, current_lien_balance: 340000, current_rate: 5.75, ltv: 54, related_property_count: 1,
+    loan_product_type: 'conventional', origination_channel: 'loan_officer',
     trigger_timeline: evidence, evidence_events: evidence,
     why_panel: { rate_spread_bps: 88, market_rate: 0.04875, equity_pct: 46, in_the_money: true, in_the_money_reason: '+88 bps spread (>= 75) AND 46% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
@@ -56,6 +57,7 @@ export const mockBorrowers: Borrower360[] = [
     recommended_offer: 'HELOC', why_now: 'Cotality HELOC propensity and strong equity position indicate equity-credit demand.', evidence_ids: ['ev-002'], approval_status: 'pending',
     clip_id: 'clip_demo_48294', owner_link_id: 'ol_demo_48294', subject_property: 'Synthetic property · Chicago, IL 60647', avm_value: 560000, current_lien_balance: 342000, current_rate: 6.75, ltv: 61, related_property_count: 1,
     has_heloc_propensity_trigger: true, heloc_propensity_score: 812, heloc_propensity_run_date: '2026-06-09',
+    loan_product_type: null, origination_channel: null,
     trigger_timeline: evidence.slice(1), evidence_events: evidence.slice(1),
     why_panel: { rate_spread_bps: 188, market_rate: 0.04875, equity_pct: 39, in_the_money: true, in_the_money_reason: '+188 bps spread (>= 75) AND 39% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   },
@@ -65,6 +67,7 @@ export const mockBorrowers: Borrower360[] = [
     recommended_offer: 'Next-home purchase loan', why_now: 'The active listing makes next-home financing more useful than refinancing the current loan.', evidence_ids: ['ev-003'], approval_status: 'pending',
     clip_id: 'clip_demo_48295', owner_link_id: 'ol_demo_48295', subject_property: 'Synthetic property · Chicago, IL 60613', avm_value: 725000, current_lien_balance: 320000, current_rate: 6.50, ltv: 44, related_property_count: 1,
     listed_for_sale: true, listing_status_category: 'A', listing_status_description: 'Active', listing_price: 725000, listing_days_on_market: 18,
+    loan_product_type: 'jumbo', origination_channel: 'digital',
     trigger_timeline: evidence.slice(2), evidence_events: evidence.slice(2),
     why_panel: { rate_spread_bps: 162, market_rate: 0.04875, equity_pct: 56, in_the_money: true, in_the_money_reason: '+162 bps spread (>= 75) AND 56% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   }

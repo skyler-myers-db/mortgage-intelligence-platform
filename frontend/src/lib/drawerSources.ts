@@ -133,6 +133,17 @@ export function descriptorForEvidence(event: {
   if (product.includes('avm') || signal.includes('equity')) {
     return withEventDate(DRAWER_SOURCES.avm, event.timestamp);
   }
+  // S1.6 dimensions. `product_type` shares the Voluntary Lien source product
+  // with rate/lien signals, so route on the specific signal_type BEFORE the
+  // generic lien block below (which would otherwise swallow it via the shared
+  // 'Voluntary Lien' source product). Origination channel comes from the
+  // First-Party LOS product.
+  if (signal.includes('product_type')) {
+    return withEventDate(DRAWER_SOURCES.loanProductType, event.timestamp);
+  }
+  if (signal.includes('origination_channel') || product.includes('first-party los')) {
+    return withEventDate(DRAWER_SOURCES.originationChannel, event.timestamp);
+  }
   if (
     product.includes('voluntary lien') ||
     product.includes('lien') ||
@@ -697,6 +708,59 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { label: 'Score', source: 'refi_propensity_score', value: '0-999' },
       { label: 'Trigger', source: 'has_refi_propensity_trigger', value: '>= 700' },
       { label: 'Run date', source: 'refi_propensity_run_date', value: 'model run date' },
+    ],
+  },
+
+  loanProductType: {
+    title: 'Loan product type evidence',
+    short: 'Product type',
+    assetKey: 'borrower_360',
+    assetPath: 'mip.gold.borrower_360',
+    usedIn: ['Segment Intelligence', 'Lead Queue', 'Borrower 360'],
+    description:
+      'Loan product type is derived by mip.gold.fn_loan_product_type from the Cotality first-position loan type code ' +
+      '(first_position_mortgage_loan_type_code) mapped to Conventional / FHA / VA, plus a Jumbo overlay when the original ' +
+      'conventional loan amount exceeds the governed conforming loan limit ' +
+      '(mip.ref.offer_rules_config key mip_conforming_loan_limit_usd). A missing source code renders Unknown.',
+    lineage: [
+      {
+        layer: 'SOURCE',
+        name: 'cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2',
+        meta: 'Cotality voluntary lien - first-position loan type code',
+      },
+      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'first_pos_loan_type, first_pos_amount' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_loan_product_type', meta: 'loan-type code + conforming-limit jumbo overlay' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360.loan_product_type', meta: 'conventional | jumbo | fha | va | other | unknown' },
+    ],
+    signals: [
+      { label: 'First-position loan type', source: 'lien_current.first_pos_loan_type', value: 'CONV / FHA / VA code' },
+      { label: 'Original loan amount', source: 'lien_current.first_pos_amount', value: 'vs conforming loan limit' },
+      { label: 'Conforming limit', source: 'mip.ref.offer_rules_config', value: 'mip_conforming_loan_limit_usd' },
+    ],
+  },
+
+  originationChannel: {
+    title: 'Origination channel evidence',
+    short: 'Origination channel',
+    assetKey: 'borrower_360',
+    assetPath: 'mip.first_party.loan_applications',
+    usedIn: ['Segment Intelligence', 'Lead Queue', 'Borrower 360'],
+    description:
+      'Origination channel is the LOS channel recorded on the most recent FUNDED application in the governed first-party ' +
+      'feed mip.first_party.loan_applications — loan officer, digital, branch, or call center. When no funded application ' +
+      'resolves, the value is NULL and renders Unknown; the app never invents a channel.',
+    lineage: [
+      {
+        layer: 'SOURCE',
+        name: 'mip.first_party.loan_applications',
+        meta: 'application_channel on funded rows, most-recent-wins',
+      },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360.origination_channel', meta: 'loan_officer | digital | branch | call_center | unknown' },
+    ],
+    signals: [
+      { label: 'Application channel', source: 'loan_applications.application_channel', value: 'most recent funded' },
+      { label: 'Funded filter', source: 'loan_applications', value: 'funded applications only' },
+      { label: 'Unknown handling', source: 'borrower_360.origination_channel', value: 'NULL renders Unknown' },
     ],
   },
 
