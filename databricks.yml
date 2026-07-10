@@ -543,6 +543,14 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/assert_borrower_360_fresh.sql
+        - task_key: ctas_household_rollup
+          description: "Rebuild mip.gold.household_rollup via CTAS for opt-in campaign household dedup."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_household_rollup.sql
         - task_key: ctas_lead_scores
           description: "Rebuild mip.gold.lead_scores via CTAS."
           depends_on:

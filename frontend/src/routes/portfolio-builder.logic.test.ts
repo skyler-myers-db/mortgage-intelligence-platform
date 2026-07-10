@@ -140,6 +140,24 @@ describe('portfolio campaign config', () => {
       budget_usd: null,
       source: 'operator_configured',
     });
+    expect(config.household_dedup).toEqual({
+      enabled: false,
+      dedupe_unit: 'borrower',
+      primary_contact_strategy: 'highest_opportunity_eligible',
+    });
+  });
+
+  it('makes household dedup opt-in at campaign time only', () => {
+    const config = buildCampaignConfig({
+      ...DEFAULT_CAMPAIGN_SETUP,
+      marketHouseholdTogether: true,
+    });
+
+    expect(config.household_dedup).toEqual({
+      enabled: true,
+      dedupe_unit: 'household',
+      primary_contact_strategy: 'highest_opportunity_eligible',
+    });
   });
 
   it('summarizes saved lender-overlay campaigns with the target lien holder', () => {

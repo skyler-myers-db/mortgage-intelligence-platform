@@ -13,6 +13,7 @@
 --   sql/ddl/gold_borrower_360.sql            -- CLIP-grain projection.
 --   sql/ddl/gold_lead_scores.sql             -- Scoring sub-scores + fn_lead_score.
 --   sql/ddl/gold_evidence_events.sql         -- Per-(CLIP, signal) rows.
+--   sql/ddl/gold_household_rollup.sql        -- Opt-in campaign household dedup.
 --   sql/ddl/gold_lead_population.sql         -- Ranked quality-filtered cut for /leads.
 --   sql/ddl/gold_segment_population.sql      -- Segment counts + prior snapshot.
 --
@@ -20,10 +21,11 @@
 --   1. gold.property_owner_bridge     (owner-link-keyed; no deps)
 --   2. gold.evidence_events           (silver-derived; scoped to silver lien_current spine)
 --   3. gold.borrower_360              (depends on property_owner_bridge + evidence_events)
---   4. gold.lead_scores               (depends on borrower_360 + evidence_events)
---   5. gold.lead_population           (depends on borrower_360 + lead_scores)
---   6. gold.segment_population        (depends on borrower_360 + lead_scores)
---   7. gold.source_readiness          (non-PII Admin source summary)
+--   4. gold.household_rollup          (depends on borrower_360 + silver.property_owners)
+--   5. gold.lead_scores               (depends on borrower_360 + evidence_events)
+--   6. gold.lead_population           (depends on borrower_360 + lead_scores)
+--   7. gold.segment_population        (depends on borrower_360 + lead_scores)
+--   8. gold.source_readiness          (non-PII Admin source summary)
 --
 -- Each file uses CREATE TABLE IF NOT EXISTS so re-running is a no-op if the
 -- schema hasn't changed. If a column is added to a per-file DDL, this
@@ -250,7 +252,36 @@ TBLPROPERTIES (
 );
 
 -- -----------------------------------------------------------------------------
--- 3. mip.gold.evidence_events
+-- 3. mip.gold.household_rollup
+--    (see sql/ddl/gold_household_rollup.sql for derivation + PII posture)
+-- -----------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS mip.gold.household_rollup (
+  clip                            STRING    NOT NULL COMMENT 'Cotality CLIP below the API redaction boundary; joins to borrower_360.clip.',
+  borrower_id                     STRING    NOT NULL COMMENT 'Synthetic stable borrower id, B-[0-9A-Z]{13}. No PII.',
+  household_id                    STRING    NOT NULL COMMENT 'Deterministic public household id: HH- + first 16 hex chars of sha2(derivation key).',
+  household_derivation_method     STRING    NOT NULL COMMENT 'owner_link | mailing_address | singleton.',
+  household_derivation_key_hash   STRING    NOT NULL COMMENT 'Full sha2 over the non-PII derivation key. Raw Owner Links, CLIPs, mailing city/state, and owner hashes are not emitted.',
+  derivation_source_tables        ARRAY<STRING> NOT NULL COMMENT 'UC source rows supporting the derivation: mip.silver.property_owners, mip.silver.property_master, and/or mip.gold.borrower_360.',
+  household_member_count          INT       NOT NULL COMMENT 'Count of borrower rows assigned to this household_id.',
+  eligible_member_count           INT       NOT NULL COMMENT 'Count of household members that are campaign-contact eligible: marketing_eligible=true and has_unresolved_owner=false.',
+  household_rank                  INT       NOT NULL COMMENT 'Deterministic rank inside household: eligible borrowers first, then opportunity_score DESC, borrower_id ASC.',
+  is_household_primary            BOOLEAN   NOT NULL COMMENT 'TRUE only for rank 1 when that borrower is contact-eligible.',
+  primary_borrower_id             STRING             COMMENT 'Synthetic borrower id of the selected primary contact, or NULL if no member is contact-eligible.',
+  suppressed_by_household_dedup   BOOLEAN   NOT NULL COMMENT 'TRUE when this eligible borrower would be suppressed by opt-in campaign household dedup.',
+  owner_link_reachable_count      INT       NOT NULL COMMENT 'Number of reachable Owner Links used by the owner_link derivation; 0 for non-owner-link methods.',
+  refreshed_at                    TIMESTAMP NOT NULL COMMENT 'Shared gold refresh timestamp from mip.ref.refresh_run_state.'
+)
+USING DELTA
+CLUSTER BY (household_id, borrower_id)
+COMMENT 'Campaign-time household dedup rollup. Borrower remains the default unit; household grouping is opt-in at campaign creation and evidence-cited through UC lineage.'
+TBLPROPERTIES (
+  'delta.enableChangeDataFeed' = 'false',
+  'delta.autoOptimize.optimizeWrite' = 'true',
+  'delta.autoOptimize.autoCompact'   = 'true'
+);
+
+-- -----------------------------------------------------------------------------
+-- 4. mip.gold.evidence_events
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
   clip           STRING NOT NULL COMMENT 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.',
