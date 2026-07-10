@@ -60,8 +60,8 @@ export const mortgageGlossary = {
     aliases: ['estimated unpaid principal balance', 'amortized balance'],
     category: 'mortgage',
     short: 'An amortized current-lien balance estimate from original UPB, note rate, and elapsed months.',
-    appContext: 'Shown as a caveated current lien value in Borrower 360 and used in gold to derive equity dollars, equity percent, and display LTV.',
-    proof: 'Proof traces to fn_estimated_upb and the gold borrower refresh; unknown rates use the documented straight-line fallback.',
+    appContext: 'Shown as caveated current lien value and used to derive equity, equity percent, and display LTV.',
+    proof: 'Proof traces to fn_estimated_upb; unknown rates use straight-line fallback.',
   },
   heloc: {
     id: 'heloc',
@@ -69,8 +69,8 @@ export const mortgageGlossary = {
     aliases: ['home equity line of credit'],
     category: 'mortgage',
     short: 'Home equity line of credit.',
-    appContext: 'HELOC Intent appears when the governed Cotality HELOC propensity trigger and equity branch support an equity-credit conversation.',
-    proof: 'Proof shows HELOC propensity and branch thresholds; filed building permits remain a separate pending source.',
+    appContext: 'HELOC Intent appears when Cotality propensity and equity support an equity-credit conversation.',
+    proof: 'Proof shows propensity and thresholds; filed permits remain separate.',
   },
   helocIntent: {
     id: 'heloc-intent',
@@ -114,7 +114,7 @@ export const mortgageGlossary = {
     aliases: ['ITM', 'refi economics'],
     category: 'scoring',
     short: 'A refinance-only economics screen: rate spread and equity both clear the configured thresholds.',
-    appContext: 'It is not the same as a high-quality lead. A borrower can be in-the-money but still rank lower after intent, relationship, fit, contactability, and evidence are applied.',
+    appContext: 'It is not the same as a high-quality lead. Ranking also considers intent, relationship, fit, contactability, and evidence.',
     proof: 'Proof compares rate spread and equity to the configured thresholds.',
   },
   refiPropensityHeuristic: {
@@ -195,7 +195,7 @@ export const mortgageGlossary = {
     aliases: ['lead score', 'score 75+'],
     category: 'scoring',
     short: 'A 0-100 ranking score for how strong the borrower is for review.',
-    appContext: 'A score of 75 or higher marks the strongest review candidates. It is broader than refinance economics because it also considers intent, fit, relationship, and evidence.',
+    appContext: 'A score of 75+ marks strong review candidates. It is broader than refinance economics because it also considers intent, fit, relationship, and evidence.',
     proof: 'Proof shows the five weighted sub-scores that make up the final score.',
   },
   ownerLink: {

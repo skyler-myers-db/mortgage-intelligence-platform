@@ -317,7 +317,7 @@ export default function PortfolioBuilder() {
     <PageShell
       eyebrow="Portfolio Builder"
       title="Build a borrower population"
-      lede="Apply geography, occupancy, lien, relationship, Owner Link, purchase-intent, product, and equity filters, then run the build. The KPI grid shows size, average score, and projected conversion."
+      lede="Apply geography, lien, relationship, Owner Link, purchase intent, product, and equity filters. KPIs show size, score, and conversion."
     >
       <div className="surface">
         <div className="surface__hdr surface__hdr--split">
