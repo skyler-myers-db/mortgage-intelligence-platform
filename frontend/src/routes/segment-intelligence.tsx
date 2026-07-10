@@ -503,9 +503,12 @@ export default function SegmentIntelligence() {
   const rankedScopeEyebrow = hasSelectedSegments
     ? 'Ranked borrowers · selected segment cohort'
     : 'Ranked borrowers · full eligible queue';
+  // The "cards are standalone memberships / don't add up" explanation lives once
+  // at the segment cards (segmentCountScopeCopy); the ranked-table copy stays
+  // scope-only to avoid repeating it on one screen.
   const rankedScopeCopy = hasSelectedSegments
-    ? 'Showing the highest-ranked returned rows; segment cards remain standalone counts, while the table and map show the selected, de-duplicated segment cohort and geography drill-downs.'
-    : 'No segment card is selected, so the table shows the full ranked lead queue after the secondary filters. Segment cards are standalone memberships and are not meant to add up to this queue total.';
+    ? 'Showing the highest-ranked returned rows for the selected, de-duplicated segment cohort and geography drill-downs.'
+    : 'No segment card is selected, so the table shows the full ranked lead queue after the secondary filters.';
   const segmentCountScopeCopy = hasSelectedSegments
     ? segmentMode === 'all'
       ? 'Card counts now show borrowers inside the All-selected intersection. Each selected card count should match the same unique borrower cohort.'

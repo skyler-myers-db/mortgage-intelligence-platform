@@ -194,7 +194,7 @@ export function AskGenieAnswerPanel({
                 <Icon name="sparkle" size={16} />
               </div>
               <div>
-                <div className="genie-empty__title">Ready for governed analysis</div>
+                <div className="genie-empty__title">Ask about your book — coverage, segments, borrowers, market shifts.</div>
                 <p className="genie-empty__copy">
                   Trusted SQL, source assets, freshness, and approval-safe actions appear with each answer.
                 </p>

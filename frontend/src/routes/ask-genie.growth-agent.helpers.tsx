@@ -1,26 +1,27 @@
 import { Chip, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
+import { friendlyAssetLabel } from '../lib/assetLabels';
 import { isUspsStateCode } from '../lib/uspsStates';
 import type {
   GrowthAgentSegmentCode,
   GrowthAgentWorkflowId,
 } from '../types';
-import type { GrowthAgentCapabilityRow } from '../types/growthAgent';
 
-// Friendly name + catalog-relative suffix. The backend returns the concrete
-// catalog-qualified paths for this deployment on /api/genie/start.
-const TRUSTED_ASSET_DEFS: Array<{ label: string; suffix: string }> = [
-  { label: 'Ranked lead population',       suffix: 'gold.lead_population' },
-  { label: 'Segment rollups',              suffix: 'gold.segment_population' },
-  { label: 'Opportunity scores',           suffix: 'gold.lead_scores' },
-  { label: 'Borrower 360 profile',         suffix: 'gold.borrower_360' },
-  { label: 'Borrower dossier',             suffix: 'gold.borrower_dossier' },
-  { label: 'Source evidence',              suffix: 'gold.evidence_events' },
-  { label: 'Source readiness',             suffix: 'gold.source_readiness' },
-  { label: 'Lock-in cohort',               suffix: 'gold.lockin_cohort' },
-  { label: 'Lead-generation metric view',  suffix: 'semantics.lead_generation_metric_view' },
-  { label: 'Segment performance view',     suffix: 'semantics.segment_performance_metric_view' },
-  { label: 'Borrower opportunity view',    suffix: 'semantics.borrower_opportunity_metric_view' },
+// Catalog-relative suffixes for the trusted-asset panel (ordering). Friendly
+// labels come from the shared assetLabels helper; the backend returns the
+// concrete catalog-qualified paths for this deployment on /api/genie/start.
+const TRUSTED_ASSET_SUFFIXES: string[] = [
+  'gold.lead_population',
+  'gold.segment_population',
+  'gold.lead_scores',
+  'gold.borrower_360',
+  'gold.borrower_dossier',
+  'gold.evidence_events',
+  'gold.source_readiness',
+  'gold.lockin_cohort',
+  'semantics.lead_generation_metric_view',
+  'semantics.segment_performance_metric_view',
+  'semantics.borrower_opportunity_metric_view',
 ];
 
 export const CUSTOM_SEGMENTS: Array<{ code: GrowthAgentSegmentCode; label: string }> = [
@@ -37,10 +38,9 @@ const STATE_TOKEN_RE = /^[A-Za-z]{2}$/;
 export function trustedAssetsForCatalog(
   startAssets: string[] | undefined,
 ): Array<{ label: string; path: string }> {
-  return TRUSTED_ASSET_DEFS.map((asset) => ({
-    label: asset.label,
-    path: startAssets?.find((path) => path.endsWith(`.${asset.suffix}`))
-      ?? asset.suffix,
+  return TRUSTED_ASSET_SUFFIXES.map((suffix) => ({
+    label: friendlyAssetLabel(suffix),
+    path: startAssets?.find((path) => path.endsWith(`.${suffix}`)) ?? suffix,
   }));
 }
 
@@ -66,11 +66,6 @@ export function parseGrowthAgentStateInput(value: string): { states: string[]; i
   return { states, invalid };
 }
 
-function sourceAssetLabel(asset: string): string {
-  const parts = asset.split('.').filter(Boolean);
-  return parts.slice(-2).join('.') || asset;
-}
-
 export function workflowIcon(workflowId: GrowthAgentWorkflowId) {
   if (workflowId === 'borrower_dossier_review') return 'doc';
   if (workflowId === 'listing_watch') return 'tag';
@@ -84,42 +79,9 @@ export function workflowIcon(workflowId: GrowthAgentWorkflowId) {
 
 export function renderSourceAssetChip(asset: string) {
   const source = drawerForAsset(asset);
-  const label = sourceAssetLabel(asset);
-  if (source) return <EvidenceChip key={asset} source={source}>{label}</EvidenceChip>;
-  return <Chip key={asset} variant="neutral" icon="db">{label}</Chip>;
-}
-
-const GROWTH_AGENT_CAPABILITY_KEYS = new Set([
-  'genie_conversation_api',
-  'certified_metric_views',
-  'uc_function_tools',
-  'agent_orchestrator',
-  'ai_gateway',
-  'lakebase_sync',
-  'agent_eval',
-]);
-
-export function visibleGrowthAgentCapabilities(
-  rows: GrowthAgentCapabilityRow[] | undefined,
-): GrowthAgentCapabilityRow[] {
-  return (rows ?? []).filter(
-    (row) => GROWTH_AGENT_CAPABILITY_KEYS.has(row.key) && row.status !== 'hidden',
-  );
-}
-
-export function capabilityStatusText(status: string): string {
-  switch (status) {
-    case 'available':
-      return 'Available';
-    case 'configured':
-      return 'Configured';
-    case 'not_provisioned':
-      return 'Not provisioned';
-    case 'preview_mirror':
-      return 'Roadmap mirror';
-    case 'hidden':
-      return 'Hidden';
-    default:
-      return status.replace('_', ' ');
-  }
+  const label = friendlyAssetLabel(asset);
+  // Plain-English label on the surface; the fully-qualified UC id stays in the
+  // title tooltip (and remains visible in /admin-config + /data-estate detail).
+  if (source) return <EvidenceChip key={asset} source={source} title={asset}>{label}</EvidenceChip>;
+  return <Chip key={asset} variant="neutral" icon="db" title={asset}>{label}</Chip>;
 }

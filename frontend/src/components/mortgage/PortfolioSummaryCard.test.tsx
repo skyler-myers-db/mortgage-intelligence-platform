@@ -42,23 +42,16 @@ describe('PortfolioSummaryCard', () => {
     container.remove();
   });
 
-  it('renders the grounded narrative, claim chips, and a verified verdict', () => {
+  it('renders the grounded narrative without restating KPI figures as claim chips', () => {
     act(() => root.render(<PortfolioSummaryCard preview={preview()} />));
     expect(container.querySelector('.portfolio-summary')).not.toBeNull();
     expect(container.textContent).toContain('Your book today');
     expect(container.querySelector('.portfolio-summary__narrative')!.textContent).toContain('5,156,184');
-    const chips = container.querySelectorAll('.portfolio-summary__claim');
-    expect(chips.length).toBe(5);
-    expect(container.querySelector('.portfolio-summary__verdict--ok')).not.toBeNull();
-    expect(container.textContent).toContain('Every figure traces to the current gold snapshot');
-  });
-
-  it('opens the source drawer when a claim chip is clicked', () => {
-    act(() => root.render(<PortfolioSummaryCard preview={preview()} />));
-    const chip = container.querySelector<HTMLButtonElement>('.portfolio-summary__claim')!;
-    act(() => chip.click());
-    expect(setDrawer).toHaveBeenCalledTimes(1);
-    expect(setDrawer.mock.calls[0][0]).toMatchObject({ title: expect.any(String) });
+    // The claim chip row was removed (evidence lives on the Home KPI cards); a
+    // clean book shows no ambient "traces to snapshot" verdict either.
+    expect(container.querySelectorAll('.portfolio-summary__claim').length).toBe(0);
+    expect(container.querySelector('.portfolio-summary__verdict')).toBeNull();
+    expect(container.textContent).not.toContain('Every figure traces to the current gold snapshot');
   });
 
   it('renders nothing on day-zero (no fabricated summary)', () => {

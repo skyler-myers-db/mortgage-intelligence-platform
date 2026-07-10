@@ -5,7 +5,8 @@ export type GlossaryCategory =
   | 'mortgage'
   | 'scoring'
   | 'evidence'
-  | 'governance';
+  | 'governance'
+  | 'principles';
 
 export interface GlossaryEntry {
   id: string;
@@ -270,6 +271,60 @@ export const mortgageGlossary = {
     short: "Databricks' governed data catalog and access-control layer.",
     appContext: 'The app reads curated gold and semantic views through UC.',
     proof: 'Proof lists UC assets and copyable SQL for authenticated users.',
+  },
+  draftOnlyHandoffs: {
+    id: 'draft-only-handoffs',
+    term: 'Draft-only handoffs',
+    aliases: ['no auto-send'],
+    category: 'principles',
+    short: 'The platform prepares outreach as drafts and never sends email or SMS automatically.',
+    appContext: 'Growth Agent and Genie actions produce reviewable drafts and Lead Queue handoffs; a person sends the message from their own system.',
+    proof: 'Draft cards are labelled "Not sent"; Module 0 exposes no outbound send endpoint.',
+  },
+  humanApproval: {
+    id: 'human-approval',
+    term: 'Human approval',
+    aliases: ['approval gate'],
+    category: 'principles',
+    short: 'A person must approve a recommendation before it becomes an actionable outreach handoff.',
+    appContext: 'Approve and reject controls sit on the ranked borrower rows and offer views; approval is always required before any handoff.',
+    proof: 'Each approval writes an append-only row to the Lakebase audit trail shown in the Admin console.',
+  },
+  auditLogging: {
+    id: 'audit-logging',
+    term: 'Audit logging',
+    aliases: ['audit trail', 'action audit'],
+    category: 'principles',
+    short: 'Every run and approval action is recorded in an append-only audit ledger.',
+    appContext: 'Growth Agent runs, approvals, rejections, and LO assignments each emit an audit event you can filter by borrower, action, or type.',
+    proof: 'The Admin console Audit explorer reads the Lakebase ledger and returns an event id for each action.',
+  },
+  evidenceTraceability: {
+    id: 'evidence-traceability',
+    term: 'Evidence traceability',
+    aliases: ['source evidence', 'traceable recommendation'],
+    category: 'principles',
+    short: 'Every score and recommendation traces back to Cotality source signals through Unity Catalog.',
+    appContext: 'Evidence chips on scores and offers open the exact governed rows and arithmetic behind the number, never an unsourced claim.',
+    proof: 'The evidence drawer cites the backing Unity Catalog tables and copyable SQL for authenticated users.',
+  },
+  piiMasking: {
+    id: 'pii-masking',
+    term: 'PII masking',
+    aliases: ['data masking', 'redaction'],
+    category: 'principles',
+    short: 'Borrower identifiers and contact details are masked throughout the product surface.',
+    appContext: 'Only masked borrower ids and display-safe fields reach the UI; raw CLIP, owner names, and contact data stay inside governed joins. Contact fields are synthetic.',
+    proof: 'Evidence rows are redacted at the API boundary before any value renders on screen.',
+  },
+  platformCapabilityStatus: {
+    id: 'platform-capability-status',
+    term: 'Platform capability status',
+    aliases: ['capability readiness', 'proof status'],
+    category: 'principles',
+    short: 'Live readiness of platform capabilities is reported honestly, not asserted as always-on.',
+    appContext: 'Capability rows mark each integration Configured, Available, or Unverified; the diagnostics live in the Admin console, not the general task surfaces.',
+    proof: 'The Admin console "Platform capabilities" panel runs live probes and labels unverified claims as such.',
   },
 } satisfies Record<string, GlossaryEntry>;
 

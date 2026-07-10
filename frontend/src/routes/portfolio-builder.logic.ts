@@ -93,8 +93,8 @@ export function buildDefaultCampaignSetup(
   return {
     subjectA: `${label} review for your current loan options`,
     subjectB: 'A refinance review may improve your mortgage fit',
-    bodyA: `Review current mortgage fit with ${label} using the governed relationship-aware template.`,
-    bodyB: 'Highlight rate, equity, and human review using the governed relationship-aware template.',
+    bodyA: `Review your current mortgage fit with ${label} — rate, equity, and next options.`,
+    bodyB: `See whether a refinance could improve your rate and use your equity, reviewed by a ${label} loan officer.`,
     holdoutPct: '10',
     startLocal: '09:00',
     endLocal: '16:00',
@@ -247,7 +247,63 @@ export function campaignCriteriaSummary(campaign: CampaignSummary): string {
   if (typeof policy === 'string' && policy) parts.push(policy.replace(/_/g, ' '));
   const holdoutPct = campaign.holdout?.size_pct;
   if (typeof holdoutPct === 'number') parts.push(`${holdoutPct}% holdout`);
-  return parts.length > 0 ? parts.join(' · ') : 'Eligible-only draft campaign';
+  // Drop case-insensitive duplicates so the suppression policy "eligible only"
+  // does not double-print the "Eligible only" marketing-eligibility criterion.
+  const seen = new Set<string>();
+  const deduped = parts.filter((part) => {
+    const key = part.toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+  return deduped.length > 0 ? deduped.join(' · ') : 'Eligible-only draft campaign';
+}
+
+export interface SavedCampaignRow {
+  /** Representative campaign (most recent) — wins the row's key/links. */
+  campaign: CampaignSummary;
+  /** Number of same-name drafts collapsed into this row; 1 = not collapsed. */
+  draftCount: number;
+  latestAt: string | null;
+}
+
+/**
+ * Collapse repeated same-name DRAFT campaigns into one representative row so a
+ * long list of identical "Genie strategy draft" rows reads as one item with a
+ * count. Non-draft or uniquely-named campaigns pass through 1:1. The most-recent
+ * campaign (by updated_at/created_at) represents the group.
+ */
+export function groupSavedCampaigns(campaigns: CampaignSummary[]): SavedCampaignRow[] {
+  const timeOf = (campaign: CampaignSummary): number => {
+    const iso = campaign.updated_at ?? campaign.created_at;
+    const parsed = iso ? Date.parse(iso) : NaN;
+    return Number.isNaN(parsed) ? 0 : parsed;
+  };
+  const groups = new Map<string, CampaignSummary[]>();
+  const order: string[] = [];
+  for (const campaign of campaigns) {
+    // Only DRAFT rows sharing a name collapse; everything else stays unique.
+    const key = campaign.status === 'draft' ? `draft:${campaign.name}` : `one:${campaign.campaign_id}`;
+    const bucket = groups.get(key);
+    if (bucket) {
+      bucket.push(campaign);
+    } else {
+      groups.set(key, [campaign]);
+      order.push(key);
+    }
+  }
+  return order.map((key) => {
+    const members = groups.get(key)!;
+    const representative = members.reduce(
+      (latest, campaign) => (timeOf(campaign) >= timeOf(latest) ? campaign : latest),
+      members[0],
+    );
+    return {
+      campaign: representative,
+      draftCount: members.length,
+      latestAt: representative.updated_at ?? representative.created_at ?? null,
+    };
+  });
 }
 
 function boundedNumber(raw: string, fallback: number, min: number, max: number): number {

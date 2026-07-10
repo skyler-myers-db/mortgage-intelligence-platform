@@ -20,6 +20,7 @@ import { useApp } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import { humanizeAssetMentions } from '../lib/assetLabels';
 import { descriptorFor } from '../lib/drawerSources';
 import {
   GENIE_CONVERSATION_RESET_EVENT,
@@ -29,7 +30,6 @@ import {
 } from '../lib/genieConversation';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
-import { GrowthAgentCapabilityDisclosure } from './ask-genie.growth-agent-capabilities';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 import { ComposePlanCard } from './ask-genie.compose-plan-card';
@@ -41,7 +41,6 @@ import {
   parseGrowthAgentStateInput,
   renderSourceAssetChip,
   trustedAssetsForCatalog,
-  visibleGrowthAgentCapabilities,
   workflowIcon,
 } from './ask-genie.growth-agent.helpers';
 
@@ -439,17 +438,12 @@ export default function AskGenie() {
   const workflows = growthAgentQuery.data?.workflows ?? growthAgentCapabilitiesQuery.data?.workflows ?? [];
   const monitors = growthAgentQuery.data?.monitors ?? growthAgentCapabilitiesQuery.data?.monitors ?? [];
   const agentBusy = growthAgentPending !== null || promptAgentPending || composePending !== null || monitorPending !== null || monitorDraftPending !== null;
-  const capabilityRows = (
-    visibleGrowthAgentCapabilities(
-      growthAgentCapabilitiesQuery.data?.capabilities ?? growthAgentQuery.data?.capabilities,
-    )
-  );
 
   return (
     <PageShell
       eyebrow="Mortgage Growth Agent"
-      title="Governed mortgage growth co-pilot"
-      lede="Route borrower-growth objectives to reviewed SQL workflows, review the exact eligible Lead Queue subset, then ask Genie follow-up questions against trusted Unity Catalog assets."
+      title="Mortgage growth co-pilot"
+      lede="Turn a growth objective into a reviewed workflow, preview the eligible borrowers, and ask follow-up questions about your book."
       heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie + SQL</Chip>}
     >
       <div className="surface growth-agent" aria-busy={agentBusy}>
@@ -459,15 +453,8 @@ export default function AskGenie() {
             <div className="h-4">Mortgage Growth Agent</div>
             <div className="muted fs-12">Reviewed workflow runs, saved watchlists, and human-review Lead Queue handoffs.</div>
           </div>
-          <div className="spacer" />
-          <Chip variant="success" icon="shield">Draft-only handoffs · no auto-send</Chip>
-          <Chip variant="neutral" icon="audit">Audit checked after each run</Chip>
         </div>
         <div className="surface__body">
-          <GrowthAgentCapabilityDisclosure
-            rows={capabilityRows}
-            isPending={growthAgentCapabilitiesQuery.isPending}
-          />
           <section className="growth-agent-command" aria-label="Mortgage Growth Agent command center">
             <div className="growth-agent-command__main">
               <label className="growth-agent__field">
@@ -482,7 +469,7 @@ export default function AskGenie() {
                   }}
                 />
                 <span className="growth-agent__hint">
-                  The co-pilot selects reviewed workflows only; raw borrower identifiers, PII, protected-class targeting, and unreviewed source requests are rejected.
+                  Describe the borrower-growth objective in plain language — the co-pilot turns it into a reviewed workflow.
                 </span>
               </label>
             </div>
@@ -562,7 +549,7 @@ export default function AskGenie() {
                     <option value="daily">Daily interval</option>
                     <option value="weekly">Weekly interval</option>
                   </select>
-                  <span className="growth-agent__hint">Saving stores reviewed filters. Automatic refresh is paused until an admin enables the draft-only scheduler.</span>
+                  <span className="growth-agent__hint">Saved watchlists stay paused until an admin enables the scheduler.</span>
             </label>
           </div>
 
@@ -591,12 +578,12 @@ export default function AskGenie() {
                       <div className="growth-agent-card__trigger">{workflow.trigger_label}</div>
                     </div>
                   </div>
-                  <p className="growth-agent-card__copy">{workflow.objective}</p>
+                  <p className="growth-agent-card__copy">{humanizeAssetMentions(workflow.objective)}</p>
                   <div className="growth-agent-card__proof">
                     {workflow.proof_points.slice(0, 3).map((point) => (
                       <div key={point} className="growth-agent-card__proof-line">
                         <Icon name="check" size={11} />
-                        <span>{point}</span>
+                        <span>{humanizeAssetMentions(point)}</span>
                       </div>
                     ))}
                   </div>
@@ -772,7 +759,6 @@ export default function AskGenie() {
                   aria-pressed={activeAssetPath === a.path}
                 >
                   <div className="trusted-asset__label">{a.label}</div>
-                  <div className="trusted-asset__path">{a.path}</div>
                 </button>
               ))}
             </div>

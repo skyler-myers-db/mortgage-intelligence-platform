@@ -119,6 +119,10 @@
   display: flex;
   align-items: center;
   gap: var(--sp-2);
+  /* Reserve breathing room before the centered search so a long crumb
+     (e.g. "Segment Intelligence") truncates with ellipsis instead of ending
+     flush against the search box. Combines with the topbar grid gap. */
+  padding-inline-end: var(--sp-4);
   color: var(--text-2);
   font-size: var(--fs-13);
   white-space: nowrap;
@@ -1367,7 +1371,8 @@ kbd {
 }
 .sales-ops-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  /* 2x2 for the four snapshot cards so none floats alone in a 3-col row. */
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: var(--sp-3);
 }
 .sales-ops-card {
@@ -2909,7 +2914,9 @@ kbd {
   align-items: flex-start;
 }
 .filter-row--lead-queue {
-  min-block-size: calc(var(--sp-10) * 3 + var(--sp-2) * 2);
+  /* No min-height reservation: every FilterSelect renders synchronously, so
+     there is no refetch CLS to guard against (dropped the 3-row reservation
+     2026-07-10). The <=640px container rule below keeps a scroll cap. */
   align-content: flex-start;
 }
 .filter-row--stacked {
@@ -4194,17 +4201,24 @@ kbd {
 .analytics-table a:hover {
   text-decoration: underline;
 }
+/* Analytics-drilldown pills. These derive from URL search params (stable
+   across a query refetch), NOT from fetched rows, so the fixed-height
+   reservation from "Stabilize filter refetch layout" (2a0a74a) no longer
+   applies: an empty strip must collapse entirely instead of leaving ~256px of
+   dead space between the "Queue filters" header and the dropdowns. Keep only a
+   max-height cap + scroll for pathological pill counts. */
 .lead-queue-scope {
   display: flex;
   flex-wrap: wrap;
   align-content: flex-start;
   gap: var(--sp-2);
   margin-block-end: var(--sp-3);
-  block-size: calc(var(--sp-16) * 4);
+  max-block-size: calc(var(--sp-16) * 4);
   overflow: auto;
 }
 .lead-queue-scope.is-empty {
-  visibility: hidden;
+  /* display:none (not visibility:hidden) so the margin collapses too. */
+  display: none;
 }
 .lead-queue-scope__pill {
   display: inline-flex;

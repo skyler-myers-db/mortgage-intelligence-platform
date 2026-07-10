@@ -146,12 +146,21 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
   const warehouseBreaker = breakerLabel(warehouseBreakerState);
   const genieBreaker = breakerLabel(genieBreakerState);
   const probeSuffix = probeMs != null ? ` · ${probeMs} ms` : '';
+  // Only surface the dependency telemetry when something is actually degraded.
+  // An all-healthy strip is ambient noise on Home; steady-state health lives in
+  // the Admin console. The honest degraded-state posture stays (2026-07-10).
+  const showTelemetry =
+    warehouse === 'down' ||
+    lakebase === 'down' ||
+    genie === 'down' ||
+    Boolean(warehouseBreaker) ||
+    Boolean(genieBreaker);
 
   return (
     <div className="surface">
       <div className="surface__hdr">
         <Icon name="audit" size={14} className="icon-accent" />
-        <div className="h-4">Agent action audit log</div>
+        <div className="h-4" title="Append-only; available for compliance export">Agent action audit log</div>
       </div>
       <div className="audit-panel" tabIndex={0} aria-label="Agent action audit events">
         {feedState === 'warming' && warmingUp && (
@@ -219,6 +228,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
           );
         })}
       </div>
+      {showTelemetry && (
       <div
         className="surface__ft surface__ft--wrap"
         aria-label="Live dependency telemetry"
@@ -255,7 +265,7 @@ export function AgentActivityLog({ limit = 12 }: { limit?: number }) {
           Last health check{probeSuffix}
         </span>
       </div>
-      <div className="surface__ft">Append-only and available for compliance export</div>
+      )}
     </div>
   );
 }

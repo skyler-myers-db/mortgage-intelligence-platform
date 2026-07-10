@@ -10,6 +10,7 @@ const CATEGORY_LABELS: Record<GlossaryCategory, string> = {
   scoring: 'Scoring and offers',
   evidence: 'Evidence and confidence',
   governance: 'Governance',
+  principles: 'Product principles & governance',
 };
 
 export default function GlossaryRoute() {
@@ -24,6 +25,7 @@ export default function GlossaryRoute() {
       scoring: [],
       evidence: [],
       governance: [],
+      principles: [],
     },
   );
 
@@ -60,7 +62,7 @@ export default function GlossaryRoute() {
           {(Object.keys(CATEGORY_LABELS) as GlossaryCategory[]).map((category) => (
             <section key={category} id={category} className="surface glossary-section">
               <div className="surface__hdr">
-                <Icon name={category === 'governance' ? 'shield' : category === 'evidence' ? 'layers' : 'info'} size={14} className="icon-accent" />
+                <Icon name={category === 'governance' || category === 'principles' ? 'shield' : category === 'evidence' ? 'layers' : 'info'} size={14} className="icon-accent" />
                 <div>
                   <div className="h-4">{CATEGORY_LABELS[category]}</div>
                   <div className="muted fs-12">{grouped[category].length} terms</div>

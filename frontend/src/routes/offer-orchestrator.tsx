@@ -7,6 +7,7 @@ import type { ApprovalStatus, Borrower360 as Borrower360Type, BorrowerLifecycle,
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
+import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
@@ -338,6 +339,7 @@ export default function OfferOrchestrator() {
         heroRight={<OfferOrchestratorEmptyHero to="/lead-queue" />}
       >
         <OfferOrchestratorEmptyState />
+        <TopLeadsQuickPick basePath="/offer-orchestrator" />
       </PageShell>
     );
   }

@@ -10,6 +10,7 @@ import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';
 import { BorrowerProofDrawer } from '../components/mortgage/BorrowerProofDrawer';
+import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
 import { Button, Chip, EvidenceChip } from '../components/Primitives';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { Icon } from '../components/Icon';
@@ -124,6 +125,7 @@ export default function Borrower360() {
             </p>
           </div>
         </div>
+        <TopLeadsQuickPick basePath="/borrower-360" />
       </PageShell>
     );
   }
@@ -248,7 +250,6 @@ export default function Borrower360() {
       ? `${b.first_party_recent_interactions} recent interactions`
       : null,
     b.first_party_recent_application ? 'Recent application' : null,
-    b.first_party_synthetic_demo ? 'Summit demo synthetic' : null,
   ].filter(Boolean);
   const saved = isLeadSaved(b.borrower_id);
   const lienBandLow = b.current_lien_balance_low ?? b.current_lien_balance;
@@ -296,11 +297,21 @@ export default function Borrower360() {
               dossier. Sits above the raw dossier so the narrative frames it. */}
           <BorrowerStoryCard borrower={b} />
           <div className="surface">
-            <div className="surface__hdr">
-              <div className="surface__icon">
-                <Icon name="user" size={14} />
+            <div className="surface__hdr surface__hdr--split">
+              <div className="surface__hdr-main">
+                <div className="surface__icon">
+                  <Icon name="user" size={14} />
+                </div>
+                <div className="h-4">{BORROWER_DOSSIER_LABEL}</div>
               </div>
-              <div className="h-4">{BORROWER_DOSSIER_LABEL}</div>
+              {b.first_party_synthetic_demo && (
+                <span
+                  className="muted fs-11"
+                  title="This borrower's first-party fields are synthetic demo data (Summit Mortgage demo tenant)."
+                >
+                  Summit demo synthetic
+                </span>
+              )}
             </div>
             <div className="surface__body field-grid">
               <Field k={<GlossaryTerm term="clip">Property ref</GlossaryTerm>} v={b.clip_id} mono />

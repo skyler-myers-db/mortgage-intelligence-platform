@@ -10,15 +10,24 @@ import type {
   TopBorrowerAnalyticsRow,
 } from '../types';
 
-export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals';
+export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'sales-ops';
 
-export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map' | 'money' | 'layers' | 'audit' }> = [
+export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map' | 'money' | 'layers' | 'audit' | 'target' }> = [
   { id: 'executive', label: 'Executive', icon: 'flow' },
   { id: 'geography', label: 'Geography', icon: 'map' },
   { id: 'economics', label: 'Economics', icon: 'money' },
   { id: 'segments', label: 'Segments', icon: 'layers' },
   { id: 'signals', label: 'Signals', icon: 'audit' },
+  { id: 'sales-ops', label: 'Sales ops', icon: 'target' },
 ];
+
+/**
+ * Resolve the `?view=` search param to a valid tab. Unknown/absent values fall
+ * back to 'executive'. Type-safe against the AnalyticsTab union via TABS.
+ */
+export function parseAnalyticsTab(value: string | null | undefined): AnalyticsTab {
+  return TABS.some((tab) => tab.id === value) ? (value as AnalyticsTab) : 'executive';
+}
 
 export const SEGMENT_FILTERS = [
   ['All segments', null],
@@ -225,7 +234,12 @@ function utcToIsoDate(value: number): string {
 }
 
 export function signalLabel(value: string): string {
-  return SIGNAL_TYPE_TO_OPTION[value] ?? value.replace(/_/g, ' ');
+  const known = SIGNAL_TYPE_TO_OPTION[value];
+  if (known) return known;
+  // Sentence-case unknown signal types (e.g. "product_type" -> "Product type")
+  // so they match the casing of the curated labels above.
+  const words = value.replace(/_/g, ' ').trim();
+  return words ? words.charAt(0).toUpperCase() + words.slice(1) : value;
 }
 
 export function parseCsvParam(value: string | null): string[] {

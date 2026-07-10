@@ -12,6 +12,7 @@ import { BuyerReadinessPanel } from '../components/admin/BuyerReadinessPanel';
 import { CapabilityPanel } from '../components/admin/CapabilityPanel';
 import { ActivationOperationsPanel } from '../components/activation/ActivationLoopPanel';
 import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
+import { PlatformCapabilitiesPanel } from '../components/admin/PlatformCapabilitiesPanel';
 import { api } from '../lib/api';
 import { formatTimestamp, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
@@ -321,6 +322,10 @@ export default function AdminConfig() {
       ) : (
         <DataEstatePanelSkeleton />
       )}
+
+      {/* Platform capability + proof status — relocated here from the Ask Genie
+          general-user surface so operators own the live-capability diagnostics. */}
+      <PlatformCapabilitiesPanel />
 
       {/* First row — the three operator-grade panels */}
       <div className="admin-grid">

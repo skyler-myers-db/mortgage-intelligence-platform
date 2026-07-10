@@ -818,9 +818,9 @@ export function GenieChat() {
                     <Icon name="sparkle" size={16} />
                   </div>
                   <div>
-                    <div className="genie-empty__title">Ready for governed analysis</div>
+                    <div className="genie-empty__title">Ask about your book — coverage, segments, borrowers, market shifts.</div>
                     <p className="genie-empty__copy">
-                      Ask a question. Data-bearing answers appear only after Genie returns trusted SQL, source assets, and proof.
+                      Data-bearing answers appear only after Genie returns trusted SQL, source assets, and proof.
                     </p>
                   </div>
                 </div>

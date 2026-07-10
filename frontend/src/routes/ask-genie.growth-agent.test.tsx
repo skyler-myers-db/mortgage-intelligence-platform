@@ -341,8 +341,6 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
     expect(container.textContent).toContain('Mortgage Growth Agent');
     expect(container.textContent).toContain('Borrower Dossier Review');
-    expect(container.textContent).toContain('Draft-only handoffs · no auto-send');
-    expect(container.textContent).toContain('Audit checked after each run');
     act(() => setNativeValue(stateInput(), 'IL illinois'));
     await waitUntil(() => container.textContent?.includes('Invalid: illinois') ?? false);
     expect(button(/^Run$/).disabled).toBe(true);
@@ -366,19 +364,10 @@ describe('AskGenie Growth Agent route panel', () => {
     mount();
     await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
-    act(() => button(/Platform capabilities/).click());
-    expect(container.textContent).toContain('Not provisioned');
-    expect(container.textContent).toContain('UC metric-view certification');
-    expect(container.textContent).toContain('Application-reviewed SQL tools');
-    expect(container.textContent).toContain('Lakebase synced-table serving');
-    expect(container.textContent).toContain('Configured');
-    expect(container.textContent).toContain('Gateway endpoint/inference-table config is missing.');
-    const configuredCapability = Array.from(
-      container.querySelectorAll<HTMLElement>('.growth-agent-capability'),
-    ).find((row) => row.textContent?.includes('UC metric-view certification'));
-    const configuredChip = configuredCapability?.querySelector<HTMLElement>('.chip');
-    expect(configuredChip?.classList.contains('chip--neutral')).toBe(true);
-    expect(configuredChip?.classList.contains('chip--success')).toBe(false);
+    // Platform-capability diagnostics moved to the Admin console; the general-user
+    // Ask Genie surface no longer renders the capability panel.
+    expect(container.textContent).not.toContain('Platform capabilities');
+    expect(container.querySelector('.growth-agent-capability')).toBeNull();
 
     const prompt = container.querySelector<HTMLTextAreaElement>(
       'textarea[aria-label="Mortgage Growth Agent prompt"]',

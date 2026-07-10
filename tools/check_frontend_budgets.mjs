@@ -63,27 +63,21 @@ const budgets = {
   // workflow cards, broad-vs-actionable reconciliation, tool timeline,
   // policy checks, and saved-monitor affordances. Measured post-feature
   // actual: CSS 125.45 / gzip 21.63; reset raw with ~5% headroom.
-  // Re-baselined 2026-07-07 for the segment-cohort-count + filter-layout
-  // slices and the Genie enhancement surface (native follow-up chips,
-  // native-viz Beta badge, reasoning-trace proof section, feedback control,
-  // staged progress). Measured post-feature actual: CSS 131.93 / gzip 22.60;
-  // raw had only 0.07 KiB headroom left (flake territory). ~4-6% headroom.
-  initialCssBytes: 138 * KiB, // actual 131.93
-  initialCssGzipBytes: 24 * KiB, // actual 22.60
-  // Re-baselined 2026-06-12: the Buyer-Wow epic + "Your book today" summary
-  // (Feature A) + LO-assignment/follow-up routing (Feature C) grew total JS
-  // from the stale 832.42 baseline to 875.99 / gzip 288.42, tipping the old
-  // 875/288 gate. Reset to the measured actual + ~5% per this file's policy.
-  // Bumped 2026-06-26 for the Mortgage Growth Agent route/API/types and run
-  // presentation. Measured post-feature actual: total JS 927.79 / gzip 303.79;
-  // reset to measured actual + ~5% per this file's policy.
-  // Re-baselined 2026-07-08 for the property-lookup UI consumer (external
-  // audit blocker: the governed lookup needed a real app surface) + the
-  // ask-genie answer-panel split: actuals 979.88 / 319.36 after adding the
-  // lazy PropertyLookupPanel chunk. Headroom stays deliberately thin so the
-  // next growth is a conscious decision, not drift.
-  totalJsBytes: 990 * KiB, // actual 979.88
-  totalJsGzipBytes: 324 * KiB, // actual 319.36
+  // Re-baselined 2026-07-10 (UX declutter batches 1-2: sales-ops -> analytics
+  // tab, capabilities -> admin console, glossary product-principles section,
+  // plus the UC-identifier -> plain-label pass with a shared assetLabels helper
+  // and the Today's-top-leads quick-pick). The initial-CSS gates had drifted
+  // thin on main; restore ~5% headroom per this file's policy. Measured: CSS
+  // 134.24 / gzip 22.97.
+  initialCssBytes: 141 * KiB, // actual 134.24
+  initialCssGzipBytes: 25 * KiB, // actual 22.97
+  // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
+  // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
+  // actual per this file's policy. Batch 2 (asset-label helper, top-leads
+  // quick-pick) nudged totals within that headroom. Measured: total JS 992.92 /
+  // gzip 323.76 (38 chunks).
+  totalJsBytes: 1041 * KiB, // actual 992.92
+  totalJsGzipBytes: 339 * KiB, // actual 323.76
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)
   fontAssetCount: 14, // exact by policy

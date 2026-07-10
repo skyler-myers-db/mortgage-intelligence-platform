@@ -31,6 +31,22 @@ const REQUIRED_TERMS = [
   'itmOnRelatedProperty',
   'payoffLoss',
   'permitActivitySegment',
+  // Product principles & governance section.
+  'draftOnlyHandoffs',
+  'humanApproval',
+  'auditLogging',
+  'evidenceTraceability',
+  'piiMasking',
+  'platformCapabilityStatus',
+] as const;
+
+const PRINCIPLE_TERMS = [
+  'draftOnlyHandoffs',
+  'humanApproval',
+  'auditLogging',
+  'evidenceTraceability',
+  'piiMasking',
+  'platformCapabilityStatus',
 ] as const;
 
 describe('mortgage glossary', () => {
@@ -75,6 +91,19 @@ describe('mortgage glossary', () => {
     expect(mortgageGlossary.mlsListings.appContext).toMatch(/separate from permits/i);
     expect(mortgageGlossary.helocIntent.short).toMatch(/HELOC propensity/i);
     expect(mortgageGlossary.buildingPermits.appContext).toMatch(/Do not infer filed permits/i);
+  });
+
+  it('documents the product principles & governance posture', () => {
+    for (const key of PRINCIPLE_TERMS) {
+      expect(mortgageGlossary[key].category).toBe('principles');
+    }
+    // The non-negotiable posture is spelled out in the glossary voice.
+    expect(mortgageGlossary.draftOnlyHandoffs.short).toMatch(/never sends email or SMS automatically/i);
+    expect(mortgageGlossary.humanApproval.short).toMatch(/must approve/i);
+    expect(mortgageGlossary.auditLogging.short).toMatch(/append-only audit ledger/i);
+    expect(mortgageGlossary.evidenceTraceability.short).toMatch(/traces back to Cotality source signals/i);
+    expect(mortgageGlossary.piiMasking.short).toMatch(/masked/i);
+    expect(mortgageGlossary.platformCapabilityStatus.appContext).toMatch(/Admin console/i);
   });
 
   it('has stable unique anchors for every entry', () => {

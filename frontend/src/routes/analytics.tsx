@@ -2,7 +2,7 @@
 // Keep this route explicit: chart-scale derivations use targeted useMemo below.
 'use no memo';
 
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { PageShell } from '../components/layout/PageShell';
@@ -29,6 +29,7 @@ import {
   SIGNAL_TYPE_TO_OPTION,
   TABS,
   normalizeAnalyticsSegmentCodes,
+  parseAnalyticsTab,
   type AnalyticsTab,
 } from './analytics.lib';
 import { LoadState } from './analytics.charts';
@@ -40,6 +41,7 @@ import {
   SegmentsView,
   SignalsView,
 } from './analytics.sections';
+import { SalesOpsSection } from './analytics.sales-ops';
 
 // Re-export the symbols imported from './analytics' by analytics.test.tsx so the
 // decomposition keeps every existing import path stable.
@@ -55,7 +57,14 @@ export { DailyEvidenceLineChart, LineChart, ScatterPlot } from './analytics.char
 
 export default function AnalyticsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const [tab, setTab] = useState<AnalyticsTab>('executive');
+  // Tab selection is URL-addressable via `?view=`; unknown/absent -> executive.
+  const tab = parseAnalyticsTab(searchParams.get('view'));
+  const setTab = (next: AnalyticsTab) => {
+    const params = new URLSearchParams(searchParams);
+    if (next === 'executive') params.delete('view');
+    else params.set('view', next);
+    setSearchParams(params);
+  };
   const footprint = useFootprint();
   const configOptionsQuery = useConfigOptionsQuery();
   const targetLenderOptions = useMemo(() => {
@@ -208,7 +217,7 @@ export default function AnalyticsRoute() {
     <PageShell
       eyebrow="Analytics"
       title="Analytics"
-      lede="Portfolio command center for governed gold and semantic-table trends, geography, economics, segments, and evidence signals."
+      lede="Command center for portfolio trends, geography, economics, segments, and evidence signals."
       heroRight={<Link className="btn btn--primary" to="/ask-genie"><Icon name="sparkle" size={14} /> Ask Genie</Link>}
     >
       <div className="analytics-tabs" role="tablist" aria-label="Analytics views">
@@ -226,6 +235,7 @@ export default function AnalyticsRoute() {
           </button>
         ))}
       </div>
+      {tab !== 'sales-ops' && (
       <div className="filter-row filter-row--spaced analytics-filters" aria-label="Analytics filters">
         <MultiFilterSelect
           label="State"
@@ -275,11 +285,17 @@ export default function AnalyticsRoute() {
           className="btn btn--sm"
           disabled={!filtersActive}
           aria-disabled={!filtersActive}
-          onClick={() => setSearchParams(new URLSearchParams())}
+          onClick={() => {
+            // Clear data filters but stay on the current tab.
+            const params = new URLSearchParams();
+            if (tab !== 'executive') params.set('view', tab);
+            setSearchParams(params);
+          }}
         >
           Clear filters
         </button>
       </div>
+      )}
 
       {tab === 'executive' && (
         <LoadState query={executive} title="Executive analytics">
@@ -306,6 +322,7 @@ export default function AnalyticsRoute() {
           {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days, ...leadParams }} />}
         </LoadState>
       )}
+      {tab === 'sales-ops' && <SalesOpsSection />}
     </PageShell>
   );
 }

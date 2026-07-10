@@ -48,17 +48,15 @@ export function BorrowerStoryCard({ borrower }: { borrower: Borrower360 }) {
           ))}
         </div>
 
-        <div
-          className={`borrower-story__verdict${
-            story.allVerified ? ' borrower-story__verdict--ok' : ' borrower-story__verdict--warn'
-          }`}
-          role="status"
-        >
-          <Icon name={story.allVerified ? 'shield' : 'info'} size={11} />
-          {story.allVerified
-            ? 'Every figure verified against the source dossier.'
-            : 'Some figures could not be verified against the dossier — review before presenting.'}
-        </div>
+        {/* Only the honest caveat renders; the ambient "every figure verified…"
+            reassurance was trimmed (the claim row above already shows per-figure
+            check marks). */}
+        {!story.allVerified && (
+          <div className="borrower-story__verdict borrower-story__verdict--warn" role="status">
+            <Icon name="info" size={11} />
+            Some figures could not be verified against the dossier — review before presenting.
+          </div>
+        )}
       </div>
     </div>
   );

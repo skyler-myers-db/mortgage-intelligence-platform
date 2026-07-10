@@ -48,11 +48,15 @@ describe('BorrowerStoryCard', () => {
     expect(body!.textContent).toContain('41 properties');
   });
 
-  it('shows the verified verdict and grounded-claim chips for a clean dossier', () => {
+  it('shows grounded-claim chips and no needs-review caveat for a clean dossier', () => {
     mount(dossier());
-    expect(container.textContent).toContain('Every figure verified against the source dossier');
+    // The per-figure claim checks stay; the ambient "every figure verified…"
+    // reassurance was trimmed (2026-07-10 declutter), so only the caveat renders
+    // when something can't be verified — and here nothing is unverified.
     expect(container.querySelectorAll('.borrower-story__claim').length).toBeGreaterThanOrEqual(4);
     expect(container.querySelector('.borrower-story__claim--unverified')).toBeNull();
+    expect(container.textContent).not.toContain('Every figure verified against the source dossier');
+    expect(container.textContent).not.toContain('Some figures could not be verified');
   });
 
   it('shows the needs-review verdict and an unverified chip when a figure cannot be verified', () => {

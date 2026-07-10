@@ -13,6 +13,7 @@ import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
+import { parseBackendTimestamp } from '../lib/time';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
@@ -29,6 +30,7 @@ import {
   buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
   campaignCriteriaSummary,
+  groupSavedCampaigns,
   dayZeroSafe,
   defaultGeographyForOptions,
   formatDelta,
@@ -44,6 +46,12 @@ import {
  * /api/portfolio/preview. "Generate Approval Required Outreach" is the
  * primary forward motion into segment intelligence.
  */
+
+/** Compact "Mon D" date for a saved-campaign timestamp (wire-safe parse). */
+function formatSavedCampaignDate(iso: string | null): string | null {
+  const parsed = parseBackendTimestamp(iso);
+  return parsed ? parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
+}
 
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -744,29 +752,42 @@ export default function PortfolioBuilder() {
                 <span>{campaigns.length.toLocaleString()} saved</span>
                 <span>eligible-only policy required before approval</span>
               </div>
-              {campaigns.slice(0, 8).map((campaign) => {
+              {groupSavedCampaigns(campaigns).slice(0, 8).map((row) => {
+                const campaign = row.campaign;
                 const householdEnabled = campaign.household_dedup?.enabled === true;
                 const suppressedCount = campaign.household_summary?.suppressed_co_owner_count ?? 0;
+                const grouped = row.draftCount > 1;
+                const latestSaved = grouped ? formatSavedCampaignDate(row.latestAt) : null;
                 return (
                   <div key={campaign.campaign_id} className="saved-workspace__item">
                     <span className="status-dot status-dot--ok" aria-hidden="true" />
                     <div className="saved-workspace__body">
                       <span className="text-1">{campaign.name}</span>
                       <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
-                      {householdEnabled && (
+                      {(grouped || householdEnabled) && (
                         <div className="saved-workspace__proof">
-                          <span className="chip chip--warning">
-                            {suppressedCount.toLocaleString()} co-owner
-                            {suppressedCount === 1 ? '' : 's'} suppressed
-                          </span>
-                          <button
-                            type="button"
-                            className="evidence-chip"
-                            onClick={() => setDrawer(DRAWER_SOURCES.householdRollup)}
-                          >
-                            <Icon name="link" size={9} className="e-ico" />
-                            <span className="evidence-chip__label">household_rollup</span>
-                          </button>
+                          {grouped && (
+                            <span className="chip chip--neutral chip--compact">×{row.draftCount} drafts</span>
+                          )}
+                          {grouped && latestSaved && (
+                            <span className="muted fs-11">latest {latestSaved}</span>
+                          )}
+                          {householdEnabled && (
+                            <>
+                              <span className="chip chip--warning">
+                                {suppressedCount.toLocaleString()} co-owner
+                                {suppressedCount === 1 ? '' : 's'} suppressed
+                              </span>
+                              <button
+                                type="button"
+                                className="evidence-chip"
+                                onClick={() => setDrawer(DRAWER_SOURCES.householdRollup)}
+                              >
+                                <Icon name="link" size={9} className="e-ico" />
+                                <span className="evidence-chip__label">household_rollup</span>
+                              </button>
+                            </>
+                          )}
                         </div>
                       )}
                     </div>

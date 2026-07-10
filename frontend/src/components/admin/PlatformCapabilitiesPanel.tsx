@@ -1,8 +1,18 @@
 import { useState } from 'react';
-import { Chip } from '../components/Primitives';
-import { Icon } from '../components/Icon';
-import type { GrowthAgentCapabilityRow } from '../types/growthAgent';
-import { capabilityStatusText } from './ask-genie.growth-agent.helpers';
+import { useQuery } from '@tanstack/react-query';
+import { Chip } from '../Primitives';
+import { Icon } from '../Icon';
+import { api } from '../../lib/api';
+import { queryKeys } from '../../lib/queryKeys';
+import { capabilityStatusText, visibleGrowthAgentCapabilities } from '../../lib/growthAgentCapabilities';
+import type { GrowthAgentCapabilityRow } from '../../types/growthAgent';
+
+/**
+ * Platform capability diagnostics. Relocated from the general-user Ask Genie
+ * surface to the Admin console (2026-07-10): the claimable / Configured /
+ * Unverified honesty logic below is untouched; only its home changed so
+ * operators — not every task user — see live proof status.
+ */
 
 interface GrowthAgentCapabilityPanelProps {
   rows: GrowthAgentCapabilityRow[];
@@ -58,19 +68,23 @@ export function GrowthAgentCapabilityPanel({
 }
 
 /**
- * Collapsed-by-default disclosure around the capability panel. Platform /
- * proof-status diagnostics stay reachable without dominating a general-user
- * surface. Mirrors admin-config's "Workspace appearance" appearance-toggle
- * pattern (surface__hdr appearance-toggle header + conditionally rendered
- * body); the panel's honesty labels are untouched once expanded.
+ * Collapsed-by-default disclosure around the capability panel, wired to the
+ * same capabilities API the Growth Agent uses. Diagnostics stay reachable in
+ * the operator console without dominating a task surface. Mirrors admin-config's
+ * appearance-toggle disclosure pattern; the panel's honesty labels are untouched
+ * once expanded.
  */
-export function GrowthAgentCapabilityDisclosure({
-  rows,
-  isPending,
-}: GrowthAgentCapabilityPanelProps) {
+export function PlatformCapabilitiesPanel() {
   const [open, setOpen] = useState(false);
+  const capabilitiesQuery = useQuery({
+    queryKey: queryKeys.growthAgentCapabilities(),
+    queryFn: ({ signal }) => api.growthAgentCapabilities(signal),
+    staleTime: 60_000,
+    refetchOnWindowFocus: false,
+  });
+  const rows = visibleGrowthAgentCapabilities(capabilitiesQuery.data?.capabilities);
   return (
-    <div className="surface surface--inset">
+    <div className="surface mt-grid">
       <button
         type="button"
         className="surface__hdr appearance-toggle"
@@ -78,8 +92,11 @@ export function GrowthAgentCapabilityDisclosure({
         aria-expanded={open}
       >
         <div className="appearance-toggle__side">
+          <Icon name="bolt" size={14} className="icon-accent" />
           <div>
-            <div className="eyebrow">Platform capabilities</div>
+            {/* Title distinguishes this live-probe panel from the buyer-claim
+                "Buyer readiness" panel lower in the console. */}
+            <div className="h-4">Platform capabilities (live probes)</div>
             <div className="muted fs-12">Live capability and proof status for this workspace</div>
           </div>
         </div>
@@ -89,8 +106,8 @@ export function GrowthAgentCapabilityDisclosure({
       </button>
       {open && (
         <div className="surface__body">
-          <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
-            <GrowthAgentCapabilityPanel rows={rows} isPending={isPending} />
+          <section className="growth-agent-capabilities" aria-label="Platform capability boundaries">
+            <GrowthAgentCapabilityPanel rows={rows} isPending={capabilitiesQuery.isPending} />
           </section>
         </div>
       )}

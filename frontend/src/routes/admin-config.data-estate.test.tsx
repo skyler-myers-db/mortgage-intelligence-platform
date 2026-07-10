@@ -17,6 +17,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const apiMocks = vi.hoisted(() => ({
   dataEstate: vi.fn(),
+  growthAgentCapabilities: vi.fn(),
 }));
 
 // Admin-config's rules / sources / audit tiles use useWarmingUpRetry; stub it
@@ -122,6 +123,11 @@ describe('AdminConfig data estate relocation', () => {
       defaultOptions: { queries: { retry: false, gcTime: Infinity } },
     });
     apiMocks.dataEstate.mockResolvedValue(ESTATE_FIXTURE);
+    apiMocks.growthAgentCapabilities.mockResolvedValue({
+      workflows: [],
+      monitors: [],
+      capabilities: [],
+    });
   });
 
   afterEach(() => {
@@ -164,5 +170,27 @@ describe('AdminConfig data estate relocation', () => {
     expect(readiness).toBeTruthy();
     const order = [...document.querySelectorAll('*')];
     expect(order.indexOf(estatePanel as Element)).toBeLessThan(order.indexOf(readiness as Element));
+  });
+
+  it('mounts the platform-capabilities diagnostics panel (relocated from Ask Genie)', async () => {
+    await act(async () => {
+      renderAdmin();
+    });
+    await settle();
+
+    // The collapsed disclosure summary is always present so operators can find it.
+    expect(document.body.textContent).toContain('Platform capabilities');
+    expect(document.body.textContent).toContain('Live capability and proof status for this workspace');
+    // Collapsed by default: the capability rows are not rendered until expanded.
+    expect(document.querySelector('.growth-agent-capability')).toBeNull();
+
+    // It sits below the data-estate proof panel.
+    const estatePanel = document.querySelector('.data-estate:not([aria-busy="true"])');
+    const capabilitiesToggle = [...document.querySelectorAll('.appearance-toggle')].find(
+      (el) => el.textContent?.includes('Platform capabilities'),
+    );
+    expect(capabilitiesToggle).toBeTruthy();
+    const order = [...document.querySelectorAll('*')];
+    expect(order.indexOf(estatePanel as Element)).toBeLessThan(order.indexOf(capabilitiesToggle as Element));
   });
 });

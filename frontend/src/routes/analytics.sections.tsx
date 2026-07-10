@@ -7,6 +7,7 @@ import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { GlossaryTerm } from '../components/GlossaryTerm';
 import { KpiCard } from '../components/mortgage/KpiCard';
+import { friendlyAssetLabel } from '../lib/assetLabels';
 import { offerDisplayLabel } from '../lib/offerLanguage';
 import type {
   EconomicsAnalyticsResponse,
@@ -212,14 +213,16 @@ export function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
 
 export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsResponse; leadParams: LenderFilterParams }) {
   const topStates = data.top_segments_by_state.filter((row) => row.state_rank === 1);
-  const scopeLabel = data.scope.label;
-  const scopeDescription = data.scope.description;
   return (
     <>
       <section className="surface">
         <div className="surface__hdr surface__hdr--split">
-          <h2 className="h-3">Segment Overview</h2>
-          <ScopeChip title={scopeDescription}>{scopeLabel}</ScopeChip>
+          <div>
+            <h2 className="h-3">Segment Overview</h2>
+            {/* One plain-English scope note for the whole tab, replacing the
+                repeated "full population · pre-suppression" badges. */}
+            <p className="analytics-panel-note">Counts include all borrowers, before contact-eligibility filtering.</p>
+          </div>
         </div>
         <div className="surface__body">
           <DataTable
@@ -237,9 +240,8 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
       </section>
       <div className="layoutA-grid analytics-grid">
         <section className="surface">
-          <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr">
             <h2 className="h-3">Segment Size</h2>
-            <ScopeChip title={scopeDescription}>{scopeLabel}</ScopeChip>
           </div>
           <div className="surface__body">
             <Bars<SegmentMetricRow>
@@ -251,9 +253,8 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
           </div>
         </section>
         <section className="surface">
-          <div className="surface__hdr surface__hdr--split">
+          <div className="surface__hdr">
             <h2 className="h-3">Mean Opportunity Score</h2>
-            <ScopeChip title={scopeDescription}>{scopeLabel}</ScopeChip>
           </div>
           <div className="surface__body">
             <Bars<SegmentMetricRow>
@@ -266,9 +267,8 @@ export function SegmentsView({ data, leadParams }: { data: SegmentAnalyticsRespo
         </section>
       </div>
       <section className="surface analytics-section">
-        <div className="surface__hdr surface__hdr--split">
+        <div className="surface__hdr">
           <h2 className="h-3">Leading Segment by State</h2>
-          <ScopeChip title={scopeDescription}>{scopeLabel}</ScopeChip>
         </div>
         <div className="surface__body">
           <Bars<TopSegmentByStateRow | SegmentByStateRow>
@@ -510,7 +510,7 @@ export function SignalsView({
           <div>
             <h2 className="h-3">Evidence Events Per Day</h2>
             <p className="analytics-panel-note">
-              Dates from <span className="mono">mip.gold.evidence_events.timestamp</span>; blank days are shown as zero.
+              Dates from the evidence-events feed; blank days are shown as zero.
               Lien, equity, and owner-graph signals carry their latest Cotality
               refresh-batch date — so those events land in bulk on refresh days —
               while AVM, market-rate, and ownership-transfer events carry true
@@ -528,18 +528,18 @@ export function SignalsView({
           <div>
             <h2 className="h-3">Evidence by Signal Type</h2>
             <p className="analytics-panel-note">
-              Rows count governed evidence events by signal and Cotality source. <GlossaryTerm term="evidenceConfidence" />
-              {' '}is the mean of <span className="mono">confidence</span> in the same gold table.
+              Rows count evidence events by signal and Cotality source; each row's
+              trailing decimal is the mean <GlossaryTerm term="evidenceConfidence" /> (0–1).
             </p>
           </div>
-          <ScopeChip>mip.gold.evidence_events</ScopeChip>
+          <ScopeChip title="mip.gold.evidence_events">Evidence events</ScopeChip>
         </div>
         <div className="surface__body">
           <Bars<EvidenceBySignalRow>
             rows={data.evidence_by_signal}
             value={(row) => row.event_count}
             label={(row) => signalLabel(row.signal_type)}
-            sublabel={(row) => `${row.source_product} · ${row.source_label ?? row.source_table} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)} ${row.confidence_label ?? 'mean evidence confidence'}`}
+            sublabel={(row) => `${row.source_product} · ${row.source_label ?? friendlyAssetLabel(row.source_table)} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)}`}
             href={(row) => analyticsHref({
               states: filterParams.states.join(',') || null,
               segment_codes: filterParams.segmentCodes.join(',') || null,

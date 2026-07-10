@@ -12,6 +12,19 @@ import {
   normalizeAnalyticsSegmentCodes,
   segmentIntelligenceHref,
 } from './analytics';
+import { signalLabel } from './analytics.lib';
+
+describe('signalLabel casing', () => {
+  it('returns curated labels for known signal types', () => {
+    expect(signalLabel('market_trend')).toBe('Market trend');
+    expect(signalLabel('equity')).toBe('Equity');
+  });
+
+  it('sentence-cases unknown signal types instead of leaving them lowercase', () => {
+    expect(signalLabel('product_type')).toBe('Product type');
+    expect(signalLabel('origination_channel')).toBe('Origination channel');
+  });
+});
 
 describe('analytics drilldown links', () => {
   it('routes every funnel stage through the exact backend funnel_stage contract', () => {

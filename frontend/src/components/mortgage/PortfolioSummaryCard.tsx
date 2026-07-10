@@ -1,27 +1,18 @@
 import { useMemo } from 'react';
 import type { PortfolioPreview } from '../../types';
 import { Icon } from '../Icon';
-import { useApp } from '../AppContext';
-import { buildPortfolioStory, type PortfolioClaimSourceKey } from '../../lib/portfolioStory';
-import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { buildPortfolioStory } from '../../lib/portfolioStory';
 
 /**
  * "Your book today" — a current-state portfolio summary on Home. A plain-
  * English orientation of the lender's book RIGHT NOW, composed deterministically
  * from the PortfolioPreview already loaded on the page (no new request, no live
- * AI call → instant, never fails at the booth). Every figure is routed through
- * the same numeric-claims verifier as the borrower "Tell the story" narrative,
- * so the card only badges itself "traces to the gold snapshot" when each number
- * is grounded — it is NOT, and is not labelled as, a live AI generation. Each
- * grounded figure links to its gold-table source drawer.
+ * AI call → instant, never fails at the booth). The narrative's figures are
+ * routed through the same numeric-claims verifier as the borrower "Tell the
+ * story" narrative, so the card flags itself when a number can't be grounded.
+ * The per-figure evidence links live on the Home KPI cards above (each KpiCard
+ * carries its gold-table source drawer), so this summary does not restate them.
  */
-
-const SOURCE_FOR: Record<PortfolioClaimSourceKey, (typeof DRAWER_SOURCES)[keyof typeof DRAWER_SOURCES]> = {
-  population: DRAWER_SOURCES.population,
-  itm: DRAWER_SOURCES.itm,
-  leadScore: DRAWER_SOURCES.leadScore,
-  nbo: DRAWER_SOURCES.nbo,
-};
 
 function formatAsOf(iso: string | null): string | null {
   if (!iso) return null;
@@ -37,7 +28,6 @@ export function PortfolioSummaryCard({
   preview: PortfolioPreview | null;
   loading?: boolean;
 }) {
-  const { setDrawer } = useApp();
   const story = useMemo(() => buildPortfolioStory(preview), [preview]);
 
   if (loading) {
@@ -75,36 +65,14 @@ export function PortfolioSummaryCard({
       <div className="surface__body">
         <p className="portfolio-summary__narrative">{story.sentences.join(' ')}</p>
 
-        <div className="portfolio-summary__claims" aria-label="Figures grounded in the gold snapshot">
-          {story.claims.map((claim) => {
-            const src = SOURCE_FOR[claim.sourceKey];
-            return (
-              <button
-                key={`${claim.label}-${claim.token}`}
-                type="button"
-                className={`portfolio-summary__claim${claim.verified ? '' : ' portfolio-summary__claim--unverified'
-                  }`}
-                onClick={() => setDrawer(src)}
-                title={`${claim.label}: ${claim.token} — open ${src.title} evidence`}
-              >
-                <Icon name={claim.verified ? 'check' : 'cross'} size={9} />
-                <span className="portfolio-summary__claim-label">{claim.label}</span>
-                <span className="portfolio-summary__claim-token mono">{claim.token}</span>
-              </button>
-            );
-          })}
-        </div>
-
-        <div
-          className={`portfolio-summary__verdict${story.allVerified ? ' portfolio-summary__verdict--ok' : ' portfolio-summary__verdict--warn'
-            }`}
-          role="status"
-        >
-          <Icon name={story.allVerified ? 'shield' : 'info'} size={11} />
-          {story.allVerified
-            ? 'Every figure traces to the current gold snapshot.'
-            : 'Some figures could not be verified against the snapshot — review before presenting.'}
-        </div>
+        {/* Only the honest caveat renders — the ambient "every figure traces…"
+            reassurance was noise (the KPI cards above already carry evidence). */}
+        {!story.allVerified && (
+          <div className="portfolio-summary__verdict portfolio-summary__verdict--warn" role="status">
+            <Icon name="info" size={11} />
+            Some figures could not be verified against the snapshot — review before presenting.
+          </div>
+        )}
       </div>
     </section>
   );

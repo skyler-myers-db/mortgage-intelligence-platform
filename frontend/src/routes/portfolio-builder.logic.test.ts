@@ -9,6 +9,7 @@ import {
   buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
   campaignCriteriaSummary,
+  groupSavedCampaigns,
   defaultGeographyForOptions,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
@@ -185,6 +186,48 @@ describe('portfolio campaign config', () => {
       },
       suppression_policy: { default: 'eligible_only' },
     } as never)).toContain('Listed for sale');
+  });
+
+  it('does not double-print eligibility from the suppression policy', () => {
+    const summary = campaignCriteriaSummary({
+      criteria: { marketing_eligibility: 'Eligible only' },
+      suppression_policy: { default: 'eligible_only' },
+    } as never);
+    // "Eligible only" (criterion) and "eligible only" (policy) collapse to one.
+    expect(summary.toLowerCase().match(/eligible only/g)?.length ?? 0).toBe(1);
+  });
+});
+
+describe('groupSavedCampaigns', () => {
+  const draft = (name: string, campaign_id: string, updated_at: string) => ({
+    campaign_id,
+    name,
+    owner_email: 'lo@summit.example',
+    status: 'draft' as const,
+    criteria: {},
+    updated_at,
+  });
+
+  it('collapses same-name drafts into one row with a count and the latest as representative', () => {
+    const rows = groupSavedCampaigns([
+      draft('Genie strategy draft', 'c1', '2026-07-08T10:00:00Z'),
+      draft('Genie strategy draft', 'c3', '2026-07-10T10:00:00Z'),
+      draft('Genie strategy draft', 'c2', '2026-07-09T10:00:00Z'),
+    ] as never);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].draftCount).toBe(3);
+    expect(rows[0].campaign.campaign_id).toBe('c3');
+    expect(rows[0].latestAt).toBe('2026-07-10T10:00:00Z');
+  });
+
+  it('keeps non-draft and uniquely-named campaigns as their own rows', () => {
+    const rows = groupSavedCampaigns([
+      draft('Genie strategy draft', 'c1', '2026-07-08T10:00:00Z'),
+      { ...draft('Genie strategy draft', 'c2', '2026-07-09T10:00:00Z'), status: 'approved' as const },
+      draft('Retention refi push', 'c3', '2026-07-09T10:00:00Z'),
+    ] as never);
+    expect(rows).toHaveLength(3);
+    expect(rows.every((row) => row.draftCount === 1)).toBe(true);
   });
 });
 
