@@ -210,21 +210,21 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Ranked lead population',
     assetKey: 'lead_population',
     assetPath: 'mip.gold.lead_population',
-    usedIn: ['Lead Queue', 'Borrower 360', 'Offer workflow', 'Analytics'],
-    notExposed: 'Raw CLIP, owner names, street addresses, source-table paths, and lender raw strings.',
+    usedIn: ['Lead Queue', 'Borrower 360', 'Offers', 'Analytics'],
+    notExposed: 'Raw CLIP, owner names, street addresses, source paths, and raw lender strings.',
     description:
-      'Gold Lead Queue population: the ranked, quality-filtered subset of borrower_360 where opportunity_score is at least 50. It carries borrower-safe display fields, segment codes, evidence IDs, primary offer path, rank, and approval state for outreach workflows.',
+      'Gold Lead Queue population: borrower_360 rows with score >= 50, safe fields, segment codes, evidence IDs, offer path, rank, and approval state.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain Cotality + first-party features' },
-      { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity_score and signal-strength components' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain features' },
+      { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity_score components' },
       { layer: 'GOLD', name: 'mip.gold.lead_population', meta: 'opportunity_score >= 50, ranked by score' },
       { layer: 'APP', name: 'Lead Queue / approval workflow', meta: 'evidence_ids and approval_status preserved' },
     ],
     signals: [
-      { label: 'Quality floor', source: 'lead_population.opportunity_score', value: '>= 50' },
-      { label: 'Rank', source: 'lead_population.rank_overall / rank_within_state', value: 'deterministic by score + CLIP' },
-      { label: 'Evidence refs', source: 'lead_population.evidence_ids', value: 'audit-forwarded' },
-      { label: 'Approval state', source: 'lead_population.approval_status', value: 'Lakebase-synced' },
+      { label: 'Floor', source: 'opportunity_score', value: '>= 50' },
+      { label: 'Rank', source: 'lead_population.rank', value: 'score + CLIP' },
+      { label: 'Evidence', source: 'lead_population.evidence_ids', value: 'audited' },
+      { label: 'Approval', source: 'lead_population.approval_status', value: 'Lakebase' },
     ],
   },
 
@@ -233,17 +233,17 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Segment population',
     assetKey: 'segment_population',
     assetPath: 'mip.gold.segment_population',
-    usedIn: ['Segment Intelligence', 'Analytics', 'Genie'],
+    usedIn: ['Segments', 'Analytics', 'Genie'],
     description:
-      'Gold segment rollup used by Segment Intelligence. It preserves the configured segment predicates, AND/OR mode, geography, and average score at the population-rollup grain.',
+      'Gold segment rollup: predicate, mode, geography, count, and average score.',
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain segment flags' },
-      { layer: 'GOLD', name: 'mip.gold.segment_population', meta: 'segment count and average-score rollup' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.segment_performance_metric_view', meta: 'Genie + reporting surface' },
+      { layer: 'GOLD', name: 'mip.gold.segment_population', meta: 'count and average score' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.segment_performance_metric_view', meta: 'Genie/reporting surface' },
     ],
     signals: [
-      { label: 'Segment count', source: 'segment_population.count', value: 'borrowers matching predicate' },
-      { label: 'Average score', source: 'segment_population.avg_score', value: 'population average' },
+      { label: 'Segment count', source: 'segment_population.count', value: 'matching borrowers' },
+      { label: 'Average score', source: 'segment_population.avg_score', value: 'average' },
       { label: 'Listing segment', source: 'borrower_360.listed_for_sale', value: 'live from Cotality MLS' },
       { label: 'HELOC intent segment', source: 'borrower_360.has_heloc_propensity_trigger', value: 'live from Cotality propensity' },
     ],
@@ -761,101 +761,101 @@ interface SegmentEvidenceSpec {
   /** gold.borrower_360 membership predicate, verbatim. */
   predicate: string;
   /** Source layers under borrower_360, most-upstream first. */
-  sources: Array<{ layer: string; name: string; meta?: string }>;
+  sources: Array<readonly [layer: string, name: string, meta?: string]>;
 }
 
 const SEGMENT_EVIDENCE_SPECS: Record<string, SegmentEvidenceSpec> = {
   itm: {
-    predicate: 'fn_in_the_money(rate_spread_bps, equity_pct, governed thresholds)',
+    predicate: 'fn_in_the_money(rate_spread_bps, equity_pct)',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'Cotality voluntary-lien spine: rates, AVM, equity' },
-      { layer: 'SILVER', name: 'mip.silver.market_rates_weekly', meta: 'FRED MORTGAGE30US par reference' },
+      ['SILVER', 'mip.silver.lien_current', 'rates, AVM, equity'],
+      ['SILVER', 'mip.silver.market_rates_weekly', 'par-rate reference'],
     ],
   },
   listed: {
     predicate: 'listed_for_sale = TRUE (current active/under-contract MLS row)',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.listing_activity', meta: 'Cotality MLS listing rows joined to CLIP' },
+      ['SILVER', 'mip.silver.listing_activity', 'MLS rows joined to CLIP'],
     ],
   },
   permit: {
-    predicate: 'has_permit OR has_heloc_propensity_trigger (score >= 700)',
+    predicate: 'has_permit OR has_heloc_propensity_trigger',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.heloc_propensity', meta: 'Cotality HELOC propensity model feed' },
+      ['SILVER', 'mip.silver.heloc_propensity', 'HELOC propensity score'],
     ],
   },
   investor: {
     predicate: 'related_property_count >= 2 OR is_corporate_owner OR is_absentee',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.owner_property_bridge', meta: 'Owner Link property rollup' },
+      ['SILVER', 'mip.silver.owner_property_bridge', 'Owner Link rollup'],
     ],
   },
   equity: {
     predicate: 'equity_pct >= heloc threshold AND COALESCE(second_pos_amount, 0) = 0',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'AVM + open-lien equity math' },
+      ['SILVER', 'mip.silver.lien_current', 'AVM + open-lien equity'],
     ],
   },
   retention: {
     predicate: 'is_current_customer AND (spread >= retention threshold OR competitor lien OR listed)',
     sources: [
-      { layer: 'REF', name: 'mip.ref.lender_dictionary', meta: 'tenant vs competitor servicer mapping' },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'current servicer + rate spread' },
+      ['REF', 'mip.ref.lender_dictionary', 'tenant vs competitor mapping'],
+      ['SILVER', 'mip.silver.lien_current', 'servicer + spread'],
     ],
   },
   second_lien_itm: {
-    predicate: 'second_pos_amount > 0 AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct, governed thresholds)',
+    predicate: 'second_pos_amount > 0 AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct)',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'open second-position rate and balance' },
-      { layer: 'SILVER', name: 'mip.silver.market_rates_weekly', meta: 'FRED MORTGAGE30US par reference' },
+      ['SILVER', 'mip.silver.lien_current', 'second lien rate/balance'],
+      ['SILVER', 'mip.silver.market_rates_weekly', 'par-rate reference'],
     ],
   },
   heloc_draw_to_payback: {
-    predicate: 'open equity-loan lien originated 102-126 months ago (120-month draw ending)',
+    predicate: 'open equity-loan lien originated 102-126 months ago',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.mortgage_events', meta: 'Cotality mortgage-event timeline: is_equity_loan, release_date' },
+      ['SILVER', 'mip.silver.mortgage_events', 'equity-loan timeline'],
     ],
   },
   home_equity_history: {
     predicate: 'appreciation >= 40% since purchase AND tenure >= 36 months AND equity_pct >= 20',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'purchase amount/date + current AVM' },
+      ['SILVER', 'mip.silver.lien_current', 'purchase basis + AVM'],
     ],
   },
   refi_propensity: {
-    predicate: 'fn_refi_propensity_heuristic(...) >= 60 — transparent points table (see glossary)',
+    predicate: 'fn_refi_propensity_heuristic(...) >= 60',
     sources: [
-      { layer: 'UDF', name: 'mip.gold.fn_refi_propensity_heuristic', meta: 'published deterministic heuristic — NOT the Cotality model' },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'spread, seasoning, equity, balance inputs' },
+      ['UDF', 'mip.gold.fn_refi_propensity_heuristic', 'published heuristic'],
+      ['SILVER', 'mip.silver.lien_current', 'spread, seasoning, equity, balance'],
     ],
   },
   itm_on_related_property: {
-    predicate: 'an Owner Link on this CLIP also holds a DIFFERENT in-the-money clip',
+    predicate: 'Owner Link also holds a different in-the-money CLIP',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.property_owners', meta: 'S1.1 multi-owner slots with Owner Link ids' },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'related-property ITM economics' },
+      ['SILVER', 'mip.silver.property_owners', 'Owner Link ids'],
+      ['SILVER', 'mip.silver.lien_current', 'related-property economics'],
     ],
   },
   payoff_loss_leads: {
     predicate: 'tenant lien released within 24 months AND current competitor lien',
     sources: [
-      { layer: 'SILVER', name: 'mip.silver.mortgage_events', meta: 'release/payoff events per CLIP' },
-      { layer: 'REF', name: 'mip.ref.lender_dictionary', meta: 'tenant vs competitor servicer mapping' },
+      ['SILVER', 'mip.silver.mortgage_events', 'release/payoff events'],
+      ['REF', 'mip.ref.lender_dictionary', 'tenant vs competitor mapping'],
     ],
   },
   permit_activity: {
-    predicate: 'has_permit = TRUE (no true filed-permit source yet — membership stays 0)',
+    predicate: 'has_permit = TRUE (filed-permit source pending)',
     sources: [
-      { layer: 'GOLD', name: 'mip.gold.source_readiness', meta: 'Building Permits source status: roadmap' },
+      ['GOLD', 'mip.gold.source_readiness', 'permit source status'],
     ],
   },
 };
 
 const SEGMENT_GATE_COPY: Record<string, string> = {
   not_connected:
-    'This segment\u2019s driving source is not connected in this workspace, so the count is gated rather than fabricated. Connect the source feed to activate the segment.',
+    'Source not connected; count is gated.',
   not_licensed:
-    'The workspace principal is not licensed/entitled to read this segment\u2019s driving source, so the count is gated rather than fabricated. License the source to activate the segment.',
+    'Source not licensed; count is gated.',
 };
 
 export function segmentEvidenceSource(
@@ -868,16 +868,16 @@ export function segmentEvidenceSource(
   const gated = segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
   const gateCopy = gated ? SEGMENT_GATE_COPY[segment.source_status ?? ''] : null;
   return enrichAsset({
-    title: `${segment.name} — segment evidence`,
+    title: `${segment.name} evidence`,
     short: `segment_population.${segment.code}`,
     assetKey: 'segment_population',
     assetPath: 'mip.gold.segment_population',
-    usedIn: ['Segment Intelligence', 'Lead Queue', 'Geography drill-down'],
+    usedIn: ['Segments', 'Lead Queue', 'Map'],
     description: gateCopy
       ? `${segment.description} ${gateCopy}`
-      : `${segment.description} The count is the live member total from mip.gold.segment_population, aggregated from per-borrower membership flags in mip.gold.borrower_360.`,
+      : `${segment.description} Live total from mip.gold.segment_population.`,
     lineage: [
-      ...(spec?.sources ?? []),
+      ...(spec?.sources.map(([layer, name, meta]) => ({ layer, name, meta })) ?? []),
       { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: spec?.predicate ?? 'segment membership flag' },
       { layer: 'GOLD', name: 'mip.gold.segment_population', meta: 'per-state + national member rollup' },
     ],
@@ -890,9 +890,8 @@ export function segmentEvidenceSource(
           },
         ]
       : [
-          { label: 'Members', source: `segment_population.count['${segment.code}']`, value: segment.count.toLocaleString() },
-          { label: 'Average score', source: 'segment_population.avg_score', value: String(segment.avg_score) },
+          { label: 'Members', source: `count['${segment.code}']`, value: segment.count.toLocaleString() },
+          { label: 'Average score', source: 'avg_score', value: String(segment.avg_score) },
         ],
   });
 }
-
