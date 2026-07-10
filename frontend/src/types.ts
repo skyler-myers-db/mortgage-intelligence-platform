@@ -1,4 +1,23 @@
-export type SegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
+export type SegmentCode =
+  | 'itm'
+  | 'listed'
+  | 'permit'
+  | 'investor'
+  | 'equity'
+  | 'retention'
+  // S1.3 overlay segments (see gold_segment_population.sql registry).
+  // permit_activity is the TRUE filed-permit segment (gated until the
+  // Cotality source lands); the legacy `permit` code remains HELOC Intent.
+  | 'second_lien_itm'
+  | 'heloc_draw_to_payback'
+  | 'home_equity_history'
+  | 'refi_propensity'
+  | 'itm_on_related_property'
+  | 'payoff_loss_leads'
+  | 'permit_activity';
+
+/** S1.3 three-state source gate resolved from gold.source_readiness. */
+export type SegmentSourceStatus = 'connected' | 'not_connected' | 'not_licensed';
 export type OfferType = 'refi' | 'heloc' | 'cash_out' | 'purchase' | 'retention' | 'recapture';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'hold';
 export type OutreachStatus = 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied';
@@ -32,6 +51,12 @@ export interface SegmentSummary {
   avg_score: number;
   description: string;
   color: string;
+  /** S1.3 three-state gate; segments default to connected and counts are
+   *  always real — a gated segment simply has zero members. Optional so
+   *  cached rows from older backends keep validating. */
+  source_status?: SegmentSourceStatus;
+  /** Human source label backing the gate (e.g. "MLS Listings"). */
+  source_name?: string | null;
 }
 
 export interface LeadSummary {
@@ -93,6 +118,14 @@ export interface LeadSummary {
   marketing_eligible?: boolean;
   consent_status?: 'opt_in' | 'opt_out' | 'unknown';
   suppression_reason?: string | null;
+  /** Owner-resolution caveats (S1.1). `owner_count` is occupied owner slots on
+   *  the property (max 4). `has_unresolved_owner` rows are never
+   *  marketing_eligible — gold stamps suppression_reason='unresolved_owner'.
+   *  Display-only; suppression is enforced in the gold/backend layer. All
+   *  optional with safe defaults so older cached payloads still parse. */
+  owner_count?: number;
+  has_unresolved_owner?: boolean;
+  primary_owner_entity_type?: 'individual' | 'trust' | 'llc' | 'unresolved' | null;
   last_touch_at?: string | null;
   eligible_recontact_at?: string | null;
   assigned_to_email?: string | null;
@@ -455,7 +488,27 @@ export interface PortfolioCreateResponse {
   campaign_id?: string | null;
   name: string;
   marketable_population: number;
+  household_summary?: HouseholdDedupSummary;
   audit_event_id?: string | null;
+}
+
+export interface HouseholdDedupConfig {
+  enabled: boolean;
+  dedupe_unit: 'borrower' | 'household';
+  primary_contact_strategy: 'highest_opportunity_eligible';
+}
+
+export interface HouseholdDedupSummary {
+  enabled: boolean;
+  candidate_borrower_count: number;
+  selected_primary_count: number;
+  suppressed_co_owner_count: number;
+  household_count: number;
+  owner_link_household_count: number;
+  mailing_address_household_count: number;
+  singleton_household_count: number;
+  primary_contact_strategy: 'highest_opportunity_eligible';
+  source_assets: string[];
 }
 
 export interface CampaignSummary {
@@ -470,6 +523,8 @@ export interface CampaignSummary {
   send_window?: Record<string, unknown>;
   holdout?: Record<string, unknown> | null;
   roi_assumptions?: Record<string, unknown> | null;
+  household_dedup?: HouseholdDedupConfig;
+  household_summary?: HouseholdDedupSummary;
   created_at?: string | null;
   updated_at?: string | null;
 }

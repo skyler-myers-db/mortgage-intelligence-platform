@@ -1,33 +1,22 @@
 import { ApiError, type LeadFunnelStage } from '../lib/api';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
+import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
 
-export const SEGMENT_CODES = new Set<SegmentCode>(['itm', 'listed', 'permit', 'investor', 'equity', 'retention']);
-export const SEGMENT_CODE_LABELS: Record<SegmentCode, string> = {
-  itm: 'Prime Refi Candidates',
-  listed: 'Listed for Sale',
-  permit: 'HELOC Intent',
-  investor: 'Investor / Multi-Property',
-  equity: 'Home Equity Candidate',
-  retention: 'Retention Risk',
-};
-export const SEGMENT_FILTER_OPTIONS = [
+// S1.3: codes, labels, and filter options derive from SEGMENT_DEFINITIONS
+// (the canonical presentation registry) so a segment added there appears in
+// the Lead Queue filter automatically instead of drifting in a second list.
+export const SEGMENT_CODES = new Set<SegmentCode>(SEGMENT_DEFINITIONS.map((d) => d.code));
+export const SEGMENT_CODE_LABELS: Record<SegmentCode, string> = Object.fromEntries(
+  SEGMENT_DEFINITIONS.map((d) => [d.code, d.name]),
+) as Record<SegmentCode, string>;
+export const SEGMENT_FILTER_OPTIONS: readonly string[] = [
   'All segments',
-  SEGMENT_CODE_LABELS.itm,
-  SEGMENT_CODE_LABELS.listed,
-  SEGMENT_CODE_LABELS.permit,
-  SEGMENT_CODE_LABELS.investor,
-  SEGMENT_CODE_LABELS.equity,
-  SEGMENT_CODE_LABELS.retention,
-] as const;
+  ...SEGMENT_DEFINITIONS.map((d) => d.name),
+];
 export const SEGMENT_OPTION_TO_CODE: Record<string, SegmentCode | null> = {
   'All segments': null,
-  [SEGMENT_CODE_LABELS.itm]: 'itm',
-  [SEGMENT_CODE_LABELS.listed]: 'listed',
-  [SEGMENT_CODE_LABELS.permit]: 'permit',
-  [SEGMENT_CODE_LABELS.investor]: 'investor',
-  [SEGMENT_CODE_LABELS.equity]: 'equity',
-  [SEGMENT_CODE_LABELS.retention]: 'retention',
+  ...Object.fromEntries(SEGMENT_DEFINITIONS.map((d) => [d.name, d.code])),
 };
 export const PRODUCT_FILTER_OPTIONS = ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] as const;
 export const OWNER_LINK_FILTER_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;

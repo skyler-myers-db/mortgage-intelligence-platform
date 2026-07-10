@@ -303,6 +303,47 @@ All silver tables: Delta, managed, cluster by `clip` (liquid clustering where CL
 
 **Public-dataset note:** FRED is free for redistribution; no license blocker. Any metric view that consumes the current rate MUST join on `is_latest = TRUE` to keep `fn_rate_spread` deterministic across a demo session.
 
+### 2.6 `mip.silver.property_owners` (S1.1 multi-owner + trust/LLC)
+
+- **Grain:** one row per `(clip, owner_position)` — one row per occupied owner slot (`owner_1..owner_4` column families in `entrada_eval_property_domain_v3`), max 4 owners per property record. Duplicate Owner Links inside one CLIP collapse to the lowest slot, so rows with a non-null `owner_link_id` equivalently satisfy one row per `(clip, owner_link)`.
+- **Source:** `entrada_eval_property_domain_v3` with non-null `clip` + `situs_state` (same per-CLIP dedup tiebreak as §2.2).
+- **PK:** `(clip, owner_position)`.
+- **Clustering:** liquid on `(clip)`.
+- **Refresh:** daily via the Lakeflow feature pipeline (`silver_property_owners` @dlt.table); warehouse-MERGE twin in `sql/transformations/silver_property_owners.sql`.
+- **Compatibility view:** `mip.silver.property_owners_primary` projects the `owner_position = 1` row per CLIP with the legacy single-owner column vocabulary (`owner_is_corporate`), so existing single-owner consumers (which read `silver.property_master`) keep working unchanged and new consumers get a drop-in primary-owner surface. Created by the `init_property_owners_primary_view` sql_task in `mip_refresh_silver`.
+
+> **Scope note — ROADMAP-TEMPORARY.** `owner_entity_type` is a **name/indicator classifier**, not entity resolution. The current slice is deliberately *classify + caveat + suppress* only: classify each owner slot from the owner name string, the Y/N corporate indicator, the slot-1 original trust name, and Owner Link presence; caveat multi-owner / trust / LLC / unresolved ownership in the UI; and suppress unresolved owners from every contact-eligible population (§3.2 `marketing_eligible`). **Cotality entity resolution is work-in-progress upstream** — when mastered entity types ship, this classifier is replaced, the `unresolved` bucket shrinks to true resolution failures, and suppressed populations re-open. This scope is a temporary roadmap state, not a permanent product ceiling.
+
+Classifier contract (branch order is normative; shared verbatim by `backend/services/owner_classification.py`, `sql/transformations/silver_property_owners.sql`, and `pipelines/lakeflow/mip_feature_pipeline.py`; pinned by `tests/fixtures/owner_entity_type_golden.json`):
+
+| # | Condition (evaluated in order) | `owner_entity_type` | `resolution_confidence` |
+|---|---|---|---|
+| 1 | vacant slot (no name, no trust name, no Owner Link) | *(no row)* | — |
+| 2 | `owner_1_original_trust_name` populated (slot 1) | `trust` | 0.95 |
+| 3 | name matches trust regex (`TRUST/TRUSTEE(S)/TRST/REVOCABLE/IRREVOCABLE/trailing TR`) | `trust` | 0.9 |
+| 4 | name matches LLC/entity regex AND corporate indicator `Y` | `llc` | 0.95 |
+| 5 | name matches LLC/entity regex | `llc` | 0.85 |
+| 6 | corporate indicator `Y`, no entity pattern in name | `llc` | 0.6 |
+| 7 | name + Owner Link present | `individual` | 0.9 |
+| 8 | name present, Owner Link missing | `unresolved` | 0.4 |
+| 9 | Owner Link present, name blank | `unresolved` | 0.5 |
+
+| Column | Type | Null | Source expression | Definition |
+|---|---|---|---|---|
+| `clip` | STRING | N | `clip` | PK part 1. |
+| `owner_position` | INT | N | slot ordinal 1..4 | PK part 2. |
+| `owner_link_id` | STRING | Y | `owner_N_identifier` | Cotality Owner Link; NULL ⇒ slot classifies `unresolved`. |
+| `owner_name_hash` | STRING | Y | `sha2(LOWER(TRIM(owner_N_full_name)) \|\| ':' \|\| salt, 256)` | Same salt contract as §2.2; NULL when the slot has no name. Raw names never land. |
+| `owner_entity_type` | STRING | N | classifier above | `individual` / `trust` / `llc` / `unresolved`. |
+| `resolution_confidence` | DOUBLE | N | classifier above | Deterministic 0..1 literal per branch. |
+| `is_corporate_indicator` | BOOLEAN | N | `UPPER(TRIM(owner_N_corporate_indicator)) = 'Y'` | Same Y/N coercion as §2.2. |
+| `is_contact_eligible` | BOOLEAN | N | `owner_entity_type <> 'unresolved'` | Unresolved owners are excluded from contact-eligible populations. |
+| `situs_state` | STRING | N | `situs_state` | Coverage inherited from refreshed source rows. |
+| `ingest_ts` | TIMESTAMP | N | `CURRENT_TIMESTAMP()` | |
+| `_meta_batch_id` | STRING | Y | `CAST(:batch_id AS STRING)` | Lakeflow run correlation id. |
+
+**Contact-eligibility contract:** `gold.borrower_360` (§3.2) aggregates this table per CLIP into `owner_count`, `has_unresolved_owner`, and `primary_owner_entity_type`. When `has_unresolved_owner` (any unresolved slot, or **no owner rows at all** — fail closed), `marketing_eligible` is forced FALSE and `suppression_reason` is stamped `unresolved_owner` unless a first-party CRM suppression already applies. Every contact-eligible query in the product gates on `marketing_eligible = TRUE`, so the exclusion is global.
+
 ---
 
 ## 3. Gold Layer
@@ -366,6 +407,9 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `current_rate` | DOUBLE | N | `COALESCE(first_pos_rate * 100, 0.0)` | `current_rate` | **Percent form** (5.75, not 0.0575) — matches Pydantic `current_rate: float` and `mock_data` convention. |
 | `ltv` | INT | N | `GREATEST(0, CASE WHEN avm_value > 0 THEN ROUND(100.0 * COALESCE(estimated_current_lien_balance, 0) / avm_value) WHEN estimated_cltv > 0 THEN ROUND(estimated_cltv) ELSE 0 END)` | `ltv` | Display LTV is not upper-capped; underwater borrowers may exceed 100 while `equity_pct` remains capped for scoring. |
 | `related_property_count` | INT | N | `COALESCE(property_owner_bridge.related_property_count, 1)` | `related_property_count` | |
+| `owner_count` | INT | N | `COALESCE(owner_rollup.owner_count, 0)` | `owner_count` | S1.1: occupied owner slots per §2.6 (max 4). Multi-owner caveat chip. |
+| `has_unresolved_owner` | BOOLEAN | N | `COALESCE(owner_rollup.has_unresolved_owner, TRUE)` | `has_unresolved_owner` | S1.1: fail closed — any unresolved slot, or no owner rows at all. Forces `marketing_eligible = FALSE` + `suppression_reason = 'unresolved_owner'`. ROADMAP-TEMPORARY per §2.6. |
+| `primary_owner_entity_type` | STRING | Y | slot-1 `owner_entity_type` | `primary_owner_entity_type` | S1.1: `individual` / `trust` / `llc` / `unresolved`; NULL when no owner rows. |
 | `is_owner_occupied` | BOOLEAN | N | `owner_occupancy_code = 'O'` | — | Feeds `fit`. |
 | `is_absentee` | BOOLEAN | N | `property_master.is_absentee` | — | Feeds investor branch. |
 | `is_corporate_owner` | BOOLEAN | N | `property_master.owner_is_corporate` | — | Feeds investor branch. |
@@ -485,6 +529,40 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 | `description` | STRING | N | static map | `description` | |
 | `color` | STRING | N | static map | `color` | Hex. |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | — | |
+
+### 3.7 `mip.gold.household_rollup`
+
+- **Grain:** one row per `borrower_360.borrower_id` / CLIP.
+- **Source:** `gold.borrower_360`, S1.1 `silver.property_owners`, and `silver.property_master`.
+- **PK:** `borrower_id`.
+- **Clustering:** `(household_id, borrower_id)`.
+- **Refresh:** daily, downstream of `borrower_360`; read only when campaign household dedup is explicitly enabled.
+- **Default unit:** BORROWER remains the default everywhere. Household is opt-in at campaign creation only.
+
+Deterministic derivation order:
+
+1. **Owner Link:** group CLIPs through shared `silver.property_owners.owner_link_id` rows, including co-owner links on CLIPs reached through one shared Owner-Link hop. The canonical key is the lexicographically smallest reachable Owner Link and is hashed before landing.
+2. **Mailing-address heuristic:** if no Owner Link exists, group by salted `owner_name_hash` plus normalized `mailing_city` / `mailing_state`. `mailing_street_address` never lands in silver or gold, so this heuristic is intentionally conservative.
+3. **Singleton:** if neither signal exists, the borrower is its own household.
+
+Primary-contact ranking is deterministic: contact-eligible members (`marketing_eligible=true` and `has_unresolved_owner=false`) rank before ineligible members, then `opportunity_score DESC`, then `borrower_id ASC`. A campaign can suppress co-owners only after this rank is computed; an ineligible member is never promoted to primary.
+
+| Column | Type | Null | Source | Definition |
+|---|---|---|---|---|
+| `clip` | STRING | N | `borrower_360.clip` | Below API redaction boundary. |
+| `borrower_id` | STRING | N | `borrower_360.borrower_id` | Synthetic `B-[0-9A-Z]{13}` id. |
+| `household_id` | STRING | N | `HH-` + sha2 suffix over the derivation key | Public household id. |
+| `household_derivation_method` | STRING | N | derivation branch | `owner_link`, `mailing_address`, or `singleton`. |
+| `household_derivation_key_hash` | STRING | N | sha2 over non-PII key | Audit reconciliation only; raw Owner Links and mailing city/state are not emitted. |
+| `derivation_source_tables` | ARRAY<STRING> | N | literal UC paths | EvidenceDrawer lineage for surfaced household counts. |
+| `household_member_count` | INT | N | window count | Members assigned to the household id. |
+| `eligible_member_count` | INT | N | window count | Members eligible to be a campaign contact. |
+| `household_rank` | INT | N | window rank | Eligible-first primary rank. |
+| `is_household_primary` | BOOLEAN | N | rank + eligibility | TRUE only for the eligible rank-1 member. |
+| `primary_borrower_id` | STRING | Y | rank result | Synthetic borrower id for the selected primary contact. |
+| `suppressed_by_household_dedup` | BOOLEAN | N | rank + eligibility | TRUE for eligible co-owners suppressed by opt-in household dedup. |
+| `owner_link_reachable_count` | INT | N | `silver.property_owners` | Count of reachable Owner Links used by the owner-link branch. |
+| `refreshed_at` | TIMESTAMP | N | `mip.ref.refresh_run_state.refresh_at` | Shared gold refresh timestamp. |
 
 ---
 

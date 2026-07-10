@@ -206,6 +206,7 @@ class DatabricksBorrowerRepository:
         "  b.current_lender_ref, "
         "  b.is_owner_occupied, b.is_investor, b.is_current_customer, "
         "  b.is_former_customer, b.is_competitor_lien, b.related_property_count, "
+        "  b.owner_count, b.has_unresolved_owner, b.primary_owner_entity_type, "
         "  b.current_lien_balance, b.second_pos_amount, b.has_permit, b.listed_for_sale, "
         "  b.listing_status_category, b.listing_status_description, b.listing_date, "
         "  b.listing_status_date, b.listing_price, b.listing_days_on_market, b.listing_service, "

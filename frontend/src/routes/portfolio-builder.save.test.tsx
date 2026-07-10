@@ -227,6 +227,7 @@ describe('PortfolioBuilder save-build flow', () => {
       'utf-8',
     );
     expect(source).not.toContain('window.prompt');
+    expect(source).toContain('market the household together');
   });
 
   it('bans the blocking-dialog class repo-wide via eslint config', () => {

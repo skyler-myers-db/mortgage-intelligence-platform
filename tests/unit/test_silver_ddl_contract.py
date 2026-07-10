@@ -42,6 +42,7 @@ SILVER_DDL_FILES: tuple[str, ...] = (
     "silver_listing_activity.sql",
     "silver_heloc_propensity.sql",
     "silver_refi_propensity.sql",
+    "silver_property_owners.sql",
 )
 
 # Expected PK-grain column per table. The contract check asserts the column
@@ -56,6 +57,7 @@ PK_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "silver_listing_activity.sql":     ("clip",),
     "silver_heloc_propensity.sql":     ("clip",),
     "silver_refi_propensity.sql":      ("clip",),
+    "silver_property_owners.sql":      ("clip",),
 }
 
 # Forbidden raw-PII column names. If any of these appear in a silver DDL
@@ -206,6 +208,7 @@ def test_silver_transformations_do_not_hardcode_demo_state_filter(name: str) -> 
         "silver_property_master.sql",
         "silver_lien_current.sql",
         "silver_owner_property_bridge.sql",
+        "silver_property_owners.sql",
     }:
         assert "situs_state IS NOT NULL" in transform_text
     elif name in {

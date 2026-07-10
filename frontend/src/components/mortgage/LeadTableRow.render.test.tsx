@@ -130,6 +130,98 @@ describe('LeadTableRow display fallbacks', () => {
     expect(document.body.textContent).not.toContain('property_ref_unavailable');
   });
 
+  it('renders a multi-owner indicator when owner_count > 1', () => {
+    const multiOwnerLead = { ...lead, owner_count: 3 } as LeadSummary;
+
+    act(() => {
+      root.render(
+        <LeadTableRow
+          lead={multiOwnerLead}
+          virtualIndex={0}
+          isOpen={false}
+          approval={undefined}
+          isSelected={false}
+          isSelectable
+          isApprovalEligible
+          bulkApproving={false}
+          salesBusy={false}
+          salesTeamCount={1}
+          pendingApproval={false}
+          onToggleRow={noop}
+          onToggleSelect={noop}
+          onApprove={noop}
+          onReject={noop}
+          onOpenDisposition={noop}
+        />,
+      );
+    });
+
+    expect(document.body.textContent).toContain('Multi-owner (3)');
+    expect(document.querySelector('.chip--neutral.chip--compact')).not.toBeNull();
+  });
+
+  it('renders the unresolved-owner warning chip when has_unresolved_owner is true', () => {
+    const unresolvedLead = {
+      ...lead,
+      has_unresolved_owner: true,
+      marketing_eligible: false,
+      suppression_reason: 'unresolved_owner',
+    } as LeadSummary;
+
+    act(() => {
+      root.render(
+        <LeadTableRow
+          lead={unresolvedLead}
+          virtualIndex={0}
+          isOpen={false}
+          approval={undefined}
+          isSelected={false}
+          isSelectable
+          isApprovalEligible
+          bulkApproving={false}
+          salesBusy={false}
+          salesTeamCount={1}
+          pendingApproval={false}
+          onToggleRow={noop}
+          onToggleSelect={noop}
+          onApprove={noop}
+          onReject={noop}
+          onOpenDisposition={noop}
+        />,
+      );
+    });
+
+    expect(document.body.textContent).toContain('Owner unresolved');
+  });
+
+  it('renders no owner-caveat chips for a default single-owner resolved lead', () => {
+    act(() => {
+      root.render(
+        <LeadTableRow
+          lead={lead}
+          virtualIndex={0}
+          isOpen={false}
+          approval={undefined}
+          isSelected={false}
+          isSelectable
+          isApprovalEligible
+          bulkApproving={false}
+          salesBusy={false}
+          salesTeamCount={1}
+          pendingApproval={false}
+          onToggleRow={noop}
+          onToggleSelect={noop}
+          onApprove={noop}
+          onReject={noop}
+          onOpenDisposition={noop}
+        />,
+      );
+    });
+
+    expect(document.body.textContent).not.toContain('Multi-owner');
+    expect(document.body.textContent).not.toContain('Owner unresolved');
+  });
+
   it('does not expose raw unknown segment codes in table or preview chips', () => {
     const weirdLead = {
       ...lead,

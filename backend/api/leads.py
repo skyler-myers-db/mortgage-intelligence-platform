@@ -17,7 +17,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import validate_internal_staff_email, validate_public_borrower_id
-from backend.schemas.lead import LeadSummary
+from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError, get_lakebase_client
@@ -39,9 +39,7 @@ router = APIRouter(tags=["leads"])
 # and the unit tests can both read one source of truth.
 DEFAULT_LEAD_LIMIT: int = 500
 MAX_LEAD_LIMIT: int = 5000
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
-    {"itm", "listed", "permit", "investor", "equity", "retention"}
-)
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     {
         "addressable",
