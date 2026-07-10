@@ -18,7 +18,11 @@ from backend.services.activation_state import (
     ActivationStateStore,
     get_activation_state_store,
 )
-from backend.services.audit_store import resolve_actor
+from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.eligibility import (
+    get_eligibility_service,
+    safe_write_suppression_audit,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
@@ -34,25 +38,49 @@ router = APIRouter(prefix="/activation", tags=["activation"])
 ActivationDep = Annotated[ActivationStateStore, Depends(get_activation_state_store)]
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 SalesStateDep = Annotated[SalesStateStore, Depends(get_sales_state_store)]
+AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 
 
 def _lakebase_503(exc: LakebaseError) -> HTTPException:
     return HTTPException(status_code=503, detail=safe_dependency_detail("lakebase"))
 
 
-def _assert_activation_eligible(borrower: object, lifecycle: dict[str, object]) -> None:
+def _assert_activation_eligible(
+    borrower: object,
+    lifecycle: dict[str, object],
+    *,
+    audit: AuditStore,
+    actor: str,
+    request_id: str | None = None,
+) -> None:
+    """S1.4 single-interface eligibility gate for the export/writeback path.
+
+    Contactability facts come from ``EligibilityService.evaluate``; this
+    maps the decision onto the pinned 409 contract and audits every
+    suppression before rejecting the stage request.
+    """
     if lifecycle.get("approval_status") != "approved":
         raise HTTPException(status_code=409, detail="lead must be approved before activation staging")
-    fields_set = getattr(borrower, "model_fields_set", set())
-    required_contactability = {"marketing_eligible", "consent_status", "suppression_reason"}
-    if not required_contactability.issubset(set(fields_set)):
+    decision = get_eligibility_service().evaluate(borrower)
+    if decision.eligible:
+        return
+    safe_write_suppression_audit(
+        audit,
+        actor=actor,
+        borrower_id=str(getattr(borrower, "borrower_id", "") or ""),
+        decision=decision,
+        surface="activation_stage",
+        request_id=request_id,
+    )
+    if not decision.configured:
         raise HTTPException(status_code=409, detail="lead contactability is not configured")
-    if getattr(borrower, "marketing_eligible", None) is not True:
+    if not decision.marketing_eligible:
         raise HTTPException(status_code=409, detail="lead is not marketing eligible")
-    if getattr(borrower, "consent_status", None) != "opt_in":
+    if decision.consent_status != "opt_in":
         raise HTTPException(status_code=409, detail="lead does not have opt-in consent")
-    if getattr(borrower, "suppression_reason", None):
+    if decision.suppression_reason or decision.dnc:
         raise HTTPException(status_code=409, detail="lead is suppressed")
+    raise HTTPException(status_code=409, detail="lead hit the re-contact frequency cap")
 
 
 @router.get("/destinations", response_model=list[ActivationDestination])
@@ -114,6 +142,7 @@ def stage_activation(
     store: ActivationDep,
     repo: BorrowerRepoDep,
     sales_state: SalesStateDep,
+    audit: AuditDep,
 ) -> ActivationStageResponse:
     """Stage an approved borrower for a governed customer destination.
 
@@ -135,7 +164,13 @@ def stage_activation(
         if "stage_lead" not in destination.allowed_actions:
             raise HTTPException(status_code=409, detail="destination does not allow lead staging")
         lifecycle = sales_state.lifecycle_for(payload.borrower_id)
-        _assert_activation_eligible(borrower, lifecycle)
+        _assert_activation_eligible(
+            borrower,
+            lifecycle,
+            audit=audit,
+            actor=actor,
+            request_id=payload.request_id,
+        )
         lifecycle_approval_id = str(lifecycle.get("approval_id") or "")
         if lifecycle_approval_id != payload.approval_id:
             raise HTTPException(status_code=409, detail="approval_id is not the current approved decision for this borrower")

@@ -210,6 +210,8 @@ SELECT
   b.suppression_reason,
   b.last_touch_at,
   b.eligible_recontact_at,
+  b.dnc,
+  b.eligibility_source,
   b.current_lender_ref,
   b.second_pos_amount,
   b.first_pos_loan_type,
@@ -302,6 +304,8 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.consent_status IS 'From borrower_360
 COMMENT ON COLUMN mip.gold.borrower_dossier.suppression_reason IS 'From borrower_360; controlled suppression reason.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.last_touch_at IS 'From borrower_360; most recent first-party marketing/contact touch.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.eligible_recontact_at IS 'From borrower_360; earliest permitted re-contact time when capped.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.dnc IS 'From borrower_360; TRUE when a first-party do_not_contact suppression exists. Synthetic-by-design consent signal.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.eligibility_source IS 'From borrower_360; provenance of the consent/eligibility fields. synthetic_seed until a CRM/CDP connector supplies it.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_lender_ref IS 'Public-demo-safe current-servicer reference.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.second_pos_amount IS 'For "equity" segment predicate.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.first_pos_loan_type IS 'For fit sub-score.';

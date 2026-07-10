@@ -45,6 +45,14 @@ from backend.services.disclosures import (
     disclosure_audit_payload,
     resolve_tenant_disclosure,
 )
+from backend.services.eligibility import (
+    DEFAULT_ELIGIBILITY_SOURCE,
+    REASON_CONSENT_NOT_OPT_IN,
+    REASON_FREQUENCY_CAP,
+    EligibilityDecision,
+    get_eligibility_service,
+    safe_write_suppression_audit,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.job_trigger import enqueue_lifecycle_trigger
@@ -322,34 +330,54 @@ def _coerce_datetime(value: Any) -> datetime | None:
     return None
 
 
-def _assert_marketing_eligible(borrower: Any) -> None:
-    consent_status = str(getattr(borrower, "consent_status", "unknown") or "unknown")
-    suppression_reason = getattr(borrower, "suppression_reason", None)
-    recontact_at = _coerce_datetime(getattr(borrower, "eligible_recontact_at", None))
-    last_touch_at = _coerce_datetime(getattr(borrower, "last_touch_at", None))
-    now = datetime.now(UTC)
-    if consent_status != "opt_in":
+def _enforce_contact_eligibility(
+    borrower: Any,
+    *,
+    audit: AuditStore,
+    actor: str,
+    surface: str,
+    request_id: str | None = None,
+) -> EligibilityDecision:
+    """S1.4 single-interface eligibility gate for outreach paths.
+
+    All contactability facts come from ``EligibilityService.evaluate``;
+    this function branches only on the decision (never raw borrower
+    fields), audits every suppression, and preserves the pinned HTTP
+    contract: 422 for consent/suppression, 409 for frequency caps.
+
+    The suppression audit write is synchronous (safe, non-raising):
+    FastAPI drops BackgroundTasks when the handler raises HTTPException,
+    so a background write would silently lose the suppression row.
+    """
+    decision = get_eligibility_service().evaluate(borrower)
+    if decision.eligible:
+        return decision
+    safe_write_suppression_audit(
+        audit,
+        actor=actor,
+        borrower_id=str(getattr(borrower, "borrower_id", "") or ""),
+        decision=decision,
+        surface=surface,
+        request_id=request_id,
+    )
+    if decision.reason_code == REASON_CONSENT_NOT_OPT_IN:
         raise HTTPException(
             status_code=422,
-            detail=f"borrower is not marketing-eligible: consent_status={consent_status}",
+            detail=f"borrower is not marketing-eligible: consent_status={decision.consent_status}",
         )
-    if recontact_at and recontact_at > now:
+    if decision.reason_code == REASON_FREQUENCY_CAP and decision.earliest_recontact_at is not None:
         raise HTTPException(
             status_code=409,
-            detail=f"borrower hit frequency cap; earliest re-contact {recontact_at.date().isoformat()}",
+            detail=(
+                "borrower hit frequency cap; earliest re-contact "
+                f"{decision.earliest_recontact_at.date().isoformat()}"
+            ),
         )
-    if last_touch_at and last_touch_at > now - timedelta(days=30):
-        earliest = last_touch_at + timedelta(days=30)
-        raise HTTPException(
-            status_code=409,
-            detail=f"borrower hit frequency cap; earliest re-contact {earliest.date().isoformat()}",
-        )
-    if getattr(borrower, "marketing_eligible", False) is not True:
-        reason = suppression_reason or "eligibility_not_proven"
-        raise HTTPException(
-            status_code=422,
-            detail=f"borrower is not marketing-eligible: {reason}",
-        )
+    reason = decision.suppression_reason or "eligibility_not_proven"
+    raise HTTPException(
+        status_code=422,
+        detail=f"borrower is not marketing-eligible: {reason}",
+    )
 
 
 def _borrower_evidence_ids(borrower: Any) -> list[str]:
@@ -407,6 +435,10 @@ def _marketing_audit_payload(borrower: Any) -> dict[str, Any]:
         "marketing_eligible": bool(getattr(borrower, "marketing_eligible", False)),
         "consent_status": str(getattr(borrower, "consent_status", "unknown") or "unknown"),
         "suppression_reason": getattr(borrower, "suppression_reason", None),
+        "dnc": bool(getattr(borrower, "dnc", False)),
+        "eligibility_source": str(
+            getattr(borrower, "eligibility_source", None) or DEFAULT_ELIGIBILITY_SOURCE
+        ),
         "last_touch_at": last_touch_at.isoformat() if last_touch_at else None,
         "eligible_recontact_at": (
             eligible_recontact_at.isoformat() if eligible_recontact_at else None
@@ -500,7 +532,12 @@ def draft_outreach(
     b = repo.find_borrower(payload.borrower_id)
     if b is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
-    _assert_marketing_eligible(b)
+    _enforce_contact_eligibility(
+        b,
+        audit=audit,
+        actor=resolve_actor(request),
+        surface="outreach_draft",
+    )
     disclosure = _resolve_disclosure_or_http(lakebase, borrower=b, channel=payload.channel)
     offer_code = _safe_offer_code(getattr(b, "recommended_offer_code", None))
     subject, body = _compose_outreach_body(
@@ -601,7 +638,13 @@ def approve_outreach(
             approval_id=existing,
             audit_event_id="",
         )
-    _assert_marketing_eligible(borrower)
+    _enforce_contact_eligibility(
+        borrower,
+        audit=audit,
+        actor=actor,
+        surface="outreach_approve",
+        request_id=effective_request_id,
+    )
     disclosure = _resolve_disclosure_or_http(lakebase, borrower=borrower, channel=payload.channel)
     approved_draft_body = _assert_disclosure_backed_draft_body(
         draft_body=payload.draft_body,

@@ -34,7 +34,7 @@ _BORROWER_360_COLUMNS: str = (
     "first_party_recent_interactions, first_party_recent_application, "
     "first_party_synthetic_demo, "
     "marketing_eligible, consent_status, suppression_reason, last_touch_at, "
-    "eligible_recontact_at, "
+    "eligible_recontact_at, dnc, eligibility_source, "
     "min_spread_bps_applied, min_equity_pct_applied, in_the_money, "
     "current_lender_ref"
 )
@@ -59,7 +59,7 @@ _LEAD_POPULATION_COLUMNS: str = (
     "refi_propensity_score, refi_propensity_run_date, has_refi_propensity_trigger, "
     "loan_product_type, origination_channel, "
     "marketing_eligible, consent_status, suppression_reason, last_touch_at, "
-    "eligible_recontact_at"
+    "eligible_recontact_at, dnc, eligibility_source"
 )
 
 _LEAD_POPULATION_SELECT_FROM_LP: str = (
@@ -80,7 +80,7 @@ _LEAD_POPULATION_SELECT_FROM_LP: str = (
     "lp.refi_propensity_score, lp.refi_propensity_run_date, lp.has_refi_propensity_trigger, "
     "lp.loan_product_type, lp.origination_channel, "
     "lp.marketing_eligible, lp.consent_status, lp.suppression_reason, lp.last_touch_at, "
-    "lp.eligible_recontact_at"
+    "lp.eligible_recontact_at, lp.dnc, lp.eligibility_source"
 )
 
 _LEAD_POPULATION_SELECT_FROM_B360: str = (
@@ -103,7 +103,7 @@ _LEAD_POPULATION_SELECT_FROM_B360: str = (
     "b.refi_propensity_score, b.refi_propensity_run_date, b.has_refi_propensity_trigger, "
     "b.loan_product_type, b.origination_channel, "
     "b.marketing_eligible, b.consent_status, b.suppression_reason, b.last_touch_at, "
-    "b.eligible_recontact_at"
+    "b.eligible_recontact_at, b.dnc, b.eligibility_source"
 )
 
 _EVIDENCE_COLUMNS: str = (

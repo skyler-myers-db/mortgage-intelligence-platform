@@ -17,6 +17,7 @@ from backend.schemas.portfolio import (
     PortfolioCriteria,
     PortfolioPreviewRequest,
 )
+from backend.services.eligibility import eligible_sql_predicate, suppressed_sql_predicate
 from backend.services.repositories.databricks_repo import DatabricksPortfolioRepository
 from backend.services.state_footprint import (
     FootprintState,
@@ -171,7 +172,10 @@ def test_portfolio_criteria_defaults_to_eligible_only_contactability() -> None:
     where, params = _where_for(criteria)
 
     assert criteria.marketing_eligibility == "Eligible only"
-    assert where == "WHERE marketing_eligible = TRUE"
+    # S1.4: the eligible-only gate is the FULL fail-closed predicate from
+    # the single EligibilityService interface (consent + suppression +
+    # dnc + frequency cap), not the bare marketing_eligible flag.
+    assert where == f"WHERE {eligible_sql_predicate()}"
     assert params == {}
 
 
@@ -180,7 +184,7 @@ def test_marketing_suppressed_predicate_is_explicit() -> None:
         PortfolioCriteria(marketing_eligibility="Suppressed only", consent_status="Opt-out"),
     )
 
-    assert "marketing_eligible = FALSE" in where
+    assert suppressed_sql_predicate() in where
     assert "consent_status = 'opt_out'" in where
     assert params == {}
 

@@ -58,12 +58,23 @@ export function buildLeadCsv(
     'suppression_reason',
     'last_touch_at',
     'eligible_recontact_at',
+    'dnc',
+    'eligibility_source',
   ];
-  const exportableLeads = leads.filter((lead) => lead.marketing_eligible === true);
+  // S1.4 fail-closed export gate: eligible, opt-in, and not do-not-contact.
+  // Gold already folds dnc/opt-out into marketing_eligible; the explicit
+  // checks are defense-in-depth so a stale row can never leak into a CSV.
+  const exportableLeads = leads.filter(
+    (lead) =>
+      lead.marketing_eligible === true &&
+      lead.dnc !== true &&
+      (lead.consent_status ?? 'opt_in') === 'opt_in',
+  );
   const metadata = [
     ['generated_at', context.generatedAt ?? new Date().toISOString()],
     ['filters', context.filters ?? 'none'],
     ['suppression_policy', 'eligible_only_default; non-eligible visible rows are excluded from client CSV'],
+    ['consent_provenance', 'synthetic-by-design demo consent fields; eligibility_source column carries the per-row source'],
     ['refreshed_at', context.refreshedAt ?? 'unknown'],
     ['rules_version', context.rulesVersion ?? 'unknown'],
   ].map(([key, value]) => `# ${key}=${String(value).replace(/\r?\n/g, ' ')}`);
@@ -106,6 +117,8 @@ export function buildLeadCsv(
       l.suppression_reason ?? '',
       l.last_touch_at ?? '',
       l.eligible_recontact_at ?? '',
+      l.dnc ?? false,
+      l.eligibility_source ?? 'synthetic_seed',
     ]
       .map((value) => csvEscape(csvValue(value)))
       .join(','),

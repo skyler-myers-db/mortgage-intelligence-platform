@@ -16,6 +16,7 @@ from backend.schemas.growth_agent import (
     GrowthAgentWorkflowId,
 )
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.eligibility import eligible_sql_predicate
 
 
 @dataclass(frozen=True)
@@ -190,8 +191,8 @@ WORKFLOWS: dict[GrowthAgentWorkflowId, GrowthAgentWorkflowDef] = {
             "The handoff opens approved leads aged at least 7 days with no outreach.",
             "This is a manager review workflow, not an automatic reassignment.",
         ),
-        broad_predicate="b.marketing_eligible = TRUE",
-        actionable_predicate="b.marketing_eligible = TRUE",
+        broad_predicate=eligible_sql_predicate("b"),
+        actionable_predicate=eligible_sql_predicate("b"),
         route_filters={
             "approval_status": "approved",
             "aged_days": "7",

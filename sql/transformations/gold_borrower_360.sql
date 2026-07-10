@@ -399,7 +399,11 @@ first_party_crm_rollup AS (
     COUNT_IF(suppression_reason = 'do_not_contact') > 0 AS has_do_not_contact,
     COUNT_IF(suppression_reason = 'recent_contact_cap') > 0 AS has_recent_contact_cap,
     MAX(NULLIF(suppression_reason, '')) AS any_suppression_reason,
-    COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
+    COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo,
+    -- Provenance inputs (S1.4): a customer_connected CRM/CDP row names its
+    -- connector via source_system; the demo seed rows stay synthetic.
+    COUNT_IF(NOT COALESCE(synthetic_demo, FALSE)) > 0 AS has_connected_rows,
+    MAX(CASE WHEN NOT COALESCE(synthetic_demo, FALSE) THEN source_system END) AS connected_source_system
   FROM mip.first_party.crm_campaign_membership
   GROUP BY borrower_id
 ),
@@ -436,6 +440,11 @@ first_party_crm AS (
       AND any_suppression_reason IS NULL
       AND (last_touch_at IS NULL OR last_touch_at < (SELECT refresh_at FROM refresh_anchor) - INTERVAL 30 DAYS)
     ) AS marketing_eligible,
+    has_do_not_contact AS dnc,
+    CASE
+      WHEN has_connected_rows THEN COALESCE(connected_source_system, 'customer_connected')
+      ELSE 'synthetic_seed'
+    END AS eligibility_source,
     synthetic_demo
   FROM first_party_crm_rollup
 ),
@@ -521,6 +530,8 @@ enriched AS (
     fpc.suppression_reason AS fp_suppression_reason,
     fpc.last_touch_at AS fp_last_touch_at,
     fpc.eligible_recontact_at AS fp_eligible_recontact_at,
+    COALESCE(fpc.dnc, FALSE) AS fp_dnc,
+    COALESCE(fpc.eligibility_source, 'synthetic_seed') AS fp_eligibility_source,
     COALESCE(fpi.recent_positive_interactions, 0) AS fp_recent_positive_interactions,
     COALESCE(fpp.max_relationship_tenure_months, 0) AS fp_max_relationship_tenure_months,
     (
@@ -1098,6 +1109,8 @@ SELECT
   )                                                                                       AS suppression_reason,
   w.fp_last_touch_at                                                                      AS last_touch_at,
   w.fp_eligible_recontact_at                                                              AS eligible_recontact_at,
+  COALESCE(w.fp_dnc, FALSE)                                                               AS dnc,
+  COALESCE(w.fp_eligibility_source, 'synthetic_seed')                                     AS eligibility_source,
   w.current_lender_ref,
   w.second_pos_amount,
   -- S1.3 overlay-segment columns. Fractional second_pos_rate is converted
@@ -1211,6 +1224,8 @@ COMMENT ON COLUMN mip.gold.borrower_360.consent_status IS 'Controlled first-part
 COMMENT ON COLUMN mip.gold.borrower_360.suppression_reason IS 'Controlled suppression reason: do_not_contact / recent_contact_cap (first-party CRM, takes precedence) or unresolved_owner (S1.1 owner-resolution gate).';
 COMMENT ON COLUMN mip.gold.borrower_360.last_touch_at IS 'Most recent first-party marketing/contact touch timestamp used for frequency-cap enforcement.';
 COMMENT ON COLUMN mip.gold.borrower_360.eligible_recontact_at IS 'Earliest timestamp the borrower can be contacted again when a frequency cap is active.';
+COMMENT ON COLUMN mip.gold.borrower_360.dnc IS 'TRUE when a first-party do_not_contact suppression exists. Synthetic-by-design consent signal; the backend EligibilityService fails closed on TRUE.';
+COMMENT ON COLUMN mip.gold.borrower_360.eligibility_source IS 'Provenance of the consent/eligibility fields: synthetic_seed for the governed demo feed, else the connected CRM/CDP connector id (source_system).';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lender_ref IS 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.';
 COMMENT ON COLUMN mip.gold.borrower_360.second_pos_amount IS '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.';
 COMMENT ON COLUMN mip.gold.borrower_360.second_pos_rate IS 'S1.3: 2nd-lien note rate in PERCENT form (8.25, not 0.0825) after silver+gold source-quality bounding. NULL when missing/invalid.';

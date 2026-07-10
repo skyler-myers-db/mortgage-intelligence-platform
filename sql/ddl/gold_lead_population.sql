@@ -100,6 +100,8 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   suppression_reason        STRING             COMMENT 'From gold.borrower_360; controlled suppression reason.',
   last_touch_at             TIMESTAMP          COMMENT 'From gold.borrower_360; most recent first-party marketing/contact touch.',
   eligible_recontact_at     TIMESTAMP          COMMENT 'From gold.borrower_360; earliest permitted re-contact time when capped.',
+  dnc                       BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; TRUE when a first-party do_not_contact suppression exists. Synthetic-by-design consent signal.',
+  eligibility_source        STRING    NOT NULL COMMENT 'From gold.borrower_360; provenance of the consent/eligibility fields. synthetic_seed until a CRM/CDP connector supplies it.',
   rank_overall              INT       NOT NULL COMMENT 'DENSE_RANK OVER (ORDER BY opportunity_score DESC, clip). 1 = highest.',
   rank_within_state         INT       NOT NULL COMMENT 'DENSE_RANK OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip). 1 = highest in state.',
   population_version        STRING    NOT NULL COMMENT 'CONCAT(DATE_FORMAT(refreshed_at, "yyyyMMdd"), "-v1"). EvidenceDrawer footer uses this as a provenance chip.',

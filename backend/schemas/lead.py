@@ -162,6 +162,11 @@ class LeadSummary(BaseModel):
     suppression_reason: str | None = None
     last_touch_at: datetime | None = None
     eligible_recontact_at: datetime | None = None
+    # S1.4: explicit do-not-contact flag plus consent-provenance slug.
+    # eligibility_source is 'synthetic_seed' for the governed demo feed and
+    # becomes a CRM/CDP connector id once customer ingestion lands (S4.1).
+    dnc: bool = False
+    eligibility_source: str = "synthetic_seed"
     assigned_to_email: str | None = None
     assigned_to_label: str | None = None
     assigned_at: datetime | None = None

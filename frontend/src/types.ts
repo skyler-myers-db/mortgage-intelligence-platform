@@ -43,10 +43,7 @@ export interface ProofEvidenceEvent {
   timestamp: string;
 }
 
-/** One value/count pair in a borrower-dimension mix (S1.6). Values are the
- *  lowercase tokens emitted by gold (product = conventional|jumbo|fha|va|
- *  other|unknown; channel = loan_officer|digital|branch|call_center|unknown).
- *  Sorted by count descending at the API boundary. */
+/** One value/count pair in a borrower-dimension mix, sorted by count descending. */
 export interface DimensionFacetCount {
   value: string;
   count: number;
@@ -60,14 +57,11 @@ export interface SegmentSummary {
   avg_score: number;
   description: string;
   color: string;
-  /** S1.3 three-state gate; segments default to connected and counts are
-   *  always real — a gated segment simply has zero members. Optional so
-   *  cached rows from older backends keep validating. */
+  /** S1.3 source gate; counts remain real even when a segment is gated. */
   source_status?: SegmentSourceStatus;
   /** Human source label backing the gate (e.g. "MLS Listings"). */
   source_name?: string | null;
-  /** Loan-product-type composition of the segment (S1.6). Optional so older
-   *  cached payloads still parse; treat a missing/empty array as "no facet". */
+  /** Loan-product-type composition of the segment. */
   loan_product_mix?: DimensionFacetCount[];
   /** Origination-channel composition of the segment (S1.6). */
   origination_channel_mix?: DimensionFacetCount[];
@@ -79,9 +73,7 @@ export interface LeadSummary {
   city: string;
   state: string;
   zip: string;
-  /** Display-safe Cotality property ref. Raw CLIP is masked at the API
-   *  boundary by default; values are `clip_ref_*` or synthetic demo refs
-   *  and match Borrower360.clip_id exactly. */
+  /** Display-safe Cotality property ref; raw CLIP is masked at the API boundary. */
   clip: string;
   segment_codes: SegmentCode[];
   equity_estimate: number;
@@ -142,6 +134,13 @@ export interface LeadSummary {
   primary_owner_entity_type?: 'individual' | 'trust' | 'llc' | 'unresolved' | null;
   last_touch_at?: string | null;
   eligible_recontact_at?: string | null;
+  /** Explicit do-not-contact suppression flag (S1.4). */
+  dnc?: boolean;
+  /**
+   * Provenance of the consent/eligibility fields: 'synthetic_seed' for the
+   * governed demo feed, else a connected CRM/CDP connector id (S4.1).
+   */
+  eligibility_source?: string;
   assigned_to_email?: string | null;
   assigned_to_label?: string | null;
   assigned_at?: string | null;

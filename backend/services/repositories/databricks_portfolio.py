@@ -26,6 +26,7 @@ from backend.schemas.portfolio import (
 from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.eligibility import eligible_sql_predicate, suppressed_sql_predicate
 from backend.services.lakebase import (
     LakebaseError,
 )
@@ -932,11 +933,14 @@ def build_preview_predicates(
         clauses.append("equity_pct >= :equity_floor")
         params["equity_floor"] = equity_floor
 
+    # S1.4: contactability predicates come from the single
+    # EligibilityService module so a consent-source swap cannot fork the
+    # set-based enforcement semantics from the row-level ones.
     marketing_eligibility = (criteria.marketing_eligibility or "").strip()
     if marketing_eligibility == "Eligible only":
-        clauses.append("marketing_eligible = TRUE")
+        clauses.append(eligible_sql_predicate())
     elif marketing_eligibility == "Suppressed only":
-        clauses.append("marketing_eligible = FALSE")
+        clauses.append(suppressed_sql_predicate())
 
     consent_status = (criteria.consent_status or "").strip()
     if consent_status == "Opt-in":

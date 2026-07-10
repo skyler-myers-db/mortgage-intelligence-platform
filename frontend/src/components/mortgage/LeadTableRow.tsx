@@ -113,8 +113,19 @@ export function LeadTableRow({
                 Owner unresolved
               </Chip>
             )}
-            {lead.marketing_eligible === false && (
-              <Chip variant="warning">
+            {lead.dnc === true && (
+              <Chip
+                variant="danger"
+                title={`DNC source: ${lead.eligibility_source ?? 'synthetic_seed'}`}
+              >
+                DNC
+              </Chip>
+            )}
+            {lead.marketing_eligible === false && lead.dnc !== true && (
+              <Chip
+                variant="warning"
+                title={`Eligibility source: ${lead.eligibility_source ?? 'synthetic_seed'}`}
+              >
                 Suppressed{lead.suppression_reason ? `: ${lead.suppression_reason}` : ''}
               </Chip>
             )}
