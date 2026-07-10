@@ -466,19 +466,11 @@ def list_leads(
     ] = None,
     loan_product: Annotated[
         str | None,
-        Query(
-            alias="loan_product",
-            max_length=64,
-            description="Optional loan product-type filter (Conventional / Jumbo / FHA / VA / Other / Unknown).",
-        ),
+        Query(alias="loan_product", max_length=64, description="Optional loan product-type filter."),
     ] = None,
     origination_channel: Annotated[
         str | None,
-        Query(
-            alias="origination_channel",
-            max_length=64,
-            description="Optional origination-channel filter from the funded first-party LOS feed (Loan officer / Digital / Branch / Call center / Unknown).",
-        ),
+        Query(alias="origination_channel", max_length=64, description="Optional origination-channel filter."),
     ] = None,
     min_equity_pct_label: Annotated[
         str | None,
