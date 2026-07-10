@@ -253,20 +253,8 @@ export default function Borrower360() {
   const saved = isLeadSaved(b.borrower_id);
   const lienBandLow = b.current_lien_balance_low ?? b.current_lien_balance;
   const lienBandHigh = b.current_lien_balance_high ?? b.current_lien_balance;
-  const lienBandLabel = `Low ${currency(lienBandLow)} / Est ${currency(b.current_lien_balance)} / High ${currency(lienBandHigh)}`;
-  const estimatedUpbBandSource = {
-    ...descriptorFor('mip.gold.fn_estimated_upb_confidence_band'),
-    title: 'Estimated UPB confidence band',
-    short: 'Estimated UPB band',
-    description:
-      'Deterministic low/estimate/high range for the caveated current-lien balance. The point estimate amortizes original UPB at the bounded note rate; the band recomputes the same formula at the governed plausible rate bounds.',
-    signals: [
-      { label: 'Band', source: 'borrower_360.current_lien_balance_low / current_lien_balance / current_lien_balance_high', value: lienBandLabel },
-      { label: 'Displayed note rate', source: 'borrower_360.current_rate', value: `${b.current_rate}%` },
-      { label: 'Rate bounds', source: 'fn_bounded_mortgage_rate', value: '1% floor / 15% ceiling' },
-      { label: 'Elapsed months', source: 'months_between(refresh_at, first_pos_date)', value: 'computed in gold refresh' },
-    ],
-  };
+  const lienBandLabel = `${currency(lienBandLow)}-${currency(lienBandHigh)}`;
+  const estimatedUpbBandSource = descriptorFor('fn_estimated_upb_confidence_band');
   const saveCurrentLead = () => {
     saveLead({
       borrower_id: b.borrower_id,

@@ -52,6 +52,8 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     send_window JSONB NOT NULL DEFAULT '{}'::jsonb,
     holdout JSONB,
     roi_assumptions JSONB,
+    household_dedup JSONB NOT NULL DEFAULT '{"enabled": false, "dedupe_unit": "borrower", "primary_contact_strategy": "highest_opportunity_eligible"}'::jsonb,
+    household_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -67,6 +69,10 @@ ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS holdout JSONB;
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS roi_assumptions JSONB;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS household_dedup JSONB NOT NULL DEFAULT '{"enabled": false, "dedupe_unit": "borrower", "primary_contact_strategy": "highest_opportunity_eligible"}'::jsonb;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS household_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_campaigns_owner
@@ -1016,5 +1022,12 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_06_30_growth_agent_monitor_drafts',
     'Persist Growth Agent Slack/Teams review drafts for scheduled monitor runs; draft-only, no connector send path'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_09_campaign_household_dedup',
+    'S1.5: persist default-off household dedup config and evidence-cited suppression summary on campaigns'
 )
 ON CONFLICT (version) DO NOTHING;

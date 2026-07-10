@@ -75,7 +75,22 @@ const SEGMENT_MODE_OPTIONS: Array<{
     description: 'AND · intersection',
   },
 ];
-const VALID_SEGMENT_CODES: readonly SegmentCode[] = ['itm', 'listed', 'permit', 'investor', 'equity', 'retention'];
+const VALID_SEGMENT_CODES: readonly SegmentCode[] = [
+  'itm',
+  'listed',
+  'permit',
+  'investor',
+  'equity',
+  'retention',
+  // S1.3 overlay segments — keep in registry order with the gold meta table.
+  'second_lien_itm',
+  'heloc_draw_to_payback',
+  'home_equity_history',
+  'refi_propensity',
+  'itm_on_related_property',
+  'payoff_loss_leads',
+  'permit_activity',
+];
 const VALID_SEGMENT_CODE_SET = new Set<string>(VALID_SEGMENT_CODES);
 
 interface ChipFilters {

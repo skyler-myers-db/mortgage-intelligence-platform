@@ -1,0 +1,149 @@
+{
+  "description": "Golden fixture pinning the owner_entity_type classifier (S1.1 multi-owner). Inputs are SYNTHETIC owner strings only — never real borrower PII. Every case must classify identically in backend/services/owner_classification.py, sql/transformations/silver_property_owners.sql, and pipelines/lakeflow/mip_feature_pipeline.py.",
+  "cases": [
+    {
+      "id": "individual_with_owner_link",
+      "inputs": {
+        "full_name": "AVERY QUINCE",
+        "corporate_indicator": "N",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000001"
+      },
+      "expected_entity_type": "individual",
+      "expected_confidence": 0.9,
+      "note": "Personal name + Owner Link, indicator N -> individual."
+    },
+    {
+      "id": "trust_via_original_trust_name_column",
+      "inputs": {
+        "full_name": "QUINCE FAMILY",
+        "corporate_indicator": "N",
+        "trust_name": "QUINCE FAMILY REVOCABLE TRUST",
+        "owner_identifier": "OL-SYN-000000002"
+      },
+      "expected_entity_type": "trust",
+      "expected_confidence": 0.95,
+      "note": "owner_1_original_trust_name populated wins over every name pattern."
+    },
+    {
+      "id": "trust_via_name_pattern",
+      "inputs": {
+        "full_name": "QUINCE FAMILY LIVING TRUST",
+        "corporate_indicator": "Y",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000003"
+      },
+      "expected_entity_type": "trust",
+      "expected_confidence": 0.9,
+      "note": "TRUST token in name outranks the LLC branches even with indicator Y."
+    },
+    {
+      "id": "trust_via_trailing_tr_abbreviation",
+      "inputs": {
+        "full_name": "AVERY QUINCE TR",
+        "corporate_indicator": "N",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000004"
+      },
+      "expected_entity_type": "trust",
+      "expected_confidence": 0.9,
+      "note": "Trailing ' TR' abbreviation is a trust signal."
+    },
+    {
+      "id": "llc_pattern_with_corporate_flag",
+      "inputs": {
+        "full_name": "SYCAMORE RIDGE HOLDINGS LLC",
+        "corporate_indicator": "Y",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000005"
+      },
+      "expected_entity_type": "llc",
+      "expected_confidence": 0.95,
+      "note": "LLC suffix + corporate indicator Y."
+    },
+    {
+      "id": "llc_pattern_without_corporate_flag",
+      "inputs": {
+        "full_name": "SYCAMORE RIDGE PROPERTIES LP",
+        "corporate_indicator": "N",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000006"
+      },
+      "expected_entity_type": "llc",
+      "expected_confidence": 0.85,
+      "note": "Entity suffix in name with indicator N still classifies llc, lower confidence."
+    },
+    {
+      "id": "generic_corporate_flag_only",
+      "inputs": {
+        "full_name": "SYCAMORE RIDGE",
+        "corporate_indicator": "Y",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000007"
+      },
+      "expected_entity_type": "llc",
+      "expected_confidence": 0.6,
+      "note": "Corporate Y with no recognizable suffix buckets to llc at low confidence (ROADMAP-TEMPORARY pending Cotality entity resolution)."
+    },
+    {
+      "id": "unresolved_name_without_owner_link",
+      "inputs": {
+        "full_name": "AVERY QUINCE",
+        "corporate_indicator": "N",
+        "trust_name": null,
+        "owner_identifier": null
+      },
+      "expected_entity_type": "unresolved",
+      "expected_confidence": 0.4,
+      "note": "No Owner Link -> identity cannot be resolved -> excluded from contact-eligible."
+    },
+    {
+      "id": "unresolved_owner_link_without_name",
+      "inputs": {
+        "full_name": "",
+        "corporate_indicator": null,
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000008"
+      },
+      "expected_entity_type": "unresolved",
+      "expected_confidence": 0.5,
+      "note": "Owner Link without a name string cannot be typed -> unresolved."
+    },
+    {
+      "id": "vacant_slot_produces_no_row",
+      "inputs": {
+        "full_name": null,
+        "corporate_indicator": null,
+        "trust_name": null,
+        "owner_identifier": null
+      },
+      "expected_entity_type": null,
+      "expected_confidence": null,
+      "note": "Empty owner slot emits no silver row."
+    },
+    {
+      "id": "corporate_indicator_whitespace_lowercase_y_normalized",
+      "inputs": {
+        "full_name": "AVERY QUINCE",
+        "corporate_indicator": " y ",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000009"
+      },
+      "expected_entity_type": "llc",
+      "expected_confidence": 0.6,
+      "note": "Indicator normalization: UPPER(TRIM(...)) = 'Y' matches the silver Y/N coercion contract."
+    },
+    {
+      "id": "individual_name_containing_trace_not_trust",
+      "inputs": {
+        "full_name": "AVERY TRACE",
+        "corporate_indicator": "N",
+        "trust_name": null,
+        "owner_identifier": "OL-SYN-000000010"
+      },
+      "expected_entity_type": "individual",
+      "expected_confidence": 0.9,
+      "note": "Word-boundary guard: TRACE must not match the TRUST/TR pattern."
+    }
+  ]
+}

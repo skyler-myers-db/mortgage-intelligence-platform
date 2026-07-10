@@ -50,6 +50,7 @@ _ALLOWED_RELATIONS: frozenset[tuple[str, str]] = frozenset(
         ("gold", "fn_rate_spread"),
         ("gold", "fn_segment_counts"),
         ("gold", "funnel_snapshot_daily"),
+        ("gold", "household_rollup"),
         ("gold", "lead_population"),
         ("gold", "lead_scores"),
         ("gold", "lockin_cohort"),

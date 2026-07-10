@@ -21,6 +21,14 @@ const REQUIRED_TERMS = [
   'rateSpread',
   'supportingEvidence',
   'unityCatalog',
+  // S1.3 overlay segments + published refi-propensity methodology.
+  'refiPropensityHeuristic',
+  'secondLienConsolidation',
+  'helocDrawEnding',
+  'homeEquityHistory',
+  'itmOnRelatedProperty',
+  'payoffLoss',
+  'permitActivitySegment',
 ] as const;
 
 describe('mortgage glossary', () => {

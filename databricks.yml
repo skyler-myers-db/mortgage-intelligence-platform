@@ -337,6 +337,18 @@ resources:
             # a full refresh so ZIP/lender/PII transformation fixes reprocess
             # existing rows instead of leaving stale Delta output behind.
             full_refresh: true
+        # S1.1 multi-owner: single-owner compatibility projection of
+        # silver.property_owners (owner_position = 1). CREATE OR REPLACE VIEW
+        # is idempotent; it runs after the pipeline so the base table exists
+        # on first deploy.
+        - task_key: init_property_owners_primary_view
+          description: "CREATE OR REPLACE mip.silver.property_owners_primary compatibility view (S1.1 multi-owner)."
+          depends_on:
+            - task_key: refresh_silver_pipeline
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/silver_property_owners_primary_view.sql
     # Slice13-accuracy: standalone ref-data seed job. Mirrors the two
     # tasks baked into mip_refresh_silver so analysts / ops can re-run
     # the lender-dictionary seed without kicking the full silver pipeline.
@@ -470,6 +482,12 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/uc_functions/fn_next_best_offer.sql
+        - task_key: init_fn_refi_propensity_heuristic
+          description: "CREATE OR REPLACE mip.gold.fn_refi_propensity_heuristic (S1.3 transparent overlay-segment heuristic) before borrower_360 CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_refi_propensity_heuristic.sql
         - task_key: init_gold_ddl
           description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
           depends_on:
@@ -480,6 +498,7 @@ resources:
             - task_key: init_fn_in_the_money
             - task_key: init_fn_lead_score
             - task_key: init_fn_next_best_offer
+            - task_key: init_fn_refi_propensity_heuristic
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -548,6 +567,14 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/assert_borrower_360_fresh.sql
+        - task_key: ctas_household_rollup
+          description: "Rebuild mip.gold.household_rollup via CTAS for opt-in campaign household dedup."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_household_rollup.sql
         - task_key: ctas_lead_scores
           description: "Rebuild mip.gold.lead_scores via CTAS."
           depends_on:

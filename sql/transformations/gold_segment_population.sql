@@ -159,7 +159,8 @@ prior AS (
   WHERE rn = 1
 ),
 -- Segment metadata inline so gold is self-contained. This is the canonical
--- 6-segment registry that the rollup CROSS-JOIN-spans below; every refresh
+-- segment registry (6 core + 7 S1.3 overlays) that the rollup
+-- CROSS-JOIN-spans below; every refresh
 -- emits a row per (segment_code, state) including states + the _ALL
 -- aggregate, so the API can never silently drop a segment whose predicate
 -- matched zero borrowers.
@@ -175,7 +176,18 @@ meta AS (
       ('permit',    'HELOC Intent',             'Cotality HELOC propensity >= 700 with equity context. Filed Building Permits remain pending until a true permit source lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
       ('equity',    'Home Equity Candidate',    'Strong equity and no active second-position balance.',                                  '#66C5FF'),
-      ('retention', 'Retention Risk',           'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', '#34D399')
+      ('retention', 'Retention Risk',           'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', '#34D399'),
+      -- S1.3 overlay segments. Membership predicates live in
+      -- gold_borrower_360.sql (with_segments) and each column comment; the
+      -- refi_propensity heuristic is published verbatim in
+      -- fn_refi_propensity_heuristic.sql + the app glossary.
+      ('second_lien_itm',         'Second-Lien Consolidation', 'Open second position whose rate clears the same governed spread/equity thresholds as first-lien ITM.', '#E879F9'),
+      ('heloc_draw_to_payback',   'HELOC Draw Ending',         'Open equity-loan lien whose standard 120-month draw period ends within 18 months or ended within the last 6.', '#FB923C'),
+      ('home_equity_history',     'Home Equity History',       'Appreciation >= 40% since purchase, owned >= 36 months, current equity >= 20%.', '#A3E635'),
+      ('refi_propensity',         'Refi Propensity',           'Transparent deterministic heuristic >= 60 of 100. Published points table over spread, seasoning, equity, balance, and listing status.', '#818CF8'),
+      ('itm_on_related_property', 'ITM on Related Property',   'An Owner Link on this property also holds a different property that is in the money.', '#38BDF8'),
+      ('payoff_loss_leads',       'Payoff Loss',               'Tenant lien released within 24 months and the property now carries a competitor lien.', '#F87171'),
+      ('permit_activity',         'Permit Activity',           'Filed building-permit activity. Pending until a true Cotality permit source table lands; never inferred from propensity models.', '#C4B5FD')
   ) AS t(segment_code, name, description, color)
 ),
 -- Build the full (segment_code, state) grid up front so segments with zero
@@ -226,7 +238,7 @@ LEFT JOIN prior     AS p USING (segment_code, state);
 -- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
 -- asset-page comments refresh-stable; the SQL file task executes the
 -- statements in order.
-COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
+COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention + S1.3 overlays second_lien_itm / heloc_draw_to_payback / home_equity_history / refi_propensity / itm_on_related_property / payoff_loss_leads / permit_activity. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
 COMMENT ON COLUMN mip.gold.segment_population.state IS '2-char state code from refreshed source coverage or "_ALL" for national rollup.';
 COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "Prime Refi Candidates").';
 COMMENT ON COLUMN mip.gold.segment_population.count IS 'Member count for this (segment, state) cell.';
