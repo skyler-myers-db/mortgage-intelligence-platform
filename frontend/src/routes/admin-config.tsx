@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent, ReactElement, ReactNode } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useLocation } from 'react-router-dom';
 import { useApp, type Accent, type Density, type Theme } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
@@ -10,11 +11,13 @@ import { DataOperationsPanel } from '../components/admin/DataOperationsPanel';
 import { BuyerReadinessPanel } from '../components/admin/BuyerReadinessPanel';
 import { CapabilityPanel } from '../components/admin/CapabilityPanel';
 import { ActivationOperationsPanel } from '../components/activation/ActivationLoopPanel';
+import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { api } from '../lib/api';
 import { formatTimestamp, parseBackendTimestamp, TIMESTAMP_UNAVAILABLE } from '../lib/time';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import { queryKeys } from '../lib/queryKeys';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import type { DataEstateResponse } from '../types';
 
 /**
  * Administration — operator-facing configuration for Module 0.
@@ -100,6 +103,34 @@ function formatThresholdValue(t: ThresholdRow): string {
     return `${(t.value * 100).toFixed(3)}%`;
   }
   return `${t.value}`;
+}
+
+/** Honest fallback for the data-estate proof surface: on API failure render
+ *  a single error lane, never an endless skeleton or a claim we cannot back. */
+function dataEstateFallback(lender: string): DataEstateResponse {
+  return {
+    generated_at: new Date().toISOString(),
+    lender_name: lender,
+    public_demo_masking: true,
+    lanes: [
+      {
+        id: 'proof_unavailable',
+        title: 'Data-estate proof unavailable',
+        description: 'The app could not load the source-readiness proof surface.',
+        status: 'error',
+        assets: [
+          {
+            name: 'Data-estate API',
+            label: '/api/v1/data-estate',
+            status: 'error',
+            note: 'Do not claim source proof until this endpoint recovers.',
+          },
+        ],
+      },
+    ],
+    known_data_gaps: ['Data-estate proof API unavailable; do not claim source proof until it recovers.'],
+    proof_assets: [],
+  };
 }
 
 export default function AdminConfig() {
@@ -257,6 +288,14 @@ export default function AdminConfig() {
       : 'unreachable'
     : null;
 
+  // Data-estate proof surface (relocated from Home so the operator console
+  // owns source-readiness chrome). Same plain useQuery + honest fallback the
+  // Home hero used, so panel behavior and deep links are unchanged.
+  const { data: dataEstate = null } = useQuery<DataEstateResponse>({
+    queryKey: queryKeys.dataEstate(),
+    queryFn: ({ signal }) => api.dataEstate(signal).catch(() => dataEstateFallback(lender)),
+  });
+
   // Rules version chip label. When the endpoint is up we render the
   // deterministic hash-based version ("rules.itm_<12hex>"); when it's
   // down we show a muted "unavailable" chip rather than faking it.
@@ -275,6 +314,14 @@ export default function AdminConfig() {
       lede="View the active offer ruleset, data source status, and recent audit activity. Per-user workspace appearance is in the Console panel."
       heroRight={<EntradaWordmark height={28} />}
     >
+      {/* Data estate — source-readiness proof, directly above the
+          "Data source readiness" card in the admin grid below. */}
+      {dataEstate ? (
+        <DataEstatePanel estate={dataEstate} />
+      ) : (
+        <DataEstatePanelSkeleton />
+      )}
+
       {/* First row — the three operator-grade panels */}
       <div className="admin-grid">
         {/* Offer rules — clickable to expand threshold table */}

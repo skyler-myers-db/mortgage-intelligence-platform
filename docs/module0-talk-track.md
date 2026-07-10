@@ -97,9 +97,13 @@ Trust frame:
 
 ## Beat 1: Data Estate
 
-Route: Home.
+Route: Admin console (`/admin-config`, "Data estate" section).
 
-Show the data-estate panel before the KPI story.
+Open the admin console's Data estate section before the KPI story — this is
+deliberately an under-the-hood surface now (general users land on a clean
+operational home; the implementation proof lives with the operator controls,
+which also reads well to a technical buyer: "your admins see the machinery,
+your loan officers see leads").
 
 Talk track:
 

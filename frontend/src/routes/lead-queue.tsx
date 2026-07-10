@@ -503,9 +503,6 @@ export default function LeadQueue() {
         </div>
       }
     >
-      <div className="mb-grid">
-        <PropertyLookupPanel />
-      </div>
       <div className="surface mb-grid">
         <div className="surface__hdr surface__hdr--split">
           <div className="surface__hdr-main">
@@ -844,6 +841,12 @@ export default function LeadQueue() {
           />
         </div>
       )}
+      {/* Address → borrower lookup: a secondary fast path, demoted from the
+          hero slot so the operational queue leads. The Console right-rail
+          quick action stays the primary lookup entry. */}
+      <div className="mb-grid">
+        <PropertyLookupPanel />
+      </div>
     </PageShell>
   );
 }

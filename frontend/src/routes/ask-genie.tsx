@@ -29,7 +29,7 @@ import {
 } from '../lib/genieConversation';
 import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
-import { GrowthAgentCapabilityPanel } from './ask-genie.growth-agent-capabilities';
+import { GrowthAgentCapabilityDisclosure } from './ask-genie.growth-agent-capabilities';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
 import { ComposePlanCard } from './ask-genie.compose-plan-card';
@@ -464,12 +464,10 @@ export default function AskGenie() {
           <Chip variant="neutral" icon="audit">Audit checked after each run</Chip>
         </div>
         <div className="surface__body">
-          <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
-            <GrowthAgentCapabilityPanel
-              rows={capabilityRows}
-              isPending={growthAgentCapabilitiesQuery.isPending}
-            />
-          </section>
+          <GrowthAgentCapabilityDisclosure
+            rows={capabilityRows}
+            isPending={growthAgentCapabilitiesQuery.isPending}
+          />
           <section className="growth-agent-command" aria-label="Mortgage Growth Agent command center">
             <div className="growth-agent-command__main">
               <label className="growth-agent__field">

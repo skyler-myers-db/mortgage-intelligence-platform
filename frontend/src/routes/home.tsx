@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { Link, useNavigate } from 'react-router-dom';
 import { PageShell } from '../components/layout/PageShell';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -7,7 +6,6 @@ import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { PortfolioSummaryCard } from '../components/mortgage/PortfolioSummaryCard';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
-import { DataEstatePanel, DataEstatePanelSkeleton } from '../components/mortgage/DataEstatePanel';
 import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
@@ -20,7 +18,7 @@ import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
-import type { DataEstateResponse, KpiTrend, PortfolioPreview } from '../types';
+import type { KpiTrend, PortfolioPreview } from '../types';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pre-Qualified Offer & Self-Serve Accept', desc: 'Borrower-facing pre-qualified offer with one-click accept → compliant application handoff (FCRA firm-offer + RESPA timing).' },
@@ -34,32 +32,6 @@ export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
 
 export function requestHomePortfolioPreview(signal?: AbortSignal) {
   return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
-}
-
-function dataEstateFallback(lender: string): DataEstateResponse {
-  return {
-    generated_at: new Date().toISOString(),
-    lender_name: lender,
-    public_demo_masking: true,
-    lanes: [
-      {
-        id: 'proof_unavailable',
-        title: 'Data-estate proof unavailable',
-        description: 'The app could not load the source-readiness proof surface.',
-        status: 'error',
-        assets: [
-          {
-            name: 'Data-estate API',
-            label: '/api/v1/data-estate',
-            status: 'error',
-            note: 'Do not claim source proof until this endpoint recovers.',
-          },
-        ],
-      },
-    ],
-    known_data_gaps: ['Data-estate proof API unavailable; do not claim source proof until it recovers.'],
-    proof_assets: [],
-  };
 }
 
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
@@ -105,11 +77,6 @@ export default function Home() {
       ? previewErrorObj.message
       : "Couldn't load portfolio KPIs."
     : null;
-
-  const { data: dataEstate = null } = useQuery<DataEstateResponse>({
-    queryKey: queryKeys.dataEstate(),
-    queryFn: ({ signal }) => api.dataEstate(signal).catch(() => dataEstateFallback(lender)),
-  });
 
   useEffect(() => {
     if (previousWarehouseDown.current && !warehouseDown && previewErrorObj) retryPreview();
@@ -297,16 +264,6 @@ export default function Home() {
           <Icon name="chevright" size={13} />
         </Link>
       </div>
-
-      {dataEstate ? (
-        <Reveal>
-          <DataEstatePanel estate={dataEstate} />
-        </Reveal>
-      ) : (
-        <Reveal>
-          <DataEstatePanelSkeleton />
-        </Reveal>
-      )}
 
       <div className="section-hdr">
         <div>

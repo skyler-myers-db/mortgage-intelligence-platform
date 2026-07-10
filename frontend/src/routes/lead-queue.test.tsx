@@ -519,4 +519,30 @@ describe('LeadQueue filter state', () => {
     expect(document.body.textContent).toContain('Outcome summary unavailable: Lakebase unavailable');
     expect(document.body.textContent).not.toContain('Customer CRM/LOS/POS outcome feeds are not configured yet');
   });
+
+  it('leads with the queue filters surface and demotes the property lookup panel to the bottom', async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter initialEntries={['/lead-queue']}>
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    const filtersHeading = [...document.querySelectorAll('.h-4')].find(
+      (el) => el.textContent === 'Queue filters',
+    );
+    const lookupPanel = document.querySelector('.property-lookup');
+    expect(filtersHeading).toBeTruthy();
+    expect(lookupPanel).toBeTruthy();
+
+    // The operational queue must precede the demoted lookup panel in the DOM.
+    const inDocumentOrder = [...document.querySelectorAll('*')];
+    expect(inDocumentOrder.indexOf(filtersHeading as Element)).toBeLessThan(
+      inDocumentOrder.indexOf(lookupPanel as Element),
+    );
+  });
 });

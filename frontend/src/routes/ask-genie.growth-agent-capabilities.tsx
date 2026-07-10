@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { Chip } from '../components/Primitives';
+import { Icon } from '../components/Icon';
 import type { GrowthAgentCapabilityRow } from '../types/growthAgent';
 import { capabilityStatusText } from './ask-genie.growth-agent.helpers';
 
@@ -51,6 +53,47 @@ export function GrowthAgentCapabilityPanel({
           Capability readiness is unavailable; treat multi-agent, AI Gateway, and MLflow claims as unverified.
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Collapsed-by-default disclosure around the capability panel. Platform /
+ * proof-status diagnostics stay reachable without dominating a general-user
+ * surface. Mirrors admin-config's "Workspace appearance" appearance-toggle
+ * pattern (surface__hdr appearance-toggle header + conditionally rendered
+ * body); the panel's honesty labels are untouched once expanded.
+ */
+export function GrowthAgentCapabilityDisclosure({
+  rows,
+  isPending,
+}: GrowthAgentCapabilityPanelProps) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="surface surface--inset">
+      <button
+        type="button"
+        className="surface__hdr appearance-toggle"
+        onClick={() => setOpen((value) => !value)}
+        aria-expanded={open}
+      >
+        <div className="appearance-toggle__side">
+          <div>
+            <div className="eyebrow">Platform capabilities</div>
+            <div className="muted fs-12">Live capability and proof status for this workspace</div>
+          </div>
+        </div>
+        <div className="appearance-toggle__side">
+          <Icon name={open ? 'up' : 'down'} size={12} />
+        </div>
+      </button>
+      {open && (
+        <div className="surface__body">
+          <section className="growth-agent-capabilities" aria-label="Growth Agent capability boundaries">
+            <GrowthAgentCapabilityPanel rows={rows} isPending={isPending} />
+          </section>
+        </div>
+      )}
     </div>
   );
 }

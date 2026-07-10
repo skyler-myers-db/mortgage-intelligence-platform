@@ -366,7 +366,7 @@ describe('AskGenie Growth Agent route panel', () => {
     mount();
     await waitUntil(() => container.textContent?.includes('Growth objective') ?? false);
     await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
-    expect(container.textContent).toContain('Agent Framework orchestration');
+    act(() => button(/Platform capabilities/).click());
     expect(container.textContent).toContain('Not provisioned');
     expect(container.textContent).toContain('UC metric-view certification');
     expect(container.textContent).toContain('Application-reviewed SQL tools');
