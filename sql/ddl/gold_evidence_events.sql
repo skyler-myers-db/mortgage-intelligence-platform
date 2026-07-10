@@ -67,9 +67,9 @@
 CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
   clip           STRING NOT NULL COMMENT 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.',
   evidence_id    STRING NOT NULL COMMENT 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.',
-  source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates / MLS Listings / HELOC Propensity / Refi Propensity.',
-  source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.',
-  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: listing / rate_spread / equity / market_trend / heloc_propensity / refi_propensity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale. BLOCKED vocab permit is NEVER emitted without a true permit source.',
+  source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates / MLS Listings / HELOC Propensity / Refi Propensity / First-Party LOS.',
+  source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.*, mip.gold.*, or mip.first_party.* path.',
+  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: listing / rate_spread / equity / market_trend / heloc_propensity / refi_propensity / loan_type_fit / product_type / origination_channel / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale. product_type and origination_channel are explainability-only (excluded from the evidence sub-score). BLOCKED vocab permit is NEVER emitted without a true permit source.',
   signal_value   STRING NOT NULL COMMENT 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".',
   display_text   STRING NOT NULL COMMENT 'One-sentence deterministic template per signal_type. No PII.',
   confidence     DOUBLE NOT NULL COMMENT '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).',

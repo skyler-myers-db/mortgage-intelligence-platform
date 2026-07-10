@@ -303,6 +303,47 @@ All silver tables: Delta, managed, cluster by `clip` (liquid clustering where CL
 
 **Public-dataset note:** FRED is free for redistribution; no license blocker. Any metric view that consumes the current rate MUST join on `is_latest = TRUE` to keep `fn_rate_spread` deterministic across a demo session.
 
+### 2.6 `mip.silver.property_owners` (S1.1 multi-owner + trust/LLC)
+
+- **Grain:** one row per `(clip, owner_position)` — one row per occupied owner slot (`owner_1..owner_4` column families in `entrada_eval_property_domain_v3`), max 4 owners per property record. Duplicate Owner Links inside one CLIP collapse to the lowest slot, so rows with a non-null `owner_link_id` equivalently satisfy one row per `(clip, owner_link)`.
+- **Source:** `entrada_eval_property_domain_v3` with non-null `clip` + `situs_state` (same per-CLIP dedup tiebreak as §2.2).
+- **PK:** `(clip, owner_position)`.
+- **Clustering:** liquid on `(clip)`.
+- **Refresh:** daily via the Lakeflow feature pipeline (`silver_property_owners` @dlt.table); warehouse-MERGE twin in `sql/transformations/silver_property_owners.sql`.
+- **Compatibility view:** `mip.silver.property_owners_primary` projects the `owner_position = 1` row per CLIP with the legacy single-owner column vocabulary (`owner_is_corporate`), so existing single-owner consumers (which read `silver.property_master`) keep working unchanged and new consumers get a drop-in primary-owner surface. Created by the `init_property_owners_primary_view` sql_task in `mip_refresh_silver`.
+
+> **Scope note — ROADMAP-TEMPORARY.** `owner_entity_type` is a **name/indicator classifier**, not entity resolution. The current slice is deliberately *classify + caveat + suppress* only: classify each owner slot from the owner name string, the Y/N corporate indicator, the slot-1 original trust name, and Owner Link presence; caveat multi-owner / trust / LLC / unresolved ownership in the UI; and suppress unresolved owners from every contact-eligible population (§3.2 `marketing_eligible`). **Cotality entity resolution is work-in-progress upstream** — when mastered entity types ship, this classifier is replaced, the `unresolved` bucket shrinks to true resolution failures, and suppressed populations re-open. This scope is a temporary roadmap state, not a permanent product ceiling.
+
+Classifier contract (branch order is normative; shared verbatim by `backend/services/owner_classification.py`, `sql/transformations/silver_property_owners.sql`, and `pipelines/lakeflow/mip_feature_pipeline.py`; pinned by `tests/fixtures/owner_entity_type_golden.json`):
+
+| # | Condition (evaluated in order) | `owner_entity_type` | `resolution_confidence` |
+|---|---|---|---|
+| 1 | vacant slot (no name, no trust name, no Owner Link) | *(no row)* | — |
+| 2 | `owner_1_original_trust_name` populated (slot 1) | `trust` | 0.95 |
+| 3 | name matches trust regex (`TRUST/TRUSTEE(S)/TRST/REVOCABLE/IRREVOCABLE/trailing TR`) | `trust` | 0.9 |
+| 4 | name matches LLC/entity regex AND corporate indicator `Y` | `llc` | 0.95 |
+| 5 | name matches LLC/entity regex | `llc` | 0.85 |
+| 6 | corporate indicator `Y`, no entity pattern in name | `llc` | 0.6 |
+| 7 | name + Owner Link present | `individual` | 0.9 |
+| 8 | name present, Owner Link missing | `unresolved` | 0.4 |
+| 9 | Owner Link present, name blank | `unresolved` | 0.5 |
+
+| Column | Type | Null | Source expression | Definition |
+|---|---|---|---|---|
+| `clip` | STRING | N | `clip` | PK part 1. |
+| `owner_position` | INT | N | slot ordinal 1..4 | PK part 2. |
+| `owner_link_id` | STRING | Y | `owner_N_identifier` | Cotality Owner Link; NULL ⇒ slot classifies `unresolved`. |
+| `owner_name_hash` | STRING | Y | `sha2(LOWER(TRIM(owner_N_full_name)) \|\| ':' \|\| salt, 256)` | Same salt contract as §2.2; NULL when the slot has no name. Raw names never land. |
+| `owner_entity_type` | STRING | N | classifier above | `individual` / `trust` / `llc` / `unresolved`. |
+| `resolution_confidence` | DOUBLE | N | classifier above | Deterministic 0..1 literal per branch. |
+| `is_corporate_indicator` | BOOLEAN | N | `UPPER(TRIM(owner_N_corporate_indicator)) = 'Y'` | Same Y/N coercion as §2.2. |
+| `is_contact_eligible` | BOOLEAN | N | `owner_entity_type <> 'unresolved'` | Unresolved owners are excluded from contact-eligible populations. |
+| `situs_state` | STRING | N | `situs_state` | Coverage inherited from refreshed source rows. |
+| `ingest_ts` | TIMESTAMP | N | `CURRENT_TIMESTAMP()` | |
+| `_meta_batch_id` | STRING | Y | `CAST(:batch_id AS STRING)` | Lakeflow run correlation id. |
+
+**Contact-eligibility contract:** `gold.borrower_360` (§3.2) aggregates this table per CLIP into `owner_count`, `has_unresolved_owner`, and `primary_owner_entity_type`. When `has_unresolved_owner` (any unresolved slot, or **no owner rows at all** — fail closed), `marketing_eligible` is forced FALSE and `suppression_reason` is stamped `unresolved_owner` unless a first-party CRM suppression already applies. Every contact-eligible query in the product gates on `marketing_eligible = TRUE`, so the exclusion is global.
+
 ---
 
 ## 3. Gold Layer
@@ -366,6 +407,9 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `current_rate` | DOUBLE | N | `COALESCE(first_pos_rate * 100, 0.0)` | `current_rate` | **Percent form** (5.75, not 0.0575) — matches Pydantic `current_rate: float` and `mock_data` convention. |
 | `ltv` | INT | N | `GREATEST(0, CASE WHEN avm_value > 0 THEN ROUND(100.0 * COALESCE(estimated_current_lien_balance, 0) / avm_value) WHEN estimated_cltv > 0 THEN ROUND(estimated_cltv) ELSE 0 END)` | `ltv` | Display LTV is not upper-capped; underwater borrowers may exceed 100 while `equity_pct` remains capped for scoring. |
 | `related_property_count` | INT | N | `COALESCE(property_owner_bridge.related_property_count, 1)` | `related_property_count` | |
+| `owner_count` | INT | N | `COALESCE(owner_rollup.owner_count, 0)` | `owner_count` | S1.1: occupied owner slots per §2.6 (max 4). Multi-owner caveat chip. |
+| `has_unresolved_owner` | BOOLEAN | N | `COALESCE(owner_rollup.has_unresolved_owner, TRUE)` | `has_unresolved_owner` | S1.1: fail closed — any unresolved slot, or no owner rows at all. Forces `marketing_eligible = FALSE` + `suppression_reason = 'unresolved_owner'`. ROADMAP-TEMPORARY per §2.6. |
+| `primary_owner_entity_type` | STRING | Y | slot-1 `owner_entity_type` | `primary_owner_entity_type` | S1.1: `individual` / `trust` / `llc` / `unresolved`; NULL when no owner rows. |
 | `is_owner_occupied` | BOOLEAN | N | `owner_occupancy_code = 'O'` | — | Feeds `fit`. |
 | `is_absentee` | BOOLEAN | N | `property_master.is_absentee` | — | Feeds investor branch. |
 | `is_corporate_owner` | BOOLEAN | N | `property_master.owner_is_corporate` | — | Feeds investor branch. |
@@ -382,12 +426,15 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `first_party_synthetic_demo` | BOOLEAN | N | any contributing first-party row has `synthetic_demo=true` | — | Disclosure flag; must not be treated as real customer data. |
 | `second_pos_amount` | BIGINT | Y | `lien_current.second_pos_amount` | `second_pos_amount` | 2nd-lien balance. `NULL` and `0` both mean no active second-position balance for the equity segment predicate. |
 | `first_pos_loan_type` | STRING | Y | `lien_current.first_pos_loan_type` | — | Feeds `fit`. |
+| `loan_product_type` | STRING | Y | `mip.gold.fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied)` | `loan_product_type` | Controlled vocab `conventional` / `jumbo` / `fha` / `va` / `other`; NULL when the source loan type code is missing (unknown never guesses). Drives the PRODUCT TYPE filter and SegmentCard facets. |
+| `origination_channel` | STRING | Y | `MAX_BY(LOWER(TRIM(application_channel)), application_at)` over funded `first_party.loan_applications` rows with a non-blank channel (`NULLIF(TRIM(..), '') IS NOT NULL`) | `origination_channel` | LOS channel of the most recent funded first-party application (`loan_officer` / `digital` / `branch` / `call_center` in the demo feed); NULL when no funded application resolves or the channel is blank/whitespace — rendered "Unknown", never invented. |
 | `owner_name_hash` | STRING | N | `property_master.owner_name_hash` | — | See §7. |
 | `min_spread_bps_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_spread_bps']`, fallback `75` | — | Threshold provenance for WhyPanel and offer proof. |
 | `min_equity_pct_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_equity_pct']`, fallback `15` | — | Threshold provenance for WhyPanel and offer proof. |
 | `heloc_equity_min_applied` | INT | N | `mip.ref.offer_rules_config['mip_heloc_equity_min_pct']`, fallback `35` | — | Threshold provenance for `fn_next_best_offer` and the equity segment. |
 | `cashout_equity_min_applied` | INT | N | `mip.ref.offer_rules_config['mip_cashout_equity_min_pct']`, fallback `25` | — | Threshold provenance for `fn_next_best_offer`. |
 | `retention_min_spread_applied` | INT | N | `mip.ref.offer_rules_config['mip_retention_min_spread_bps']`, fallback `50` | — | Threshold provenance for `fn_next_best_offer` and the retention segment. |
+| `conforming_loan_limit_applied` | BIGINT | N | `mip.ref.offer_rules_config['mip_conforming_loan_limit_usd']`, fallback `806500` | — | Conforming loan limit applied this refresh when classifying `jumbo` via `fn_loan_product_type`. |
 | `in_the_money` | BOOLEAN | N | `mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied)` | — | Materialized ITM flag. |
 | `trigger_timeline_json` | STRING | N | JSON-encoded top-3 `gold.evidence_events` rows | `trigger_timeline` | Pre-materialized to avoid per-row fan-out at read; service decodes to `list[EvidenceEvent]`. |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | — | Shared timestamp captured once per refresh run. |
@@ -429,7 +476,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 ### 3.4 `mip.gold.evidence_events`
 
 - **Grain:** one row per (`clip`, `evidence_id`) — each row IS an `EvidenceEvent`.
-- **Source:** unioned from `silver.lien_current` (rate_spread, equity, loan_type_fit, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property), `silver.listing_activity` (MLS listing), `silver.heloc_propensity` (HELOC propensity), and `silver.refi_propensity` (refi propensity). True filed-permit signal types await a Cotality Building Permits feed; no `permit` evidence rows are emitted.
+- **Source:** unioned from `silver.lien_current` (rate_spread, equity, loan_type_fit, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property), `silver.listing_activity` (MLS listing), `silver.heloc_propensity` (HELOC propensity), and `silver.refi_propensity` (refi propensity), plus explainability-only `product_type` (from `silver.lien_current` via `fn_loan_product_type`) and `origination_channel` (from `first_party.loan_applications` funded rows). True filed-permit signal types await a Cotality Building Permits feed; no `permit` evidence rows are emitted.
 - **PK:** `(clip, evidence_id)`.
 - **Clustering:** liquid on `clip`; timeline ordering is by `signal_rank` / timestamp in the query layer.
 - **Refresh:** daily.
@@ -439,9 +486,9 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 |---|---|---|---|---|---|
 | `clip` | STRING | N | source tables | — | Not in `EvidenceEvent` but required for join / filter. |
 | `evidence_id` | STRING | N | `CONCAT('ev-', SUBSTR(sha2(CONCAT(clip, '\|', signal_type, '\|', timestamp), 256), 1, 12))` | `evidence_id` | Stable across refreshes — decoupled from row order so `Borrower360.evidence_ids` lists stay stable. |
-| `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`, `'MLS Listings'`, `'HELOC Propensity'`, `'Refi Propensity'`) | `source_product` | |
+| `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`, `'MLS Listings'`, `'HELOC Propensity'`, `'Refi Propensity'`, `'First-Party LOS'`) | `source_product` | |
 | `source_table` | STRING | N | literal UC path (e.g. `'mip.silver.lien_current'`) | `source_table` | **Must be a real UC path** — the EvidenceDrawer shows it. |
-| `signal_type` | STRING | N | controlled vocab includes live `listing`, live `heloc_propensity`, live `refi_propensity`, and reserved `permit` alongside `rate_spread`, `equity`, `loan_type_fit`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, and `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. `listing`, `heloc_propensity`, and `refi_propensity` are live; `permit` is reserved for true filed-permit data and remains un-emitted. |
+| `signal_type` | STRING | N | controlled vocab includes live `listing`, live `heloc_propensity`, live `refi_propensity`, and reserved `permit` alongside `rate_spread`, `equity`, `loan_type_fit`, `product_type`, `origination_channel`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, and `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. `product_type` and `origination_channel` are explainability-only rows for the S1.6 dimensions and are likewise excluded from the evidence sub-score. `listing`, `heloc_propensity`, and `refi_propensity` are live; `permit` is reserved for true filed-permit data and remains un-emitted. |
 | `signal_value` | STRING | N | string-cast of the computed value (`'+88 bps'`, `'$285K'`, `'3 properties'`, `'competitor refi'`) | `signal_value` | Human-readable and deterministic. |
 | `display_text` | STRING | N | one-sentence template per `signal_type` | `display_text` | Deterministic; no PII. |
 | `confidence` | DOUBLE | N | per-signal: AVM `confidence_score_mktg`; rate_spread and market_trend `0.92`; Owner-Link derived `0.85`; recent events and competitor/foreclosure signals `0.89`. | `confidence` | 0..1 per `EvidenceEvent` constraint. |
@@ -460,7 +507,7 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 
 | Column | Type | Null | Source | Definition |
 |---|---|---|---|---|
-| (inherits all `LeadSummary` fields from `borrower_360`) | — | — | — | Served directly via `SELECT *` projection. |
+| (inherits all `LeadSummary` fields from `borrower_360`, including `loan_product_type`, `origination_channel`, and the `conforming_loan_limit_applied` provenance column) | — | — | — | Served directly via `SELECT *` projection. |
 | `rank_overall` | INT | N | `DENSE_RANK() OVER (ORDER BY opportunity_score DESC, clip)` | |
 | `rank_within_state` | INT | N | `DENSE_RANK() OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip)` | |
 | `population_version` | STRING | N | `CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1')` | Used in the EvidenceDrawer footer as a provenance chip. |
@@ -484,7 +531,43 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 | `avg_score` | INT | N | `CAST(ROUND(AVG(opportunity_score)) AS INT)` | `avg_score` | |
 | `description` | STRING | N | static map | `description` | |
 | `color` | STRING | N | static map | `color` | Hex. |
+| `loan_product_mix` | ARRAY<STRUCT<value STRING, count INT>> | N | `COUNT(*)` per `COALESCE(loan_product_type, 'unknown')` within the cell, sorted count desc then value | `loan_product_mix` | SegmentCard facet mix; facet counts sum to the segment count (NULL rolls up as `unknown`). |
+| `origination_channel_mix` | ARRAY<STRUCT<value STRING, count INT>> | N | `COUNT(*)` per `COALESCE(origination_channel, 'unknown')` within the cell, sorted count desc then value | `origination_channel_mix` | SegmentCard facet mix; `unknown` aggregates borrowers with no funded first-party application. |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | — | |
+
+### 3.7 `mip.gold.household_rollup`
+
+- **Grain:** one row per `borrower_360.borrower_id` / CLIP.
+- **Source:** `gold.borrower_360`, S1.1 `silver.property_owners`, and `silver.property_master`.
+- **PK:** `borrower_id`.
+- **Clustering:** `(household_id, borrower_id)`.
+- **Refresh:** daily, downstream of `borrower_360`; read only when campaign household dedup is explicitly enabled.
+- **Default unit:** BORROWER remains the default everywhere. Household is opt-in at campaign creation only.
+
+Deterministic derivation order:
+
+1. **Owner Link:** group CLIPs through shared `silver.property_owners.owner_link_id` rows, including co-owner links on CLIPs reached through one shared Owner-Link hop. The canonical key is the lexicographically smallest reachable Owner Link and is hashed before landing.
+2. **Mailing-address heuristic:** if no Owner Link exists, group by salted `owner_name_hash` plus normalized `mailing_city` / `mailing_state`. `mailing_street_address` never lands in silver or gold, so this heuristic is intentionally conservative.
+3. **Singleton:** if neither signal exists, the borrower is its own household.
+
+Primary-contact ranking is deterministic: contact-eligible members (`marketing_eligible=true` and `has_unresolved_owner=false`) rank before ineligible members, then `opportunity_score DESC`, then `borrower_id ASC`. A campaign can suppress co-owners only after this rank is computed; an ineligible member is never promoted to primary.
+
+| Column | Type | Null | Source | Definition |
+|---|---|---|---|---|
+| `clip` | STRING | N | `borrower_360.clip` | Below API redaction boundary. |
+| `borrower_id` | STRING | N | `borrower_360.borrower_id` | Synthetic `B-[0-9A-Z]{13}` id. |
+| `household_id` | STRING | N | `HH-` + sha2 suffix over the derivation key | Public household id. |
+| `household_derivation_method` | STRING | N | derivation branch | `owner_link`, `mailing_address`, or `singleton`. |
+| `household_derivation_key_hash` | STRING | N | sha2 over non-PII key | Audit reconciliation only; raw Owner Links and mailing city/state are not emitted. |
+| `derivation_source_tables` | ARRAY<STRING> | N | literal UC paths | EvidenceDrawer lineage for surfaced household counts. |
+| `household_member_count` | INT | N | window count | Members assigned to the household id. |
+| `eligible_member_count` | INT | N | window count | Members eligible to be a campaign contact. |
+| `household_rank` | INT | N | window rank | Eligible-first primary rank. |
+| `is_household_primary` | BOOLEAN | N | rank + eligibility | TRUE only for the eligible rank-1 member. |
+| `primary_borrower_id` | STRING | Y | rank result | Synthetic borrower id for the selected primary contact. |
+| `suppressed_by_household_dedup` | BOOLEAN | N | rank + eligibility | TRUE for eligible co-owners suppressed by opt-in household dedup. |
+| `owner_link_reachable_count` | INT | N | `silver.property_owners` | Count of reachable Owner Links used by the owner-link branch. |
+| `refreshed_at` | TIMESTAMP | N | `mip.ref.refresh_run_state.refresh_at` | Shared gold refresh timestamp. |
 
 ---
 

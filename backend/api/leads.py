@@ -17,7 +17,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, R
 
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import validate_internal_staff_email, validate_public_borrower_id
-from backend.schemas.lead import LeadSummary
+from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError, get_lakebase_client
@@ -39,9 +39,7 @@ router = APIRouter(tags=["leads"])
 # and the unit tests can both read one source of truth.
 DEFAULT_LEAD_LIMIT: int = 500
 MAX_LEAD_LIMIT: int = 5000
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
-    {"itm", "listed", "permit", "investor", "equity", "retention"}
-)
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     {
         "addressable",
@@ -238,6 +236,8 @@ def _portfolio_criteria_from_query(
     lender_relationship: str | None,
     product: str | None,
     target_lender_ref: str | None,
+    loan_product: str | None = None,
+    origination_channel: str | None = None,
     min_equity_pct_label: str | None,
     min_equity_pct: float | None,
     owner_link: str | None = None,
@@ -257,6 +257,10 @@ def _portfolio_criteria_from_query(
         fields["lender_relationship"] = lender_relationship
     if product:
         fields["product"] = product
+    if loan_product:
+        fields["loan_product"] = loan_product
+    if origination_channel:
+        fields["origination_channel"] = origination_channel
     if target_lender_ref:
         fields["target_lender_ref"] = target_lender_ref
     if min_equity_pct_label:
@@ -457,6 +461,14 @@ def list_leads(
             max_length=64,
             description="Optional Portfolio Builder product filter.",
         ),
+    ] = None,
+    loan_product: Annotated[
+        str | None,
+        Query(alias="loan_product", max_length=64, description="Optional loan product-type filter."),
+    ] = None,
+    origination_channel: Annotated[
+        str | None,
+        Query(alias="origination_channel", max_length=64, description="Optional origination-channel filter."),
     ] = None,
     min_equity_pct_label: Annotated[
         str | None,
@@ -742,6 +754,8 @@ def list_leads(
                 lender_relationship=lender_relationship,
                 product=product,
                 target_lender_ref=target_lender_ref,
+                loan_product=loan_product,
+                origination_channel=origination_channel,
                 min_equity_pct_label=min_equity_pct_label,
                 min_equity_pct=min_equity_pct,
                 owner_link=owner_link,

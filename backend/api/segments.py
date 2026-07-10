@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend.schemas.lead import SegmentSummary
+from backend.schemas.lead import SEGMENT_CODE_VALUES, SegmentSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.repositories import SegmentRepository, get_segment_repository
 
@@ -16,7 +16,7 @@ RepoDep = Annotated[SegmentRepository, Depends(get_segment_repository)]
 def _parse_segment_codes(raw: str | None) -> list[str] | None:
     if raw is None:
         return None
-    allowed = {"itm", "listed", "permit", "investor", "equity", "retention"}
+    allowed = set(SEGMENT_CODE_VALUES)
     out: list[str] = []
     for part in raw.split(","):
         code = part.strip().lower()
@@ -43,6 +43,8 @@ def _portfolio_criteria_from_query(
     lien_status: str | None,
     lender_relationship: str | None,
     product: str | None,
+    loan_product: str | None,
+    origination_channel: str | None,
     target_lender_ref: str | None,
     min_equity_pct_label: str | None,
     min_equity_pct: float | None,
@@ -59,6 +61,8 @@ def _portfolio_criteria_from_query(
         ("lien_status", lien_status),
         ("lender_relationship", lender_relationship),
         ("product", product),
+        ("loan_product", loan_product),
+        ("origination_channel", origination_channel),
         ("target_lender_ref", target_lender_ref),
         ("min_equity_pct_label", min_equity_pct_label),
         ("owner_link", owner_link),
@@ -92,6 +96,8 @@ def list_segments(
     lien_status: str | None = None,
     lender_relationship: str | None = None,
     product: str | None = None,
+    loan_product: str | None = None,
+    origination_channel: str | None = None,
     target_lender_ref: str | None = None,
     min_equity_pct_label: str | None = None,
     min_equity_pct: float | None = None,
@@ -109,6 +115,8 @@ def list_segments(
             lien_status=lien_status,
             lender_relationship=lender_relationship,
             product=product,
+            loan_product=loan_product,
+            origination_channel=origination_channel,
             target_lender_ref=target_lender_ref,
             min_equity_pct_label=min_equity_pct_label,
             min_equity_pct=min_equity_pct,

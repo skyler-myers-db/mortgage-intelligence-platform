@@ -1,35 +1,29 @@
 import { ApiError, type LeadFunnelStage } from '../lib/api';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
+import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
 
-export const SEGMENT_CODES = new Set<SegmentCode>(['itm', 'listed', 'permit', 'investor', 'equity', 'retention']);
-export const SEGMENT_CODE_LABELS: Record<SegmentCode, string> = {
-  itm: 'Prime Refi Candidates',
-  listed: 'Listed for Sale',
-  permit: 'HELOC Intent',
-  investor: 'Investor / Multi-Property',
-  equity: 'Home Equity Candidate',
-  retention: 'Retention Risk',
-};
-export const SEGMENT_FILTER_OPTIONS = [
+// S1.3: codes, labels, and filter options derive from SEGMENT_DEFINITIONS
+// (the canonical presentation registry) so a segment added there appears in
+// the Lead Queue filter automatically instead of drifting in a second list.
+export const SEGMENT_CODES = new Set<SegmentCode>(SEGMENT_DEFINITIONS.map((d) => d.code));
+export const SEGMENT_CODE_LABELS: Record<SegmentCode, string> = Object.fromEntries(
+  SEGMENT_DEFINITIONS.map((d) => [d.code, d.name]),
+) as Record<SegmentCode, string>;
+export const SEGMENT_FILTER_OPTIONS: readonly string[] = [
   'All segments',
-  SEGMENT_CODE_LABELS.itm,
-  SEGMENT_CODE_LABELS.listed,
-  SEGMENT_CODE_LABELS.permit,
-  SEGMENT_CODE_LABELS.investor,
-  SEGMENT_CODE_LABELS.equity,
-  SEGMENT_CODE_LABELS.retention,
-] as const;
+  ...SEGMENT_DEFINITIONS.map((d) => d.name),
+];
 export const SEGMENT_OPTION_TO_CODE: Record<string, SegmentCode | null> = {
   'All segments': null,
-  [SEGMENT_CODE_LABELS.itm]: 'itm',
-  [SEGMENT_CODE_LABELS.listed]: 'listed',
-  [SEGMENT_CODE_LABELS.permit]: 'permit',
-  [SEGMENT_CODE_LABELS.investor]: 'investor',
-  [SEGMENT_CODE_LABELS.equity]: 'equity',
-  [SEGMENT_CODE_LABELS.retention]: 'retention',
+  ...Object.fromEntries(SEGMENT_DEFINITIONS.map((d) => [d.name, d.code])),
 };
 export const PRODUCT_FILTER_OPTIONS = ['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention'] as const;
+// S1.6 — borrower loan-product-type and origination-channel dimensions. Values
+// are the reviewed display labels the backend accepts as query-param values
+// (the API maps them to the lowercase gold tokens). "All ..." is the no-op.
+export const LOAN_PRODUCT_FILTER_OPTIONS = ['All loan products', 'Conventional', 'Jumbo', 'FHA', 'VA', 'Other', 'Unknown'] as const;
+export const ORIGINATION_CHANNEL_FILTER_OPTIONS = ['All channels', 'Loan officer', 'Digital', 'Branch', 'Call center', 'Unknown'] as const;
 export const OWNER_LINK_FILTER_OPTIONS = ['All', 'Single-property owner', 'Multi-property (2-4)', 'Portfolio investor (5+)'] as const;
 export const PURCHASE_INTENT_FILTER_OPTIONS = ['All', 'Listed for sale', 'HELOC intent', 'Both'] as const;
 export const CONTACTABILITY_FILTER_OPTIONS = ['Eligible only', 'Any', 'Suppressed only'] as const;
@@ -55,6 +49,8 @@ const PORTFOLIO_FILTER_KEYS = [
   'lender_relationship',
   'target_lender_ref',
   'product',
+  'loan_product',
+  'origination_channel',
   'min_equity_pct_label',
   'owner_link',
   'purchase_intent',
@@ -160,11 +156,46 @@ export function segmentFilterDisplayValue(
   return 'All segments';
 }
 
+// S1.6 — deep links may carry the backend's lowercase/snake_case tokens
+// (e.g. ?loan_product=jumbo, ?origination_channel=loan_officer) instead of
+// the display labels. Mirrors _LOAN_PRODUCT_ALIASES / _ORIGINATION_CHANNEL_ALIASES
+// in backend/schemas/portfolio.py; keys are lowercased with spaces -> underscores.
+const LOAN_PRODUCT_VALUE_ALIASES: Record<string, string> = {
+  all: 'All loan products',
+  all_loan_products: 'All loan products',
+  conventional: 'Conventional',
+  jumbo: 'Jumbo',
+  fha: 'FHA',
+  va: 'VA',
+  other: 'Other',
+  unknown: 'Unknown',
+};
+const ORIGINATION_CHANNEL_VALUE_ALIASES: Record<string, string> = {
+  all: 'All channels',
+  all_channels: 'All channels',
+  loan_officer: 'Loan officer',
+  digital: 'Digital',
+  branch: 'Branch',
+  call_center: 'Call center',
+  unknown: 'Unknown',
+};
+const PORTFOLIO_FILTER_VALUE_ALIASES: Partial<Record<PortfolioFilterKey, Record<string, string>>> = {
+  loan_product: LOAN_PRODUCT_VALUE_ALIASES,
+  origination_channel: ORIGINATION_CHANNEL_VALUE_ALIASES,
+};
+
+function resolvePortfolioValueAlias(key: PortfolioFilterKey, value: string): string {
+  const aliases = PORTFOLIO_FILTER_VALUE_ALIASES[key];
+  return aliases?.[value.toLowerCase().replace(/ /g, '_')] ?? value;
+}
+
 const PORTFOLIO_FILTER_VALUE_SETS: Partial<Record<PortfolioFilterKey, Set<string>>> = {
   occupancy: new Set(['Owner-occupied', 'Non-owner-occupied', 'All']),
   lien_status: new Set(['Any', 'Open 1st lien', 'Open first lien', 'Open HELOC', 'Free & clear', 'Free and clear']),
   lender_relationship: new Set([...LENDER_RELATIONSHIP_OPTIONS, 'Competitor']),
   product: new Set(['All products', 'Refi', 'HELOC', 'Cash-out', 'Purchase', 'Retention']),
+  loan_product: new Set(LOAN_PRODUCT_FILTER_OPTIONS),
+  origination_channel: new Set(ORIGINATION_CHANNEL_FILTER_OPTIONS),
   min_equity_pct_label: new Set(['Any', '>= 15%', '>= 25%', '>= 40%', '≥ 15%', '≥ 25%', '≥ 40%']),
   owner_link: new Set(OWNER_LINK_FILTER_OPTIONS),
   purchase_intent: new Set(PURCHASE_INTENT_FILTER_OPTIONS),
@@ -185,10 +216,11 @@ function sanitizePortfolioCriteria(
 ): Record<string, string> | undefined {
   const criteria: Record<string, string> = {};
   for (const key of PORTFOLIO_FILTER_KEYS) {
-    const value = key === 'purchase_intent'
+    const trimmed = key === 'purchase_intent'
       ? normalizePurchaseIntent(raw[key]?.trim() ?? '')
       : raw[key]?.trim();
-    if (!value) continue;
+    if (!trimmed) continue;
+    const value = resolvePortfolioValueAlias(key, trimmed);
     if (key === 'target_lender_ref' && !isPublicLenderRef(value, allowedLenderRefs)) continue;
     const allowedValues = PORTFOLIO_FILTER_VALUE_SETS[key];
     if (allowedValues && !allowedValues.has(value)) continue;
@@ -214,6 +246,8 @@ const PORTFOLIO_FILTER_LABELS: Record<string, string> = {
   lender_relationship: 'relationship',
   target_lender_ref: 'lender',
   product: 'product',
+  loan_product: 'Product type',
+  origination_channel: 'Origination channel',
   min_equity_pct_label: 'equity',
   owner_link: 'owner link',
   purchase_intent: 'purchase intent',

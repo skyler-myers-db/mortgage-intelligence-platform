@@ -170,9 +170,14 @@ SELECT
   b.subject_property,
   b.avm_value,
   b.current_lien_balance,
+  b.current_lien_balance_low,
+  b.current_lien_balance_high,
   b.current_rate,
   b.ltv,
   b.related_property_count,
+  b.owner_count,
+  b.has_unresolved_owner,
+  b.primary_owner_entity_type,
   b.is_owner_occupied,
   b.is_absentee,
   b.is_corporate_owner,
@@ -210,12 +215,15 @@ SELECT
   b.current_lender_ref,
   b.second_pos_amount,
   b.first_pos_loan_type,
+  b.loan_product_type,
+  b.origination_channel,
   b.owner_name_hash,
   b.min_spread_bps_applied,
   b.min_equity_pct_applied,
   b.heloc_equity_min_applied,
   b.cashout_equity_min_applied,
   b.retention_min_spread_applied,
+  b.conforming_loan_limit_applied,
   b.in_the_money,
   b.trigger_timeline_json,
   -- New dossier-only columns: pre-joined evidence payload.
@@ -255,10 +263,15 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.approval_status IS 'Default "pending
 COMMENT ON COLUMN mip.gold.borrower_dossier.owner_link_id IS 'Cotality Owner Link id.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.subject_property IS 'Synthetic city/state/ZIP5 string.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.avm_value IS 'AVM value; 0 when missing.';
-COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Total open lien balance.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Estimated current lien balance.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance_low IS 'Lower bound of estimated current lien balance confidence band in USD.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance_high IS 'Upper bound of estimated current lien balance confidence band in USD.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_rate IS 'Percent form (5.75).';
 COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS 'Display LTV int; underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.related_property_count IS 'From gold.property_owner_bridge.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.owner_count IS 'From borrower_360 (S1.1); occupied owner slots on the CLIP (max 4). Drives the multi-owner caveat chip.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.has_unresolved_owner IS 'From borrower_360 (S1.1); TRUE when any owner slot is unresolved. Such rows are never marketing_eligible (suppression_reason unresolved_owner).';
+COMMENT ON COLUMN mip.gold.borrower_dossier.primary_owner_entity_type IS 'From borrower_360 (S1.1); slot-1 owner entity type: individual | trust | llc | unresolved.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_owner_occupied IS 'owner_occupancy_code = "O".';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_absentee IS 'From silver.property_master.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_corporate_owner IS 'From silver.property_master.';
@@ -296,12 +309,15 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.eligibility_source IS 'From borrower
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_lender_ref IS 'Public-demo-safe current-servicer reference.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.second_pos_amount IS 'For "equity" segment predicate.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.first_pos_loan_type IS 'For fit sub-score.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.loan_product_type IS 'From borrower_360; conventional / jumbo / fha / va / other, NULL when unknown.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.origination_channel IS 'From borrower_360; funded first-party application channel, NULL when unknown.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.owner_name_hash IS 'sha2 hash from silver; internal only, router strips.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.min_spread_bps_applied IS 'Threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.min_equity_pct_applied IS 'Threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.heloc_equity_min_applied IS 'HELOC equity threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.cashout_equity_min_applied IS 'Cash-out equity threshold this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.retention_min_spread_applied IS 'Retention spread threshold this refresh.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.conforming_loan_limit_applied IS 'Conforming loan limit (USD) applied this refresh for jumbo classification.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.in_the_money IS 'fn_in_the_money output.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.trigger_timeline_json IS 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).';
 COMMENT ON COLUMN mip.gold.borrower_dossier.evidence_events IS 'Full evidence array (capped at 20 per CLIP) sorted by signal_rank.';

@@ -40,6 +40,31 @@
 --                 has_permit OR has_heloc_propensity_trigger. has_permit
 --                 remains FALSE until true filed permit rows land.
 --
+-- S1.3 overlay-segment predicates (computed in gold_borrower_360.sql;
+-- data-contract §3.2 column comments carry the same definitions):
+--   second_lien_itm         : COALESCE(second_pos_amount, 0) > 0 AND
+--                             fn_in_the_money(second_pos_rate_spread_bps,
+--                             equity_pct, governed thresholds).
+--   heloc_draw_to_payback   : open equity-loan lien (silver.mortgage_events
+--                             is_equity_loan, no release_date) originated
+--                             102-126 months ago -- standard 120-month draw
+--                             ending within 18 months or ended within 6.
+--   home_equity_history     : home_value_appreciation_pct >= 40 AND
+--                             months_since_purchase >= 36 AND equity_pct >= 20.
+--   refi_propensity         : fn_refi_propensity_heuristic(...) >= 60.
+--                             TRANSPARENT deterministic points table published
+--                             in the UDF header + app glossary. NOT the
+--                             Cotality refi propensity model.
+--   itm_on_related_property : any Owner Link on this CLIP (S1.1
+--                             silver.property_owners, all slots) also holds a
+--                             DIFFERENT clip that is in the money.
+--   payoff_loss_leads       : tenant lien released within 24 months AND the
+--                             property now carries a competitor lien.
+--   permit_activity         : has_permit = TRUE. Registered but gated (source
+--                             readiness 'Building Permits' is roadmap); count
+--                             stays 0 and the UI renders the gated panel --
+--                             members are NEVER fabricated from propensity.
+--
 -- `delta_vs_prior` requires a prior-period snapshot. The transformation
 -- file maintains a mip.gold.segment_population_prior Delta table
 -- (daily partition-rollup). On first refresh, delta_vs_prior is emitted
@@ -50,7 +75,7 @@
 -- =============================================================================
 
 CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
-  segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.',
+  segment_code    STRING    NOT NULL COMMENT 'itm / listed / permit / investor / equity / retention + S1.3 overlays second_lien_itm / heloc_draw_to_payback / home_equity_history / refi_propensity / itm_on_related_property / payoff_loss_leads / permit_activity. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.',
   state           STRING    NOT NULL COMMENT '2-char state code from refreshed source coverage or "_ALL" for national rollup.',
   name            STRING    NOT NULL COMMENT 'Static label per segment_code (e.g., "Prime Refi Candidates").',
   count           INT       NOT NULL COMMENT 'Member count for this (segment, state) cell.',
@@ -58,6 +83,10 @@ CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   avg_score       INT       NOT NULL COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',
   description     STRING    NOT NULL COMMENT 'Static description per segment_code.',
   color           STRING    NOT NULL COMMENT 'Hex color for segment tile.',
+  loan_product_mix ARRAY<STRUCT<value: STRING, count: INT>>
+                            NOT NULL COMMENT 'Loan product-type facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. value is conventional / jumbo / fha / va / other / unknown. Backs SegmentCard facets.',
+  origination_channel_mix ARRAY<STRUCT<value: STRING, count: INT>>
+                            NOT NULL COMMENT 'Origination-channel facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. unknown aggregates borrowers with no funded first-party application. Backs SegmentCard facets.',
   refreshed_at    TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
 )
 USING DELTA

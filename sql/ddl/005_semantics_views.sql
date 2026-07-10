@@ -258,6 +258,9 @@ SELECT
     ELSE 'none'
   END                                               AS segment,
   b.first_pos_loan_type                             AS loan_purpose,
+  b.loan_product_type,
+  b.origination_channel,
+  b.conforming_loan_limit_applied,
   b.is_investor,
   b.is_current_customer,
   b.is_former_customer,
@@ -280,4 +283,4 @@ SELECT
 FROM mip.gold.borrower_360 AS b;
 
 COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
-  'Genie + dashboard borrower-grain view over gold.borrower_360 (one row per clip). Exposed row columns: clip, state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer, is_former_customer, is_competitor_lien, has_permit, listed_for_sale, listing_status_category, listing_price, listing_days_on_market, heloc_propensity_score, has_heloc_propensity_trigger, refi_propensity_score, has_refi_propensity_trigger, current_lender_ref, rate_spread_bps, equity_pct, in_the_money, current_lien_balance, opportunity_score. These are plain columns, not materialized measure columns; dashboards and Genie compute read-time aggregations such as AVG(rate_spread_bps), AVG(equity_pct), COUNT(DISTINCT clip), and AVG(opportunity_score). See docs/data-contract-module0.md §3.2.';
+  'Genie + dashboard borrower-grain view over gold.borrower_360 (one row per clip). Exposed row columns: clip, state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, loan_product_type, origination_channel, conforming_loan_limit_applied, is_investor, is_current_customer, is_former_customer, is_competitor_lien, has_permit, listed_for_sale, listing_status_category, listing_price, listing_days_on_market, heloc_propensity_score, has_heloc_propensity_trigger, refi_propensity_score, has_refi_propensity_trigger, current_lender_ref, rate_spread_bps, equity_pct, in_the_money, current_lien_balance, opportunity_score. These are plain columns, not materialized measure columns; dashboards and Genie compute read-time aggregations such as AVG(rate_spread_bps), AVG(equity_pct), COUNT(DISTINCT clip), and AVG(opportunity_score). See docs/data-contract-module0.md §3.2.';

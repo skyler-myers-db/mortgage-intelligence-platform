@@ -35,6 +35,7 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_borrower_360.sql",
     "gold_lead_scores.sql",
     "gold_evidence_events.sql",
+    "gold_household_rollup.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
     # slice13-accuracy-validation: geography rollups for the USChoroplethMap drill.
@@ -49,6 +50,7 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_borrower_360.sql",
     "gold_lead_scores.sql",
     "gold_evidence_events.sql",
+    "gold_household_rollup.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
     "gold_county_rollup.sql",
@@ -67,6 +69,7 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.borrower_360",
     "mip.gold.lead_scores",
     "mip.gold.evidence_events",
+    "mip.gold.household_rollup",
     "mip.gold.lead_population",
     "mip.gold.segment_population",
     "mip.gold.borrower_dossier",
@@ -342,6 +345,7 @@ def test_borrower_360_transformation_enforces_zip5_or_null_boundary() -> None:
 _TIMESTAMP_SHARED_CTAS_FILES: tuple[str, ...] = (
     "gold_property_owner_bridge.sql",
     "gold_borrower_360.sql",
+    "gold_household_rollup.sql",
     "gold_lead_scores.sql",
     "gold_segment_population.sql",
     "gold_lockin_cohort.sql",
@@ -393,9 +397,11 @@ def test_borrower_360_bounds_source_mortgage_rates_before_scoring() -> None:
         TRANSFORM_DIR / "gold_borrower_360.sql"
     ).read_text(encoding="utf-8")
 
-    assert "WHEN lc.first_pos_rate < 0.01 THEN NULL" in text
-    assert "WHEN lc.first_pos_rate > 0.15 THEN 0.15" in text
+    assert "mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate" in text
     assert "mip.gold.fn_rate_spread(b.first_pos_rate" in text
+    assert "mip.gold.fn_estimated_upb_confidence_band(" in text
+    assert "current_lien_balance_low" in text
+    assert "current_lien_balance_high" in text
 
 
 def test_rate_spread_evidence_uses_same_bounded_rate_contract() -> None:
@@ -404,8 +410,7 @@ def test_rate_spread_evidence_uses_same_bounded_rate_contract() -> None:
     ).read_text(encoding="utf-8")
 
     assert "rate_spread_inputs AS" in text
-    assert "WHEN lc.first_pos_rate < 0.01 THEN NULL" in text
-    assert "WHEN lc.first_pos_rate > 0.15 THEN 0.15" in text
+    assert "mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate" in text
     assert "FROM rate_spread_inputs AS lc" in text
 
 
@@ -462,15 +467,19 @@ def test_uc_functions_are_wired_before_gold_ctas() -> None:
     pass locally, which is exactly the failure this guard prevents.
     """
     expected_tasks = (
+        "init_fn_bounded_mortgage_rate",
         "init_fn_rate_spread",
         "init_fn_estimated_upb",
+        "init_fn_estimated_upb_confidence_band",
         "init_fn_in_the_money",
         "init_fn_lead_score",
         "init_fn_next_best_offer",
     )
     expected_rendered_paths = (
+        "sql/_rendered/uc_functions/fn_bounded_mortgage_rate.sql",
         "sql/_rendered/uc_functions/fn_rate_spread.sql",
         "sql/_rendered/uc_functions/fn_estimated_upb.sql",
+        "sql/_rendered/uc_functions/fn_estimated_upb_confidence_band.sql",
         "sql/_rendered/uc_functions/fn_in_the_money.sql",
         "sql/_rendered/uc_functions/fn_lead_score.sql",
         "sql/_rendered/uc_functions/fn_next_best_offer.sql",
@@ -572,7 +581,9 @@ def test_evidence_event_source_table_literals_are_uc_paths() -> None:
 
     assert source_table_literals, "gold.evidence_events must emit source_table literals."
     for literal in source_table_literals:
-        assert re.fullmatch(r"mip\.(silver|gold|ref)\.[a-z0-9_]+", literal), (
+        # first_party joined the allowed schemas in S1.6: origination_channel
+        # evidence cites the governed mip.first_party.loan_applications feed.
+        assert re.fullmatch(r"mip\.(silver|gold|ref|first_party)\.[a-z0-9_]+", literal), (
             f"source_table literal must be one real UC path, got {literal!r}."
         )
 
@@ -664,8 +675,11 @@ def test_fit_loan_type_parity_and_explainability_contract() -> None:
     assert re.search(parity_pattern, lead_scores_sql)
     assert "'loan_type_fit'                                  AS signal_type" in evidence_sql
     assert "first_pos_loan_type IN ('CONV','FHA','VA')" in evidence_sql
-    assert "signal_type NOT IN ('permit', 'loan_type_fit')" in borrower_sql
-    assert "signal_type NOT IN ('permit', 'loan_type_fit')" in lead_scores_sql
+    # S1.6 extended the explainability-only exclusion list: product_type and
+    # origination_channel rows must never retune the evidence sub-score.
+    exclusion = "signal_type NOT IN ('permit', 'loan_type_fit', 'product_type', 'origination_channel')"
+    assert exclusion in borrower_sql
+    assert exclusion in lead_scores_sql
     assert "CONV/FHA/VA parity is a contract" in docs
     assert "customer compliance team should explicitly review" in re.sub(r"\s+", " ", docs)
 

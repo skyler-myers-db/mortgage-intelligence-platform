@@ -12,6 +12,8 @@ const REQUIRED_TERMS = [
   'mlsListings',
   'listedForSale',
   'buildingPermits',
+  'loanProductType',
+  'originationChannel',
   'inTheMoney',
   'nextBestOffer',
   'opportunityScore',
@@ -21,6 +23,14 @@ const REQUIRED_TERMS = [
   'rateSpread',
   'supportingEvidence',
   'unityCatalog',
+  // S1.3 overlay segments + published refi-propensity methodology.
+  'refiPropensityHeuristic',
+  'secondLienConsolidation',
+  'helocDrawEnding',
+  'homeEquityHistory',
+  'itmOnRelatedProperty',
+  'payoffLoss',
+  'permitActivitySegment',
 ] as const;
 
 describe('mortgage glossary', () => {
@@ -47,6 +57,16 @@ describe('mortgage glossary', () => {
     expect(mortgageGlossary.inTheMoney.appContext).toMatch(/not the same as a high-quality lead/i);
     expect(mortgageGlossary.opportunityScore.appContext).toMatch(/broader than refinance economics/i);
     expect(mortgageGlossary.nextBestOffer.term).toBe('Primary offer');
+  });
+
+  it('documents the estimated UPB methodology and confidence band', () => {
+    const entry = mortgageGlossary.estimatedUpb;
+
+    expect(entry.appContext).toMatch(/original_upb/i);
+    expect(entry.appContext).toMatch(/monthly_rate/i);
+    expect(entry.proof).toMatch(/fn_bounded_mortgage_rate/i);
+    expect(entry.proof).toMatch(/months_elapsed clamps to 0\.\.360/i);
+    expect(entry.proof).toMatch(/confidence band recomputes/i);
   });
 
   it('separates live listings, HELOC intent, and pending filed permits', () => {

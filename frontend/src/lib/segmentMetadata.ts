@@ -62,6 +62,57 @@ export const SEGMENT_DEFINITIONS: readonly SegmentDefinition[] = [
     description: 'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.',
     icon: 'shield',
   },
+  // S1.3 overlay segments — registry parity with the gold `meta` VALUES
+  // table in sql/transformations/gold_segment_population.sql.
+  {
+    code: 'second_lien_itm',
+    name: 'Second-Lien Consolidation',
+    color: 'var(--seg-second-lien)',
+    description: 'Open second lien clears governed spread and equity thresholds.',
+    icon: 'layers',
+  },
+  {
+    code: 'heloc_draw_to_payback',
+    name: 'HELOC Draw Ending',
+    color: 'var(--seg-heloc-draw)',
+    description: 'Equity-loan lien near the standard 120-month draw reset.',
+    icon: 'bell',
+  },
+  {
+    code: 'home_equity_history',
+    name: 'Home Equity History',
+    color: 'var(--seg-equity-history)',
+    description: 'Appreciation ≥ 40%, owned ≥ 36 months, current equity ≥ 20%.',
+    icon: 'equity',
+  },
+  {
+    code: 'refi_propensity',
+    name: 'Refi Propensity',
+    color: 'var(--seg-refi-propensity)',
+    description: 'Transparent 0-100 heuristic; 60+ joins this segment.',
+    icon: 'target',
+  },
+  {
+    code: 'itm_on_related_property',
+    name: 'ITM on Related Property',
+    color: 'var(--seg-related-itm)',
+    description: 'Owner Link also holds a different in-the-money property.',
+    icon: 'link',
+  },
+  {
+    code: 'payoff_loss_leads',
+    name: 'Payoff Loss',
+    color: 'var(--seg-payoff-loss)',
+    description: 'Tenant lien released within 24 months; current lien is competitor-held.',
+    icon: 'export',
+  },
+  {
+    code: 'permit_activity',
+    name: 'Permit Activity',
+    color: 'var(--seg-permit-activity)',
+    description: 'Filed permits only; gated until a true Cotality permit source lands.',
+    icon: 'permit',
+  },
 ];
 
 export function segmentByCode(code: string): SegmentDefinition | undefined {
@@ -76,15 +127,19 @@ export function segmentName(code: string): string {
   return segmentByCode(code)?.name ?? code;
 }
 
+// Canonical codes use underscores (matching SegmentCode Literals and the
+// gold registry), so normalization folds spaces/hyphens INTO underscores.
+// S1.3: `permit_activity` is now a real registered segment, so the legacy
+// alias that routed "permit activity" to the HELOC-Intent `permit` code is
+// gone — only genuine HELOC phrasings still map there.
 const SEGMENT_ALIASES: Record<string, SegmentCode> = {
   heloc: 'permit',
-  'heloc-intent': 'permit',
-  'permit-activity': 'permit',
+  heloc_intent: 'permit',
 };
 
 export function normalizeSegmentCode(value: unknown): SegmentCode | null {
   if (typeof value !== 'string') return null;
-  const code = value.trim().toLowerCase().replace(/[\s_]+/g, '-');
+  const code = value.trim().toLowerCase().replace(/[\s-]+/g, '_');
   if (!code) return null;
   const normalized = SEGMENT_ALIASES[code] ?? code;
   return segmentByCode(normalized) ? normalized as SegmentCode : null;

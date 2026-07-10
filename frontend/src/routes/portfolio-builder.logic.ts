@@ -83,6 +83,7 @@ export type CampaignSetupState = {
   emailCost: string;
   smsCost: string;
   mailCost: string;
+  marketHouseholdTogether: boolean;
 };
 
 export function buildDefaultCampaignSetup(
@@ -101,6 +102,7 @@ export function buildDefaultCampaignSetup(
     emailCost: '1.20',
     smsCost: '0.08',
     mailCost: '0.86',
+    marketHouseholdTogether: false,
   };
 }
 
@@ -267,6 +269,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
   send_window: Record<string, unknown>;
   holdout: Record<string, unknown>;
   roi_assumptions: Record<string, unknown>;
+  household_dedup: Record<string, unknown>;
 } {
   const holdoutPct = boundedNumber(setup.holdoutPct, 10, 0, 50);
   return {
@@ -307,6 +310,11 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
         direct_mail: nullableMoney(setup.mailCost),
       },
       source: 'operator_configured',
+    },
+    household_dedup: {
+      enabled: setup.marketHouseholdTogether,
+      dedupe_unit: setup.marketHouseholdTogether ? 'household' : 'borrower',
+      primary_contact_strategy: 'highest_opportunity_eligible',
     },
   };
 }

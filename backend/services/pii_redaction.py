@@ -352,6 +352,15 @@ def _eligibility_source(raw: Any) -> str:
     return "synthetic_seed"
 
 
+# S1.1 owner-entity classification enum (silver.property_owners contract).
+_OWNER_ENTITY_TYPE_VALUES = frozenset({"individual", "trust", "llc", "unresolved"})
+
+
+def _owner_entity_type(raw: Any) -> str | None:
+    value = str(raw or "").strip().lower()
+    return value if value in _OWNER_ENTITY_TYPE_VALUES else None
+
+
 def _optional_int(raw: Any) -> int | None:
     if raw is None or raw == "":
         return None
@@ -519,6 +528,18 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         or f"ol_demo_{borrower_id}"
     )
 
+    current_lien_balance = int(row.get("current_lien_balance") or 0)
+    current_lien_balance_low = (
+        int(row["current_lien_balance_low"])
+        if row.get("current_lien_balance_low") is not None
+        else current_lien_balance
+    )
+    current_lien_balance_high = (
+        int(row["current_lien_balance_high"])
+        if row.get("current_lien_balance_high") is not None
+        else current_lien_balance
+    )
+
     output: dict[str, Any] = {
         "borrower_id": borrower_id,
         "display_name": synthesize_display_name(row.get("owner_name_hash")),
@@ -546,12 +567,24 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "owner_link_id": owner_link_id,
         "subject_property": synthesize_subject_property(city, state, zip5),
         "avm_value": int(row.get("avm_value") or 0),
-        "current_lien_balance": int(row.get("current_lien_balance") or 0),
+        "current_lien_balance": current_lien_balance,
+        "current_lien_balance_low": current_lien_balance_low,
+        "current_lien_balance_high": current_lien_balance_high,
         "current_rate": float(row.get("current_rate") or 0.0),
         "ltv": int(row.get("ltv") or 0),
         "related_property_count": int(row.get("related_property_count") or 1),
+        # S1.1 multi-owner caveat fields. Display-only here: contact
+        # suppression is enforced upstream (gold.borrower_360 fails
+        # marketing_eligible closed on unresolved owners).
+        "owner_count": int(row.get("owner_count") or 1),
+        "has_unresolved_owner": bool(row.get("has_unresolved_owner") or False),
+        "primary_owner_entity_type": _owner_entity_type(
+            row.get("primary_owner_entity_type")
+        ),
         "situs_cbsa_code": row.get("situs_cbsa_code") or None,
         "first_pos_loan_type": row.get("first_pos_loan_type") or None,
+        "loan_product_type": _optional_str(row.get("loan_product_type")),
+        "origination_channel": _optional_str(row.get("origination_channel")),
         "is_owner_occupied": bool(row.get("is_owner_occupied") or False),
         "is_absentee": bool(row.get("is_absentee") or False),
         "is_corporate_owner": bool(row.get("is_corporate_owner") or False),
@@ -668,6 +701,13 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "is_former_customer": bool(row.get("is_former_customer") or False),
         "is_competitor_lien": bool(row.get("is_competitor_lien") or False),
         "related_property_count": int(row.get("related_property_count") or 1),
+        # S1.1 multi-owner caveat fields (display-only; suppression is
+        # enforced upstream in gold.borrower_360.marketing_eligible).
+        "owner_count": int(row.get("owner_count") or 1),
+        "has_unresolved_owner": bool(row.get("has_unresolved_owner") or False),
+        "primary_owner_entity_type": _owner_entity_type(
+            row.get("primary_owner_entity_type")
+        ),
         "current_lien_balance": int(row.get("current_lien_balance") or 0),
         "second_pos_amount": int(row.get("second_pos_amount") or 0),
         "has_permit": bool(row.get("has_permit") or False),
@@ -689,6 +729,10 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "has_refi_propensity_trigger": bool(
             row.get("has_refi_propensity_trigger") or False
         ),
+        # S1.6 dimensions. None = unknown; the UI renders "Unknown" and the
+        # filters treat NULL as its own reviewed bucket.
+        "loan_product_type": _optional_str(row.get("loan_product_type")),
+        "origination_channel": _optional_str(row.get("origination_channel")),
         # Fail closed when source columns are missing/null.
         "marketing_eligible": bool(row.get("marketing_eligible") is True),
         "consent_status": _consent_status(row.get("consent_status")),

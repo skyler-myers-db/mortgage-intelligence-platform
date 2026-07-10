@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.schemas._validators import (
     configured_public_lender_name,
@@ -25,6 +25,35 @@ _LENDER_RELATIONSHIP_LABELS: frozenset[str] = frozenset(
 _PRODUCT_LABELS: frozenset[str] = frozenset(
     {"All products", "Refi", "HELOC", "Cash-out", "Purchase", "Retention"},
 )
+# S1.6: loan product-type dimension (gold.borrower_360.loan_product_type).
+# Distinct from `product`, which filters the RECOMMENDED OFFER product.
+_LOAN_PRODUCT_LABELS: frozenset[str] = frozenset(
+    {"All loan products", "Conventional", "Jumbo", "FHA", "VA", "Other", "Unknown"},
+)
+_LOAN_PRODUCT_ALIASES: dict[str, str] = {
+    "all": "All loan products",
+    "all_loan_products": "All loan products",
+    "conventional": "Conventional",
+    "jumbo": "Jumbo",
+    "fha": "FHA",
+    "va": "VA",
+    "other": "Other",
+    "unknown": "Unknown",
+}
+# S1.6: origination-channel dimension (gold.borrower_360.origination_channel,
+# sourced from funded first-party LOS applications; Unknown = NULL).
+_ORIGINATION_CHANNEL_LABELS: frozenset[str] = frozenset(
+    {"All channels", "Loan officer", "Digital", "Branch", "Call center", "Unknown"},
+)
+_ORIGINATION_CHANNEL_ALIASES: dict[str, str] = {
+    "all": "All channels",
+    "all_channels": "All channels",
+    "loan_officer": "Loan officer",
+    "digital": "Digital",
+    "branch": "Branch",
+    "call_center": "Call center",
+    "unknown": "Unknown",
+}
 _EQUITY_LABELS: frozenset[str] = frozenset({"≥ 15%", "≥ 25%", "≥ 40%", "Any"})
 _OWNER_LINK_LABELS: frozenset[str] = frozenset(
     {"All", "Single-property owner", "Multi-property (2-4)", "Portfolio investor (5+)"}
@@ -245,6 +274,8 @@ class PortfolioCriteria(BaseModel):
     lien_status: str | None = None
     lender_relationship: str | None = None
     product: str | None = None
+    loan_product: str | None = None
+    origination_channel: str | None = None
     target_lender_ref: str | None = None
     min_equity_pct: float | None = None
     owner_link: str | None = None
@@ -327,6 +358,26 @@ class PortfolioCriteria(BaseModel):
     @classmethod
     def _product_is_reviewed_label(cls, value: str | None) -> str | None:
         return _validate_optional_label(value, allowed=_PRODUCT_LABELS, field_name="product")
+
+    @field_validator("loan_product")
+    @classmethod
+    def _loan_product_is_reviewed_label(cls, value: str | None) -> str | None:
+        return _normalise_reviewed_alias(
+            value,
+            allowed=_LOAN_PRODUCT_LABELS,
+            aliases=_LOAN_PRODUCT_ALIASES,
+            field_name="loan_product",
+        )
+
+    @field_validator("origination_channel")
+    @classmethod
+    def _origination_channel_is_reviewed_label(cls, value: str | None) -> str | None:
+        return _normalise_reviewed_alias(
+            value,
+            allowed=_ORIGINATION_CHANNEL_LABELS,
+            aliases=_ORIGINATION_CHANNEL_ALIASES,
+            field_name="origination_channel",
+        )
 
     @field_validator("min_equity_pct_label")
     @classmethod
@@ -439,6 +490,10 @@ class PortfolioCriteria(BaseModel):
             return True
         if self.product and self.product != "All products":
             return True
+        if self.loan_product and self.loan_product != "All loan products":
+            return True
+        if self.origination_channel and self.origination_channel != "All channels":
+            return True
         if self.min_equity_pct is not None and self.min_equity_pct > 0:
             return True
         if self.marketing_eligibility == "Suppressed only":
@@ -458,6 +513,68 @@ class PortfolioPreviewRequest(BaseModel):
     criteria: PortfolioCriteria = Field(default_factory=PortfolioCriteria)
 
 
+HouseholdDedupeUnit = Literal["borrower", "household"]
+HouseholdPrimaryStrategy = Literal["highest_opportunity_eligible"]
+
+
+def _household_source_assets() -> list[str]:
+    return ["mip.gold.household_rollup", "mip.gold.borrower_360"]
+
+
+class HouseholdDedupConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    dedupe_unit: HouseholdDedupeUnit = "borrower"
+    primary_contact_strategy: HouseholdPrimaryStrategy = "highest_opportunity_eligible"
+
+    @model_validator(mode="after")
+    def _normalize_dedupe_unit(self) -> "HouseholdDedupConfig":
+        self.dedupe_unit = "household" if self.enabled else "borrower"
+        return self
+
+
+class HouseholdDedupSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    candidate_borrower_count: int = 0
+    selected_primary_count: int = 0
+    suppressed_co_owner_count: int = 0
+    household_count: int = 0
+    owner_link_household_count: int = 0
+    mailing_address_household_count: int = 0
+    singleton_household_count: int = 0
+    primary_contact_strategy: HouseholdPrimaryStrategy = "highest_opportunity_eligible"
+    source_assets: list[str] = Field(default_factory=_household_source_assets)
+
+    @field_validator(
+        "candidate_borrower_count",
+        "selected_primary_count",
+        "suppressed_co_owner_count",
+        "household_count",
+        "owner_link_household_count",
+        "mailing_address_household_count",
+        "singleton_household_count",
+    )
+    @classmethod
+    def _validate_count(cls, value: int) -> int:
+        if isinstance(value, bool) or value < 0 or value > 10_000_000:
+            raise ValueError("household counts must be bounded non-negative integers")
+        return int(value)
+
+    @field_validator("source_assets")
+    @classmethod
+    def _validate_source_assets(cls, value: list[str]) -> list[str]:
+        if not value or len(value) > 5:
+            raise ValueError("source_assets must cite bounded governed UC assets")
+        normalized = [str(item).strip() for item in value]
+        for asset in normalized:
+            if asset not in {"mip.gold.household_rollup", "mip.gold.borrower_360"}:
+                raise ValueError("source_assets must cite household_rollup and borrower_360 only")
+        return normalized
+
+
 class PortfolioCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -469,6 +586,7 @@ class PortfolioCreateRequest(BaseModel):
     send_window: dict[str, object] = Field(default_factory=dict)
     holdout: dict[str, object] | None = None
     roi_assumptions: dict[str, object] | None = None
+    household_dedup: HouseholdDedupConfig = Field(default_factory=HouseholdDedupConfig)
 
     @field_validator("name")
     @classmethod
@@ -683,6 +801,7 @@ class PortfolioCreateResponse(BaseModel):
     campaign_id: str | None = None
     name: str
     marketable_population: int
+    household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     audit_event_id: str | None = None
 
 
@@ -701,6 +820,8 @@ class CampaignSummary(BaseModel):
     send_window: dict[str, object] = Field(default_factory=dict)
     holdout: dict[str, object] | None = None
     roi_assumptions: dict[str, object] | None = None
+    household_dedup: HouseholdDedupConfig = Field(default_factory=HouseholdDedupConfig)
+    household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

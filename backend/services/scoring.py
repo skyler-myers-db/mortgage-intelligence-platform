@@ -15,6 +15,11 @@ golden-fixture JSON that the SQL side validates against the same inputs:
                             + ``tests/fixtures/estimated_upb_golden.json``
                             (case_04 pins unknown-rate fallback; case_06
                             pins near-payoff behavior).
+- ``estimated_upb_confidence_band``
+                         -> ``sql/uc_functions/fn_estimated_upb_confidence_band.sql``
+                            + ``tests/fixtures/estimated_upb_confidence_band_golden.json``
+                            (pins lower/point/upper range from bounded
+                            mortgage-rate uncertainty).
 - ``in_the_money``       -> ``sql/uc_functions/fn_in_the_money.sql``
                             + ``tests/fixtures/in_the_money_golden.json``
                             (cases 04/05 pin the inclusive ``>=`` boundary).
@@ -22,6 +27,16 @@ golden-fixture JSON that the SQL side validates against the same inputs:
                             + ``tests/fixtures/next_best_offer_golden.json``
                             (case_12 pins the fixture refi_plus_heloc shift;
                             cases 09/10 pin the HELOC-equity boundary).
+- ``loan_product_type``  -> ``sql/uc_functions/fn_loan_product_type.sql``
+                            + ``tests/fixtures/loan_product_type_golden.json``
+                            (boundary case pins "exactly at the conforming
+                            limit is conforming, not jumbo"; NULL code
+                            returns None -- unknown never guesses).
+- ``refi_propensity_heuristic``
+                         -> ``sql/uc_functions/fn_refi_propensity_heuristic.sql``
+                            + ``tests/fixtures/refi_propensity_heuristic_golden.json``
+                            (S1.3 transparent points table; boundary cases pin
+                            every published band edge).
 
 Weights for ``lead_score`` (non-negotiable): 0.35 / 0.30 / 0.15 / 0.10 / 0.10.
 NULL (``None``) score components coerce to 0. ``in_the_money`` returns
@@ -38,6 +53,8 @@ _INT32_MIN = -2_147_483_648
 _INT32_MAX = 2_147_483_647
 _STANDARD_MORTGAGE_TERM_MONTHS = 360
 _MAX_AMORTIZATION_RATE = 10.0
+_MIN_BOUNDED_MORTGAGE_RATE = 0.01
+_MAX_BOUNDED_MORTGAGE_RATE = 0.15
 
 # fn_lead_score weights as EXACT decimals. Spark parses the SQL literals
 # (0.35 etc.) as DECIMAL, so the UDF computes the weighted sum exactly and
@@ -68,6 +85,31 @@ NBO_PRODUCT_LABELS: dict[str, str] = {
     "investor": "Investor Product",
     "retention": "Retention",
     "nurture": "Nurture",
+}
+
+# Canonical loan product-type vocabulary emitted by fn_loan_product_type /
+# gold.borrower_360.loan_product_type. Order matters: it is the reviewed
+# filter-option order on the segments / lead-queue surfaces.
+LOAN_PRODUCT_TYPES: tuple[str, ...] = ("conventional", "jumbo", "fha", "va", "other")
+
+LOAN_PRODUCT_DISPLAY_LABELS: dict[str, str] = {
+    "conventional": "Conventional",
+    "jumbo": "Jumbo",
+    "fha": "FHA",
+    "va": "VA",
+    "other": "Other",
+}
+
+# Origination-channel vocabulary from the governed first-party LOS feed
+# (mip.first_party.loan_applications.application_channel; funded rows only).
+# NULL gold values render as "Unknown" -- the app never invents a channel.
+ORIGINATION_CHANNELS: tuple[str, ...] = ("loan_officer", "digital", "branch", "call_center")
+
+ORIGINATION_CHANNEL_DISPLAY_LABELS: dict[str, str] = {
+    "loan_officer": "Loan officer",
+    "digital": "Digital",
+    "branch": "Branch",
+    "call_center": "Call center",
 }
 
 OFFER_DISPLAY_LABELS: dict[str, str] = {
@@ -110,10 +152,13 @@ def offer_display_label(code: str | None, fallback: str | None = None) -> str:
 SOURCE_DISPLAY_LABELS: dict[str, str] = {
     # UC function evidence
     "mip.gold.fn_rate_spread":      "Market rate comparison",
+    "mip.gold.fn_bounded_mortgage_rate": "Mortgage rate quality bound",
     "mip.gold.fn_estimated_upb":    "Estimated UPB amortization",
+    "mip.gold.fn_estimated_upb_confidence_band": "Estimated UPB confidence band",
     "mip.gold.fn_in_the_money":     "Refinance economics screen",
     "mip.gold.fn_next_best_offer":  "Primary offer rules",
     "mip.gold.fn_lead_score":       "Opportunity score",
+    "mip.gold.fn_loan_product_type": "Loan product classification",
     # UC table evidence
     "mip.gold.borrower_360":        "Borrower dossier",
     "mip.gold.borrower_dossier":    "Borrower dossier",
@@ -124,12 +169,17 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.silver.listing_activity":  "MLS listing activity",
     "mip.silver.heloc_propensity":  "HELOC propensity",
     "mip.silver.refi_propensity":   "Refi propensity",
+    "mip.first_party.loan_applications": "First-party loan applications",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",
+    "fn_bounded_mortgage_rate":     "Mortgage rate quality bound",
     "fn_estimated_upb":             "Estimated UPB amortization",
+    "fn_estimated_upb_confidence_band": "Estimated UPB confidence band",
     "fn_in_the_money":              "Refinance economics screen",
     "fn_next_best_offer":           "Primary offer rules",
     "fn_lead_score":                "Opportunity score",
+    "fn_loan_product_type":         "Loan product classification",
+    "loan_applications":            "First-party loan applications",
     "rules.itm_v3":                 "Refinance economics screen",
     "mlflow.mtg_nbo_v3":            "Primary offer rules v3",
     "permits.building":             "Building permit signal",
@@ -295,6 +345,64 @@ def estimated_upb(
     return max(0, int(round(balance)))
 
 
+def bounded_mortgage_rate(raw_rate: float | None) -> float | None:
+    """Return the governed source-quality bound for mortgage rates.
+
+    Mirrors ``mip.gold.fn_bounded_mortgage_rate``. Rates are fractional
+    annual APR values. ``None`` and values below 1% return ``None`` because
+    they are treated as missing/no-signal in gold. Values above 15% clamp to
+    15% so source or synthetic generator outliers remain visible without
+    dominating mortgage economics.
+    """
+    import math
+
+    try:
+        rate = None if raw_rate is None else float(raw_rate)
+    except (TypeError, ValueError):
+        return None
+    if rate is None or not math.isfinite(rate) or rate < _MIN_BOUNDED_MORTGAGE_RATE:
+        return None
+    if rate > _MAX_BOUNDED_MORTGAGE_RATE:
+        return _MAX_BOUNDED_MORTGAGE_RATE
+    return rate
+
+
+def estimated_upb_confidence_band(
+    original_upb: int | float | None,
+    estimated_rate: float | None,
+    months_elapsed: int | None,
+) -> dict[str, int]:
+    """Return lower/point/upper estimated-UPB dollars.
+
+    Mirrors ``mip.gold.fn_estimated_upb_confidence_band``. The point estimate
+    is ``estimated_upb`` using the canonical bounded mortgage rate. The band
+    recomputes ``estimated_upb`` at the same plausible rate floor/ceiling used
+    by the gold rate-quality bound. The final range is expanded to include the
+    point estimate so unknown-rate straight-line fallback rows still produce a
+    valid ``lower <= estimate <= upper`` contract.
+    """
+    estimate = estimated_upb(
+        original_upb,
+        bounded_mortgage_rate(estimated_rate),
+        months_elapsed,
+    )
+    lower_at_floor = estimated_upb(
+        original_upb,
+        bounded_mortgage_rate(_MIN_BOUNDED_MORTGAGE_RATE),
+        months_elapsed,
+    )
+    upper_at_ceiling = estimated_upb(
+        original_upb,
+        bounded_mortgage_rate(_MAX_BOUNDED_MORTGAGE_RATE),
+        months_elapsed,
+    )
+    return {
+        "lower_upb": min(lower_at_floor, estimate, upper_at_ceiling),
+        "estimate_upb": estimate,
+        "upper_upb": max(lower_at_floor, estimate, upper_at_ceiling),
+    }
+
+
 def in_the_money(
     rate_spread_bps: int | None,
     equity_pct: int | None,
@@ -316,6 +424,55 @@ def in_the_money(
     ):
         return False
     return (rate_spread_bps >= min_spread_bps) and (equity_pct >= min_equity_pct)
+
+
+def refi_propensity_heuristic(
+    rate_spread_bps: int | None,
+    loan_age_months: int | None,
+    equity_pct: int | None,
+    estimated_upb: int | None,
+    listed_for_sale: bool | None,
+) -> int:
+    """Return the 0..100 transparent refi-propensity heuristic score.
+
+    Mirrors ``mip.gold.fn_refi_propensity_heuristic`` (S1.3). This is a
+    deterministic published points table over observable lien/AVM/MLS
+    signals -- NOT the Cotality refi propensity model, which the app
+    surfaces separately. The exact table lives in the UDF header and the
+    glossary methodology entry; the ``refi_propensity`` overlay segment
+    admits scores >= 60 (threshold applied in gold, not here). ``None``
+    numeric inputs contribute 0 points; ``None`` listed_for_sale is
+    treated as not-listed.
+    """
+    spread = rate_spread_bps or 0
+    if spread >= 100:
+        score = 40
+    elif spread >= 75:
+        score = 32
+    elif spread >= 50:
+        score = 22
+    elif spread >= 25:
+        score = 10
+    else:
+        score = 0
+    if loan_age_months is not None:
+        if 24 <= loan_age_months <= 84:
+            score += 20
+        elif 12 <= loan_age_months <= 23 or 85 <= loan_age_months <= 120:
+            score += 10
+    equity = equity_pct or 0
+    if equity >= 20:
+        score += 20
+    elif equity >= 10:
+        score += 10
+    upb = estimated_upb or 0
+    if upb >= 150_000:
+        score += 10
+    elif upb >= 75_000:
+        score += 5
+    if not listed_for_sale:
+        score += 10
+    return score
 
 
 def next_best_offer(
@@ -382,3 +539,40 @@ def next_best_offer(
     if customer and (spread >= retention_min or competitor_lien):
         return "retention"
     return "nurture"
+
+
+def loan_product_type(
+    loan_type_code: str | None,
+    original_loan_amount: int | None,
+    conforming_limit_usd: int | None,
+) -> str | None:
+    """Return the canonical loan product-type bucket, or ``None`` if unknown.
+
+    Mirrors ``mip.gold.fn_loan_product_type`` EXACTLY. The Cotality
+    first-position loan type code (CONV / FHA / VA / other codes) maps to
+    the lowercase vocabulary in ``LOAN_PRODUCT_TYPES``; a conventional
+    first lien whose ORIGINAL amount is strictly greater than the governed
+    conforming loan limit classifies as ``'jumbo'``. A loan exactly at the
+    limit is conforming (FHFA definition -- golden fixture pins the
+    boundary). ``None``/blank code returns ``None``: an unknown source
+    code must read as "unknown", never a guessed product. ``None`` amount
+    or limit only disables the jumbo branch.
+    """
+    if loan_type_code is None:
+        return None
+    code = loan_type_code.strip().upper()
+    if not code:
+        return None
+    if code == "CONV":
+        if (
+            original_loan_amount is not None
+            and conforming_limit_usd is not None
+            and original_loan_amount > conforming_limit_usd
+        ):
+            return "jumbo"
+        return "conventional"
+    if code == "FHA":
+        return "fha"
+    if code == "VA":
+        return "va"
+    return "other"

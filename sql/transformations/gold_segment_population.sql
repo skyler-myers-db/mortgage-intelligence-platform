@@ -114,7 +114,11 @@ WITH exploded AS (
   SELECT
     b.state,
     sc AS segment_code,
-    b.opportunity_score
+    b.opportunity_score,
+    -- Facet dimensions (S1.6). NULL reads as 'unknown' in the mix so facet
+    -- counts always sum to the segment count -- no silent row drops.
+    COALESCE(b.loan_product_type, 'unknown')   AS loan_product_type,
+    COALESCE(b.origination_channel, 'unknown') AS origination_channel
   FROM mip.gold.borrower_360 AS b
   LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
 ),
@@ -141,6 +145,63 @@ current_counts AS (
   UNION ALL
   SELECT * FROM national
 ),
+-- Facet mixes (S1.6): per-(segment, state) product-type and origination-
+-- channel breakdowns, spanning both per-state cells and the _ALL national
+-- rollup. Sorted by count desc then value so the SegmentCard facet chips are
+-- deterministic across refreshes.
+exploded_spanned AS (
+  SELECT state, segment_code, loan_product_type, origination_channel FROM exploded
+  UNION ALL
+  SELECT '_ALL' AS state, segment_code, loan_product_type, origination_channel FROM exploded
+),
+product_mix AS (
+  SELECT
+    segment_code,
+    state,
+    TRANSFORM(
+      ARRAY_SORT(
+        COLLECT_LIST(STRUCT(cnt, value)),
+        (a, b) -> CASE
+          WHEN a.cnt   > b.cnt   THEN -1
+          WHEN a.cnt   < b.cnt   THEN  1
+          WHEN a.value < b.value THEN -1
+          WHEN a.value > b.value THEN  1
+          ELSE 0
+        END
+      ),
+      x -> STRUCT(x.value AS value, x.cnt AS count)
+    ) AS loan_product_mix
+  FROM (
+    SELECT segment_code, state, loan_product_type AS value, CAST(COUNT(*) AS INT) AS cnt
+    FROM exploded_spanned
+    GROUP BY segment_code, state, loan_product_type
+  )
+  GROUP BY segment_code, state
+),
+channel_mix AS (
+  SELECT
+    segment_code,
+    state,
+    TRANSFORM(
+      ARRAY_SORT(
+        COLLECT_LIST(STRUCT(cnt, value)),
+        (a, b) -> CASE
+          WHEN a.cnt   > b.cnt   THEN -1
+          WHEN a.cnt   < b.cnt   THEN  1
+          WHEN a.value < b.value THEN -1
+          WHEN a.value > b.value THEN  1
+          ELSE 0
+        END
+      ),
+      x -> STRUCT(x.value AS value, x.cnt AS count)
+    ) AS origination_channel_mix
+  FROM (
+    SELECT segment_code, state, origination_channel AS value, CAST(COUNT(*) AS INT) AS cnt
+    FROM exploded_spanned
+    GROUP BY segment_code, state, origination_channel
+  )
+  GROUP BY segment_code, state
+),
 -- Most recent prior snapshot strictly before today. Takes the MAX snapshot
 -- date < today for each (segment_code, state); first-refresh rows have no
 -- prior and emit prior_count = 0 -> delta '+0%'.
@@ -159,7 +220,8 @@ prior AS (
   WHERE rn = 1
 ),
 -- Segment metadata inline so gold is self-contained. This is the canonical
--- 6-segment registry that the rollup CROSS-JOIN-spans below; every refresh
+-- segment registry (6 core + 7 S1.3 overlays) that the rollup
+-- CROSS-JOIN-spans below; every refresh
 -- emits a row per (segment_code, state) including states + the _ALL
 -- aggregate, so the API can never silently drop a segment whose predicate
 -- matched zero borrowers.
@@ -175,7 +237,18 @@ meta AS (
       ('permit',    'HELOC Intent',             'Cotality HELOC propensity >= 700 with equity context. Filed Building Permits remain pending until a true permit source lands.', '#A78BFA'),
       ('investor',  'Investor / Multi-Property','Owner Link shows 2+ properties or repeat behavior.',                                    '#F472B6'),
       ('equity',    'Home Equity Candidate',    'Strong equity and no active second-position balance.',                                  '#66C5FF'),
-      ('retention', 'Retention Risk',           'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', '#34D399')
+      ('retention', 'Retention Risk',           'Current-customer or recapture signals worth reviewing before the borrower shops alternatives.', '#34D399'),
+      -- S1.3 overlay segments. Membership predicates live in
+      -- gold_borrower_360.sql (with_segments) and each column comment; the
+      -- refi_propensity heuristic is published verbatim in
+      -- fn_refi_propensity_heuristic.sql + the app glossary.
+      ('second_lien_itm',         'Second-Lien Consolidation', 'Open second position whose rate clears the same governed spread/equity thresholds as first-lien ITM.', '#E879F9'),
+      ('heloc_draw_to_payback',   'HELOC Draw Ending',         'Open equity-loan lien whose standard 120-month draw period ends within 18 months or ended within the last 6.', '#FB923C'),
+      ('home_equity_history',     'Home Equity History',       'Appreciation >= 40% since purchase, owned >= 36 months, current equity >= 20%.', '#A3E635'),
+      ('refi_propensity',         'Refi Propensity',           'Transparent deterministic heuristic >= 60 of 100. Published points table over spread, seasoning, equity, balance, and listing status.', '#818CF8'),
+      ('itm_on_related_property', 'ITM on Related Property',   'An Owner Link on this property also holds a different property that is in the money.', '#38BDF8'),
+      ('payoff_loss_leads',       'Payoff Loss',               'Tenant lien released within 24 months and the property now carries a competitor lien.', '#F87171'),
+      ('permit_activity',         'Permit Activity',           'Filed building-permit activity. Pending until a true Cotality permit source table lands; never inferred from propensity models.', '#C4B5FD')
   ) AS t(segment_code, name, description, color)
 ),
 -- Build the full (segment_code, state) grid up front so segments with zero
@@ -213,12 +286,18 @@ SELECT
   COALESCE(c.avg_score, 0)                          AS avg_score,
   m.description,
   m.color,
+  COALESCE(pmix.loan_product_mix,
+           CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>))       AS loan_product_mix,
+  COALESCE(cmix.origination_channel_mix,
+           CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>))       AS origination_channel_mix,
   -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM grid           AS g
 LEFT JOIN meta      AS m USING (segment_code)
 LEFT JOIN current_counts AS c USING (segment_code, state)
-LEFT JOIN prior     AS p USING (segment_code, state);
+LEFT JOIN prior     AS p USING (segment_code, state)
+LEFT JOIN product_mix AS pmix USING (segment_code, state)
+LEFT JOIN channel_mix AS cmix USING (segment_code, state);
 
 -- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
 -- CREATE OR REPLACE drops DDL column comments on every refresh, and the
@@ -226,7 +305,7 @@ LEFT JOIN prior     AS p USING (segment_code, state);
 -- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
 -- asset-page comments refresh-stable; the SQL file task executes the
 -- statements in order.
-COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
+COMMENT ON COLUMN mip.gold.segment_population.segment_code IS 'itm / listed / permit / investor / equity / retention + S1.3 overlays second_lien_itm / heloc_draw_to_payback / home_equity_history / refi_propensity / itm_on_related_property / payoff_loss_leads / permit_activity. Matches SegmentCode Literal exactly; permit is the backward-compatible code for customer-facing HELOC Intent.';
 COMMENT ON COLUMN mip.gold.segment_population.state IS '2-char state code from refreshed source coverage or "_ALL" for national rollup.';
 COMMENT ON COLUMN mip.gold.segment_population.name IS 'Static label per segment_code (e.g., "Prime Refi Candidates").';
 COMMENT ON COLUMN mip.gold.segment_population.count IS 'Member count for this (segment, state) cell.';
@@ -234,4 +313,6 @@ COMMENT ON COLUMN mip.gold.segment_population.delta_vs_prior IS 'Quarter-over-qu
 COMMENT ON COLUMN mip.gold.segment_population.avg_score IS 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.';
 COMMENT ON COLUMN mip.gold.segment_population.description IS 'Static description per segment_code.';
 COMMENT ON COLUMN mip.gold.segment_population.color IS 'Hex color for segment tile.';
+COMMENT ON COLUMN mip.gold.segment_population.loan_product_mix IS 'Loan product-type facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. value is conventional / jumbo / fha / va / other / unknown. Backs SegmentCard facets.';
+COMMENT ON COLUMN mip.gold.segment_population.origination_channel_mix IS 'Origination-channel facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. unknown aggregates borrowers with no funded first-party application. Backs SegmentCard facets.';
 COMMENT ON COLUMN mip.gold.segment_population.refreshed_at IS 'Refresh timestamp.';

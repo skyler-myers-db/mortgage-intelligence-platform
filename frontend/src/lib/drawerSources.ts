@@ -1,4 +1,6 @@
 import type { DrawerSource } from '../components/AppContext';
+import type { SegmentSummary } from '../types';
+import { SEGMENT_EVIDENCE_SPECS, SEGMENT_GATE_COPY } from './segmentEvidenceSpecs';
 
 const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.gold.lead_population': 'lead_population',
@@ -7,6 +9,7 @@ const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.gold.borrower_360': 'borrower_360',
   'mip.gold.borrower_dossier': 'borrower_dossier',
   'mip.gold.evidence_events': 'evidence_events',
+  'mip.gold.household_rollup': 'household_rollup',
   'mip.gold.source_readiness': 'source_readiness',
   'mip.gold.lockin_cohort': 'lockin_cohort',
   'mip.gold.funnel_snapshot_daily': 'funnel_snapshot_daily',
@@ -63,8 +66,7 @@ export function descriptorFor(rawSource: string): DrawerSource {
   return drawerForAsset(rawSource) ?? {
     title: rawSource,
     short: rawSource.split('.').pop() ?? rawSource,
-    description:
-      `Unity Catalog object: ${rawSource}. No curated drawer mapping exists yet; showing the exact source rather than routing to a mismatched drawer.`,
+    description: `UC object: ${rawSource}.`,
     lineage: [{ layer: 'UC', name: rawSource }],
     signals: [],
   };
@@ -74,6 +76,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   const key = rawSource.toLowerCase();
 
   if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
+  if (key.includes('fn_estimated_upb_confidence_band')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('fn_estimated_upb')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('rate_spread')) return enrichAsset(DRAWER_SOURCES.rateSpread);
   if (key.includes('fn_in_the_money') || key.includes('itm')) return enrichAsset(DRAWER_SOURCES.itm);
@@ -85,6 +88,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('lead_population')) return enrichAsset(DRAWER_SOURCES.leadPopulation);
   if (key.includes('segment_population')) return enrichAsset(DRAWER_SOURCES.segmentPopulation);
   if (key.includes('borrower_dossier')) return enrichAsset(DRAWER_SOURCES.borrowerDossier);
+  if (key.includes('household_rollup')) return enrichAsset(DRAWER_SOURCES.householdRollup);
   if (key.includes('borrower_360')) return enrichAsset(DRAWER_SOURCES.borrower360);
   if (key.includes('evidence_events')) return enrichAsset(DRAWER_SOURCES.evidenceStream);
   if (key.includes('source_readiness')) return enrichAsset(DRAWER_SOURCES.sourceReadiness);
@@ -132,6 +136,17 @@ export function descriptorForEvidence(event: {
   }
   if (product.includes('avm') || signal.includes('equity')) {
     return withEventDate(DRAWER_SOURCES.avm, event.timestamp);
+  }
+  // S1.6 dimensions. `product_type` shares the Voluntary Lien source product
+  // with rate/lien signals, so route on the specific signal_type BEFORE the
+  // generic lien block below (which would otherwise swallow it via the shared
+  // 'Voluntary Lien' source product). Origination channel comes from the
+  // First-Party LOS product.
+  if (signal.includes('product_type')) {
+    return withEventDate(DRAWER_SOURCES.loanProductType, event.timestamp);
+  }
+  if (signal.includes('origination_channel') || product.includes('first-party los')) {
+    return withEventDate(DRAWER_SOURCES.originationChannel, event.timestamp);
   }
   if (
     product.includes('voluntary lien') ||
@@ -188,19 +203,18 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     // showed "Freshness unavailable", implying a data gap that wasn't real.
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
-    description:
-      'Deed and mortgage records joined to voluntary liens and the Owner Link graph, filtered by the lender configuration.',
+    description: 'Deed, lien, and Owner Link records.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.public_records.deed_and_mortgage', meta: 'Delta Share - nationwide' },
-      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Delta Share - nationwide' },
-      { layer: 'ENTITY', name: 'entity.property_clip', meta: 'Mastered via CLIP' },
-      { layer: 'ENTITY', name: 'entity.owner_link', meta: 'Mastered via Owner Link' },
-      { layer: 'SEMANTIC', name: 'metrics.borrower_universe', meta: 'UC metric view' },
+      { layer: 'SOURCE', name: 'cotality.public_records.deed_and_mortgage' },
+      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien' },
+      { layer: 'ENTITY', name: 'entity.property_clip' },
+      { layer: 'ENTITY', name: 'entity.owner_link' },
+      { layer: 'SEMANTIC', name: 'metrics.borrower_universe' },
     ],
     signals: [
       { label: 'Borrower universe', source: 'metrics.borrower_universe', value: 'live count' },
       { label: 'Ownership graph', source: 'entity.owner_link', value: 'CLIP-grain' },
-      { label: 'Configured tenant lens', source: 'mip.ref.lender_dictionary', value: 'applied during gold refresh' },
+      { label: 'Tenant lens', source: 'mip.ref.lender_dictionary', value: 'gold refresh' },
     ],
   },
 
@@ -209,21 +223,18 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Ranked lead population',
     assetKey: 'lead_population',
     assetPath: 'mip.gold.lead_population',
-    usedIn: ['Lead Queue', 'Borrower 360', 'Offer workflow', 'Analytics'],
-    notExposed: 'Raw CLIP, owner names, street addresses, source-table paths, and lender raw strings.',
-    description:
-      'Gold Lead Queue population: the ranked, quality-filtered subset of borrower_360 where opportunity_score is at least 50. It carries borrower-safe display fields, segment codes, evidence IDs, primary offer path, rank, and approval state for outreach workflows.',
+    description: 'Gold Lead Queue rows: score >= 50, safe fields, segments, evidence, offer, rank, and approval.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain Cotality + first-party features' },
-      { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity_score and signal-strength components' },
-      { layer: 'GOLD', name: 'mip.gold.lead_population', meta: 'opportunity_score >= 50, ranked by score' },
-      { layer: 'APP', name: 'Lead Queue / approval workflow', meta: 'evidence_ids and approval_status preserved' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SCORE', name: 'mip.gold.lead_scores' },
+      { layer: 'GOLD', name: 'mip.gold.lead_population' },
+      { layer: 'APP', name: 'Lead Queue / approval workflow' },
     ],
     signals: [
-      { label: 'Quality floor', source: 'lead_population.opportunity_score', value: '>= 50' },
-      { label: 'Rank', source: 'lead_population.rank_overall / rank_within_state', value: 'deterministic by score + CLIP' },
-      { label: 'Evidence refs', source: 'lead_population.evidence_ids', value: 'audit-forwarded' },
-      { label: 'Approval state', source: 'lead_population.approval_status', value: 'Lakebase-synced' },
+      { label: 'Floor', source: 'opportunity_score', value: '>= 50' },
+      { label: 'Rank', source: 'lead_population.rank', value: 'score + CLIP' },
+      { label: 'Evidence', source: 'lead_population.evidence_ids', value: 'audited' },
+      { label: 'Approval', source: 'lead_population.approval_status', value: 'Lakebase' },
     ],
   },
 
@@ -232,37 +243,56 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Segment population',
     assetKey: 'segment_population',
     assetPath: 'mip.gold.segment_population',
-    usedIn: ['Segment Intelligence', 'Analytics', 'Genie'],
     description:
-      'Gold segment rollup used by Segment Intelligence. It preserves the configured segment predicates, AND/OR mode, geography, and average score at the population-rollup grain.',
+      'Gold segment rollup: predicate, mode, geography, count, and average score.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain segment flags' },
-      { layer: 'GOLD', name: 'mip.gold.segment_population', meta: 'segment count and average-score rollup' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.segment_performance_metric_view', meta: 'Genie + reporting surface' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'GOLD', name: 'mip.gold.segment_population' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.segment_performance_metric_view' },
     ],
     signals: [
-      { label: 'Segment count', source: 'segment_population.count', value: 'borrowers matching predicate' },
-      { label: 'Average score', source: 'segment_population.avg_score', value: 'population average' },
+      { label: 'Segment count', source: 'segment_population.count', value: 'matching borrowers' },
+      { label: 'Average score', source: 'segment_population.avg_score', value: 'average' },
       { label: 'Listing segment', source: 'borrower_360.listed_for_sale', value: 'live from Cotality MLS' },
-      { label: 'HELOC intent segment', source: 'borrower_360.has_heloc_propensity_trigger', value: 'live from Cotality propensity' },
+      { label: 'HELOC intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'Cotality propensity' },
     ],
   },
 
   ownerGraph: {
     title: 'Property + owner graph',
     short: 'Property + owner graph',
-    description:
-      'Property records mastered to CLIP and connected through Owner Link so the app can identify ownership relationships, related properties, occupancy posture, and investor patterns.',
+    description: 'CLIP property records with Owner Link, occupancy, and investor flags.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.public_records.deed_and_mortgage', meta: 'Delta Share - property and ownership attributes' },
-      { layer: 'ENTITY', name: 'mip.silver.property_master', meta: 'CLIP-grain property master' },
-      { layer: 'ENTITY', name: 'mip.gold.property_owner_bridge', meta: 'Owner Link related-property rollup' },
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'related_property_count, occupancy, investor flags' },
+      { layer: 'SOURCE', name: 'cotality.public_records.deed_and_mortgage' },
+      { layer: 'ENTITY', name: 'mip.silver.property_master' },
+      { layer: 'ENTITY', name: 'mip.gold.property_owner_bridge' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
     ],
     signals: [
       { label: 'Property identity', source: 'mip.silver.property_master.clip', value: 'masked CLIP ref' },
-      { label: 'Owner relationship', source: 'mip.gold.property_owner_bridge.owner_link_id', value: 'masked Owner Link ref' },
-      { label: 'Investor signal', source: 'borrower_360.related_property_count', value: '2+ related properties' },
+      { label: 'Owner link', source: 'property_owner_bridge.owner_link_id', value: 'masked ref' },
+      { label: 'Investor', source: 'borrower_360.related_property_count', value: '2+ properties' },
+    ],
+  },
+
+  householdRollup: {
+    title: 'Household rollup',
+    short: 'Household rollup',
+    assetKey: 'household_rollup',
+    assetPath: 'mip.gold.household_rollup',
+    description:
+      'Opt-in household grouping. Borrower remains default; dedup selects one eligible primary.',
+    lineage: [
+      { layer: 'SILVER', name: 'mip.silver.property_owners' },
+      { layer: 'SILVER', name: 'mip.silver.property_master' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'GOLD', name: 'mip.gold.household_rollup' },
+    ],
+    signals: [
+      { label: 'Default unit', source: 'campaign.household_dedup.enabled', value: 'borrower' },
+      { label: 'Primary contact', source: 'household_rollup.household_rank', value: 'eligible, score, id' },
+      { label: 'Co-owners', source: 'suppressed_by_household_dedup', value: 'campaign summary' },
+      { label: 'Derivation', source: 'household_rollup.derivation_source_tables', value: 'UC lineage' },
     ],
   },
 
@@ -270,17 +300,17 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Property profile',
     short: 'Property profile',
     description:
-      'CLIP-grain property attributes used for geography, occupancy posture, corporate-owner signals, mailing/situs mismatch, and foreclosure-stage snapshots. Raw owner and address identifiers are masked before API response.',
+      'CLIP geography, occupancy, owner type, mailing/situs, and foreclosure features.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.public_records.property', meta: 'property and ownership attributes' },
-      { layer: 'SILVER', name: 'mip.silver.property_master', meta: 'CLIP-grain property profile' },
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'occupancy, geography, fit and distress flags' },
-      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'absentee_mailing, corporate_owner, foreclosure_stage evidence rows' },
+      { layer: 'SOURCE', name: 'cotality.public_records.property' },
+      { layer: 'SILVER', name: 'mip.silver.property_master' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events' },
     ],
     signals: [
       { label: 'Property identity', source: 'property_master.clip', value: 'masked CLIP ref' },
-      { label: 'Occupancy / mailing', source: 'property_master', value: 'display-safe flags' },
-      { label: 'Distress snapshot', source: 'property_master.foreclosure_stage_code', value: 'when present' },
+      { label: 'Occupancy / mailing', source: 'property_master', value: 'safe flags' },
+      { label: 'Distress', source: 'property_master.foreclosure_stage_code', value: 'when present' },
     ],
   },
 
@@ -289,22 +319,20 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Borrower 360 feature set',
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
-    usedIn: ['Borrower 360', 'Offer workflow', 'Analytics', 'Proof layer'],
-    notExposed: 'Raw CLIP, owner identity, street address, raw lender values, and upstream source paths.',
     description:
-      'Canonical borrower-level feature table used by the dossier, offer logic, lead queue, and Genie trusted assets. It combines property, Owner Link, lien, AVM, market-rate, and first-party relationship fields at borrower grain.',
+      'Canonical borrower table for dossier, offers, Lead Queue, and Genie.',
     lineage: [
-      { layer: 'SILVER', name: 'mip.silver.property_master', meta: 'property and geography attributes' },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'current-lien and AVM attributes' },
-      { layer: 'GOLD', name: 'mip.gold.property_owner_bridge', meta: 'related property and owner graph features' },
-      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly', meta: 'market-rate comparison feed' },
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain feature projection' },
+      { layer: 'SILVER', name: 'mip.silver.property_master' },
+      { layer: 'SILVER', name: 'mip.silver.lien_current' },
+      { layer: 'GOLD', name: 'mip.gold.property_owner_bridge' },
+      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
     ],
     signals: [
       { label: 'Property ref', source: 'property_master.clip', value: 'masked CLIP ref' },
-      { label: 'Owner graph ref', source: 'property_owner_bridge.owner_link_id', value: 'masked Owner Link ref' },
-      { label: 'Borrower economics', source: 'lien_current + market_rates_weekly', value: 'rate spread, LTV, equity' },
-      { label: 'First-party lens', source: 'demo first-party feeds when configured', value: 'relationship flags' },
+      { label: 'Owner ref', source: 'property_owner_bridge.owner_link_id', value: 'masked ref' },
+      { label: 'Economics', source: 'lien_current + market_rates_weekly', value: 'rate, LTV, equity' },
+      { label: 'First-party', source: 'demo first-party feeds when configured', value: 'relationship' },
     ],
   },
 
@@ -313,44 +341,45 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Borrower dossier proof table',
     assetKey: 'borrower_dossier',
     assetPath: 'mip.gold.borrower_dossier',
-    usedIn: ['Borrower 360 proof drawer', 'Offer workflow', 'Reproduce SQL'],
-    notExposed: 'Raw CLIP, owner identity, street address, raw lender values, upstream source paths, and nested source-table names.',
     description:
-      'Governed borrower-proof table used to reconcile the displayed dossier, score math, decision inputs, evidence rows, and reproduce-SQL templates for a single borrower.',
+      'Governed borrower-proof table for dossier, score, decisions, evidence, and SQL proof.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-grain feature projection' },
-      { layer: 'SCORE', name: 'mip.gold.lead_scores', meta: 'opportunity score and signal-strength components' },
-      { layer: 'EVIDENCE', name: 'mip.gold.evidence_events', meta: 'display-safe evidence rows' },
-      { layer: 'GOLD', name: 'mip.gold.borrower_dossier', meta: 'proof-ready borrower dossier projection' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SCORE', name: 'mip.gold.lead_scores' },
+      { layer: 'EVIDENCE', name: 'mip.gold.evidence_events' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_dossier' },
     ],
     signals: [
-      { label: 'Displayed dossier', source: 'borrower_dossier.borrower_id', value: 'masked borrower id' },
-      { label: 'Score reconciliation', source: 'borrower_dossier.opportunity_score', value: 'compared with fn_lead_score' },
-      { label: 'Decision inputs', source: 'borrower_dossier.rate_spread_bps / equity_pct', value: 'recomputed in proof' },
-      { label: 'Evidence rows', source: 'borrower_dossier.evidence_events', value: 'nested fields redacted where sensitive' },
+      { label: 'Dossier', source: 'borrower_dossier.borrower_id', value: 'masked id' },
+      { label: 'Score', source: 'borrower_dossier.opportunity_score', value: 'vs fn_lead_score' },
+      { label: 'Decision inputs', source: 'rate_spread_bps / equity_pct', value: 'checked' },
+      { label: 'Evidence rows', source: 'borrower_dossier.evidence_events', value: 'redacted' },
     ],
   },
 
   lien: {
     title: 'Voluntary lien',
     short: 'Voluntary lien',
-    description:
-      'Current open-lien status, lien balance, lender reference, lien rate, and lien-derived relationship flags. This is the lien evidence behind rate spread, current-customer, competitor-lien, and open-lien filters.',
+    description: 'Current lien status, balance, lender ref, and rate.',
     lineage: [
       {
         layer: 'SOURCE',
         name: 'cotality.voluntary_lien_status_marketing',
-        meta: 'Cotality Delta Share',
       },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'current lien snapshot' },
-      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb', meta: 'UC SQL parity-pinned to scoring.py' },
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'current_lien_balance, current_rate, lender relationship' },
-      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'rate_spread and competitor_lien evidence rows' },
+      { layer: 'SILVER', name: 'mip.silver.lien_current' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_bounded_mortgage_rate' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb_confidence_band' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events' },
     ],
     signals: [
-      { label: 'Lien rate', source: 'lien_current.first_pos_rate', value: 'per borrower' },
-      { label: 'Estimated UPB', source: 'fn_estimated_upb', value: 'amortized from original UPB' },
-      { label: 'Lender relationship', source: 'mip.ref.lender_dictionary', value: 'tenant / competitor / other' },
+      { label: 'Original UPB', source: 'lien_current.first_pos_amount', value: 'borrower' },
+      { label: 'Lien rate', source: 'lien_current.first_pos_rate', value: 'borrower' },
+      { label: 'Elapsed months', source: 'months_between(refresh_at, first_pos_date)', value: 'refresh' },
+      { label: 'Estimated UPB', source: 'fn_estimated_upb', value: 'amortized' },
+      { label: 'Confidence band', source: 'fn_estimated_upb_confidence_band', value: '1%-15%' },
+      { label: 'Lender relationship', source: 'mip.ref.lender_dictionary', value: 'tenant/competitor/other' },
     ],
   },
 
@@ -358,26 +387,24 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Rate spread evidence',
     short: 'Rate spread evidence',
     description:
-      'Derived evidence comparing the borrower current lien rate from Cotality voluntary lien data with the current market-rate reference. This chip is not Cotality-only; it combines lien data with the market-rate feed.',
+      'Compares Cotality lien rate with the market-rate reference.',
     lineage: [
       {
         layer: 'SOURCE',
         name: 'cotality.voluntary_lien_status_marketing',
-        meta: 'borrower current lien rate',
       },
       {
         layer: 'SOURCE',
         name: 'MORTGAGE30US market-rate feed',
-        meta: 'market-rate comparison input',
       },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'first_pos_rate' },
-      { layer: 'SILVER', name: 'mip.silver.market_rates_weekly', meta: 'latest par-rate observation' },
-      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'rate_spread evidence rows' },
+      { layer: 'SILVER', name: 'mip.silver.lien_current' },
+      { layer: 'SILVER', name: 'mip.silver.market_rates_weekly' },
+      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events' },
     ],
     signals: [
-      { label: 'Borrower rate', source: 'lien_current.first_pos_rate', value: 'per borrower' },
-      { label: 'Market rate', source: 'market_rates_weekly.rate_fraction', value: 'latest MORTGAGE30US' },
-      { label: 'Spread', source: 'fn_rate_spread', value: 'basis points vs par' },
+      { label: 'Borrower rate', source: 'lien_current.first_pos_rate', value: 'borrower' },
+      { label: 'Market rate', source: 'market_rates_weekly.rate_fraction', value: 'latest' },
+      { label: 'Spread', source: 'fn_rate_spread', value: 'bps vs par' },
     ],
   },
 
@@ -385,35 +412,34 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Mortgage Domain events',
     short: 'Mortgage Domain events',
     description:
-      'Cotality mortgage transaction history used for recent refinance, payoff, release, and lifecycle signals. These are event-backed signals and do not expose borrower names or raw property identifiers in the app.',
+      'Cotality mortgage events for refi, payoff, release, and lifecycle signals.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.mortgage_domain', meta: 'Cotality Delta Share transaction events' },
-      { layer: 'SILVER', name: 'mip.silver.mortgage_events', meta: 'event-grain mortgage history' },
-      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'recent_refi and recent_payoff evidence rows' },
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'relationship and intent-trigger features' },
+      { layer: 'SOURCE', name: 'cotality.mortgage_domain' },
+      { layer: 'SILVER', name: 'mip.silver.mortgage_events' },
+      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
     ],
     signals: [
       { label: 'Recent refinance', source: 'evidence_events.signal_type', value: 'recent_refi' },
       { label: 'Recent payoff', source: 'evidence_events.signal_type', value: 'recent_payoff' },
-      { label: 'Refi event date', source: 'mortgage_events.event_date', value: 'per event' },
-      { label: 'Payoff release date', source: 'mortgage_events.release_date', value: 'per event' },
+      { label: 'Refi date', source: 'mortgage_events.event_date', value: 'event' },
+      { label: 'Payoff release', source: 'mortgage_events.release_date', value: 'event' },
     ],
   },
 
   ownerTransfer: {
     title: 'Owner Transfer events',
     short: 'Owner Transfer events',
-    description:
-      'Cotality owner-transfer and sale events used to identify recent sale activity and ownership lifecycle changes. The app surfaces sanitized event evidence only.',
+    description: 'Cotality transfer/sale events for recent-sale signals.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.owner_transfer_and_sales', meta: 'Cotality Delta Share transfer events' },
-      { layer: 'SILVER', name: 'mip.silver.owner_transfer_events', meta: 'event-grain owner transfer history' },
-      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'recent_sale evidence rows' },
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'purchase-intent and lifecycle context' },
+      { layer: 'SOURCE', name: 'cotality.owner_transfer_and_sales' },
+      { layer: 'SILVER', name: 'mip.silver.owner_transfer_events' },
+      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
     ],
     signals: [
       { label: 'Recent sale', source: 'evidence_events.signal_type', value: 'recent_sale' },
-      { label: 'Sale date', source: 'owner_transfer_events.sale_date', value: 'per event' },
+      { label: 'Sale date', source: 'owner_transfer_events.sale_date', value: 'event' },
     ],
   },
 
@@ -422,26 +448,24 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Evidence stream',
     assetKey: 'evidence_events',
     assetPath: 'mip.gold.evidence_events',
-    usedIn: ['Borrower proof', 'Lineage drawers', 'Genie citations', 'Audit review'],
-    notExposed: 'Raw CLIP and source table internals are removed at the API boundary.',
     description:
-      'Borrower-safe evidence-event table. Each row is a source-backed signal with source product, UC table, signal type, display text, evidence confidence, and timestamp. Raw CLIP is used only for joins and is removed at the API boundary.',
+      'Borrower-safe evidence table with source, signal, text, confidence, and timestamp.',
     lineage: [
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'rate, lien and AVM evidence' },
-      { layer: 'SILVER', name: 'mip.silver.market_rates_weekly', meta: 'FRED market-rate observation for market_trend evidence' },
-      { layer: 'SILVER', name: 'mip.silver.mortgage_events', meta: 'mortgage lifecycle events' },
-      { layer: 'SILVER', name: 'mip.silver.owner_transfer_events', meta: 'sale / transfer events' },
-      { layer: 'GOLD', name: 'mip.gold.property_owner_bridge', meta: 'Owner Link evidence' },
-      { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'sanitized evidence stream' },
+      { layer: 'SILVER', name: 'mip.silver.lien_current' },
+      { layer: 'SILVER', name: 'mip.silver.market_rates_weekly' },
+      { layer: 'SILVER', name: 'mip.silver.mortgage_events' },
+      { layer: 'SILVER', name: 'mip.silver.owner_transfer_events' },
+      { layer: 'GOLD', name: 'mip.gold.property_owner_bridge' },
+      { layer: 'GOLD', name: 'mip.gold.evidence_events' },
     ],
     signals: [
       {
         label: 'Controlled vocab',
         source: 'evidence_events.signal_type',
-        value: 'listing, HELOC propensity, refi propensity live; permit reserved',
+        value: 'listing, HELOC/refi live; permit reserved',
       },
       { label: 'Display text', source: 'evidence_events.display_text', value: 'deterministic, no PII' },
-      { label: 'Evidence confidence', source: 'evidence_events.confidence', value: '0..1 per signal' },
+      { label: 'Confidence', source: 'evidence_events.confidence', value: '0..1' },
     ],
   },
 
@@ -450,21 +474,20 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Source readiness',
     assetKey: 'source_readiness',
     assetPath: 'mip.gold.source_readiness',
-    usedIn: ['Data estate', 'Admin source readiness', 'Genie data-gap answers'],
     description:
-      'Non-PII readiness ledger showing which Cotality, FRED, first-party, and gold assets are live, synthetic-demo, pending, empty, or blocked. Used for governed data-gap answers so missing feeds are not treated as zero demand.',
+      'Non-PII readiness ledger for feed status.',
     lineage: [
-      { layer: 'GOLD', name: 'mip.gold.source_readiness', meta: 'source status summary' },
-      { layer: 'SOURCE', name: 'Cotality MLS/Listings', meta: 'live Delta Share' },
-      { layer: 'SOURCE', name: 'Cotality HELOC Propensity', meta: 'live model score feed' },
-      { layer: 'SOURCE', name: 'Cotality Refi Propensity', meta: 'live model score feed' },
-      { layer: 'SOURCE', name: 'Cotality Building Permits', meta: 'roadmap: true filed permits not yet present' },
-      { layer: 'SOURCE', name: 'FRED MORTGAGE30US', meta: 'weekly market-rate feed' },
-      { layer: 'FIRST PARTY', name: 'Summit demo feeds', meta: 'synthetic-demo lender data' },
+      { layer: 'GOLD', name: 'mip.gold.source_readiness' },
+      { layer: 'SOURCE', name: 'Cotality MLS/Listings' },
+      { layer: 'SOURCE', name: 'Cotality HELOC Propensity' },
+      { layer: 'SOURCE', name: 'Cotality Refi Propensity' },
+      { layer: 'SOURCE', name: 'Cotality Building Permits' },
+      { layer: 'SOURCE', name: 'FRED MORTGAGE30US' },
+      { layer: 'FIRST PARTY', name: 'Summit demo feeds' },
     ],
     signals: [
-      { label: 'Status', source: 'source_readiness.status', value: 'live / roadmap / demo_synthetic / blocked' },
-      { label: 'Rows', source: 'source_readiness.row_count', value: 'source-specific row proof' },
+      { label: 'Status', source: 'source_readiness.status', value: 'live / roadmap / blocked' },
+      { label: 'Rows', source: 'source_readiness.row_count', value: 'row proof' },
       { label: 'Checked at', source: 'source_readiness.checked_at', value: 'refresh timestamp' },
     ],
   },
@@ -472,19 +495,18 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   avm: {
     title: 'AVM equity',
     short: 'AVM equity',
-    description:
-      'AVM-backed property value and lien-balance math used to estimate borrower equity, CLTV/LTV, and the equity leg of refinance and HELOC eligibility.',
+    description: 'AVM value plus lien balance for equity, CLTV/LTV, and product fit.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.lien_status_marketing.avm_fields', meta: 'estimated value and confidence fields' },
-      { layer: 'SILVER', name: 'mip.silver.lien_current', meta: 'avm_value, confidence, original UPB, note rate' },
-      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb', meta: 'amortized current lien estimate' },
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'equity_estimate, equity_pct, ltv' },
-      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events', meta: 'equity evidence rows' },
+      { layer: 'SOURCE', name: 'cotality.lien_status_marketing.avm_fields' },
+      { layer: 'SILVER', name: 'mip.silver.lien_current' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_estimated_upb' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SEMANTIC', name: 'mip.gold.evidence_events' },
     ],
     signals: [
-      { label: 'AVM value', source: 'lien_current.avm_value', value: 'per borrower' },
-      { label: 'Equity estimate', source: 'borrower_360.equity_estimate', value: 'AVM minus estimated current lien' },
-      { label: 'Equity %', source: 'borrower_360.equity_pct', value: 'AVM and estimated current lien' },
+      { label: 'AVM value', source: 'lien_current.avm_value', value: 'borrower' },
+      { label: 'Equity estimate', source: 'borrower_360.equity_estimate', value: 'AVM - lien' },
+      { label: 'Equity %', source: 'borrower_360.equity_pct', value: 'AVM + lien' },
     ],
   },
 
@@ -497,19 +519,19 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
     description:
-      'Checks whether a borrower appears to have enough refinance incentive: current lien rate at least 75 bps above the market reference rate and equity at least 15%. This is only the refi-economics screen, not the full lead score.',
+      'Refi screen: rate >= 75 bps above market and equity >= 15%; not the full score.',
     lineage: [
-      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly', meta: 'FRED MORTGAGE30US weekly snapshot' },
-      { layer: 'SOURCE', name: 'cotality.avm.current', meta: 'Property value snapshot' },
-      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Current lien rate' },
-      { layer: 'PRIMITIVE', name: 'mip.gold.fn_in_the_money', meta: 'UC SQL parity-pinned' },
-      { layer: 'SEMANTIC', name: 'metrics.itm_flag', meta: 'UC metric view' },
+      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly' },
+      { layer: 'SOURCE', name: 'cotality.avm.current' },
+      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_in_the_money' },
+      { layer: 'SEMANTIC', name: 'metrics.itm_flag' },
     ],
     signals: [
-      { label: 'Par refi rate', source: 'mip.silver.market_rates_weekly.market_rate_fraction', value: 'latest available feed' },
-      { label: 'Lien rate', source: 'voluntary_lien.current_rate', value: 'per borrower' },
+      { label: 'Par refi rate', source: 'market_rates_weekly.market_rate_fraction', value: 'latest' },
+      { label: 'Lien rate', source: 'voluntary_lien.current_rate', value: 'borrower' },
       { label: 'Rate spread', source: 'derived', value: 'lien minus par' },
-      { label: 'Equity %', source: 'avm + lien balance', value: 'per borrower' },
+      { label: 'Equity %', source: 'avm + lien balance', value: 'borrower' },
     ],
   },
 
@@ -517,17 +539,17 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Market rate comparison',
     short: 'Market rate comparison',
     description:
-      "Computes the basis-point spread between a borrower's current lien rate and the market refinance reference rate. Positive spread means the current rate appears above market.",
+      'Basis-point spread between lien rate and market refi reference.',
     lineage: [
-      { layer: 'SOURCE', name: 'fred.MORTGAGE30US', meta: 'FRED 30y conforming par-refi rate' },
-      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly', meta: 'FRED MORTGAGE30US weekly snapshot' },
-      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien', meta: 'Current lien rate, per CLIP' },
-      { layer: 'PRIMITIVE', name: 'mip.gold.fn_rate_spread', meta: 'UC SQL parity-pinned to scoring.py' },
-      { layer: 'SEMANTIC', name: 'metrics.rate_spread_bps', meta: 'UC metric view' },
+      { layer: 'SOURCE', name: 'fred.MORTGAGE30US' },
+      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly' },
+      { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_rate_spread' },
+      { layer: 'SEMANTIC', name: 'metrics.rate_spread_bps' },
     ],
     signals: [
-      { label: 'Market par rate', source: 'fred.MORTGAGE30US', value: 'latest available snapshot' },
-      { label: 'Borrower lien rate', source: 'voluntary_lien.current_rate', value: 'per row' },
+      { label: 'Market par rate', source: 'fred.MORTGAGE30US', value: 'latest' },
+      { label: 'Borrower lien rate', source: 'voluntary_lien.current_rate', value: 'row' },
       { label: 'Spread (bps)', source: 'derived', value: 'lien - par x 100' },
     ],
   },
@@ -537,16 +559,15 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Lead-generation metric view',
     assetKey: 'lead_generation_metric_view',
     assetPath: 'mip.semantics.lead_generation_metric_view',
-    usedIn: ['Home', 'Genie', 'Executive analytics'],
     description:
-      'Curated semantic view for executive lead-generation questions: marketable population, ranked borrowers, top geographies, score bands, and offer-ready funnel measures.',
+      'Semantic view for lead-generation KPIs, ranks, geography, score bands, and offer funnel.',
     lineage: [
-      { layer: 'GOLD', name: 'mip.gold.lead_population', meta: 'ranked lead queue population' },
-      { layer: 'GOLD', name: 'mip.gold.lead_scores', meta: 'opportunity score components' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.lead_generation_metric_view', meta: 'Genie trusted asset' },
+      { layer: 'GOLD', name: 'mip.gold.lead_population' },
+      { layer: 'GOLD', name: 'mip.gold.lead_scores' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.lead_generation_metric_view' },
     ],
     signals: [
-      { label: 'Population', source: 'lead_population', value: 'ranked borrower grain' },
+      { label: 'Population', source: 'lead_population', value: 'ranked grain' },
       { label: 'Score', source: 'lead_scores.opportunity_score', value: '0-100' },
     ],
   },
@@ -556,18 +577,17 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Segment performance metric view',
     assetKey: 'segment_performance_metric_view',
     assetPath: 'mip.semantics.segment_performance_metric_view',
-    usedIn: ['Analytics segments', 'Genie'],
     description:
-      'Curated semantic view for segment comparison questions. It uses the same segment predicates as the app, including live MLS listing rows and Cotality HELOC propensity for intent.',
+      'Semantic view for segment comparisons, MLS listings, and HELOC propensity.',
     lineage: [
-      { layer: 'GOLD', name: 'mip.gold.segment_population', meta: 'segment counts and averages' },
-      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'segment predicate source' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.segment_performance_metric_view', meta: 'Genie trusted asset' },
+      { layer: 'GOLD', name: 'mip.gold.segment_population' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.segment_performance_metric_view' },
     ],
     signals: [
-      { label: 'Segment', source: 'segment_population.segment_code', value: 'controlled Module 0 vocab' },
+      { label: 'Segment', source: 'segment_population.segment_code', value: 'controlled vocab' },
       { label: 'Borrowers', source: 'segment_population.count', value: 'predicate count' },
-      { label: 'Listed for Sale', source: 'borrower_360.listed_for_sale', value: 'current MLS row' },
+      { label: 'Listed for Sale', source: 'borrower_360.listed_for_sale', value: 'MLS row' },
       { label: 'HELOC Intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'score >= 700' },
     ],
   },
@@ -577,18 +597,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Borrower opportunity metric view',
     assetKey: 'borrower_opportunity_metric_view',
     assetPath: 'mip.semantics.borrower_opportunity_metric_view',
-    usedIn: ['Analytics economics', 'Geography drilldowns', 'Genie'],
-    description:
-      'Curated borrower-level semantic view used by Genie for drill-down questions about cohorts, geographies, scores, and selected offer rationale.',
+    description: 'Borrower-level semantic view for Genie cohort, geography, score, and offer questions.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'borrower-level feature set' },
-      { layer: 'GOLD', name: 'mip.gold.lead_scores', meta: 'score components and offer code' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.borrower_opportunity_metric_view', meta: 'Genie trusted asset' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'GOLD', name: 'mip.gold.lead_scores' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.borrower_opportunity_metric_view' },
     ],
     signals: [
-      { label: 'Borrower grain', source: 'borrower_360.borrower_id', value: 'masked demo-safe id' },
-      { label: 'Primary offer', source: 'borrower_360.recommended_offer_code', value: 'selected offer path' },
-      { label: 'Evidence ids', source: 'borrower_360.evidence_ids', value: 'ordered evidence refs' },
+      { label: 'Borrower grain', source: 'borrower_360.borrower_id', value: 'masked id' },
+      { label: 'Primary offer', source: 'borrower_360.recommended_offer_code', value: 'offer path' },
+      { label: 'Evidence ids', source: 'borrower_360.evidence_ids', value: 'evidence refs' },
     ],
   },
 
@@ -597,14 +615,13 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Opportunity score',
     assetKey: 'lead_scores',
     assetPath: 'mip.gold.lead_scores',
-    usedIn: ['Opportunity score', 'Signal strength', 'Borrower proof'],
     description:
-      'Ranks how strong a borrower is for review on a 0-100 scale. The score blends refinance economics, intent, product fit, relationship, and evidence quality.',
+      '0-100 borrower score from economics, intent, fit, relationship, and evidence.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.lead_scores', meta: 'CLIP-grain component scores + final opportunity_score' },
-      { layer: 'PRIMITIVE', name: 'mip.gold.fn_lead_score', meta: 'UC SQL weighted blend' },
-      { layer: 'PARITY', name: 'backend/services/scoring.py', meta: 'Pinned to tests/fixtures/lead_score_golden.json' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.lead_generation_metric_view', meta: 'Genie + reporting surface' },
+      { layer: 'FEATURES', name: 'mip.gold.lead_scores' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_lead_score' },
+      { layer: 'PARITY', name: 'backend/services/scoring.py' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.lead_generation_metric_view' },
     ],
     signals: [
       { label: 'Economic incentive', source: 'lead_scores.economic_incentive', value: '35% weight' },
@@ -620,17 +637,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'Lock-in cohort',
     assetKey: 'lockin_cohort',
     assetPath: 'mip.gold.lockin_cohort',
-    usedIn: ['Genie', 'Rate-lock analysis'],
     description:
-      'Gold cohort table used for rate-lock and refi-sensitivity questions. It is derived from borrower economics and market-rate comparisons, not from synthetic workflow counters.',
+      'Gold cohort for rate-lock and refi-sensitivity questions.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'current rate, equity, LTV' },
-      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly', meta: 'FRED MORTGAGE30US weekly snapshot' },
-      { layer: 'GOLD', name: 'mip.gold.lockin_cohort', meta: 'rate lock-in cohort' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SOURCE', name: 'mip.silver.market_rates_weekly' },
+      { layer: 'GOLD', name: 'mip.gold.lockin_cohort' },
     ],
     signals: [
-      { label: 'Current rate', source: 'borrower_360.current_rate', value: 'per borrower' },
-      { label: 'Market rate', source: 'market_rates_weekly.market_rate_fraction', value: 'latest snapshot' },
+      { label: 'Current rate', source: 'borrower_360.current_rate', value: 'borrower' },
+      { label: 'Market rate', source: 'market_rates_weekly.market_rate_fraction', value: 'latest' },
       { label: 'Rate spread', source: 'derived', value: 'basis points' },
     ],
   },
@@ -640,23 +656,22 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     short: 'How the offer path was selected',
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
-    usedIn: ['Primary offer', 'Outreach approvals', 'Borrower proof'],
     description:
-      'Chooses one offer path from the strongest current signals. Listings route to next-home purchase financing; refinance economics route to refi or refi plus equity review; weak signals stay in nurture.',
+      'Chooses one offer path from current signals: purchase, refi/equity review, or nurture.',
     lineage: [
-      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'Cotality public records + Owner Link + lien history' },
-      { layer: 'PRIMITIVE', name: 'mip.gold.fn_next_best_offer', meta: 'UC SQL decision tree' },
-      { layer: 'PARITY', name: 'backend/services/scoring.py', meta: 'Pinned to golden cases' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_next_best_offer' },
+      { layer: 'PARITY', name: 'backend/services/scoring.py' },
     ],
     signals: [
       { label: 'Rate spread', source: 'borrower_360.rate_spread_bps', value: 'refi economics' },
-      { label: 'Equity', source: 'borrower_360.equity_pct', value: 'equity product fit' },
-      { label: 'HELOC intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'propensity trigger' },
+      { label: 'Equity', source: 'borrower_360.equity_pct', value: 'product fit' },
+      { label: 'HELOC intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'trigger' },
       { label: 'Permit activity', source: 'borrower_360.has_permit', value: 'filed permit only' },
-      { label: 'Listing activity', source: 'borrower_360.listed_for_sale', value: 'next-home purchase path' },
-      { label: 'Investor profile', source: 'borrower_360.is_investor', value: 'portfolio lending path' },
-      { label: 'Current customer', source: 'borrower_360.is_current_customer', value: 'relationship path' },
-      { label: 'Competitor lien', source: 'borrower_360.is_competitor_lien', value: 'recapture path' },
+      { label: 'Listing activity', source: 'borrower_360.listed_for_sale', value: 'purchase path' },
+      { label: 'Investor profile', source: 'borrower_360.is_investor', value: 'portfolio path' },
+      { label: 'Current customer', source: 'borrower_360.is_current_customer', value: 'relationship' },
+      { label: 'Competitor lien', source: 'borrower_360.is_competitor_lien', value: 'recapture' },
     ],
   },
 
@@ -666,17 +681,17 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     assetKey: 'heloc_propensity',
     assetPath: 'mip.silver.heloc_propensity',
     description:
-      'Cotality HELOC propensity score feed used as the live HELOC-intent overlay. This is a model propensity signal, not a filed building permit.',
+      'Cotality HELOC propensity feed for HELOC Intent; not a filed permit.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1', meta: 'Cotality HELOC propensity' },
-      { layer: 'SILVER', name: 'mip.silver.heloc_propensity', meta: 'latest score by CLIP' },
-      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'has_heloc_propensity_trigger = score >= 700' },
-      { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'heloc_propensity evidence rows' },
+      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_heloc_propensity_score_v1' },
+      { layer: 'SILVER', name: 'mip.silver.heloc_propensity' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360' },
+      { layer: 'GOLD', name: 'mip.gold.evidence_events' },
     ],
     signals: [
       { label: 'Score', source: 'heloc_propensity_score', value: '0-999' },
       { label: 'Trigger', source: 'has_heloc_propensity_trigger', value: '>= 700' },
-      { label: 'Run date', source: 'heloc_propensity_run_date', value: 'model run date' },
+      { label: 'Run date', source: 'heloc_propensity_run_date', value: 'model run' },
     ],
   },
 
@@ -686,17 +701,58 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     assetKey: 'refi_propensity',
     assetPath: 'mip.silver.refi_propensity',
     description:
-      'Cotality refinance propensity score feed. It supplements the deterministic refinance-economics screen without replacing the rate-spread threshold.',
+      'Cotality refi propensity feed; supplements rate-spread economics.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1', meta: 'Cotality refinance propensity' },
-      { layer: 'SILVER', name: 'mip.silver.refi_propensity', meta: 'latest score by CLIP' },
-      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'has_refi_propensity_trigger = score >= 700' },
-      { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'refi_propensity evidence rows' },
+      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_refi_propensity_score_v1' },
+      { layer: 'SILVER', name: 'mip.silver.refi_propensity' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360' },
+      { layer: 'GOLD', name: 'mip.gold.evidence_events' },
     ],
     signals: [
       { label: 'Score', source: 'refi_propensity_score', value: '0-999' },
       { label: 'Trigger', source: 'has_refi_propensity_trigger', value: '>= 700' },
-      { label: 'Run date', source: 'refi_propensity_run_date', value: 'model run date' },
+      { label: 'Run date', source: 'refi_propensity_run_date', value: 'model run' },
+    ],
+  },
+
+  loanProductType: {
+    title: 'Loan product type evidence',
+    short: 'Product type',
+    assetKey: 'borrower_360',
+    assetPath: 'mip.gold.borrower_360',
+    description: 'Derived from first-position loan type plus the governed jumbo limit.',
+    lineage: [
+      {
+        layer: 'SOURCE',
+        name: 'cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2',
+      },
+      { layer: 'SILVER', name: 'mip.silver.lien_current' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_loan_product_type' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360.loan_product_type' },
+    ],
+    signals: [
+      { label: 'Loan type', source: 'lien_current.first_pos_loan_type', value: 'CONV / FHA / VA' },
+      { label: 'Original amount', source: 'lien_current.first_pos_amount', value: 'vs limit' },
+      { label: 'Conforming limit', source: 'mip.ref.offer_rules_config', value: 'mip_conforming_loan_limit_usd' },
+    ],
+  },
+
+  originationChannel: {
+    title: 'Origination channel evidence',
+    short: 'Origination channel',
+    assetKey: 'borrower_360',
+    assetPath: 'mip.first_party.loan_applications',
+    description: 'Most recent funded LOS application channel.',
+    lineage: [
+      {
+        layer: 'SOURCE',
+        name: 'mip.first_party.loan_applications',
+      },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360.origination_channel' },
+    ],
+    signals: [
+      { label: 'Channel', source: 'loan_applications.application_channel', value: 'funded' },
+      { label: 'Unknown', source: 'borrower_360.origination_channel', value: 'NULL' },
     ],
   },
 
@@ -704,16 +760,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     title: 'Building permit signal',
     short: 'Building Permits - pending',
     description:
-      'True filed building-permit rows are still pending. The app keeps has_permit false until a governed permit table with filing date, type, value, and source record ID is present.',
+      'Filed permit rows are pending; has_permit stays false until a governed table exists.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality.permits.building', meta: 'Delta Share - pending' },
-      { layer: 'JOIN', name: 'join.permit_to_clip', meta: 'pending true permit source' },
-      { layer: 'GOLD', name: 'mip.gold.borrower_360.has_permit', meta: 'false until filed-permit evidence exists' },
+      { layer: 'SOURCE', name: 'cotality.permits.building' },
+      { layer: 'JOIN', name: 'join.permit_to_clip' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360.has_permit' },
     ],
     signals: [
       { label: 'Readiness', source: 'mip.gold.source_readiness', value: 'roadmap' },
-      { label: 'Filed permit flag', source: 'mip.gold.borrower_360.has_permit', value: 'filed permit only' },
-      { label: 'HELOC intent substitute', source: 'mip.silver.heloc_propensity', value: 'separate signal' },
+      { label: 'Permit flag', source: 'mip.gold.borrower_360.has_permit', value: 'filed only' },
+      { label: 'HELOC intent', source: 'mip.silver.heloc_propensity', value: 'separate' },
     ],
   },
 
@@ -723,16 +779,16 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     assetKey: 'listing_activity',
     assetPath: 'mip.silver.listing_activity',
     description:
-      'Cotality MLS listing activity joined to CLIP. Active and under-contract current rows drive listed_for_sale, purchase-intent segmentation, and listing evidence.',
+      'Cotality MLS listings joined to CLIP; active/under-contract rows drive purchase intent.',
     lineage: [
-      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1', meta: 'Cotality MLS listing feed' },
-      { layer: 'SILVER', name: 'mip.silver.listing_activity', meta: 'current listing row by CLIP' },
-      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: 'listed_for_sale flag and listing attributes' },
-      { layer: 'GOLD', name: 'mip.gold.evidence_events', meta: 'listing evidence rows' },
+      { layer: 'SOURCE', name: 'cotality_mortgage_data.corelogic.entrada_eval_mls_listing_v1' },
+      { layer: 'SILVER', name: 'mip.silver.listing_activity' },
+      { layer: 'GOLD', name: 'mip.gold.borrower_360' },
+      { layer: 'GOLD', name: 'mip.gold.evidence_events' },
     ],
     signals: [
       { label: 'Readiness', source: 'mip.gold.source_readiness', value: 'live' },
-      { label: 'listed_for_sale', source: 'mip.gold.borrower_360', value: 'active or under contract' },
+      { label: 'listed_for_sale', source: 'mip.gold.borrower_360', value: 'active/contract' },
       { label: 'Listing evidence', source: 'mip.gold.evidence_events', value: 'signal_type = listing' },
     ],
   },
@@ -745,3 +801,42 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [],
   },
 };
+
+export function segmentEvidenceSource(
+  segment: Pick<
+    SegmentSummary,
+    'code' | 'name' | 'count' | 'avg_score' | 'description' | 'source_status' | 'source_name'
+  >,
+): DrawerSource {
+  const spec = SEGMENT_EVIDENCE_SPECS[segment.code];
+  const predicate = spec?.[0];
+  const sources = spec?.[1];
+  const gated = segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
+  const gateCopy = gated ? SEGMENT_GATE_COPY[segment.source_status ?? ''] : null;
+  return enrichAsset({
+    title: `${segment.name} evidence`,
+    short: `segment_population.${segment.code}`,
+    assetKey: 'segment_population',
+    assetPath: 'mip.gold.segment_population',
+    description: gateCopy
+      ? `${segment.description} ${gateCopy}`
+      : `${segment.description} Live total from mip.gold.segment_population.`,
+    lineage: [
+      ...(sources?.map(([layer, name, meta]) => ({ layer, name, meta })) ?? []),
+      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: predicate ?? 'segment membership flag' },
+      { layer: 'GOLD', name: 'mip.gold.segment_population' },
+    ],
+    signals: gated
+      ? [
+          {
+            label: 'Source status',
+            source: 'source_readiness',
+            value: `${segment.source_name ?? 'source'}: ${segment.source_status === 'not_licensed' ? 'unlicensed' : 'not connected'}`,
+          },
+        ]
+      : [
+          { label: 'Members', source: `count['${segment.code}']`, value: segment.count.toLocaleString() },
+          { label: 'Average score', source: 'avg_score', value: String(segment.avg_score) },
+        ],
+  });
+}

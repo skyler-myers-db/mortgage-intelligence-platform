@@ -70,7 +70,20 @@ MIN_EQUITY_PCT = 15
 HELOC_EQUITY_MIN = 35
 RETENTION_MIN_SPREAD = 50
 
-SEGMENTS = ("itm", "investor", "equity", "retention", "listed", "permit")
+SEGMENTS = (
+    "itm",
+    "investor",
+    "equity",
+    "retention",
+    "listed",
+    "permit",
+    # S1.3: the only overlay segment derivable from the raw share without
+    # reproducing gold-internal joins (amortized UPB, owner explode,
+    # lender dictionary). The remaining overlays are pinned by
+    # test_overlay_segment_flags_match_membership below, which reconciles
+    # the membership array against each overlay's dedicated flag column.
+    "second_lien_itm",
+)
 
 # Tolerance: we allow 0.5% drift per state per segment. Segment counts
 # below 1000 must match exactly (relative-tolerance is misleading at
@@ -565,6 +578,57 @@ def _heloc_intent_reference_sql() -> str:
     """
 
 
+def _second_lien_itm_reference_sql(mortgage30us_fraction: float) -> str:
+    """Reference second_lien_itm count per state (S1.3).
+
+    Mirrors gold_borrower_360.sql: an OPEN second position
+    (second_position_mortgage_amount > 0) whose bounded fractional rate
+    clears the SAME governed spread threshold against the first-lien par
+    reference, with the shared equity screen. The rate bounding matches
+    silver_lien_current.sql (rates below 1% treated as missing; outliers
+    above 15% APR clamp to 15%). Equity uses the same cltv-first
+    approximation as the ITM reference; the shared REL_TOLERANCE covers
+    the amortized-UPB refinement gold applies on top.
+    """
+    return f"""
+    WITH src AS (
+      SELECT
+        situs_state AS state,
+        clip,
+        CASE
+          WHEN second_position_mortgage_interest_rate IS NULL THEN NULL
+          WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+          WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
+          ELSE CAST(second_position_mortgage_interest_rate AS DOUBLE) / 100.0
+        END AS rate2_frac,
+        CAST(second_position_mortgage_amount AS BIGINT) AS second_pos,
+        CAST(estimated_value_mktg AS BIGINT) AS avm,
+        CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS lien,
+        CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv
+      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
+      WHERE situs_state IS NOT NULL
+        AND clip IS NOT NULL
+    ),
+    calc AS (
+      SELECT
+        state, clip, second_pos,
+        CAST(ROUND((rate2_frac - {mortgage30us_fraction}) * 10000.0) AS INT) AS rate_spread_bps,
+        CAST(GREATEST(0, LEAST(100, CASE
+          WHEN cltv IS NOT NULL AND cltv > 0 THEN ROUND(100 - cltv)
+          WHEN avm  IS NOT NULL AND avm  > 0 THEN ROUND(100.0 * (avm - COALESCE(lien, 0)) / avm)
+          ELSE 0
+        END)) AS INT) AS equity_pct
+      FROM src
+    )
+    SELECT state, COUNT(*) AS n
+    FROM calc
+    WHERE COALESCE(second_pos, 0) > 0
+      AND rate_spread_bps >= {MIN_SPREAD_BPS}
+      AND equity_pct >= {MIN_EQUITY_PCT}
+    GROUP BY state ORDER BY state
+    """
+
+
 def _gold_segment_sql(segment_code: str) -> str:
     """Gold-side segment count per state.
 
@@ -684,6 +748,16 @@ def test_borrower_360_market_rate_matches_latest_fred(
     )
 
 
+def _borrower_360_has_s13_columns(host: str, token: str, warehouse_id: str) -> bool:
+    """True when the deployed gold.borrower_360 carries the S1.3 overlay
+    columns. A pre-S1.3 table (deploy ordering: this branch's refresh job
+    has not run yet) makes the overlay checks meaningless, so they skip
+    with an operational message instead of reporting false drift."""
+    rows = _run_sql(host, token, warehouse_id, "DESCRIBE TABLE mip.gold.borrower_360")
+    columns = {str(r[0]) for r in rows}
+    return "second_lien_itm" in columns and "refi_propensity_heuristic" in columns
+
+
 @pytest.fixture(scope="module")
 def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int]]]:
     """Returns ``counts[segment][path][state] -> int``.
@@ -702,10 +776,19 @@ def counts(warehouse: tuple[str, str, str]) -> dict[str, dict[str, dict[str, int
         "retention": _retention_reference_sql(mortgage30us_fraction),
         "listed": _listed_reference_sql(),
         "permit": _heloc_intent_reference_sql(),
+        "second_lien_itm": _second_lien_itm_reference_sql(mortgage30us_fraction),
     }
 
+    segments = SEGMENTS
+    if not _borrower_360_has_s13_columns(host, token, wh):
+        logger.warning(
+            "gold.borrower_360 pre-dates S1.3 overlay columns; skipping "
+            "second_lien_itm parity until mip_refresh_scores runs on this branch"
+        )
+        segments = tuple(s for s in SEGMENTS if s != "second_lien_itm")
+
     out: dict[str, dict[str, dict[str, int]]] = {}
-    for seg in SEGMENTS:
+    for seg in segments:
         ref: dict[str, int] = {}
         if seg in reference_sqls:
             t0 = time.time()
@@ -728,8 +811,8 @@ def test_segment_count_parity(
     counts: dict[str, dict[str, dict[str, int]]],
 ) -> None:
     """One assertion path per discovered (segment, state)."""
-    assert any(counts[seg]["ref"] or counts[seg]["gold"] for seg in SEGMENTS)
-    for segment in SEGMENTS:
+    assert any(paths["ref"] or paths["gold"] for paths in counts.values())
+    for segment in counts:
         ref_map = counts[segment]["ref"]
         gold_map = counts[segment]["gold"]
 
@@ -835,6 +918,59 @@ def test_segment_population_matches_borrower_360(
         f"segment_population vs borrower_360 drift (pop, b360): "
         f"{mismatches[:10]}"
     )
+
+
+def test_overlay_segment_flags_match_membership(
+    warehouse: tuple[str, str, str],
+) -> None:
+    """S1.3: every overlay segment's membership array entry must reconcile
+    EXACTLY with its dedicated flag column on the same row. This pins the
+    with_segments FILTER(ARRAY(...)) block against the flag predicates so a
+    refactor cannot silently decouple the two, and it pins permit_activity
+    at zero members until a true filed-permit source lands."""
+    host, token, wh = warehouse
+    if not _borrower_360_has_s13_columns(host, token, wh):
+        pytest.skip(
+            "gold.borrower_360 pre-dates the S1.3 overlay columns; run "
+            "mip_refresh_scores from this branch before overlay reconciliation"
+        )
+    overlay_predicates = {
+        "second_lien_itm": "second_lien_itm",
+        "heloc_draw_to_payback": "has_heloc_draw_ending",
+        "home_equity_history": "has_home_equity_history",
+        "refi_propensity": "refi_propensity_heuristic >= 60",
+        "itm_on_related_property": "itm_on_related_property",
+        "payoff_loss_leads": "is_payoff_loss",
+        "permit_activity": "has_permit",
+    }
+    drifts: list[str] = []
+    for segment, predicate in overlay_predicates.items():
+        rows = _run_sql(
+            host,
+            token,
+            wh,
+            f"""
+            SELECT
+              COUNT_IF(array_contains(segment_codes, '{segment}')) AS members,
+              COUNT_IF({predicate}) AS flagged,
+              COUNT_IF(array_contains(segment_codes, '{segment}')
+                       AND NOT ({predicate})) AS members_without_flag
+            FROM mip.gold.borrower_360
+            """,
+        )
+        assert rows, f"{segment}: overlay reconciliation probe returned no rows"
+        members, flagged, members_without_flag = (int(v) for v in rows[0])
+        if members != flagged or members_without_flag != 0:
+            drifts.append(
+                f"{segment}: members={members} flagged={flagged} "
+                f"members_without_flag={members_without_flag}"
+            )
+        if segment == "permit_activity" and members != 0:
+            drifts.append(
+                f"permit_activity has {members} members but no true filed-permit "
+                "source exists -- membership must never be fabricated"
+            )
+    assert not drifts, "overlay segment flag/membership drift:\n" + "\n".join(drifts)
 
 
 def test_lead_population_score_floor(warehouse: tuple[str, str, str]) -> None:

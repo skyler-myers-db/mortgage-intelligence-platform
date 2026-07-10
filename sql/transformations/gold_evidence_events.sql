@@ -40,6 +40,8 @@
 --  12  recent_payoff
 --  13  recent_sale
 --  14  foreclosure_stage
+--  15  product_type          (explainability-only; excluded from evidence sub-score)
+--  16  origination_channel   (explainability-only; excluded from evidence sub-score)
 --
 -- display_text is deterministic per signal_type and interpolates only
 -- numeric values, never PII. ISO-8601 timestamp strings come from upstream
@@ -55,6 +57,7 @@
 --   mip.silver.heloc_propensity
 --   mip.silver.refi_propensity
 --   mip.gold.property_owner_bridge
+--   mip.first_party.loan_applications
 --
 -- 2026-06-11 audit P2-8: CTAS re-declares clustering/comments/properties
 -- because COR TABLE drops DDL metadata on every refresh. Clustering, column
@@ -85,6 +88,13 @@ refresh_anchor AS (
   ORDER BY captured_at DESC
   LIMIT 1
 ),
+rules AS (
+  -- Governed conforming loan limit for the product_type explainability row.
+  -- Same fallback default as gold_borrower_360's rules CTE.
+  SELECT
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_conforming_loan_limit_usd' THEN value END), 806500.0) AS BIGINT) AS conforming_loan_limit_usd
+  FROM mip.ref.offer_rules_config
+),
 borrower_spine AS (
   -- Match gold.borrower_360's silver lien spine without reading gold output.
   -- This keeps evidence_events buildable before borrower_360 in the refresh DAG.
@@ -98,12 +108,7 @@ rate_spread_inputs AS (
     lc.clip,
     lc.ingest_ts,
     lc.situs_state,
-    CASE
-      WHEN lc.first_pos_rate IS NULL THEN NULL
-      WHEN lc.first_pos_rate < 0.01 THEN NULL
-      WHEN lc.first_pos_rate > 0.15 THEN 0.15
-      ELSE lc.first_pos_rate
-    END AS first_pos_rate
+    mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate
   FROM mip.silver.lien_current AS lc
 ),
 equity_inputs AS (
@@ -118,12 +123,7 @@ equity_inputs AS (
       WHEN lc.first_pos_amount IS NOT NULL AND lc.first_pos_amount > 0 THEN
         mip.gold.fn_estimated_upb(
           lc.first_pos_amount,
-          CASE
-            WHEN lc.first_pos_rate IS NULL THEN NULL
-            WHEN lc.first_pos_rate < 0.01 THEN NULL
-            WHEN lc.first_pos_rate > 0.15 THEN 0.15
-            ELSE lc.first_pos_rate
-          END,
+          mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate),
           CASE
             WHEN lc.first_pos_date IS NULL THEN NULL
             ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), lc.first_pos_date)) AS INT)
@@ -471,6 +471,66 @@ foreclosure_stage_rows AS (
   WHERE pm.foreclosure_stage_code IS NOT NULL
     AND pm.situs_state IS NOT NULL
 ),
+-- 16. product_type: explainability row for the derived loan product-type
+--     dimension (conventional / jumbo / fha / va / other). Excluded from the
+--     evidence sub-score (like loan_type_fit) so adding rationale does not
+--     retune opportunity scores.
+product_type_rows AS (
+  SELECT
+    lc.clip,
+    'Voluntary Lien'                                 AS source_product,
+    'mip.silver.lien_current'                        AS source_table,
+    'product_type'                                   AS signal_type,
+    CONCAT(
+      mip.gold.fn_loan_product_type(lc.first_pos_loan_type, lc.first_pos_amount, r.conforming_loan_limit_usd),
+      ' (source code ', UPPER(TRIM(lc.first_pos_loan_type)), ')'
+    )                                                AS signal_value,
+    'First-lien product type derived from the Cotality loan type code and original amount vs. the governed conforming loan limit.' AS display_text,
+    0.89                                             AS confidence,
+    CAST(lc.ingest_ts AS STRING)                     AS `timestamp`,
+    15                                               AS signal_rank
+  FROM mip.silver.lien_current AS lc
+  CROSS JOIN rules AS r
+  WHERE lc.first_pos_loan_type IS NOT NULL
+    AND LENGTH(TRIM(lc.first_pos_loan_type)) > 0
+    AND lc.situs_state IS NOT NULL
+),
+-- 17. origination_channel: LOS channel of the most recent FUNDED first-party
+--     application, cited from the governed mip.first_party feed. Only
+--     borrowers with a real funded application emit this row -- "unknown"
+--     never fabricates evidence. Explainability-only (excluded from the
+--     evidence sub-score). borrower_id derivation matches gold_borrower_360 /
+--     demo_first_party_feeds exactly.
+origination_channel_rows AS (
+  SELECT
+    lc.clip,
+    'First-Party LOS'                                AS source_product,
+    'mip.first_party.loan_applications'              AS source_table,
+    'origination_channel'                            AS signal_type,
+    fa.latest_funded_channel                         AS signal_value,
+    'Origination channel recorded on the most recent funded loan application in the first-party LOS feed.' AS display_text,
+    0.89                                             AS confidence,
+    CAST(fa.latest_funded_at AS STRING)              AS `timestamp`,
+    16                                               AS signal_rank
+  FROM mip.silver.lien_current AS lc
+  JOIN (
+    SELECT
+      borrower_id,
+      -- Blank/whitespace-only channels count as NULL (unknown) -- matches
+      -- gold_borrower_360 so evidence never cites an empty-string channel.
+      MAX_BY(LOWER(TRIM(application_channel)), application_at)
+        FILTER (WHERE application_status = 'funded'
+                AND NULLIF(TRIM(application_channel), '') IS NOT NULL) AS latest_funded_channel,
+      MAX(application_at)
+        FILTER (WHERE application_status = 'funded'
+                AND NULLIF(TRIM(application_channel), '') IS NOT NULL) AS latest_funded_at
+    FROM mip.first_party.loan_applications
+    GROUP BY borrower_id
+  ) AS fa
+    ON fa.borrower_id = CONCAT('B-', LPAD(UPPER(CONV(CAST(ABS(XXHASH64(lc.clip)) AS STRING), 10, 36)), 13, '0'))
+  WHERE fa.latest_funded_channel IS NOT NULL
+    AND lc.situs_state IS NOT NULL
+),
 unioned AS (
   SELECT * FROM rate_spread_rows      UNION ALL
   SELECT * FROM equity_rows           UNION ALL
@@ -486,7 +546,9 @@ unioned AS (
   SELECT * FROM recent_refi_rows      UNION ALL
   SELECT * FROM recent_payoff_rows    UNION ALL
   SELECT * FROM recent_sale_rows      UNION ALL
-  SELECT * FROM foreclosure_stage_rows
+  SELECT * FROM foreclosure_stage_rows UNION ALL
+  SELECT * FROM product_type_rows     UNION ALL
+  SELECT * FROM origination_channel_rows
 )
 SELECT
   u.clip,
@@ -511,9 +573,9 @@ JOIN borrower_spine AS bs
 -- statements in order.
 COMMENT ON COLUMN mip.gold.evidence_events.clip IS 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.';
 COMMENT ON COLUMN mip.gold.evidence_events.evidence_id IS 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.';
-COMMENT ON COLUMN mip.gold.evidence_events.source_product IS 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates / MLS Listings / HELOC Propensity / Refi Propensity.';
-COMMENT ON COLUMN mip.gold.evidence_events.source_table IS 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.';
-COMMENT ON COLUMN mip.gold.evidence_events.signal_type IS 'Controlled vocab: listing / rate_spread / equity / market_trend / heloc_propensity / refi_propensity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale. BLOCKED vocab permit is NEVER emitted without a true permit source.';
+COMMENT ON COLUMN mip.gold.evidence_events.source_product IS 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates / MLS Listings / HELOC Propensity / Refi Propensity / First-Party LOS.';
+COMMENT ON COLUMN mip.gold.evidence_events.source_table IS 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.*, mip.gold.*, or mip.first_party.* path.';
+COMMENT ON COLUMN mip.gold.evidence_events.signal_type IS 'Controlled vocab: listing / rate_spread / equity / market_trend / heloc_propensity / refi_propensity / loan_type_fit / product_type / origination_channel / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale. product_type and origination_channel are explainability-only (excluded from the evidence sub-score). BLOCKED vocab permit is NEVER emitted without a true permit source.';
 COMMENT ON COLUMN mip.gold.evidence_events.signal_value IS 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".';
 COMMENT ON COLUMN mip.gold.evidence_events.display_text IS 'One-sentence deterministic template per signal_type. No PII.';
 COMMENT ON COLUMN mip.gold.evidence_events.confidence IS '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).';

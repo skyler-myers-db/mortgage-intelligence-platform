@@ -39,12 +39,15 @@ describe('actionPreview', () => {
       description: 'Open a governed lead list.',
       criteria: {
         result_filters: {
+          // S1.3: permit-activity is no longer an alias for HELOC Intent —
+          // it resolves to the real (gated) Permit Activity segment, so both
+          // labels appear. HELOC aliases still collapse to HELOC Intent.
           segment_codes: ['HELOC', 'heloc-intent', 'permit-activity'],
         },
       },
     });
 
-    expect(preview).toEqual(['Segments: HELOC Intent (any selected segment)']);
+    expect(preview).toEqual(['Segments: HELOC Intent, Permit Activity (any selected segment)']);
   });
 
   it('does not render raw unknown segment codes in governed action chips', () => {

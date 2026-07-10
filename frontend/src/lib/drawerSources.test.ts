@@ -99,6 +99,31 @@ describe('descriptorFor', () => {
     ).toBe(DRAWER_SOURCES.refiPropensity);
   });
 
+  it('routes S1.6 product-type and origination-channel evidence to their curated drawers', () => {
+    // product_type shares the Voluntary Lien source product with rate/lien
+    // signals; the specific signal_type must win over the generic lien route.
+    expect(
+      descriptorForEvidence({
+        source_product: 'Voluntary Lien',
+        source_table: 'mip.silver.lien_current',
+        signal_type: 'product_type',
+      }),
+    ).toBe(DRAWER_SOURCES.loanProductType);
+    expect(
+      descriptorForEvidence({
+        source_product: 'First-Party LOS',
+        source_table: 'mip.first_party.loan_applications',
+        signal_type: 'origination_channel',
+      }),
+    ).toBe(DRAWER_SOURCES.originationChannel);
+  });
+
+  it('keeps S1.6 dimension drawers resolvable to a registered asset key', () => {
+    expect(assetKeyForSource(DRAWER_SOURCES.loanProductType.assetPath)).toBe('borrower_360');
+    expect(DRAWER_SOURCES.loanProductType.assetKey).toBe('borrower_360');
+    expect(DRAWER_SOURCES.originationChannel.assetKey).toBe('borrower_360');
+  });
+
   it('maps Genie trusted assets to specific curated drawers', () => {
     expect(drawerForAsset('mip.gold.segment_population')).toBe(DRAWER_SOURCES.segmentPopulation);
     expect(drawerForAsset('mip.gold.lead_population')).toBe(DRAWER_SOURCES.leadPopulation);
@@ -106,9 +131,11 @@ describe('descriptorFor', () => {
     expect(assetKeyForSource('mip.gold.borrower_dossier')).toBe('borrower_dossier');
     expect(assetHrefForSource('mip.gold.borrower_dossier')).toBe('/data-estate/assets/borrower_dossier');
     expect(drawerForAsset('mip.gold.evidence_events')).toBe(DRAWER_SOURCES.evidenceStream);
+    expect(drawerForAsset('mip.gold.household_rollup')).toBe(DRAWER_SOURCES.householdRollup);
     expect(drawerForAsset('mip.gold.source_readiness')).toBe(DRAWER_SOURCES.sourceReadiness);
     expect(drawerForAsset('mip.gold.lockin_cohort')).toBe(DRAWER_SOURCES.lockinCohort);
     expect(drawerForAsset('mip.gold.fn_rate_spread')).toBe(DRAWER_SOURCES.marketRate);
+    expect(drawerForAsset('mip.gold.fn_estimated_upb_confidence_band')).toBe(DRAWER_SOURCES.lien);
     expect(drawerForAsset('mip.gold.evidence_events.rate_spread')).toBe(DRAWER_SOURCES.rateSpread);
     expect(drawerForAsset('mip.semantics.lead_generation_metric_view')).toBe(DRAWER_SOURCES.leadGenerationView);
     expect(drawerForAsset('mip.semantics.segment_performance_metric_view')).toBe(DRAWER_SOURCES.segmentPerformanceView);
@@ -126,6 +153,17 @@ describe('descriptorFor', () => {
     expect(assetHrefForSource('mip.silver.heloc_propensity')).toBe('/data-estate/assets/heloc_propensity');
     expect(assetKeyForSource('mip.silver.lien_current')).toBeNull();
     expect(assetHrefForSource('mip.first_party.loan_applications')).toBeNull();
+  });
+
+  it('documents estimated UPB confidence-band lineage and inputs', () => {
+    const lineageNames = DRAWER_SOURCES.lien.lineage?.map((node) => node.name) ?? [];
+    const signalSources = DRAWER_SOURCES.lien.signals?.map((signal) => signal.source) ?? [];
+
+    expect(lineageNames).toContain('mip.gold.fn_bounded_mortgage_rate');
+    expect(lineageNames).toContain('mip.gold.fn_estimated_upb_confidence_band');
+    expect(signalSources).toContain('lien_current.first_pos_amount');
+    expect(signalSources).toContain('months_between(refresh_at, first_pos_date)');
+    expect(signalSources).toContain('fn_estimated_upb_confidence_band');
   });
 
   it('carries event timestamps as event dates, not source freshness', () => {
@@ -157,6 +195,7 @@ describe('descriptorFor', () => {
       DRAWER_SOURCES.evidenceStream,
       DRAWER_SOURCES.sourceReadiness,
       DRAWER_SOURCES.borrowerDossier,
+      DRAWER_SOURCES.householdRollup,
       DRAWER_SOURCES.itm,
       DRAWER_SOURCES.marketRate,
       DRAWER_SOURCES.leadScore,

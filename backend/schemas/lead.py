@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -10,7 +10,39 @@ from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.why import WhyPanel
 
-SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
+SegmentCode = Literal[
+    "itm",
+    "listed",
+    "permit",
+    "investor",
+    "equity",
+    "retention",
+    # S1.3 overlay segments. Membership predicates live in
+    # sql/transformations/gold_borrower_360.sql (with_segments) and the
+    # registry rows in gold_segment_population.sql. permit_activity is the
+    # TRUE filed-permit segment (gated until the Cotality source lands);
+    # the legacy `permit` code remains the customer-facing HELOC Intent.
+    "second_lien_itm",
+    "heloc_draw_to_payback",
+    "home_equity_history",
+    "refi_propensity",
+    "itm_on_related_property",
+    "payoff_loss_leads",
+    "permit_activity",
+]
+# Canonical runtime vocabulary derived from the Literal so API allowlists,
+# audit validation, and repositories share exactly one registry.
+SEGMENT_CODE_VALUES: tuple[str, ...] = get_args(SegmentCode)
+# S1.3 three-state source gating for segments whose driving source can be
+# disconnected or unlicensed: connected / not_connected / not_licensed.
+# Derived from gold.source_readiness; the full entitlement matrix ships in
+# S5.1 and will extend this same field.
+SegmentSourceStatus = Literal["connected", "not_connected", "not_licensed"]
+# S1.1 multi-owner: entity classification of an owner slot. Classify +
+# caveat + suppress only (ROADMAP-TEMPORARY pending Cotality entity
+# resolution). `unresolved` owners are excluded from contact-eligible
+# populations upstream in gold.borrower_360.
+OwnerEntityType = Literal["individual", "trust", "llc", "unresolved"]
 # Round-4 hole-finder R4-19: `hold` is a valid 4th state — jobs/sync_lifecycle_state.py
 # writes it; Lakebase CHECK constraint accepts it; gold DDL documents it. The Literal
 # used to reject it, which would 500 `/api/leads` the moment the lead_population CTAS
@@ -18,6 +50,13 @@ SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retentio
 ApprovalStatus = Literal["pending", "approved", "rejected", "hold"]
 ConsentStatus = Literal["opt_in", "opt_out", "unknown"]
 OutreachStatus = Literal["none", "queued", "actioned", "sent", "bounced", "replied"]
+
+
+class DimensionFacetCount(BaseModel):
+    """One (value, count) facet cell inside a SegmentCard mix (S1.6)."""
+
+    value: str
+    count: int = Field(ge=0)
 
 
 class SegmentSummary(BaseModel):
@@ -28,6 +67,20 @@ class SegmentSummary(BaseModel):
     avg_score: int = Field(ge=0, le=100)
     description: str
     color: str
+    # S1.3: three-state gate resolved from gold.source_readiness for the
+    # segment's driving source. "connected" for core-spine segments and
+    # whenever the readiness read is unavailable (gating is presentational;
+    # counts are always real -- a gated segment simply has 0 members).
+    source_status: SegmentSourceStatus = "connected"
+    # Human source label backing the gate (e.g. "MLS Listings"); NULL for
+    # core-spine segments that are not separately entitleable.
+    source_name: str | None = None
+    # S1.6 facet mixes from gold.segment_population (state='_ALL' row or the
+    # dynamically-filtered rollup). Sorted by count desc then value; 'unknown'
+    # aggregates borrowers with a NULL dimension value. Default [] keeps older
+    # cached rows and test fixtures validating.
+    loan_product_mix: list[DimensionFacetCount] = Field(default_factory=list)
+    origination_channel_mix: list[DimensionFacetCount] = Field(default_factory=list)
 
 
 class LeadSummary(BaseModel):
@@ -69,6 +122,13 @@ class LeadSummary(BaseModel):
     is_former_customer: bool = False
     is_competitor_lien: bool = False
     related_property_count: int = 1
+    # S1.1 multi-owner caveat fields (from silver.property_owners via
+    # gold.borrower_360). Defaults are single-resolved-owner so older cached
+    # rows and fixtures keep validating; has_unresolved_owner=True rows are
+    # never marketing_eligible upstream.
+    owner_count: int = 1
+    has_unresolved_owner: bool = False
+    primary_owner_entity_type: OwnerEntityType | None = None
     current_lien_balance: int = 0
     second_pos_amount: int = 0
     has_permit: bool = False
@@ -86,6 +146,11 @@ class LeadSummary(BaseModel):
     refi_propensity_score: int | None = None
     refi_propensity_run_date: str | None = None
     has_refi_propensity_trigger: bool = False
+    # S1.6 dimensions. loan_product_type is the fn_loan_product_type bucket
+    # (conventional/jumbo/fha/va/other); origination_channel is the funded
+    # first-party LOS application channel. None = unknown, rendered as such.
+    loan_product_type: str | None = None
+    origination_channel: str | None = None
     current_lender_ref: str | None = None
     # Marketing-contactability fields. These are sourced from first-party
     # CRM/campaign membership, not Cotality, and intentionally carry only
@@ -143,6 +208,8 @@ class Borrower360(LeadSummary):
     subject_property: str
     avm_value: int
     current_lien_balance: int
+    current_lien_balance_low: int = 0
+    current_lien_balance_high: int = 0
     current_rate: float
     ltv: int
     related_property_count: int
