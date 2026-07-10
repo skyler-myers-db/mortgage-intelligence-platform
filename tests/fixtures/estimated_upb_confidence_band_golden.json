@@ -1,0 +1,44 @@
+{
+  "standard_term_months": 360,
+  "rate_unit": "fractional annual note rate; 0.06 means 6.00%",
+  "band_method": "point estimate uses fn_bounded_mortgage_rate(estimated_rate); lower/upper recompute fn_estimated_upb at the canonical 1%-15% plausible rate bounds and include the point estimate",
+  "rounding": "banker's rounding to the nearest dollar, matching Databricks BROUND",
+  "cases": [
+    {
+      "id": "case_01_standard_fixed_rate_band",
+      "inputs": {"original_upb": 360000, "estimated_rate": 0.06, "months_elapsed": 12},
+      "expected_band": {"lower_upb": 349658, "estimate_upb": 355579, "upper_upb": 359331},
+      "note": "Ordinary positive-rate row: the 6% point estimate falls inside the 1%-15% rate band."
+    },
+    {
+      "id": "case_02_missing_rate_includes_linear_point",
+      "inputs": {"original_upb": 360000, "estimated_rate": null, "months_elapsed": 120},
+      "expected_band": {"lower_upb": 240000, "estimate_upb": 240000, "upper_upb": 345689},
+      "note": "Unknown rate uses straight-line point estimate; band expands to include that fallback and the 15% plausible-rate upper."
+    },
+    {
+      "id": "case_03_source_high_rate_clamps_to_ceiling",
+      "inputs": {"original_upb": 300000, "estimated_rate": 0.8456, "months_elapsed": 60},
+      "expected_band": {"lower_upb": 256033, "estimate_upb": 296162, "upper_upb": 296162},
+      "note": "Source high-rate outlier clamps to the canonical 15% ceiling for the point estimate."
+    },
+    {
+      "id": "case_04_source_low_rate_is_missing",
+      "inputs": {"original_upb": 240000, "estimated_rate": 0.005, "months_elapsed": 180},
+      "expected_band": {"lower_upb": 120000, "estimate_upb": 120000, "upper_upb": 216826},
+      "note": "Source low-rate value below 1% is treated as missing, so the point estimate uses the linear fallback."
+    },
+    {
+      "id": "case_05_past_term_collapses_to_zero",
+      "inputs": {"original_upb": 200000, "estimated_rate": 0.055, "months_elapsed": 420},
+      "expected_band": {"lower_upb": 0, "estimate_upb": 0, "upper_upb": 0},
+      "note": "Elapsed months beyond term collapse both point estimate and band to zero."
+    },
+    {
+      "id": "case_06_null_original_upb_collapses_to_zero",
+      "inputs": {"original_upb": null, "estimated_rate": 0.06, "months_elapsed": 12},
+      "expected_band": {"lower_upb": 0, "estimate_upb": 0, "upper_upb": 0},
+      "note": "Missing original UPB cannot be amortized and must fail closed."
+    }
+  ]
+}

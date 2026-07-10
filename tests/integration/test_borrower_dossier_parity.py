@@ -134,6 +134,8 @@ _PARITY_COLUMNS: tuple[str, ...] = (
     "subject_property",
     "avm_value",
     "current_lien_balance",
+    "current_lien_balance_low",
+    "current_lien_balance_high",
     "current_rate",
     "ltv",
     "related_property_count",

@@ -374,6 +374,8 @@ export interface Borrower360 extends LeadSummary {
   subject_property: string;
   avm_value: number;
   current_lien_balance: number;
+  current_lien_balance_low?: number;
+  current_lien_balance_high?: number;
   current_rate: number;
   ltv: number;
   related_property_count: number;

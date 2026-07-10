@@ -170,6 +170,8 @@ SELECT
   b.subject_property,
   b.avm_value,
   b.current_lien_balance,
+  b.current_lien_balance_low,
+  b.current_lien_balance_high,
   b.current_rate,
   b.ltv,
   b.related_property_count,
@@ -256,7 +258,9 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.approval_status IS 'Default "pending
 COMMENT ON COLUMN mip.gold.borrower_dossier.owner_link_id IS 'Cotality Owner Link id.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.subject_property IS 'Synthetic city/state/ZIP5 string.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.avm_value IS 'AVM value; 0 when missing.';
-COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Total open lien balance.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Estimated current lien balance.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance_low IS 'Lower bound of estimated current lien balance confidence band in USD.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance_high IS 'Upper bound of estimated current lien balance confidence band in USD.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_rate IS 'Percent form (5.75).';
 COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS 'Display LTV int; underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.related_property_count IS 'From gold.property_owner_bridge.';

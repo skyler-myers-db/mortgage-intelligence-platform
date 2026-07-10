@@ -3,78 +3,78 @@ type SegmentEvidenceSpec = readonly [predicate: string, sources: readonly Source
 
 export const SEGMENT_EVIDENCE_SPECS: Record<string, SegmentEvidenceSpec> = {
   itm: [
-    'fn_in_the_money(rate_spread_bps, equity_pct)',
+    'fn_in_the_money(spread, equity)',
     [
-      ['SILVER', 'mip.silver.lien_current', 'rates, AVM, equity'],
-      ['SILVER', 'mip.silver.market_rates_weekly', 'par-rate reference'],
+      ['SILVER', 'mip.silver.lien_current'],
+      ['SILVER', 'mip.silver.market_rates_weekly'],
     ],
   ],
   listed: [
-    'listed_for_sale = TRUE (current active/under-contract MLS row)',
-    [['SILVER', 'mip.silver.listing_activity', 'MLS rows joined to CLIP']],
+    'listed_for_sale',
+    [['SILVER', 'mip.silver.listing_activity']],
   ],
   permit: [
-    'has_permit OR has_heloc_propensity_trigger',
-    [['SILVER', 'mip.silver.heloc_propensity', 'HELOC propensity score']],
+    'permit OR HELOC propensity',
+    [['SILVER', 'mip.silver.heloc_propensity']],
   ],
   investor: [
-    'related_property_count >= 2 OR is_corporate_owner OR is_absentee',
-    [['SILVER', 'mip.silver.owner_property_bridge', 'Owner Link rollup']],
+    '2+ properties OR corporate/absentee',
+    [['SILVER', 'mip.silver.owner_property_bridge']],
   ],
   equity: [
-    'equity_pct >= heloc threshold AND COALESCE(second_pos_amount, 0) = 0',
-    [['SILVER', 'mip.silver.lien_current', 'AVM + open-lien equity']],
+    'equity clears threshold; no open 2nd lien',
+    [['SILVER', 'mip.silver.lien_current']],
   ],
   retention: [
-    'is_current_customer AND (spread >= retention threshold OR competitor lien OR listed)',
+    'current customer with retention trigger',
     [
-      ['REF', 'mip.ref.lender_dictionary', 'tenant vs competitor mapping'],
-      ['SILVER', 'mip.silver.lien_current', 'servicer + spread'],
+      ['REF', 'mip.ref.lender_dictionary'],
+      ['SILVER', 'mip.silver.lien_current'],
     ],
   ],
   second_lien_itm: [
-    'second_pos_amount > 0 AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct)',
+    'open 2nd lien and in-the-money',
     [
-      ['SILVER', 'mip.silver.lien_current', 'second lien rate/balance'],
-      ['SILVER', 'mip.silver.market_rates_weekly', 'par-rate reference'],
+      ['SILVER', 'mip.silver.lien_current'],
+      ['SILVER', 'mip.silver.market_rates_weekly'],
     ],
   ],
   heloc_draw_to_payback: [
-    'open equity-loan lien originated 102-126 months ago',
-    [['SILVER', 'mip.silver.mortgage_events', 'equity-loan timeline']],
+    'equity-loan draw reset window',
+    [['SILVER', 'mip.silver.mortgage_events']],
   ],
   home_equity_history: [
-    'appreciation >= 40% since purchase AND tenure >= 36 months AND equity_pct >= 20',
-    [['SILVER', 'mip.silver.lien_current', 'purchase basis + AVM']],
+    'appreciation, tenure, and equity',
+    [['SILVER', 'mip.silver.lien_current']],
   ],
   refi_propensity: [
-    'fn_refi_propensity_heuristic(...) >= 60',
+    'refi heuristic >= 60',
     [
-      ['UDF', 'mip.gold.fn_refi_propensity_heuristic', 'published heuristic'],
-      ['SILVER', 'mip.silver.lien_current', 'spread, seasoning, equity, balance'],
+      ['UDF', 'mip.gold.fn_refi_propensity_heuristic'],
+      ['SILVER', 'mip.silver.lien_current'],
     ],
   ],
   itm_on_related_property: [
-    'Owner Link also holds a different in-the-money CLIP',
+    'related property is in-the-money',
     [
-      ['SILVER', 'mip.silver.property_owners', 'Owner Link ids'],
-      ['SILVER', 'mip.silver.lien_current', 'related-property economics'],
+      ['SILVER', 'mip.silver.property_owners'],
+      ['SILVER', 'mip.silver.lien_current'],
     ],
   ],
   payoff_loss_leads: [
-    'tenant lien released within 24 months AND current competitor lien',
+    'recent payoff plus competitor lien',
     [
-      ['SILVER', 'mip.silver.mortgage_events', 'release/payoff events'],
-      ['REF', 'mip.ref.lender_dictionary', 'tenant vs competitor mapping'],
+      ['SILVER', 'mip.silver.mortgage_events'],
+      ['REF', 'mip.ref.lender_dictionary'],
     ],
   ],
   permit_activity: [
-    'has_permit = TRUE (filed-permit source pending)',
-    [['GOLD', 'mip.gold.source_readiness', 'permit source status']],
+    'filed permit source pending',
+    [['GOLD', 'mip.gold.source_readiness']],
   ],
 };
 
 export const SEGMENT_GATE_COPY: Record<string, string> = {
-  not_connected: 'Source not connected; count is gated.',
-  not_licensed: 'Source not licensed; count is gated.',
+  not_connected: 'Source not connected.',
+  not_licensed: 'Source not licensed.',
 };
