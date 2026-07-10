@@ -1,47 +1,23 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent, type MouseEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import type { DimensionFacetCount, SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
 import { segmentEvidenceSource } from '../../lib/drawerSources';
 import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
-import { useApp } from '../AppContext';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 
-/** S1.6 — short display labels for the borrower-dimension tokens. Any value
- *  not in the map (including unknown) falls back to a title-cased token so the
- *  chip never renders a raw lowercase code. */
-const LOAN_PRODUCT_LABELS: Record<string, string> = {
+const FACET_LABELS: Record<string, string> = {
   conventional: 'Conv',
   jumbo: 'Jumbo',
   fha: 'FHA',
   va: 'VA',
   other: 'Other',
   unknown: 'Unknown',
-};
-const ORIGINATION_CHANNEL_LABELS: Record<string, string> = {
   loan_officer: 'Loan officer',
   digital: 'Digital',
   branch: 'Branch',
   call_center: 'Call center',
-  unknown: 'Unknown',
 };
-
-function titleCaseToken(token: string): string {
-  return token
-    .split('_')
-    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1) : part))
-    .join(' ');
-}
-
-/** Compact borrower counts for facet chips: 1240 -> "1.2K", 980 -> "980". */
-function formatFacetCount(count: number): string {
-  if (count < 1000) return count.toLocaleString();
-  const thousands = count / 1000;
-  if (thousands < 10) return `${thousands.toFixed(1).replace(/\.0$/, '')}K`;
-  if (count < 1_000_000) return `${Math.round(thousands)}K`;
-  const millions = count / 1_000_000;
-  return `${millions.toFixed(1).replace(/\.0$/, '')}M`;
-}
 
 /**
  * SegmentCard — prototype `.seg-card` BEM: badge + title + count + sub + meta row.
@@ -73,46 +49,6 @@ function formatFacetCount(count: number): string {
  * card (e.g. when loading a filtered URL).
  */
 
-/**
- * Non-button facet chip used inside a SegmentCard. Rendered as a span with
- * role="button" + tabIndex so it stays keyboard-reachable, and it stops
- * propagation so a click/Enter/Space opens the drawer without toggling card
- * selection.
- */
-function EvidenceFacetChip({
-  label,
-  ariaLabel,
-  onOpen,
-}: {
-  label: string;
-  ariaLabel: string;
-  onOpen: () => void;
-}) {
-  const handleClick = (event: MouseEvent<HTMLSpanElement>) => {
-    event.stopPropagation();
-    onOpen();
-  };
-  const handleKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
-    if (event.key === 'Enter' || event.key === ' ') {
-      event.preventDefault();
-      event.stopPropagation();
-      onOpen();
-    }
-  };
-  return (
-    <span
-      className="chip chip--neutral seg-card__facet-chip"
-      role="button"
-      tabIndex={0}
-      aria-label={ariaLabel}
-      onClick={handleClick}
-      onKeyDown={handleKeyDown}
-    >
-      {label}
-    </span>
-  );
-}
-
 interface SegmentCardProps {
   segment: SegmentSummary;
   selected?: boolean;
@@ -121,7 +57,6 @@ interface SegmentCardProps {
 }
 
 export function SegmentCard({ segment, selected, updating, onClick }: SegmentCardProps) {
-  const { setDrawer } = useApp();
   const icon = segmentIcon(segment.code);
   const presentation = segmentByCode(segment.code);
   const displayName = presentation?.name ?? segment.name;
@@ -226,14 +161,18 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             <div className="seg-card__facet-row">
               <span className="seg-card__facet-label">Product</span>
               {loanProductMix.map((facet) => {
-                const label = LOAN_PRODUCT_LABELS[facet.value] ?? titleCaseToken(facet.value);
+                const label = FACET_LABELS[facet.value] ?? facet.value;
                 return (
-                  <EvidenceFacetChip
+                  <span
                     key={`product-${facet.value}`}
-                    label={`${label} ${formatFacetCount(facet.count)}`}
-                    ariaLabel={`${label} loan product, ${facet.count.toLocaleString()} borrowers — open evidence`}
-                    onOpen={() => setDrawer(DRAWER_SOURCES.loanProductType)}
-                  />
+                    className="seg-card__facet-chip"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <EvidenceChip source={DRAWER_SOURCES.loanProductType}>
+                      {label} {facet.count.toLocaleString()}
+                    </EvidenceChip>
+                  </span>
                 );
               })}
             </div>
@@ -242,14 +181,18 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             <div className="seg-card__facet-row">
               <span className="seg-card__facet-label">Channel</span>
               {originationChannelMix.map((facet) => {
-                const label = ORIGINATION_CHANNEL_LABELS[facet.value] ?? titleCaseToken(facet.value);
+                const label = FACET_LABELS[facet.value] ?? facet.value;
                 return (
-                  <EvidenceFacetChip
+                  <span
                     key={`channel-${facet.value}`}
-                    label={`${label} ${formatFacetCount(facet.count)}`}
-                    ariaLabel={`${label} origination channel, ${facet.count.toLocaleString()} borrowers — open evidence`}
-                    onOpen={() => setDrawer(DRAWER_SOURCES.originationChannel)}
-                  />
+                    className="seg-card__facet-chip"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <EvidenceChip source={DRAWER_SOURCES.originationChannel}>
+                      {label} {facet.count.toLocaleString()}
+                    </EvidenceChip>
+                  </span>
                 );
               })}
             </div>

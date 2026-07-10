@@ -21,6 +21,7 @@ from backend.services.databricks_sql_helpers import qualify
 from backend.services.geography_scope import GeographyScope, load_geography_scope
 from backend.services.observability import emit
 from backend.services.repositories.databricks_portfolio import DatabricksPortfolioRepository
+from backend.services.repositories.databricks_segment_gates import apply_source_gates
 from backend.services.repositories.databricks_shared import _SEGMENT_COLUMNS, _parse_facet_mix
 from backend.services.resilience import TTLCache
 
@@ -145,100 +146,6 @@ class DatabricksSegmentRepository:
         "permit_activity",
     )
 
-    # S1.3 three-state gating: driving gold.source_readiness source per
-    # entitleable segment. Core-spine segments (itm / investor / equity /
-    # retention) ride on silver.lien_current -- if that is down the whole
-    # app is degraded, so they are deliberately unmapped and always read
-    # "connected". The full entitlement matrix ships in S5.1 and replaces
-    # only the lookup, not this contract.
-    _SEGMENT_SOURCE_REQUIREMENTS: dict[str, str] = {
-        "listed": "MLS Listings",
-        "permit": "Cotality HELOC Propensity",
-        "second_lien_itm": "Voluntary Lien",
-        "heloc_draw_to_payback": "MMA Mortgage Analytics",
-        "home_equity_history": "AVM",
-        "refi_propensity": "Voluntary Lien",
-        "itm_on_related_property": "Owner Link",
-        "payoff_loss_leads": "MMA Mortgage Analytics",
-        "permit_activity": "Building Permits",
-    }
-
-    _SOURCE_STATUS_SQL = (
-        "SELECT source_name, status "
-        f"FROM {qualify('gold', 'source_readiness')}"
-    )
-    _SOURCE_STATUS_CACHE_KEY = "segments.source_statuses"
-
-    @staticmethod
-    def _three_state_status(status: str | None) -> str:
-        """Collapse DataEstateStatus into the S1.3 three-state gate.
-
-        connected      -- live / demo_synthetic / configured_empty (plumbing
-                          works; an empty feed is an honest zero, not a gate).
-        not_licensed   -- permission_denied (the principal cannot read the
-                          share => entitlement problem).
-        not_connected  -- roadmap / not_configured / error / missing row.
-        """
-        if status in ("live", "demo_synthetic", "configured_empty"):
-            return "connected"
-        if status == "permission_denied":
-            return "not_licensed"
-        return "not_connected"
-
-    def _source_statuses(self) -> dict[str, str]:
-        """Cached gold.source_readiness (source_name -> status) snapshot.
-
-        Returns an EMPTY dict when the readiness read fails so a transient
-        warehouse flap never wrongly gates live segments -- the caller skips
-        gating entirely on empty (all segments read "connected"). A missing
-        row for a mapped source, by contrast, gates as not_connected.
-        """
-        def build() -> dict[str, str]:
-            try:
-                rows = self._client.execute(self._SOURCE_STATUS_SQL) or []
-            except Exception as exc:  # noqa: BLE001 -- gating is presentational
-                emit(
-                    log,
-                    "segment_source_readiness_unavailable",
-                    level=logging.WARNING,
-                    dependency="warehouse",
-                    outcome="degraded",
-                    exc_type=type(exc).__name__,
-                    exc_msg=str(exc)[:500],
-                )
-                return {}
-            return {
-                str(r.get("source_name")): str(r.get("status") or "")
-                for r in rows
-                if r.get("source_name")
-            }
-
-        return self._cache.get_or_set(
-            self._SOURCE_STATUS_CACHE_KEY,
-            build,
-            ttl_s=self._cache_ttl_s,
-        )
-
-    def _apply_source_gates(self, segments: list[SegmentSummary]) -> list[SegmentSummary]:
-        statuses = self._source_statuses()
-        if not statuses:
-            return segments
-        gated: list[SegmentSummary] = []
-        for segment in segments:
-            source_name = self._SEGMENT_SOURCE_REQUIREMENTS.get(segment.code)
-            if source_name is None:
-                gated.append(segment)
-                continue
-            gated.append(
-                segment.model_copy(
-                    update={
-                        "source_status": self._three_state_status(statuses.get(source_name)),
-                        "source_name": source_name,
-                    }
-                )
-            )
-        return gated
-
     def _list_cache_key(
         self,
         portfolio_id: str | None,
@@ -306,7 +213,12 @@ class DatabricksSegmentRepository:
             order_index: dict[str, int] = {code: i for i, code in enumerate(self._CANONICAL_ORDER)}
             unknown_tail_index = len(self._CANONICAL_ORDER)
             segments.sort(key=lambda s: order_index.get(s.code, unknown_tail_index))
-            return self._apply_source_gates(segments)
+            return apply_source_gates(
+                segments,
+                client=self._client,
+                cache=self._cache,
+                cache_ttl_s=self._cache_ttl_s,
+            )
 
         return self._cache.get_or_set(
             key,

@@ -126,13 +126,13 @@ describe('SegmentCard', () => {
         { value: 'branch', count: 90 },
       ],
     });
-    // Product row: top-3 only, compact counts, short labels.
-    expect(container.textContent).toContain('FHA 1.2K');
+    // Product row: top-3 only, exact counts, short labels.
+    expect(container.textContent).toContain('FHA 1,240');
     expect(container.textContent).toContain('Conv 980');
     expect(container.textContent).toContain('Jumbo 210');
     expect(container.textContent).not.toContain('VA 40');
     // Channel row: top-2 only, display labels.
-    expect(container.textContent).toContain('Loan officer 1.5K');
+    expect(container.textContent).toContain('Loan officer 1,500');
     expect(container.textContent).toContain('Digital 620');
     expect(container.textContent).not.toContain('Branch 90');
     expect(container.querySelector('.seg-card__facets')).not.toBeNull();
@@ -143,7 +143,7 @@ describe('SegmentCard', () => {
     expect(container.querySelector('.seg-card__facets')).toBeNull();
   });
 
-  it('keeps the card on the div role-button composition and facet chips as spans', () => {
+  it('keeps the card on the div role-button composition and wraps facet controls in spans', () => {
     render({
       code: 'itm',
       count: 12,
@@ -152,10 +152,9 @@ describe('SegmentCard', () => {
     const card = container.querySelector('.seg-card');
     expect(card?.tagName).toBe('DIV');
     expect(card?.getAttribute('role')).toBe('button');
-    expect(container.querySelectorAll('button').length).toBe(1);
     const chip = container.querySelector('.seg-card__facet-chip');
     expect(chip?.tagName).toBe('SPAN');
-    expect(chip?.getAttribute('role')).toBe('button');
+    expect(chip?.querySelector('.evidence-chip')).not.toBeNull();
   });
 
   it('opens the product-type drawer on chip click without toggling card selection', () => {
@@ -168,7 +167,7 @@ describe('SegmentCard', () => {
       },
       onClick,
     );
-    const chip = container.querySelector('.seg-card__facet-chip') as HTMLElement;
+    const chip = container.querySelector('.seg-card__facet-chip .evidence-chip') as HTMLElement;
     act(() => {
       chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
@@ -182,7 +181,7 @@ describe('SegmentCard', () => {
       count: 12,
       origination_channel_mix: [{ value: 'loan_officer', count: 1500 }],
     });
-    const chip = container.querySelector('.seg-card__facet-chip') as HTMLElement;
+    const chip = container.querySelector('.seg-card__facet-chip .evidence-chip') as HTMLElement;
     act(() => {
       chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
