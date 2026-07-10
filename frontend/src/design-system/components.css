@@ -123,6 +123,11 @@
      (e.g. "Segment Intelligence") truncates with ellipsis instead of ending
      flush against the search box. Combines with the topbar grid gap. */
   padding-inline-end: var(--sp-4);
+  /* Cap the item at its grid area: a start-justified grid item sizes to
+     content and can overflow its track, sliding under the centered search
+     (measured 20px overlap on the longest crumb at 1440px). With the cap,
+     the ellipsis rules above actually bind and the grid gap stays clear. */
+  max-inline-size: 100%;
   color: var(--text-2);
   font-size: var(--fs-13);
   white-space: nowrap;

@@ -22,6 +22,15 @@ describe('friendlyAssetLabel', () => {
   it('humanizes unknown assets instead of leaking a raw identifier', () => {
     expect(friendlyAssetLabel('mip.gold.some_new_table')).toBe('Some new table');
   });
+
+  it('passes already-friendly backend labels through unchanged', () => {
+    // The Signals sublabel wraps `source_label ?? source_table`, so backend
+    // labels that are already display-grade must survive the mapping
+    // (live-signoff item 13: 8/11 rows leaked raw names via source_label).
+    expect(friendlyAssetLabel('Owner Link bridge')).toBe('Owner Link bridge');
+    expect(friendlyAssetLabel('First-party loan applications')).toBe('First-party loan applications');
+    expect(friendlyAssetLabel('MLS listing activity')).toBe('MLS listing activity');
+  });
 });
 
 describe('humanizeAssetMentions', () => {

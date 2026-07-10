@@ -539,7 +539,7 @@ export function SignalsView({
             rows={data.evidence_by_signal}
             value={(row) => row.event_count}
             label={(row) => signalLabel(row.signal_type)}
-            sublabel={(row) => `${row.source_product} · ${row.source_label ?? friendlyAssetLabel(row.source_table)} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)}`}
+            sublabel={(row) => `${row.source_product} · ${friendlyAssetLabel(row.source_label ?? row.source_table)} · ${row.mean_confidence === null || row.mean_confidence === undefined ? '—' : row.mean_confidence.toFixed(3)}`}
             href={(row) => analyticsHref({
               states: filterParams.states.join(',') || null,
               segment_codes: filterParams.segmentCodes.join(',') || null,
