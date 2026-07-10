@@ -511,6 +511,18 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         or f"ol_demo_{borrower_id}"
     )
 
+    current_lien_balance = int(row.get("current_lien_balance") or 0)
+    current_lien_balance_low = (
+        int(row["current_lien_balance_low"])
+        if row.get("current_lien_balance_low") is not None
+        else current_lien_balance
+    )
+    current_lien_balance_high = (
+        int(row["current_lien_balance_high"])
+        if row.get("current_lien_balance_high") is not None
+        else current_lien_balance
+    )
+
     output: dict[str, Any] = {
         "borrower_id": borrower_id,
         "display_name": synthesize_display_name(row.get("owner_name_hash")),
@@ -538,7 +550,9 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         "owner_link_id": owner_link_id,
         "subject_property": synthesize_subject_property(city, state, zip5),
         "avm_value": int(row.get("avm_value") or 0),
-        "current_lien_balance": int(row.get("current_lien_balance") or 0),
+        "current_lien_balance": current_lien_balance,
+        "current_lien_balance_low": current_lien_balance_low,
+        "current_lien_balance_high": current_lien_balance_high,
         "current_rate": float(row.get("current_rate") or 0.0),
         "ltv": int(row.get("ltv") or 0),
         "related_property_count": int(row.get("related_property_count") or 1),

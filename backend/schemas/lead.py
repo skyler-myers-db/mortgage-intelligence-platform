@@ -203,6 +203,8 @@ class Borrower360(LeadSummary):
     subject_property: str
     avm_value: int
     current_lien_balance: int
+    current_lien_balance_low: int = 0
+    current_lien_balance_high: int = 0
     current_rate: float
     ltv: int
     related_property_count: int

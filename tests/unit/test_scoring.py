@@ -18,7 +18,9 @@ from pathlib import Path
 import pytest
 
 from backend.services.scoring import (
+    bounded_mortgage_rate,
     estimated_upb,
+    estimated_upb_confidence_band,
     lead_score,
     refi_propensity_heuristic,
     source_display_label,
@@ -36,6 +38,12 @@ ESTIMATED_UPB_FIXTURE_PATH = (
     / "fixtures"
     / "estimated_upb_golden.json"
 )
+ESTIMATED_UPB_BAND_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "estimated_upb_confidence_band_golden.json"
+)
 REFI_PROPENSITY_FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
     / "tests"
@@ -48,6 +56,9 @@ with FIXTURE_PATH.open() as f:
 
 with ESTIMATED_UPB_FIXTURE_PATH.open() as f:
     ESTIMATED_UPB_CASES = json.load(f)["cases"]
+
+with ESTIMATED_UPB_BAND_FIXTURE_PATH.open() as f:
+    ESTIMATED_UPB_BAND_CASES = json.load(f)["cases"]
 
 with REFI_PROPENSITY_FIXTURE_PATH.open() as f:
     REFI_PROPENSITY_CASES = json.load(f)["cases"]
@@ -100,6 +111,45 @@ def test_estimated_upb_is_importable_from_services() -> None:
     from backend.services import scoring
 
     assert callable(scoring.estimated_upb)
+
+
+@pytest.mark.parametrize(
+    "case",
+    ESTIMATED_UPB_BAND_CASES,
+    ids=[c["id"] for c in ESTIMATED_UPB_BAND_CASES],
+)
+def test_estimated_upb_confidence_band_matches_golden_fixture(case: dict) -> None:
+    """Every band case must produce the SQL-pinned lower/point/upper values."""
+    assert (
+        estimated_upb_confidence_band(**case["inputs"]) == case["expected_band"]
+    ), case.get("note", "")
+
+
+@pytest.mark.parametrize(
+    ("raw_rate", "expected"),
+    [
+        (None, None),
+        (float("nan"), None),
+        (0.0099, None),
+        (0.01, 0.01),
+        (0.06, 0.06),
+        (0.8456, 0.15),
+    ],
+)
+def test_bounded_mortgage_rate_matches_gold_contract(
+    raw_rate: float | None,
+    expected: float | None,
+) -> None:
+    """Python must mirror mip.gold.fn_bounded_mortgage_rate exactly."""
+    assert bounded_mortgage_rate(raw_rate) == expected
+
+
+def test_estimated_upb_band_primitives_are_importable_from_services() -> None:
+    """The band and rate-bound primitives must live beside the scoring mirrors."""
+    from backend.services import scoring
+
+    assert callable(scoring.bounded_mortgage_rate)
+    assert callable(scoring.estimated_upb_confidence_band)
 
 
 @pytest.mark.parametrize(

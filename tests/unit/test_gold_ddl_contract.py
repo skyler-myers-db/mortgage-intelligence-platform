@@ -397,9 +397,11 @@ def test_borrower_360_bounds_source_mortgage_rates_before_scoring() -> None:
         TRANSFORM_DIR / "gold_borrower_360.sql"
     ).read_text(encoding="utf-8")
 
-    assert "WHEN lc.first_pos_rate < 0.01 THEN NULL" in text
-    assert "WHEN lc.first_pos_rate > 0.15 THEN 0.15" in text
+    assert "mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate" in text
     assert "mip.gold.fn_rate_spread(b.first_pos_rate" in text
+    assert "mip.gold.fn_estimated_upb_confidence_band(" in text
+    assert "current_lien_balance_low" in text
+    assert "current_lien_balance_high" in text
 
 
 def test_rate_spread_evidence_uses_same_bounded_rate_contract() -> None:
@@ -408,8 +410,7 @@ def test_rate_spread_evidence_uses_same_bounded_rate_contract() -> None:
     ).read_text(encoding="utf-8")
 
     assert "rate_spread_inputs AS" in text
-    assert "WHEN lc.first_pos_rate < 0.01 THEN NULL" in text
-    assert "WHEN lc.first_pos_rate > 0.15 THEN 0.15" in text
+    assert "mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate" in text
     assert "FROM rate_spread_inputs AS lc" in text
 
 
@@ -466,15 +467,19 @@ def test_uc_functions_are_wired_before_gold_ctas() -> None:
     pass locally, which is exactly the failure this guard prevents.
     """
     expected_tasks = (
+        "init_fn_bounded_mortgage_rate",
         "init_fn_rate_spread",
         "init_fn_estimated_upb",
+        "init_fn_estimated_upb_confidence_band",
         "init_fn_in_the_money",
         "init_fn_lead_score",
         "init_fn_next_best_offer",
     )
     expected_rendered_paths = (
+        "sql/_rendered/uc_functions/fn_bounded_mortgage_rate.sql",
         "sql/_rendered/uc_functions/fn_rate_spread.sql",
         "sql/_rendered/uc_functions/fn_estimated_upb.sql",
+        "sql/_rendered/uc_functions/fn_estimated_upb_confidence_band.sql",
         "sql/_rendered/uc_functions/fn_in_the_money.sql",
         "sql/_rendered/uc_functions/fn_lead_score.sql",
         "sql/_rendered/uc_functions/fn_next_best_offer.sql",

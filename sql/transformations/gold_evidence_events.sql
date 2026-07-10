@@ -108,12 +108,7 @@ rate_spread_inputs AS (
     lc.clip,
     lc.ingest_ts,
     lc.situs_state,
-    CASE
-      WHEN lc.first_pos_rate IS NULL THEN NULL
-      WHEN lc.first_pos_rate < 0.01 THEN NULL
-      WHEN lc.first_pos_rate > 0.15 THEN 0.15
-      ELSE lc.first_pos_rate
-    END AS first_pos_rate
+    mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate) AS first_pos_rate
   FROM mip.silver.lien_current AS lc
 ),
 equity_inputs AS (
@@ -128,12 +123,7 @@ equity_inputs AS (
       WHEN lc.first_pos_amount IS NOT NULL AND lc.first_pos_amount > 0 THEN
         mip.gold.fn_estimated_upb(
           lc.first_pos_amount,
-          CASE
-            WHEN lc.first_pos_rate IS NULL THEN NULL
-            WHEN lc.first_pos_rate < 0.01 THEN NULL
-            WHEN lc.first_pos_rate > 0.15 THEN 0.15
-            ELSE lc.first_pos_rate
-          END,
+          mip.gold.fn_bounded_mortgage_rate(lc.first_pos_rate),
           CASE
             WHEN lc.first_pos_date IS NULL THEN NULL
             ELSE CAST(FLOOR(months_between(DATE(ra.refresh_at), lc.first_pos_date)) AS INT)

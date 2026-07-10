@@ -251,6 +251,10 @@ export default function Borrower360() {
     b.first_party_synthetic_demo ? 'Summit demo synthetic' : null,
   ].filter(Boolean);
   const saved = isLeadSaved(b.borrower_id);
+  const lienBandLow = b.current_lien_balance_low ?? b.current_lien_balance;
+  const lienBandHigh = b.current_lien_balance_high ?? b.current_lien_balance;
+  const lienBandLabel = `${currency(lienBandLow)}-${currency(lienBandHigh)}`;
+  const estimatedUpbBandSource = descriptorFor('fn_estimated_upb_confidence_band');
   const saveCurrentLead = () => {
     saveLead({
       borrower_id: b.borrower_id,
@@ -334,9 +338,14 @@ export default function Borrower360() {
                   <div>
                     <div className="field__value mono num">{`${currency(b.current_lien_balance)} · ${b.current_rate}%`}</div>
                     <div className="field__sub">
-                      <Chip variant="warning" className="chip--compact" icon="info">
-                        Estimated UPB
-                      </Chip>
+                      <div className="chip-row chip-row--baseline">
+                        <Chip variant="warning" className="chip--compact" icon="info">
+                          Estimated UPB
+                        </Chip>
+                        <EvidenceChip source={estimatedUpbBandSource}>
+                          {lienBandLabel}
+                        </EvidenceChip>
+                      </div>
                     </div>
                   </div>
                 }

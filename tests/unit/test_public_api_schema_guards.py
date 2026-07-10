@@ -117,6 +117,8 @@ def test_borrower_360_projection_selects_module0_flags() -> None:
         "first_party_recent_interactions",
         "first_party_recent_application",
         "first_party_synthetic_demo",
+        "current_lien_balance_low",
+        "current_lien_balance_high",
     ):
         assert column in _BORROWER_360_COLUMNS
 
@@ -129,6 +131,8 @@ def test_borrower_360_accepts_governed_dossier_enrichment_fields() -> None:
         "subject_property": "Synthetic property · Chicago, IL 60614",
         "avm_value": 500000,
         "current_lien_balance": 300000,
+        "current_lien_balance_low": 290000,
+        "current_lien_balance_high": 310000,
         "current_rate": 6.5,
         "ltv": 60,
         "related_property_count": 1,
@@ -162,6 +166,8 @@ def test_borrower_360_accepts_governed_dossier_enrichment_fields() -> None:
     assert parsed.is_absentee is True
     assert parsed.has_first_party_relationship is True
     assert parsed.first_party_recent_interactions == 2
+    assert parsed.current_lien_balance_low == 290000
+    assert parsed.current_lien_balance_high == 310000
 
 
 def test_lead_population_projection_selects_module0_flags() -> None:
