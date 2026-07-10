@@ -4,3 +4,4 @@
 - [AI Gateway async-recent-row proof inversion (b77d28d..3256faf)](project_ai_gateway_proof_inversion.md) — one deliberate `available`→True flip (gov-reviewed separately); smoke jq guard truth-tabled sound.
 - [Live API-layer signoff recipe for deployed mip-app](project_live_signoff_recipe.md) — auth mint + exact Genie-enhancement/feedback/capabilities/growth-agent contracts; UI is OAuth-gated for headless.
 - [Reconciling confusing pytest count deltas](project_count_delta_reconciliation.md) — diff JUnit test-id SETS (not counts) + check baseline commit's graph position; separates new/removed/skip-flip/pre-baseline effects.
+- [Live browser signoff operational notes](project_browser_signoff_ops.md) — Playwright MCP is repo-sandboxed (screenshot relative then mv); admin capabilities probe takes ~40s; topbar gap = measure form box AND input.
