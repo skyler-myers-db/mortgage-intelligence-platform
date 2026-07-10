@@ -52,6 +52,13 @@ ConsentStatus = Literal["opt_in", "opt_out", "unknown"]
 OutreachStatus = Literal["none", "queued", "actioned", "sent", "bounced", "replied"]
 
 
+class DimensionFacetCount(BaseModel):
+    """One (value, count) facet cell inside a SegmentCard mix (S1.6)."""
+
+    value: str
+    count: int = Field(ge=0)
+
+
 class SegmentSummary(BaseModel):
     code: SegmentCode
     name: str
@@ -68,6 +75,12 @@ class SegmentSummary(BaseModel):
     # Human source label backing the gate (e.g. "MLS Listings"); NULL for
     # core-spine segments that are not separately entitleable.
     source_name: str | None = None
+    # S1.6 facet mixes from gold.segment_population (state='_ALL' row or the
+    # dynamically-filtered rollup). Sorted by count desc then value; 'unknown'
+    # aggregates borrowers with a NULL dimension value. Default [] keeps older
+    # cached rows and test fixtures validating.
+    loan_product_mix: list[DimensionFacetCount] = Field(default_factory=list)
+    origination_channel_mix: list[DimensionFacetCount] = Field(default_factory=list)
 
 
 class LeadSummary(BaseModel):
@@ -133,6 +146,11 @@ class LeadSummary(BaseModel):
     refi_propensity_score: int | None = None
     refi_propensity_run_date: str | None = None
     has_refi_propensity_trigger: bool = False
+    # S1.6 dimensions. loan_product_type is the fn_loan_product_type bucket
+    # (conventional/jumbo/fha/va/other); origination_channel is the funded
+    # first-party LOS application channel. None = unknown, rendered as such.
+    loan_product_type: str | None = None
+    origination_channel: str | None = None
     current_lender_ref: str | None = None
     # Marketing-contactability fields. These are sourced from first-party
     # CRM/campaign membership, not Cotality, and intentionally carry only

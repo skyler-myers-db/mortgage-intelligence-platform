@@ -977,6 +977,44 @@ kbd {
   overflow-wrap: anywhere;
 }
 
+/* S1.6 — borrower-dimension facet rows (loan product + origination channel).
+ * Sits under the meta row; one row per dimension: a small caps label followed
+ * by `.chip chip--neutral` chips. Chips are evidence-clickable spans (not
+ * buttons — the card itself is a <button>, so nesting is invalid) that open
+ * the EvidenceDrawer without toggling card selection. */
+.seg-card__facets {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-2);
+  margin-top: var(--sp-3);
+}
+.seg-card__facet-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}
+.seg-card__facet-label {
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-3);
+  margin-inline-end: var(--sp-1);
+}
+.seg-card__facet-chip {
+  cursor: pointer;
+}
+.seg-card__facet-chip:hover {
+  border-color: var(--line-2);
+  color: var(--text-1);
+}
+.seg-card__facet-chip:focus-visible {
+  outline: calc(var(--sp-1) / 2) solid var(--accent);
+  outline-offset: calc(var(--sp-1) / 2);
+}
+
 /* ============================================================
    SCORE BADGE
    ============================================================ */

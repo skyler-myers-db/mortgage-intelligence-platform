@@ -426,12 +426,15 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 | `first_party_synthetic_demo` | BOOLEAN | N | any contributing first-party row has `synthetic_demo=true` | — | Disclosure flag; must not be treated as real customer data. |
 | `second_pos_amount` | BIGINT | Y | `lien_current.second_pos_amount` | `second_pos_amount` | 2nd-lien balance. `NULL` and `0` both mean no active second-position balance for the equity segment predicate. |
 | `first_pos_loan_type` | STRING | Y | `lien_current.first_pos_loan_type` | — | Feeds `fit`. |
+| `loan_product_type` | STRING | Y | `mip.gold.fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied)` | `loan_product_type` | Controlled vocab `conventional` / `jumbo` / `fha` / `va` / `other`; NULL when the source loan type code is missing (unknown never guesses). Drives the PRODUCT TYPE filter and SegmentCard facets. |
+| `origination_channel` | STRING | Y | `MAX_BY(LOWER(TRIM(application_channel)), application_at)` over funded `first_party.loan_applications` rows with a non-blank channel (`NULLIF(TRIM(..), '') IS NOT NULL`) | `origination_channel` | LOS channel of the most recent funded first-party application (`loan_officer` / `digital` / `branch` / `call_center` in the demo feed); NULL when no funded application resolves or the channel is blank/whitespace — rendered "Unknown", never invented. |
 | `owner_name_hash` | STRING | N | `property_master.owner_name_hash` | — | See §7. |
 | `min_spread_bps_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_spread_bps']`, fallback `75` | — | Threshold provenance for WhyPanel and offer proof. |
 | `min_equity_pct_applied` | INT | N | `mip.ref.offer_rules_config['mip_min_equity_pct']`, fallback `15` | — | Threshold provenance for WhyPanel and offer proof. |
 | `heloc_equity_min_applied` | INT | N | `mip.ref.offer_rules_config['mip_heloc_equity_min_pct']`, fallback `35` | — | Threshold provenance for `fn_next_best_offer` and the equity segment. |
 | `cashout_equity_min_applied` | INT | N | `mip.ref.offer_rules_config['mip_cashout_equity_min_pct']`, fallback `25` | — | Threshold provenance for `fn_next_best_offer`. |
 | `retention_min_spread_applied` | INT | N | `mip.ref.offer_rules_config['mip_retention_min_spread_bps']`, fallback `50` | — | Threshold provenance for `fn_next_best_offer` and the retention segment. |
+| `conforming_loan_limit_applied` | BIGINT | N | `mip.ref.offer_rules_config['mip_conforming_loan_limit_usd']`, fallback `806500` | — | Conforming loan limit applied this refresh when classifying `jumbo` via `fn_loan_product_type`. |
 | `in_the_money` | BOOLEAN | N | `mip.gold.fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied)` | — | Materialized ITM flag. |
 | `trigger_timeline_json` | STRING | N | JSON-encoded top-3 `gold.evidence_events` rows | `trigger_timeline` | Pre-materialized to avoid per-row fan-out at read; service decodes to `list[EvidenceEvent]`. |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | — | Shared timestamp captured once per refresh run. |
@@ -473,7 +476,7 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 ### 3.4 `mip.gold.evidence_events`
 
 - **Grain:** one row per (`clip`, `evidence_id`) — each row IS an `EvidenceEvent`.
-- **Source:** unioned from `silver.lien_current` (rate_spread, equity, loan_type_fit, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property), `silver.listing_activity` (MLS listing), `silver.heloc_propensity` (HELOC propensity), and `silver.refi_propensity` (refi propensity). True filed-permit signal types await a Cotality Building Permits feed; no `permit` evidence rows are emitted.
+- **Source:** unioned from `silver.lien_current` (rate_spread, equity, loan_type_fit, competitor_lien), `silver.market_rates_weekly` (market_trend), `silver.mortgage_events` (last refi/payoff), `silver.owner_transfer_events` (last sale), `gold.property_owner_bridge` (multi-property), `silver.listing_activity` (MLS listing), `silver.heloc_propensity` (HELOC propensity), and `silver.refi_propensity` (refi propensity), plus explainability-only `product_type` (from `silver.lien_current` via `fn_loan_product_type`) and `origination_channel` (from `first_party.loan_applications` funded rows). True filed-permit signal types await a Cotality Building Permits feed; no `permit` evidence rows are emitted.
 - **PK:** `(clip, evidence_id)`.
 - **Clustering:** liquid on `clip`; timeline ordering is by `signal_rank` / timestamp in the query layer.
 - **Refresh:** daily.
@@ -483,9 +486,9 @@ All gold tables: Delta, managed, partition/cluster tuned for the Module 0 querie
 |---|---|---|---|---|---|
 | `clip` | STRING | N | source tables | — | Not in `EvidenceEvent` but required for join / filter. |
 | `evidence_id` | STRING | N | `CONCAT('ev-', SUBSTR(sha2(CONCAT(clip, '\|', signal_type, '\|', timestamp), 256), 1, 12))` | `evidence_id` | Stable across refreshes — decoupled from row order so `Borrower360.evidence_ids` lists stay stable. |
-| `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`, `'MLS Listings'`, `'HELOC Propensity'`, `'Refi Propensity'`) | `source_product` | |
+| `source_product` | STRING | N | literal per source (`'Voluntary Lien'`, `'AVM'`, `'Owner Link'`, `'Property'`, `'Mortgage Domain'`, `'Owner Transfer'`, `'Market Rates'`, `'MLS Listings'`, `'HELOC Propensity'`, `'Refi Propensity'`, `'First-Party LOS'`) | `source_product` | |
 | `source_table` | STRING | N | literal UC path (e.g. `'mip.silver.lien_current'`) | `source_table` | **Must be a real UC path** — the EvidenceDrawer shows it. |
-| `signal_type` | STRING | N | controlled vocab includes live `listing`, live `heloc_propensity`, live `refi_propensity`, and reserved `permit` alongside `rate_spread`, `equity`, `loan_type_fit`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, and `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. `listing`, `heloc_propensity`, and `refi_propensity` are live; `permit` is reserved for true filed-permit data and remains un-emitted. |
+| `signal_type` | STRING | N | controlled vocab includes live `listing`, live `heloc_propensity`, live `refi_propensity`, and reserved `permit` alongside `rate_spread`, `equity`, `loan_type_fit`, `product_type`, `origination_channel`, `competitor_lien`, `multi_property`, `absentee_mailing`, `corporate_owner`, `foreclosure_stage`, `recent_refi`, `recent_payoff`, `recent_sale`, and `market_trend` | `signal_type` | `loan_type_fit` is compliance-visible rationale for the symmetric CONV/FHA/VA fit branch and is excluded from the evidence sub-score. `product_type` and `origination_channel` are explainability-only rows for the S1.6 dimensions and are likewise excluded from the evidence sub-score. `listing`, `heloc_propensity`, and `refi_propensity` are live; `permit` is reserved for true filed-permit data and remains un-emitted. |
 | `signal_value` | STRING | N | string-cast of the computed value (`'+88 bps'`, `'$285K'`, `'3 properties'`, `'competitor refi'`) | `signal_value` | Human-readable and deterministic. |
 | `display_text` | STRING | N | one-sentence template per `signal_type` | `display_text` | Deterministic; no PII. |
 | `confidence` | DOUBLE | N | per-signal: AVM `confidence_score_mktg`; rate_spread and market_trend `0.92`; Owner-Link derived `0.85`; recent events and competitor/foreclosure signals `0.89`. | `confidence` | 0..1 per `EvidenceEvent` constraint. |
@@ -504,7 +507,7 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 
 | Column | Type | Null | Source | Definition |
 |---|---|---|---|---|
-| (inherits all `LeadSummary` fields from `borrower_360`) | — | — | — | Served directly via `SELECT *` projection. |
+| (inherits all `LeadSummary` fields from `borrower_360`, including `loan_product_type`, `origination_channel`, and the `conforming_loan_limit_applied` provenance column) | — | — | — | Served directly via `SELECT *` projection. |
 | `rank_overall` | INT | N | `DENSE_RANK() OVER (ORDER BY opportunity_score DESC, clip)` | |
 | `rank_within_state` | INT | N | `DENSE_RANK() OVER (PARTITION BY state ORDER BY opportunity_score DESC, clip)` | |
 | `population_version` | STRING | N | `CONCAT(DATE_FORMAT(refreshed_at, 'yyyyMMdd'), '-v1')` | Used in the EvidenceDrawer footer as a provenance chip. |
@@ -528,6 +531,8 @@ Columns = exact superset of what `LeadSummary` needs, plus `rank_overall` and `r
 | `avg_score` | INT | N | `CAST(ROUND(AVG(opportunity_score)) AS INT)` | `avg_score` | |
 | `description` | STRING | N | static map | `description` | |
 | `color` | STRING | N | static map | `color` | Hex. |
+| `loan_product_mix` | ARRAY<STRUCT<value STRING, count INT>> | N | `COUNT(*)` per `COALESCE(loan_product_type, 'unknown')` within the cell, sorted count desc then value | `loan_product_mix` | SegmentCard facet mix; facet counts sum to the segment count (NULL rolls up as `unknown`). |
+| `origination_channel_mix` | ARRAY<STRUCT<value STRING, count INT>> | N | `COUNT(*)` per `COALESCE(origination_channel, 'unknown')` within the cell, sorted count desc then value | `origination_channel_mix` | SegmentCard facet mix; `unknown` aggregates borrowers with no funded first-party application. |
 | `refreshed_at` | TIMESTAMP | N | latest `mip.ref.refresh_run_state.refresh_at` | — | |
 
 ### 3.7 `mip.gold.household_rollup`

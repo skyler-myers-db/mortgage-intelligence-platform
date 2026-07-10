@@ -24,6 +24,14 @@
 --                        remains the membership contract.
 --   loan_purpose       — first_pos_loan_type (proxy for loan_purpose; CONV/
 --                        FHA/VA etc. from share).
+--   loan_product_type  — fn_loan_product_type bucket: conventional / jumbo /
+--                        fha / va / other; NULL when the source code is
+--                        missing.
+--   origination_channel — funded first-party LOS application channel; NULL
+--                        when unknown.
+--   conforming_loan_limit_applied — conforming loan limit (USD) applied this
+--                        refresh when classifying jumbo; provenance for
+--                        loan_product_type.
 --   is_investor        — boolean.
 --   is_current_customer — boolean.
 --   is_former_customer — boolean.
@@ -72,6 +80,9 @@ SELECT
     ELSE 'none'
   END                                               AS segment,
   b.first_pos_loan_type                             AS loan_purpose,
+  b.loan_product_type,
+  b.origination_channel,
+  b.conforming_loan_limit_applied,
   b.is_investor,
   b.is_current_customer,
   b.is_former_customer,
@@ -94,4 +105,4 @@ SELECT
 FROM mip.gold.borrower_360 AS b;
 
 COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
-  'Genie + dashboard borrower-grain metric view over gold.borrower_360 (one row per clip). Exposed columns: clip, state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, is_investor, is_current_customer, is_former_customer, is_competitor_lien, has_permit, listed_for_sale, listing_status_category, listing_price, listing_days_on_market, heloc_propensity_score, has_heloc_propensity_trigger, refi_propensity_score, has_refi_propensity_trigger, current_lender_ref, rate_spread_bps, equity_pct, in_the_money, current_lien_balance, opportunity_score. These are plain columns, NOT materialized measures: the intended read-time aggregations are avg_rate_spread_bps = AVG(rate_spread_bps), avg_equity_pct = AVG(equity_pct), count_itm = COUNT(*) FILTER (in_the_money), sum_loan_amount = SUM(current_lien_balance), count_total = COUNT(DISTINCT clip), and avg_opportunity_score = AVG(opportunity_score), each computed by the dashboard or Genie query at read time. See docs/data-contract-module0.md §3.2.';
+  'Genie + dashboard borrower-grain metric view over gold.borrower_360 (one row per clip). Exposed columns: clip, state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, loan_product_type, origination_channel, conforming_loan_limit_applied, is_investor, is_current_customer, is_former_customer, is_competitor_lien, has_permit, listed_for_sale, listing_status_category, listing_price, listing_days_on_market, heloc_propensity_score, has_heloc_propensity_trigger, refi_propensity_score, has_refi_propensity_trigger, current_lender_ref, rate_spread_bps, equity_pct, in_the_money, current_lien_balance, opportunity_score. These are plain columns, NOT materialized measures: the intended read-time aggregations are avg_rate_spread_bps = AVG(rate_spread_bps), avg_equity_pct = AVG(equity_pct), count_itm = COUNT(*) FILTER (in_the_money), sum_loan_amount = SUM(current_lien_balance), count_total = COUNT(DISTINCT clip), and avg_opportunity_score = AVG(opportunity_score), each computed by the dashboard or Genie query at read time. See docs/data-contract-module0.md §3.2.';

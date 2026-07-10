@@ -114,7 +114,11 @@ WITH exploded AS (
   SELECT
     b.state,
     sc AS segment_code,
-    b.opportunity_score
+    b.opportunity_score,
+    -- Facet dimensions (S1.6). NULL reads as 'unknown' in the mix so facet
+    -- counts always sum to the segment count -- no silent row drops.
+    COALESCE(b.loan_product_type, 'unknown')   AS loan_product_type,
+    COALESCE(b.origination_channel, 'unknown') AS origination_channel
   FROM mip.gold.borrower_360 AS b
   LATERAL VIEW EXPLODE(b.segment_codes) s AS sc
 ),
@@ -140,6 +144,63 @@ current_counts AS (
   SELECT * FROM per_state
   UNION ALL
   SELECT * FROM national
+),
+-- Facet mixes (S1.6): per-(segment, state) product-type and origination-
+-- channel breakdowns, spanning both per-state cells and the _ALL national
+-- rollup. Sorted by count desc then value so the SegmentCard facet chips are
+-- deterministic across refreshes.
+exploded_spanned AS (
+  SELECT state, segment_code, loan_product_type, origination_channel FROM exploded
+  UNION ALL
+  SELECT '_ALL' AS state, segment_code, loan_product_type, origination_channel FROM exploded
+),
+product_mix AS (
+  SELECT
+    segment_code,
+    state,
+    TRANSFORM(
+      ARRAY_SORT(
+        COLLECT_LIST(STRUCT(cnt, value)),
+        (a, b) -> CASE
+          WHEN a.cnt   > b.cnt   THEN -1
+          WHEN a.cnt   < b.cnt   THEN  1
+          WHEN a.value < b.value THEN -1
+          WHEN a.value > b.value THEN  1
+          ELSE 0
+        END
+      ),
+      x -> STRUCT(x.value AS value, x.cnt AS count)
+    ) AS loan_product_mix
+  FROM (
+    SELECT segment_code, state, loan_product_type AS value, CAST(COUNT(*) AS INT) AS cnt
+    FROM exploded_spanned
+    GROUP BY segment_code, state, loan_product_type
+  )
+  GROUP BY segment_code, state
+),
+channel_mix AS (
+  SELECT
+    segment_code,
+    state,
+    TRANSFORM(
+      ARRAY_SORT(
+        COLLECT_LIST(STRUCT(cnt, value)),
+        (a, b) -> CASE
+          WHEN a.cnt   > b.cnt   THEN -1
+          WHEN a.cnt   < b.cnt   THEN  1
+          WHEN a.value < b.value THEN -1
+          WHEN a.value > b.value THEN  1
+          ELSE 0
+        END
+      ),
+      x -> STRUCT(x.value AS value, x.cnt AS count)
+    ) AS origination_channel_mix
+  FROM (
+    SELECT segment_code, state, origination_channel AS value, CAST(COUNT(*) AS INT) AS cnt
+    FROM exploded_spanned
+    GROUP BY segment_code, state, origination_channel
+  )
+  GROUP BY segment_code, state
 ),
 -- Most recent prior snapshot strictly before today. Takes the MAX snapshot
 -- date < today for each (segment_code, state); first-refresh rows have no
@@ -225,12 +286,18 @@ SELECT
   COALESCE(c.avg_score, 0)                          AS avg_score,
   m.description,
   m.color,
+  COALESCE(pmix.loan_product_mix,
+           CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>))       AS loan_product_mix,
+  COALESCE(cmix.origination_channel_mix,
+           CAST(ARRAY() AS ARRAY<STRUCT<value: STRING, count: INT>>))       AS origination_channel_mix,
   -- Shared refresh_at captured once per run. See audit-holes-round-3 #7.
   (SELECT refresh_at FROM mip.ref.refresh_run_state ORDER BY captured_at DESC LIMIT 1) AS refreshed_at
 FROM grid           AS g
 LEFT JOIN meta      AS m USING (segment_code)
 LEFT JOIN current_counts AS c USING (segment_code, state)
-LEFT JOIN prior     AS p USING (segment_code, state);
+LEFT JOIN prior     AS p USING (segment_code, state)
+LEFT JOIN product_mix AS pmix USING (segment_code, state)
+LEFT JOIN channel_mix AS cmix USING (segment_code, state);
 
 -- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
 -- CREATE OR REPLACE drops DDL column comments on every refresh, and the
@@ -246,4 +313,6 @@ COMMENT ON COLUMN mip.gold.segment_population.delta_vs_prior IS 'Quarter-over-qu
 COMMENT ON COLUMN mip.gold.segment_population.avg_score IS 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.';
 COMMENT ON COLUMN mip.gold.segment_population.description IS 'Static description per segment_code.';
 COMMENT ON COLUMN mip.gold.segment_population.color IS 'Hex color for segment tile.';
+COMMENT ON COLUMN mip.gold.segment_population.loan_product_mix IS 'Loan product-type facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. value is conventional / jumbo / fha / va / other / unknown. Backs SegmentCard facets.';
+COMMENT ON COLUMN mip.gold.segment_population.origination_channel_mix IS 'Origination-channel facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. unknown aggregates borrowers with no funded first-party application. Backs SegmentCard facets.';
 COMMENT ON COLUMN mip.gold.segment_population.refreshed_at IS 'Refresh timestamp.';

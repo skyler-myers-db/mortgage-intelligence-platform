@@ -29,6 +29,18 @@ fields:
     expr: in_the_money
     synonyms: ["refi incentive", "rate incentive", "economic incentive", "prime refi"]
     comment: "TRUE when the rate-spread and equity thresholds are both met."
+  - name: Loan Product Type
+    expr: loan_product_type
+    synonyms: ["product type", "loan product", "loan program", "jumbo vs conventional"]
+    comment: "fn_loan_product_type bucket: conventional / jumbo / fha / va / other. NULL when the Cotality loan type code is missing."
+  - name: Origination Channel
+    expr: origination_channel
+    synonyms: ["channel", "LOS channel", "application channel", "origination source"]
+    comment: "LOS channel of the most recent funded first-party application. NULL when no funded application resolves to the borrower."
+  - name: Conforming Loan Limit Applied
+    expr: conforming_loan_limit_applied
+    synonyms: ["conforming limit", "jumbo threshold", "loan limit applied"]
+    comment: "Conforming loan limit (USD) applied this refresh when classifying jumbo; provenance for Loan Product Type."
   - name: Listed For Sale
     expr: listed_for_sale
     synonyms: ["listing", "MLS", "for sale", "purchase intent"]

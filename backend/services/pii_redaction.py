@@ -566,6 +566,8 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "situs_cbsa_code": row.get("situs_cbsa_code") or None,
         "first_pos_loan_type": row.get("first_pos_loan_type") or None,
+        "loan_product_type": _optional_str(row.get("loan_product_type")),
+        "origination_channel": _optional_str(row.get("origination_channel")),
         "is_owner_occupied": bool(row.get("is_owner_occupied") or False),
         "is_absentee": bool(row.get("is_absentee") or False),
         "is_corporate_owner": bool(row.get("is_corporate_owner") or False),
@@ -703,6 +705,10 @@ def redact_lead_row(row: dict[str, Any]) -> dict[str, Any]:
         "has_refi_propensity_trigger": bool(
             row.get("has_refi_propensity_trigger") or False
         ),
+        # S1.6 dimensions. None = unknown; the UI renders "Unknown" and the
+        # filters treat NULL as its own reviewed bucket.
+        "loan_product_type": _optional_str(row.get("loan_product_type")),
+        "origination_channel": _optional_str(row.get("origination_channel")),
         # Fail closed when source columns are missing/null.
         "marketing_eligible": bool(row.get("marketing_eligible") is True),
         "consent_status": _consent_status(row.get("consent_status")),

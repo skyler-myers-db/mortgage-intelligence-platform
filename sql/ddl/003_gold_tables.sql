@@ -252,12 +252,15 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_360 (
   itm_on_related_property   BOOLEAN   NOT NULL COMMENT 'S1.3 itm_on_related_property segment flag: any Owner Link on this CLIP (S1.1 silver.property_owners, all slots) also holds a DIFFERENT clip that is in the money under the same refresh thresholds.',
   related_itm_property_count INT      NOT NULL COMMENT 'S1.3: count of OTHER in-the-money clips on the strongest Owner Link for this CLIP. Evidence display for itm_on_related_property.',
   first_pos_loan_type       STRING             COMMENT '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.',
+  loan_product_type         STRING             COMMENT 'fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied): conventional / jumbo / fha / va / other. NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter and SegmentCard facets.',
+  origination_channel       STRING             COMMENT 'LOS channel of the most recent funded first-party application (loan_officer / digital / branch / call_center in the demo feed). NULL when no funded application resolves to this borrower -- rendered "Unknown", never invented.',
   owner_name_hash           STRING    NOT NULL COMMENT 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.',
   min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold applied when computing ITM for THIS refresh. Carried so WhyPanel.min_spread_bps is the run-specific value.',
   min_equity_pct_applied    INT       NOT NULL COMMENT 'Equity threshold applied this refresh.',
   heloc_equity_min_applied  INT       NOT NULL COMMENT 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3 and equity segment).',
   cashout_equity_min_applied INT      NOT NULL COMMENT 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).',
   retention_min_spread_applied INT    NOT NULL COMMENT 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7 and retention segment).',
+  conforming_loan_limit_applied BIGINT NOT NULL COMMENT 'Conforming loan limit (USD) applied this refresh when classifying jumbo via fn_loan_product_type.',
   in_the_money              BOOLEAN   NOT NULL COMMENT 'fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).',
   trigger_timeline_json     STRING    NOT NULL COMMENT 'JSON-encoded top-3 EvidenceEvent rows pre-materialized to avoid per-row fan-out at read. Router json_decodes into List[EvidenceEvent].',
   refreshed_at              TIMESTAMP NOT NULL COMMENT 'Refresh timestamp; used as EvidenceDrawer footer provenance chip.'
@@ -306,9 +309,9 @@ TBLPROPERTIES (
 CREATE TABLE IF NOT EXISTS mip.gold.evidence_events (
   clip           STRING NOT NULL COMMENT 'Cotality CLIP. Not in Pydantic EvidenceEvent (router strips); used for join / filter.',
   evidence_id    STRING NOT NULL COMMENT 'Deterministic: "ev-" || substr(sha2(clip || signal_type || timestamp, 256), 1, 12). Stable across refreshes so Borrower360.evidence_ids stays consistent.',
-  source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates / MLS Listings / HELOC Propensity / Refi Propensity.',
-  source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.* or mip.gold.* path.',
-  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: listing / rate_spread / equity / market_trend / heloc_propensity / refi_propensity / loan_type_fit / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale. BLOCKED vocab permit is NEVER emitted without a true permit source.',
+  source_product STRING NOT NULL COMMENT 'Human label: Voluntary Lien / AVM / Owner Link / Property / Mortgage Domain / Owner Transfer / Market Rates / MLS Listings / HELOC Propensity / Refi Propensity / First-Party LOS.',
+  source_table   STRING NOT NULL COMMENT 'Real UC path. Shown verbatim in EvidenceDrawer -- must be a resolvable mip.silver.*, mip.gold.*, or mip.first_party.* path.',
+  signal_type    STRING NOT NULL COMMENT 'Controlled vocab: listing / rate_spread / equity / market_trend / heloc_propensity / refi_propensity / loan_type_fit / product_type / origination_channel / competitor_lien / multi_property / absentee_mailing / corporate_owner / foreclosure_stage / recent_refi / recent_payoff / recent_sale. product_type and origination_channel are explainability-only (excluded from the evidence sub-score). BLOCKED vocab permit is NEVER emitted without a true permit source.',
   signal_value   STRING NOT NULL COMMENT 'Human-readable value: "+88 bps", "$285K", "3 properties", "competitor refi".',
   display_text   STRING NOT NULL COMMENT 'One-sentence deterministic template per signal_type. No PII.',
   confidence     DOUBLE NOT NULL COMMENT '0..1. Per-signal: AVM uses upstream confidence_score_mktg; count-based rows 0.85-0.92 (see header).',
@@ -442,6 +445,9 @@ CREATE TABLE IF NOT EXISTS mip.gold.lead_population (
   refi_propensity_score     INT                COMMENT 'Cotality refinance propensity score, 0..999 in the current feed.',
   refi_propensity_run_date  DATE               COMMENT 'Cotality refinance propensity model run date.',
   has_refi_propensity_trigger BOOLEAN NOT NULL COMMENT 'TRUE when refi_propensity_score >= 700. Adds intent score context.',
+  loan_product_type         STRING             COMMENT 'From gold.borrower_360; conventional / jumbo / fha / va / other, NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter.',
+  origination_channel       STRING             COMMENT 'From gold.borrower_360; LOS channel of the most recent funded first-party application, NULL when unknown. Drives the ORIGINATION CHANNEL filter.',
+  conforming_loan_limit_applied BIGINT NOT NULL COMMENT 'From gold.borrower_360; conforming loan limit (USD) applied this refresh when classifying jumbo via fn_loan_product_type. Provenance for loan_product_type.',
   marketing_eligible        BOOLEAN   NOT NULL COMMENT 'From gold.borrower_360; TRUE only when consent, suppression, and frequency-cap gates are clear.',
   consent_status            STRING    NOT NULL COMMENT 'From gold.borrower_360; opt_in / opt_out / unknown.',
   suppression_reason        STRING             COMMENT 'From gold.borrower_360; controlled suppression reason.',
@@ -473,6 +479,10 @@ CREATE TABLE IF NOT EXISTS mip.gold.segment_population (
   avg_score       INT       NOT NULL COMMENT 'CAST(ROUND(AVG(opportunity_score)) AS INT) over the segment cell.',
   description     STRING    NOT NULL COMMENT 'Static description per segment_code.',
   color           STRING    NOT NULL COMMENT 'Hex color for segment tile.',
+  loan_product_mix ARRAY<STRUCT<value: STRING, count: INT>>
+                            NOT NULL COMMENT 'Loan product-type facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. value is conventional / jumbo / fha / va / other / unknown. Backs SegmentCard facets.',
+  origination_channel_mix ARRAY<STRUCT<value: STRING, count: INT>>
+                            NOT NULL COMMENT 'Origination-channel facet mix for this (segment, state) cell: (value, count) pairs sorted by count desc then value. unknown aggregates borrowers with no funded first-party application. Backs SegmentCard facets.',
   refreshed_at    TIMESTAMP NOT NULL COMMENT 'Refresh timestamp.'
 )
 USING DELTA
@@ -753,12 +763,15 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_dossier (
   current_lender_ref        STRING             COMMENT 'Public-demo-safe current-servicer reference.',
   second_pos_amount         BIGINT             COMMENT 'For "equity" segment predicate.',
   first_pos_loan_type       STRING             COMMENT 'For fit sub-score.',
+  loan_product_type         STRING             COMMENT 'From borrower_360; conventional / jumbo / fha / va / other, NULL when unknown.',
+  origination_channel       STRING             COMMENT 'From borrower_360; funded first-party application channel, NULL when unknown.',
   owner_name_hash           STRING    NOT NULL COMMENT 'sha2 hash from silver; internal only, router strips.',
   min_spread_bps_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
   min_equity_pct_applied    INT       NOT NULL COMMENT 'Threshold this refresh.',
   heloc_equity_min_applied  INT       NOT NULL COMMENT 'HELOC equity threshold this refresh.',
   cashout_equity_min_applied INT      NOT NULL COMMENT 'Cash-out equity threshold this refresh.',
   retention_min_spread_applied INT    NOT NULL COMMENT 'Retention spread threshold this refresh.',
+  conforming_loan_limit_applied BIGINT NOT NULL COMMENT 'Conforming loan limit (USD) applied this refresh for jumbo classification.',
   in_the_money              BOOLEAN   NOT NULL COMMENT 'fn_in_the_money output.',
   trigger_timeline_json     STRING    NOT NULL COMMENT 'JSON-encoded top-3 evidence rows (carried from borrower_360 for parity).',
   evidence_events           ARRAY<STRUCT<evidence_id: STRING, source_product: STRING, source_table: STRING, signal_type: STRING, signal_value: STRING, display_text: STRING, confidence: DOUBLE, `timestamp`: STRING, signal_rank: INT>>

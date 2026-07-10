@@ -24,6 +24,7 @@
 --              mip_heloc_equity_min_pct      = 35     (fn_next_best_offer.sql L94)
 --              mip_cashout_equity_min_pct    = 25     (fn_next_best_offer.sql L95)
 --              mip_retention_min_spread_bps  = 50     (fn_next_best_offer.sql L96)
+--              mip_conforming_loan_limit_usd = 806500 (fn_loan_product_type.sql; FHFA 2025 baseline one-unit conforming loan limit)
 --
 -- Idempotency: MERGE on key. Re-running this file (as part of the
 --            `mip_ref_seed` + `mip_refresh_silver` bundle jobs) is a no-op
@@ -53,7 +54,9 @@ USING (
     ('mip_cashout_equity_min_pct',   25.0,    'pct',           'Cash-out equity floor (%)',
      'Equity floor required for cash-out refi eligibility when rate economics are absent.',    4),
     ('mip_retention_min_spread_bps', 50.0,    'bps',           'Retention min spread (bps)',
-     'Lowered spread bar used for retention outreach on existing customers.',                  5)
+     'Lowered spread bar used for retention outreach on existing customers.',                  5),
+    ('mip_conforming_loan_limit_usd', 806500.0, 'usd',         'Conforming loan limit ($)',
+     'FHFA baseline one-unit conforming loan limit used to classify conventional first liens as jumbo.', 6)
 ) AS s
 ON t.key = s.key
 WHEN MATCHED THEN UPDATE SET

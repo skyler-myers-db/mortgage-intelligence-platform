@@ -108,7 +108,8 @@ rules AS (
     CAST(COALESCE(MAX(CASE WHEN key = 'mip_min_equity_pct'           THEN value END), 15.0) AS INT) AS min_equity_pct,
     CAST(COALESCE(MAX(CASE WHEN key = 'mip_heloc_equity_min_pct'     THEN value END), 35.0) AS INT) AS heloc_equity_min_pct,
     CAST(COALESCE(MAX(CASE WHEN key = 'mip_cashout_equity_min_pct'   THEN value END), 25.0) AS INT) AS cashout_equity_min_pct,
-    CAST(COALESCE(MAX(CASE WHEN key = 'mip_retention_min_spread_bps' THEN value END), 50.0) AS INT) AS retention_min_spread_bps
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_retention_min_spread_bps' THEN value END), 50.0) AS INT) AS retention_min_spread_bps,
+    CAST(COALESCE(MAX(CASE WHEN key = 'mip_conforming_loan_limit_usd' THEN value END), 806500.0) AS BIGINT) AS conforming_loan_limit_usd
   FROM mip.ref.offer_rules_config
 ),
 -- Recent-event aggregates per CLIP feeding intent_trigger (last 90 days).
@@ -372,6 +373,18 @@ first_party_applications AS (
     COUNT(*) AS application_rows,
     COUNT_IF(application_status = 'funded') AS funded_application_count,
     COUNT_IF(application_at >= DATE_SUB(CURRENT_DATE(), 180)) > 0 AS has_recent_application,
+    -- Origination channel: LOS channel of the most recent FUNDED application.
+    -- Funded-only is deliberate -- "origination channel" describes how a loan
+    -- actually originated, not how a withdrawn/declined inquiry arrived.
+    -- NULL when no funded application resolves to this borrower; the app
+    -- renders NULL as "Unknown" and never invents a channel. Blank or
+    -- whitespace-only channel strings are treated as NULL (unknown) --
+    -- NULLIF(TRIM(..), '') keeps '' out of the channel vocabulary so the
+    -- segment facet 'unknown' bucket stays the single catch-all.
+    MAX_BY(LOWER(TRIM(application_channel)), application_at)
+      FILTER (WHERE application_status = 'funded'
+              AND NULLIF(TRIM(application_channel), '') IS NOT NULL)
+      AS latest_funded_channel,
     COUNT_IF(COALESCE(synthetic_demo, FALSE)) > 0 AS synthetic_demo
   FROM mip.first_party.loan_applications
   GROUP BY borrower_id
@@ -500,6 +513,9 @@ enriched AS (
     COALESCE(fps.has_closed_servicing, FALSE) AS fp_has_closed_servicing,
     COALESCE(fpa.funded_application_count, 0) AS fp_funded_application_count,
     COALESCE(fpa.has_recent_application, FALSE) AS fp_has_recent_application,
+    -- Origination channel from the governed first-party LOS feed. NULL when
+    -- no funded application resolves to this borrower -- rendered "Unknown".
+    fpa.latest_funded_channel AS origination_channel,
     COALESCE(fpc.marketing_eligible, FALSE) AS fp_marketing_eligible,
     COALESCE(fpc.consent_status, 'unknown') AS fp_consent_status,
     fpc.suppression_reason AS fp_suppression_reason,
@@ -659,6 +675,12 @@ scored AS (
     r.heloc_equity_min_pct     AS heloc_equity_min_applied,
     r.cashout_equity_min_pct   AS cashout_equity_min_applied,
     r.retention_min_spread_bps AS retention_min_spread_applied,
+    r.conforming_loan_limit_usd AS conforming_loan_limit_applied,
+    -- Product type via frozen UDF: CONV/FHA/VA source codes plus the governed
+    -- conforming-limit jumbo overlay. NULL when the source code is missing.
+    mip.gold.fn_loan_product_type(
+      e.first_pos_loan_type, e.first_pos_amount, r.conforming_loan_limit_usd
+    ) AS loan_product_type,
     mip.gold.fn_in_the_money(
       e.rate_spread_bps, e.equity_pct, r.min_spread_bps, r.min_equity_pct
     ) AS in_the_money,
@@ -785,7 +807,7 @@ with_segments AS (
 evidence_counts AS (
   SELECT clip, COUNT(*) AS evidence_event_count
   FROM mip.gold.evidence_events
-  WHERE signal_type NOT IN ('permit', 'loan_type_fit')
+  WHERE signal_type NOT IN ('permit', 'loan_type_fit', 'product_type', 'origination_channel')
   GROUP BY clip
 ),
 -- Top-3 evidence timeline per CLIP, pre-materialized as JSON to avoid
@@ -1100,12 +1122,15 @@ SELECT
   w.itm_on_related_property,
   w.related_itm_property_count,
   w.first_pos_loan_type,
+  w.loan_product_type,
+  w.origination_channel,
   w.owner_name_hash,
   w.min_spread_bps_applied,
   w.min_equity_pct_applied,
   w.heloc_equity_min_applied,
   w.cashout_equity_min_applied,
   w.retention_min_spread_applied,
+  w.conforming_loan_limit_applied,
   w.in_the_money,
   COALESCE(tl.trigger_timeline_json, '[]')                                           AS trigger_timeline_json,
   -- refresh_at comes from mip.ref.refresh_run_state (captured once per run
@@ -1207,12 +1232,15 @@ COMMENT ON COLUMN mip.gold.borrower_360.is_payoff_loss IS 'S1.3 payoff_loss_lead
 COMMENT ON COLUMN mip.gold.borrower_360.itm_on_related_property IS 'S1.3 itm_on_related_property segment flag: any Owner Link on this CLIP (S1.1 silver.property_owners, all slots) also holds a DIFFERENT clip that is in the money under the same refresh thresholds.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_itm_property_count IS 'S1.3: count of OTHER in-the-money clips on the strongest Owner Link for this CLIP. Evidence display for itm_on_related_property.';
 COMMENT ON COLUMN mip.gold.borrower_360.first_pos_loan_type IS '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.';
+COMMENT ON COLUMN mip.gold.borrower_360.loan_product_type IS 'fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied): conventional / jumbo / fha / va / other. NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter and SegmentCard facets.';
+COMMENT ON COLUMN mip.gold.borrower_360.origination_channel IS 'LOS channel of the most recent funded first-party application (loan_officer / digital / branch / call_center in the demo feed). NULL when no funded application resolves to this borrower -- rendered "Unknown", never invented.';
 COMMENT ON COLUMN mip.gold.borrower_360.owner_name_hash IS 'sha2(LOWER(TRIM(name)) || salt, 256) propagated from silver.property_master. Internal only -- router strips before /api/*.';
 COMMENT ON COLUMN mip.gold.borrower_360.min_spread_bps_applied IS 'Threshold applied when computing ITM for THIS refresh. Carried so WhyPanel.min_spread_bps is the run-specific value.';
 COMMENT ON COLUMN mip.gold.borrower_360.min_equity_pct_applied IS 'Equity threshold applied this refresh.';
 COMMENT ON COLUMN mip.gold.borrower_360.heloc_equity_min_applied IS 'HELOC equity threshold applied this refresh (fn_next_best_offer branch 2/3 and equity segment).';
 COMMENT ON COLUMN mip.gold.borrower_360.cashout_equity_min_applied IS 'Cash-out equity threshold applied this refresh (fn_next_best_offer branch 5).';
 COMMENT ON COLUMN mip.gold.borrower_360.retention_min_spread_applied IS 'Retention spread threshold applied this refresh (fn_next_best_offer branch 7 and retention segment).';
+COMMENT ON COLUMN mip.gold.borrower_360.conforming_loan_limit_applied IS 'Conforming loan limit (USD) applied this refresh when classifying jumbo via fn_loan_product_type.';
 COMMENT ON COLUMN mip.gold.borrower_360.in_the_money IS 'fn_in_the_money(rate_spread_bps, equity_pct, min_spread_bps_applied, min_equity_pct_applied).';
 COMMENT ON COLUMN mip.gold.borrower_360.trigger_timeline_json IS 'JSON-encoded top-3 EvidenceEvent rows pre-materialized to avoid per-row fan-out at read. Router json_decodes into List[EvidenceEvent].';
 COMMENT ON COLUMN mip.gold.borrower_360.refreshed_at IS 'Refresh timestamp; used as EvidenceDrawer footer provenance chip.';

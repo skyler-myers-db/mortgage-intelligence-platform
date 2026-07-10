@@ -1,9 +1,23 @@
 import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
-import type { SegmentSummary } from '../../types';
+import type { DimensionFacetCount, SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
 import { EvidenceChip } from '../Primitives';
 import { segmentEvidenceSource } from '../../lib/drawerSources';
 import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
+
+const FACET_LABELS: Record<string, string> = {
+  conventional: 'Conv',
+  jumbo: 'Jumbo',
+  fha: 'FHA',
+  va: 'VA',
+  other: 'Other',
+  unknown: 'Unknown',
+  loan_officer: 'Loan officer',
+  digital: 'Digital',
+  branch: 'Branch',
+  call_center: 'Call center',
+};
 
 /**
  * SegmentCard — prototype `.seg-card` BEM: badge + title + count + sub + meta row.
@@ -51,6 +65,9 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
 
+  const loanProductMix: DimensionFacetCount[] = (segment.loan_product_mix ?? []).slice(0, 3);
+  const originationChannelMix: DimensionFacetCount[] = (segment.origination_channel_mix ?? []).slice(0, 2);
+  const hasFacets = loanProductMix.length > 0 || originationChannelMix.length > 0;
   const gated =
     segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
   const gateLabel = segment.source_status === 'not_licensed' ? 'not licensed' : 'not connected';
@@ -138,6 +155,50 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
           </EvidenceChip>
         </span>
       </div>
+      {!gated && hasFacets && (
+        <div className="seg-card__facets">
+          {loanProductMix.length > 0 && (
+            <div className="seg-card__facet-row">
+              <span className="seg-card__facet-label">Product</span>
+              {loanProductMix.map((facet) => {
+                const label = FACET_LABELS[facet.value] ?? facet.value;
+                return (
+                  <span
+                    key={`product-${facet.value}`}
+                    className="seg-card__facet-chip"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <EvidenceChip source={DRAWER_SOURCES.loanProductType}>
+                      {label} {facet.count.toLocaleString()}
+                    </EvidenceChip>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+          {originationChannelMix.length > 0 && (
+            <div className="seg-card__facet-row">
+              <span className="seg-card__facet-label">Channel</span>
+              {originationChannelMix.map((facet) => {
+                const label = FACET_LABELS[facet.value] ?? facet.value;
+                return (
+                  <span
+                    key={`channel-${facet.value}`}
+                    className="seg-card__facet-chip"
+                    onClick={(event) => event.stopPropagation()}
+                    onKeyDown={(event) => event.stopPropagation()}
+                  >
+                    <EvidenceChip source={DRAWER_SOURCES.originationChannel}>
+                      {label} {facet.count.toLocaleString()}
+                    </EvidenceChip>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
