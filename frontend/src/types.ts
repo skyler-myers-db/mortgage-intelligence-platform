@@ -1,4 +1,23 @@
-export type SegmentCode = 'itm' | 'listed' | 'permit' | 'investor' | 'equity' | 'retention';
+export type SegmentCode =
+  | 'itm'
+  | 'listed'
+  | 'permit'
+  | 'investor'
+  | 'equity'
+  | 'retention'
+  // S1.3 overlay segments (see gold_segment_population.sql registry).
+  // permit_activity is the TRUE filed-permit segment (gated until the
+  // Cotality source lands); the legacy `permit` code remains HELOC Intent.
+  | 'second_lien_itm'
+  | 'heloc_draw_to_payback'
+  | 'home_equity_history'
+  | 'refi_propensity'
+  | 'itm_on_related_property'
+  | 'payoff_loss_leads'
+  | 'permit_activity';
+
+/** S1.3 three-state source gate resolved from gold.source_readiness. */
+export type SegmentSourceStatus = 'connected' | 'not_connected' | 'not_licensed';
 export type OfferType = 'refi' | 'heloc' | 'cash_out' | 'purchase' | 'retention' | 'recapture';
 export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'hold';
 export type OutreachStatus = 'none' | 'queued' | 'actioned' | 'sent' | 'bounced' | 'replied';
@@ -32,6 +51,12 @@ export interface SegmentSummary {
   avg_score: number;
   description: string;
   color: string;
+  /** S1.3 three-state gate; segments default to connected and counts are
+   *  always real — a gated segment simply has zero members. Optional so
+   *  cached rows from older backends keep validating. */
+  source_status?: SegmentSourceStatus;
+  /** Human source label backing the gate (e.g. "MLS Listings"). */
+  source_name?: string | null;
 }
 
 export interface LeadSummary {

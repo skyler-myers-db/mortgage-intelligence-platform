@@ -27,6 +27,7 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.services.agent_tools import registered_agent_tool_names
 from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_metadata_value_policy import (
@@ -433,7 +434,7 @@ _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
 _DECISION_INPUT_KEYS: frozenset[str] = frozenset(DECISION_INPUT_KEYS)
 
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     {
         "addressable",

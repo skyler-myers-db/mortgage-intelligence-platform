@@ -2,7 +2,7 @@
 
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Literal, get_args
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -10,7 +10,34 @@ from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import EvidenceEvent
 from backend.schemas.why import WhyPanel
 
-SegmentCode = Literal["itm", "listed", "permit", "investor", "equity", "retention"]
+SegmentCode = Literal[
+    "itm",
+    "listed",
+    "permit",
+    "investor",
+    "equity",
+    "retention",
+    # S1.3 overlay segments. Membership predicates live in
+    # sql/transformations/gold_borrower_360.sql (with_segments) and the
+    # registry rows in gold_segment_population.sql. permit_activity is the
+    # TRUE filed-permit segment (gated until the Cotality source lands);
+    # the legacy `permit` code remains the customer-facing HELOC Intent.
+    "second_lien_itm",
+    "heloc_draw_to_payback",
+    "home_equity_history",
+    "refi_propensity",
+    "itm_on_related_property",
+    "payoff_loss_leads",
+    "permit_activity",
+]
+# Canonical runtime vocabulary derived from the Literal so API allowlists,
+# audit validation, and repositories share exactly one registry.
+SEGMENT_CODE_VALUES: tuple[str, ...] = get_args(SegmentCode)
+# S1.3 three-state source gating for segments whose driving source can be
+# disconnected or unlicensed: connected / not_connected / not_licensed.
+# Derived from gold.source_readiness; the full entitlement matrix ships in
+# S5.1 and will extend this same field.
+SegmentSourceStatus = Literal["connected", "not_connected", "not_licensed"]
 # S1.1 multi-owner: entity classification of an owner slot. Classify +
 # caveat + suppress only (ROADMAP-TEMPORARY pending Cotality entity
 # resolution). `unresolved` owners are excluded from contact-eligible
@@ -33,6 +60,14 @@ class SegmentSummary(BaseModel):
     avg_score: int = Field(ge=0, le=100)
     description: str
     color: str
+    # S1.3: three-state gate resolved from gold.source_readiness for the
+    # segment's driving source. "connected" for core-spine segments and
+    # whenever the readiness read is unavailable (gating is presentational;
+    # counts are always real -- a gated segment simply has 0 members).
+    source_status: SegmentSourceStatus = "connected"
+    # Human source label backing the gate (e.g. "MLS Listings"); NULL for
+    # core-spine segments that are not separately entitleable.
+    source_name: str | None = None
 
 
 class LeadSummary(BaseModel):

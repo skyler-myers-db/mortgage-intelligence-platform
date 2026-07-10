@@ -1,6 +1,8 @@
-import { useEffect, useRef, useState, type CSSProperties } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
 import type { SegmentSummary } from '../../types';
 import { Icon } from '../Icon';
+import { EvidenceChip } from '../Primitives';
+import { segmentEvidenceSource } from '../../lib/drawerSources';
 import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
 
 /**
@@ -8,17 +10,29 @@ import { segmentByCode, segmentIcon } from '../../lib/segmentMetadata';
  * Segment color is passed as a CSS variable `--seg-color` so the top accent bar,
  * badge, selection shadow, and hover radial gradient all pick it up.
  *
+ * Root element is the prototype's `div role="button"` composition
+ * (`design_files/Module 0 Prototype.html` lines 1150–1153) rather than a
+ * native <button>, so the S1.3 evidence chip in the meta row can be a real
+ * button without nesting interactive elements.
+ *
+ * S1.3 evidence: every segment count carries an `.evidence-chip` that opens
+ * the EvidenceDrawer with the segment's exact membership predicate, its
+ * borrower_360 flag column, the Cotality silver sources, and governed UC
+ * metadata for gold.segment_population. (The chip in the meta row is an
+ * additive extension of the prototype's seg-card contract — required by the
+ * "every count opens evidence" rule.)
+ *
+ * S1.3 gating: when `source_status` is `not_connected` / `not_licensed` the
+ * card renders an explicit gated panel — count suppressed (never fabricated),
+ * a `.chip--warning` state chip, and no selection affordance. Connected
+ * zero-count segments remain selectable so users can verify the exact
+ * filter result.
+ *
  * Emanation: when `selected` flips false → true, we mount a single
  * `.seg-card__emanate` span with a fresh key. The CSS animation is one-shot
  * (animation-iteration-count: 1); bumping the key restarts the animation on
  * every re-selection without ever playing on initial mount of a deselected
  * card (e.g. when loading a filtered URL).
- *
- * The gold rollup CTAS emits a row for every configured segment_code
- * (count=0 when no borrower matches), so the FE always sees the complete
- * Module 0 segment catalog. Source-readiness status now lives in the
- * evidence drawer/admin surfaces; a zero-count segment remains selectable
- * so users can verify the exact filter result.
  */
 
 interface SegmentCardProps {
@@ -37,6 +51,10 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
   const prev = useRef<boolean | undefined>(selected);
   const [emanateKey, setEmanateKey] = useState<number>(selected ? 1 : 0);
 
+  const gated =
+    segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
+  const gateLabel = segment.source_status === 'not_licensed' ? 'not licensed' : 'not connected';
+
   const deltaIsFirstSnapshot =
     segment.delta.trim() === '+0%' ||
     segment.delta.trim() === '0%' ||
@@ -52,13 +70,31 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
     prev.current = selected;
   }, [selected]);
 
+  const evidenceSource = segmentEvidenceSource({
+    ...segment,
+    name: displayName,
+    description: displayDescription,
+  });
+
+  const activate = gated ? undefined : onClick;
+  const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!activate) return;
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      activate();
+    }
+  };
+
   return (
-    <button
-      type="button"
-      className={`seg-card ${selected ? 'is-selected' : ''} ${updating ? 'is-updating' : ''}`}
+    <div
+      className={`seg-card ${selected ? 'is-selected' : ''} ${updating ? 'is-updating' : ''} ${gated ? 'seg-card--gated' : ''}`}
       style={{ '--seg-color': displayColor } as CSSProperties}
-      onClick={onClick}
-      aria-pressed={selected}
+      onClick={activate}
+      onKeyDown={handleKeyDown}
+      role="button"
+      tabIndex={0}
+      aria-pressed={gated ? undefined : selected}
+      aria-disabled={gated || undefined}
       aria-busy={updating || undefined}
     >
       {selected && emanateKey > 0 && (
@@ -68,10 +104,21 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
         <div className="seg-card__badge"><Icon name={icon} size={14} /></div>
         <div className="seg-card__title">{displayName}</div>
       </div>
-      <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
+      {gated ? (
+        <div className="seg-card__count num seg-card__count--gated" aria-label={`Segment gated: source ${gateLabel}`}>
+          —
+        </div>
+      ) : (
+        <div className="seg-card__count num">{segment.count.toLocaleString()}</div>
+      )}
       <div className="seg-card__sub">{displayDescription}</div>
       <div className="seg-card__meta">
-        {hasNoBorrowers ? (
+        {gated ? (
+          <>
+            <span className="chip chip--warning">{gateLabel}</span>
+            {segment.source_name && <span>{segment.source_name}</span>}
+          </>
+        ) : hasNoBorrowers ? (
           <span>no borrowers in current view</span>
         ) : deltaIsFirstSnapshot ? (
           <span>first snapshot · deltas pending</span>
@@ -80,9 +127,18 @@ export function SegmentCard({ segment, selected, updating, onClick }: SegmentCar
             {segment.delta.startsWith('-') ? '▼' : '▲'} {segment.delta}
           </span>
         )}
-        {!hasNoBorrowers && <span>avg {segment.avg_score}</span>}
+        {!gated && !hasNoBorrowers && <span>avg {segment.avg_score}</span>}
+        <span
+          className="seg-card__evidence"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <EvidenceChip source={evidenceSource} title={`Evidence for ${displayName}`}>
+            evidence
+          </EvidenceChip>
+        </span>
       </div>
-    </button>
+    </div>
   );
 }
 

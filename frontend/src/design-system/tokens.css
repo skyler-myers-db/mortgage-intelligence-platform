@@ -39,6 +39,15 @@
   --seg-investor:   #F472B6;  /* Investor / Multi-Property — rose */
   --seg-equity:     #66C5FF;  /* Home Equity Candidate — bright blue */
   --seg-retention:  #34D399;  /* Retention — green */
+  /* S1.3 overlay segments — hex values mirror the gold registry in
+     sql/transformations/gold_segment_population.sql (meta VALUES). */
+  --seg-second-lien:      #E879F9;  /* Second-Lien Consolidation — fuchsia */
+  --seg-heloc-draw:       #FB923C;  /* HELOC Draw Ending — orange */
+  --seg-equity-history:   #A3E635;  /* Home Equity History — lime */
+  --seg-refi-propensity:  #818CF8;  /* Refi Propensity (heuristic) — indigo */
+  --seg-related-itm:      #38BDF8;  /* ITM on Related Property — sky */
+  --seg-payoff-loss:      #F87171;  /* Payoff Loss — red */
+  --seg-permit-activity:  #C4B5FD;  /* Permit Activity (gated) — light violet */
 
   /* ---------- Typography ---------- */
   --font-sans: 'Geist', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;

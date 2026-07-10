@@ -841,6 +841,21 @@ kbd {
 .seg-card.is-updating {
   box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--accent) 18%, transparent);
 }
+/* S1.3 gated segment panel: source not connected / not licensed. The card
+   stays in the grid (registry completeness) but reads as inert — dashed
+   border, muted accent, default cursor, no hover lift. Counts are never
+   fabricated; the em-dash count + warning chip say why. */
+.seg-card--gated {
+  cursor: default;
+  border-style: dashed;
+  border-color: var(--line-2);
+}
+.seg-card--gated:hover { transform: none; border-color: var(--line-2); }
+.seg-card--gated::before { opacity: 0.35; }
+.seg-card--gated::after { opacity: 0.12; }
+.seg-card__count--gated { color: var(--text-4); }
+/* Evidence chip slot in the meta row; pushes to the row end. */
+.seg-card__evidence { margin-left: auto; display: inline-flex; }
 .seg-card--skeleton {
   cursor: default;
   pointer-events: none;
