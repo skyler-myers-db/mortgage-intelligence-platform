@@ -14,6 +14,7 @@ from backend.schemas.portfolio import (
     CampaignListResponse,
     CampaignStatusPatchRequest,
     CampaignSummary,
+    HouseholdDedupConfig,
     HouseholdDedupSummary,
     KpiTrend,
     PortfolioCreateRequest,
@@ -1022,6 +1023,18 @@ def json_value(value: Any, fallback: Any) -> Any:
     return value
 
 
+def household_dedup_config_from_value(value: Any) -> HouseholdDedupConfig:
+    if not isinstance(value, dict):
+        return HouseholdDedupConfig()
+    return HouseholdDedupConfig.model_validate(value)
+
+
+def household_dedup_summary_from_value(value: Any) -> HouseholdDedupSummary:
+    if not isinstance(value, dict):
+        return HouseholdDedupSummary()
+    return HouseholdDedupSummary.model_validate(value)
+
+
 def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
     criteria = json_value(row.get("criteria"), {})
     suppression_policy = json_value(row.get("suppression_policy"), {})
@@ -1048,12 +1061,8 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
             if isinstance(roi_assumptions, dict) or roi_assumptions is None
             else None
         ),
-        household_dedup=(
-            household_dedup if isinstance(household_dedup, dict) else {}
-        ),
-        household_summary=(
-            household_summary if isinstance(household_summary, dict) else {}
-        ),
+        household_dedup=household_dedup_config_from_value(household_dedup),
+        household_summary=household_dedup_summary_from_value(household_summary),
         created_at=coerce_utc_datetime(row.get("created_at")),
         updated_at=coerce_utc_datetime(row.get("updated_at")),
     )
