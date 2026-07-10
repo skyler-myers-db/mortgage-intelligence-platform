@@ -70,6 +70,30 @@ export const mockBorrowers: Borrower360[] = [
     loan_product_type: 'jumbo', origination_channel: 'digital',
     trigger_timeline: evidence.slice(2), evidence_events: evidence.slice(2),
     why_panel: { rate_spread_bps: 162, market_rate: 0.04875, equity_pct: 56, in_the_money: true, in_the_money_reason: '+162 bps spread (>= 75) AND 56% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
+  },
+  {
+    // S1.1 multi-owner caveat fixture — resolved, marketing-eligible, but the
+    // property has 3 occupied owner slots and a trust as primary owner entity.
+    borrower_id: 'B-7KP2M4XQ9RTVA', clip: 'clip_demo_7kp2m4', display_name: 'Owner 7KP2M4', city: 'Chicago', state: 'IL', zip: '60614',
+    segment_codes: ['itm', 'investor'], equity_estimate: 512000, rate_spread_bps: 132, opportunity_score: 90, confidence: 84,
+    recommended_offer: 'Cash-out refinance', why_now: 'Strong equity across a shared-ownership property with a lien currently in the money.', evidence_ids: ['ev-001', 'ev-002'], approval_status: 'pending',
+    clip_id: 'clip_demo_7kp2m4', owner_link_id: 'ol_demo_7kp2m4', subject_property: 'Synthetic property · Chicago, IL 60614', avm_value: 880000, current_lien_balance: 368000, current_rate: 6.25, ltv: 42, related_property_count: 2,
+    is_investor: true, owner_count: 3, has_unresolved_owner: false, primary_owner_entity_type: 'trust',
+    marketing_eligible: true, consent_status: 'opt_in', suppression_reason: null,
+    trigger_timeline: evidence, evidence_events: evidence,
+    why_panel: { rate_spread_bps: 132, market_rate: 0.04875, equity_pct: 58, in_the_money: true, in_the_money_reason: '+132 bps spread (>= 75) AND 58% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
+  },
+  {
+    // S1.1 unresolved-owner caveat fixture — gold stamps suppression and this
+    // row is never marketing-eligible; outreach is suppressed downstream.
+    borrower_id: 'B-3ZN8W1CFHJ6DK', clip: 'clip_demo_3zn8w1', display_name: 'Owner 3ZN8W1', city: 'Chicago', state: 'IL', zip: '60622',
+    segment_codes: ['equity'], equity_estimate: 264000, rate_spread_bps: 96, opportunity_score: 71, confidence: 58,
+    recommended_offer: 'Refinance', why_now: 'Rate spread is in the money, but the owner entity could not be resolved from Owner Link.', evidence_ids: ['ev-002'], approval_status: 'pending',
+    clip_id: 'clip_demo_3zn8w1', owner_link_id: 'ol_demo_3zn8w1', subject_property: 'Synthetic property · Chicago, IL 60622', avm_value: 540000, current_lien_balance: 276000, current_rate: 6.00, ltv: 51, related_property_count: 1,
+    owner_count: 2, has_unresolved_owner: true, primary_owner_entity_type: 'unresolved',
+    marketing_eligible: false, consent_status: 'unknown', suppression_reason: 'unresolved_owner',
+    trigger_timeline: evidence.slice(1), evidence_events: evidence.slice(1),
+    why_panel: { rate_spread_bps: 96, market_rate: 0.04875, equity_pct: 49, in_the_money: true, in_the_money_reason: '+96 bps spread (>= 75) AND 49% equity (>= 15%)', min_spread_bps: 75, min_equity_pct: 15, sources: ['mip.gold.fn_rate_spread', 'mip.gold.fn_in_the_money'] }
   }
 ];
 

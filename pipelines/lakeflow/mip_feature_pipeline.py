@@ -10,6 +10,7 @@ Declares the silver tables lifted from `cotality_mortgage_data.corelogic`:
     * silver.mortgage_events          (event-grain from mortgage_domain_v1)
     * silver.owner_transfer_events    (event-grain from owner_transfer_domain_v1)
     * silver.owner_property_bridge    (Owner-Link rollup from silver.property_master + lien_current)
+    * silver.property_owners          (owner-slot grain, multi-owner explode of property_domain_v3)
 
 All tables retain every valid source state present in the Cotality share. The
 app derives its current footprint from refreshed gold coverage, so expanding or
@@ -53,10 +54,12 @@ try:  # pragma: no cover -- Databricks runtime only
     import dlt
     from pyspark.sql import DataFrame
     from pyspark.sql import functions as F
+    from pyspark.sql.window import Window
 except ImportError:  # pragma: no cover -- local parse-only
     dlt = None  # type: ignore[assignment]
     DataFrame = None  # type: ignore[assignment,misc]
     F = None  # type: ignore[assignment]
+    Window = None  # type: ignore[assignment,misc]
 
 
 # ---------------------------------------------------------------------------
@@ -85,6 +88,19 @@ LEADING_ZERO_ZIP_STATES: tuple[str, ...] = (
 # intended fail-visible behaviour now that deploy guarantees provisioning.
 _PII_SALT_SCOPE = "mip"
 _PII_SALT_KEY = "pii-salt-v1"
+
+# S1.1 owner-entity classifier contract. These regex patterns and the
+# confidence literals used in silver_property_owners() below MUST match
+# backend/services/owner_classification.py (Python mirror + golden fixture)
+# and sql/transformations/silver_property_owners.sql (warehouse MERGE).
+# tests/unit/test_property_owners.py asserts the literals appear verbatim
+# in all three files. Classification is ROADMAP-TEMPORARY: classify +
+# caveat + suppress only, pending Cotality entity resolution.
+TRUST_NAME_PATTERN = r"\b(TRUST|TRUSTEE|TRUSTEES|TRST|REVOCABLE|IRREVOCABLE)\b|\bTR\s*$"
+LLC_NAME_PATTERN = r"\b(LLC|L L C|LC|LTD|LIMITED|INC|INCORPORATED|CORP|CORPORATION|COMPANY|LP|LLP|LLLP|PARTNERSHIP|PARTNERS|HOLDINGS|VENTURES|PROPERTIES|ENTERPRISES|INVESTMENTS)\b"
+
+# Max owner slots in entrada_eval_property_domain_v3 (owner_1..owner_4).
+MAX_OWNER_SLOTS = 4
 
 # Source share tables (full UC path).
 _SHARE_CATALOG = "cotality_mortgage_data.corelogic"
@@ -694,6 +710,197 @@ def silver_owner_property_bridge() -> DataFrame:  # pragma: no cover
                 .alias("total_estimated_equity"),
             F.max(F.when(F.col("owner_occupancy_code") == F.lit("O"), F.col("clip")))
                 .alias("primary_clip"),
+            F.current_timestamp().alias("ingest_ts"),
+            F.lit(None).cast("string").alias("_meta_batch_id"),
+        )
+    )
+
+
+# ---------------------------------------------------------------------------
+# silver.property_owners  (S1.1 multi-owner explode + entity classification)
+# ---------------------------------------------------------------------------
+
+
+def _owner_slot_struct(position: int):  # pragma: no cover -- Databricks-runtime only
+    """STRUCT for one owner_N_* slot column family (1..MAX_OWNER_SLOTS).
+
+    owner_1_original_trust_name only exists for slot 1 in the share; the
+    other slots carry a typed NULL so the exploded array stays homogeneous.
+    """
+    trust_name = (
+        F.col("owner_1_original_trust_name").cast("string")
+        if position == 1
+        else F.lit(None).cast("string")
+    )
+    return F.struct(
+        F.lit(position).alias("owner_position"),
+        F.col(f"owner_{position}_full_name").cast("string").alias("owner_full_name"),
+        F.col(f"owner_{position}_corporate_indicator").cast("string").alias("corporate_indicator"),
+        F.col(f"owner_{position}_identifier").cast("string").alias("owner_identifier"),
+        trust_name.alias("trust_name"),
+    )
+
+
+def _blank_to_null(col):  # pragma: no cover -- Databricks-runtime only
+    """TRIM a string column and collapse empty strings to NULL."""
+    trimmed = F.trim(col.cast("string"))
+    return F.when(trimmed == "", F.lit(None).cast("string")).otherwise(trimmed)
+
+
+@dlt.table(  # pragma: no cover
+    name="property_owners",
+    comment=(
+        "Multi-owner explode of entrada_eval_property_domain_v3 (S1.1): one "
+        "row per occupied owner slot (max 4 per property record), with "
+        "owner_entity_type classification {individual,trust,llc,unresolved} "
+        "+ resolution_confidence. Classify + caveat + suppress only — "
+        "ROADMAP-TEMPORARY pending Cotality entity resolution. Raw owner "
+        "names never land; only the salted owner_name_hash persists. "
+        "See docs/data-contract-module0.md §2.6."
+    ),
+    table_properties={
+        "quality": "silver",
+        "pipelines.pii.level": "hashed-only",
+        "delta.autoOptimize.optimizeWrite": "true",
+        "delta.autoOptimize.autoCompact": "true",
+    },
+    cluster_by=["clip"],
+)
+@dlt.expect_or_fail("valid_clip", "clip IS NOT NULL")
+@dlt.expect_or_fail("valid_owner_position", "owner_position BETWEEN 1 AND 4")
+@dlt.expect(
+    "valid_entity_type",
+    "owner_entity_type IN ('individual', 'trust', 'llc', 'unresolved')",
+)
+@dlt.expect(
+    "unresolved_never_contact_eligible",
+    "owner_entity_type <> 'unresolved' OR is_contact_eligible = FALSE",
+)
+def silver_property_owners() -> DataFrame:  # pragma: no cover
+    # Batch read (not streaming): this table needs ROW_NUMBER windows for the
+    # per-CLIP dedup and the duplicate-Owner-Link collapse, and non-watermarked
+    # window functions are not supported on streaming DataFrames. The pipeline
+    # runs full_refresh=true, so a snapshot read is the correct posture.
+    src = _read_share_table(_SHARE_PROPERTY_V3, streaming=False)
+    # Same per-CLIP dedup tiebreak as silver_property_master (audit P2-10)
+    # so the (clip, owner_position) grain stays unique on duplicate share rows.
+    dedup_window = Window.partitionBy("clip").orderBy(
+        F.col("tax_year").desc(),
+        F.col("last_foreclosure_transaction_date").desc(),
+        F.col("calculated_total_value").desc(),
+    )
+    slots = (
+        src.filter(_valid_state(F.col("situs_state")))
+        .filter(F.col("clip").isNotNull())
+        .withColumn("_clip_rn", F.row_number().over(dedup_window))
+        .filter(F.col("_clip_rn") == 1)
+        .select(
+            "clip",
+            "situs_state",
+            F.explode(
+                F.array(
+                    *[_owner_slot_struct(i) for i in range(1, MAX_OWNER_SLOTS + 1)]
+                )
+            ).alias("slot"),
+        )
+        .select(
+            "clip",
+            "situs_state",
+            F.col("slot.owner_position").alias("owner_position"),
+            _blank_to_null(F.col("slot.owner_full_name")).alias("owner_full_name"),
+            (
+                F.upper(F.trim(F.coalesce(F.col("slot.corporate_indicator"), F.lit(""))))
+                == F.lit("Y")
+            ).alias("is_corporate_indicator"),
+            _blank_to_null(F.col("slot.owner_identifier")).alias("owner_link_id"),
+            _blank_to_null(F.col("slot.trust_name")).alias("trust_name"),
+        )
+        # Vacant slots emit no row (classifier branch 1).
+        .where(
+            F.col("owner_full_name").isNotNull()
+            | F.col("owner_link_id").isNotNull()
+            | F.col("trust_name").isNotNull()
+        )
+    )
+
+    upper_name = F.upper(F.col("owner_full_name"))
+    matches_trust = F.col("owner_full_name").isNotNull() & upper_name.rlike(
+        TRUST_NAME_PATTERN
+    )
+    matches_llc = F.col("owner_full_name").isNotNull() & upper_name.rlike(
+        LLC_NAME_PATTERN
+    )
+    # Branch ORDER is the shared classifier contract — must match
+    # backend/services/owner_classification.py and the warehouse MERGE in
+    # sql/transformations/silver_property_owners.sql.
+    entity_type = (
+        F.when(F.col("trust_name").isNotNull(), F.lit("trust"))
+        .when(matches_trust, F.lit("trust"))
+        .when(matches_llc & F.col("is_corporate_indicator"), F.lit("llc"))
+        .when(matches_llc, F.lit("llc"))
+        .when(F.col("is_corporate_indicator"), F.lit("llc"))
+        .when(
+            F.col("owner_full_name").isNotNull() & F.col("owner_link_id").isNotNull(),
+            F.lit("individual"),
+        )
+        .when(F.col("owner_full_name").isNotNull(), F.lit("unresolved"))
+        .otherwise(F.lit("unresolved"))
+    )
+    resolution_confidence = (
+        F.when(F.col("trust_name").isNotNull(), F.lit(0.95))
+        .when(matches_trust, F.lit(0.9))
+        .when(matches_llc & F.col("is_corporate_indicator"), F.lit(0.95))
+        .when(matches_llc, F.lit(0.85))
+        .when(F.col("is_corporate_indicator"), F.lit(0.6))
+        .when(
+            F.col("owner_full_name").isNotNull() & F.col("owner_link_id").isNotNull(),
+            F.lit(0.9),
+        )
+        .when(F.col("owner_full_name").isNotNull(), F.lit(0.4))
+        .otherwise(F.lit(0.5))
+    )
+
+    classified = slots.withColumn("owner_entity_type", entity_type).withColumn(
+        "resolution_confidence", resolution_confidence.cast("double")
+    )
+
+    # Duplicate Owner Links inside one CLIP collapse to the lowest slot so
+    # resolved owners keep the one-row-per-(clip, owner_link) grain.
+    link_window = Window.partitionBy(
+        "clip",
+        F.coalesce(
+            F.col("owner_link_id"),
+            F.concat(F.lit("pos-"), F.col("owner_position").cast("string")),
+        ),
+    ).orderBy("owner_position")
+
+    return (
+        classified.withColumn("_link_rn", F.row_number().over(link_window))
+        .filter(F.col("_link_rn") == 1)
+        .select(
+            F.col("clip"),
+            F.col("owner_position").cast("int").alias("owner_position"),
+            F.col("owner_link_id"),
+            # PII HASH: same expression contract as property_master. Raw
+            # owner names are consumed here and never emitted.
+            F.when(
+                F.col("owner_full_name").isNotNull(),
+                F.sha2(
+                    F.concat(
+                        F.lower(F.trim(F.coalesce(F.col("owner_full_name"), F.lit("")))),
+                        F.lit(":"),
+                        _pii_salt_expr(),
+                    ),
+                    256,
+                ),
+            ).alias("owner_name_hash"),
+            F.col("owner_entity_type"),
+            F.col("resolution_confidence"),
+            F.col("is_corporate_indicator"),
+            (F.col("owner_entity_type") != F.lit("unresolved")).alias(
+                "is_contact_eligible"
+            ),
+            F.col("situs_state"),
             F.current_timestamp().alias("ingest_ts"),
             F.lit(None).cast("string").alias("_meta_batch_id"),
         )

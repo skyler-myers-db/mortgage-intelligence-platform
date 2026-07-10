@@ -27,6 +27,7 @@ from backend.schemas.common import (
     validate_public_campaign_label,
     validate_public_opaque_id,
 )
+from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.services.agent_tools import registered_agent_tool_names
 from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_metadata_value_policy import (
@@ -285,6 +286,16 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "holdout",
         "roi_assumptions",
         "marketable_population",
+        "dedupe_unit",
+        "household_dedup_enabled",
+        "household_primary_strategy",
+        "household_candidate_count",
+        "household_primary_count",
+        "household_suppressed_count",
+        "household_household_count",
+        "household_owner_link_count",
+        "household_mailing_address_count",
+        "household_singleton_count",
         "status",
         # Admin degraded-banner proof drill
         "forced_state",
@@ -423,7 +434,7 @@ _MAX_RESULT_FILTER_VALUES = 500
 _MAX_RESULT_FILTER_STATES = 56
 _DECISION_INPUT_KEYS: frozenset[str] = frozenset(DECISION_INPUT_KEYS)
 
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 _ALLOWED_FUNNEL_STAGES: frozenset[str] = frozenset(
     {
         "addressable",
@@ -438,6 +449,8 @@ _FORCED_DEGRADED_DEPENDENCIES: frozenset[str] = frozenset({"warehouse", "lakebas
 _ACTIVATION_DESTINATION_TYPES: frozenset[str] = frozenset({"salesforce", "crm_cdp", "los_pos", "servicing", "webhook"})
 _ACTIVATION_STATUSES: frozenset[str] = frozenset({"dry_run", "staged", "delivered", "failed", "cancelled"})
 _ACTIVATION_DESTINATION_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+_HOUSEHOLD_DEDUPE_UNITS: frozenset[str] = frozenset({"borrower", "household"})
+_HOUSEHOLD_PRIMARY_STRATEGIES: frozenset[str] = frozenset({"highest_opportunity_eligible"})
 _GROWTH_AGENT_WORKFLOWS: frozenset[str] = frozenset(
     {
         "daily_refi_brief",
@@ -736,6 +749,8 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
         "forced_dependency": _FORCED_DEGRADED_DEPENDENCIES,
         "forced_state": {"on", "off"},
         "proof_scope": {"browser_cookie"},
+        "dedupe_unit": _HOUSEHOLD_DEDUPE_UNITS,
+        "household_primary_strategy": _HOUSEHOLD_PRIMARY_STRATEGIES,
     }.items():
         for _, value in _metadata_values_for(metadata, {field}):
             if value is not None and str(value) not in allowed:
@@ -797,7 +812,10 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"refusal_reason"}):
         if value is not None and str(value) not in _GENIE_REFUSAL_REASONS:
             raise AuditMetadataValueViolation(field, "must be a governed Genie refusal reason")
-    for field, value in _metadata_values_for(metadata, {"helpful", "comment_present", "hit"}):
+    for field, value in _metadata_values_for(
+        metadata,
+        {"helpful", "comment_present", "hit", "household_dedup_enabled"},
+    ):
         if value is not None and not isinstance(value, bool):
             raise AuditMetadataValueViolation(field, "must be a boolean")
     for field, value in _metadata_values_for(metadata, {"address_hash"}):
@@ -905,7 +923,16 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
                 validate_sql_hash(value)
             except ValueError as exc:
                 raise AuditMetadataValueViolation(field, str(exc)) from exc
-    for field, value in _metadata_values_for(metadata, {"row_count"}):
+    household_count_fields = {
+        "household_candidate_count",
+        "household_primary_count",
+        "household_suppressed_count",
+        "household_household_count",
+        "household_owner_link_count",
+        "household_mailing_address_count",
+        "household_singleton_count",
+    }
+    for field, value in _metadata_values_for(metadata, {"row_count"} | household_count_fields):
         if value is None:
             continue
         try:

@@ -35,6 +35,7 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_borrower_360.sql",
     "gold_lead_scores.sql",
     "gold_evidence_events.sql",
+    "gold_household_rollup.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
     # slice13-accuracy-validation: geography rollups for the USChoroplethMap drill.
@@ -49,6 +50,7 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_borrower_360.sql",
     "gold_lead_scores.sql",
     "gold_evidence_events.sql",
+    "gold_household_rollup.sql",
     "gold_lead_population.sql",
     "gold_segment_population.sql",
     "gold_county_rollup.sql",
@@ -67,6 +69,7 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.borrower_360",
     "mip.gold.lead_scores",
     "mip.gold.evidence_events",
+    "mip.gold.household_rollup",
     "mip.gold.lead_population",
     "mip.gold.segment_population",
     "mip.gold.borrower_dossier",
@@ -342,6 +345,7 @@ def test_borrower_360_transformation_enforces_zip5_or_null_boundary() -> None:
 _TIMESTAMP_SHARED_CTAS_FILES: tuple[str, ...] = (
     "gold_property_owner_bridge.sql",
     "gold_borrower_360.sql",
+    "gold_household_rollup.sql",
     "gold_lead_scores.sql",
     "gold_segment_population.sql",
     "gold_lockin_cohort.sql",

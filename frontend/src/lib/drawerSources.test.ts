@@ -131,6 +131,7 @@ describe('descriptorFor', () => {
     expect(assetKeyForSource('mip.gold.borrower_dossier')).toBe('borrower_dossier');
     expect(assetHrefForSource('mip.gold.borrower_dossier')).toBe('/data-estate/assets/borrower_dossier');
     expect(drawerForAsset('mip.gold.evidence_events')).toBe(DRAWER_SOURCES.evidenceStream);
+    expect(drawerForAsset('mip.gold.household_rollup')).toBe(DRAWER_SOURCES.householdRollup);
     expect(drawerForAsset('mip.gold.source_readiness')).toBe(DRAWER_SOURCES.sourceReadiness);
     expect(drawerForAsset('mip.gold.lockin_cohort')).toBe(DRAWER_SOURCES.lockinCohort);
     expect(drawerForAsset('mip.gold.fn_rate_spread')).toBe(DRAWER_SOURCES.marketRate);
@@ -182,6 +183,7 @@ describe('descriptorFor', () => {
       DRAWER_SOURCES.evidenceStream,
       DRAWER_SOURCES.sourceReadiness,
       DRAWER_SOURCES.borrowerDossier,
+      DRAWER_SOURCES.householdRollup,
       DRAWER_SOURCES.itm,
       DRAWER_SOURCES.marketRate,
       DRAWER_SOURCES.leadScore,

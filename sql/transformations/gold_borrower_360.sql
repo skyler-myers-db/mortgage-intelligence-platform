@@ -115,6 +115,20 @@ rules AS (
 -- Intent_trigger itself is computed in gold.lead_scores, not here, but the
 -- AVM-uplift evidence signal reads from recent AVMs; we expose the raw
 -- counts on borrower_360 so WhyPanel can cite them without a fresh join.
+-- S1.1 multi-owner rollup per CLIP from silver.property_owners (owner-slot
+-- grain, max 4). owner_count / has_unresolved_owner / primary_owner_entity_
+-- type feed the multi-owner caveat UI and the unresolved-owner contact
+-- suppression below. Classification is ROADMAP-TEMPORARY (classify + caveat
+-- + suppress pending Cotality entity resolution) — data-contract §2.6.
+owner_rollup AS (
+  SELECT
+    clip,
+    CAST(COUNT(*) AS INT)                                        AS owner_count,
+    COUNT_IF(owner_entity_type = 'unresolved') > 0               AS has_unresolved_owner,
+    MAX(CASE WHEN owner_position = 1 THEN owner_entity_type END) AS primary_owner_entity_type
+  FROM mip.silver.property_owners
+  GROUP BY clip
+),
 base AS (
   SELECT
     lc.clip,
@@ -171,12 +185,31 @@ base AS (
       ELSE UPPER(TRIM(lc.first_pos_lender_current))
     END                                 AS lender_raw_key,
     lc.second_pos_amount,
-    COALESCE(pob.related_property_count, 1) AS related_property_count
+    -- S1.3 overlay-segment inputs. second_pos_rate gets the same defensive
+    -- bounding as first_pos_rate (silver already bounds; this re-guard keeps
+    -- the two rate paths symmetric against source regressions).
+    CASE
+      WHEN lc.second_pos_rate IS NULL THEN NULL
+      WHEN lc.second_pos_rate < 0.01 THEN NULL
+      WHEN lc.second_pos_rate > 0.15 THEN 0.15
+      ELSE lc.second_pos_rate
+    END                                 AS second_pos_rate,
+    lc.purchase_amount,
+    lc.purchase_date,
+    COALESCE(pob.related_property_count, 1) AS related_property_count,
+    COALESCE(orl.owner_count, 0)            AS owner_count,
+    -- Fail closed: a CLIP with no owner rows at all (no name AND no Owner
+    -- Link in any source slot) cannot be resolved to a contactable party,
+    -- so it is treated exactly like an unresolved classification.
+    COALESCE(orl.has_unresolved_owner, TRUE) AS has_unresolved_owner,
+    orl.primary_owner_entity_type
   FROM mip.silver.lien_current AS lc
   LEFT JOIN mip.silver.property_master AS pm
     ON pm.clip = lc.clip
   LEFT JOIN mip.gold.property_owner_bridge AS pob
     ON pob.owner_link_id = pm.owner_link_id
+  LEFT JOIN owner_rollup AS orl
+    ON orl.clip = lc.clip
   -- Coverage is data-driven. If the Cotality share expands or contracts,
   -- borrower_360 follows the refreshed silver source rows instead of a
   -- tenant/demo state seed.
@@ -278,6 +311,37 @@ historical_tenant AS (
     AND me.situs_state IS NOT NULL
     AND pm.owner_link_id IS NOT NULL
   GROUP BY pm.owner_link_id
+),
+-- S1.3 heloc_draw_to_payback: latest OPEN equity-loan lien event per CLIP
+-- (is_equity_loan = TRUE with no release_date). Standard HELOC terms are a
+-- 10-year (120-month) draw period followed by repayment; the segment flags
+-- borrowers whose draw period ends within the next 18 months or ended in
+-- the last 6 (origination 102-126 months ago), computed in `enriched`.
+heloc_draw AS (
+  SELECT
+    me.clip,
+    MAX(me.event_date) AS heloc_open_date
+  FROM mip.silver.mortgage_events AS me
+  WHERE me.is_equity_loan = TRUE
+    AND me.release_date IS NULL
+    AND me.event_date IS NOT NULL
+  GROUP BY me.clip
+),
+-- S1.3 payoff_loss_leads: most recent RELEASED tenant-lender lien per CLIP.
+-- A tenant payoff inside the 24-month recapture window combined with a
+-- current competitor lien (checked in `scored`) means the borrower was
+-- recently lost to a competitor payoff. Also feeds the future S2.7
+-- competitive view.
+tenant_payoff AS (
+  SELECT
+    me.clip,
+    MAX(me.release_date) AS tenant_payoff_date
+  FROM mip.silver.mortgage_events AS me
+  JOIN lender_ref AS lr
+    ON lr.raw_key = UPPER(TRIM(me.lender_name))
+  WHERE COALESCE(NOT lr.is_competitor, FALSE)
+    AND me.release_date IS NOT NULL
+  GROUP BY me.clip
 ),
 first_party_servicing AS (
   SELECT
@@ -514,7 +578,51 @@ enriched AS (
     COALESCE(hp.heloc_propensity_score, 0) >= 700 AS has_heloc_propensity_trigger,
     rp.refi_propensity_score,
     rp.refi_propensity_run_date,
-    COALESCE(rp.refi_propensity_score, 0) >= 700 AS has_refi_propensity_trigger
+    COALESCE(rp.refi_propensity_score, 0) >= 700 AS has_refi_propensity_trigger,
+    -- ------------------------------------------------------------------
+    -- S1.3 overlay-segment signals (all deterministic, all from live
+    -- Cotality silver rows; predicates documented in data-contract §3.2
+    -- and the app glossary).
+    -- ------------------------------------------------------------------
+    -- Second-lien consolidation economics: spread of the OPEN second-
+    -- position rate over the same first-lien par reference. Rolling an
+    -- expensive second into a new first at par is the consolidation play.
+    mip.gold.fn_rate_spread(b.second_pos_rate, m.market_rate_fraction) AS second_pos_rate_spread_bps,
+    -- First-lien seasoning in whole months at refresh time. NULL when the
+    -- origination date is missing (heuristic scores it 0 points).
+    CASE
+      WHEN b.first_pos_date IS NULL THEN NULL
+      ELSE CAST(FLOOR(months_between(DATE((SELECT refresh_at FROM refresh_anchor)), b.first_pos_date)) AS INT)
+    END AS first_pos_age_months,
+    -- Equity-history signals: appreciation since purchase + tenure.
+    CAST(CASE
+      WHEN b.purchase_amount IS NOT NULL AND b.purchase_amount > 0
+       AND b.avm_value IS NOT NULL AND b.avm_value > 0
+      THEN ROUND(100.0 * (b.avm_value - b.purchase_amount) / b.purchase_amount)
+      ELSE NULL
+    END AS INT) AS home_value_appreciation_pct,
+    CASE
+      WHEN b.purchase_date IS NULL THEN NULL
+      ELSE CAST(FLOOR(months_between(DATE((SELECT refresh_at FROM refresh_anchor)), b.purchase_date)) AS INT)
+    END AS months_since_purchase,
+    -- HELOC draw-to-payback transition window: open equity-loan lien
+    -- originated 102-126 months ago (standard 120-month draw ends within
+    -- the next 18 months or ended within the last 6).
+    hd.heloc_open_date,
+    CASE WHEN hd.heloc_open_date IS NOT NULL THEN ADD_MONTHS(hd.heloc_open_date, 120) END
+      AS heloc_draw_end_date,
+    (
+      hd.heloc_open_date IS NOT NULL
+      AND CAST(FLOOR(months_between(DATE((SELECT refresh_at FROM refresh_anchor)), hd.heloc_open_date)) AS INT)
+          BETWEEN 102 AND 126
+    ) AS has_heloc_draw_ending,
+    -- Tenant payoff inside the 24-month recapture window. Combined with
+    -- is_competitor_lien in `scored` to form is_payoff_loss.
+    tp.tenant_payoff_date,
+    (
+      tp.tenant_payoff_date IS NOT NULL
+      AND tp.tenant_payoff_date >= ADD_MONTHS(DATE((SELECT refresh_at FROM refresh_anchor)), -24)
+    ) AS has_recent_tenant_payoff
   FROM upb_estimates AS b
   CROSS JOIN market AS m
   CROSS JOIN tenant_display AS td
@@ -526,6 +634,10 @@ enriched AS (
     ON hp.clip = b.clip
   LEFT JOIN latest_refi_propensity AS rp
     ON rp.clip = b.clip
+  LEFT JOIN heloc_draw AS hd
+    ON hd.clip = b.clip
+  LEFT JOIN tenant_payoff AS tp
+    ON tp.clip = b.clip
   LEFT JOIN historical_tenant AS ht
     ON ht.owner_link_id = b.owner_link_id
   LEFT JOIN first_party_servicing AS fps
@@ -571,14 +683,78 @@ scored AS (
       r.heloc_equity_min_pct,
       r.cashout_equity_min_pct,
       r.retention_min_spread_bps
-    ) AS recommended_offer_code
+    ) AS recommended_offer_code,
+    -- S1.3 second_lien_itm: an OPEN second position whose rate clears the
+    -- SAME governed spread/equity thresholds as first-lien ITM — the
+    -- consolidation-refi economics screen. fn_rate_spread returns 0 for a
+    -- NULL second rate, so missing-rate rows can never qualify.
+    (
+      COALESCE(e.second_pos_amount, 0) > 0
+      AND mip.gold.fn_in_the_money(
+        e.second_pos_rate_spread_bps, e.equity_pct, r.min_spread_bps, r.min_equity_pct
+      )
+    ) AS second_lien_itm,
+    -- S1.3 home_equity_history: equity built through tenure + appreciation.
+    -- Published predicate: appreciation >= 40% since purchase AND owned
+    -- >= 36 months AND current equity >= 20%.
+    (
+      COALESCE(e.home_value_appreciation_pct, 0) >= 40
+      AND COALESCE(e.months_since_purchase, 0) >= 36
+      AND e.equity_pct >= 20
+    ) AS has_home_equity_history,
+    -- S1.3 refi_propensity: TRANSPARENT deterministic heuristic (published
+    -- points table in fn_refi_propensity_heuristic + glossary). NOT the
+    -- Cotality refi propensity model score.
+    mip.gold.fn_refi_propensity_heuristic(
+      e.rate_spread_bps,
+      e.first_pos_age_months,
+      e.equity_pct,
+      e.estimated_current_lien_balance,
+      e.listed_for_sale
+    ) AS refi_propensity_heuristic,
+    -- S1.3 payoff_loss_leads: tenant lien released in the last 24 months
+    -- AND the property now carries a competitor lien.
+    (e.has_recent_tenant_payoff AND e.is_competitor_lien) AS is_payoff_loss
   FROM enriched AS e
   CROSS JOIN rules AS r
+),
+-- S1.3 itm_on_related_property: the S1.1 multi-owner model
+-- (silver.property_owners) supplies (clip, owner_link_id) pairs across all
+-- owner slots; a borrower is flagged when ANY Owner Link on their CLIP
+-- also holds a DIFFERENT clip that is in the money. Membership is
+-- computed on the scored spine so ITM here is exactly fn_in_the_money
+-- under this refresh's governed thresholds.
+clip_owner_links AS (
+  SELECT DISTINCT po.clip, po.owner_link_id
+  FROM mip.silver.property_owners AS po
+  WHERE po.owner_link_id IS NOT NULL
+),
+owner_link_itm AS (
+  SELECT
+    col.owner_link_id,
+    COUNT(DISTINCT CASE WHEN sc.in_the_money THEN sc.clip END) AS itm_clip_count
+  FROM clip_owner_links AS col
+  JOIN scored AS sc ON sc.clip = col.clip
+  GROUP BY col.owner_link_id
+),
+related_itm AS (
+  SELECT
+    col.clip,
+    MAX(oli.itm_clip_count - CASE WHEN sc.in_the_money THEN 1 ELSE 0 END) >= 1
+      AS itm_on_related_property,
+    CAST(GREATEST(0, MAX(oli.itm_clip_count - CASE WHEN sc.in_the_money THEN 1 ELSE 0 END)) AS INT)
+      AS related_itm_property_count
+  FROM clip_owner_links AS col
+  JOIN owner_link_itm AS oli ON oli.owner_link_id = col.owner_link_id
+  JOIN scored AS sc ON sc.clip = col.clip
+  GROUP BY col.clip
 ),
 -- Segment codes array (order matters for the segment stripe rendering).
 with_segments AS (
   SELECT
     s.*,
+    COALESCE(ri.itm_on_related_property, FALSE)              AS itm_on_related_property,
+    CAST(COALESCE(ri.related_itm_property_count, 0) AS INT)  AS related_itm_property_count,
     FILTER(
       ARRAY(
         CASE WHEN s.in_the_money                            THEN 'itm'       END,
@@ -592,11 +768,23 @@ with_segments AS (
         CASE WHEN s.is_current_customer
               AND (s.rate_spread_bps >= s.retention_min_spread_applied
                    OR s.is_competitor_lien
-                   OR s.listed_for_sale)                    THEN 'retention' END
+                   OR s.listed_for_sale)                    THEN 'retention' END,
+        -- S1.3 overlay segments. permit_activity stays gated on the true
+        -- filed-permit flag (literal FALSE until the source lands), so the
+        -- segment is registered but never fabricates members.
+        CASE WHEN s.second_lien_itm                         THEN 'second_lien_itm'         END,
+        CASE WHEN s.has_heloc_draw_ending                   THEN 'heloc_draw_to_payback'   END,
+        CASE WHEN s.has_home_equity_history                 THEN 'home_equity_history'     END,
+        CASE WHEN s.refi_propensity_heuristic >= 60         THEN 'refi_propensity'         END,
+        CASE WHEN COALESCE(ri.itm_on_related_property, FALSE)
+                                                            THEN 'itm_on_related_property' END,
+        CASE WHEN s.is_payoff_loss                          THEN 'payoff_loss_leads'       END,
+        CASE WHEN s.has_permit                              THEN 'permit_activity'         END
       ),
       x -> x IS NOT NULL
     ) AS segment_codes
   FROM scored AS s
+  LEFT JOIN related_itm AS ri ON ri.clip = s.clip
 ),
 -- Evidence counts per CLIP (feeds the `evidence` sub-score in lead_scores,
 -- but we also need a rough count here to populate evidence_ids). Exclude
@@ -852,6 +1040,9 @@ SELECT
   CAST(COALESCE(w.first_pos_rate * 100, 0.0) AS DOUBLE)                              AS current_rate,
   w.ltv,
   w.related_property_count,
+  w.owner_count,
+  w.has_unresolved_owner,
+  w.primary_owner_entity_type,
   w.is_owner_occupied,
   COALESCE(w.is_absentee, FALSE)                                                     AS is_absentee,
   COALESCE(w.owner_is_corporate, FALSE)                                              AS is_corporate_owner,
@@ -879,13 +1070,41 @@ SELECT
   CAST(COALESCE(w.fp_recent_positive_interactions, 0) AS INT)                            AS first_party_recent_interactions,
   COALESCE(w.fp_has_recent_application, FALSE)                                           AS first_party_recent_application,
   COALESCE(w.fp_synthetic_demo, FALSE)                                                   AS first_party_synthetic_demo,
-  COALESCE(w.fp_marketing_eligible, FALSE)                                                AS marketing_eligible,
+  -- S1.1: unresolved owners are excluded from every contact-eligible
+  -- population. marketing_eligible fails closed when any owner slot on the
+  -- CLIP is unresolved (AND NOT has_unresolved_owner); first-party CRM
+  -- suppression reasons keep precedence over the owner-resolution gate.
+  (COALESCE(w.fp_marketing_eligible, FALSE) AND NOT w.has_unresolved_owner)               AS marketing_eligible,
   COALESCE(w.fp_consent_status, 'unknown')                                                AS consent_status,
-  w.fp_suppression_reason                                                                 AS suppression_reason,
+  COALESCE(
+    w.fp_suppression_reason,
+    CASE WHEN w.has_unresolved_owner THEN 'unresolved_owner' END
+  )                                                                                       AS suppression_reason,
   w.fp_last_touch_at                                                                      AS last_touch_at,
   w.fp_eligible_recontact_at                                                              AS eligible_recontact_at,
   w.current_lender_ref,
   w.second_pos_amount,
+  -- S1.3 overlay-segment columns. Fractional second_pos_rate is converted
+  -- to PERCENT form for display parity with current_rate.
+  CAST(CASE WHEN w.second_pos_rate IS NOT NULL THEN w.second_pos_rate * 100 END AS DOUBLE)
+                                                                                     AS second_pos_rate,
+  w.second_pos_rate_spread_bps,
+  w.second_lien_itm,
+  w.heloc_open_date,
+  w.heloc_draw_end_date,
+  w.has_heloc_draw_ending,
+  w.purchase_amount,
+  w.purchase_date,
+  w.home_value_appreciation_pct,
+  w.months_since_purchase,
+  w.has_home_equity_history,
+  w.first_pos_age_months,
+  w.refi_propensity_heuristic,
+  (w.refi_propensity_heuristic >= 60)                                                AS has_refi_propensity_heuristic_trigger,
+  w.tenant_payoff_date,
+  w.is_payoff_loss,
+  w.itm_on_related_property,
+  w.related_itm_property_count,
   w.first_pos_loan_type,
   w.loan_product_type,
   w.origination_channel,
@@ -920,7 +1139,7 @@ COMMENT ON COLUMN mip.gold.borrower_360.state IS 'Situs state from refreshed sou
 COMMENT ON COLUMN mip.gold.borrower_360.zip IS '5-digit situs ZIP.';
 COMMENT ON COLUMN mip.gold.borrower_360.situs_cbsa_code IS 'CBSA metro code. Gold-only; used for geography drill-down.';
 COMMENT ON COLUMN mip.gold.borrower_360.county_fips_5 IS '5-char FIPS county code (2-char state + 3-char county) from silver.property_master.fips_county_code. Feeds gold.county_rollup + gold.zip_rollup. NULL for the ~0.2% of rows where silver has no county geocode.';
-COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention) this borrower belongs to.';
+COMMENT ON COLUMN mip.gold.borrower_360.segment_codes IS 'Ordered list of SegmentCode Literals (itm/listed/permit/investor/equity/retention + S1.3 overlays second_lien_itm/heloc_draw_to_payback/home_equity_history/refi_propensity/itm_on_related_property/payoff_loss_leads/permit_activity) this borrower belongs to.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_estimate IS 'USD: GREATEST(0, avm_value - estimated current lien balance). Current lien uses fn_estimated_upb(first_pos_amount, first_pos_rate, months_elapsed) plus second-position amount when first-lien inputs are present.';
 COMMENT ON COLUMN mip.gold.borrower_360.equity_pct IS '0..100 int available-equity percentage from AVM and estimated current lien balance; falls back to Cotality estimated_cltv only when AVM is missing. Underwater borrowers clamp to 0 for scoring while display LTV can exceed 100. Feeds fn_in_the_money + fn_next_best_offer.';
 COMMENT ON COLUMN mip.gold.borrower_360.rate_spread_bps IS 'fn_rate_spread(first_pos_rate, market_rate_fraction). Positive = above market = refi opportunity.';
@@ -939,6 +1158,9 @@ COMMENT ON COLUMN mip.gold.borrower_360.current_lien_balance IS 'Estimated curre
 COMMENT ON COLUMN mip.gold.borrower_360.current_rate IS 'PERCENT form (5.75, not 0.0575). Matches Pydantic current_rate and mock_data convention.';
 COMMENT ON COLUMN mip.gold.borrower_360.ltv IS 'Display LTV int from estimated current lien balance divided by AVM when AVM is present; not upper-capped, so underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_360.related_property_count IS 'COALESCE(property_owner_bridge.related_property_count, 1).';
+COMMENT ON COLUMN mip.gold.borrower_360.owner_count IS 'S1.1: occupied owner slots on this CLIP in silver.property_owners (max 4, duplicate Owner Links collapsed). 0 when the source record has no owner information. Drives the multi-owner caveat chip.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_unresolved_owner IS 'S1.1: TRUE when any owner slot classifies unresolved OR no owner rows exist. Fails marketing_eligible closed with suppression_reason unresolved_owner. ROADMAP-TEMPORARY classify+caveat+suppress scope pending Cotality entity resolution (data-contract §2.6).';
+COMMENT ON COLUMN mip.gold.borrower_360.primary_owner_entity_type IS 'S1.1: owner_entity_type of the slot-1 owner (individual | trust | llc | unresolved). NULL when no owner rows exist.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_owner_occupied IS 'owner_occupancy_code = "O". Feeds fit sub-score.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_absentee IS 'property_master.is_absentee. Feeds investor branch.';
 COMMENT ON COLUMN mip.gold.borrower_360.is_corporate_owner IS 'property_master.owner_is_corporate. Feeds investor branch.';
@@ -966,13 +1188,31 @@ COMMENT ON COLUMN mip.gold.borrower_360.first_party_relationship_depth IS 'Bound
 COMMENT ON COLUMN mip.gold.borrower_360.first_party_recent_interactions IS 'Recent call-center/digital interaction count resolved through first-party feeds.';
 COMMENT ON COLUMN mip.gold.borrower_360.first_party_recent_application IS 'TRUE when a recent LOS/application event exists.';
 COMMENT ON COLUMN mip.gold.borrower_360.first_party_synthetic_demo IS 'TRUE only when resolved first-party rows come from the Summit demo_synthetic seed.';
-COMMENT ON COLUMN mip.gold.borrower_360.marketing_eligible IS 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, and the 30-day touch cap is clear. Campaign and draft APIs fail closed on FALSE.';
+COMMENT ON COLUMN mip.gold.borrower_360.marketing_eligible IS 'TRUE only when latest first-party CRM consent is opt-in, no suppression exists, the 30-day touch cap is clear, AND no owner slot is unresolved (S1.1). Campaign and draft APIs fail closed on FALSE.';
 COMMENT ON COLUMN mip.gold.borrower_360.consent_status IS 'Controlled first-party CRM consent enum: opt_in / opt_out / unknown. No raw contact data.';
-COMMENT ON COLUMN mip.gold.borrower_360.suppression_reason IS 'Controlled first-party CRM suppression reason, e.g. do_not_contact or recent_contact_cap.';
+COMMENT ON COLUMN mip.gold.borrower_360.suppression_reason IS 'Controlled suppression reason: do_not_contact / recent_contact_cap (first-party CRM, takes precedence) or unresolved_owner (S1.1 owner-resolution gate).';
 COMMENT ON COLUMN mip.gold.borrower_360.last_touch_at IS 'Most recent first-party marketing/contact touch timestamp used for frequency-cap enforcement.';
 COMMENT ON COLUMN mip.gold.borrower_360.eligible_recontact_at IS 'Earliest timestamp the borrower can be contacted again when a frequency cap is active.';
 COMMENT ON COLUMN mip.gold.borrower_360.current_lender_ref IS 'Public-demo-safe current-servicer reference: Summit Mortgage, Competitor A/B/etc., or Competitor Other. Never the raw Cotality lender string.';
 COMMENT ON COLUMN mip.gold.borrower_360.second_pos_amount IS '2nd-lien balance passthrough; NULL or 0 both mean no active 2nd-lien. Feeds the equity segment clean-lien predicate.';
+COMMENT ON COLUMN mip.gold.borrower_360.second_pos_rate IS 'S1.3: 2nd-lien note rate in PERCENT form (8.25, not 0.0825) after silver+gold source-quality bounding. NULL when missing/invalid.';
+COMMENT ON COLUMN mip.gold.borrower_360.second_pos_rate_spread_bps IS 'S1.3: fn_rate_spread(second_pos_rate_fraction, market_rate_fraction). 0 when the second rate is unknown.';
+COMMENT ON COLUMN mip.gold.borrower_360.second_lien_itm IS 'S1.3 second_lien_itm segment flag: open 2nd position AND fn_in_the_money(second_pos_rate_spread_bps, equity_pct, governed thresholds). Consolidation-refi economics screen.';
+COMMENT ON COLUMN mip.gold.borrower_360.heloc_open_date IS 'S1.3: latest OPEN equity-loan lien event date from silver.mortgage_events (is_equity_loan, no release_date).';
+COMMENT ON COLUMN mip.gold.borrower_360.heloc_draw_end_date IS 'S1.3: heloc_open_date + 120 months (standard 10-year draw period).';
+COMMENT ON COLUMN mip.gold.borrower_360.has_heloc_draw_ending IS 'S1.3 heloc_draw_to_payback segment flag: open equity-loan lien originated 102-126 months ago (standard 120-month draw ending within 18 months or ended within the last 6).';
+COMMENT ON COLUMN mip.gold.borrower_360.purchase_amount IS 'S1.3: last recorded purchase amount from the Cotality lien share.';
+COMMENT ON COLUMN mip.gold.borrower_360.purchase_date IS 'S1.3: last recorded purchase recording date from the Cotality lien share.';
+COMMENT ON COLUMN mip.gold.borrower_360.home_value_appreciation_pct IS 'S1.3: ROUND(100 * (avm_value - purchase_amount) / purchase_amount). NULL when either side is missing/zero.';
+COMMENT ON COLUMN mip.gold.borrower_360.months_since_purchase IS 'S1.3: whole months between purchase_date and this refresh. NULL when purchase_date is missing.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_home_equity_history IS 'S1.3 home_equity_history segment flag: appreciation >= 40% AND tenure >= 36 months AND equity_pct >= 20.';
+COMMENT ON COLUMN mip.gold.borrower_360.first_pos_age_months IS 'S1.3: whole months since first-lien origination at refresh time. Feeds fn_refi_propensity_heuristic seasoning points.';
+COMMENT ON COLUMN mip.gold.borrower_360.refi_propensity_heuristic IS 'S1.3: fn_refi_propensity_heuristic output 0..100. TRANSPARENT deterministic points table (published in the glossary). NOT the Cotality refi propensity model score.';
+COMMENT ON COLUMN mip.gold.borrower_360.has_refi_propensity_heuristic_trigger IS 'S1.3 refi_propensity segment flag: refi_propensity_heuristic >= 60.';
+COMMENT ON COLUMN mip.gold.borrower_360.tenant_payoff_date IS 'S1.3: most recent released tenant-lender lien date from silver.mortgage_events joined to ref.lender_dictionary.';
+COMMENT ON COLUMN mip.gold.borrower_360.is_payoff_loss IS 'S1.3 payoff_loss_leads segment flag: tenant lien released within 24 months AND the property now carries a competitor lien. Also feeds the future S2.7 competitive view.';
+COMMENT ON COLUMN mip.gold.borrower_360.itm_on_related_property IS 'S1.3 itm_on_related_property segment flag: any Owner Link on this CLIP (S1.1 silver.property_owners, all slots) also holds a DIFFERENT clip that is in the money under the same refresh thresholds.';
+COMMENT ON COLUMN mip.gold.borrower_360.related_itm_property_count IS 'S1.3: count of OTHER in-the-money clips on the strongest Owner Link for this CLIP. Evidence display for itm_on_related_property.';
 COMMENT ON COLUMN mip.gold.borrower_360.first_pos_loan_type IS '1st-lien loan type code (CONV / FHA / VA / etc). Feeds fit sub-score.';
 COMMENT ON COLUMN mip.gold.borrower_360.loan_product_type IS 'fn_loan_product_type(first_pos_loan_type, first_pos_amount, conforming_loan_limit_applied): conventional / jumbo / fha / va / other. NULL when the Cotality loan type code is missing. Drives the PRODUCT TYPE filter and SegmentCard facets.';
 COMMENT ON COLUMN mip.gold.borrower_360.origination_channel IS 'LOS channel of the most recent funded first-party application (loan_officer / digital / branch / call_center in the demo feed). NULL when no funded application resolves to this borrower -- rendered "Unknown", never invented.';

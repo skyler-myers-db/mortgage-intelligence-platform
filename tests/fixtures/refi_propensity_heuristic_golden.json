@@ -1,0 +1,131 @@
+{
+  "heuristic": "S1.3 transparent deterministic refi-propensity points table. Published in fn_refi_propensity_heuristic.sql header and the app glossary methodology entry; segment threshold >= 60 is applied in gold.borrower_360, not in the function.",
+  "cases": [
+    {
+      "id": "case_01_all_null",
+      "inputs": {"rate_spread_bps": null, "loan_age_months": null, "equity_pct": null, "estimated_upb": null, "listed_for_sale": null},
+      "expected_score": 10,
+      "note": "No data scores only the not-listed default: unknown inputs contribute 0 points, NULL listing treated as not listed (+10)."
+    },
+    {
+      "id": "case_02_max_score",
+      "inputs": {"rate_spread_bps": 150, "loan_age_months": 48, "equity_pct": 40, "estimated_upb": 320000, "listed_for_sale": false},
+      "expected_score": 100,
+      "note": "Every component at its top band: 40 + 20 + 20 + 10 + 10 = 100."
+    },
+    {
+      "id": "case_03_spread_100_boundary",
+      "inputs": {"rate_spread_bps": 100, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 40,
+      "note": "Inclusive >= 100 bps boundary lands the 40-point band; listed-for-sale zeroes the listing component."
+    },
+    {
+      "id": "case_04_spread_99_falls_to_75_band",
+      "inputs": {"rate_spread_bps": 99, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 32,
+      "note": "99 bps sits in the 75-99 band (32 points)."
+    },
+    {
+      "id": "case_05_spread_75_boundary",
+      "inputs": {"rate_spread_bps": 75, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 32,
+      "note": "Inclusive 75 bps boundary."
+    },
+    {
+      "id": "case_06_spread_50_boundary",
+      "inputs": {"rate_spread_bps": 50, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 22,
+      "note": "Inclusive 50 bps boundary (22 points)."
+    },
+    {
+      "id": "case_07_spread_25_boundary",
+      "inputs": {"rate_spread_bps": 25, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 10,
+      "note": "Inclusive 25 bps boundary (10 points)."
+    },
+    {
+      "id": "case_08_spread_24_scores_zero",
+      "inputs": {"rate_spread_bps": 24, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 0,
+      "note": "Below 25 bps there is no spread contribution."
+    },
+    {
+      "id": "case_09_seasoning_prime_band_edges",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 24, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 20,
+      "note": "24 months is the inclusive lower edge of the 24-84 prime seasoning band."
+    },
+    {
+      "id": "case_10_seasoning_84_upper_edge",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 84, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 20,
+      "note": "84 months is the inclusive upper edge of the prime band."
+    },
+    {
+      "id": "case_11_seasoning_shoulder_bands",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 12, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 10,
+      "note": "12-23 months shoulder band scores 10."
+    },
+    {
+      "id": "case_12_seasoning_85_to_120_shoulder",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 120, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 10,
+      "note": "120 months is the inclusive upper edge of the late shoulder band."
+    },
+    {
+      "id": "case_13_seasoning_121_scores_zero",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 121, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 0,
+      "note": "Beyond 120 months seasoning contributes nothing."
+    },
+    {
+      "id": "case_14_seasoning_11_scores_zero",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 11, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 0,
+      "note": "Below 12 months a brand-new loan has no seasoning contribution."
+    },
+    {
+      "id": "case_15_equity_bands",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 0, "equity_pct": 20, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 20,
+      "note": "Inclusive 20% equity boundary (20 points)."
+    },
+    {
+      "id": "case_16_equity_10_band",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 0, "equity_pct": 10, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 10,
+      "note": "Inclusive 10% equity boundary (10 points); 9% would score 0."
+    },
+    {
+      "id": "case_17_upb_bands",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 150000, "listed_for_sale": true},
+      "expected_score": 10,
+      "note": "Inclusive 150k UPB boundary (10 points)."
+    },
+    {
+      "id": "case_18_upb_shoulder",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 149999, "listed_for_sale": true},
+      "expected_score": 5,
+      "note": "149,999 sits in the 75k-149,999 band (5 points)."
+    },
+    {
+      "id": "case_19_upb_below_75k_scores_zero",
+      "inputs": {"rate_spread_bps": 0, "loan_age_months": 0, "equity_pct": 0, "estimated_upb": 74999, "listed_for_sale": true},
+      "expected_score": 0,
+      "note": "Below 75k the balance is not worth the refinance cost."
+    },
+    {
+      "id": "case_20_segment_threshold_edge",
+      "inputs": {"rate_spread_bps": 75, "loan_age_months": 30, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": false},
+      "expected_score": 62,
+      "note": "32 + 20 + 0 + 0 + 10 = 62: clears the >= 60 segment threshold without equity or balance points."
+    },
+    {
+      "id": "case_21_listing_blocks_threshold",
+      "inputs": {"rate_spread_bps": 75, "loan_age_months": 30, "equity_pct": 0, "estimated_upb": 0, "listed_for_sale": true},
+      "expected_score": 52,
+      "note": "Same borrower with an active MLS listing loses the 10 listing points and drops below the 60 threshold."
+    }
+  ]
+}

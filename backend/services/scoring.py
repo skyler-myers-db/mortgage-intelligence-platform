@@ -27,6 +27,11 @@ golden-fixture JSON that the SQL side validates against the same inputs:
                             (boundary case pins "exactly at the conforming
                             limit is conforming, not jumbo"; NULL code
                             returns None -- unknown never guesses).
+- ``refi_propensity_heuristic``
+                         -> ``sql/uc_functions/fn_refi_propensity_heuristic.sql``
+                            + ``tests/fixtures/refi_propensity_heuristic_golden.json``
+                            (S1.3 transparent points table; boundary cases pin
+                            every published band edge).
 
 Weights for ``lead_score`` (non-negotiable): 0.35 / 0.30 / 0.15 / 0.10 / 0.10.
 NULL (``None``) score components coerce to 0. ``in_the_money`` returns
@@ -350,6 +355,55 @@ def in_the_money(
     ):
         return False
     return (rate_spread_bps >= min_spread_bps) and (equity_pct >= min_equity_pct)
+
+
+def refi_propensity_heuristic(
+    rate_spread_bps: int | None,
+    loan_age_months: int | None,
+    equity_pct: int | None,
+    estimated_upb: int | None,
+    listed_for_sale: bool | None,
+) -> int:
+    """Return the 0..100 transparent refi-propensity heuristic score.
+
+    Mirrors ``mip.gold.fn_refi_propensity_heuristic`` (S1.3). This is a
+    deterministic published points table over observable lien/AVM/MLS
+    signals -- NOT the Cotality refi propensity model, which the app
+    surfaces separately. The exact table lives in the UDF header and the
+    glossary methodology entry; the ``refi_propensity`` overlay segment
+    admits scores >= 60 (threshold applied in gold, not here). ``None``
+    numeric inputs contribute 0 points; ``None`` listed_for_sale is
+    treated as not-listed.
+    """
+    spread = rate_spread_bps or 0
+    if spread >= 100:
+        score = 40
+    elif spread >= 75:
+        score = 32
+    elif spread >= 50:
+        score = 22
+    elif spread >= 25:
+        score = 10
+    else:
+        score = 0
+    if loan_age_months is not None:
+        if 24 <= loan_age_months <= 84:
+            score += 20
+        elif 12 <= loan_age_months <= 23 or 85 <= loan_age_months <= 120:
+            score += 10
+    equity = equity_pct or 0
+    if equity >= 20:
+        score += 20
+    elif equity >= 10:
+        score += 10
+    upb = estimated_upb or 0
+    if upb >= 150_000:
+        score += 10
+    elif upb >= 75_000:
+        score += 5
+    if not listed_for_sale:
+        score += 10
+    return score
 
 
 def next_best_offer(

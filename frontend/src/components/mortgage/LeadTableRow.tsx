@@ -103,6 +103,16 @@ export function LeadTableRow({
         <td>
           <div className="chip-stack">
             <Chip variant={relationshipVariant(lead)}>{relationshipLabel(lead)}</Chip>
+            {typeof lead.owner_count === 'number' && lead.owner_count > 1 && (
+              <span className="chip chip--neutral chip--compact">
+                <span className="chip__label">Multi-owner ({lead.owner_count})</span>
+              </span>
+            )}
+            {lead.has_unresolved_owner === true && (
+              <Chip variant="warning" icon="shield">
+                Owner unresolved
+              </Chip>
+            )}
             {lead.marketing_eligible === false && (
               <Chip variant="warning">
                 Suppressed{lead.suppression_reason ? `: ${lead.suppression_reason}` : ''}

@@ -173,6 +173,9 @@ SELECT
   b.current_rate,
   b.ltv,
   b.related_property_count,
+  b.owner_count,
+  b.has_unresolved_owner,
+  b.primary_owner_entity_type,
   b.is_owner_occupied,
   b.is_absentee,
   b.is_corporate_owner,
@@ -260,6 +263,9 @@ COMMENT ON COLUMN mip.gold.borrower_dossier.current_lien_balance IS 'Total open 
 COMMENT ON COLUMN mip.gold.borrower_dossier.current_rate IS 'Percent form (5.75).';
 COMMENT ON COLUMN mip.gold.borrower_dossier.ltv IS 'Display LTV int; underwater borrowers may exceed 100.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.related_property_count IS 'From gold.property_owner_bridge.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.owner_count IS 'From borrower_360 (S1.1); occupied owner slots on the CLIP (max 4). Drives the multi-owner caveat chip.';
+COMMENT ON COLUMN mip.gold.borrower_dossier.has_unresolved_owner IS 'From borrower_360 (S1.1); TRUE when any owner slot is unresolved. Such rows are never marketing_eligible (suppression_reason unresolved_owner).';
+COMMENT ON COLUMN mip.gold.borrower_dossier.primary_owner_entity_type IS 'From borrower_360 (S1.1); slot-1 owner entity type: individual | trust | llc | unresolved.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_owner_occupied IS 'owner_occupancy_code = "O".';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_absentee IS 'From silver.property_master.';
 COMMENT ON COLUMN mip.gold.borrower_dossier.is_corporate_owner IS 'From silver.property_master.';

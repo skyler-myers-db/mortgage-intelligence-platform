@@ -4,7 +4,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.schemas._validators import (
     configured_public_lender_name,
@@ -513,6 +513,68 @@ class PortfolioPreviewRequest(BaseModel):
     criteria: PortfolioCriteria = Field(default_factory=PortfolioCriteria)
 
 
+HouseholdDedupeUnit = Literal["borrower", "household"]
+HouseholdPrimaryStrategy = Literal["highest_opportunity_eligible"]
+
+
+def _household_source_assets() -> list[str]:
+    return ["mip.gold.household_rollup", "mip.gold.borrower_360"]
+
+
+class HouseholdDedupConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    dedupe_unit: HouseholdDedupeUnit = "borrower"
+    primary_contact_strategy: HouseholdPrimaryStrategy = "highest_opportunity_eligible"
+
+    @model_validator(mode="after")
+    def _normalize_dedupe_unit(self) -> "HouseholdDedupConfig":
+        self.dedupe_unit = "household" if self.enabled else "borrower"
+        return self
+
+
+class HouseholdDedupSummary(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    candidate_borrower_count: int = 0
+    selected_primary_count: int = 0
+    suppressed_co_owner_count: int = 0
+    household_count: int = 0
+    owner_link_household_count: int = 0
+    mailing_address_household_count: int = 0
+    singleton_household_count: int = 0
+    primary_contact_strategy: HouseholdPrimaryStrategy = "highest_opportunity_eligible"
+    source_assets: list[str] = Field(default_factory=_household_source_assets)
+
+    @field_validator(
+        "candidate_borrower_count",
+        "selected_primary_count",
+        "suppressed_co_owner_count",
+        "household_count",
+        "owner_link_household_count",
+        "mailing_address_household_count",
+        "singleton_household_count",
+    )
+    @classmethod
+    def _validate_count(cls, value: int) -> int:
+        if isinstance(value, bool) or value < 0 or value > 10_000_000:
+            raise ValueError("household counts must be bounded non-negative integers")
+        return int(value)
+
+    @field_validator("source_assets")
+    @classmethod
+    def _validate_source_assets(cls, value: list[str]) -> list[str]:
+        if not value or len(value) > 5:
+            raise ValueError("source_assets must cite bounded governed UC assets")
+        normalized = [str(item).strip() for item in value]
+        for asset in normalized:
+            if asset not in {"mip.gold.household_rollup", "mip.gold.borrower_360"}:
+                raise ValueError("source_assets must cite household_rollup and borrower_360 only")
+        return normalized
+
+
 class PortfolioCreateRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -524,6 +586,7 @@ class PortfolioCreateRequest(BaseModel):
     send_window: dict[str, object] = Field(default_factory=dict)
     holdout: dict[str, object] | None = None
     roi_assumptions: dict[str, object] | None = None
+    household_dedup: HouseholdDedupConfig = Field(default_factory=HouseholdDedupConfig)
 
     @field_validator("name")
     @classmethod
@@ -738,6 +801,7 @@ class PortfolioCreateResponse(BaseModel):
     campaign_id: str | None = None
     name: str
     marketable_population: int
+    household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     audit_event_id: str | None = None
 
 
@@ -756,6 +820,8 @@ class CampaignSummary(BaseModel):
     send_window: dict[str, object] = Field(default_factory=dict)
     holdout: dict[str, object] | None = None
     roi_assumptions: dict[str, object] | None = None
+    household_dedup: HouseholdDedupConfig = Field(default_factory=HouseholdDedupConfig)
+    household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     created_at: datetime | None = None
     updated_at: datetime | None = None
 

@@ -4,14 +4,18 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { SEGMENT_DEFINITIONS } from '../../lib/segmentMetadata';
+import { normalizeSegmentCode, SEGMENT_DEFINITIONS } from '../../lib/segmentMetadata';
 import type { SegmentSummary } from '../../types';
-
-const setDrawer = vi.fn();
-vi.mock('../AppContext', () => ({ useApp: () => ({ setDrawer }) }));
 
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { SegmentCard } from './SegmentCard';
+
+// EvidenceChip (the S1.3 per-segment evidence affordance) reads setDrawer +
+// showEvidence from the app context; mock it so the card renders standalone.
+const setDrawer = vi.fn();
+vi.mock('../AppContext', () => ({
+  useApp: () => ({ setDrawer, showEvidence: true }),
+}));
 
 describe('Segment definitions', () => {
   it('contains in-the-money segment', () => {
@@ -30,6 +34,30 @@ describe('Segment definitions', () => {
     expect(helocIntent?.name).toBe('HELOC Intent');
     expect(helocIntent?.description).toContain('HELOC propensity');
     expect(helocIntent?.icon).toBe('equity');
+  });
+
+  it('registers all seven S1.3 overlay segments', () => {
+    const codes = new Set<string>(SEGMENT_DEFINITIONS.map((s) => s.code));
+    for (const code of [
+      'second_lien_itm',
+      'heloc_draw_to_payback',
+      'home_equity_history',
+      'refi_propensity',
+      'itm_on_related_property',
+      'payoff_loss_leads',
+      'permit_activity',
+    ]) {
+      expect(codes.has(code), `${code} missing from SEGMENT_DEFINITIONS`).toBe(true);
+    }
+  });
+
+  it('normalizes underscore/hyphen/space forms to canonical codes', () => {
+    expect(normalizeSegmentCode('second-lien-itm')).toBe('second_lien_itm');
+    expect(normalizeSegmentCode('Payoff Loss Leads')).toBe('payoff_loss_leads');
+    // permit_activity is now its own registered segment, no longer an alias
+    // for the HELOC-Intent `permit` code.
+    expect(normalizeSegmentCode('permit_activity')).toBe('permit_activity');
+    expect(normalizeSegmentCode('heloc')).toBe('permit');
   });
 });
 
@@ -115,12 +143,15 @@ describe('SegmentCard', () => {
     expect(container.querySelector('.seg-card__facets')).toBeNull();
   });
 
-  it('does not nest a <button> inside the card button', () => {
+  it('keeps the card on the div role-button composition and facet chips as spans', () => {
     render({
       code: 'itm',
       count: 12,
       loan_product_mix: [{ value: 'fha', count: 1240 }],
     });
+    const card = container.querySelector('.seg-card');
+    expect(card?.tagName).toBe('DIV');
+    expect(card?.getAttribute('role')).toBe('button');
     expect(container.querySelectorAll('button').length).toBe(1);
     const chip = container.querySelector('.seg-card__facet-chip');
     expect(chip?.tagName).toBe('SPAN');
@@ -156,5 +187,44 @@ describe('SegmentCard', () => {
       chip.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
     });
     expect(setDrawer).toHaveBeenCalledWith(DRAWER_SOURCES.originationChannel);
+  });
+
+  it('renders an explicit gated panel for a not-connected source and suppresses the count', () => {
+    render({
+      code: 'permit_activity',
+      count: 0,
+      source_status: 'not_connected',
+      source_name: 'Building Permits',
+    });
+    expect(container.textContent).toContain('not connected');
+    expect(container.textContent).toContain('Building Permits');
+    expect(container.textContent).toContain('—');
+    expect(container.textContent).not.toContain('no borrowers in current view');
+    const card = container.querySelector('.seg-card');
+    expect(card?.classList.contains('seg-card--gated')).toBe(true);
+    expect(card?.getAttribute('aria-disabled')).toBe('true');
+  });
+
+  it('labels a permission-denied source as not licensed', () => {
+    render({
+      code: 'second_lien_itm',
+      count: 0,
+      source_status: 'not_licensed',
+      source_name: 'Voluntary Lien',
+    });
+    expect(container.textContent).toContain('not licensed');
+    expect(container.textContent).toContain('Voluntary Lien');
+  });
+
+  it('opens the evidence drawer from the segment evidence chip', () => {
+    render({ code: 'refi_propensity', count: 42, delta: '+5%', avg_score: 71 });
+    const chip = container.querySelector<HTMLButtonElement>('.evidence-chip');
+    expect(chip).not.toBeNull();
+    act(() => chip!.click());
+    expect(setDrawer).toHaveBeenCalledTimes(1);
+    const source = setDrawer.mock.calls[0][0];
+    expect(source.assetKey).toBe('segment_population');
+    expect(source.title).toContain('Refi Propensity');
+    expect(JSON.stringify(source.lineage)).toContain('mip.gold.borrower_360');
   });
 });

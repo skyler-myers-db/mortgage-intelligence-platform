@@ -25,15 +25,14 @@ from backend.schemas.geo import (
     StateRollupResponse,
     ZipRollupResponse,
 )
+from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.repositories import GeoRepository, get_geo_repository
 
 router = APIRouter(prefix="/geo", tags=["geo"])
 
 RepoDep = Annotated[GeoRepository, Depends(get_geo_repository)]
-_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(
-    {"itm", "listed", "permit", "investor", "equity", "retention"}
-)
+_ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 
 
 def _parse_segment_codes(raw: str | None) -> list[str] | None:

@@ -4,7 +4,7 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
-from backend.schemas.lead import SegmentSummary
+from backend.schemas.lead import SEGMENT_CODE_VALUES, SegmentSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.repositories import SegmentRepository, get_segment_repository
 
@@ -16,7 +16,7 @@ RepoDep = Annotated[SegmentRepository, Depends(get_segment_repository)]
 def _parse_segment_codes(raw: str | None) -> list[str] | None:
     if raw is None:
         return None
-    allowed = {"itm", "listed", "permit", "investor", "equity", "retention"}
+    allowed = set(SEGMENT_CODE_VALUES)
     out: list[str] = []
     for part in raw.split(","):
         code = part.strip().lower()
