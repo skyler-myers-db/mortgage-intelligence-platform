@@ -144,6 +144,53 @@ export function segmentDisplayLabel(code: SegmentCode | string): string {
   return SEGMENT_CODE_LABELS[code as SegmentCode] ?? 'Unknown segment';
 }
 
+export interface SegmentFilterChip {
+  code: SegmentCode;
+  label: string;
+}
+
+/**
+ * S8: one removable chip per active segment filter, whether the deep link
+ * arrived as a single `?segment=` or a composed `?segment_codes=` selection.
+ */
+export function segmentFilterChips(
+  segment?: SegmentCode,
+  segmentCodes: SegmentCode[] = [],
+): SegmentFilterChip[] {
+  const codes = segmentCodes.length > 0 ? segmentCodes : segment ? [segment] : [];
+  return codes.map((code) => ({ code, label: segmentDisplayLabel(code) }));
+}
+
+/**
+ * S8: recompute the URL state after removing one segment chip. The server
+ * re-runs the composed predicate for whatever remains:
+ *   - 2+ codes remain → keep `segment_codes` (+ the current `segment_mode`)
+ *   - exactly 1 remains → collapse to the single-segment `segment` param
+ *   - none remain → drop the segment filter entirely
+ * Every other query param is preserved untouched.
+ */
+export function searchParamsAfterSegmentRemoval(
+  searchParams: URLSearchParams,
+  code: SegmentCode,
+): URLSearchParams {
+  const activeSegment = parseSegmentCodes(searchParams.get('segment'))[0];
+  const activeCodes = parseSegmentCodes(searchParams.get('segment_codes'));
+  const codes = activeCodes.length > 0 ? activeCodes : activeSegment ? [activeSegment] : [];
+  const remaining = codes.filter((c) => c !== code);
+  const mode = searchParams.get('segment_mode')?.trim().toLowerCase() === 'all' ? 'all' : 'any';
+  const next = new URLSearchParams(searchParams);
+  next.delete('segment');
+  next.delete('segment_codes');
+  next.delete('segment_mode');
+  if (remaining.length === 1) {
+    next.set('segment', remaining[0]);
+  } else if (remaining.length > 1) {
+    next.set('segment_codes', remaining.join(','));
+    next.set('segment_mode', mode);
+  }
+  return next;
+}
+
 export function segmentFilterDisplayValue(
   segment?: SegmentCode,
   segmentCodes: SegmentCode[] = [],

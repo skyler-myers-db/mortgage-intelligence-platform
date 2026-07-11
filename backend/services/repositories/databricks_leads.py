@@ -25,6 +25,10 @@ from backend.services.repositories.databricks_shared import (
 )
 from backend.services.resilience import TTLCache
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
+from backend.services.segment_predicates import (
+    compose_segment_predicate,
+    normalise_segment_codes,
+)
 from backend.services.state_footprint import get_state_footprint_resolver
 
 
@@ -74,16 +78,10 @@ class DatabricksLeadRepository:
         "LIMIT {limit}"
     )
 
-    _LIST_BY_SEGMENT_SQL_TEMPLATE = (
-        f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
-        f"FROM {qualify('gold', 'lead_population')} lp "
-        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
-        "  ON ls.borrower_id = lp.borrower_id "
-        "WHERE array_contains(segment_codes, :segment) {lifecycle_clause} "
-        "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
-        "LIMIT {limit}"
-    )
-
+    # S8 cross-review B1: the old single-segment template died when the
+    # canonical composer took over clause building; _LIST_FILTERED_SQL_TEMPLATE
+    # covers one segment and many alike, so no SQL here may hardcode a
+    # segment bind-parameter name.
     _LIST_FILTERED_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
         f"FROM {qualify('gold', 'lead_population')} lp "
@@ -635,17 +633,7 @@ class DatabricksLeadRepository:
         segment_codes: list[str] | None,
     ) -> list[str]:
         raw = segment_codes if segment_codes else ([segment] if segment else [])
-        # Preserve caller order for deterministic parameter names while
-        # dropping duplicates and blanks.
-        out: list[str] = []
-        seen: set[str] = set()
-        for code in raw:
-            normalised = str(code or "").strip()
-            if not normalised or normalised in seen:
-                continue
-            seen.add(normalised)
-            out.append(normalised)
-        return out
+        return normalise_segment_codes(raw)
 
     @classmethod
     def _segment_filter_clause(
@@ -655,22 +643,12 @@ class DatabricksLeadRepository:
         segment_codes: list[str] | None,
         segment_mode: str,
     ) -> tuple[str, dict[str, object]]:
-        codes = cls._normalise_segment_codes(segment, segment_codes)
-        if not codes:
-            return "", {}
-        if len(codes) == 1:
-            return "array_contains(segment_codes, :segment)", {"segment": codes[0]}
-        if segment_mode == "all":
-            params = {f"segment_{i}": code for i, code in enumerate(codes)}
-            clause = " AND ".join(
-                f"array_contains(segment_codes, :segment_{i})" for i in range(len(codes))
-            )
-            return clause, params
-        params = {f"segment_{i}": code for i, code in enumerate(codes)}
-        clause = " OR ".join(
-            f"array_contains(segment_codes, :segment_{i})" for i in range(len(codes))
+        # S8: delegate to the canonical composer so the Lead Queue ranks the
+        # exact cohort the Segment Intelligence cards previewed.
+        return compose_segment_predicate(
+            cls._normalise_segment_codes(segment, segment_codes),
+            mode=segment_mode,
         )
-        return f"({clause})", params
 
     @classmethod
     def _bound_limit(cls, limit: int | None) -> int:

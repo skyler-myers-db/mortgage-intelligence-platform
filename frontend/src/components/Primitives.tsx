@@ -16,6 +16,8 @@ export function Chip({
   icon,
   className,
   title,
+  onRemove,
+  removeLabel,
 }: PropsWithChildren<{
   variant?: 'success' | 'warning' | 'danger' | 'neutral';
   icon?: IconName;
@@ -26,12 +28,31 @@ export function Chip({
    * different timezones can disambiguate a Slack screenshot. R5-19.
    */
   title?: string;
+  /**
+   * S8: dismiss affordance for removable filter chips (Lead Queue segment
+   * intersection). The prototype chip block has no dismiss element, so
+   * `.chip__remove` is a BEM extension of the prototype's `.chip`; the base
+   * classes and typography stay prototype-exact.
+   */
+  onRemove?: () => void;
+  /** Accessible name for the remove button, e.g. "Remove Investor filter". */
+  removeLabel?: string;
 }>) {
   const cls = ['chip', variant ? `chip--${variant}` : '', className ?? ''].filter(Boolean).join(' ');
   return (
     <span className={cls} title={title}>
       {icon && <Icon name={icon} size={10} />}
       <span className="chip__label">{children}</span>
+      {onRemove && (
+        <button
+          type="button"
+          className="chip__remove"
+          aria-label={removeLabel ?? 'Remove filter'}
+          onClick={onRemove}
+        >
+          <Icon name="cross" size={9} />
+        </button>
+      )}
     </span>
   );
 }
