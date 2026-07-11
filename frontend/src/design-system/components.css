@@ -1585,7 +1585,7 @@ kbd {
 }
 .login-summary__skeleton {
   display: block;
-  block-size: 20px;
+  block-size: var(--sp-5);
   inline-size: 28rem;
   max-inline-size: 80%;
   border-radius: var(--r-sm);
@@ -1604,12 +1604,16 @@ kbd {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
   text-decoration: underline dotted var(--chip-line);
+  /* 3px: baseline-hugging underline offset, below the 4px (--sp-1) spacing
+     scale; intentional raw-px hairline. */
   text-underline-offset: 3px;
   cursor: pointer;
   transition: color var(--dur-fast) var(--ease-standard);
 }
 .login-summary__num:hover { color: var(--accent-ink); text-decoration-color: var(--accent-ink); }
 .login-summary__num:focus-visible {
+  /* 2px/1px: focus-ring hairlines below the 4px token scale; intentional
+     raw px, matching .portfolio-summary__claim:focus-visible. */
   outline: 2px solid var(--accent-ink);
   outline-offset: 1px;
 }
