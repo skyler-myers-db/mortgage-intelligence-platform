@@ -14,6 +14,8 @@ import type {
   ActivationStageResponse,
   ActivationSummary,
   EconomicsAnalyticsResponse,
+  EquitySpreadPointsResponse,
+  EquitySpreadViewport,
   ExecutiveAnalyticsResponse,
   GeographyAnalyticsResponse,
   LeadSummary,
@@ -249,8 +251,13 @@ function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCri
   });
 }
 
-function analyticsPath(scope: string, opts: AnalyticsQueryOptions = {}): string {
+function analyticsPath(
+  scope: string,
+  opts: AnalyticsQueryOptions = {},
+  extraParams: Record<string, number> = {},
+): string {
   const params = new URLSearchParams();
+  Object.entries(extraParams).forEach(([key, value]) => params.set(key, String(value)));
   const states = opts.states?.length ? opts.states : opts.state ? [opts.state] : [];
   if (states.length > 0) params.set('states', states.map((state) => state.toUpperCase()).join(','));
   if (opts.segmentCodes && opts.segmentCodes.length > 0) {
@@ -733,6 +740,29 @@ export const api = {
 
   analyticsEconomics: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
     getJson<EconomicsAnalyticsResponse>(analyticsPath('economics', opts), signal),
+
+  // S7 zoom: real borrower points for a scatter viewport. The server caps
+  // the page and reports the honest pre-cap total (showing N of M).
+  analyticsEconomicsPoints: (
+    signal?: AbortSignal,
+    opts: AnalyticsQueryOptions = {},
+    viewport?: EquitySpreadViewport,
+  ) =>
+    getJson<EquitySpreadPointsResponse>(
+      analyticsPath(
+        'economics/points',
+        opts,
+        viewport
+          ? {
+              equity_min: viewport.equity_min,
+              equity_max: viewport.equity_max,
+              spread_min: viewport.spread_min,
+              spread_max: viewport.spread_max,
+            }
+          : {},
+      ),
+      signal,
+    ),
 
   analyticsSegments: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
     getJson<SegmentAnalyticsResponse>(analyticsPath('segments', opts), signal),

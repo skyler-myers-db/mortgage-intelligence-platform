@@ -15,6 +15,7 @@ const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.gold.funnel_snapshot_daily': 'funnel_snapshot_daily',
   'mip.gold.county_rollup': 'county_rollup',
   'mip.gold.zip_rollup': 'zip_rollup',
+  'mip.gold.equity_spread_points': 'equity_spread_points',
   'mip.silver.listing_activity': 'listing_activity',
   'mip.silver.heloc_propensity': 'heloc_propensity',
   'mip.silver.refi_propensity': 'refi_propensity',
@@ -76,6 +77,7 @@ export function descriptorFor(rawSource: string): DrawerSource {
 export function drawerForAsset(rawSource: string): DrawerSource | null {
   const key = rawSource.toLowerCase();
 
+  if (key.includes('equity_spread_points')) return enrichAsset(DRAWER_SOURCES.equitySpreadPoints);
   if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
   if (key.includes('fn_estimated_upb_confidence_band')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('fn_estimated_upb')) return enrichAsset(DRAWER_SOURCES.lien);
@@ -219,6 +221,27 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { label: 'Underlying rows', source: 'mip.gold.borrower_360', value: 'borrower grain' },
       { label: 'Ownership graph', source: 'entity.owner_link', value: 'CLIP-grain' },
       { label: 'Tenant lens', source: 'mip.ref.lender_dictionary', value: 'gold refresh' },
+    ],
+  },
+
+  equitySpreadPoints: {
+    title: 'Equity × rate-spread scatter',
+    short: 'Equity × spread points',
+    assetKey: 'equity_spread_points',
+    assetPath: 'mip.gold.equity_spread_points',
+    description:
+      'Precomputed per-borrower equity and rate-spread coordinates with canonical score bands. The overview shows server-side density bins; zooming loads real borrowers capped at the server limit.',
+    lineage: [
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_rate_spread' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_score_band' },
+      { layer: 'FEATURES', name: 'mip.gold.equity_spread_points' },
+    ],
+    signals: [
+      { label: 'X axis', source: 'equity_spread_points.equity_pct', value: 'AVM equity %' },
+      { label: 'Y axis', source: 'equity_spread_points.rate_spread_bps', value: 'fn_rate_spread' },
+      { label: 'Band', source: 'equity_spread_points.score_band', value: 'fn_score_band' },
+      { label: 'Bins', source: 'equity_spread_points.equity_bin_pct', value: 'precomputed' },
     ],
   },
 
