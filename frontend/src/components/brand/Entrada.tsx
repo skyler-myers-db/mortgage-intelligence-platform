@@ -35,7 +35,7 @@
  * cyan accent is ~40% of the bar — not the 25%/square the earlier
  * commits guessed at. Geometry below tracks the measured brand asset:
  *   - viewBox 32×22  (32 / 22 ≈ 1.45)
- *   - bar height 4.5 (≈ 20% of 22, matches measured 30/151)
+ *   - bar height 4.5 (≈ 20% of 22, matches the measured 30px-of-151px bar ratio)
  *   - cyan tip 13   (≈ 40% of 32, matches measured 38–41%)
  *   - long bar 19   (32 − 13)
  */
