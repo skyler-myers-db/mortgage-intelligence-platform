@@ -145,6 +145,9 @@ export interface LeadSummary {
   assigned_to_label?: string | null;
   assigned_at?: string | null;
   assignment_expires_at?: string | null;
+  /** S2 assignment lifecycle stage of the active assignment; null/absent
+   *  when the lead is unassigned or outside the actor scope. */
+  assignment_status?: AssignmentLifecycleStatus | null;
   latest_disposition_outcome?: string | null;
   latest_disposition_at?: string | null;
   latest_callback_at?: string | null;
@@ -169,6 +172,37 @@ export interface SalesTeamMember {
   active: boolean;
 }
 
+/** S2 assignment lifecycle — strictly ordered; transitions are one step
+ *  forward and enforced server-side. */
+export type AssignmentLifecycleStatus =
+  | 'assigned'
+  | 'contact_drafted'
+  | 'approved'
+  | 'actioned'
+  | 'outcome_recorded';
+
+export interface LoanOfficer {
+  loan_officer_id: string;
+  email: string;
+  display_name: string;
+  coverage_states: string[];
+  coverage_counties: string[];
+  active: boolean;
+}
+
+export interface LoanOfficerAssignment {
+  assignment_id: string;
+  borrower_id: string;
+  loan_officer_id?: string | null;
+  loan_officer_email: string;
+  loan_officer_name?: string | null;
+  status: AssignmentLifecycleStatus;
+  assigned_by: string;
+  assigned_at: string;
+  status_updated_at?: string | null;
+  released_at?: string | null;
+}
+
 export interface LeadAssignment {
   assignment_id: string;
   borrower_id: string;
@@ -179,6 +213,7 @@ export interface LeadAssignment {
   expires_at?: string | null;
   released_at?: string | null;
   strategy: 'manual' | 'round_robin' | 'score_balanced';
+  status?: AssignmentLifecycleStatus;
 }
 
 export interface CallDisposition {
