@@ -1076,6 +1076,139 @@
         "title": "AnalyticsScope",
         "type": "object"
       },
+      "ApprovalFunnelResponse": {
+        "properties": {
+          "approvals": {
+            "items": {
+              "$ref": "#/components/schemas/ApproverActivityRow"
+            },
+            "title": "Approvals",
+            "type": "array"
+          },
+          "generated_at": {
+            "format": "date-time",
+            "title": "Generated At",
+            "type": "string"
+          },
+          "loan_officers": {
+            "items": {
+              "$ref": "#/components/schemas/LoanOfficerFunnelRow"
+            },
+            "title": "Loan Officers",
+            "type": "array"
+          },
+          "stages": {
+            "items": {
+              "$ref": "#/components/schemas/ApprovalFunnelStage"
+            },
+            "title": "Stages",
+            "type": "array"
+          }
+        },
+        "required": [
+          "generated_at",
+          "stages",
+          "approvals",
+          "loan_officers"
+        ],
+        "title": "ApprovalFunnelResponse",
+        "type": "object"
+      },
+      "ApprovalFunnelStage": {
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "source": {
+            "title": "Source",
+            "type": "string"
+          },
+          "stage": {
+            "enum": [
+              "population",
+              "high_opportunity",
+              "approved",
+              "actioned",
+              "outcome_recorded"
+            ],
+            "title": "Stage",
+            "type": "string"
+          },
+          "stage_order": {
+            "maximum": 5.0,
+            "minimum": 1.0,
+            "title": "Stage Order",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "stage",
+          "stage_order",
+          "label",
+          "borrower_count",
+          "source"
+        ],
+        "title": "ApprovalFunnelStage",
+        "type": "object"
+      },
+      "ApproverActivityRow": {
+        "description": "Who approved what \u2014 one row per human approve decision.",
+        "properties": {
+          "actor_email": {
+            "title": "Actor Email",
+            "type": "string"
+          },
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "assigned_to_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To Email"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "decided_at": {
+            "format": "date-time",
+            "title": "Decided At",
+            "type": "string"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          }
+        },
+        "required": [
+          "approval_id",
+          "borrower_id",
+          "actor_email",
+          "decided_at"
+        ],
+        "title": "ApproverActivityRow",
+        "type": "object"
+      },
       "AssetColumn": {
         "properties": {
           "comment": {
@@ -1532,6 +1665,128 @@
         "title": "AssignLeadRequest",
         "type": "object"
       },
+      "AssignLoanOfficerRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "loan_officer_id": {
+            "title": "Loan Officer Id",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "loan_officer_id"
+        ],
+        "title": "AssignLoanOfficerRequest",
+        "type": "object"
+      },
+      "AssignmentOutcomeCounts": {
+        "properties": {
+          "declined": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Declined",
+            "type": "integer"
+          },
+          "no_response": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "No Response",
+            "type": "integer"
+          },
+          "success": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Success",
+            "type": "integer"
+          }
+        },
+        "title": "AssignmentOutcomeCounts",
+        "type": "object"
+      },
+      "AssignmentOutcomeRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "outcome": {
+            "enum": [
+              "success",
+              "no_response",
+              "declined"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "AssignmentOutcomeRequest",
+        "type": "object"
+      },
+      "AssignmentOutcomeResponse": {
+        "properties": {
+          "assignment": {
+            "$ref": "#/components/schemas/LoanOfficerAssignment"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "feedback_id": {
+            "title": "Feedback Id",
+            "type": "string"
+          },
+          "outcome": {
+            "enum": [
+              "success",
+              "no_response",
+              "declined"
+            ],
+            "title": "Outcome",
+            "type": "string"
+          }
+        },
+        "required": [
+          "assignment",
+          "outcome",
+          "feedback_id"
+        ],
+        "title": "AssignmentOutcomeResponse",
+        "type": "object"
+      },
       "AssignmentResponse": {
         "properties": {
           "assignment": {
@@ -1553,6 +1808,38 @@
           "assignment"
         ],
         "title": "AssignmentResponse",
+        "type": "object"
+      },
+      "AssignmentStatusUpdateRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "status": {
+            "enum": [
+              "assigned",
+              "contact_drafted",
+              "approved",
+              "actioned",
+              "outcome_recorded"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "AssignmentStatusUpdateRequest",
         "type": "object"
       },
       "AuditEvent": {
@@ -1873,6 +2160,35 @@
               }
             ],
             "title": "Assignment Expires At"
+          },
+          "assignment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignment Id"
+          },
+          "assignment_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "assigned",
+                  "contact_drafted",
+                  "approved",
+                  "actioned",
+                  "outcome_recorded"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignment Status"
           },
           "avm_value": {
             "title": "Avm Value",
@@ -3888,62 +4204,62 @@
       },
       "EconomicsAnalyticsResponse": {
         "properties": {
+          "equity_spread": {
+            "$ref": "#/components/schemas/EquitySpreadOverview"
+          },
           "rate_spread_histogram": {
             "items": {
               "$ref": "#/components/schemas/RateSpreadBucket"
             },
-            "type": "array",
-            "title": "Rate Spread Histogram"
-          },
-          "equity_spread": {
-            "$ref": "#/components/schemas/EquitySpreadOverview"
+            "title": "Rate Spread Histogram",
+            "type": "array"
           },
           "top_borrowers": {
             "items": {
               "$ref": "#/components/schemas/TopBorrowerAnalyticsRow"
             },
-            "type": "array",
-            "title": "Top Borrowers"
+            "title": "Top Borrowers",
+            "type": "array"
           }
         },
-        "type": "object",
         "required": [
           "rate_spread_histogram",
           "equity_spread",
           "top_borrowers"
         ],
-        "title": "EconomicsAnalyticsResponse"
+        "title": "EconomicsAnalyticsResponse",
+        "type": "object"
       },
       "EquitySpreadBin": {
+        "description": "One density cell of the scatter overview (bin lower edges).",
         "properties": {
-          "equity_bin_pct": {
-            "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Equity Bin Pct"
-          },
-          "spread_bin_bps": {
-            "type": "integer",
-            "title": "Spread Bin Bps"
-          },
           "borrower_count": {
-            "type": "integer",
             "minimum": 0.0,
-            "title": "Borrower Count"
+            "title": "Borrower Count",
+            "type": "integer"
           },
-          "mean_opportunity_score": {
-            "type": "integer",
+          "equity_bin_pct": {
             "maximum": 100.0,
             "minimum": 0.0,
-            "title": "Mean Opportunity Score"
+            "title": "Equity Bin Pct",
+            "type": "integer"
           },
           "in_the_money_borrowers": {
-            "type": "integer",
             "minimum": 0.0,
-            "title": "In The Money Borrowers"
+            "title": "In The Money Borrowers",
+            "type": "integer"
+          },
+          "mean_opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Mean Opportunity Score",
+            "type": "integer"
+          },
+          "spread_bin_bps": {
+            "title": "Spread Bin Bps",
+            "type": "integer"
           }
         },
-        "type": "object",
         "required": [
           "equity_bin_pct",
           "spread_bin_bps",
@@ -3952,51 +4268,30 @@
           "in_the_money_borrowers"
         ],
         "title": "EquitySpreadBin",
-        "description": "One density cell of the scatter overview (bin lower edges)."
+        "type": "object"
       },
       "EquitySpreadOverview": {
+        "description": "Server-side density bins for the economics scatter overview.\n\nThe overview never ships raw borrower rows; the zoomed points endpoint\nreturns real borrowers with an honest showing-N-of-M payload.",
         "properties": {
           "bins": {
             "items": {
               "$ref": "#/components/schemas/EquitySpreadBin"
             },
-            "type": "array",
-            "title": "Bins"
-          },
-          "total_borrowers": {
-            "type": "integer",
-            "minimum": 0.0,
-            "title": "Total Borrowers"
+            "title": "Bins",
+            "type": "array"
           },
           "equity_bin_pct": {
-            "type": "integer",
             "exclusiveMinimum": 0.0,
-            "title": "Equity Bin Pct"
-          },
-          "spread_bin_bps": {
-            "type": "integer",
-            "exclusiveMinimum": 0.0,
-            "title": "Spread Bin Bps"
-          },
-          "equity_domain_min": {
-            "type": "integer",
-            "title": "Equity Domain Min"
+            "title": "Equity Bin Pct",
+            "type": "integer"
           },
           "equity_domain_max": {
-            "type": "integer",
-            "title": "Equity Domain Max"
+            "title": "Equity Domain Max",
+            "type": "integer"
           },
-          "spread_domain_min": {
-            "type": "integer",
-            "title": "Spread Domain Min"
-          },
-          "spread_domain_max": {
-            "type": "integer",
-            "title": "Spread Domain Max"
-          },
-          "source_table": {
-            "type": "string",
-            "title": "Source Table"
+          "equity_domain_min": {
+            "title": "Equity Domain Min",
+            "type": "integer"
           },
           "refreshed_at": {
             "anyOf": [
@@ -4008,9 +4303,30 @@
               }
             ],
             "title": "Refreshed At"
+          },
+          "source_table": {
+            "title": "Source Table",
+            "type": "string"
+          },
+          "spread_bin_bps": {
+            "exclusiveMinimum": 0.0,
+            "title": "Spread Bin Bps",
+            "type": "integer"
+          },
+          "spread_domain_max": {
+            "title": "Spread Domain Max",
+            "type": "integer"
+          },
+          "spread_domain_min": {
+            "title": "Spread Domain Min",
+            "type": "integer"
+          },
+          "total_borrowers": {
+            "minimum": 0.0,
+            "title": "Total Borrowers",
+            "type": "integer"
           }
         },
-        "type": "object",
         "required": [
           "bins",
           "total_borrowers",
@@ -4023,59 +4339,23 @@
           "source_table"
         ],
         "title": "EquitySpreadOverview",
-        "description": "Server-side density bins for the economics scatter overview.\n\nThe overview never ships raw borrower rows; the zoomed points endpoint\nreturns real borrowers with an honest showing-N-of-M payload."
+        "type": "object"
       },
       "EquitySpreadPoint": {
         "properties": {
           "borrower_id": {
-            "type": "string",
-            "title": "Borrower Id"
+            "title": "Borrower Id",
+            "type": "string"
           },
           "display_name": {
-            "type": "string",
-            "title": "Display Name"
-          },
-          "segment": {
-            "type": "string",
-            "title": "Segment"
-          },
-          "state": {
-            "type": "string",
-            "maxLength": 2,
-            "minLength": 2,
-            "title": "State"
+            "title": "Display Name",
+            "type": "string"
           },
           "equity_pct": {
-            "type": "integer",
             "maximum": 100.0,
             "minimum": 0.0,
-            "title": "Equity Pct"
-          },
-          "rate_spread_bps": {
-            "type": "integer",
-            "title": "Rate Spread Bps"
-          },
-          "opportunity_score": {
-            "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Opportunity Score"
-          },
-          "score_band": {
-            "anyOf": [
-              {
-                "type": "string",
-                "enum": [
-                  "high",
-                  "med",
-                  "low"
-                ]
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Score Band"
+            "title": "Equity Pct",
+            "type": "integer"
           },
           "in_the_money": {
             "anyOf": [
@@ -4087,9 +4367,44 @@
               }
             ],
             "title": "In The Money"
+          },
+          "opportunity_score": {
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Opportunity Score",
+            "type": "integer"
+          },
+          "rate_spread_bps": {
+            "title": "Rate Spread Bps",
+            "type": "integer"
+          },
+          "score_band": {
+            "anyOf": [
+              {
+                "enum": [
+                  "high",
+                  "med",
+                  "low"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Band"
+          },
+          "segment": {
+            "title": "Segment",
+            "type": "string"
+          },
+          "state": {
+            "maxLength": 2,
+            "minLength": 2,
+            "title": "State",
+            "type": "string"
           }
         },
-        "type": "object",
         "required": [
           "borrower_id",
           "display_name",
@@ -4099,42 +4414,23 @@
           "rate_spread_bps",
           "opportunity_score"
         ],
-        "title": "EquitySpreadPoint"
+        "title": "EquitySpreadPoint",
+        "type": "object"
       },
       "EquitySpreadPointsResponse": {
+        "description": "Real borrower points for a zoomed viewport, capped server-side.",
         "properties": {
+          "point_cap": {
+            "exclusiveMinimum": 0.0,
+            "title": "Point Cap",
+            "type": "integer"
+          },
           "points": {
             "items": {
               "$ref": "#/components/schemas/EquitySpreadPoint"
             },
-            "type": "array",
-            "title": "Points"
-          },
-          "total_matching": {
-            "type": "integer",
-            "minimum": 0.0,
-            "title": "Total Matching"
-          },
-          "showing": {
-            "type": "integer",
-            "minimum": 0.0,
-            "title": "Showing"
-          },
-          "point_cap": {
-            "type": "integer",
-            "exclusiveMinimum": 0.0,
-            "title": "Point Cap"
-          },
-          "truncated": {
-            "type": "boolean",
-            "title": "Truncated"
-          },
-          "viewport": {
-            "$ref": "#/components/schemas/EquitySpreadViewport"
-          },
-          "source_table": {
-            "type": "string",
-            "title": "Source Table"
+            "title": "Points",
+            "type": "array"
           },
           "refreshed_at": {
             "anyOf": [
@@ -4146,9 +4442,29 @@
               }
             ],
             "title": "Refreshed At"
+          },
+          "showing": {
+            "minimum": 0.0,
+            "title": "Showing",
+            "type": "integer"
+          },
+          "source_table": {
+            "title": "Source Table",
+            "type": "string"
+          },
+          "total_matching": {
+            "minimum": 0.0,
+            "title": "Total Matching",
+            "type": "integer"
+          },
+          "truncated": {
+            "title": "Truncated",
+            "type": "boolean"
+          },
+          "viewport": {
+            "$ref": "#/components/schemas/EquitySpreadViewport"
           }
         },
-        "type": "object",
         "required": [
           "points",
           "total_matching",
@@ -4159,42 +4475,42 @@
           "source_table"
         ],
         "title": "EquitySpreadPointsResponse",
-        "description": "Real borrower points for a zoomed viewport, capped server-side."
+        "type": "object"
       },
       "EquitySpreadViewport": {
+        "description": "Zoom window for the points endpoint, clamped to the plot domain.",
         "properties": {
-          "equity_min": {
-            "type": "integer",
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Equity Min",
-            "default": 0
-          },
           "equity_max": {
-            "type": "integer",
+            "default": 100,
             "maximum": 100.0,
             "minimum": 0.0,
             "title": "Equity Max",
-            "default": 100
+            "type": "integer"
           },
-          "spread_min": {
-            "type": "integer",
-            "maximum": 400.0,
-            "minimum": -100.0,
-            "title": "Spread Min",
-            "default": -100
+          "equity_min": {
+            "default": 0,
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Equity Min",
+            "type": "integer"
           },
           "spread_max": {
-            "type": "integer",
+            "default": 400,
             "maximum": 400.0,
             "minimum": -100.0,
             "title": "Spread Max",
-            "default": 400
+            "type": "integer"
+          },
+          "spread_min": {
+            "default": -100,
+            "maximum": 400.0,
+            "minimum": -100.0,
+            "title": "Spread Min",
+            "type": "integer"
           }
         },
-        "type": "object",
         "title": "EquitySpreadViewport",
-        "description": "Zoom window for the points endpoint, clamped to the plot domain."
+        "type": "object"
       },
       "EvidenceBySignalRow": {
         "properties": {
@@ -5369,6 +5685,132 @@
           "kind"
         ],
         "title": "GenieVisualizationSpec",
+        "type": "object"
+      },
+      "GeoAssignmentOverlayResponse": {
+        "description": "Assigned-vs-unattended overlay for one drill level.",
+        "properties": {
+          "county_fips": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Parent county FIPS (echoed at level=zip).",
+            "title": "County Fips"
+          },
+          "lead_definition": {
+            "default": "Marketing-eligible borrowers in the live lead queue (mip.gold.borrower_360, marketing_eligible = TRUE)",
+            "description": "Copy-ready definition of what counts as a lead here.",
+            "title": "Lead Definition",
+            "type": "string"
+          },
+          "level": {
+            "enum": [
+              "state",
+              "county",
+              "zip"
+            ],
+            "title": "Level",
+            "type": "string"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Parent state (echoed at level=county; derived at level=zip).",
+            "title": "State"
+          },
+          "total_assigned": {
+            "minimum": 0.0,
+            "title": "Total Assigned",
+            "type": "integer"
+          },
+          "total_leads": {
+            "minimum": 0.0,
+            "title": "Total Leads",
+            "type": "integer"
+          },
+          "total_unattended": {
+            "minimum": 0.0,
+            "title": "Total Unattended",
+            "type": "integer"
+          },
+          "units": {
+            "items": {
+              "$ref": "#/components/schemas/GeoAssignmentOverlayUnit"
+            },
+            "title": "Units",
+            "type": "array"
+          }
+        },
+        "required": [
+          "level",
+          "units",
+          "total_leads",
+          "total_assigned",
+          "total_unattended"
+        ],
+        "title": "GeoAssignmentOverlayResponse",
+        "type": "object"
+      },
+      "GeoAssignmentOverlayUnit": {
+        "description": "One geography unit's assigned-vs-unattended breakdown.",
+        "properties": {
+          "assigned_count": {
+            "description": "Leads in the unit currently held by an active (unreleased) loan-officer assignment.",
+            "minimum": 0.0,
+            "title": "Assigned Count",
+            "type": "integer"
+          },
+          "covering_officer_count": {
+            "description": "Active loan officers whose coverage arrays include this unit (county FIPS membership, or state membership which implies its counties and ZIPs).",
+            "minimum": 0.0,
+            "title": "Covering Officer Count",
+            "type": "integer"
+          },
+          "covering_officers": {
+            "description": "Display names of the covering officers (roster order).",
+            "items": {
+              "type": "string"
+            },
+            "title": "Covering Officers",
+            "type": "array"
+          },
+          "lead_count": {
+            "description": "Live marketing-eligible lead count in the unit.",
+            "minimum": 0.0,
+            "title": "Lead Count",
+            "type": "integer"
+          },
+          "unattended_count": {
+            "description": "lead_count - assigned_count; leads with no active assignment.",
+            "minimum": 0.0,
+            "title": "Unattended Count",
+            "type": "integer"
+          },
+          "unit_id": {
+            "description": "State USPS code at level=state, 5-char county FIPS at level=county, 5-digit ZIP at level=zip.",
+            "title": "Unit Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "unit_id",
+          "lead_count",
+          "assigned_count",
+          "unattended_count",
+          "covering_officer_count"
+        ],
+        "title": "GeoAssignmentOverlayUnit",
         "type": "object"
       },
       "GeographyAnalyticsResponse": {
@@ -6562,6 +7004,58 @@
         "title": "HTTPValidationError",
         "type": "object"
       },
+      "HeadlineKpis": {
+        "description": "One reading of the S1 headline aggregates (live or snapshotted).",
+        "properties": {
+          "avg_opportunity_score": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Opportunity Score"
+          },
+          "high_opportunity": {
+            "minimum": 0.0,
+            "title": "High Opportunity",
+            "type": "integer"
+          },
+          "marketable_population": {
+            "minimum": 0.0,
+            "title": "Marketable Population",
+            "type": "integer"
+          },
+          "offers_available": {
+            "minimum": 0.0,
+            "title": "Offers Available",
+            "type": "integer"
+          },
+          "offers_recommended": {
+            "minimum": 0.0,
+            "title": "Offers Recommended",
+            "type": "integer"
+          },
+          "refi_economics_screen": {
+            "minimum": 0.0,
+            "title": "Refi Economics Screen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "marketable_population",
+          "refi_economics_screen",
+          "high_opportunity",
+          "offers_available",
+          "offers_recommended"
+        ],
+        "title": "HeadlineKpis",
+        "type": "object"
+      },
       "HealthResponse": {
         "properties": {
           "actor_cache_key": {
@@ -6624,6 +7118,195 @@
           "mode"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HomeSummaryHighlight": {
+        "description": "One number in the summary sentence, traceable to its sources.\n\n``display`` is the exact rendered token (e.g. ``+1.5%``, ``+2,250``\nor ``5,240,100``); ``value_token`` is the unsigned magnitude used to\nlocate the number inside a Genie-phrased sentence (``1.5%``,\n``2,250``). Keeping both here means the backend validator and the\nfrontend chip-wrapper agree character-for-character.",
+        "properties": {
+          "baseline": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline"
+          },
+          "current": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "title": "Current"
+          },
+          "delta": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta"
+          },
+          "delta_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delta Pct"
+          },
+          "display": {
+            "title": "Display",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "measure": {
+            "title": "Measure",
+            "type": "string"
+          },
+          "value_token": {
+            "title": "Value Token",
+            "type": "string"
+          }
+        },
+        "required": [
+          "measure",
+          "label",
+          "display",
+          "value_token",
+          "current"
+        ],
+        "title": "HomeSummaryHighlight",
+        "type": "object"
+      },
+      "HomeSummaryResponse": {
+        "description": "The ``GET /api/home/summary`` contract.",
+        "properties": {
+          "baseline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HeadlineKpis"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "baseline_snapshot_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Snapshot At"
+          },
+          "baseline_source": {
+            "default": "mip_app.kpi_snapshots",
+            "title": "Baseline Source",
+            "type": "string"
+          },
+          "current": {
+            "$ref": "#/components/schemas/HeadlineKpis"
+          },
+          "current_source": {
+            "default": "mip.semantics.portfolio_headline_metric_view",
+            "title": "Current Source",
+            "type": "string"
+          },
+          "deltas": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/KpiDeltas"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "headline": {
+            "title": "Headline",
+            "type": "string"
+          },
+          "highlights": {
+            "items": {
+              "$ref": "#/components/schemas/HomeSummaryHighlight"
+            },
+            "title": "Highlights",
+            "type": "array"
+          },
+          "phrasing_fallback_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Phrasing Fallback Reason"
+          },
+          "phrasing_source": {
+            "default": "deterministic",
+            "enum": [
+              "deterministic",
+              "genie"
+            ],
+            "title": "Phrasing Source",
+            "type": "string"
+          },
+          "previous_visit_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Previous Visit At"
+          },
+          "status": {
+            "enum": [
+              "delta",
+              "first_visit",
+              "no_baseline"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "headline",
+          "current"
+        ],
+        "title": "HomeSummaryResponse",
         "type": "object"
       },
       "HouseholdDedupConfig": {
@@ -6711,6 +7394,51 @@
           }
         },
         "title": "HouseholdDedupSummary",
+        "type": "object"
+      },
+      "KpiDeltas": {
+        "description": "Signed current-minus-baseline differences per headline measure.",
+        "properties": {
+          "avg_opportunity_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Opportunity Score"
+          },
+          "high_opportunity": {
+            "title": "High Opportunity",
+            "type": "integer"
+          },
+          "marketable_population": {
+            "title": "Marketable Population",
+            "type": "integer"
+          },
+          "offers_available": {
+            "title": "Offers Available",
+            "type": "integer"
+          },
+          "offers_recommended": {
+            "title": "Offers Recommended",
+            "type": "integer"
+          },
+          "refi_economics_screen": {
+            "title": "Refi Economics Screen",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "marketable_population",
+          "refi_economics_screen",
+          "high_opportunity",
+          "offers_available",
+          "offers_recommended"
+        ],
+        "title": "KpiDeltas",
         "type": "object"
       },
       "KpiTrend": {
@@ -6825,6 +7553,18 @@
               }
             ],
             "title": "Released At"
+          },
+          "status": {
+            "default": "assigned",
+            "enum": [
+              "assigned",
+              "contact_drafted",
+              "approved",
+              "actioned",
+              "outcome_recorded"
+            ],
+            "title": "Status",
+            "type": "string"
           },
           "strategy": {
             "default": "manual",
@@ -7206,6 +7946,35 @@
               }
             ],
             "title": "Assignment Expires At"
+          },
+          "assignment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignment Id"
+          },
+          "assignment_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "assigned",
+                  "contact_drafted",
+                  "approved",
+                  "actioned",
+                  "outcome_recorded"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assignment Status"
           },
           "borrower_id": {
             "title": "Borrower Id",
@@ -7672,6 +8441,375 @@
           "evidence_ids"
         ],
         "title": "LeadSummary",
+        "type": "object"
+      },
+      "LineageFamily": {
+        "properties": {
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/LineageNode"
+            },
+            "title": "Nodes",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "description",
+          "nodes"
+        ],
+        "title": "LineageFamily",
+        "type": "object"
+      },
+      "LineageManifestResponse": {
+        "properties": {
+          "families": {
+            "items": {
+              "$ref": "#/components/schemas/LineageFamily"
+            },
+            "title": "Families",
+            "type": "array"
+          },
+          "manifest_path": {
+            "title": "Manifest Path",
+            "type": "string"
+          },
+          "schema_version": {
+            "title": "Schema Version",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "schema_version",
+          "manifest_path",
+          "families"
+        ],
+        "title": "LineageManifestResponse",
+        "type": "object"
+      },
+      "LineageNode": {
+        "description": "API node: resolved FQN + workspace deep link.",
+        "properties": {
+          "catalog_explorer_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Explorer Url"
+          },
+          "fqn": {
+            "title": "Fqn",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "layer": {
+            "enum": [
+              "raw_share",
+              "silver",
+              "gold",
+              "uc_function",
+              "metric_view",
+              "reference"
+            ],
+            "title": "Layer",
+            "type": "string"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "object_type": {
+            "enum": [
+              "table",
+              "view",
+              "function"
+            ],
+            "title": "Object Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "layer",
+          "object_type",
+          "fqn",
+          "label"
+        ],
+        "title": "LineageNode",
+        "type": "object"
+      },
+      "LoanOfficer": {
+        "properties": {
+          "active": {
+            "default": true,
+            "title": "Active",
+            "type": "boolean"
+          },
+          "coverage_counties": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 500,
+            "title": "Coverage Counties",
+            "type": "array"
+          },
+          "coverage_states": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 60,
+            "title": "Coverage States",
+            "type": "array"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "loan_officer_id": {
+            "title": "Loan Officer Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loan_officer_id",
+          "email",
+          "display_name"
+        ],
+        "title": "LoanOfficer",
+        "type": "object"
+      },
+      "LoanOfficerAssignment": {
+        "properties": {
+          "assigned_at": {
+            "format": "date-time",
+            "title": "Assigned At",
+            "type": "string"
+          },
+          "assigned_by": {
+            "title": "Assigned By",
+            "type": "string"
+          },
+          "assignment_id": {
+            "title": "Assignment Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "loan_officer_email": {
+            "title": "Loan Officer Email",
+            "type": "string"
+          },
+          "loan_officer_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loan Officer Id"
+          },
+          "loan_officer_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loan Officer Name"
+          },
+          "released_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Released At"
+          },
+          "status": {
+            "default": "assigned",
+            "enum": [
+              "assigned",
+              "contact_drafted",
+              "approved",
+              "actioned",
+              "outcome_recorded"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "status_updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status Updated At"
+          }
+        },
+        "required": [
+          "assignment_id",
+          "borrower_id",
+          "loan_officer_email",
+          "assigned_by",
+          "assigned_at"
+        ],
+        "title": "LoanOfficerAssignment",
+        "type": "object"
+      },
+      "LoanOfficerAssignmentResponse": {
+        "properties": {
+          "assignment": {
+            "$ref": "#/components/schemas/LoanOfficerAssignment"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          }
+        },
+        "required": [
+          "assignment"
+        ],
+        "title": "LoanOfficerAssignmentResponse",
+        "type": "object"
+      },
+      "LoanOfficerFunnelDetailResponse": {
+        "properties": {
+          "assignments": {
+            "items": {
+              "$ref": "#/components/schemas/LoanOfficerAssignment"
+            },
+            "title": "Assignments",
+            "type": "array"
+          },
+          "officer": {
+            "$ref": "#/components/schemas/LoanOfficerFunnelRow"
+          },
+          "outcome_counts": {
+            "$ref": "#/components/schemas/AssignmentOutcomeCounts"
+          }
+        },
+        "required": [
+          "officer",
+          "assignments",
+          "outcome_counts"
+        ],
+        "title": "LoanOfficerFunnelDetailResponse",
+        "type": "object"
+      },
+      "LoanOfficerFunnelRow": {
+        "description": "Per-officer active-assignment counts across the S2 lifecycle.",
+        "properties": {
+          "actioned": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Actioned",
+            "type": "integer"
+          },
+          "approved": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Approved",
+            "type": "integer"
+          },
+          "assigned": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Assigned",
+            "type": "integer"
+          },
+          "contact_drafted": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Contact Drafted",
+            "type": "integer"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "email": {
+            "title": "Email",
+            "type": "string"
+          },
+          "loan_officer_id": {
+            "title": "Loan Officer Id",
+            "type": "string"
+          },
+          "outcome_recorded": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Outcome Recorded",
+            "type": "integer"
+          },
+          "total_active": {
+            "default": 0,
+            "minimum": 0.0,
+            "title": "Total Active",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "loan_officer_id",
+          "display_name",
+          "email"
+        ],
+        "title": "LoanOfficerFunnelRow",
         "type": "object"
       },
       "OfferAlternative": {
@@ -8757,6 +9895,17 @@
           "marketable_population": {
             "title": "Marketable Population",
             "type": "integer"
+          },
+          "offers_available": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offers Available"
           },
           "offers_recommended": {
             "anyOf": [
@@ -10539,7 +11688,7 @@
         "type": "object"
       },
       "StateRollup": {
-        "description": "One state's addressable + high-intent + top-tier count + avg score.\n\n``state`` is the 2-char USPS code (uppercase) \u2014 the map component\nlowercases it to match the state topology location ids.\n\nFields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never\nhas to re-aggregate: ``addressable`` is the borrower count for the\nstate, ``in_the_money`` is the high-intent subset,\n``top_tier_opportunities`` is the ``opportunity_score \u2265 75`` subset\n(for the lvl-4 hero tier on the choropleth), and ``avg_score`` is\nthe state-wide mean opportunity score.\n\n``top_segment_code`` is the dominant SegmentCode for the state\nsourced from ``mip.gold.state_top_segment``. Nullable because the\njoin is ``LEFT`` (state has data but no segment-code row yet on\nfirst deploy); the UI renders a neutral \"unknown\" segment label\nwhen null.",
+        "description": "One state's addressable + high-intent + top-tier count + avg score.\n\n``state`` is the 2-char USPS code (uppercase) \u2014 the map component\nlowercases it to match the state topology location ids.\n\nFields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never\nhas to re-aggregate: ``addressable`` is the borrower count for the\nstate, ``in_the_money`` is the high-intent subset,\n``top_tier_opportunities`` is the high-opportunity subset (canonical\nthreshold: ``scoring.HIGH_OPPORTUNITY_THRESHOLD`` / ``fn_high_opportunity``)\n(for the lvl-4 hero tier on the choropleth), and ``avg_score`` is\nthe state-wide mean opportunity score.\n\n``top_segment_code`` is the dominant SegmentCode for the state\nsourced from ``mip.gold.state_top_segment``. Nullable because the\njoin is ``LEFT`` (state has data but no segment-code row yet on\nfirst deploy); the UI renders a neutral \"unknown\" segment label\nwhen null.",
         "properties": {
           "addressable": {
             "minimum": 0.0,
@@ -11784,24 +12933,21 @@
     },
     "/api/analytics/economics/points": {
       "get": {
-        "tags": [
-          "analytics"
-        ],
-        "summary": "Economics Points",
+        "deprecated": true,
         "description": "Real borrower points for a zoomed scatter viewport.\n\nCapped server-side; the payload carries the honest pre-cap total so the\nUI renders \"showing N of M\" instead of implying the page is everything.",
         "operationId": "get_api_analytics_economics_points_economics_points",
-        "deprecated": true,
         "parameters": [
           {
-            "name": "state",
+            "description": "Deprecated single-state alias. Prefer states.",
             "in": "query",
+            "name": "state",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
+                  "maxLength": 2,
                   "minLength": 2,
-                  "maxLength": 2
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -11809,12 +12955,12 @@
               ],
               "description": "Deprecated single-state alias. Prefer states.",
               "title": "State"
-            },
-            "description": "Deprecated single-state alias. Prefer states."
+            }
           },
           {
-            "name": "states",
+            "description": "Optional comma-separated 2-letter state filters.",
             "in": "query",
+            "name": "states",
             "required": false,
             "schema": {
               "anyOf": [
@@ -11827,12 +12973,12 @@
               ],
               "description": "Optional comma-separated 2-letter state filters.",
               "title": "States"
-            },
-            "description": "Optional comma-separated 2-letter state filters."
+            }
           },
           {
-            "name": "segment_codes",
+            "description": "Optional comma-separated segment code filter.",
             "in": "query",
+            "name": "segment_codes",
             "required": false,
             "schema": {
               "anyOf": [
@@ -11845,24 +12991,24 @@
               ],
               "description": "Optional comma-separated segment code filter.",
               "title": "Segment Codes"
-            },
-            "description": "Optional comma-separated segment code filter."
+            }
           },
           {
-            "name": "segment_mode",
+            "description": "Segment filter mode for multi-select codes.",
             "in": "query",
+            "name": "segment_mode",
             "required": false,
             "schema": {
-              "type": "string",
-              "description": "Segment filter mode for multi-select codes.",
               "default": "any",
-              "title": "Segment Mode"
-            },
-            "description": "Segment filter mode for multi-select codes."
+              "description": "Segment filter mode for multi-select codes.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
           },
           {
-            "name": "lender_relationship",
+            "description": "Optional governed lender relationship filter.",
             "in": "query",
+            "name": "lender_relationship",
             "required": false,
             "schema": {
               "anyOf": [
@@ -11875,12 +13021,12 @@
               ],
               "description": "Optional governed lender relationship filter.",
               "title": "Lender Relationship"
-            },
-            "description": "Optional governed lender relationship filter."
+            }
           },
           {
-            "name": "target_lender_ref",
+            "description": "Optional public-safe current lien-holder alias.",
             "in": "query",
+            "name": "target_lender_ref",
             "required": false,
             "schema": {
               "anyOf": [
@@ -11893,12 +13039,12 @@
               ],
               "description": "Optional public-safe current lien-holder alias.",
               "title": "Target Lender Ref"
-            },
-            "description": "Optional public-safe current lien-holder alias."
+            }
           },
           {
-            "name": "signal_type",
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
+            "name": "signal_type",
             "required": false,
             "schema": {
               "anyOf": [
@@ -11911,12 +13057,12 @@
               ],
               "description": "Deprecated single-signal alias. Prefer signal_types.",
               "title": "Signal Type"
-            },
-            "description": "Deprecated single-signal alias. Prefer signal_types."
+            }
           },
           {
-            "name": "signal_types",
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
             "in": "query",
+            "name": "signal_types",
             "required": false,
             "schema": {
               "anyOf": [
@@ -11929,102 +13075,105 @@
               ],
               "description": "Optional comma-separated evidence signal filters for the Signals tab.",
               "title": "Signal Types"
-            },
-            "description": "Optional comma-separated evidence signal filters for the Signals tab."
+            }
           },
           {
-            "name": "days",
+            "description": "Evidence lookback window for the Signals tab.",
             "in": "query",
+            "name": "days",
             "required": false,
             "schema": {
-              "type": "integer",
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
               "maximum": 90,
               "minimum": 1,
-              "description": "Evidence lookback window for the Signals tab.",
-              "default": 30,
-              "title": "Days"
-            },
-            "description": "Evidence lookback window for the Signals tab."
+              "title": "Days",
+              "type": "integer"
+            }
           },
           {
+            "description": "Zoom window lower equity bound (pct).",
+            "in": "query",
             "name": "equity_min",
-            "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 0,
-              "description": "Zoom window lower equity bound (pct).",
               "default": 0,
-              "title": "Equity Min"
-            },
-            "description": "Zoom window lower equity bound (pct)."
-          },
-          {
-            "name": "equity_max",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
+              "description": "Zoom window lower equity bound (pct).",
               "maximum": 100,
               "minimum": 0,
-              "description": "Zoom window upper equity bound (pct).",
+              "title": "Equity Min",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Zoom window upper equity bound (pct).",
+            "in": "query",
+            "name": "equity_max",
+            "required": false,
+            "schema": {
               "default": 100,
-              "title": "Equity Max"
-            },
-            "description": "Zoom window upper equity bound (pct)."
+              "description": "Zoom window upper equity bound (pct).",
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Equity Max",
+              "type": "integer"
+            }
           },
           {
+            "description": "Zoom window lower rate-spread bound (bps).",
+            "in": "query",
             "name": "spread_min",
-            "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
+              "default": -100,
+              "description": "Zoom window lower rate-spread bound (bps).",
               "maximum": 400,
               "minimum": -100,
-              "description": "Zoom window lower rate-spread bound (bps).",
-              "default": -100,
-              "title": "Spread Min"
-            },
-            "description": "Zoom window lower rate-spread bound (bps)."
+              "title": "Spread Min",
+              "type": "integer"
+            }
           },
           {
-            "name": "spread_max",
+            "description": "Zoom window upper rate-spread bound (bps).",
             "in": "query",
+            "name": "spread_max",
             "required": false,
             "schema": {
-              "type": "integer",
+              "default": 400,
+              "description": "Zoom window upper rate-spread bound (bps).",
               "maximum": 400,
               "minimum": -100,
-              "description": "Zoom window upper rate-spread bound (bps).",
-              "default": 400,
-              "title": "Spread Max"
-            },
-            "description": "Zoom window upper rate-spread bound (bps)."
+              "title": "Spread Max",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EquitySpreadPointsResponse"
                 }
               }
-            }
+            },
+            "description": "Successful Response"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
-            }
+            },
+            "description": "Validation Error"
           }
-        }
+        },
+        "summary": "Economics Points",
+        "tags": [
+          "analytics"
+        ]
       }
     },
     "/api/analytics/executive": {
@@ -12210,6 +13359,73 @@
           }
         },
         "summary": "Executive",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/funnel": {
+      "get": {
+        "deprecated": true,
+        "description": "Live approval funnel: UC population stages + Lakebase workflow stages.\n\nPopulation and high-opportunity come from the S1 headline metric view;\napproved/actioned/outcome_recorded come from the live Lakebase\nlead_assignments lifecycle, approvals ledger, and outcome feedback rows.",
+        "operationId": "get_api_analytics_funnel_approval_funnel",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Approval Funnel",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/analytics/funnel/loan-officers/{loan_officer_id}": {
+      "get": {
+        "deprecated": true,
+        "description": "Per-loan-officer drill-down: stage counts, live assignments, outcomes.",
+        "operationId": "get_api_analytics_funnel_loan_officers_loan_officer_id_approval_funnel_loan_officer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "loan_officer_id",
+            "required": true,
+            "schema": {
+              "title": "Loan Officer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanOfficerFunnelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approval Funnel Loan Officer",
         "tags": [
           "analytics"
         ]
@@ -13829,6 +15045,100 @@
         ]
       }
     },
+    "/api/geo/assignment-overlay": {
+      "get": {
+        "deprecated": true,
+        "description": "Assigned-vs-unattended overlay for the geography drill-down.\n\nPer unit: live marketing-eligible lead count (Unity Catalog\n``borrower_360``), active-assignment count (Lakebase\n``lead_assignments`` joined back to ``borrower_360`` geography),\n``unattended = leads - assigned``, and the active loan officers whose\n``coverage_states`` / ``coverage_counties`` arrays include the unit.\nBoth live dependencies fail visibly (503 via the resilience layer) \u2014\nthere is no mock substitution.",
+        "operationId": "get_api_geo_assignment_overlay_assignment_overlay",
+        "parameters": [
+          {
+            "description": "Drill level the overlay units are keyed at.",
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "default": "state",
+              "description": "Drill level the overlay units are keyed at.",
+              "enum": [
+                "state",
+                "county",
+                "zip"
+              ],
+              "title": "Level",
+              "type": "string"
+            }
+          },
+          {
+            "description": "2-char USPS state code. Required when level=county.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "2-char USPS state code. Required when level=county.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "5-char county FIPS. Required when level=zip.",
+            "in": "query",
+            "name": "county_fips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "5-char county FIPS. Required when level=zip.",
+              "title": "County Fips"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoAssignmentOverlayResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assignment Overlay",
+        "tags": [
+          "geo"
+        ]
+      }
+    },
     "/api/geo/county-rollups": {
       "get": {
         "deprecated": true,
@@ -15177,6 +16487,29 @@
         "summary": "Health"
       }
     },
+    "/api/home/summary": {
+      "get": {
+        "deprecated": true,
+        "description": "Since-your-last-login KPI deltas for the signed-in actor.\n\nAggregates the UNFILTERED headline set on both sides (live metric view\nvs persisted snapshot) so baseline and current stay apples-to-apples;\nportfolio-builder predicates never apply here.",
+        "operationId": "get_api_home_summary_home_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Home Summary",
+        "tags": [
+          "home"
+        ]
+      }
+    },
     "/api/leads": {
       "get": {
         "deprecated": true,
@@ -16075,6 +17408,336 @@
         "summary": "Record Lead Outcome",
         "tags": [
           "sales"
+        ]
+      }
+    },
+    "/api/lineage/manifest": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_lineage_manifest_get_lineage_manifest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageManifestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Lineage Manifest",
+        "tags": [
+          "lineage"
+        ]
+      }
+    },
+    "/api/loan-officers": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_loan_officers_list_loan_officers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LoanOfficer"
+                  },
+                  "title": "Response Get Api Loan Officers List Loan Officers",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Loan Officers",
+        "tags": [
+          "loan-officers"
+        ]
+      }
+    },
+    "/api/loan-officers/assignments": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_loan_officers_assignments_list_loan_officer_assignments",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "loan_officer_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Loan Officer Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "assigned",
+                    "contact_drafted",
+                    "approved",
+                    "actioned",
+                    "outcome_recorded"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LoanOfficerAssignment"
+                  },
+                  "title": "Response Get Api Loan Officers Assignments List Loan Officer Assignments",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Loan Officer Assignments",
+        "tags": [
+          "loan-officers"
+        ]
+      },
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_loan_officers_assignments_assign_loan_officer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignLoanOfficerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanOfficerAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assign Loan Officer",
+        "tags": [
+          "loan-officers"
+        ]
+      }
+    },
+    "/api/loan-officers/assignments/{assignment_id}/outcome": {
+      "post": {
+        "deprecated": true,
+        "description": "Record success / no_response / declined for an actioned assignment.\n\nThe server enforces the lifecycle gate: only an ``actioned`` assignment\n(which itself passed the human ``approved`` stage) can record an\noutcome \u2014 anything else is 409. No outreach is sent from this path.",
+        "operationId": "post_api_loan_officers_assignments_assignment_id_outcome_record_assignment_outcome",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "assignment_id",
+            "required": true,
+            "schema": {
+              "title": "Assignment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentOutcomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentOutcomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Assignment Outcome",
+        "tags": [
+          "loan-officers"
+        ]
+      }
+    },
+    "/api/loan-officers/assignments/{assignment_id}/status": {
+      "patch": {
+        "deprecated": true,
+        "operationId": "patch_api_loan_officers_assignments_assignment_id_status_update_assignment_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "assignment_id",
+            "required": true,
+            "schema": {
+              "title": "Assignment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentStatusUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanOfficerAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Assignment Status",
+        "tags": [
+          "loan-officers"
         ]
       }
     },
@@ -17999,23 +19662,20 @@
     },
     "/api/v1/analytics/economics/points": {
       "get": {
-        "tags": [
-          "analytics"
-        ],
-        "summary": "Economics Points",
         "description": "Real borrower points for a zoomed scatter viewport.\n\nCapped server-side; the payload carries the honest pre-cap total so the\nUI renders \"showing N of M\" instead of implying the page is everything.",
         "operationId": "get_api_v1_analytics_economics_points_economics_points",
         "parameters": [
           {
-            "name": "state",
+            "description": "Deprecated single-state alias. Prefer states.",
             "in": "query",
+            "name": "state",
             "required": false,
             "schema": {
               "anyOf": [
                 {
-                  "type": "string",
+                  "maxLength": 2,
                   "minLength": 2,
-                  "maxLength": 2
+                  "type": "string"
                 },
                 {
                   "type": "null"
@@ -18023,12 +19683,12 @@
               ],
               "description": "Deprecated single-state alias. Prefer states.",
               "title": "State"
-            },
-            "description": "Deprecated single-state alias. Prefer states."
+            }
           },
           {
-            "name": "states",
+            "description": "Optional comma-separated 2-letter state filters.",
             "in": "query",
+            "name": "states",
             "required": false,
             "schema": {
               "anyOf": [
@@ -18041,12 +19701,12 @@
               ],
               "description": "Optional comma-separated 2-letter state filters.",
               "title": "States"
-            },
-            "description": "Optional comma-separated 2-letter state filters."
+            }
           },
           {
-            "name": "segment_codes",
+            "description": "Optional comma-separated segment code filter.",
             "in": "query",
+            "name": "segment_codes",
             "required": false,
             "schema": {
               "anyOf": [
@@ -18059,24 +19719,24 @@
               ],
               "description": "Optional comma-separated segment code filter.",
               "title": "Segment Codes"
-            },
-            "description": "Optional comma-separated segment code filter."
+            }
           },
           {
-            "name": "segment_mode",
+            "description": "Segment filter mode for multi-select codes.",
             "in": "query",
+            "name": "segment_mode",
             "required": false,
             "schema": {
-              "type": "string",
-              "description": "Segment filter mode for multi-select codes.",
               "default": "any",
-              "title": "Segment Mode"
-            },
-            "description": "Segment filter mode for multi-select codes."
+              "description": "Segment filter mode for multi-select codes.",
+              "title": "Segment Mode",
+              "type": "string"
+            }
           },
           {
-            "name": "lender_relationship",
+            "description": "Optional governed lender relationship filter.",
             "in": "query",
+            "name": "lender_relationship",
             "required": false,
             "schema": {
               "anyOf": [
@@ -18089,12 +19749,12 @@
               ],
               "description": "Optional governed lender relationship filter.",
               "title": "Lender Relationship"
-            },
-            "description": "Optional governed lender relationship filter."
+            }
           },
           {
-            "name": "target_lender_ref",
+            "description": "Optional public-safe current lien-holder alias.",
             "in": "query",
+            "name": "target_lender_ref",
             "required": false,
             "schema": {
               "anyOf": [
@@ -18107,12 +19767,12 @@
               ],
               "description": "Optional public-safe current lien-holder alias.",
               "title": "Target Lender Ref"
-            },
-            "description": "Optional public-safe current lien-holder alias."
+            }
           },
           {
-            "name": "signal_type",
+            "description": "Deprecated single-signal alias. Prefer signal_types.",
             "in": "query",
+            "name": "signal_type",
             "required": false,
             "schema": {
               "anyOf": [
@@ -18125,12 +19785,12 @@
               ],
               "description": "Deprecated single-signal alias. Prefer signal_types.",
               "title": "Signal Type"
-            },
-            "description": "Deprecated single-signal alias. Prefer signal_types."
+            }
           },
           {
-            "name": "signal_types",
+            "description": "Optional comma-separated evidence signal filters for the Signals tab.",
             "in": "query",
+            "name": "signal_types",
             "required": false,
             "schema": {
               "anyOf": [
@@ -18143,102 +19803,105 @@
               ],
               "description": "Optional comma-separated evidence signal filters for the Signals tab.",
               "title": "Signal Types"
-            },
-            "description": "Optional comma-separated evidence signal filters for the Signals tab."
+            }
           },
           {
-            "name": "days",
+            "description": "Evidence lookback window for the Signals tab.",
             "in": "query",
+            "name": "days",
             "required": false,
             "schema": {
-              "type": "integer",
+              "default": 30,
+              "description": "Evidence lookback window for the Signals tab.",
               "maximum": 90,
               "minimum": 1,
-              "description": "Evidence lookback window for the Signals tab.",
-              "default": 30,
-              "title": "Days"
-            },
-            "description": "Evidence lookback window for the Signals tab."
+              "title": "Days",
+              "type": "integer"
+            }
           },
           {
+            "description": "Zoom window lower equity bound (pct).",
+            "in": "query",
             "name": "equity_min",
-            "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
-              "maximum": 100,
-              "minimum": 0,
-              "description": "Zoom window lower equity bound (pct).",
               "default": 0,
-              "title": "Equity Min"
-            },
-            "description": "Zoom window lower equity bound (pct)."
-          },
-          {
-            "name": "equity_max",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "integer",
+              "description": "Zoom window lower equity bound (pct).",
               "maximum": 100,
               "minimum": 0,
-              "description": "Zoom window upper equity bound (pct).",
+              "title": "Equity Min",
+              "type": "integer"
+            }
+          },
+          {
+            "description": "Zoom window upper equity bound (pct).",
+            "in": "query",
+            "name": "equity_max",
+            "required": false,
+            "schema": {
               "default": 100,
-              "title": "Equity Max"
-            },
-            "description": "Zoom window upper equity bound (pct)."
+              "description": "Zoom window upper equity bound (pct).",
+              "maximum": 100,
+              "minimum": 0,
+              "title": "Equity Max",
+              "type": "integer"
+            }
           },
           {
+            "description": "Zoom window lower rate-spread bound (bps).",
+            "in": "query",
             "name": "spread_min",
-            "in": "query",
             "required": false,
             "schema": {
-              "type": "integer",
+              "default": -100,
+              "description": "Zoom window lower rate-spread bound (bps).",
               "maximum": 400,
               "minimum": -100,
-              "description": "Zoom window lower rate-spread bound (bps).",
-              "default": -100,
-              "title": "Spread Min"
-            },
-            "description": "Zoom window lower rate-spread bound (bps)."
+              "title": "Spread Min",
+              "type": "integer"
+            }
           },
           {
-            "name": "spread_max",
+            "description": "Zoom window upper rate-spread bound (bps).",
             "in": "query",
+            "name": "spread_max",
             "required": false,
             "schema": {
-              "type": "integer",
+              "default": 400,
+              "description": "Zoom window upper rate-spread bound (bps).",
               "maximum": 400,
               "minimum": -100,
-              "description": "Zoom window upper rate-spread bound (bps).",
-              "default": 400,
-              "title": "Spread Max"
-            },
-            "description": "Zoom window upper rate-spread bound (bps)."
+              "title": "Spread Max",
+              "type": "integer"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/EquitySpreadPointsResponse"
                 }
               }
-            }
+            },
+            "description": "Successful Response"
           },
           "422": {
-            "description": "Validation Error",
             "content": {
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
-            }
+            },
+            "description": "Validation Error"
           }
-        }
+        },
+        "summary": "Economics Points",
+        "tags": [
+          "analytics"
+        ]
       }
     },
     "/api/v1/analytics/executive": {
@@ -18423,6 +20086,71 @@
           }
         },
         "summary": "Executive",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/v1/analytics/funnel": {
+      "get": {
+        "description": "Live approval funnel: UC population stages + Lakebase workflow stages.\n\nPopulation and high-opportunity come from the S1 headline metric view;\napproved/actioned/outcome_recorded come from the live Lakebase\nlead_assignments lifecycle, approvals ledger, and outcome feedback rows.",
+        "operationId": "get_api_v1_analytics_funnel_approval_funnel",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApprovalFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Approval Funnel",
+        "tags": [
+          "analytics"
+        ]
+      }
+    },
+    "/api/v1/analytics/funnel/loan-officers/{loan_officer_id}": {
+      "get": {
+        "description": "Per-loan-officer drill-down: stage counts, live assignments, outcomes.",
+        "operationId": "get_api_v1_analytics_funnel_loan_officers_loan_officer_id_approval_funnel_loan_officer",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "loan_officer_id",
+            "required": true,
+            "schema": {
+              "title": "Loan Officer Id",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanOfficerFunnelDetailResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Approval Funnel Loan Officer",
         "tags": [
           "analytics"
         ]
@@ -20021,6 +21749,99 @@
         ]
       }
     },
+    "/api/v1/geo/assignment-overlay": {
+      "get": {
+        "description": "Assigned-vs-unattended overlay for the geography drill-down.\n\nPer unit: live marketing-eligible lead count (Unity Catalog\n``borrower_360``), active-assignment count (Lakebase\n``lead_assignments`` joined back to ``borrower_360`` geography),\n``unattended = leads - assigned``, and the active loan officers whose\n``coverage_states`` / ``coverage_counties`` arrays include the unit.\nBoth live dependencies fail visibly (503 via the resilience layer) \u2014\nthere is no mock substitution.",
+        "operationId": "get_api_v1_geo_assignment_overlay_assignment_overlay",
+        "parameters": [
+          {
+            "description": "Drill level the overlay units are keyed at.",
+            "in": "query",
+            "name": "level",
+            "required": false,
+            "schema": {
+              "default": "state",
+              "description": "Drill level the overlay units are keyed at.",
+              "enum": [
+                "state",
+                "county",
+                "zip"
+              ],
+              "title": "Level",
+              "type": "string"
+            }
+          },
+          {
+            "description": "2-char USPS state code. Required when level=county.",
+            "in": "query",
+            "name": "state",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2,
+                  "minLength": 2,
+                  "pattern": "^[A-Za-z]{2}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "2-char USPS state code. Required when level=county.",
+              "title": "State"
+            }
+          },
+          {
+            "description": "5-char county FIPS. Required when level=zip.",
+            "in": "query",
+            "name": "county_fips",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 5,
+                  "minLength": 5,
+                  "pattern": "^\\d{5}$",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "5-char county FIPS. Required when level=zip.",
+              "title": "County Fips"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GeoAssignmentOverlayResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assignment Overlay",
+        "tags": [
+          "geo"
+        ]
+      }
+    },
     "/api/v1/geo/county-rollups": {
       "get": {
         "description": "Return per-county rollups for the given state at the latest snapshot.\n\nState codes outside the current tenant footprint, or states with no\nCotality-backed county coverage in the current gold refresh, legitimately\nreturn an empty ``rollups`` list. The map UI renders \"\u2014\" for any county\nnot in the payload, which is the correct posture for a geography without\ngold-layer coverage.",
@@ -21355,6 +23176,28 @@
         "summary": "Health"
       }
     },
+    "/api/v1/home/summary": {
+      "get": {
+        "description": "Since-your-last-login KPI deltas for the signed-in actor.\n\nAggregates the UNFILTERED headline set on both sides (live metric view\nvs persisted snapshot) so baseline and current stay apples-to-apples;\nportfolio-builder predicates never apply here.",
+        "operationId": "get_api_v1_home_summary_home_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomeSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Home Summary",
+        "tags": [
+          "home"
+        ]
+      }
+    },
     "/api/v1/leads": {
       "get": {
         "operationId": "get_api_v1_leads_list_leads",
@@ -22248,6 +24091,330 @@
         "summary": "Record Lead Outcome",
         "tags": [
           "sales"
+        ]
+      }
+    },
+    "/api/v1/lineage/manifest": {
+      "get": {
+        "operationId": "get_api_v1_lineage_manifest_get_lineage_manifest",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LineageManifestResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Lineage Manifest",
+        "tags": [
+          "lineage"
+        ]
+      }
+    },
+    "/api/v1/loan-officers": {
+      "get": {
+        "operationId": "get_api_v1_loan_officers_list_loan_officers",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LoanOfficer"
+                  },
+                  "title": "Response Get Api V1 Loan Officers List Loan Officers",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Loan Officers",
+        "tags": [
+          "loan-officers"
+        ]
+      }
+    },
+    "/api/v1/loan-officers/assignments": {
+      "get": {
+        "operationId": "get_api_v1_loan_officers_assignments_list_loan_officer_assignments",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "loan_officer_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Loan Officer Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "status",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "assigned",
+                    "contact_drafted",
+                    "approved",
+                    "actioned",
+                    "outcome_recorded"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 100,
+              "maximum": 500,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/LoanOfficerAssignment"
+                  },
+                  "title": "Response Get Api V1 Loan Officers Assignments List Loan Officer Assignments",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Loan Officer Assignments",
+        "tags": [
+          "loan-officers"
+        ]
+      },
+      "post": {
+        "operationId": "post_api_v1_loan_officers_assignments_assign_loan_officer",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignLoanOfficerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanOfficerAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Assign Loan Officer",
+        "tags": [
+          "loan-officers"
+        ]
+      }
+    },
+    "/api/v1/loan-officers/assignments/{assignment_id}/outcome": {
+      "post": {
+        "description": "Record success / no_response / declined for an actioned assignment.\n\nThe server enforces the lifecycle gate: only an ``actioned`` assignment\n(which itself passed the human ``approved`` stage) can record an\noutcome \u2014 anything else is 409. No outreach is sent from this path.",
+        "operationId": "post_api_v1_loan_officers_assignments_assignment_id_outcome_record_assignment_outcome",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "assignment_id",
+            "required": true,
+            "schema": {
+              "title": "Assignment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentOutcomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssignmentOutcomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Assignment Outcome",
+        "tags": [
+          "loan-officers"
+        ]
+      }
+    },
+    "/api/v1/loan-officers/assignments/{assignment_id}/status": {
+      "patch": {
+        "operationId": "patch_api_v1_loan_officers_assignments_assignment_id_status_update_assignment_status",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "assignment_id",
+            "required": true,
+            "schema": {
+              "title": "Assignment Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignmentStatusUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoanOfficerAssignmentResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update Assignment Status",
+        "tags": [
+          "loan-officers"
         ]
       }
     },
