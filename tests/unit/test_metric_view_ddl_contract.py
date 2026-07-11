@@ -276,6 +276,122 @@ class TestBorrowerOpportunityMetricView:
 
 
 # -----------------------------------------------------------------------------
+# portfolio_headline_metric_view.sql (S1 headline KPI home)
+# -----------------------------------------------------------------------------
+class TestPortfolioHeadlineMetricView:
+    view_path = METRIC_VIEW_DIR / "portfolio_headline_metric_view.sql"
+
+    def test_file_is_non_empty(self) -> None:
+        assert self.view_path.exists(), "portfolio_headline_metric_view.sql missing"
+        assert self.view_path.stat().st_size > 200
+
+    def test_declares_borrower_grain_view(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        assert re.search(
+            r"CREATE\s+OR\s+REPLACE\s+VIEW\s+mip\.semantics\.portfolio_headline_metric_view",
+            sql_nc,
+            re.IGNORECASE,
+        )
+        assert "mip.gold.borrower_360" in sql_nc
+
+    def test_headline_measures_use_canonical_primitives(self) -> None:
+        """The high-opportunity indicator and the display band must come from
+        the canonical UC functions — a literal threshold here is drift
+        (S1; tests/unit/test_score_threshold_guard.py)."""
+        _, sql_nc = _read_sql(self.view_path)
+        assert "mip.gold.fn_high_opportunity(b.opportunity_score)" in sql_nc
+        assert "mip.gold.fn_score_band(b.opportunity_score)" in sql_nc
+
+    def test_publishes_headline_indicator_columns(self) -> None:
+        _, sql_nc = _read_sql(self.view_path)
+        for col in (
+            "is_high_opportunity",
+            "score_band",
+            "offer_available",
+            "offer_recommended",
+        ):
+            assert re.search(rf"\bAS\s+{col}\b", sql_nc, re.IGNORECASE), (
+                f"portfolio_headline_metric_view must expose `{col}`"
+            )
+        for passthrough in ("b.opportunity_score", "b.in_the_money"):
+            assert passthrough in sql_nc
+
+    def test_offers_available_means_non_null_next_best_offer(self) -> None:
+        """"Offers available" is COUNT of borrowers with a non-null
+        fn_next_best_offer decision — pinned as the recommended_offer_code
+        IS NOT NULL indicator."""
+        _, sql_nc = _read_sql(self.view_path)
+        assert re.search(
+            r"\(\s*b\.recommended_offer_code\s+IS\s+NOT\s+NULL\s*\)\s+AS\s+offer_available",
+            sql_nc,
+            re.IGNORECASE,
+        )
+
+    def test_passes_through_preview_predicate_vocabulary(self) -> None:
+        """Every column build_preview_predicates can emit must survive the
+        view, or criteria-filtered previews fail at the warehouse."""
+        _, sql_nc = _read_sql(self.view_path)
+        for col in (
+            "state",
+            "is_owner_occupied",
+            "current_lien_balance",
+            "second_pos_amount",
+            "related_property_count",
+            "listed_for_sale",
+            "has_heloc_propensity_trigger",
+            "is_current_customer",
+            "is_former_customer",
+            "is_competitor_lien",
+            "current_lender_ref",
+            "recommended_offer_code",
+            "loan_product_type",
+            "origination_channel",
+            "equity_pct",
+            "marketing_eligible",
+            "consent_status",
+            "suppression_reason",
+            "dnc",
+            "eligible_recontact_at",
+            "last_touch_at",
+        ):
+            assert col in sql_nc, f"view must pass through `{col}` for criteria push-down"
+
+    def test_has_semantic_comment(self) -> None:
+        raw, _ = _read_sql(self.view_path)
+        assert "COMMENT ON VIEW mip.semantics.portfolio_headline_metric_view" in raw
+
+    def test_deploy_manifest_stays_in_sync(self) -> None:
+        raw, _ = _read_sql(DDL_DIR / "005_semantics_views.sql")
+        assert "CREATE OR REPLACE VIEW mip.semantics.portfolio_headline_metric_view" in raw
+        for needle in (
+            "mip.gold.fn_high_opportunity(b.opportunity_score)",
+            "mip.gold.fn_score_band(b.opportunity_score)",
+            "AS offer_available",
+            "AS offer_recommended",
+        ):
+            assert needle in raw, f"005_semantics_views.sql missing `{needle}`"
+
+    def test_preview_repository_aggregates_over_this_view(self) -> None:
+        """Home KPIs must resolve to the named metric view, not an ad-hoc
+        aggregate over borrower_360."""
+        from backend.services.repositories.databricks_portfolio import (
+            DatabricksPortfolioRepository,
+        )
+
+        template = DatabricksPortfolioRepository._PREVIEW_SQL_TEMPLATE
+        assert "portfolio_headline_metric_view" in template
+        assert re.search(r"(>=|≥)\s*\d", template) is None, (
+            "preview SQL must not carry a literal score threshold"
+        )
+        for measure in (
+            "is_high_opportunity",
+            "offer_recommended",
+            "offer_available",
+        ):
+            assert measure in template
+
+
+# -----------------------------------------------------------------------------
 # Gold DDL additions (lifecycle_state + funnel_snapshot_daily)
 # -----------------------------------------------------------------------------
 class TestGoldDdlAdditions:

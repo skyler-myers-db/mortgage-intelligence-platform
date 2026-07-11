@@ -24,7 +24,8 @@ class StateRollup(BaseModel):
     Fields map 1:1 to ``funnel_snapshot_daily`` columns so the UI never
     has to re-aggregate: ``addressable`` is the borrower count for the
     state, ``in_the_money`` is the high-intent subset,
-    ``top_tier_opportunities`` is the ``opportunity_score ≥ 75`` subset
+    ``top_tier_opportunities`` is the high-opportunity subset (canonical
+    threshold: ``scoring.HIGH_OPPORTUNITY_THRESHOLD`` / ``fn_high_opportunity``)
     (for the lvl-4 hero tier on the choropleth), and ``avg_score`` is
     the state-wide mean opportunity score.
 

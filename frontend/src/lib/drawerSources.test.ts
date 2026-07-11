@@ -1,6 +1,46 @@
 import { describe, expect, it } from 'vitest';
 import { assetHrefForSource, assetKeyForSource, descriptorFor, descriptorForEvidence, drawerForAsset, DRAWER_SOURCES } from './drawerSources';
 
+describe('home headline KPI sources cite the metric view (S1)', () => {
+  it('routes the headline view lineage to its own drawer entry', () => {
+    expect(descriptorFor('mip.semantics.portfolio_headline_metric_view')).toBe(
+      DRAWER_SOURCES.portfolioHeadlineView,
+    );
+    expect(assetKeyForSource('mip.semantics.portfolio_headline_metric_view')).toBe(
+      'portfolio_headline_metric_view',
+    );
+  });
+
+  it('cites the headline metric view + underlying rows on every home KPI drawer', () => {
+    const homeKpiSources = [
+      DRAWER_SOURCES.population,
+      DRAWER_SOURCES.itm,
+      DRAWER_SOURCES.leadScore,
+      DRAWER_SOURCES.nbo,
+    ];
+    for (const source of homeKpiSources) {
+      const lineageNames = (source.lineage ?? []).map((step) => step.name);
+      expect(lineageNames).toContain('mip.semantics.portfolio_headline_metric_view');
+      // Underlying row asset stays anchored so the drawer's freshness +
+      // lineage link resolve to a real governed table.
+      expect(source.assetKey).toBeTruthy();
+      expect(
+        (source.signals ?? []).some((signal) =>
+          signal.source.includes('portfolio_headline_metric_view'),
+        ),
+      ).toBe(true);
+    }
+  });
+
+  it('keeps the offers-available measure visible on the offer drawer', () => {
+    expect(
+      (DRAWER_SOURCES.nbo.signals ?? []).some(
+        (signal) => signal.source === 'portfolio_headline_metric_view.offer_available',
+      ),
+    ).toBe(true);
+  });
+});
+
 describe('descriptorFor', () => {
   it('routes lead score lineage to the lead score drawer', () => {
     expect(descriptorFor('mip.gold.fn_lead_score')).toBe(DRAWER_SOURCES.leadScore);

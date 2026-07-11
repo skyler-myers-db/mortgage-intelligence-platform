@@ -17,6 +17,7 @@ from backend.schemas.growth_agent import (
 )
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -100,8 +101,8 @@ WORKFLOWS: dict[GrowthAgentWorkflowId, GrowthAgentWorkflowDef] = {
             "The handoff uses the existing high-opportunity Lead Queue stage.",
             "The agent does not open a raw borrower profile or expose owner names.",
         ),
-        broad_predicate="b.opportunity_score >= 75",
-        actionable_predicate="b.opportunity_score >= 75",
+        broad_predicate=f"b.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}",
+        actionable_predicate=f"b.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}",
         route_filters={
             "funnel_stage": "high_opportunity",
             "marketing_eligibility": "Eligible only",

@@ -24,6 +24,7 @@ from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_LP,
 )
 from backend.services.resilience import TTLCache
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 from backend.services.state_footprint import get_state_footprint_resolver
 
 
@@ -597,7 +598,7 @@ class DatabricksLeadRepository:
         if stage == "in_the_money":
             return "AND b.in_the_money = TRUE"
         if stage == "high_opportunity":
-            return "AND b.opportunity_score >= 75"
+            return f"AND b.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}"
         if stage == "offer_recommended":
             return (
                 "AND b.recommended_offer_code IS NOT NULL "

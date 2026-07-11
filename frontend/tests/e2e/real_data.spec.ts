@@ -786,6 +786,41 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .toBeGreaterThanOrEqual(2);
   });
 
+  test('home: every headline KPI opens an evidence drawer citing the headline metric view', async ({ page }) => {
+    await gotoApp(page, '/');
+
+    const kpiRow = page.locator('.kpi-row');
+    await expect(kpiRow).toBeVisible({ timeout: 45_000 });
+    await expect(kpiRow.locator('.kpi__source .evidence-chip')).toHaveCount(4, {
+      timeout: 15_000,
+    });
+
+    // S1 acceptance: each home KPI resolves to the named
+    // mip.semantics.portfolio_headline_metric_view and its drawer lineage
+    // cites that view plus an underlying row asset.
+    const kpiChips: Array<[string | RegExp, string]> = [
+      ['Marketable population', 'Marketable population'],
+      [/Rate \+ equity screen/, 'Rate + equity screen'],
+      ['Opportunity score', 'Opportunity score'],
+      [/How the offer path was selected/, 'How the offer path was selected'],
+    ];
+    for (const [chipLabel, drawerSubtitle] of kpiChips) {
+      const chip = kpiRow.locator('.evidence-chip').filter({ hasText: chipLabel }).first();
+      await expect(chip, `home KPI chip ${String(chipLabel)}`).toBeVisible({ timeout: 10_000 });
+      await chip.click();
+      const drawer = page.locator('.drawer.is-open').first();
+      await expect(drawer).toBeVisible({ timeout: 3_000 });
+      await expect(drawer.locator('.drawer__subtitle')).toHaveText(drawerSubtitle);
+      await expect(
+        drawer.locator('.lineage-node__name', {
+          hasText: 'mip.semantics.portfolio_headline_metric_view',
+        }),
+      ).toBeVisible();
+      await drawer.getByRole('button', { name: /Close drawer/i }).click();
+      await expect(drawer).toBeHidden({ timeout: 3_000 });
+    }
+  });
+
   test('genie FAB returns a non-empty answer and source chip opens lineage', async ({ page }) => {
     await gotoApp(page, '/');
 

@@ -8,6 +8,7 @@ from typing import Any
 
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 
 @dataclass(frozen=True)
@@ -424,12 +425,12 @@ LIMIT 8
 _CANONICAL_ITM_TOP_TIER_COMPARE_SQL = f"""
 SELECT CAST(COUNT(*) AS BIGINT) AS marketable_borrowers
      , CAST(COUNT_IF(in_the_money = TRUE) AS BIGINT) AS in_the_money_borrowers
-     , CAST(COUNT_IF(opportunity_score >= 75) AS BIGINT) AS top_tier_borrowers
-     , CAST(COUNT_IF(in_the_money = TRUE AND opportunity_score >= 75) AS BIGINT)
+     , CAST(COUNT_IF(opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}) AS BIGINT) AS top_tier_borrowers
+     , CAST(COUNT_IF(in_the_money = TRUE AND opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}) AS BIGINT)
          AS overlap_borrowers
      , CAST(ROUND(AVG(CASE WHEN in_the_money = TRUE THEN rate_spread_bps END), 1) AS DOUBLE)
          AS avg_in_the_money_rate_spread_bps
-     , CAST(ROUND(AVG(CASE WHEN opportunity_score >= 75 THEN opportunity_score END), 1) AS DOUBLE)
+     , CAST(ROUND(AVG(CASE WHEN opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD} THEN opportunity_score END), 1) AS DOUBLE)
          AS avg_top_tier_score
      , MAX(refreshed_at) AS refreshed_at
 FROM {_BORROWER_360}

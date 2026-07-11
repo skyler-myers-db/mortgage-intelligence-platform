@@ -1,8 +1,8 @@
 -- =============================================================================
 -- 005_semantics_views.sql
 -- -----------------------------------------------------------------------------
--- Purpose:   Idempotent CREATE OR REPLACE VIEW manifest for the three
---            Genie-facing + dashboard-facing semantic views under
+-- Purpose:   Idempotent CREATE OR REPLACE VIEW manifest for the four
+--            Genie-facing + dashboard-facing + app-serving semantic views under
 --            mip.semantics. A single file so a single bundle task can
 --            materialise them AFTER the gold tables they read from are
 --            built. This is the file `mip_refresh_scores` executes at
@@ -15,6 +15,7 @@
 --     sql/metric_views/lead_generation_metric_view.sql
 --     sql/metric_views/segment_performance_metric_view.sql
 --     sql/metric_views/borrower_opportunity_metric_view.sql
+--     sql/metric_views/portfolio_headline_metric_view.sql
 --
 -- Idempotency: every statement below is CREATE OR REPLACE VIEW; re-running
 -- this file any number of times is safe and byte-stable. No DDL against
@@ -22,10 +23,11 @@
 -- mip.semantics schema itself is created by 001_catalogs_schemas.sql.
 --
 -- Grounding contract: Genie's trusted_assets list in
--- genie/mortgage_lead_intelligence_space.yml references each of these
--- three fully qualified names. If a view name drifts, provision_genie_
+-- genie/mortgage_lead_intelligence_space.yml references the first three
+-- fully qualified names. If a view name drifts, provision_genie_
 -- space.py will fail to bind tables on create/update. Keep this file
--- in lockstep with the YAML.
+-- in lockstep with the YAML. portfolio_headline_metric_view is the
+-- app-serving headline-KPI view (S1); it is not a Genie trusted asset.
 --
 -- Slice:     slice13-accuracy (zero-click semantics provisioning).
 -- Data contract: docs/data-contract-module0.md §3.5, §3.6 + per-file
@@ -284,3 +286,53 @@ FROM mip.gold.borrower_360 AS b;
 
 COMMENT ON VIEW mip.semantics.borrower_opportunity_metric_view IS
   'Genie + dashboard borrower-grain view over gold.borrower_360 (one row per clip). Exposed row columns: clip, state, segment_codes, primary_segment, deprecated segment alias, loan_purpose, loan_product_type, origination_channel, conforming_loan_limit_applied, is_investor, is_current_customer, is_former_customer, is_competitor_lien, has_permit, listed_for_sale, listing_status_category, listing_price, listing_days_on_market, heloc_propensity_score, has_heloc_propensity_trigger, refi_propensity_score, has_refi_propensity_trigger, current_lender_ref, rate_spread_bps, equity_pct, in_the_money, current_lien_balance, opportunity_score. These are plain columns, not materialized measure columns; dashboards and Genie compute read-time aggregations such as AVG(rate_spread_bps), AVG(equity_pct), COUNT(DISTINCT clip), and AVG(opportunity_score). See docs/data-contract-module0.md §3.2.';
+
+
+-- -----------------------------------------------------------------------------
+-- 4. mip.semantics.portfolio_headline_metric_view
+-- -----------------------------------------------------------------------------
+-- See sql/metric_views/portfolio_headline_metric_view.sql for the authored
+-- copy + per-column rationale. App-serving headline-KPI view (S1): the
+-- portfolio preview aggregates its indicator columns; the canonical
+-- high-opportunity threshold and score bands live only in
+-- mip.gold.fn_high_opportunity / mip.gold.fn_score_band.
+CREATE OR REPLACE VIEW mip.semantics.portfolio_headline_metric_view AS
+SELECT
+  -- Grain + geography
+  b.borrower_id,
+  b.state,
+  -- Headline measure indicators
+  b.opportunity_score,
+  b.in_the_money,
+  mip.gold.fn_high_opportunity(b.opportunity_score)                    AS is_high_opportunity,
+  mip.gold.fn_score_band(b.opportunity_score)                          AS score_band,
+  (b.recommended_offer_code IS NOT NULL)                               AS offer_available,
+  (b.recommended_offer_code IS NOT NULL
+    AND b.recommended_offer_code <> 'nurture')                         AS offer_recommended,
+  -- Criteria push-down dimensions (build_preview_predicates vocabulary)
+  b.recommended_offer_code,
+  b.is_owner_occupied,
+  b.current_lien_balance,
+  b.second_pos_amount,
+  b.related_property_count,
+  b.listed_for_sale,
+  b.has_heloc_propensity_trigger,
+  b.is_current_customer,
+  b.is_former_customer,
+  b.is_competitor_lien,
+  b.current_lender_ref,
+  b.loan_product_type,
+  b.origination_channel,
+  b.equity_pct,
+  -- Contactability dimensions (EligibilityService predicate vocabulary)
+  b.marketing_eligible,
+  b.consent_status,
+  b.suppression_reason,
+  b.dnc,
+  b.eligible_recontact_at,
+  b.last_touch_at,
+  b.has_unresolved_owner,
+  b.refreshed_at
+FROM mip.gold.borrower_360 AS b;
+
+COMMENT ON VIEW mip.semantics.portfolio_headline_metric_view IS 'Borrower-grain semantic view defining every demoed headline KPI: marketable population (COUNT(*)), refi economics screen (SUM(in_the_money)), high opportunity (SUM(is_high_opportunity), canonical fn_high_opportunity threshold), offers available (SUM(offer_available), non-null fn_next_best_offer decision), primary offer paths (SUM(offer_recommended)), and average opportunity score. Home-page KPIs aggregate over this view with portfolio-builder criteria pushed down as WHERE predicates on the dimension columns.';

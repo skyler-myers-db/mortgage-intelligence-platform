@@ -63,7 +63,7 @@ aggregates AS (
     ANY_VALUE(state)                                                          AS state,
     CAST(COUNT(*) AS INT)                                                     AS addressable_borrowers,
     CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT)                AS in_the_money_borrowers,
-    CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT)     AS high_opportunity_borrowers,
+    CAST(SUM(CASE WHEN mip.gold.fn_high_opportunity(opportunity_score) THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers,
     CAST(ROUND(AVG(opportunity_score)) AS INT)                                AS avg_opportunity_score
   FROM base
   GROUP BY fips_5
@@ -125,7 +125,7 @@ COMMENT ON COLUMN mip.gold.county_rollup.state IS '2-char USPS state code (upper
 COMMENT ON COLUMN mip.gold.county_rollup.county_name IS 'Human county name. NULL until a FIPS->name crosswalk seed lands; UI falls back to fips_5.';
 COMMENT ON COLUMN mip.gold.county_rollup.addressable_borrowers IS 'Population count for this county on snapshot_date.';
 COMMENT ON COLUMN mip.gold.county_rollup.in_the_money_borrowers IS 'COUNT where borrower_360.in_the_money = TRUE.';
-COMMENT ON COLUMN mip.gold.county_rollup.high_opportunity_borrowers IS 'COUNT where borrower_360.opportunity_score >= 75.';
+COMMENT ON COLUMN mip.gold.county_rollup.high_opportunity_borrowers IS 'COUNT where mip.gold.fn_high_opportunity(borrower_360.opportunity_score) = TRUE (canonical high-opportunity threshold).';
 COMMENT ON COLUMN mip.gold.county_rollup.avg_opportunity_score IS 'AVG(borrower_360.opportunity_score) rounded to int.';
 COMMENT ON COLUMN mip.gold.county_rollup.top_segment_code IS 'Dominant segment_code by count. NULL when every borrower in the county has empty segment_codes.';
 COMMENT ON COLUMN mip.gold.county_rollup.snapshot_date IS 'Refresh date; daily grain. PK part.';
