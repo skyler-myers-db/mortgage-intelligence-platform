@@ -17,6 +17,7 @@ from backend.services.growth_agent_workflows import (
     SOURCE_READINESS,
     GrowthAgentWorkflowDef,
 )
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 # S1.4: canonical fail-closed contactability predicates (single interface).
 _B_ELIGIBLE = eligible_sql_predicate("b")
@@ -102,7 +103,7 @@ WITH broad AS (
   FROM {BORROWER_DOSSIER} d
   LEFT JOIN {EVIDENCE_EVENTS} ev
     ON ev.clip = d.clip
-  WHERE d.opportunity_score >= 75
+  WHERE d.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}
     {broad_state_clause}
 ),
 actionable AS (
@@ -110,7 +111,7 @@ actionable AS (
     COUNT(DISTINCT d.clip) AS actionable_total,
     ROUND(AVG(CAST(d.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score
   FROM {BORROWER_DOSSIER} d
-  WHERE d.opportunity_score >= 75
+  WHERE d.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}
     AND {_D_ELIGIBLE}
     {actionable_state_clause}
 )

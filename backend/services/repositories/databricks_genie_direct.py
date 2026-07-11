@@ -136,7 +136,7 @@ from backend.services.repositories.databricks_genie_trust import (
 from backend.services.repositories.databricks_genie_visualization import (
     _plan_genie_visualization,
 )
-from backend.services.scoring import offer_display_label
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, offer_display_label
 
 _SEGMENT_DISPLAY_LABELS = {
     "itm": "Prime Refi Candidates",
@@ -1334,7 +1334,7 @@ def direct_canonical_response(
         answer = (
             "They are related but not the same. In-the-money is a refinance-economics "
             "screen: the borrower clears the configured rate-spread and equity thresholds. "
-            "Top-tier opportunity means opportunity_score >= 75, which blends economics, "
+            f"Top-tier opportunity means opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}, which blends economics, "
             "intent, fit, relationship, and evidence. In the current marketable set, "
             f"{rows[0]['in_the_money_borrowers']:,} borrowers are in-the-money, "
             f"{rows[0]['top_tier_borrowers']:,} are top-tier, and "
