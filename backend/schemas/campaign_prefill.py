@@ -27,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 from backend.schemas.lead import SEGMENT_CODE_VALUES
 
-PREFILL_SOURCE = "geo-drilldown"
+PREFILL_SOURCE: Literal["geo-drilldown"] = "geo-drilldown"
 
 # Wire parameter names — the versioned contract S10 will read.
 PARAM_SOURCE = "prefill_source"
