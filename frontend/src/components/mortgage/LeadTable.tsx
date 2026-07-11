@@ -356,7 +356,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     })
     .map((l) => l.borrower_id);
 
-  function applyAssignmentOverrides(assignments: { borrower_id: string; assigned_to_email: string; assigned_to_label?: string | null; assigned_at: string; expires_at?: string | null }[]) {
+  function applyAssignmentOverrides(assignments: { borrower_id: string; assigned_to_email: string; assigned_to_label?: string | null; assigned_at: string; expires_at?: string | null; status?: LeadSummary['assignment_status'] }[]) {
     setSalesOverrides((current) => {
       const next = { ...current };
       assignments.forEach((assignment) => {
@@ -366,6 +366,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           assigned_to_label: assignment.assigned_to_label ?? assignment.assigned_to_email,
           assigned_at: assignment.assigned_at,
           assignment_expires_at: assignment.expires_at ?? null,
+          // S2 lifecycle chip: a fresh assignment always enters at 'assigned'.
+          assignment_status: assignment.status ?? 'assigned',
         };
       });
       return next;

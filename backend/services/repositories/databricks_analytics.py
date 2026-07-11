@@ -55,6 +55,7 @@ from backend.services.economics_scatter import (
 )
 from backend.services.resilience import TTLCache
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, source_display_label
+from backend.services.segment_predicates import compose_segment_predicate
 
 
 def _date_text(value: object) -> str | None:
@@ -154,13 +155,16 @@ class DatabricksAnalyticsRepository:
                 state_keys.append(f":{key}")
             predicates.append(f"{alias}.state IN (" + ", ".join(state_keys) + ")")
         if filters.segment_codes:
-            segment_predicates: list[str] = []
-            for idx, code in enumerate(filters.segment_codes):
-                key = f"segment_{idx}"
-                out_params[key] = code
-                segment_predicates.append(f"array_contains({alias}.segment_codes, :{key})")
-            joiner = " AND " if filters.segment_mode == "all" else " OR "
-            predicates.append("(" + joiner.join(segment_predicates) + ")")
+            # S8: same canonical composer as the lead + geo repositories so
+            # analytics drilldowns count the identical segment cohort.
+            segment_clause, segment_params = compose_segment_predicate(
+                filters.segment_codes,
+                mode=filters.segment_mode,
+                column=f"{alias}.segment_codes",
+            )
+            if segment_clause:
+                out_params.update(segment_params)
+                predicates.append(f"({segment_clause})")
         if filters.lender_relationship == "Current customer":
             predicates.append(f"{alias}.is_current_customer = TRUE")
         elif filters.lender_relationship == "Former customer":

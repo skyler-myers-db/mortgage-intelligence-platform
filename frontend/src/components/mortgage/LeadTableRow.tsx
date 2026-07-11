@@ -7,6 +7,8 @@ import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import {
+  assignmentStatusLabel,
+  assignmentStatusVariant,
   dispositionLabel,
   dispositionVariant,
   formatDateTimeShort,
@@ -136,6 +138,14 @@ export function LeadTableRow({
             <Chip variant={lead.assigned_to_email ? 'success' : 'neutral'}>
               {lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'}
             </Chip>
+            {lead.assigned_to_email && lead.assignment_status && (
+              <Chip
+                variant={assignmentStatusVariant(lead.assignment_status)}
+                title="Assignment lifecycle stage"
+              >
+                {assignmentStatusLabel(lead.assignment_status)}
+              </Chip>
+            )}
             {lead.assigned_at && (
               <span className="muted mono fs-11">{formatDateTimeShort(lead.assigned_at)}</span>
             )}

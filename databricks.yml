@@ -866,6 +866,52 @@ resources:
             file:
               path: sql/_rendered/transformations/gold_funnel_snapshot_daily.sql
 
+    # S3: daily headline-KPI snapshot. Aggregates the S1 headline measures
+    # over <catalog>.semantics.portfolio_headline_metric_view (real UC read;
+    # the view is landed by mip_refresh_scores task refresh_semantics_views)
+    # and upserts ONE row per day into Lakebase mip_app.kpi_snapshots via
+    # ON CONFLICT (snapshot_date) DO UPDATE -- re-runs refresh the day's row,
+    # never duplicate it. S4 reads this table for "since your last login"
+    # deltas via backend/services/kpi_deltas.py.
+    #
+    # Daily 05:30 America/Chicago cron (after the 04:00 lifecycle-sync slot
+    # when an operator enables both). Ships PAUSED like every scheduled job
+    # in this bundle (cost-control posture ratified on
+    # mip_sync_lifecycle_state / mip_fred_rates_ingest above); freshness on
+    # the dev cadence comes from ./scripts/deploy.sh, which runs this job
+    # after every gold refresh -- that run is also the first-install
+    # backfill, so kpi_snapshots is never empty after a zero-click deploy.
+    mip_kpi_snapshot:
+      name: mip_kpi_snapshot
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: s3-kpi-snapshots
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 30 5 ? * * *"
+        timezone_id: America/Chicago
+        pause_status: PAUSED
+      environments:
+        - environment_key: py_default
+          spec:
+            # Serverless Python env version 5 -- see comment on the
+            # mip_sync_lifecycle_state job for the upgrade rationale.
+            environment_version: "5"
+            dependencies:
+              - psycopg[binary]==3.2.10
+              - databricks-sdk>=0.30.0
+      tasks:
+        - task_key: snapshot_headline_kpis
+          description: "Aggregate semantics.portfolio_headline_metric_view and upsert today's row into mip_app.kpi_snapshots."
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/kpi_snapshot.py
+            parameters: ["--catalog=${var.uc_catalog}"]
+          max_retries: 2
+          retry_on_timeout: true
+
     # Draft-only scheduled Mortgage Growth Agent monitor runner. The job calls
     # the deployed Databricks App through its OAuth proxy and hits the
     # admin-gated /api/v1/growth-agent/monitors/run-due-all endpoint. It replays
