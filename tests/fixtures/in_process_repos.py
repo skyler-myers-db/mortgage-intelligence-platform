@@ -17,7 +17,11 @@ from backend.schemas.analytics import (
     AnalyticsFilters,
     AnalyticsScope,
     EconomicsAnalyticsResponse,
+    EquitySpreadBin,
+    EquitySpreadOverview,
     EquitySpreadPoint,
+    EquitySpreadPointsResponse,
+    EquitySpreadViewport,
     EvidenceBySignalRow,
     EvidenceDailyRow,
     ExecutiveAnalyticsResponse,
@@ -39,6 +43,7 @@ from backend.schemas.analytics import (
     TopZipOpportunityRow,
 )
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.funnel import FunnelPopulation
 from backend.schemas.geo import (
     CountyRollup,
     CountyRollupResponse,
@@ -62,6 +67,7 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
+from backend.services import economics_scatter
 from backend.services.genie_answers import (
     GenieActionSuggestion,
     GenieMessageResponse,
@@ -70,6 +76,7 @@ from backend.services.genie_answers import (
     default_follow_up_questions,
 )
 from backend.services.repositories.databricks_borrowers import _build_borrower_proof
+from backend.services.scoring import is_high_opportunity, score_band
 from tests.fixtures import mock_population as mock_data
 
 
@@ -177,6 +184,15 @@ class InProcessMockAnalyticsRepository:
             ],
         )
 
+    def funnel_population(self) -> FunnelPopulation:
+        borrowers = list(mock_data.BORROWERS)
+        return FunnelPopulation(
+            population=len(borrowers),
+            high_opportunity=sum(
+                1 for b in borrowers if is_high_opportunity(b.opportunity_score)
+            ),
+        )
+
     def geography(self, filters: AnalyticsFilters | None = None) -> GeographyAnalyticsResponse:
         _ = filters
         borrowers = list(mock_data.BORROWERS)
@@ -238,19 +254,7 @@ class InProcessMockAnalyticsRepository:
                 RateSpreadBucket(spread_bucket_bps=bucket, borrower_count=count)
                 for bucket, count in sorted(spread_buckets.items())
             ],
-            equity_vs_spread=[
-                EquitySpreadPoint(
-                    borrower_id=borrower.borrower_id,
-                    display_name=borrower.display_name,
-                    segment=borrower.segment_codes[0] if borrower.segment_codes else "none",
-                    state=borrower.state,
-                    equity_pct=max(0, min(100, int(round(100.0 * borrower.equity_estimate / borrower.avm_value)))),
-                    rate_spread_bps=borrower.rate_spread_bps,
-                    opportunity_score=borrower.opportunity_score,
-                )
-                for borrower in borrowers
-                if -100 <= borrower.rate_spread_bps <= 400
-            ],
+            equity_spread=self._equity_spread_overview(borrowers),
             top_borrowers=[
                 TopBorrowerAnalyticsRow(
                     borrower_id=borrower.borrower_id,
@@ -268,6 +272,94 @@ class InProcessMockAnalyticsRepository:
                     start=1,
                 )
             ],
+        )
+
+    @staticmethod
+    def _scatter_rows(borrowers: list) -> list[tuple[int, int, object]]:
+        """(equity_pct, rate_spread_bps, borrower) inside the plot domain."""
+        rows: list[tuple[int, int, object]] = []
+        for borrower in borrowers:
+            if not (
+                economics_scatter.SPREAD_DOMAIN_MIN
+                <= borrower.rate_spread_bps
+                <= economics_scatter.SPREAD_DOMAIN_MAX
+            ):
+                continue
+            equity_pct = max(0, min(100, round(100.0 * borrower.equity_estimate / borrower.avm_value)))
+            rows.append((equity_pct, borrower.rate_spread_bps, borrower))
+        return rows
+
+    def _equity_spread_overview(self, borrowers: list) -> EquitySpreadOverview:
+        by_bin: dict[tuple[int, int], list] = {}
+        for equity_pct, spread_bps, borrower in self._scatter_rows(borrowers):
+            key = (
+                economics_scatter.equity_bin_pct(equity_pct),
+                economics_scatter.spread_bin_bps(spread_bps),
+            )
+            by_bin.setdefault(key, []).append(borrower)
+        bins = [
+            EquitySpreadBin(
+                equity_bin_pct=equity_bin,
+                spread_bin_bps=spread_bin,
+                borrower_count=len(rows),
+                mean_opportunity_score=round(sum(b.opportunity_score for b in rows) / len(rows)),
+                in_the_money_borrowers=sum(1 for b in rows if self._is_itm(b)),
+            )
+            for (equity_bin, spread_bin), rows in sorted(by_bin.items())
+        ]
+        return EquitySpreadOverview(
+            bins=bins,
+            total_borrowers=sum(b.borrower_count for b in bins),
+            equity_bin_pct=economics_scatter.EQUITY_BIN_PCT,
+            spread_bin_bps=economics_scatter.SPREAD_BIN_BPS,
+            equity_domain_min=economics_scatter.EQUITY_DOMAIN_MIN,
+            equity_domain_max=economics_scatter.EQUITY_DOMAIN_MAX,
+            spread_domain_min=economics_scatter.SPREAD_DOMAIN_MIN,
+            spread_domain_max=economics_scatter.SPREAD_DOMAIN_MAX,
+            source_table=economics_scatter.EQUITY_SPREAD_SOURCE_TABLE,
+            refreshed_at=None,
+        )
+
+    def economics_points(
+        self,
+        filters: AnalyticsFilters | None = None,
+        viewport: EquitySpreadViewport | None = None,
+    ) -> EquitySpreadPointsResponse:
+        _ = filters
+        window = viewport or EquitySpreadViewport()
+        matching = [
+            (equity_pct, spread_bps, borrower)
+            for equity_pct, spread_bps, borrower in self._scatter_rows(list(mock_data.BORROWERS))
+            if window.equity_min <= equity_pct <= window.equity_max
+            and window.spread_min <= spread_bps <= window.spread_max
+        ]
+        matching.sort(key=lambda row: (-row[2].opportunity_score, row[2].borrower_id))
+        capped = matching[: economics_scatter.MAX_SCATTER_POINT_ROWS]
+        points = [
+            EquitySpreadPoint(
+                borrower_id=borrower.borrower_id,
+                display_name=borrower.display_name,
+                segment=economics_scatter.segment_display_label(
+                    borrower.segment_codes[0] if borrower.segment_codes else None
+                ),
+                state=borrower.state,
+                equity_pct=equity_pct,
+                rate_spread_bps=spread_bps,
+                opportunity_score=borrower.opportunity_score,
+                score_band=score_band(borrower.opportunity_score),
+                in_the_money=self._is_itm(borrower),
+            )
+            for equity_pct, spread_bps, borrower in capped
+        ]
+        return EquitySpreadPointsResponse(
+            points=points,
+            total_matching=len(matching),
+            showing=len(points),
+            point_cap=economics_scatter.MAX_SCATTER_POINT_ROWS,
+            truncated=len(matching) > len(points),
+            viewport=window,
+            source_table=economics_scatter.EQUITY_SPREAD_SOURCE_TABLE,
+            refreshed_at=None,
         )
 
     def segments(self, filters: AnalyticsFilters | None = None) -> SegmentAnalyticsResponse:

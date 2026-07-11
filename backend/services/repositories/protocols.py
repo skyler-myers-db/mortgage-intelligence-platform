@@ -24,12 +24,15 @@ from typing import Protocol, runtime_checkable
 from backend.schemas.analytics import (
     AnalyticsFilters,
     EconomicsAnalyticsResponse,
+    EquitySpreadPointsResponse,
+    EquitySpreadViewport,
     ExecutiveAnalyticsResponse,
     GeographyAnalyticsResponse,
     SegmentAnalyticsResponse,
     SignalAnalyticsResponse,
 )
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.funnel import FunnelPopulation
 from backend.schemas.geo import (
     CountyRollupResponse,
     StateRollupResponse,
@@ -68,10 +71,23 @@ class AnalyticsRepository(Protocol):
     def economics(self, filters: AnalyticsFilters | None = None) -> EconomicsAnalyticsResponse:
         ...
 
+    def economics_points(
+        self,
+        filters: AnalyticsFilters | None = None,
+        viewport: EquitySpreadViewport | None = None,
+    ) -> EquitySpreadPointsResponse:
+        ...
+
     def segments(self, filters: AnalyticsFilters | None = None) -> SegmentAnalyticsResponse:
         ...
 
     def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
+        ...
+
+    def funnel_population(self) -> FunnelPopulation:
+        """S6: population + high-opportunity counts from the S1 headline
+        metric view (canonical ``fn_high_opportunity`` threshold — never a
+        literal predicate)."""
         ...
 
 

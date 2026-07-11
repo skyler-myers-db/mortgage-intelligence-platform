@@ -26,6 +26,7 @@ from backend.services.lakebase_bootstrap import (
     _reset_bootstrap_for_tests,
     ensure_approval_followup_columns,
     ensure_approval_idempotency_column,
+    ensure_assignment_outcome_schema,
     ensure_sales_workflow_request_id_columns,
 )
 
@@ -384,4 +385,72 @@ def test_approval_followup_bootstrap_second_call_after_success_is_noop() -> None
     ensure_approval_followup_columns(second)  # type: ignore[arg-type]
 
     assert _bootstrap_state_for_tests()["approval_followup_bootstrapped"] is True
+    assert second.calls == []
+
+
+def test_assignment_outcome_bootstrap_runs_expected_ddl_under_lock() -> None:
+    """S6: local/owned Lakebase runtimes get the idempotent feedback DDL."""
+
+    client = _FakeClient()
+
+    ensure_assignment_outcome_schema(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["assignment_outcome_bootstrapped"] is True
+    assert len(client.calls) == len(lakebase_bootstrap._ASSIGNMENT_OUTCOME_DDL) + 2
+    assert "pg_advisory_lock" in client.calls[0]
+    assert "pg_advisory_unlock" in client.calls[-1]
+    assert client.calls[1:-1] == list(lakebase_bootstrap._ASSIGNMENT_OUTCOME_DDL)
+
+
+def test_assignment_outcome_bootstrap_preflight_latches_when_schema_already_exists() -> None:
+    """Skip owner-only DDL when the migrate job already applied the S6 columns."""
+
+    class _AlreadyApplied(_FakeClient):
+        def fetchone(self, stmt: str, params: Any = None) -> dict[str, bool]:
+            _ = params
+            self.calls.append(stmt)
+            return {
+                "has_assignment_id_column": True,
+                "has_request_id_index": True,
+                "has_assignment_outcome_index": True,
+            }
+
+    client = _AlreadyApplied()
+
+    ensure_assignment_outcome_schema(client)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["assignment_outcome_bootstrapped"] is True
+    assert len(client.calls) == 1
+    assert "information_schema.columns" in client.calls[0]
+    assert not any("ALTER TABLE" in call for call in client.calls)
+
+
+def test_assignment_outcome_bootstrap_retries_after_lakebase_error() -> None:
+    """A failed S6 bootstrap must not latch success; next request retries."""
+
+    failing = _FakeClient(raise_on_call=[False, True])
+
+    ensure_assignment_outcome_schema(failing)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["assignment_outcome_bootstrapped"] is False
+    assert "pg_advisory_unlock" in failing.calls[-1]
+
+    clean = _FakeClient()
+    ensure_assignment_outcome_schema(clean)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["assignment_outcome_bootstrapped"] is True
+    assert len(clean.calls) == len(lakebase_bootstrap._ASSIGNMENT_OUTCOME_DDL) + 2
+
+
+def test_assignment_outcome_bootstrap_second_call_after_success_is_noop() -> None:
+    """Successful S6 bootstrap should not re-run DDL."""
+
+    first = _FakeClient()
+    ensure_assignment_outcome_schema(first)  # type: ignore[arg-type]
+    assert _bootstrap_state_for_tests()["assignment_outcome_bootstrapped"] is True
+
+    second = _FakeClient()
+    ensure_assignment_outcome_schema(second)  # type: ignore[arg-type]
+
+    assert _bootstrap_state_for_tests()["assignment_outcome_bootstrapped"] is True
     assert second.calls == []

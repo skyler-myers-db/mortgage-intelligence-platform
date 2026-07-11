@@ -5,25 +5,45 @@ segment, and evidence-signal dashboards without leaving the Mortgage
 Intelligence Platform for Databricks Lakeview. The repository reads the
 same governed UC gold/semantic datasets as the Lakeview artifacts.
 """
+from datetime import UTC, datetime
 from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.analytics import (
     AnalyticsFilters,
     EconomicsAnalyticsResponse,
+    EquitySpreadPointsResponse,
+    EquitySpreadViewport,
     ExecutiveAnalyticsResponse,
     GeographyAnalyticsResponse,
     SegmentAnalyticsResponse,
     SignalAnalyticsResponse,
 )
+from backend.schemas.funnel import (
+    ApprovalFunnelResponse,
+    LoanOfficerFunnelDetailResponse,
+)
 from backend.schemas.lead import SegmentCode
+from backend.services.approval_funnel import (
+    ApprovalFunnelStore,
+    get_approval_funnel_store,
+)
+from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.lakebase import LakebaseError
+from backend.services.loan_officer_state import (
+    LoanOfficerStateStore,
+    get_loan_officer_state_store,
+)
 from backend.services.repositories import AnalyticsRepository, get_analytics_repository
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
 RepoDep = Annotated[AnalyticsRepository, Depends(get_analytics_repository)]
+FunnelStoreDep = Annotated[ApprovalFunnelStore, Depends(get_approval_funnel_store)]
+LoanOfficerStateDep = Annotated[LoanOfficerStateStore, Depends(get_loan_officer_state_store)]
 
 _ALLOWED_SEGMENTS = set(get_args(SegmentCode))
 _ALLOWED_SIGNAL_TYPES = {
@@ -196,6 +216,52 @@ def economics(repo: RepoDep, filters: FiltersDep) -> EconomicsAnalyticsResponse:
     return repo.economics(filters)
 
 
+def _equity_spread_viewport(
+    equity_min: Annotated[
+        int,
+        Query(ge=0, le=100, description="Zoom window lower equity bound (pct)."),
+    ] = 0,
+    equity_max: Annotated[
+        int,
+        Query(ge=0, le=100, description="Zoom window upper equity bound (pct)."),
+    ] = 100,
+    spread_min: Annotated[
+        int,
+        Query(ge=-100, le=400, description="Zoom window lower rate-spread bound (bps)."),
+    ] = -100,
+    spread_max: Annotated[
+        int,
+        Query(ge=-100, le=400, description="Zoom window upper rate-spread bound (bps)."),
+    ] = 400,
+) -> EquitySpreadViewport:
+    try:
+        return EquitySpreadViewport(
+            equity_min=equity_min,
+            equity_max=equity_max,
+            spread_min=spread_min,
+            spread_max=spread_max,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="viewport bounds must satisfy min <= max") from exc
+
+
+ViewportDep = Annotated[EquitySpreadViewport, Depends(_equity_spread_viewport)]
+
+
+@router.get("/economics/points", response_model=EquitySpreadPointsResponse)
+def economics_points(
+    repo: RepoDep,
+    filters: FiltersDep,
+    viewport: ViewportDep,
+) -> EquitySpreadPointsResponse:
+    """Real borrower points for a zoomed scatter viewport.
+
+    Capped server-side; the payload carries the honest pre-cap total so the
+    UI renders "showing N of M" instead of implying the page is everything.
+    """
+    return repo.economics_points(filters, viewport)
+
+
 @router.get("/segments", response_model=SegmentAnalyticsResponse)
 def segments(repo: RepoDep, filters: FiltersDep) -> SegmentAnalyticsResponse:
     return repo.segments(filters)
@@ -204,3 +270,46 @@ def segments(repo: RepoDep, filters: FiltersDep) -> SegmentAnalyticsResponse:
 @router.get("/signals", response_model=SignalAnalyticsResponse)
 def signals(repo: RepoDep, filters: FiltersDep) -> SignalAnalyticsResponse:
     return repo.signals(filters)
+
+
+@router.get("/funnel", response_model=ApprovalFunnelResponse)
+def approval_funnel(repo: RepoDep, store: FunnelStoreDep) -> ApprovalFunnelResponse:
+    """Live approval funnel: UC population stages + Lakebase workflow stages.
+
+    Population and high-opportunity come from the S1 headline metric view;
+    approved/actioned/outcome_recorded come from the live Lakebase
+    lead_assignments lifecycle, approvals ledger, and outcome feedback rows.
+    """
+    population = repo.funnel_population()
+    try:
+        return ApprovalFunnelResponse(
+            generated_at=datetime.now(UTC),
+            stages=store.workflow_stages(population),
+            approvals=store.recent_approvals(),
+            loan_officers=store.per_loan_officer(),
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+
+
+@router.get(
+    "/funnel/loan-officers/{loan_officer_id}",
+    response_model=LoanOfficerFunnelDetailResponse,
+)
+def approval_funnel_loan_officer(
+    loan_officer_id: str,
+    store: FunnelStoreDep,
+    lifecycle: LoanOfficerStateDep,
+) -> LoanOfficerFunnelDetailResponse:
+    """Per-loan-officer drill-down: stage counts, live assignments, outcomes."""
+    try:
+        officer = store.officer_row(loan_officer_id)
+        if officer is None:
+            raise HTTPException(status_code=404, detail="loan officer not found")
+        return LoanOfficerFunnelDetailResponse(
+            officer=officer,
+            assignments=lifecycle.list_assignments(loan_officer_id=loan_officer_id),
+            outcome_counts=store.outcome_counts(loan_officer_id),
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc

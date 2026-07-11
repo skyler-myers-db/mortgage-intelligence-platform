@@ -1,7 +1,4 @@
-import type {
-  AssignmentLifecycleStatus,
-  LeadAssignment,
-} from './types/loanOfficer';
+import type { AssignmentLifecycleStatus, LeadAssignment } from './types/loanOfficer';
 
 export type SegmentCode =
   | 'itm'
@@ -153,6 +150,8 @@ export interface LeadSummary {
   /** S2 assignment lifecycle stage of the active assignment; null/absent
    *  when the lead is unassigned or outside the actor scope. */
   assignment_status?: AssignmentLifecycleStatus | null;
+  /** S6: active assignment id so the row can host the lifecycle-advance control. */
+  assignment_id?: string | null;
   latest_disposition_outcome?: string | null;
   latest_disposition_at?: string | null;
   latest_callback_at?: string | null;
@@ -763,16 +762,6 @@ export interface RateSpreadBucket {
   borrower_count: number;
 }
 
-export interface EquitySpreadPoint {
-  borrower_id: string;
-  display_name: string;
-  segment: string;
-  state: string;
-  equity_pct: number;
-  rate_spread_bps: number;
-  opportunity_score: number;
-}
-
 export interface TopBorrowerAnalyticsRow {
   borrower_id: string;
   display_name: string;
@@ -787,7 +776,7 @@ export interface TopBorrowerAnalyticsRow {
 
 export interface EconomicsAnalyticsResponse {
   rate_spread_histogram: RateSpreadBucket[];
-  equity_vs_spread: EquitySpreadPoint[];
+  equity_spread: import('./types/economicsScatter').EquitySpreadOverview;
   top_borrowers: TopBorrowerAnalyticsRow[];
 }
 
@@ -882,10 +871,8 @@ export type {
   ZipRollupResponse,
 } from './types/geo';
 
-export type {
-  AssignmentLifecycleStatus,
-  LeadAssignment,
-  LoanOfficer,
-  LoanOfficerAssignment,
-  SalesTeamMember,
-} from './types/loanOfficer';
+export type { HomeSummary, HomeSummaryHighlight } from './types/homeSummary';
+export type * from './types/loanOfficer';
+export type * from './types/lineage';
+export type * from './types/economicsScatter';
+export type * from './types/approvalFunnel';
