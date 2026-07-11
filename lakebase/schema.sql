@@ -1031,3 +1031,64 @@ VALUES (
     'S1.5: persist default-off household dedup config and evidence-cited suppression summary on campaigns'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- KPI snapshots ---------------------------------------------------------
+-- S3: one row per day capturing the S1 headline aggregates measured over
+-- mip.semantics.portfolio_headline_metric_view (the named semantic home for
+-- every demoed headline KPI). Written by the mip_kpi_snapshot bundle job
+-- (jobs/kpi_snapshot.py) with a per-day upsert; the deploy script runs the
+-- job once post-gold-refresh so a fresh install never has an empty table.
+-- S4 ("since your last login" deltas) queries "the snapshot nearest a given
+-- past timestamp" -- the snapshot_at index makes both sides of that lookup
+-- (latest at-or-before / earliest after) an index-ordered LIMIT 1.
+-- Aggregates only: no borrower ids, owner names, or Cotality identifiers
+-- belong in this table.
+CREATE TABLE IF NOT EXISTS mip_app.kpi_snapshots (
+    snapshot_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    snapshot_date          DATE NOT NULL,
+    snapshot_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    source_view            TEXT NOT NULL DEFAULT 'portfolio_headline_metric_view',
+    marketable_population  BIGINT NOT NULL CHECK (marketable_population >= 0),
+    refi_economics_screen  BIGINT NOT NULL CHECK (refi_economics_screen >= 0),
+    high_opportunity       BIGINT NOT NULL CHECK (high_opportunity >= 0),
+    offers_available       BIGINT NOT NULL CHECK (offers_available >= 0),
+    offers_recommended     BIGINT NOT NULL CHECK (offers_recommended >= 0),
+    avg_opportunity_score  DOUBLE PRECISION CHECK (
+        avg_opportunity_score IS NULL
+        OR (avg_opportunity_score >= 0 AND avg_opportunity_score <= 100)
+    ),
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Per-day idempotency: jobs upsert via ON CONFLICT (snapshot_date), so a
+-- re-run (or a deploy backfill on a day the scheduled job already ran)
+-- updates the day's row instead of duplicating it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kpi_snapshots_snapshot_date
+    ON mip_app.kpi_snapshots (snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_kpi_snapshots_snapshot_at
+    ON mip_app.kpi_snapshots (snapshot_at DESC);
+COMMENT ON TABLE mip_app.kpi_snapshots IS
+    'Daily aggregates of mip.semantics.portfolio_headline_metric_view headline KPIs; upserted per day by the mip_kpi_snapshot job. No borrower-level data.';
+
+-- User visits -----------------------------------------------------------
+-- S3: authenticated app visits recorded by the backend visit-tracking
+-- middleware (backend/services/visit_tracking.py). One row per actor per
+-- dedupe window (default 15 minutes), never one row per request. Stores
+-- ONLY the existing actor identity model (workspace email forwarded by the
+-- Databricks Apps edge) + a timestamp -- no routes, IPs, user agents, or
+-- any borrower-linked data.
+CREATE TABLE IF NOT EXISTS mip_app.user_visits (
+    actor_email TEXT NOT NULL,
+    visited_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (actor_email, visited_at)
+);
+CREATE INDEX IF NOT EXISTS idx_user_visits_actor_visited
+    ON mip_app.user_visits (actor_email, visited_at DESC);
+COMMENT ON TABLE mip_app.user_visits IS
+    'Throttled authenticated-visit ledger (actor email + timestamp only) backing "since your last login" KPI deltas.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_10_s3_kpi_snapshots_user_visits',
+    'S3: daily headline-KPI snapshot table (per-day upsert target for mip_kpi_snapshot job) and throttled user_visits ledger for last-login deltas'
+)
+ON CONFLICT (version) DO NOTHING;
