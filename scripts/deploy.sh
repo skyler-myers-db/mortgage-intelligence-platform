@@ -19,6 +19,8 @@
 #       metric views Genie depends on.
 #   9.  Sync lifecycle state + funnel snapshot so the delta_vs_prior_*
 #       view columns resolve on the first dashboard render.
+#   9b. Backfill today's headline-KPI snapshot into mip_app.kpi_snapshots
+#       (idempotent per-day upsert; S4's last-login deltas never start empty).
 #   10. Provision / rebind the Genie space via
 #       tools/databricks/provision_genie_space.py.
 #   11. Provision MIP-owned agentic resources: Lakebase synced tables,
@@ -676,6 +678,17 @@ run_job_with_retry databricks bundle run mip_refresh_scores -t "$TARGET"
 # -----------------------------------------------------------------------------
 step "sync lifecycle state from Lakebase + record daily funnel snapshot"
 run "$PYTHON" tools/sync_lifecycle_warehouse.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+
+# -----------------------------------------------------------------------------
+# Step 9b: KPI snapshot backfill (S3)
+# -----------------------------------------------------------------------------
+# Upsert today's headline-KPI snapshot into Lakebase mip_app.kpi_snapshots so
+# S4's "since your last login" deltas never see an empty table on a fresh
+# install. Requires step 4b (Lakebase schema) + step 8 (gold refresh landed
+# semantics.portfolio_headline_metric_view). Idempotent: the job keys on
+# snapshot_date, so re-deploying the same day refreshes the day's row.
+step "record headline KPI snapshot — mip_app.kpi_snapshots backfill (idempotent per-day)"
+run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 
 # -----------------------------------------------------------------------------
 # Step 10: rebind the Genie space after gold/semantic assets exist

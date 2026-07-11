@@ -63,6 +63,7 @@ from backend.services.observability import (
     set_correlation_id,
 )
 from backend.services.static_assets import select_asset_variant
+from backend.services.visit_tracking import VisitTrackingMiddleware
 from backend.version import api_version
 
 log = logging.getLogger("mip-runtime")
@@ -451,6 +452,12 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 _backpressure_controller = BackpressureController()
 
 app.add_middleware(BackpressureMiddleware, controller=_backpressure_controller)
+# S3: throttled authenticated-visit ledger (one mip_app.user_visits row per
+# actor per window; the Lakebase write happens off the request path).
+# Added before CorrelationIdMiddleware so it sits INSIDE it in the stack
+# (last add_middleware call = outermost) and its structured log lines carry
+# the request's correlation id.
+app.add_middleware(VisitTrackingMiddleware)
 app.add_middleware(CorrelationIdMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 # compresslevel=6 (not the library default 9): dynamic JSON responses sit on
