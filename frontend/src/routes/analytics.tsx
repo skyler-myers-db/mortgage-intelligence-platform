@@ -46,14 +46,20 @@ import { SalesOpsSection } from './analytics.sales-ops';
 // Re-export the symbols imported from './analytics' by analytics.test.tsx so the
 // decomposition keeps every existing import path stable.
 export {
+  binCellRect,
+  binDensityAlpha,
+  binZoomViewport,
   buildDailyEvidenceTotals,
-  compactScatterRows,
   leadQueueHref,
   leadQueueHrefForFunnelStage,
   normalizeAnalyticsSegmentCodes,
+  overviewScatterLayout,
+  scatterPosition,
   segmentIntelligenceHref,
+  zoomScatterLayout,
 } from './analytics.lib';
-export { DailyEvidenceLineChart, LineChart, ScatterPlot } from './analytics.charts';
+export { DailyEvidenceLineChart, LineChart } from './analytics.charts';
+export { EquitySpreadBinsView, EquitySpreadPointsView, EquitySpreadScatter } from './analytics.equity-scatter';
 
 export default function AnalyticsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -309,7 +315,7 @@ export default function AnalyticsRoute() {
       )}
       {tab === 'economics' && (
         <LoadState query={economics} title="Economics analytics">
-          {(data) => <EconomicsView data={data} />}
+          {(data) => <EconomicsView data={data} filters={baseFilters} filterCriteria={baseCriteria} />}
         </LoadState>
       )}
       {tab === 'segments' && (

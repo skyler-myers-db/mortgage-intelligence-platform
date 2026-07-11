@@ -4238,13 +4238,43 @@ kbd {
   box-shadow: 0 0 0 2px var(--text-1), 0 0 0 var(--sp-1) var(--accent-soft);
   z-index: 2;
 }
-.analytics-segment--equity { background: var(--seg-equity); }
-.analytics-segment--itm { background: var(--seg-itm); }
-.analytics-segment--investor { background: var(--seg-investor); }
-.analytics-segment--listed { background: var(--seg-listed); }
-.analytics-segment--permit { background: var(--seg-permit); }
-.analytics-segment--retention { background: var(--seg-retention); }
-.analytics-segment--none { background: var(--text-3); }
+/* S7 zoom dots carry the canonical score-band classes (scoreBand ->
+   .score--high/med/low). The chip variants of those classes use soft
+   backgrounds; an 8px dot needs the solid band ink to stay legible, so the
+   dot modifier re-points background at the same band tokens. */
+.analytics-scatter__dot--band.score--high { background: var(--status-success-ink); border-color: transparent; }
+.analytics-scatter__dot--band.score--med { background: var(--status-warning-ink); border-color: transparent; }
+.analytics-scatter__dot--band.score--low { background: var(--text-3); border-color: transparent; }
+/* S7 overview density cells: one absolutely-positioned button per server
+   bin. Band class picks the hue (same tokens as the dots); --bin-alpha
+   encodes density. Hover/focus lifts the cell to full opacity with an
+   outline so keyboard users can walk the grid. */
+.analytics-scatter__bin {
+  position: absolute;
+  inset-inline-start: var(--bin-x);
+  inset-block-start: var(--bin-y);
+  inline-size: var(--bin-w);
+  block-size: var(--bin-h);
+  border: 0;
+  border-radius: var(--r-sm);
+  padding: 0;
+  opacity: var(--bin-alpha);
+  cursor: zoom-in;
+  pointer-events: auto;
+  transition: opacity var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+.analytics-scatter__bin.score--high { background: var(--status-success-ink); }
+.analytics-scatter__bin.score--med { background: var(--status-warning-ink); }
+.analytics-scatter__bin.score--low { background: var(--text-3); }
+.analytics-scatter__bin:hover,
+.analytics-scatter__bin:focus-visible {
+  opacity: 1;
+  box-shadow: 0 0 0 1px var(--text-1);
+  z-index: 2;
+}
+.analytics-scatter-meta {
+  margin: var(--sp-2) 0 0;
+}
 .analytics-table-wrap {
   overflow-x: auto;
 }
