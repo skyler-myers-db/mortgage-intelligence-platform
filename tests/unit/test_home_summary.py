@@ -165,64 +165,82 @@ def _highlights() -> list[Any]:
     return compose_home_summary(_delta_result()).highlights
 
 
-def test_validator_accepts_exact_token_rephrase() -> None:
+def test_validator_substitutes_tokens_into_placeholder_slots() -> None:
     text = (
+        "Great news since you were last here: high-opportunity is up {{0}}, "
+        "you have {{1}} refi candidates, and {{2}} offers available."
+    )
+    assert validate_genie_phrasing(text, _highlights()) == (
         "Great news since you were last here: high-opportunity is up +1.5%, "
         "you have +2,250 refi candidates, and +4,120 offers available."
     )
-    assert validate_genie_phrasing(text, _highlights()) == text
+
+
+def test_validator_keeps_attachment_structural_under_reordering() -> None:
+    # The model may reorder the slots freely — each slot still carries its
+    # OWN highlight's number, so a delta can never land on the wrong KPI.
+    text = "You gained {{1}} refi candidates, {{2}} offers available, and {{0}} high-opportunity."
+    assert validate_genie_phrasing(text, _highlights()) == (
+        "You gained +2,250 refi candidates, +4,120 offers available, "
+        "and +1.5% high-opportunity."
+    )
+
+
+def test_validator_rejects_the_reorder_exploit_sentence() -> None:
+    # Cross-review B1 regression: under the old bag-of-tokens check this
+    # sentence VALIDATED while attaching every delta to the wrong KPI.
+    # Model-written digits are now rejected wholesale.
+    exploit = (
+        "Since your last login: +2,250 high-opportunity and +1.5% more "
+        "refi candidates, +4,120 offers available"
+    )
+    assert validate_genie_phrasing(exploit, _highlights()) is None
 
 
 def test_validator_normalizes_whitespace() -> None:
-    text = "Up +1.5%,\n with +2,250 refi candidates   and +4,120 offers."
+    text = "Up {{0}},\n with {{1}} refi candidates   and {{2}} offers."
     assert validate_genie_phrasing(text, _highlights()) == (
         "Up +1.5%, with +2,250 refi candidates and +4,120 offers."
     )
 
 
-def test_validator_rejects_missing_altered_or_invented_numbers() -> None:
+def test_validator_rejects_bad_slots_digits_and_markup() -> None:
     highlights = _highlights()
-    # Missing a token.
-    assert validate_genie_phrasing("Up +1.5% with +2,250 refi candidates.", highlights) is None
-    # Altered magnitude.
+    # Missing a placeholder.
+    assert validate_genie_phrasing("Up {{0}} with {{1}} refi candidates.", highlights) is None
+    # Placeholder repeated.
     assert (
         validate_genie_phrasing(
-            "Up +1.6%, +2,250 refi candidates, +4,120 offers available.", highlights
+            "Up {{0}} and {{0}}, {{1}} refi candidates, {{2}} offers.", highlights
         )
         is None
     )
-    # Dropped sign.
+    # Unknown slot index.
     assert (
         validate_genie_phrasing(
-            "Up 1.5%, +2,250 refi candidates, +4,120 offers available.", highlights
+            "Up {{0}}, {{1}} refi candidates, {{3}} offers available.", highlights
         )
         is None
     )
-    # Invented extra number.
+    # Model-written digit alongside the slots.
     assert (
         validate_genie_phrasing(
-            "Up +1.5%, +2,250 refi candidates, +4,120 offers, 7 days left.", highlights
+            "Up {{0}}, {{1}} refi candidates, {{2}} offers, 7 days left.", highlights
         )
         is None
     )
-    # Token duplicated.
+    # Raw numbers instead of slots.
     assert (
         validate_genie_phrasing(
-            "Up +1.5% and +1.5%, +2,250 refi candidates, +4,120 offers.", highlights
+            "Up +1.5%, +2,250 refi candidates, +4,120 offers available.", highlights
         )
         is None
     )
-    # Token embedded in a larger number.
+    # Markup rejected outright (React escapes on render; cached phrasings
+    # must be clean too).
     assert (
         validate_genie_phrasing(
-            "Up +1.5%, +2,250,000 refi candidates, +4,120 offers available.", highlights
-        )
-        is None
-    )
-    # Count turned into a percent.
-    assert (
-        validate_genie_phrasing(
-            "Up +1.5%, +2,250% refi candidates, +4,120 offers available.", highlights
+            "Up {{0}}, {{1}} refi candidates, {{2}} offers <b>today</b>.", highlights
         )
         is None
     )
@@ -233,16 +251,19 @@ def test_validator_rejects_empty_and_oversized_text() -> None:
     assert validate_genie_phrasing(None, highlights) is None
     assert validate_genie_phrasing("   ", highlights) is None
     padding = "steady growth ahead " * 20
-    oversized = f"+1.5% +2,250 +4,120 {padding}"
+    oversized = f"{{{{0}}}} {{{{1}}}} {{{{2}}}} {padding}"
     assert validate_genie_phrasing(oversized, highlights) is None
 
 
-def test_phrasing_prompt_carries_headline_and_tokens() -> None:
+def test_phrasing_prompt_carries_headline_slots_and_tokens() -> None:
     summary = compose_home_summary(_delta_result())
     prompt = phrasing_prompt(summary)
     assert summary.headline in prompt
+    for slot in ("{{0}}", "{{1}}", "{{2}}"):
+        assert slot in prompt
     for token in ("+1.5%", "+2,250", "+4,120"):
         assert token in prompt
+    assert "Do not write any digits" in prompt
 
 
 # -- service: gate, cache, honest fallbacks ---------------------------------
@@ -275,6 +296,10 @@ def _service(
 
 
 _VALID_REPHRASE = (
+    "Since yesterday your book gained {{0}} high-opportunity, "
+    "{{1}} refi candidates and {{2}} offers available — nice tailwind."
+)
+_VALID_REPHRASE_SUBSTITUTED = (
     "Since yesterday your book gained +1.5% high-opportunity, "
     "+2,250 refi candidates and +4,120 offers available — nice tailwind."
 )
@@ -298,14 +323,14 @@ def test_service_serves_genie_phrasing_after_background_fill(
 
     second = service.summary_for_actor("lo01@summit.example")
     assert second.phrasing_source == "genie"
-    assert second.headline == _VALID_REPHRASE
+    assert second.headline == _VALID_REPHRASE_SUBSTITUTED
     assert second.phrasing_fallback_reason is None
     # The deterministic numbers are untouched enrichment or not.
     assert second.deltas == _DELTAS
     assert len(asked) == 1  # cached: one Genie turn per template window
 
 
-def test_service_falls_back_when_genie_alters_numbers(monkeypatch: Any) -> None:
+def test_service_falls_back_when_genie_writes_its_own_numbers(monkeypatch: Any) -> None:
     monkeypatch.setattr(settings, "mip_genie_live_first", True)
     service = _service(
         genie_ask=lambda prompt: "You gained +9.9% high-opportunity overnight!"
@@ -315,6 +340,31 @@ def test_service_falls_back_when_genie_alters_numbers(monkeypatch: Any) -> None:
     assert second.phrasing_source == "deterministic"
     assert second.phrasing_fallback_reason == "genie_numbers_mismatch"
     assert second.headline.startswith("Since your last login:")
+
+
+def test_service_skips_enrichment_when_tokens_are_not_distinct(monkeypatch: Any) -> None:
+    # Two zero deltas render the same "0" token; the frontend attaches
+    # evidence drawers by exact token string, so enrichment stays off to
+    # keep number->drawer attachment provable.
+    monkeypatch.setattr(settings, "mip_genie_live_first", True)
+    asked: list[str] = []
+    result = _delta_result().model_copy(
+        update={
+            "deltas": _DELTAS.model_copy(
+                update={"refi_economics_screen": 0, "offers_available": 0}
+            )
+        }
+    )
+    service = HomeSummaryService(
+        delta_service=_StubDeltas(result),
+        genie_ask=lambda p: asked.append(p) or _VALID_REPHRASE,
+        spawn=_sync_spawn,
+    )
+    summary = service.summary_for_actor("lo01@summit.example")
+    assert [h.display for h in summary.highlights] == ["+1.5%", "0", "0"]
+    assert summary.phrasing_source == "deterministic"
+    assert summary.phrasing_fallback_reason == "genie_duplicate_tokens"
+    assert asked == []
 
 
 def test_service_falls_back_when_genie_raises(monkeypatch: Any) -> None:

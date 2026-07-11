@@ -173,50 +173,64 @@ def compose_home_summary(result: KpiDeltaResult) -> HomeSummaryResponse:
 
 
 # -- Genie phrasing (optional enrichment) --------------------------------
+#
+# Placeholder-substitution design (cross-review of the original
+# validate-the-numbers approach): the model is asked to write a sentence
+# containing one {{i}} slot per highlight and NO digits of its own; the
+# server then substitutes each highlight's deterministic token into its
+# own slot. Attachment is structural — {{1}} can only ever carry
+# highlight 1's number, so the model may reorder or rephrase freely but
+# can never pin a delta onto the wrong KPI. Any digit outside a slot,
+# any missing/duplicate/unknown slot, or any markup rejects the output.
+
+_PLACEHOLDER_RE = re.compile(r"\{\{(\d+)\}\}")
 
 
 def phrasing_prompt(summary: HomeSummaryResponse) -> str:
-    tokens = ", ".join(h.value_token for h in summary.highlights)
+    slots = "; ".join(
+        f"{{{{{i}}}}} = {h.display} {h.label}"
+        for i, h in enumerate(summary.highlights)
+    )
     return (
         "Rephrase the portfolio update below as ONE friendly sentence for a "
-        "mortgage growth leader opening their dashboard. You MUST keep these "
-        f"figures verbatim, each exactly once, including any +/- sign: {tokens}. "
-        "Do not add, recompute, or round any other number, do not run a query, "
-        "and do not name any borrower. Update: "
+        "mortgage growth leader opening their dashboard. Do not write any "
+        "digits: instead use each of these placeholder slots exactly once, in "
+        f"any order that reads well: {slots}. "
+        "Keep each placeholder next to the wording for its own metric. Do not "
+        "add or recompute figures, do not use markup, do not run a query, and "
+        "do not name any borrower. Update for context: "
         f"{summary.headline}"
     )
-
-
-def _token_pattern(token: str) -> re.Pattern[str]:
-    # Boundary guards: the token must not extend a larger number on either
-    # side ("2,250" inside "12,250", or followed by ",345" / ".5" / "%",
-    # which would silently change the magnitude or turn a count into a
-    # percentage). Percent tokens already end in a literal %.
-    if token.endswith("%"):
-        return re.compile(rf"(?<![\d.,]){re.escape(token[:-1])}%")
-    return re.compile(rf"(?<![\d.,]){re.escape(token)}(?![.,]?\d)(?!%)")
 
 
 def validate_genie_phrasing(
     text: str | None, highlights: list[HomeSummaryHighlight]
 ) -> str | None:
-    """Return the normalized Genie sentence only if it carries EXACTLY the
-    deterministic tokens (each once, signs intact) and no other digits."""
+    """Return the final sentence — the model's phrasing with each {{i}}
+    slot replaced by highlight i's deterministic token — or ``None``.
+
+    Rejects: empty/oversized output, markup, any digit outside a
+    placeholder, and any missing, repeated, or unknown placeholder. This
+    makes number→KPI attachment structural: the model never writes a
+    number, so it cannot reorder one onto the wrong metric (the original
+    bag-of-tokens check allowed exactly that)."""
     if not text:
         return None
     normalized = " ".join(text.split())
     if not normalized or len(normalized) > _PHRASING_MAX_LEN:
         return None
-    remaining = normalized
-    # Longest token first so "2,250" can't consume part of "12,250".
-    for token in sorted((h.value_token for h in highlights), key=len, reverse=True):
-        pattern = _token_pattern(token)
-        if len(pattern.findall(remaining)) != 1:
-            return None
-        remaining = pattern.sub(" ", remaining, count=1)
-    if re.search(r"\d", remaining):
+    # Defense-in-depth against markup injection (React escapes on render;
+    # reject here too so an audit of stored/cached phrasings stays clean).
+    if "<" in normalized or ">" in normalized:
         return None
-    return normalized
+    slots = [int(i) for i in _PLACEHOLDER_RE.findall(normalized)]
+    if sorted(slots) != list(range(len(highlights))):
+        return None
+    if re.search(r"\d", _PLACEHOLDER_RE.sub(" ", normalized)):
+        return None
+    return _PLACEHOLDER_RE.sub(
+        lambda m: highlights[int(m.group(1))].value_token, normalized
+    )
 
 
 class _PhrasingFailure:
@@ -351,6 +365,15 @@ class HomeSummaryService:
         reason = self._phrasing_gate()
         if reason is not None:
             return summary.model_copy(update={"phrasing_fallback_reason": reason})
+        # Slot substitution puts each number in its own placeholder, but the
+        # frontend attaches evidence drawers by exact token string — two
+        # identical tokens (e.g. two zero deltas) would make that attachment
+        # ambiguous under model reordering. Rare edge; stay deterministic.
+        tokens = [h.value_token for h in summary.highlights]
+        if len(set(tokens)) != len(tokens):
+            return summary.model_copy(
+                update={"phrasing_fallback_reason": "genie_duplicate_tokens"}
+            )
         key = "home_summary.phrasing." + hashlib.sha256(
             summary.headline.encode("utf-8")
         ).hexdigest()

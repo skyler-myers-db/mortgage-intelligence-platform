@@ -219,6 +219,21 @@ describe('LastLoginSummary', () => {
     expect(container.textContent).not.toContain('Genie-phrased');
   });
 
+  it('never renders model output as HTML (defense-in-depth; backend also rejects markup)', () => {
+    const hostile: HomeSummary = {
+      ...DELTA_SUMMARY,
+      phrasing_source: 'genie',
+      headline:
+        '<img src=x onerror="window.__pwned=1"> up +1.5%, +2,250 refi candidates, +4,120 offers available.',
+    };
+    render(hostile);
+    expect(container.querySelector('img[src="x"]')).toBeNull();
+    expect((window as unknown as { __pwned?: number }).__pwned).toBeUndefined();
+    // The markup shows up as inert text, tokens stay interactive.
+    expect(container.querySelector('.login-summary__narrative')?.textContent).toContain('<img');
+    expect(container.querySelectorAll('.login-summary__num').length).toBe(3);
+  });
+
   it('falls back to structured highlights when a token cannot be located', () => {
     const mangled: HomeSummary = {
       ...DELTA_SUMMARY,
