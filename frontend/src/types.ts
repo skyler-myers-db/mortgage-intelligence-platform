@@ -1,7 +1,4 @@
-import type {
-  AssignmentLifecycleStatus,
-  LeadAssignment,
-} from './types/loanOfficer';
+import type { AssignmentLifecycleStatus, LeadAssignment } from './types/loanOfficer';
 
 export type SegmentCode =
   | 'itm'
@@ -872,12 +869,6 @@ export type {
   ZipRollupResponse,
 } from './types/geo';
 
-export type {
-  AssignmentLifecycleStatus,
-  LeadAssignment,
-  LoanOfficer,
-  LoanOfficerAssignment,
-  SalesTeamMember,
-} from './types/loanOfficer';
-
+export type { HomeSummary, HomeSummaryHighlight } from './types/homeSummary';
+export type * from './types/loanOfficer';
 export type * from './types/economicsScatter';
