@@ -16,6 +16,7 @@ import type {
   EconomicsAnalyticsResponse,
   ExecutiveAnalyticsResponse,
   GeographyAnalyticsResponse,
+  HomeSummary,
   LeadSummary,
   LeadAssignment,
   LoanOfficer,
@@ -742,6 +743,9 @@ export const api = {
 
   analyticsSignals: (signal?: AbortSignal, opts: AnalyticsQueryOptions = {}) =>
     getJson<SignalAnalyticsResponse>(analyticsPath('signals', opts), signal),
+
+  homeSummary: (signal?: AbortSignal) =>
+    getJson<HomeSummary>('/api/home/summary', signal),
 
   portfolioPreview: (
     criteria: Record<string, unknown> = {},
