@@ -8,7 +8,13 @@ import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from '../lib/api';
-import { buildLeadQueueExportFilters, formatLeadQueueLoadError } from './lead-queue.filters';
+import {
+  buildLeadQueueExportFilters,
+  formatLeadQueueLoadError,
+  searchParamsAfterSegmentRemoval,
+  segmentFilterChips,
+} from './lead-queue.filters';
+import type { SegmentCode } from '../types';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -361,5 +367,112 @@ describe('LeadQueue filter state', () => {
     expect(inDocumentOrder.indexOf(filtersHeading as Element)).toBeLessThan(
       inDocumentOrder.indexOf(lookupPanel as Element),
     );
+  });
+
+  it('renders one removable chip per intersected segment and recomputes on removal (S8)', async () => {
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter
+            initialEntries={['/lead-queue?segment_codes=refi_propensity,investor&segment_mode=all&state=IL']}
+          >
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    const chipRow = document.querySelector('[aria-label="Active segment filters"]');
+    expect(chipRow).toBeTruthy();
+    expect(chipRow!.querySelectorAll('.chip').length).toBe(2);
+    expect(chipRow!.textContent).toContain('Refi Propensity');
+    expect(chipRow!.textContent).toContain('Investor / Multi-Property');
+    expect(chipRow!.textContent).toContain('Intersection');
+
+    const removeInvestor = document.querySelector(
+      'button[aria-label="Remove Investor / Multi-Property segment filter"]',
+    ) as HTMLButtonElement;
+    expect(removeInvestor).toBeTruthy();
+    await act(async () => {
+      removeInvestor.click();
+    });
+    await settle();
+
+    // One segment left: the selection collapses to the single-segment param
+    // and the SEGMENT dropdown reflects the recomputed server-side filter.
+    expect(document.querySelector('button[aria-label="SEGMENT: Refi Propensity"]')).toBeTruthy();
+    const remainingRow = document.querySelector('[aria-label="Active segment filters"]');
+    expect(remainingRow!.querySelectorAll('.chip').length).toBe(1);
+    expect(remainingRow!.textContent).not.toContain('Intersection');
+    // Unrelated filters survive the chip removal.
+    expect(document.querySelector('button[aria-label="STATE: IL"]')).toBeTruthy();
+
+    const removeRefi = document.querySelector(
+      'button[aria-label="Remove Refi Propensity segment filter"]',
+    ) as HTMLButtonElement;
+    await act(async () => {
+      removeRefi.click();
+    });
+    await settle();
+
+    expect(document.querySelector('[aria-label="Active segment filters"]')).toBeNull();
+    expect(document.querySelector('button[aria-label="SEGMENT: All segments"]')).toBeTruthy();
+  });
+});
+
+describe('segment chip add/remove state (S8)', () => {
+  const codes = (value: string | null) => (value ?? '').split(',').filter(Boolean);
+
+  it('builds one chip per composed segment and falls back to the single segment param', () => {
+    expect(segmentFilterChips(undefined, ['refi_propensity', 'investor'] as SegmentCode[])).toEqual([
+      { code: 'refi_propensity', label: 'Refi Propensity' },
+      { code: 'investor', label: 'Investor / Multi-Property' },
+    ]);
+    expect(segmentFilterChips('itm' as SegmentCode, [])).toEqual([
+      { code: 'itm', label: 'Prime Refi Candidates' },
+    ]);
+    expect(segmentFilterChips(undefined, [])).toEqual([]);
+  });
+
+  it('keeps the intersection mode while 2+ segments remain after a removal', () => {
+    const next = searchParamsAfterSegmentRemoval(
+      new URLSearchParams('segment_codes=refi_propensity,investor,itm&segment_mode=all&state=IL'),
+      'investor' as SegmentCode,
+    );
+    expect(codes(next.get('segment_codes'))).toEqual(['refi_propensity', 'itm']);
+    expect(next.get('segment_mode')).toBe('all');
+    expect(next.get('segment')).toBeNull();
+    expect(next.get('state')).toBe('IL');
+  });
+
+  it('collapses to the single-segment param when one remains and drops the mode', () => {
+    const next = searchParamsAfterSegmentRemoval(
+      new URLSearchParams('segment_codes=refi_propensity,investor&segment_mode=all'),
+      'investor' as SegmentCode,
+    );
+    expect(next.get('segment')).toBe('refi_propensity');
+    expect(next.get('segment_codes')).toBeNull();
+    expect(next.get('segment_mode')).toBeNull();
+  });
+
+  it('drops the whole segment filter when the last chip is removed', () => {
+    const next = searchParamsAfterSegmentRemoval(
+      new URLSearchParams('segment=refi_propensity&zip=60617'),
+      'refi_propensity' as SegmentCode,
+    );
+    expect(next.get('segment')).toBeNull();
+    expect(next.get('segment_codes')).toBeNull();
+    expect(next.get('segment_mode')).toBeNull();
+    expect(next.get('zip')).toBe('60617');
+  });
+
+  it('ignores removal of a code that is not part of the selection', () => {
+    const next = searchParamsAfterSegmentRemoval(
+      new URLSearchParams('segment_codes=refi_propensity,investor&segment_mode=all'),
+      'equity' as SegmentCode,
+    );
+    expect(codes(next.get('segment_codes'))).toEqual(['refi_propensity', 'investor']);
+    expect(next.get('segment_mode')).toBe('all');
   });
 });

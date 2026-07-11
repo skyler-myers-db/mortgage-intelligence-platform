@@ -538,6 +538,19 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* S8 BEM extension: dismiss affordance for removable filter chips (segment
+ * intersection on the Lead Queue). The prototype `.chip` block has no
+ * dismiss element; this adds one without touching the base chip metrics. */
+.chip__remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-inline-start: 2px; padding: 1px;
+  border: none; border-radius: var(--r-pill);
+  background: transparent; color: inherit;
+  cursor: pointer; opacity: 0.65;
+  transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+.chip__remove:hover,
+.chip__remove:focus-visible { opacity: 1; background: var(--bg-3); }
 .chip--neutral { background: var(--bg-3); border-color: var(--line-1); color: var(--text-2); }
 .chip--success { background: var(--status-success-soft-muted); border-color: var(--status-success-line-strong); color: var(--status-success-ink); }
 .chip--warning { background: var(--status-warning-soft-muted); border-color: var(--status-warning-line-strong); color: var(--status-warning-ink); }
