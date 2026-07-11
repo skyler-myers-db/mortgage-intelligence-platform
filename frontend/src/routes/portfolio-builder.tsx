@@ -6,12 +6,14 @@ import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { CampaignListResponse, CampaignSummary, PortfolioPreview } from '../types';
 import { PageShell } from '../components/layout/PageShell';
+import { CampaignPrefillBanner } from '../components/mortgage/CampaignPrefillBanner';
 import { KpiCard } from '../components/mortgage/KpiCard';
 import { Button } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import { useApp } from '../components/AppContext';
 import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
+import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { parseBackendTimestamp } from '../lib/time';
 import { useFootprint } from '../components/FootprintProvider';
@@ -57,6 +59,11 @@ export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { setDrawer } = useApp();
   const footprint = useFootprint();
+  // S9 geo → campaign handoff: a `prefill_source=geo-drilldown` link seeds a
+  // draft context banner. The state predicate itself applies through the
+  // existing `states=` param via parseStateCodesFromUrl below — no second
+  // application path here.
+  const campaignPrefill = useMemo(() => parseCampaignPrefill(searchParams), [searchParams]);
   const configOptionsQuery = useConfigOptionsQuery();
   const targetLenderOptions = useMemo(() => {
     const values = configOptionsQuery.data?.target_lender_refs?.filter(Boolean);
@@ -327,6 +334,7 @@ export default function PortfolioBuilder() {
       title="Build a borrower population"
       lede="Apply geography, lien, relationship, Owner Link, purchase intent, product, and equity filters. KPIs show size, score, and conversion."
     >
+      <CampaignPrefillBanner prefill={campaignPrefill.prefill} error={campaignPrefill.error} />
       <div className="surface">
         <div className="surface__hdr surface__hdr--split">
           <div className="surface__hdr-main">
