@@ -143,6 +143,16 @@ export interface CountiesPayload {
   viewBox: string;
 }
 
+/** S9 overlay facts attached to a hover when the assignment overlay is ON. */
+export interface HoverOverlay {
+  leadCount: number | null;
+  assignedCount: number | null;
+  unattendedCount: number | null;
+  coveringOfficerCount: number | null;
+  /** Officer display names — surfaced only on the drilled/selected unit. */
+  coveringOfficers?: string[];
+}
+
 export interface HoverState {
   x: number;
   y: number;
@@ -151,6 +161,8 @@ export interface HoverState {
   avgScore: number | null;
   topSegment?: string;
   sourceHint?: string;
+  /** Present when the assignment overlay is active (S9). */
+  overlay?: HoverOverlay;
 }
 
 export interface LeadQueuePathInput {

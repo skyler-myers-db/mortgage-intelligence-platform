@@ -793,6 +793,24 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     ],
   },
 
+  assignmentOverlay: {
+    title: 'Assigned vs. unattended coverage',
+    short: 'assignment_overlay',
+    description:
+      'Per-geography difference between the live lead queue and active loan-officer assignments — the leads nobody is working.',
+    lineage: [
+      { layer: 'STATE', name: 'mip_app.lead_assignments', meta: 'active only (released_at IS NULL)' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'marketing-eligible geography join' },
+      { layer: 'STATE', name: 'mip_app.loan_officers', meta: 'coverage_states / coverage_counties arrays' },
+    ],
+    signals: [
+      { label: 'Leads', source: 'borrower_360.marketing_eligible', value: 'live queue population' },
+      { label: 'Assigned', source: 'lead_assignments.released_at IS NULL', value: 'active hold' },
+      { label: 'Unattended', source: 'lead_count - assigned_count', value: 'no active assignment' },
+      { label: 'LO coverage', source: 'loan_officers.coverage_*', value: 'array membership' },
+    ],
+  },
+
   config: {
     title: 'Campaign assumptions',
     short: 'config',

@@ -240,6 +240,38 @@ export interface LeadsPageResult {
 
 export type GeoQueryCriteria = Record<string, string | number | readonly string[] | null | undefined>;
 
+/**
+ * S9 assigned-vs-unattended overlay. Mirrors
+ * `backend/schemas/geo_overlay.py`: per-geography-unit lead / assigned /
+ * unattended counts plus loan-officer coverage. The overlay is the
+ * difference between the live lead queue population
+ * (`mip.gold.borrower_360`, marketing_eligible) and active Lakebase
+ * assignments (`mip_app.lead_assignments`, released_at IS NULL).
+ */
+export type GeoOverlayLevel = 'state' | 'county' | 'zip';
+
+export interface GeoAssignmentOverlayUnit {
+  /** USPS code (state) | 5-char FIPS (county) | 5-digit ZIP (zip). */
+  unit_id: string;
+  lead_count: number;
+  assigned_count: number;
+  unattended_count: number;
+  covering_officer_count: number;
+  covering_officers: string[];
+}
+
+export interface GeoAssignmentOverlayResponse {
+  level: GeoOverlayLevel;
+  state: string | null;
+  county_fips: string | null;
+  units: GeoAssignmentOverlayUnit[];
+  total_leads: number;
+  total_assigned: number;
+  total_unattended: number;
+  /** Honest copy for the legend — cite verbatim. */
+  lead_definition: string;
+}
+
 function appendPortfolioCriteria(params: URLSearchParams, criteria?: GeoQueryCriteria | null) {
   if (!criteria) return;
   Object.entries(criteria).forEach(([key, value]) => {
@@ -877,6 +909,26 @@ export const api = {
     return getJson<ZipRollupResponse>(
       `/api/geo/zip-rollups?${params.toString()}`,
       signal,
+    );
+  },
+
+  /**
+   * S9 assigned-vs-unattended overlay for one drill level. Follows the
+   * stateRollups/countyRollups/zipRollups pattern: 422 when level=county
+   * without state or level=zip without countyFips; a transient 503 flows
+   * through the same retry/degraded-state path as every other geo read.
+   */
+  assignmentOverlay: (
+    level: GeoOverlayLevel,
+    opts: { state?: string | null; countyFips?: string | null; signal?: AbortSignal } = {},
+  ) => {
+    const params = new URLSearchParams();
+    params.set('level', level);
+    if (opts.state) params.set('state', opts.state.toUpperCase());
+    if (opts.countyFips) params.set('county_fips', opts.countyFips);
+    return getJson<GeoAssignmentOverlayResponse>(
+      `/api/geo/assignment-overlay?${params.toString()}`,
+      opts.signal,
     );
   },
 
