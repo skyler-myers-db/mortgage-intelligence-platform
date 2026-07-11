@@ -1,10 +1,15 @@
 """OpenAPI wire-contract compatibility gates.
 
 The storage layer already has DDL contract tests. This file protects the
-public API surface by comparing the current FastAPI OpenAPI document against a
-committed baseline and failing only on breaking changes. Additive paths,
-optional fields, and enum widenings are allowed; removals and tighter required
-sets are not.
+public API surface in two directions:
+
+- Breaking drift (removals, tighter required sets, enum narrowing) fails
+  ``test_openapi_wire_contract_has_no_breaking_changes``.
+- Additive drift (new paths, methods, schemas, or contract changes not yet
+  captured in the committed baseline) fails
+  ``test_openapi_baseline_captures_current_api_surface``. Additive changes
+  are still allowed — they just must be snapshotted: run
+  ``python tools/regen_openapi_baseline.py`` and commit the result.
 """
 from __future__ import annotations
 
@@ -20,6 +25,10 @@ from backend.version import api_version
 ROOT = Path(__file__).resolve().parents[2]
 BASELINE = ROOT / "tests" / "fixtures" / "openapi_baseline.json"
 HTTP_METHODS = {"get", "post", "put", "patch", "delete"}
+REGEN_HINT = (
+    "The committed OpenAPI baseline is stale. "
+    "Run `python tools/regen_openapi_baseline.py` and commit the result."
+)
 
 
 def _schema() -> dict[str, Any]:
@@ -169,6 +178,77 @@ def test_canonical_api_routes_do_not_use_generic_dict_response_models() -> None:
             methods = ",".join(sorted((route.methods or set()) - {"HEAD", "OPTIONS"}))
             violations.append(f"{methods} {route.path}: {model}")
     assert violations == []
+
+
+def _api_paths(schema: dict[str, Any]) -> dict[str, Any]:
+    """All /api-prefixed paths: canonical /api/v1/* plus /api/* compat aliases.
+
+    Every /api route mounts unconditionally via ``API_ROUTERS`` in
+    ``backend.main``. The SPA catch-all ``/{full_path}`` is deliberately
+    excluded: it mounts only when ``frontend/dist/index.html`` exists, so its
+    presence varies between environments and it carries no API contract.
+    """
+
+    return {
+        path: methods
+        for path, methods in schema.get("paths", {}).items()
+        if path.startswith("/api/")
+    }
+
+
+def test_openapi_baseline_captures_current_api_surface() -> None:
+    """Fail loud on additive baseline drift.
+
+    The breaking-change test below is additive-tolerant by design, which let
+    ~38 real endpoints accrue between 2026-06-25 and 2026-07-11 without a
+    single test failure. This test closes that hole by requiring the committed
+    baseline to exactly match the live /api surface in BOTH directions:
+    paths, methods, operation contracts (title-stripped; docstrings excluded),
+    and component schemas. Additive changes remain allowed — they just must be
+    snapshotted in the same commit via ``tools/regen_openapi_baseline.py``.
+    """
+
+    current = _schema()
+    baseline = json.loads(BASELINE.read_text(encoding="utf-8"))
+
+    current_paths = _api_paths(current)
+    baseline_paths = _api_paths(baseline)
+
+    missing_paths = sorted(set(current_paths) - set(baseline_paths))
+    assert missing_paths == [], f"Paths missing from baseline: {missing_paths}. {REGEN_HINT}"
+
+    stale_paths = sorted(set(baseline_paths) - set(current_paths))
+    assert stale_paths == [], f"Baseline paths no longer live: {stale_paths}. {REGEN_HINT}"
+
+    method_drift: list[str] = []
+    contract_drift: list[str] = []
+    for path, methods in sorted(current_paths.items()):
+        baseline_methods = baseline_paths[path]
+        for method in sorted((set(methods) | set(baseline_methods)) & HTTP_METHODS):
+            if method not in baseline_methods or method not in methods:
+                method_drift.append(f"{method.upper()} {path}")
+            elif _operation_contract(methods[method]) != _operation_contract(
+                baseline_methods[method]
+            ):
+                contract_drift.append(f"{method.upper()} {path}")
+    assert method_drift == [], f"Method drift vs baseline: {method_drift}. {REGEN_HINT}"
+    assert contract_drift == [], f"Operation contract drift vs baseline: {contract_drift}. {REGEN_HINT}"
+
+    current_schemas = _schemas(current)
+    baseline_schemas = _schemas(baseline)
+    missing_schemas = sorted(set(current_schemas) - set(baseline_schemas))
+    assert missing_schemas == [], f"Schemas missing from baseline: {missing_schemas}. {REGEN_HINT}"
+
+    stale_schemas = sorted(set(baseline_schemas) - set(current_schemas))
+    assert stale_schemas == [], f"Baseline schemas no longer live: {stale_schemas}. {REGEN_HINT}"
+
+    schema_drift = sorted(
+        name
+        for name, current_schema in current_schemas.items()
+        if _without_schema_titles(current_schema)
+        != _without_schema_titles(baseline_schemas[name])
+    )
+    assert schema_drift == [], f"Schema definition drift vs baseline: {schema_drift}. {REGEN_HINT}"
 
 
 def test_openapi_wire_contract_has_no_breaking_changes() -> None:

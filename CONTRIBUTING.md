@@ -102,9 +102,13 @@ When adding or changing an endpoint:
 2. Add or update router tests.
 3. Update `ROUTE_TEST_MANIFEST` in
    `tests/unit/test_architecture_boundaries.py`.
-4. If the wire contract intentionally changes, regenerate
-   `tests/fixtures/openapi_baseline.json` from `backend.main.app.openapi()` and
-   explain why the change is additive or intentionally breaking.
+4. If the wire contract changes — including additive changes — regenerate
+   `tests/fixtures/openapi_baseline.json` with
+   `python tools/regen_openapi_baseline.py` (deterministic snapshot of
+   `backend.main.app.openapi()`) and commit it in the same PR, explaining why
+   the change is additive or intentionally breaking.
+   `tests/unit/test_openapi_contract.py` fails loud when the baseline drifts
+   from the live `/api` surface in either direction.
 5. Update frontend API types and callers, or generated types if that path is
    adopted later.
 6. Update `CHANGELOG.md` and the relevant operator docs.
