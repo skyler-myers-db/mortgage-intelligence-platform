@@ -2,7 +2,7 @@ import { useMemo } from 'react';
 import type { HomeSummary, HomeSummaryHighlight } from '../../types';
 import { Icon } from '../Icon';
 import { useApp } from '../AppContext';
-import { loginSummaryDrawerSource } from '../../lib/drawerSources';
+import { loginSummaryDrawerSource } from '../../lib/loginSummaryDrawerSource';
 import { formatTimestamp } from '../../lib/time';
 
 /**

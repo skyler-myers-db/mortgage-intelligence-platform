@@ -1,5 +1,5 @@
 import type { DrawerSource } from '../components/AppContext';
-import type { HomeSummaryHighlight, SegmentSummary } from '../types';
+import type { SegmentSummary } from '../types';
 import { SEGMENT_EVIDENCE_SPECS, SEGMENT_GATE_COPY } from './segmentEvidenceSpecs';
 
 const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
@@ -871,85 +871,4 @@ export function segmentEvidenceSource(
           { label: 'Average score', source: 'avg_score', value: String(segment.avg_score) },
         ],
   });
-}
-
-/** S4 home summary: evidence for one "since your last login" number.
- *
- * Cites BOTH sides of the comparison: the live headline metric view
- * (current reading) and the persisted `mip_app.kpi_snapshots` row nearest
- * the actor's previous visit (baseline). Welcome states (first visit /
- * pre-backfill) carry no baseline, so the snapshot lineage step and
- * baseline signal are omitted rather than faked.
- */
-export function loginSummaryDrawerSource(
-  highlight: Pick<
-    HomeSummaryHighlight,
-    'measure' | 'label' | 'display' | 'current' | 'baseline' | 'delta' | 'delta_pct'
-  >,
-  opts: { baselineSnapshotAt: string | null; previousVisitAt: string | null } = {
-    baselineSnapshotAt: null,
-    previousVisitAt: null,
-  },
-): DrawerSource {
-  const hasBaseline = highlight.baseline !== null && highlight.delta !== null;
-  const lineage: NonNullable<DrawerSource['lineage']> = [];
-  if (hasBaseline) {
-    lineage.push({
-      layer: 'APP',
-      name: 'mip_app.kpi_snapshots',
-      meta: opts.baselineSnapshotAt
-        ? `baseline snapshot @ ${opts.baselineSnapshotAt}`
-        : 'baseline snapshot nearest your previous visit',
-    });
-  }
-  lineage.push(
-    { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
-    {
-      layer: 'SEMANTIC',
-      name: 'mip.semantics.portfolio_headline_metric_view',
-      meta: 'current reading (unfiltered headline set)',
-    },
-  );
-  const signals: NonNullable<DrawerSource['signals']> = [
-    {
-      label: 'Current',
-      source: `portfolio_headline_metric_view.${highlight.measure}`,
-      value: highlight.current.toLocaleString(),
-    },
-  ];
-  if (hasBaseline) {
-    signals.push(
-      {
-        label: 'Baseline',
-        source: `kpi_snapshots.${highlight.measure}`,
-        value: (highlight.baseline as number).toLocaleString(),
-      },
-      {
-        label: 'Since last login',
-        source: 'current - baseline',
-        value:
-          highlight.delta_pct !== null
-            ? `${highlight.display} (${(highlight.delta as number).toLocaleString()})`
-            : highlight.display,
-      },
-    );
-  }
-  return {
-    title: hasBaseline
-      ? `Since your last login — ${highlight.label}`
-      : `Your book today — ${highlight.label}`,
-    short: `portfolio_headline_metric_view.${highlight.measure}`,
-    assetKey: 'portfolio_headline_metric_view',
-    assetPath: 'mip.semantics.portfolio_headline_metric_view',
-    description: hasBaseline
-      ? 'Signed movement between the daily headline-KPI snapshot nearest your ' +
-        'previous visit (mip_app.kpi_snapshots) and the live unfiltered headline ' +
-        'metric view. Both sides aggregate the same headline set, so the ' +
-        'comparison is apples-to-apples.'
-      : 'Live reading from the unfiltered portfolio headline metric view. ' +
-        'Last-login deltas appear once a previous visit and a baseline snapshot exist.',
-    lineage,
-    signals,
-    ...(opts.previousVisitAt ? { eventDate: opts.previousVisitAt } : {}),
-  };
 }
