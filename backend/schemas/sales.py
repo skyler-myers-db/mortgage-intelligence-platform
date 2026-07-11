@@ -16,6 +16,7 @@ from backend.schemas.common import (
     validate_public_borrower_id,
     validate_public_opaque_id,
 )
+from backend.schemas.loan_officer import AssignmentLifecycleStatus
 
 AssignmentStrategy = Literal["manual", "round_robin", "score_balanced"]
 OutreachStatus = Literal["none", "queued", "actioned", "sent", "bounced", "replied"]
@@ -111,6 +112,9 @@ class LeadAssignment(BaseModel):
     expires_at: datetime | None = None
     released_at: datetime | None = None
     strategy: AssignmentStrategy = "manual"
+    # S2 lifecycle stage; rows written before the loan-officer migration
+    # read back as the entry stage.
+    status: AssignmentLifecycleStatus = "assigned"
 
 
 class AssignLeadRequest(BaseModel):
