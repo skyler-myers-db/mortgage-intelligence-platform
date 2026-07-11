@@ -339,6 +339,22 @@ class _FakeLakebaseClient:
                 if row.get("request_id") == request_id:
                     return dict(row)
             return None
+        if "approved_union" in sql:
+            # S6 funnel: distinct borrowers at-or-past 'approved' via the
+            # active assignment lifecycle UNION human approve decisions.
+            lifecycle_borrowers = {
+                row["borrower_id"]
+                for row in self.assignments
+                if row.get("released_at") is None
+                and (row.get("status") or "assigned")
+                in {"approved", "actioned", "outcome_recorded"}
+            }
+            approval_borrowers = {
+                row["borrower_id"]
+                for row in self.approvals
+                if row.get("action") == "approve"
+            }
+            return {"n": len(lifecycle_borrowers | approval_borrowers)}
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
             return None
         if "FROM mip_app.tenant_disclosures" in sql:
@@ -385,6 +401,82 @@ class _FakeLakebaseClient:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         self.fetchalls.append((sql, params or {}, limit))
+        if "GROUP BY COALESCE(status, 'assigned')" in sql:
+            # S6 funnel: distinct borrowers per lifecycle status (active rows).
+            by_status: dict[str, set[str]] = {}
+            for row in self.assignments:
+                if row.get("released_at") is not None:
+                    continue
+                status = str(row.get("status") or "assigned")
+                by_status.setdefault(status, set()).add(str(row["borrower_id"]))
+            return [
+                {"status": status, "n": len(borrowers)}
+                for status, borrowers in sorted(by_status.items())
+            ][:limit]
+        if "GROUP BY o.loan_officer_id" in sql:
+            # S6 funnel: per-officer active-assignment counts by status,
+            # LEFT JOIN semantics -- officers with no assignments still
+            # emit one zero row.
+            out = []
+            for officer in self.loan_officers:
+                if not officer["active"]:
+                    continue
+                counts: dict[str, int] = {}
+                for row in self.assignments:
+                    if row.get("released_at") is not None:
+                        continue
+                    if str(row.get("loan_officer_id") or "") != officer["loan_officer_id"]:
+                        continue
+                    status = str(row.get("status") or "assigned")
+                    counts[status] = counts.get(status, 0) + 1
+                if not counts:
+                    counts = {"assigned": 0}
+                for status, n in sorted(counts.items()):
+                    out.append(
+                        {
+                            "loan_officer_id": officer["loan_officer_id"],
+                            "display_name": officer["display_name"],
+                            "email": officer["email"],
+                            "status": status,
+                            "n": n,
+                        }
+                    )
+            return out[:limit]
+        if "FROM mip_app.feedback f" in sql:
+            # S6 funnel: per-officer recorded-outcome counts.
+            loan_officer_id = str((params or {}).get("loan_officer_id") or "")
+            assignment_ids = {
+                str(row["assignment_id"])
+                for row in self.assignments
+                if str(row.get("loan_officer_id") or "") == loan_officer_id
+            }
+            counts: dict[str, int] = {}
+            for row in self.feedback:
+                event_type = str(row.get("event_type") or "")
+                if not event_type.startswith("assignment_outcome_"):
+                    continue
+                if str(row.get("assignment_id")) not in assignment_ids:
+                    continue
+                counts[event_type] = counts.get(event_type, 0) + 1
+            return [
+                {"event_type": event_type, "n": n}
+                for event_type, n in sorted(counts.items())
+            ][:limit]
+        if "FROM mip_app.approvals" in sql and "ORDER BY decided_at DESC" in sql:
+            rows = [
+                {
+                    "approval_id": row.get("approval_id"),
+                    "borrower_id": row.get("borrower_id"),
+                    "offer_code": row.get("offer_code"),
+                    "actor_email": row.get("actor_email"),
+                    "assigned_to_email": row.get("assigned_to_email"),
+                    "decided_at": row.get("decided_at"),
+                }
+                for row in self.approvals
+                if row.get("action") == "approve"
+            ]
+            rows.sort(key=lambda r: r["decided_at"], reverse=True)
+            return rows[:limit]
         if "FROM mip_app.sales_team" in sql:
             return [dict(row) for row in self.sales_team if row["active"]][:limit]
         if "FROM mip_app.loan_officers" in sql:

@@ -36,6 +36,7 @@ from backend.schemas.analytics import (
     TopSegmentByStateRow,
     TopZipOpportunityRow,
 )
+from backend.schemas.funnel import FunnelPopulation
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.resilience import TTLCache
@@ -171,6 +172,17 @@ class DatabricksAnalyticsRepository:
         if not predicates:
             return "", out_params
         return "WHERE " + " AND ".join(predicates), out_params
+
+    # S6: the approval funnel's population stages come from the S1 headline
+    # metric view; ``is_high_opportunity`` carries the canonical
+    # fn_high_opportunity predicate, so no threshold literal appears here.
+    _FUNNEL_POPULATION_SQL = (
+        "SELECT "
+        "  CAST(COUNT(*) AS INT) AS population, "
+        "  CAST(COALESCE(SUM(CASE WHEN is_high_opportunity THEN 1 ELSE 0 END), 0) AS INT) "
+        "    AS high_opportunity "
+        f"FROM {qualify('semantics', 'portfolio_headline_metric_view')}"
+    )
 
     _FUNNEL_TOTALS_SQL = (
         "SELECT "
@@ -565,6 +577,17 @@ class DatabricksAnalyticsRepository:
             )
 
         return self._cached(f"analytics.executive:{_filter_key(analytics_filters)}", build)
+
+    def funnel_population(self) -> FunnelPopulation:
+        def build() -> FunnelPopulation:
+            row = (self._client.execute(self._FUNNEL_POPULATION_SQL) or [{}])[0]
+            return FunnelPopulation(
+                population=_int(row.get("population")),
+                high_opportunity=_int(row.get("high_opportunity")),
+                source=qualify("semantics", "portfolio_headline_metric_view"),
+            )
+
+        return self._cached("analytics.funnel_population", build)
 
     def geography(self, filters: AnalyticsFilters | None = None) -> GeographyAnalyticsResponse:
         analytics_filters = _filters(filters)

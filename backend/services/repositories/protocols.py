@@ -30,6 +30,7 @@ from backend.schemas.analytics import (
     SignalAnalyticsResponse,
 )
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.funnel import FunnelPopulation
 from backend.schemas.geo import (
     CountyRollupResponse,
     StateRollupResponse,
@@ -72,6 +73,12 @@ class AnalyticsRepository(Protocol):
         ...
 
     def signals(self, filters: AnalyticsFilters | None = None) -> SignalAnalyticsResponse:
+        ...
+
+    def funnel_population(self) -> FunnelPopulation:
+        """S6: population + high-opportunity counts from the S1 headline
+        metric view (canonical ``fn_high_opportunity`` threshold — never a
+        literal predicate)."""
         ...
 
 
