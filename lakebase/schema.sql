@@ -1031,3 +1031,83 @@ VALUES (
     'S1.5: persist default-off household dedup config and evidence-cited suppression summary on campaigns'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Loan officers (S2) ---------------------------------------------------
+-- First-class loan-officer entity for assignment routing. The middle
+-- path: officers stay joined to the existing mip_app.sales_team roster
+-- by email (identity, role, manager scope), while this table owns the
+-- coverage footprint the assignment surfaces need. Coverage is stored
+-- as plain arrays -- two-letter state codes and 5-digit county FIPS --
+-- deliberately NO geometry columns; geo drill-down joins these codes
+-- against the existing gold geography rollups (S9).
+CREATE TABLE IF NOT EXISTS mip_app.loan_officers (
+    loan_officer_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email             TEXT NOT NULL UNIQUE REFERENCES mip_app.sales_team(email),
+    display_name      TEXT NOT NULL,
+    coverage_states   TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    coverage_counties TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    active            BOOLEAN NOT NULL DEFAULT true,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_loan_officers_active
+    ON mip_app.loan_officers (active, display_name);
+
+-- Assignment lifecycle (S2). Existing mip_app.lead_assignments rows are
+-- point-in-time distribution records; S2 adds the reviewed lifecycle the
+-- approval funnel (S6), geo assigned-vs-unattended (S9), campaigns (S10)
+-- and handoffs (S12) consume:
+--   assigned -> contact_drafted -> approved -> actioned -> outcome_recorded
+-- The repo's enum idiom is TEXT + named CHECK constraint (see
+-- call_dispositions.outcome, approvals.action); a Postgres ENUM type
+-- cannot be extended idempotently inside a re-runnable script.
+ALTER TABLE mip_app.lead_assignments
+    ADD COLUMN IF NOT EXISTS loan_officer_id UUID REFERENCES mip_app.loan_officers(loan_officer_id);
+ALTER TABLE mip_app.lead_assignments
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'assigned';
+ALTER TABLE mip_app.lead_assignments
+    ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_lead_assignments_status'
+          AND conrelid = 'mip_app.lead_assignments'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_assignments
+            ADD CONSTRAINT ck_lead_assignments_status
+            CHECK (status IN ('assigned','contact_drafted','approved','actioned','outcome_recorded'));
+    END IF;
+END $$;
+-- Masked-borrower-id format guard, same NOT VALID + tolerant VALIDATE
+-- pattern as approvals_borrower_id_format_chk: new writes are enforced
+-- immediately; one unexpected legacy row cannot fail the migrate job.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'lead_assignments_borrower_id_format_chk'
+          AND conrelid = 'mip_app.lead_assignments'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_assignments
+            ADD CONSTRAINT lead_assignments_borrower_id_format_chk
+            CHECK (borrower_id ~ '^B-[0-9A-Z]{13}$') NOT VALID;
+    END IF;
+END $$;
+DO $$
+BEGIN
+    ALTER TABLE mip_app.lead_assignments
+        VALIDATE CONSTRAINT lead_assignments_borrower_id_format_chk;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'lead_assignments_borrower_id_format_chk left NOT VALID (new writes still enforced): %', SQLERRM;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_lead_assignments_lo_status
+    ON mip_app.lead_assignments (loan_officer_id, status)
+    WHERE released_at IS NULL;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_10_s2_loan_officer_entity',
+    'S2: loan_officers entity with array coverage (no geometry) + assigned->contact_drafted->approved->actioned->outcome_recorded lifecycle on lead_assignments'
+)
+ON CONFLICT (version) DO NOTHING;
