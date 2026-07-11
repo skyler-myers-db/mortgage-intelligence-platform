@@ -15,9 +15,6 @@ from backend.schemas.analytics import (
     AnalyticsFilters,
     AnalyticsScope,
     EconomicsAnalyticsResponse,
-    EquitySpreadBin,
-    EquitySpreadOverview,
-    EquitySpreadPoint,
     EquitySpreadPointsResponse,
     EquitySpreadViewport,
     EvidenceBySignalRow,
@@ -42,16 +39,11 @@ from backend.schemas.analytics import (
 )
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
-from backend.services.economics_scatter import (
-    EQUITY_BIN_PCT,
-    EQUITY_DOMAIN_MAX,
-    EQUITY_DOMAIN_MIN,
-    EQUITY_SPREAD_SOURCE_TABLE,
-    MAX_SCATTER_POINT_ROWS,
-    SPREAD_BIN_BPS,
-    SPREAD_DOMAIN_MAX,
-    SPREAD_DOMAIN_MIN,
-    segment_display_label,
+from backend.services.repositories.databricks_economics_scatter import (
+    economics_points as build_economics_points,
+)
+from backend.services.repositories.databricks_economics_scatter import (
+    equity_spread_overview,
 )
 from backend.services.resilience import TTLCache
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, source_display_label
@@ -299,54 +291,6 @@ class DatabricksAnalyticsRepository:
         "{where} "
         "GROUP BY CAST(FLOOR(rate_spread_bps / 25) * 25 AS INT) "
         "ORDER BY spread_bucket_bps"
-    )
-
-    # S7: the scatter overview reads precomputed density bins from
-    # mip.gold.equity_spread_points (GROUP BY on the liquid-cluster keys),
-    # never raw borrower rows. MAX(refreshed_at) rides along per bin so the
-    # payload can cite the refresh anchor without a second scan.
-    _EQUITY_SPREAD_BINS_SQL = (
-        "SELECT "
-        "  p.equity_bin_pct AS equity_bin_pct, "
-        "  p.spread_bin_bps AS spread_bin_bps, "
-        "  CAST(COUNT(*) AS INT) AS borrower_count, "
-        "  CAST(ROUND(AVG(p.opportunity_score)) AS INT) AS mean_opportunity_score, "
-        "  CAST(SUM(CASE WHEN p.in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
-        "  MAX(p.refreshed_at) AS refreshed_at "
-        f"FROM {qualify('gold', 'equity_spread_points')} AS p "
-        "{where} "
-        "GROUP BY p.equity_bin_pct, p.spread_bin_bps "
-        "ORDER BY p.equity_bin_pct, p.spread_bin_bps"
-    )
-
-    # S7 zoom: real borrower points inside a viewport, capped server-side.
-    # Deterministic ordering (score DESC, borrower_id ASC) so the capped
-    # page is stable across identical requests.
-    _EQUITY_SPREAD_POINTS_SQL = (
-        "SELECT "
-        "  p.borrower_id AS borrower_id, "
-        "  p.display_name AS display_name, "
-        "  p.primary_segment_code AS primary_segment_code, "
-        "  p.state AS state, "
-        "  p.equity_pct AS equity_pct, "
-        "  p.rate_spread_bps AS rate_spread_bps, "
-        "  p.opportunity_score AS opportunity_score, "
-        "  p.score_band AS score_band, "
-        "  p.in_the_money AS in_the_money "
-        f"FROM {qualify('gold', 'equity_spread_points')} AS p "
-        "{where} "
-        "ORDER BY p.opportunity_score DESC, p.borrower_id "
-        f"LIMIT {MAX_SCATTER_POINT_ROWS}"
-    )
-
-    # Honest total for the SAME predicate the capped page used, so the UI
-    # can render "showing N of M" without guessing.
-    _EQUITY_SPREAD_POINTS_COUNT_SQL = (
-        "SELECT "
-        "  CAST(COUNT(*) AS BIGINT) AS total_matching, "
-        "  MAX(p.refreshed_at) AS refreshed_at "
-        f"FROM {qualify('gold', 'equity_spread_points')} AS p "
-        "{where}"
     )
 
     _TOP_BORROWERS_SQL = (
@@ -678,7 +622,7 @@ class DatabricksAnalyticsRepository:
                         extra=["b.rate_spread_bps BETWEEN -100 AND 400"],
                     )
                 ],
-                equity_spread=self._equity_spread_overview(analytics_filters),
+                equity_spread=equity_spread_overview(self, analytics_filters),
                 top_borrowers=[
                     TopBorrowerAnalyticsRow(
                         borrower_id=str(row.get("borrower_id") or ""),
@@ -701,109 +645,12 @@ class DatabricksAnalyticsRepository:
 
         return self._cached(f"analytics.economics:{_filter_key(analytics_filters)}", build)
 
-    def _equity_spread_overview(self, filters: AnalyticsFilters) -> EquitySpreadOverview:
-        """Density-bin overview over the precomputed scatter gold table.
-
-        total_borrowers is the sum of the bin counts -- one GROUP BY scan
-        answers the bins, the honest total, and the refresh anchor.
-        """
-        rows = self._execute_template(self._EQUITY_SPREAD_BINS_SQL, filters, alias="p")
-        bins = [
-            EquitySpreadBin(
-                equity_bin_pct=_int(row.get("equity_bin_pct")),
-                spread_bin_bps=_int(row.get("spread_bin_bps")),
-                borrower_count=_int(row.get("borrower_count")),
-                mean_opportunity_score=_int(row.get("mean_opportunity_score")),
-                in_the_money_borrowers=_int(row.get("in_the_money_borrowers")),
-            )
-            for row in rows
-        ]
-        refreshed = [str(row["refreshed_at"]) for row in rows if row.get("refreshed_at") is not None]
-        return EquitySpreadOverview(
-            bins=bins,
-            total_borrowers=sum(b.borrower_count for b in bins),
-            equity_bin_pct=EQUITY_BIN_PCT,
-            spread_bin_bps=SPREAD_BIN_BPS,
-            equity_domain_min=EQUITY_DOMAIN_MIN,
-            equity_domain_max=EQUITY_DOMAIN_MAX,
-            spread_domain_min=SPREAD_DOMAIN_MIN,
-            spread_domain_max=SPREAD_DOMAIN_MAX,
-            source_table=EQUITY_SPREAD_SOURCE_TABLE,
-            refreshed_at=max(refreshed) if refreshed else None,
-        )
-
     def economics_points(
         self,
         filters: AnalyticsFilters | None = None,
         viewport: EquitySpreadViewport | None = None,
     ) -> EquitySpreadPointsResponse:
-        analytics_filters = _filters(filters)
-        window = viewport or EquitySpreadViewport()
-
-        def build() -> EquitySpreadPointsResponse:
-            extra = [
-                "p.equity_pct BETWEEN :vp_equity_min AND :vp_equity_max",
-                "p.rate_spread_bps BETWEEN :vp_spread_min AND :vp_spread_max",
-            ]
-            params: dict[str, object] = {
-                "vp_equity_min": window.equity_min,
-                "vp_equity_max": window.equity_max,
-                "vp_spread_min": window.spread_min,
-                "vp_spread_max": window.spread_max,
-            }
-            point_rows = self._execute_template(
-                self._EQUITY_SPREAD_POINTS_SQL,
-                analytics_filters,
-                alias="p",
-                extra=extra,
-                params=params,
-            )
-            count_row = (
-                self._execute_template(
-                    self._EQUITY_SPREAD_POINTS_COUNT_SQL,
-                    analytics_filters,
-                    alias="p",
-                    extra=extra,
-                    params=params,
-                )
-                or [{}]
-            )[0]
-            points = [
-                EquitySpreadPoint(
-                    borrower_id=str(row.get("borrower_id") or ""),
-                    display_name=str(row.get("display_name") or "Borrower"),
-                    segment=segment_display_label(row.get("primary_segment_code")),
-                    state=str(row.get("state") or ""),
-                    equity_pct=_int(row.get("equity_pct")),
-                    rate_spread_bps=_int(row.get("rate_spread_bps")),
-                    opportunity_score=_int(row.get("opportunity_score")),
-                    score_band=row.get("score_band"),
-                    in_the_money=bool(row.get("in_the_money")),
-                )
-                for row in point_rows
-            ]
-            # Server-side cap belt-and-braces: the SQL already LIMITs, but a
-            # fake/misbehaving client must never push >cap rows to the UI.
-            points = points[:MAX_SCATTER_POINT_ROWS]
-            total_matching = max(_int(count_row.get("total_matching")), len(points))
-            refreshed_at = count_row.get("refreshed_at")
-            return EquitySpreadPointsResponse(
-                points=points,
-                total_matching=total_matching,
-                showing=len(points),
-                point_cap=MAX_SCATTER_POINT_ROWS,
-                truncated=total_matching > len(points),
-                viewport=window,
-                source_table=EQUITY_SPREAD_SOURCE_TABLE,
-                refreshed_at=None if refreshed_at is None else str(refreshed_at),
-            )
-
-        key = (
-            "analytics.economics_points:"
-            f"{_filter_key(analytics_filters)}|"
-            f"vp={window.equity_min},{window.equity_max},{window.spread_min},{window.spread_max}"
-        )
-        return self._cached(key, build)
+        return build_economics_points(self, filters, viewport)
 
     def segments(self, filters: AnalyticsFilters | None = None) -> SegmentAnalyticsResponse:
         analytics_filters = _filters(filters)
