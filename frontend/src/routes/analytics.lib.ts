@@ -9,6 +9,7 @@ import type {
   SegmentCode,
   TopBorrowerAnalyticsRow,
 } from '../types';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
 export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'sales-ops';
 
@@ -163,7 +164,7 @@ export function leadQueueHrefForFunnelStage(
     'in the money': 'in_the_money',
     'refi economics': 'in_the_money',
     'high opportunity': 'high_opportunity',
-    'opportunity score 75+': 'high_opportunity',
+    [HIGH_OPPORTUNITY_KPI_LABEL.toLowerCase()]: 'high_opportunity',
     'top-tier score': 'high_opportunity',
     'offer recommended': 'offer_recommended',
     'primary offer selected': 'offer_recommended',
@@ -178,7 +179,7 @@ export function funnelStageDisplayLabel(row: Pick<FunnelStage, 'stage' | 'stage_
   const byOrder: Record<number, string> = {
     1: 'Addressable',
     2: 'Refi economics',
-    3: 'Opportunity score 75+',
+    3: HIGH_OPPORTUNITY_KPI_LABEL,
     4: 'Primary offer selected',
     5: 'Approved',
     6: 'Actioned',

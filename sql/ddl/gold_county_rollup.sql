@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.county_rollup (
   county_name                  STRING             COMMENT 'Human county name. NULL until a FIPS->name crosswalk seed lands; UI falls back to fips_5.',
   addressable_borrowers        INT       NOT NULL COMMENT 'Population count for this county on snapshot_date.',
   in_the_money_borrowers       INT       NOT NULL COMMENT 'COUNT where borrower_360.in_the_money = TRUE.',
-  high_opportunity_borrowers   INT       NOT NULL COMMENT 'COUNT where borrower_360.opportunity_score >= 75.',
+  high_opportunity_borrowers   INT       NOT NULL COMMENT 'COUNT where mip.gold.fn_high_opportunity(borrower_360.opportunity_score) = TRUE (canonical high-opportunity threshold).',
   avg_opportunity_score        INT       NOT NULL COMMENT 'AVG(borrower_360.opportunity_score) rounded to int.',
   top_segment_code             STRING             COMMENT 'Dominant segment_code by count. NULL when every borrower in the county has empty segment_codes.',
   snapshot_date                DATE      NOT NULL COMMENT 'Refresh date; daily grain. PK part.',

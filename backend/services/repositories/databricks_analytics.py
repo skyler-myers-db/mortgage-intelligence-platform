@@ -39,7 +39,7 @@ from backend.schemas.analytics import (
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.resilience import TTLCache
-from backend.services.scoring import source_display_label
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, source_display_label
 
 
 def _date_text(value: object) -> str | None:
@@ -192,7 +192,8 @@ class DatabricksAnalyticsRepository:
         "  CAST(MAX(DATE(b.refreshed_at)) AS STRING) AS snapshot_date, "
         "  CAST(COUNT(*) AS INT) AS addressable_borrowers, "
         "  CAST(SUM(CASE WHEN b.in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
-        "  CAST(SUM(CASE WHEN b.opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
+        "  CAST(SUM(CASE WHEN b.opportunity_score "
+        f"                >= {HIGH_OPPORTUNITY_THRESHOLD} THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
         "  CAST(SUM(CASE WHEN LOWER(b.recommended_offer_code) <> 'nurture' THEN 1 ELSE 0 END) AS INT) "
         "    AS offer_recommended_borrowers, "
         "  CAST(SUM(CASE WHEN COALESCE(ls.approval_status, 'pending') = 'approved' THEN 1 ELSE 0 END) AS INT) "

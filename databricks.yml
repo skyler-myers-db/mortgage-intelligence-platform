@@ -494,6 +494,18 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/uc_functions/fn_refi_propensity_heuristic.sql
+        - task_key: init_fn_high_opportunity
+          description: "CREATE OR REPLACE mip.gold.fn_high_opportunity (canonical high-opportunity threshold) before rollup/snapshot CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_high_opportunity.sql
+        - task_key: init_fn_score_band
+          description: "CREATE OR REPLACE mip.gold.fn_score_band (canonical score display bands) before semantics views."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_score_band.sql
         - task_key: init_gold_ddl
           description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
           depends_on:
@@ -506,6 +518,8 @@ resources:
             - task_key: init_fn_next_best_offer
             - task_key: init_fn_loan_product_type
             - task_key: init_fn_refi_propensity_heuristic
+            - task_key: init_fn_high_opportunity
+            - task_key: init_fn_score_band
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -683,14 +697,14 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_source_readiness.sql
-        # Zero-click Genie provisioning — publish the three mip.semantics.*
-        # views so the Genie trusted_assets list in
+        # Zero-click Genie + app-serving semantics — publish the four
+        # mip.semantics.* views so the Genie trusted_assets list in
         # genie/mortgage_lead_intelligence_space.yml binds on first deploy.
         # Runs AFTER every gold table the views read from is built.
         # The DDL file is idempotent (CREATE OR REPLACE VIEW); re-running
         # this task is a byte-stable no-op at the view definition level.
         - task_key: refresh_semantics_views
-          description: "CREATE OR REPLACE the three mip.semantics.* metric views (Genie + dashboards)."
+          description: "CREATE OR REPLACE the four mip.semantics.* metric views (Genie + dashboards + headline KPIs)."
           depends_on:
             - task_key: ctas_lead_population
             - task_key: ctas_segment_population

@@ -15,7 +15,7 @@
 #   6.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
 #   7.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
 #   8.  Refresh gold (CTAS chain) — the last task in the chain is
-#       `refresh_semantics_views`, which lands the three mip.semantics.*
+#       `refresh_semantics_views`, which lands the four mip.semantics.*
 #       metric views Genie depends on.
 #   9.  Sync lifecycle state + funnel snapshot so the delta_vs_prior_*
 #       view columns resolve on the first dashboard render.

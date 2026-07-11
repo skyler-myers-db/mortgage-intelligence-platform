@@ -226,13 +226,20 @@ class KpiTrend(BaseModel):
 
 
 class PortfolioPreview(BaseModel):
-    # Headline KPIs — ALL from mip.gold.borrower_360 / funnel_snapshot_daily,
-    # which are derived from Cotality Delta Share + public FRED data. No
-    # lender CRM / campaign / app-activity signal contributes to these.
+    # Headline KPIs — ALL measured over the named semantic view
+    # mip.semantics.portfolio_headline_metric_view (borrower_360-derived;
+    # trends from funnel_snapshot_daily). Cotality Delta Share + public FRED
+    # data only; no lender CRM / campaign / app-activity signal contributes.
     marketable_population: int
     high_intent_leads: int
-    top_tier_opportunities: int | None = None  # opportunity_score >= 75
-    offers_recommended: int | None = None       # recommended_offer_code != 'nurture'
+    # SUM(is_high_opportunity) — canonical threshold pinned in
+    # mip.gold.fn_high_opportunity / scoring.HIGH_OPPORTUNITY_THRESHOLD.
+    top_tier_opportunities: int | None = None
+    # SUM(offer_recommended) — actionable lane (non-null and not nurture).
+    offers_recommended: int | None = None
+    # SUM(offer_available) — borrowers with a non-null fn_next_best_offer
+    # decision ("offers available" headline measure).
+    offers_available: int | None = None
     avg_score: int | None = Field(default=None, ge=0, le=100)
     # Optional trend histories keyed by KPI field name. When absent, the UI
     # renders the KPI without a sparkline.
