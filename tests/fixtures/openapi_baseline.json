@@ -1,6 +1,409 @@
 {
   "components": {
     "schemas": {
+      "ActivationDestination": {
+        "properties": {
+          "allowed_actions": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Allowed Actions",
+            "type": "array"
+          },
+          "destination_key": {
+            "title": "Destination Key",
+            "type": "string"
+          },
+          "destination_type": {
+            "enum": [
+              "salesforce",
+              "crm_cdp",
+              "los_pos",
+              "servicing",
+              "webhook"
+            ],
+            "title": "Destination Type",
+            "type": "string"
+          },
+          "display_name": {
+            "title": "Display Name",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "not_configured",
+              "dry_run",
+              "connected",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "destination_key",
+          "destination_type",
+          "display_name",
+          "status",
+          "allowed_actions"
+        ],
+        "title": "ActivationDestination",
+        "type": "object"
+      },
+      "ActivationOutboxItem": {
+        "properties": {
+          "activation_id": {
+            "title": "Activation Id",
+            "type": "string"
+          },
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "channel": {
+            "anyOf": [
+              {
+                "enum": [
+                  "email",
+                  "sms",
+                  "direct_mail"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Channel"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Created At"
+          },
+          "created_by": {
+            "title": "Created By",
+            "type": "string"
+          },
+          "delivery_metadata": {
+            "anyOf": [
+              {
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Delivery Metadata"
+          },
+          "destination_display_name": {
+            "title": "Destination Display Name",
+            "type": "string"
+          },
+          "destination_key": {
+            "title": "Destination Key",
+            "type": "string"
+          },
+          "destination_status": {
+            "enum": [
+              "not_configured",
+              "dry_run",
+              "connected",
+              "disabled"
+            ],
+            "title": "Destination Status",
+            "type": "string"
+          },
+          "destination_type": {
+            "enum": [
+              "salesforce",
+              "crm_cdp",
+              "los_pos",
+              "servicing",
+              "webhook"
+            ],
+            "title": "Destination Type",
+            "type": "string"
+          },
+          "entity_id": {
+            "title": "Entity Id",
+            "type": "string"
+          },
+          "entity_type": {
+            "enum": [
+              "borrower",
+              "campaign",
+              "cohort"
+            ],
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "dry_run",
+              "staged",
+              "delivered",
+              "failed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "activation_id",
+          "destination_key",
+          "destination_type",
+          "destination_display_name",
+          "destination_status",
+          "entity_type",
+          "entity_id",
+          "borrower_id",
+          "approval_id",
+          "status",
+          "request_id",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ActivationOutboxItem",
+        "type": "object"
+      },
+      "ActivationStageRequest": {
+        "properties": {
+          "approval_id": {
+            "title": "Approval Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "channel": {
+            "default": "email",
+            "enum": [
+              "email",
+              "sms",
+              "direct_mail"
+            ],
+            "title": "Channel",
+            "type": "string"
+          },
+          "destination_key": {
+            "title": "Destination Key",
+            "type": "string"
+          },
+          "offer_code": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Offer Code"
+          },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "borrower_id",
+          "destination_key",
+          "approval_id",
+          "request_id"
+        ],
+        "title": "ActivationStageRequest",
+        "type": "object"
+      },
+      "ActivationStageResponse": {
+        "properties": {
+          "activation": {
+            "$ref": "#/components/schemas/ActivationOutboxItem"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "staged": {
+            "title": "Staged",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "staged",
+          "activation"
+        ],
+        "title": "ActivationStageResponse",
+        "type": "object"
+      },
+      "ActivationSummary": {
+        "properties": {
+          "destinations": {
+            "items": {
+              "$ref": "#/components/schemas/ActivationDestination"
+            },
+            "title": "Destinations",
+            "type": "array"
+          },
+          "recent_outbox": {
+            "items": {
+              "$ref": "#/components/schemas/ActivationOutboxItem"
+            },
+            "title": "Recent Outbox",
+            "type": "array"
+          }
+        },
+        "required": [
+          "destinations",
+          "recent_outbox"
+        ],
+        "title": "ActivationSummary",
+        "type": "object"
+      },
+      "AdminCapabilitiesResponse": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "$ref": "#/components/schemas/AdminCapability"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          }
+        },
+        "title": "AdminCapabilitiesResponse",
+        "type": "object"
+      },
+      "AdminCapability": {
+        "description": "One DAIS-2026 capability with its honest provisioning status.",
+        "properties": {
+          "claimable": {
+            "title": "Claimable",
+            "type": "boolean"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "ga": {
+            "title": "Ga",
+            "type": "boolean"
+          },
+          "key": {
+            "title": "Key",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "available",
+              "configured",
+              "not_provisioned",
+              "preview_mirror",
+              "hidden"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "key",
+          "label",
+          "ga",
+          "status",
+          "claimable",
+          "detail"
+        ],
+        "title": "AdminCapability",
+        "type": "object"
+      },
       "AdminHealthResponse": {
         "properties": {
           "actor_cache_key": {
@@ -79,6 +482,17 @@
               }
             ]
           },
+          "git_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Git Sha"
+          },
           "log_export": {
             "default": "stdout-only",
             "title": "Log Export",
@@ -122,6 +536,11 @@
             "title": "Configured",
             "type": "boolean"
           },
+          "cooldown_remaining_s": {
+            "default": 0,
+            "title": "Cooldown Remaining S",
+            "type": "integer"
+          },
           "description": {
             "title": "Description",
             "type": "string"
@@ -164,6 +583,13 @@
                 "type": "null"
               }
             ]
+          },
+          "recent_runs": {
+            "items": {
+              "$ref": "#/components/schemas/AdminOperationRun"
+            },
+            "title": "Recent Runs",
+            "type": "array"
           },
           "run_order": {
             "title": "Run Order",
@@ -1500,12 +1926,32 @@
             "title": "Current Lien Balance",
             "type": "integer"
           },
+          "current_lien_balance_high": {
+            "default": 0,
+            "title": "Current Lien Balance High",
+            "type": "integer"
+          },
+          "current_lien_balance_low": {
+            "default": 0,
+            "title": "Current Lien Balance Low",
+            "type": "integer"
+          },
           "current_rate": {
             "title": "Current Rate",
             "type": "number"
           },
           "display_name": {
             "title": "Display Name",
+            "type": "string"
+          },
+          "dnc": {
+            "default": false,
+            "title": "Dnc",
+            "type": "boolean"
+          },
+          "eligibility_source": {
+            "default": "synthetic_seed",
+            "title": "Eligibility Source",
             "type": "string"
           },
           "eligible_recontact_at": {
@@ -1574,10 +2020,47 @@
             "title": "Has First Party Relationship",
             "type": "boolean"
           },
+          "has_heloc_propensity_trigger": {
+            "default": false,
+            "title": "Has Heloc Propensity Trigger",
+            "type": "boolean"
+          },
           "has_permit": {
             "default": false,
             "title": "Has Permit",
             "type": "boolean"
+          },
+          "has_refi_propensity_trigger": {
+            "default": false,
+            "title": "Has Refi Propensity Trigger",
+            "type": "boolean"
+          },
+          "has_unresolved_owner": {
+            "default": false,
+            "title": "Has Unresolved Owner",
+            "type": "boolean"
+          },
+          "heloc_propensity_run_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heloc Propensity Run Date"
+          },
+          "heloc_propensity_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heloc Propensity Score"
           },
           "is_absentee": {
             "default": false,
@@ -1666,6 +2149,94 @@
             "title": "Listed For Sale",
             "type": "boolean"
           },
+          "listing_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Date"
+          },
+          "listing_days_on_market": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Days On Market"
+          },
+          "listing_price": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Price"
+          },
+          "listing_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Service"
+          },
+          "listing_status_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Status Category"
+          },
+          "listing_status_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Status Date"
+          },
+          "listing_status_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Status Description"
+          },
+          "loan_product_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loan Product Type"
+          },
           "ltv": {
             "title": "Ltv",
             "type": "integer"
@@ -1680,6 +2251,17 @@
             "minimum": 0.0,
             "title": "Opportunity Score",
             "type": "integer"
+          },
+          "origination_channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origination Channel"
           },
           "outreach_at": {
             "anyOf": [
@@ -1706,9 +2288,31 @@
             "title": "Outreach Status",
             "type": "string"
           },
+          "owner_count": {
+            "default": 1,
+            "title": "Owner Count",
+            "type": "integer"
+          },
           "owner_link_id": {
             "title": "Owner Link Id",
             "type": "string"
+          },
+          "primary_owner_entity_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "individual",
+                  "trust",
+                  "llc",
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Owner Entity Type"
           },
           "rate_spread_bps": {
             "title": "Rate Spread Bps",
@@ -1722,6 +2326,28 @@
             "default": "nurture",
             "title": "Recommended Offer Code",
             "type": "string"
+          },
+          "refi_propensity_run_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refi Propensity Run Date"
+          },
+          "refi_propensity_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refi Propensity Score"
           },
           "related_property_count": {
             "title": "Related Property Count",
@@ -1740,7 +2366,14 @@
                 "permit",
                 "investor",
                 "equity",
-                "retention"
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
               ],
               "type": "string"
             },
@@ -1827,6 +2460,17 @@
       },
       "BorrowerLifecycleResponse": {
         "properties": {
+          "approval_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Id"
+          },
           "approval_status": {
             "default": "pending",
             "enum": [
@@ -2261,6 +2905,12 @@
             ],
             "title": "Holdout"
           },
+          "household_dedup": {
+            "$ref": "#/components/schemas/HouseholdDedupConfig"
+          },
+          "household_summary": {
+            "$ref": "#/components/schemas/HouseholdDedupSummary"
+          },
           "message_variants": {
             "items": {
               "type": "object"
@@ -2329,6 +2979,231 @@
           "criteria"
         ],
         "title": "CampaignSummary",
+        "type": "object"
+      },
+      "ComposePlanRequest": {
+        "additionalProperties": false,
+        "description": "Ask the co-pilot to compose (and optionally execute) a governed plan.",
+        "properties": {
+          "execute": {
+            "default": false,
+            "title": "Execute",
+            "type": "boolean"
+          },
+          "objective": {
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Objective",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "objective"
+        ],
+        "title": "ComposePlanRequest",
+        "type": "object"
+      },
+      "ComposePlanResponse": {
+        "description": "Response for the plan-composition endpoint.\n\n``status`` discriminates the three honest outcomes: a validated\n``composed`` plan, a ``degraded`` response when the Supervisor host is\nunavailable (reviewed catalog workflows are offered as a labelled\nfallback), or an ``invalid`` response when the Supervisor answered but the\nplan failed validation (no silent canned substitution).",
+        "properties": {
+          "approval_gate_step_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Approval Gate Step Id"
+          },
+          "approval_required": {
+            "default": false,
+            "title": "Approval Required",
+            "type": "boolean"
+          },
+          "audit_event_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Audit Event Ids",
+            "type": "array"
+          },
+          "degraded_reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Degraded Reason"
+          },
+          "executed": {
+            "default": false,
+            "title": "Executed",
+            "type": "boolean"
+          },
+          "fallback_workflows": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentWorkflow"
+            },
+            "title": "Fallback Workflows",
+            "type": "array"
+          },
+          "interpreted_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interpreted Intent"
+          },
+          "message": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Message"
+          },
+          "model_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Model Endpoint"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ComposedPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "plan_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Id"
+          },
+          "planner": {
+            "default": "supervisor_composed",
+            "title": "Planner",
+            "type": "string"
+          },
+          "reasoning_summary": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reasoning Summary"
+          },
+          "status": {
+            "enum": [
+              "composed",
+              "degraded",
+              "invalid"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "trace": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStepTrace"
+            },
+            "title": "Trace",
+            "type": "array"
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "title": "ComposePlanResponse",
+        "type": "object"
+      },
+      "ComposedPlan": {
+        "description": "A model-composed, app-validated multi-step plan.\n\n``requires_approval`` is always computed server-side from the registry: any\nstep whose tool writes state or hands off to outreach/campaign forces it to\n``True`` regardless of what the model returned.",
+        "properties": {
+          "expected_outcome": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Expected Outcome",
+            "type": "string"
+          },
+          "objective_summary": {
+            "maxLength": 300,
+            "title": "Objective Summary",
+            "type": "string"
+          },
+          "requires_approval": {
+            "default": false,
+            "title": "Requires Approval",
+            "type": "boolean"
+          },
+          "risk_notes": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Risk Notes",
+            "type": "string"
+          },
+          "steps": {
+            "items": {
+              "$ref": "#/components/schemas/PlanStep"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Steps",
+            "type": "array"
+          }
+        },
+        "required": [
+          "objective_summary",
+          "steps"
+        ],
+        "title": "ComposedPlan",
         "type": "object"
       },
       "ConfigFootprintResponse": {
@@ -2573,6 +3448,17 @@
       },
       "DataEstateAsset": {
         "properties": {
+          "catalog_explorer_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Explorer Url"
+          },
           "label": {
             "title": "Label",
             "type": "string"
@@ -2734,6 +3620,26 @@
           "lanes"
         ],
         "title": "DataEstateResponse",
+        "type": "object"
+      },
+      "DimensionFacetCount": {
+        "description": "One (value, count) facet cell inside a SegmentCard mix (S1.6).",
+        "properties": {
+          "count": {
+            "minimum": 0.0,
+            "title": "Count",
+            "type": "integer"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "value",
+          "count"
+        ],
+        "title": "DimensionFacetCount",
         "type": "object"
       },
       "DispositionRequest": {
@@ -3063,6 +3969,17 @@
       },
       "EvidenceBySignalRow": {
         "properties": {
+          "confidence_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence Label"
+          },
           "confidence_source": {
             "title": "Confidence Source",
             "type": "string"
@@ -3086,6 +4003,17 @@
           "signal_type": {
             "title": "Signal Type",
             "type": "string"
+          },
+          "source_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Label"
           },
           "source_product": {
             "title": "Source Product",
@@ -3689,6 +4617,62 @@
         "title": "GenieDataFreshness",
         "type": "object"
       },
+      "GenieFeedbackRequest": {
+        "properties": {
+          "comment": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Comment"
+          },
+          "conversation_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Conversation Id",
+            "type": "string"
+          },
+          "helpful": {
+            "title": "Helpful",
+            "type": "boolean"
+          },
+          "message_id": {
+            "maxLength": 128,
+            "minLength": 1,
+            "title": "Message Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "conversation_id",
+          "message_id",
+          "helpful"
+        ],
+        "title": "GenieFeedbackRequest",
+        "type": "object"
+      },
+      "GenieFeedbackResponse": {
+        "properties": {
+          "accepted": {
+            "title": "Accepted",
+            "type": "boolean"
+          },
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "accepted",
+          "audit_event_id"
+        ],
+        "title": "GenieFeedbackResponse",
+        "type": "object"
+      },
       "GenieMessageRequest": {
         "properties": {
           "conversation_id": {
@@ -3703,6 +4687,7 @@
             "title": "Conversation Id"
           },
           "question": {
+            "minLength": 1,
             "title": "Question",
             "type": "string"
           }
@@ -3749,6 +4734,17 @@
             "title": "Follow Up Questions",
             "type": "array"
           },
+          "genie_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genie Status"
+          },
           "message_id": {
             "anyOf": [
               {
@@ -3770,6 +4766,16 @@
               }
             ],
             "title": "Metric Value"
+          },
+          "native_visualization": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GenieNativeVisualization"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "proof": {
             "anyOf": [
@@ -3795,6 +4801,13 @@
               }
             ],
             "title": "Question Hash"
+          },
+          "reasoning_trace": {
+            "items": {
+              "$ref": "#/components/schemas/GenieReasoningStep"
+            },
+            "title": "Reasoning Trace",
+            "type": "array"
           },
           "row_count": {
             "anyOf": [
@@ -3862,6 +4875,42 @@
           "trusted_assets"
         ],
         "title": "GenieMessageResponse",
+        "type": "object"
+      },
+      "GenieNativeVisualization": {
+        "description": "Reference to a Genie-authored native visualization attachment.\n\nCarries only the attachment ids and optional title. MIP does not fetch\nthe Beta download endpoint (not rolled out on this workspace, returns\n404); the frontend uses these ids to advertise/label the native chart.",
+        "properties": {
+          "attachment_id": {
+            "title": "Attachment Id",
+            "type": "string"
+          },
+          "query_attachment_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Query Attachment Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "required": [
+          "attachment_id"
+        ],
+        "title": "GenieNativeVisualization",
         "type": "object"
       },
       "GenieProof": {
@@ -4222,6 +5271,1055 @@
         "title": "GeographyScopePayload",
         "type": "object"
       },
+      "GrowthAgentCustomRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "monitor_name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Name"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "save_monitor": {
+            "default": false,
+            "title": "Save Monitor",
+            "type": "boolean"
+          },
+          "segment_codes": {
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention"
+              ],
+              "type": "string"
+            },
+            "maxItems": 6,
+            "minItems": 1,
+            "title": "Segment Codes",
+            "type": "array"
+          },
+          "segment_mode": {
+            "default": "any",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "title": "Segment Mode",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "segment_codes"
+        ],
+        "title": "GrowthAgentCustomRunRequest",
+        "type": "object"
+      },
+      "GrowthAgentDueMonitorRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "items": {
+              "enum": [
+                "slack",
+                "teams"
+              ],
+              "type": "string"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "limit": {
+            "default": 5,
+            "maximum": 20.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "title": "GrowthAgentDueMonitorRunRequest",
+        "type": "object"
+      },
+      "GrowthAgentDueMonitorRunResponse": {
+        "properties": {
+          "actor_count": {
+            "default": 1,
+            "minimum": 0.0,
+            "title": "Actor Count",
+            "type": "integer"
+          },
+          "drafts": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentNotificationDraft"
+            },
+            "title": "Drafts",
+            "type": "array"
+          },
+          "due_count": {
+            "minimum": 0.0,
+            "title": "Due Count",
+            "type": "integer"
+          },
+          "runs": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentRunResponse"
+            },
+            "title": "Runs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs",
+          "drafts",
+          "due_count"
+        ],
+        "title": "GrowthAgentDueMonitorRunResponse",
+        "type": "object"
+      },
+      "GrowthAgentGovernanceChip": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "evidence_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Ref"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "review_required",
+              "roadmap",
+              "not_provisioned",
+              "not_attached"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "status",
+          "detail"
+        ],
+        "title": "GrowthAgentGovernanceChip",
+        "type": "object"
+      },
+      "GrowthAgentHomeResponse": {
+        "properties": {
+          "capabilities": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Capabilities",
+            "type": "array"
+          },
+          "monitors": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentMonitor"
+            },
+            "title": "Monitors",
+            "type": "array"
+          },
+          "workflows": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentWorkflow"
+            },
+            "title": "Workflows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "workflows",
+          "monitors"
+        ],
+        "title": "GrowthAgentHomeResponse",
+        "type": "object"
+      },
+      "GrowthAgentMonitor": {
+        "properties": {
+          "actionable_total": {
+            "minimum": 0.0,
+            "title": "Actionable Total",
+            "type": "integer"
+          },
+          "cadence": {
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "criteria": {
+            "title": "Criteria",
+            "type": "object"
+          },
+          "last_run_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Run Id"
+          },
+          "monitor_id": {
+            "title": "Monitor Id",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "route": {
+            "title": "Route",
+            "type": "string"
+          },
+          "source_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Assets",
+            "type": "array"
+          },
+          "status": {
+            "default": "active",
+            "enum": [
+              "active",
+              "paused",
+              "disabled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "workflow_id": {
+            "enum": [
+              "daily_refi_brief",
+              "borrower_dossier_review",
+              "listing_watch",
+              "competitor_recapture_monitor",
+              "high_equity_heloc_watch",
+              "branch_capacity_review",
+              "source_freshness_sentinel",
+              "custom_segment_watch"
+            ],
+            "title": "Workflow Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "monitor_id",
+          "workflow_id",
+          "name",
+          "cadence",
+          "criteria",
+          "route",
+          "actionable_total",
+          "source_assets"
+        ],
+        "title": "GrowthAgentMonitor",
+        "type": "object"
+      },
+      "GrowthAgentMonitorDraftRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "channels": {
+            "items": {
+              "enum": [
+                "slack",
+                "teams"
+              ],
+              "type": "string"
+            },
+            "title": "Channels",
+            "type": "array"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "title": "GrowthAgentMonitorDraftRequest",
+        "type": "object"
+      },
+      "GrowthAgentNotificationDraft": {
+        "properties": {
+          "body": {
+            "title": "Body",
+            "type": "string"
+          },
+          "channel": {
+            "enum": [
+              "slack",
+              "teams"
+            ],
+            "title": "Channel",
+            "type": "string"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "draft_id": {
+            "title": "Draft Id",
+            "type": "string"
+          },
+          "monitor_id": {
+            "title": "Monitor Id",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "status": {
+            "default": "draft",
+            "enum": [
+              "draft",
+              "reviewed",
+              "cancelled"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "required": [
+          "draft_id",
+          "monitor_id",
+          "run_id",
+          "channel",
+          "title",
+          "body"
+        ],
+        "title": "GrowthAgentNotificationDraft",
+        "type": "object"
+      },
+      "GrowthAgentPolicyCheck": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "passed",
+              "review_required",
+              "blocked"
+            ],
+            "title": "Status",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "status",
+          "detail"
+        ],
+        "title": "GrowthAgentPolicyCheck",
+        "type": "object"
+      },
+      "GrowthAgentPromptRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "monitor_name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Name"
+          },
+          "prompt": {
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Prompt",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "save_monitor": {
+            "default": false,
+            "title": "Save Monitor",
+            "type": "boolean"
+          },
+          "segment_codes": {
+            "items": {
+              "enum": [
+                "itm",
+                "listed",
+                "permit",
+                "investor",
+                "equity",
+                "retention"
+              ],
+              "type": "string"
+            },
+            "maxItems": 6,
+            "title": "Segment Codes",
+            "type": "array"
+          },
+          "segment_mode": {
+            "default": "any",
+            "enum": [
+              "any",
+              "all"
+            ],
+            "title": "Segment Mode",
+            "type": "string"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "required": [
+          "prompt"
+        ],
+        "title": "GrowthAgentPromptRunRequest",
+        "type": "object"
+      },
+      "GrowthAgentRunRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "cadence": {
+            "default": "daily",
+            "enum": [
+              "daily",
+              "weekly"
+            ],
+            "title": "Cadence",
+            "type": "string"
+          },
+          "monitor_name": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Monitor Name"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "save_monitor": {
+            "default": false,
+            "title": "Save Monitor",
+            "type": "boolean"
+          },
+          "states": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 20,
+            "title": "States",
+            "type": "array"
+          }
+        },
+        "title": "GrowthAgentRunRequest",
+        "type": "object"
+      },
+      "GrowthAgentRunResponse": {
+        "properties": {
+          "actionable_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Avg Score"
+          },
+          "actionable_label": {
+            "default": "Eligible subset",
+            "title": "Actionable Label",
+            "type": "string"
+          },
+          "actionable_total": {
+            "minimum": 0.0,
+            "title": "Actionable Total",
+            "type": "integer"
+          },
+          "agent_reasoning": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Reasoning"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "avg_equity_pct": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Equity Pct"
+          },
+          "avg_rate_spread_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Rate Spread Bps"
+          },
+          "broad_avg_score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Broad Avg Score"
+          },
+          "broad_label": {
+            "default": "Broad opportunity",
+            "title": "Broad Label",
+            "type": "string"
+          },
+          "broad_total": {
+            "minimum": 0.0,
+            "title": "Broad Total",
+            "type": "integer"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "criteria": {
+            "title": "Criteria",
+            "type": "object"
+          },
+          "execution_mode": {
+            "default": "deterministic",
+            "enum": [
+              "deterministic",
+              "genie_conversation",
+              "agent_framework"
+            ],
+            "title": "Execution Mode",
+            "type": "string"
+          },
+          "genie_conversation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genie Conversation Id"
+          },
+          "genie_message_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genie Message Id"
+          },
+          "genie_question_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genie Question Hash"
+          },
+          "genie_row_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genie Row Count"
+          },
+          "genie_sql_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Genie Sql Hash"
+          },
+          "genie_trusted_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Genie Trusted Assets",
+            "type": "array"
+          },
+          "governance_chips": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentGovernanceChip"
+            },
+            "title": "Governance Chips",
+            "type": "array"
+          },
+          "interpreted_intent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interpreted Intent"
+          },
+          "monitor": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GrowthAgentMonitor"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "planner_label": {
+            "default": "Reviewed deterministic planner",
+            "title": "Planner Label",
+            "type": "string"
+          },
+          "policy_checks": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentPolicyCheck"
+            },
+            "title": "Policy Checks",
+            "type": "array"
+          },
+          "route": {
+            "title": "Route",
+            "type": "string"
+          },
+          "run_id": {
+            "title": "Run Id",
+            "type": "string"
+          },
+          "source_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Assets",
+            "type": "array"
+          },
+          "specialist_agent": {
+            "enum": [
+              "structured_data_agent",
+              "borrower_dossier_agent",
+              "offer_agent",
+              "compliance_agent",
+              "campaign_agent",
+              "data_ops_agent"
+            ],
+            "title": "Specialist Agent",
+            "type": "string"
+          },
+          "tool_result_hash": {
+            "title": "Tool Result Hash",
+            "type": "string"
+          },
+          "tool_steps": {
+            "items": {
+              "$ref": "#/components/schemas/GrowthAgentToolStep"
+            },
+            "title": "Tool Steps",
+            "type": "array"
+          },
+          "trace_id": {
+            "title": "Trace Id",
+            "type": "string"
+          },
+          "trace_kind": {
+            "default": "local_hash",
+            "enum": [
+              "local_hash",
+              "genie_conversation",
+              "agent_framework",
+              "mlflow_trace"
+            ],
+            "title": "Trace Kind",
+            "type": "string"
+          },
+          "workflow": {
+            "$ref": "#/components/schemas/GrowthAgentWorkflow"
+          }
+        },
+        "required": [
+          "workflow",
+          "run_id",
+          "specialist_agent",
+          "trace_id",
+          "tool_result_hash",
+          "broad_total",
+          "actionable_total",
+          "route",
+          "criteria",
+          "source_assets",
+          "tool_steps",
+          "policy_checks"
+        ],
+        "title": "GrowthAgentRunResponse",
+        "type": "object"
+      },
+      "GrowthAgentToolStep": {
+        "properties": {
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "result_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Hash"
+          },
+          "source_asset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Asset"
+          },
+          "status": {
+            "enum": [
+              "completed",
+              "blocked",
+              "review_required"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "tool_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Tool Name"
+          }
+        },
+        "required": [
+          "label",
+          "status",
+          "detail"
+        ],
+        "title": "GrowthAgentToolStep",
+        "type": "object"
+      },
+      "GrowthAgentWorkflow": {
+        "properties": {
+          "action_label": {
+            "title": "Action Label",
+            "type": "string"
+          },
+          "cadence_options": {
+            "items": {
+              "enum": [
+                "daily",
+                "weekly"
+              ],
+              "type": "string"
+            },
+            "title": "Cadence Options",
+            "type": "array"
+          },
+          "default_route": {
+            "title": "Default Route",
+            "type": "string"
+          },
+          "id": {
+            "enum": [
+              "daily_refi_brief",
+              "borrower_dossier_review",
+              "listing_watch",
+              "competitor_recapture_monitor",
+              "high_equity_heloc_watch",
+              "branch_capacity_review",
+              "source_freshness_sentinel",
+              "custom_segment_watch"
+            ],
+            "title": "Id",
+            "type": "string"
+          },
+          "objective": {
+            "title": "Objective",
+            "type": "string"
+          },
+          "proof_points": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Proof Points",
+            "type": "array"
+          },
+          "source_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Assets",
+            "type": "array"
+          },
+          "title": {
+            "title": "Title",
+            "type": "string"
+          },
+          "trigger_label": {
+            "title": "Trigger Label",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "objective",
+          "trigger_label",
+          "action_label",
+          "source_assets",
+          "default_route",
+          "proof_points"
+        ],
+        "title": "GrowthAgentWorkflow",
+        "type": "object"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4272,6 +6370,17 @@
               }
             ]
           },
+          "git_sha": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Git Sha"
+          },
           "mode": {
             "title": "Mode",
             "type": "string"
@@ -4286,6 +6395,93 @@
           "mode"
         ],
         "title": "HealthResponse",
+        "type": "object"
+      },
+      "HouseholdDedupConfig": {
+        "additionalProperties": false,
+        "properties": {
+          "dedupe_unit": {
+            "default": "borrower",
+            "enum": [
+              "borrower",
+              "household"
+            ],
+            "title": "Dedupe Unit",
+            "type": "string"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "primary_contact_strategy": {
+            "const": "highest_opportunity_eligible",
+            "default": "highest_opportunity_eligible",
+            "title": "Primary Contact Strategy",
+            "type": "string"
+          }
+        },
+        "title": "HouseholdDedupConfig",
+        "type": "object"
+      },
+      "HouseholdDedupSummary": {
+        "additionalProperties": false,
+        "properties": {
+          "candidate_borrower_count": {
+            "default": 0,
+            "title": "Candidate Borrower Count",
+            "type": "integer"
+          },
+          "enabled": {
+            "default": false,
+            "title": "Enabled",
+            "type": "boolean"
+          },
+          "household_count": {
+            "default": 0,
+            "title": "Household Count",
+            "type": "integer"
+          },
+          "mailing_address_household_count": {
+            "default": 0,
+            "title": "Mailing Address Household Count",
+            "type": "integer"
+          },
+          "owner_link_household_count": {
+            "default": 0,
+            "title": "Owner Link Household Count",
+            "type": "integer"
+          },
+          "primary_contact_strategy": {
+            "const": "highest_opportunity_eligible",
+            "default": "highest_opportunity_eligible",
+            "title": "Primary Contact Strategy",
+            "type": "string"
+          },
+          "selected_primary_count": {
+            "default": 0,
+            "title": "Selected Primary Count",
+            "type": "integer"
+          },
+          "singleton_household_count": {
+            "default": 0,
+            "title": "Singleton Household Count",
+            "type": "integer"
+          },
+          "source_assets": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Assets",
+            "type": "array"
+          },
+          "suppressed_co_owner_count": {
+            "default": 0,
+            "title": "Suppressed Co Owner Count",
+            "type": "integer"
+          }
+        },
+        "title": "HouseholdDedupSummary",
         "type": "object"
       },
       "KpiTrend": {
@@ -4422,6 +6618,284 @@
         "title": "LeadAssignment",
         "type": "object"
       },
+      "LeadOutcome": {
+        "properties": {
+          "assigned_to_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To Email"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "borrower_id": {
+            "title": "Borrower Id",
+            "type": "string"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "competitor_lender_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitor Lender Label"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "loan_amount": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loan Amount"
+          },
+          "occurred_at": {
+            "format": "date-time",
+            "title": "Occurred At",
+            "type": "string"
+          },
+          "outcome_id": {
+            "title": "Outcome Id",
+            "type": "string"
+          },
+          "outcome_type": {
+            "enum": [
+              "application_submitted",
+              "closed_funded",
+              "lost_to_competitor",
+              "withdrawn",
+              "not_qualified"
+            ],
+            "title": "Outcome Type",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "source_record_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Record Ref"
+          },
+          "source_system": {
+            "enum": [
+              "salesforce",
+              "crm_cdp",
+              "los_pos",
+              "servicing",
+              "webhook",
+              "manual_import"
+            ],
+            "title": "Source System",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome_id",
+          "borrower_id",
+          "outcome_type",
+          "source_system",
+          "occurred_at"
+        ],
+        "title": "LeadOutcome",
+        "type": "object"
+      },
+      "LeadOutcomeRequest": {
+        "additionalProperties": false,
+        "description": "PII-safe closed-loop outcome event from CRM/LOS/POS/servicing.",
+        "properties": {
+          "assigned_to_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To Email"
+          },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
+          "competitor_lender_label": {
+            "anyOf": [
+              {
+                "maxLength": 80,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Competitor Lender Label"
+          },
+          "loan_amount": {
+            "anyOf": [
+              {
+                "maximum": 100000000.0,
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loan Amount"
+          },
+          "occurred_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Occurred At"
+          },
+          "outcome_type": {
+            "enum": [
+              "application_submitted",
+              "closed_funded",
+              "lost_to_competitor",
+              "withdrawn",
+              "not_qualified"
+            ],
+            "title": "Outcome Type",
+            "type": "string"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          },
+          "source_record_ref": {
+            "anyOf": [
+              {
+                "maxLength": 128,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Record Ref"
+          },
+          "source_system": {
+            "enum": [
+              "salesforce",
+              "crm_cdp",
+              "los_pos",
+              "servicing",
+              "webhook",
+              "manual_import"
+            ],
+            "title": "Source System",
+            "type": "string"
+          }
+        },
+        "required": [
+          "outcome_type",
+          "source_system"
+        ],
+        "title": "LeadOutcomeRequest",
+        "type": "object"
+      },
+      "LeadOutcomeResponse": {
+        "properties": {
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/LeadOutcome"
+          }
+        },
+        "required": [
+          "outcome"
+        ],
+        "title": "LeadOutcomeResponse",
+        "type": "object"
+      },
       "LeadSummary": {
         "properties": {
           "aging_days": {
@@ -4553,6 +7027,16 @@
             "title": "Display Name",
             "type": "string"
           },
+          "dnc": {
+            "default": false,
+            "title": "Dnc",
+            "type": "boolean"
+          },
+          "eligibility_source": {
+            "default": "synthetic_seed",
+            "title": "Eligibility Source",
+            "type": "string"
+          },
           "eligible_recontact_at": {
             "anyOf": [
               {
@@ -4576,10 +7060,47 @@
             "title": "Evidence Ids",
             "type": "array"
           },
+          "has_heloc_propensity_trigger": {
+            "default": false,
+            "title": "Has Heloc Propensity Trigger",
+            "type": "boolean"
+          },
           "has_permit": {
             "default": false,
             "title": "Has Permit",
             "type": "boolean"
+          },
+          "has_refi_propensity_trigger": {
+            "default": false,
+            "title": "Has Refi Propensity Trigger",
+            "type": "boolean"
+          },
+          "has_unresolved_owner": {
+            "default": false,
+            "title": "Has Unresolved Owner",
+            "type": "boolean"
+          },
+          "heloc_propensity_run_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heloc Propensity Run Date"
+          },
+          "heloc_propensity_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Heloc Propensity Score"
           },
           "is_competitor_lien": {
             "default": false,
@@ -4658,6 +7179,94 @@
             "title": "Listed For Sale",
             "type": "boolean"
           },
+          "listing_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Date"
+          },
+          "listing_days_on_market": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Days On Market"
+          },
+          "listing_price": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Price"
+          },
+          "listing_service": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Service"
+          },
+          "listing_status_category": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Status Category"
+          },
+          "listing_status_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Status Date"
+          },
+          "listing_status_description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Listing Status Description"
+          },
+          "loan_product_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loan Product Type"
+          },
           "marketing_eligible": {
             "default": true,
             "title": "Marketing Eligible",
@@ -4668,6 +7277,17 @@
             "minimum": 0.0,
             "title": "Opportunity Score",
             "type": "integer"
+          },
+          "origination_channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origination Channel"
           },
           "outreach_at": {
             "anyOf": [
@@ -4694,6 +7314,28 @@
             "title": "Outreach Status",
             "type": "string"
           },
+          "owner_count": {
+            "default": 1,
+            "title": "Owner Count",
+            "type": "integer"
+          },
+          "primary_owner_entity_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "individual",
+                  "trust",
+                  "llc",
+                  "unresolved"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Owner Entity Type"
+          },
           "rate_spread_bps": {
             "title": "Rate Spread Bps",
             "type": "integer"
@@ -4706,6 +7348,28 @@
             "default": "nurture",
             "title": "Recommended Offer Code",
             "type": "string"
+          },
+          "refi_propensity_run_date": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refi Propensity Run Date"
+          },
+          "refi_propensity_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refi Propensity Score"
           },
           "related_property_count": {
             "default": 1,
@@ -4725,7 +7389,14 @@
                 "permit",
                 "investor",
                 "equity",
-                "retention"
+                "retention",
+                "second_lien_itm",
+                "heloc_draw_to_payback",
+                "home_equity_history",
+                "refi_propensity",
+                "itm_on_related_property",
+                "payoff_loss_leads",
+                "permit_activity"
               ],
               "type": "string"
             },
@@ -4909,6 +7580,18 @@
             "title": "Actor",
             "type": "string"
           },
+          "assigned_to_email": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To Email"
+          },
           "borrower_id": {
             "title": "Borrower Id",
             "type": "string"
@@ -4971,12 +7654,24 @@
             "title": "Draft Body"
           },
           "evidence_ids": {
-            "default": [],
             "items": {
               "type": "string"
             },
             "title": "Evidence Ids",
             "type": "array"
+          },
+          "follow_up_in_days": {
+            "anyOf": [
+              {
+                "maximum": 30.0,
+                "minimum": 1.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up In Days"
           },
           "offer_code": {
             "anyOf": [
@@ -5053,9 +7748,32 @@
             "title": "Approved",
             "type": "boolean"
           },
+          "assigned_to_email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Assigned To Email"
+          },
           "audit_event_id": {
             "title": "Audit Event Id",
             "type": "string"
+          },
+          "follow_up_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Up At"
           }
         },
         "required": [
@@ -5213,7 +7931,6 @@
             "type": "string"
           },
           "evidence_ids": {
-            "default": [],
             "items": {
               "type": "string"
             },
@@ -5322,6 +8039,135 @@
         "title": "OutreachRejectResponse",
         "type": "object"
       },
+      "PlanStep": {
+        "description": "One validated, deterministic step of a composed plan.",
+        "properties": {
+          "params": {
+            "title": "Params",
+            "type": "object"
+          },
+          "rationale": {
+            "default": "",
+            "maxLength": 300,
+            "title": "Rationale",
+            "type": "string"
+          },
+          "step_id": {
+            "maxLength": 48,
+            "minLength": 1,
+            "title": "Step Id",
+            "type": "string"
+          },
+          "tool": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id",
+          "tool"
+        ],
+        "title": "PlanStep",
+        "type": "object"
+      },
+      "PlanStepTrace": {
+        "description": "Deterministic execution record for one plan step.",
+        "properties": {
+          "approval_gate": {
+            "default": false,
+            "title": "Approval Gate",
+            "type": "boolean"
+          },
+          "audit_event_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audit Event Id"
+          },
+          "detail": {
+            "title": "Detail",
+            "type": "string"
+          },
+          "duration_ms": {
+            "minimum": 0.0,
+            "title": "Duration Ms",
+            "type": "integer"
+          },
+          "label": {
+            "title": "Label",
+            "type": "string"
+          },
+          "result_hash": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result Hash"
+          },
+          "row_summary": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Row Summary"
+          },
+          "source_asset": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Asset"
+          },
+          "status": {
+            "enum": [
+              "pending",
+              "completed",
+              "review_required",
+              "blocked"
+            ],
+            "title": "Status",
+            "type": "string"
+          },
+          "step_id": {
+            "title": "Step Id",
+            "type": "string"
+          },
+          "tool": {
+            "title": "Tool",
+            "type": "string"
+          }
+        },
+        "required": [
+          "step_id",
+          "tool",
+          "label",
+          "status",
+          "detail",
+          "duration_ms"
+        ],
+        "title": "PlanStepTrace",
+        "type": "object"
+      },
       "PortfolioCreateRequest": {
         "additionalProperties": false,
         "properties": {
@@ -5345,6 +8191,9 @@
               }
             ],
             "title": "Holdout"
+          },
+          "household_dedup": {
+            "$ref": "#/components/schemas/HouseholdDedupConfig"
           },
           "message_variants": {
             "items": {
@@ -5406,6 +8255,9 @@
               }
             ],
             "title": "Campaign Id"
+          },
+          "household_summary": {
+            "$ref": "#/components/schemas/HouseholdDedupSummary"
           },
           "marketable_population": {
             "title": "Marketable Population",
@@ -5475,6 +8327,17 @@
             ],
             "title": "Lien Status"
           },
+          "loan_product": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Loan Product"
+          },
           "marketing_eligibility": {
             "anyOf": [
               {
@@ -5519,6 +8382,17 @@
               }
             ],
             "title": "Occupancy"
+          },
+          "origination_channel": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Origination Channel"
           },
           "owner_link": {
             "anyOf": [
@@ -5939,6 +8813,212 @@
         "title": "ProofScoreComponent",
         "type": "object"
       },
+      "PropertyLoanLookupLoan": {
+        "description": "The loan facts surfaced on a match. All fields are public-safe.",
+        "properties": {
+          "current_lien_balance": {
+            "title": "Current Lien Balance",
+            "type": "integer"
+          },
+          "current_rate": {
+            "title": "Current Rate",
+            "type": "number"
+          },
+          "has_open_lien": {
+            "title": "Has Open Lien",
+            "type": "boolean"
+          },
+          "lender_brand": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lender Brand"
+          },
+          "ltv": {
+            "title": "Ltv",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "current_rate",
+          "current_lien_balance",
+          "has_open_lien",
+          "ltv"
+        ],
+        "title": "PropertyLoanLookupLoan",
+        "type": "object"
+      },
+      "PropertyLoanLookupRequest": {
+        "description": "Request body for ``POST /api/v1/lookup/property-loan``.\n\nField constraints are simple length / digit bounds only -- no PII-shaped\nregex that could be reflected back through the 422 error ``input`` field.\n(The app-wide RequestValidationError handler already strips ``input`` /\n``ctx`` from 422 bodies, so even a rejected ZIP never echoes the raw value.)",
+        "properties": {
+          "address_line": {
+            "maxLength": 200,
+            "minLength": 4,
+            "title": "Address Line",
+            "type": "string"
+          },
+          "city": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "City"
+          },
+          "state": {
+            "anyOf": [
+              {
+                "maxLength": 2,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "State"
+          },
+          "zip5": {
+            "maxLength": 5,
+            "minLength": 5,
+            "title": "Zip5",
+            "type": "string"
+          }
+        },
+        "required": [
+          "address_line",
+          "zip5"
+        ],
+        "title": "PropertyLoanLookupRequest",
+        "type": "object"
+      },
+      "PropertyLoanLookupResponse": {
+        "description": "Response for the property loan lookup.\n\nNever contains ``address_line``. ``clip_ref`` / ``owner_link_ref`` /\n``borrower_id`` are masked; ``lead_score`` / ``segment`` / ``loan`` /\n``dossier_path`` are populated only when the property maps to a governed\nborrower row.",
+        "properties": {
+          "audit_event_id": {
+            "title": "Audit Event Id",
+            "type": "string"
+          },
+          "borrower_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Borrower Id"
+          },
+          "clip_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Clip Ref"
+          },
+          "dossier_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dossier Path"
+          },
+          "lead_score": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lead Score"
+          },
+          "loan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/PropertyLoanLookupLoan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "match_basis": {
+            "const": "exact_normalized_address_zip",
+            "default": "exact_normalized_address_zip",
+            "title": "Match Basis",
+            "type": "string"
+          },
+          "matched": {
+            "title": "Matched",
+            "type": "boolean"
+          },
+          "owner_link_ref": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Link Ref"
+          },
+          "segment": {
+            "anyOf": [
+              {
+                "items": {
+                  "enum": [
+                    "itm",
+                    "listed",
+                    "permit",
+                    "investor",
+                    "equity",
+                    "retention",
+                    "second_lien_itm",
+                    "heloc_draw_to_payback",
+                    "home_equity_history",
+                    "refi_propensity",
+                    "itm_on_related_property",
+                    "payoff_loss_leads",
+                    "permit_activity"
+                  ],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Segment"
+          }
+        },
+        "required": [
+          "matched",
+          "audit_event_id"
+        ],
+        "title": "PropertyLoanLookupResponse",
+        "type": "object"
+      },
       "RateSpreadBucket": {
         "properties": {
           "borrower_count": {
@@ -6217,6 +9297,86 @@
           "rows"
         ],
         "title": "SalesConversionResponse",
+        "type": "object"
+      },
+      "SalesOutcomeSummaryResponse": {
+        "properties": {
+          "applications_submitted": {
+            "title": "Applications Submitted",
+            "type": "integer"
+          },
+          "by_lo": {
+            "items": {
+              "type": "object"
+            },
+            "title": "By Lo",
+            "type": "array"
+          },
+          "by_source_system": {
+            "items": {
+              "type": "object"
+            },
+            "title": "By Source System",
+            "type": "array"
+          },
+          "closed_funded": {
+            "title": "Closed Funded",
+            "type": "integer"
+          },
+          "from_date": {
+            "title": "From Date",
+            "type": "string"
+          },
+          "lost_to_competitor": {
+            "title": "Lost To Competitor",
+            "type": "integer"
+          },
+          "not_qualified": {
+            "title": "Not Qualified",
+            "type": "integer"
+          },
+          "source_statuses": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Source Statuses",
+            "type": "array"
+          },
+          "to_date": {
+            "title": "To Date",
+            "type": "string"
+          },
+          "top_competitors": {
+            "items": {
+              "type": "object"
+            },
+            "title": "Top Competitors",
+            "type": "array"
+          },
+          "total_outcomes": {
+            "title": "Total Outcomes",
+            "type": "integer"
+          },
+          "withdrawn": {
+            "title": "Withdrawn",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "total_outcomes",
+          "applications_submitted",
+          "closed_funded",
+          "lost_to_competitor",
+          "withdrawn",
+          "not_qualified",
+          "by_source_system",
+          "source_statuses",
+          "by_lo",
+          "top_competitors"
+        ],
+        "title": "SalesOutcomeSummaryResponse",
         "type": "object"
       },
       "SalesStandupResponse": {
@@ -6700,7 +9860,14 @@
               "permit",
               "investor",
               "equity",
-              "retention"
+              "retention",
+              "second_lien_itm",
+              "heloc_draw_to_payback",
+              "home_equity_history",
+              "refi_propensity",
+              "itm_on_related_property",
+              "payoff_loss_leads",
+              "permit_activity"
             ],
             "title": "Segment Code",
             "type": "string"
@@ -6734,7 +9901,14 @@
               "permit",
               "investor",
               "equity",
-              "retention"
+              "retention",
+              "second_lien_itm",
+              "heloc_draw_to_payback",
+              "home_equity_history",
+              "refi_propensity",
+              "itm_on_related_property",
+              "payoff_loss_leads",
+              "permit_activity"
             ],
             "title": "Segment Code",
             "type": "string"
@@ -6841,7 +10015,14 @@
               "permit",
               "investor",
               "equity",
-              "retention"
+              "retention",
+              "second_lien_itm",
+              "heloc_draw_to_payback",
+              "home_equity_history",
+              "refi_propensity",
+              "itm_on_related_property",
+              "payoff_loss_leads",
+              "permit_activity"
             ],
             "title": "Segment Code",
             "type": "string"
@@ -6873,7 +10054,14 @@
               "permit",
               "investor",
               "equity",
-              "retention"
+              "retention",
+              "second_lien_itm",
+              "heloc_draw_to_payback",
+              "home_equity_history",
+              "refi_propensity",
+              "itm_on_related_property",
+              "payoff_loss_leads",
+              "permit_activity"
             ],
             "title": "Code",
             "type": "string"
@@ -6894,8 +10082,43 @@
             "title": "Description",
             "type": "string"
           },
+          "loan_product_mix": {
+            "items": {
+              "$ref": "#/components/schemas/DimensionFacetCount"
+            },
+            "title": "Loan Product Mix",
+            "type": "array"
+          },
           "name": {
             "title": "Name",
+            "type": "string"
+          },
+          "origination_channel_mix": {
+            "items": {
+              "$ref": "#/components/schemas/DimensionFacetCount"
+            },
+            "title": "Origination Channel Mix",
+            "type": "array"
+          },
+          "source_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Name"
+          },
+          "source_status": {
+            "default": "connected",
+            "enum": [
+              "connected",
+              "not_connected",
+              "not_licensed"
+            ],
+            "title": "Source Status",
             "type": "string"
           }
         },
@@ -7246,7 +10469,14 @@
               "permit",
               "investor",
               "equity",
-              "retention"
+              "retention",
+              "second_lien_itm",
+              "heloc_draw_to_payback",
+              "home_equity_history",
+              "refi_propensity",
+              "itm_on_related_property",
+              "payoff_loss_leads",
+              "permit_activity"
             ],
             "title": "Segment Code",
             "type": "string"
@@ -7618,6 +10848,192 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/activation/destinations": {
+      "get": {
+        "deprecated": true,
+        "description": "Return the governed destination registry.\n\nDestinations can be configured, dry-run, disabled, or explicitly\nnot-configured. The endpoint never accepts or returns destination secrets.",
+        "operationId": "get_api_activation_destinations_list_activation_destinations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ActivationDestination"
+                  },
+                  "title": "Response Get Api Activation Destinations List Activation Destinations",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Activation Destinations",
+        "tags": [
+          "activation"
+        ]
+      }
+    },
+    "/api/activation/outbox": {
+      "get": {
+        "deprecated": true,
+        "description": "Return staged activation records from the Lakebase outbox.",
+        "operationId": "get_api_activation_outbox_list_activation_outbox",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "destination_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Destination Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ActivationOutboxItem"
+                  },
+                  "title": "Response Get Api Activation Outbox List Activation Outbox",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Activation Outbox",
+        "tags": [
+          "activation"
+        ]
+      }
+    },
+    "/api/activation/stage": {
+      "post": {
+        "deprecated": true,
+        "description": "Stage an approved borrower for a governed customer destination.\n\nThis is an outbox write, not external delivery. If the destination is not\nconfigured the row is still useful as a dry-run proof of what would leave\nMIP after customer connector setup.",
+        "operationId": "post_api_activation_stage_stage_activation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivationStageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationStageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage Activation",
+        "tags": [
+          "activation"
+        ]
+      }
+    },
+    "/api/activation/summary": {
+      "get": {
+        "deprecated": true,
+        "description": "Return destination status plus recent outbox activity.",
+        "operationId": "get_api_activation_summary_activation_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Activation Summary",
+        "tags": [
+          "activation"
+        ]
+      }
+    },
     "/api/admin/assets/{asset_key}/metadata": {
       "get": {
         "deprecated": true,
@@ -7662,6 +11078,51 @@
         ]
       }
     },
+    "/api/admin/capabilities": {
+      "get": {
+        "deprecated": true,
+        "description": "Return the honest DAIS-2026 capability snapshot for this workspace.\n\nBest-effort live probes may upgrade configured rows to ``available``. Probe\nfailures never 503 this route; they leave the row non-claimable with a\nprobe-failed detail. Each row's ``status``/``claimable`` remains the\nenforcement point for the no-overclaim posture.",
+        "operationId": "get_api_admin_capabilities_get_capabilities",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Live",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilitiesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Capabilities",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/admin/force-degraded": {
       "post": {
         "deprecated": true,
@@ -7687,6 +11148,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -7774,6 +11245,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -7860,7 +11341,7 @@
     "/api/admin/sources": {
       "get": {
         "deprecated": true,
-        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources (MLS,\nBuilding Permits). Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
+        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
         "operationId": "get_api_admin_sources_get_sources",
         "responses": {
           "200": {
@@ -8849,6 +12330,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -9673,6 +13164,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -9685,6 +13186,59 @@
           }
         },
         "summary": "Genie Action",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/genie/feedback": {
+      "post": {
+        "deprecated": true,
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nGuards: JSON content type, the genie rate-limit lane (applied by the\nbackpressure middleware for ``/api/genie/*``), and a conversation\nownership check. Side effects: a best-effort Genie message comment (a\nfailure here does not fail the request) and a required ``GENIE_FEEDBACK``\naudit row written in a Lakebase transaction. The caller comment is\nvalidated public-safe (422 on PII) and never stored verbatim.",
+        "operationId": "post_api_genie_feedback_genie_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieFeedbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Feedback",
         "tags": [
           "genie"
         ]
@@ -9714,6 +13268,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -9763,6 +13327,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -10568,6 +14142,547 @@
         ]
       }
     },
+    "/api/growth-agent": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_growth_agent_growth_agent_home",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "live_capabilities",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Live Capabilities",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentHomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Home",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/agent/compose": {
+      "post": {
+        "deprecated": true,
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "operationId": "post_api_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposePlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compose Mortgage Growth Agent Plan",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/agent/run": {
+      "post": {
+        "deprecated": true,
+        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen the Databricks Supervisor Agent is configured, it may choose exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
+        "operationId": "post_api_growth_agent_agent_run_run_mortgage_growth_agent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentPromptRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Mortgage Growth Agent",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/custom/run": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_growth_agent_custom_run_run_custom_growth_agent_workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentCustomRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Custom Growth Agent Workflow",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/monitors": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_growth_agent_monitors_growth_agent_monitors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrowthAgentMonitor"
+                  },
+                  "title": "Response Get Api Growth Agent Monitors Growth Agent Monitors",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Growth Agent Monitors",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/monitors/run-due": {
+      "post": {
+        "deprecated": true,
+        "description": "Run active saved watchlists whose cadence window has elapsed.\n\nThis endpoint is scheduler-safe but not a sender: it replays reviewed saved\nfilters, refreshes counts, and writes Slack/Teams review drafts only.",
+        "operationId": "post_api_growth_agent_monitors_run_due_run_due_growth_agent_monitors",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentDueMonitorRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentDueMonitorRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Due Growth Agent Monitors",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/monitors/run-due-all": {
+      "post": {
+        "deprecated": true,
+        "description": "Run all due saved watchlists for the scheduled Databricks job.\n\nThis is the only all-actor runner. It is admin-gated, replays only stored\nreviewed monitor criteria, attributes each run/draft to the monitor owner,\nand creates review drafts only. It never sends outreach or connector\nnotifications.",
+        "operationId": "post_api_growth_agent_monitors_run_due_all_run_due_growth_agent_monitors_all_actors",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentDueMonitorRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentDueMonitorRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Due Growth Agent Monitors All Actors",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/monitors/{monitor_id}/notification-drafts": {
+      "post": {
+        "deprecated": true,
+        "description": "Create Slack/Teams review drafts for a saved watchlist's latest run.",
+        "operationId": "post_api_growth_agent_monitors_monitor_id_notification_drafts_create_growth_agent_monitor_notification_drafts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Monitor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentMonitorDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrowthAgentNotificationDraft"
+                  },
+                  "title": "Response Post Api Growth Agent Monitors Monitor Id Notification Drafts Create Growth Agent Monitor Notification Drafts",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Growth Agent Monitor Notification Drafts",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/monitors/{monitor_id}/run": {
+      "post": {
+        "deprecated": true,
+        "description": "Re-run a saved, reviewed watchlist on demand.\n\nThis is the low-cost automation path: the user explicitly asks for a\nfresh run, the stored criteria are replayed, and the monitor's counts are\nrefreshed. It does not create a scheduler, send outreach, or execute a raw\nnatural-language prompt.",
+        "operationId": "post_api_growth_agent_monitors_monitor_id_run_rerun_growth_agent_monitor",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Monitor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rerun Growth Agent Monitor",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/growth-agent/workflows/{workflow_id}/run": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_growth_agent_workflows_workflow_id_run_run_growth_agent_workflow",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "enum": [
+                "daily_refi_brief",
+                "borrower_dossier_review",
+                "listing_watch",
+                "competitor_recapture_monitor",
+                "high_equity_heloc_watch",
+                "branch_capacity_review",
+                "source_freshness_sentinel",
+                "custom_segment_watch"
+              ],
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Growth Agent Workflow",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/health": {
       "get": {
         "deprecated": true,
@@ -10906,6 +15021,44 @@
               ],
               "description": "Optional Portfolio Builder product filter.",
               "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
             }
           },
           {
@@ -11255,6 +15408,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -11351,6 +15514,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -11365,6 +15538,121 @@
         "summary": "Log Disposition",
         "tags": [
           "sales"
+        ]
+      }
+    },
+    "/api/leads/{borrower_id}/outcome": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_leads_borrower_id_outcome_record_lead_outcome",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadOutcomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadOutcomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Lead Outcome",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/lookup/property-loan": {
+      "post": {
+        "deprecated": true,
+        "operationId": "post_api_lookup_property_loan_property_loan_lookup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PropertyLoanLookupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyLoanLookupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Property Loan Lookup",
+        "tags": [
+          "lookup"
         ]
       }
     },
@@ -11392,6 +15680,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -11435,6 +15733,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -11476,6 +15784,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -11519,6 +15837,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -11639,6 +15967,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -11687,6 +16025,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -11954,6 +16302,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -11966,6 +16324,60 @@
           }
         },
         "summary": "Distribute Leads",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/outcomes/summary": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_sales_outcomes_summary_sales_outcome_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesOutcomeSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Outcome Summary",
         "tags": [
           "sales"
         ]
@@ -12177,6 +16589,38 @@
           },
           {
             "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Loan Product"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "in": "query",
             "name": "target_lender_ref",
             "required": false,
             "schema": {
@@ -12362,6 +16806,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -12376,6 +16830,188 @@
         "summary": "Record Rum",
         "tags": [
           "telemetry"
+        ]
+      }
+    },
+    "/api/v1/activation/destinations": {
+      "get": {
+        "description": "Return the governed destination registry.\n\nDestinations can be configured, dry-run, disabled, or explicitly\nnot-configured. The endpoint never accepts or returns destination secrets.",
+        "operationId": "get_api_v1_activation_destinations_list_activation_destinations",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ActivationDestination"
+                  },
+                  "title": "Response Get Api V1 Activation Destinations List Activation Destinations",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "List Activation Destinations",
+        "tags": [
+          "activation"
+        ]
+      }
+    },
+    "/api/v1/activation/outbox": {
+      "get": {
+        "description": "Return staged activation records from the Lakebase outbox.",
+        "operationId": "get_api_v1_activation_outbox_list_activation_outbox",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "borrower_id",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Borrower Id"
+            }
+          },
+          {
+            "in": "query",
+            "name": "destination_key",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Destination Key"
+            }
+          },
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 25,
+              "maximum": 100,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ActivationOutboxItem"
+                  },
+                  "title": "Response Get Api V1 Activation Outbox List Activation Outbox",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Activation Outbox",
+        "tags": [
+          "activation"
+        ]
+      }
+    },
+    "/api/v1/activation/stage": {
+      "post": {
+        "description": "Stage an approved borrower for a governed customer destination.\n\nThis is an outbox write, not external delivery. If the destination is not\nconfigured the row is still useful as a dry-run proof of what would leave\nMIP after customer connector setup.",
+        "operationId": "post_api_v1_activation_stage_stage_activation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ActivationStageRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationStageResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Stage Activation",
+        "tags": [
+          "activation"
+        ]
+      }
+    },
+    "/api/v1/activation/summary": {
+      "get": {
+        "description": "Return destination status plus recent outbox activity.",
+        "operationId": "get_api_v1_activation_summary_activation_summary",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActivationSummary"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Activation Summary",
+        "tags": [
+          "activation"
         ]
       }
     },
@@ -12422,6 +17058,50 @@
         ]
       }
     },
+    "/api/v1/admin/capabilities": {
+      "get": {
+        "description": "Return the honest DAIS-2026 capability snapshot for this workspace.\n\nBest-effort live probes may upgrade configured rows to ``available``. Probe\nfailures never 503 this route; they leave the row non-claimable with a\nprobe-failed detail. Each row's ``status``/``claimable`` remains the\nenforcement point for the no-overclaim posture.",
+        "operationId": "get_api_v1_admin_capabilities_get_capabilities",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "live",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Live",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AdminCapabilitiesResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Capabilities",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
     "/api/v1/admin/force-degraded": {
       "post": {
         "description": "Issue or clear a browser-local degraded-banner proof cookie.\n\nThis endpoint is an admin actuator and therefore writes Lakebase audit\nbefore changing the browser-visible state. It does not mutate global health\nor stop infrastructure.",
@@ -12446,6 +17126,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -12530,6 +17220,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -12612,7 +17312,7 @@
     },
     "/api/v1/admin/sources": {
       "get": {
-        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources (MLS,\nBuilding Permits). Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
+        "description": "Return per-source readiness rows.\n\nShape:\n    [\n      {\n        \"name\":         \"Cotality Public Records\",\n        \"status\":       \"live\" | \"demo_synthetic\" | \"configured_empty\"\n                        | \"not_configured\" | \"roadmap\"\n                        | \"permission_denied\" | \"error\",\n        \"rows\":         12345 | null,\n        \"last_updated\": \"2026-04-22T17:02:11Z\" | null,\n        \"checked_at\":   \"2026-04-22T17:04:11Z\" | null,\n        \"note\":         \"Delta Share \u00b7 nightly\"\n      },\n      ...\n    ]\n\n``rows`` and ``last_updated`` are null for roadmap sources such as\nBuilding Permits. MLS/Listings is live when\n``mip.gold.source_readiness`` reports rows for that feed. Preferred production path reads\n``mip.gold.source_readiness`` so the running app principal does not\nneed direct silver grants.",
         "operationId": "get_api_v1_admin_sources_get_sources",
         "responses": {
           "200": {
@@ -13595,6 +18295,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -14405,6 +19115,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -14417,6 +19137,58 @@
           }
         },
         "summary": "Genie Action",
+        "tags": [
+          "genie"
+        ]
+      }
+    },
+    "/api/v1/genie/feedback": {
+      "post": {
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nGuards: JSON content type, the genie rate-limit lane (applied by the\nbackpressure middleware for ``/api/genie/*``), and a conversation\nownership check. Side effects: a best-effort Genie message comment (a\nfailure here does not fail the request) and a required ``GENIE_FEEDBACK``\naudit row written in a Lakebase transaction. The caller comment is\nvalidated public-safe (422 on PII) and never stored verbatim.",
+        "operationId": "post_api_v1_genie_feedback_genie_feedback",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenieFeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GenieFeedbackResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Genie Feedback",
         "tags": [
           "genie"
         ]
@@ -14445,6 +19217,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -14493,6 +19275,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -15295,6 +20087,537 @@
         ]
       }
     },
+    "/api/v1/growth-agent": {
+      "get": {
+        "operationId": "get_api_v1_growth_agent_growth_agent_home",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "live_capabilities",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Live Capabilities",
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentHomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Growth Agent Home",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/agent/compose": {
+      "post": {
+        "description": "Compose a specialized multi-step plan from the governed tool registry.\n\nUnlike ``/agent/run`` (which selects one reviewed workflow), this endpoint\nasks the Supervisor serving endpoint to *compose* a plan whose every step is\nvalidated against the reviewed deterministic tool registry, then \u2014 when\n``execute`` is set \u2014 runs the validated steps deterministically with the\nexisting per-step audit and approval rails. Every composed response is\nlabelled ``planner=\"supervisor_composed\"`` and carries the model endpoint, so\nnothing composed can masquerade as a reviewed catalog workflow. When the\nSupervisor host is unavailable the response degrades honestly and offers the\nreviewed catalog workflows as a labelled fallback; when the model answers but\nthe plan fails validation the response is ``invalid`` with no canned plan.",
+        "operationId": "post_api_v1_growth_agent_agent_compose_compose_mortgage_growth_agent_plan",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComposePlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComposePlanResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Compose Mortgage Growth Agent Plan",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/agent/run": {
+      "post": {
+        "description": "Route a natural-language co-pilot request to reviewed workflows.\n\nWhen the Databricks Supervisor Agent is configured, it may choose exactly\none reviewed workflow id from the app allowlist. The endpoint still does\nnot call the normal Genie answer path for prompt planning because that path\ncan compile and execute SQL. Reviewed deterministic tools own SQL, counts,\nfilters, Lakebase audit rows, and the reconciled Lead Queue/Admin handoff.",
+        "operationId": "post_api_v1_growth_agent_agent_run_run_mortgage_growth_agent",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentPromptRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Mortgage Growth Agent",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/custom/run": {
+      "post": {
+        "operationId": "post_api_v1_growth_agent_custom_run_run_custom_growth_agent_workflow",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentCustomRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Custom Growth Agent Workflow",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/monitors": {
+      "get": {
+        "operationId": "get_api_v1_growth_agent_monitors_growth_agent_monitors",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrowthAgentMonitor"
+                  },
+                  "title": "Response Get Api V1 Growth Agent Monitors Growth Agent Monitors",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Growth Agent Monitors",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/monitors/run-due": {
+      "post": {
+        "description": "Run active saved watchlists whose cadence window has elapsed.\n\nThis endpoint is scheduler-safe but not a sender: it replays reviewed saved\nfilters, refreshes counts, and writes Slack/Teams review drafts only.",
+        "operationId": "post_api_v1_growth_agent_monitors_run_due_run_due_growth_agent_monitors",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentDueMonitorRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentDueMonitorRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Due Growth Agent Monitors",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/monitors/run-due-all": {
+      "post": {
+        "description": "Run all due saved watchlists for the scheduled Databricks job.\n\nThis is the only all-actor runner. It is admin-gated, replays only stored\nreviewed monitor criteria, attributes each run/draft to the monitor owner,\nand creates review drafts only. It never sends outreach or connector\nnotifications.",
+        "operationId": "post_api_v1_growth_agent_monitors_run_due_all_run_due_growth_agent_monitors_all_actors",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentDueMonitorRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentDueMonitorRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Due Growth Agent Monitors All Actors",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/monitors/{monitor_id}/notification-drafts": {
+      "post": {
+        "description": "Create Slack/Teams review drafts for a saved watchlist's latest run.",
+        "operationId": "post_api_v1_growth_agent_monitors_monitor_id_notification_drafts_create_growth_agent_monitor_notification_drafts",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Monitor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentMonitorDraftRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/GrowthAgentNotificationDraft"
+                  },
+                  "title": "Response Post Api V1 Growth Agent Monitors Monitor Id Notification Drafts Create Growth Agent Monitor Notification Drafts",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Growth Agent Monitor Notification Drafts",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/monitors/{monitor_id}/run": {
+      "post": {
+        "description": "Re-run a saved, reviewed watchlist on demand.\n\nThis is the low-cost automation path: the user explicitly asks for a\nfresh run, the stored criteria are replayed, and the monitor's counts are\nrefreshed. It does not create a scheduler, send outreach, or execute a raw\nnatural-language prompt.",
+        "operationId": "post_api_v1_growth_agent_monitors_monitor_id_run_rerun_growth_agent_monitor",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "monitor_id",
+            "required": true,
+            "schema": {
+              "format": "uuid",
+              "title": "Monitor Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Rerun Growth Agent Monitor",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
+    "/api/v1/growth-agent/workflows/{workflow_id}/run": {
+      "post": {
+        "operationId": "post_api_v1_growth_agent_workflows_workflow_id_run_run_growth_agent_workflow",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "workflow_id",
+            "required": true,
+            "schema": {
+              "enum": [
+                "daily_refi_brief",
+                "borrower_dossier_review",
+                "listing_watch",
+                "competitor_recapture_monitor",
+                "high_equity_heloc_watch",
+                "branch_capacity_review",
+                "source_freshness_sentinel",
+                "custom_segment_watch"
+              ],
+              "title": "Workflow Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrowthAgentRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrowthAgentRunResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Run Growth Agent Workflow",
+        "tags": [
+          "growth-agent"
+        ]
+      }
+    },
     "/api/v1/health": {
       "get": {
         "description": "Return probe-friendly health with only runtime status.\n\nR6-09 (governance/security): the endpoint is publicly reachable via\nthe Databricks Apps URL, which is how the platform's load balancer\ndoes liveness/readiness checks. The LB sends anonymous requests, so\nwe MUST keep returning a 200 with a minimal body shape\n(``{status, mode}``) for that path. What changed: an external\nattacker probing the same URL used to get circuit-breaker state,\napp_env, warehouse IDs, flap-history counts, and the identity-fallback\ncounter. That diagnostic body now lives behind admin RBAC at\n``/api/admin/health``. Trusted authenticated browsers only receive\nthe coarse dependency / breaker states required for the\ndegraded-state UI plus a PII-safe actor cache discriminator.\n\nHTTP status stays 200 in both shapes even when ``status==\"degraded\"``\nso the LB probe contract (degraded != unhealthy) is preserved.",
@@ -15631,6 +20954,44 @@
               ],
               "description": "Optional Portfolio Builder product filter.",
               "title": "Product"
+            }
+          },
+          {
+            "description": "Optional loan product-type filter.",
+            "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional loan product-type filter.",
+              "title": "Loan Product"
+            }
+          },
+          {
+            "description": "Optional origination-channel filter.",
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 64,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional origination-channel filter.",
+              "title": "Origination Channel"
             }
           },
           {
@@ -15979,6 +21340,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -16073,6 +21444,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -16087,6 +21468,119 @@
         "summary": "Log Disposition",
         "tags": [
           "sales"
+        ]
+      }
+    },
+    "/api/v1/leads/{borrower_id}/outcome": {
+      "post": {
+        "operationId": "post_api_v1_leads_borrower_id_outcome_record_lead_outcome",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "borrower_id",
+            "required": true,
+            "schema": {
+              "title": "Borrower Id",
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LeadOutcomeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LeadOutcomeResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Record Lead Outcome",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/lookup/property-loan": {
+      "post": {
+        "operationId": "post_api_v1_lookup_property_loan_property_loan_lookup",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PropertyLoanLookupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyLoanLookupResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Property Loan Lookup",
+        "tags": [
+          "lookup"
         ]
       }
     },
@@ -16113,6 +21607,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -16155,6 +21659,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -16195,6 +21709,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -16237,6 +21761,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -16355,6 +21889,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -16402,6 +21946,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -16664,6 +22218,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -16676,6 +22240,59 @@
           }
         },
         "summary": "Distribute Leads",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/outcomes/summary": {
+      "get": {
+        "operationId": "get_api_v1_sales_outcomes_summary_sales_outcome_summary",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SalesOutcomeSummaryResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Outcome Summary",
         "tags": [
           "sales"
         ]
@@ -16884,6 +22501,38 @@
           },
           {
             "in": "query",
+            "name": "loan_product",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Loan Product"
+            }
+          },
+          {
+            "in": "query",
+            "name": "origination_channel",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Origination Channel"
+            }
+          },
+          {
+            "in": "query",
             "name": "target_lender_ref",
             "required": false,
             "schema": {
@@ -17067,6 +22716,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
