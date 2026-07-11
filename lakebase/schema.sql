@@ -1111,3 +1111,51 @@ VALUES (
     'S2: loan_officers entity with array coverage (no geometry) + assigned->contact_drafted->approved->actioned->outcome_recorded lifecycle on lead_assignments'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- =====================================================================
+-- S6 APPENDIX -- assignment outcome recording on the feedback table.
+-- (Appended at end of file on purpose: S2/S3 slices also append here;
+-- keeping S6 DDL in one clearly-bounded block minimises merge friction.)
+--
+-- The approval funnel's terminal stage (outcome_recorded) captures what
+-- happened after an actioned assignment: success | no_response | declined.
+-- Outcomes reuse the EXISTING mip_app.feedback row shape (event_type +
+-- borrower_id + actor_email); the outcome value is encoded in event_type
+-- ('assignment_outcome_success' / 'assignment_outcome_no_response' /
+-- 'assignment_outcome_declined') so per-outcome counts stay a GROUP BY on
+-- the already-indexed event_type column. Three additive nullable columns
+-- join the row back to governance objects; legacy feedback writers keep
+-- inserting without them:
+--   * assignment_id   -- the lifecycle row this outcome closed.
+--   * request_id      -- retry idempotency key (same partial-unique idiom
+--                        as approvals.request_id / call_dispositions).
+--   * audit_event_id  -- the LEAD_OUTCOME_RECORDED action_audit row written
+--                        in the SAME transaction as the status change.
+-- No CHECK on feedback.event_type: the table stays a generic feedback
+-- ledger; the outcome vocabulary is enforced by the API schema and by the
+-- partial-unique index predicate below (one recorded outcome per
+-- assignment).
+-- =====================================================================
+ALTER TABLE mip_app.feedback
+    ADD COLUMN IF NOT EXISTS assignment_id UUID;
+ALTER TABLE mip_app.feedback
+    ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE mip_app.feedback
+    ADD COLUMN IF NOT EXISTS audit_event_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_request_id
+    ON mip_app.feedback (request_id)
+    WHERE request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_assignment_outcome
+    ON mip_app.feedback (assignment_id)
+    WHERE assignment_id IS NOT NULL
+      AND event_type LIKE 'assignment_outcome_%';
+CREATE INDEX IF NOT EXISTS idx_feedback_assignment
+    ON mip_app.feedback (assignment_id, recorded_at DESC)
+    WHERE assignment_id IS NOT NULL;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_11_s6_assignment_outcome_feedback',
+    'S6: record assignment outcomes (success/no_response/declined) on mip_app.feedback -- additive assignment_id/request_id/audit_event_id columns, retry-safe request index, one outcome per assignment'
+)
+ON CONFLICT (version) DO NOTHING;
