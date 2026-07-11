@@ -8,6 +8,7 @@ export const queryKeys = {
   homePreview: () => ['mip', 'portfolio', 'preview', 'home'] as const,
   dataEstate: () => ['mip', 'data-estate'] as const,
   assetMetadata: (assetKey: string | null | undefined) => ['mip', 'asset', assetKey ?? ''] as const,
+  lineageManifest: () => ['mip', 'lineage', 'manifest'] as const,
   analytics: (scope: string, criteria: readonly unknown[] = []) => ['mip', 'analytics', scope, ...criteria] as const,
   segments: (criteria: readonly unknown[]) => ['mip', 'segments', ...criteria] as const,
   leads: (criteria: readonly unknown[]) => ['mip', 'leads', ...criteria] as const,

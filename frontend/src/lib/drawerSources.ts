@@ -198,6 +198,7 @@ export function descriptorForEvidence(event: {
 export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   population: {
     title: 'Marketable population',
+    lineageFamily: 'marketable_population',
     short: 'Marketable population',
     // Governed anchor (2026-06-11): the marketable-population KPI is
     // COUNT(*) over mip.gold.borrower_360, so this drawer reads that
@@ -224,6 +225,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   leadPopulation: {
     title: 'Ranked lead population',
+    lineageFamily: 'lead_queue_rank',
     short: 'Ranked lead population',
     assetKey: 'lead_population',
     assetPath: 'mip.gold.lead_population',
@@ -244,6 +246,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   segmentPopulation: {
     title: 'Segment population',
+    lineageFamily: 'segment_population',
     short: 'Segment population',
     assetKey: 'segment_population',
     assetPath: 'mip.gold.segment_population',
@@ -389,6 +392,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   rateSpread: {
     title: 'Rate spread evidence',
+    lineageFamily: 'rate_spread',
     short: 'Rate spread evidence',
     description:
       'Compares Cotality lien rate with the market-rate reference.',
@@ -516,6 +520,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   itm: {
     title: 'Refinance economics screen',
+    lineageFamily: 'in_the_money',
     short: 'Rate + equity screen',
     // Governed anchor (2026-06-11): the high-intent KPI sums the
     // in_the_money column on mip.gold.borrower_360 — same rationale as
@@ -542,6 +547,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   marketRate: {
     title: 'Market rate comparison',
+    lineageFamily: 'rate_spread',
     short: 'Market rate comparison',
     description:
       'Basis-point spread between lien rate and market refi reference.',
@@ -561,6 +567,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   portfolioHeadlineView: {
     title: 'Portfolio headline metric view',
+    lineageFamily: 'marketable_population',
     short: 'Portfolio headline metric view',
     assetKey: 'portfolio_headline_metric_view',
     assetPath: 'mip.semantics.portfolio_headline_metric_view',
@@ -583,6 +590,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   leadGenerationView: {
     title: 'Lead-generation metric view',
+    lineageFamily: 'lead_queue_rank',
     short: 'Lead-generation metric view',
     assetKey: 'lead_generation_metric_view',
     assetPath: 'mip.semantics.lead_generation_metric_view',
@@ -601,6 +609,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   segmentPerformanceView: {
     title: 'Segment performance metric view',
+    lineageFamily: 'segment_population',
     short: 'Segment performance metric view',
     assetKey: 'segment_performance_metric_view',
     assetPath: 'mip.semantics.segment_performance_metric_view',
@@ -639,6 +648,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   leadScore: {
     title: 'Opportunity score',
+    lineageFamily: 'opportunity_score',
     short: 'Opportunity score',
     assetKey: 'lead_scores',
     assetPath: 'mip.gold.lead_scores',
@@ -682,6 +692,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   nbo: {
     title: 'Primary offer rules',
+    lineageFamily: 'next_best_offer',
     short: 'How the offer path was selected',
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
@@ -850,6 +861,7 @@ export function segmentEvidenceSource(
     short: `segment_population.${segment.code}`,
     assetKey: 'segment_population',
     assetPath: 'mip.gold.segment_population',
+    lineageFamily: 'segment_population',
     description: gateCopy
       ? `${segment.description} ${gateCopy}`
       : `${segment.description} Live total from mip.gold.segment_population.`,

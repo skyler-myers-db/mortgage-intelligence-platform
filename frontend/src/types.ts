@@ -715,6 +715,43 @@ export interface AssetMetadataResponse {
   known_data_gaps: string[];
 }
 
+/**
+ * Governed lineage manifest (GET /api/lineage/manifest). Mirrors
+ * backend/schemas/lineage.py; the payload is the repo-committed
+ * backend/resources/lineage_manifest.json resolved for this deployment
+ * (default catalog + Catalog Explorer deep links).
+ */
+export type LineageLayer =
+  | 'raw_share'
+  | 'silver'
+  | 'gold'
+  | 'uc_function'
+  | 'metric_view'
+  | 'reference';
+
+export interface LineageManifestNode {
+  id: string;
+  layer: LineageLayer;
+  object_type: 'table' | 'view' | 'function';
+  fqn: string;
+  label: string;
+  note?: string | null;
+  catalog_explorer_url?: string | null;
+}
+
+export interface LineageManifestFamily {
+  id: string;
+  title: string;
+  description: string;
+  nodes: LineageManifestNode[];
+}
+
+export interface LineageManifestResponse {
+  schema_version: number;
+  manifest_path: string;
+  families: LineageManifestFamily[];
+}
+
 export interface FunnelTotals {
   snapshot_date?: string | null;
   addressable_borrowers: number;

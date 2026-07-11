@@ -18,6 +18,7 @@ import type {
   GeographyAnalyticsResponse,
   LeadSummary,
   LeadAssignment,
+  LineageManifestResponse,
   OfferRecommendation,
   PortfolioCreateResponse,
   PortfolioPreview,
@@ -1579,6 +1580,15 @@ export const api = {
       `/api/admin/assets/${encodeURIComponent(assetKey)}/metadata`,
       signal,
     ),
+
+  /**
+   * Governed lineage manifest for the EvidenceDrawer Lineage tab. The
+   * payload is repo-committed product truth (backend/resources/
+   * lineage_manifest.json) resolved with this deployment's catalog and
+   * Catalog Explorer deep links — static per deploy, so callers cache it.
+   */
+  lineageManifest: (signal?: AbortSignal) =>
+    getJson<LineageManifestResponse>('/api/lineage/manifest', signal),
 
   configOptions: (signal?: AbortSignal) =>
     getJson<ConfigOptions>('/api/config/options', signal),
