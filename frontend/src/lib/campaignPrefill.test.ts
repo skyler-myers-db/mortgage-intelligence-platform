@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'vitest';
+// Shared parity table — the Python side (tests/unit/test_campaign_prefill.py)
+// reads this exact file, so the accept/reject table cannot drift between the
+// two validator mirrors.
+import segmentParity from '../../../tests/fixtures/campaign_prefill_segment_parity.json';
 import {
   PARAM_SOURCE,
   PREFILL_SOURCE,
@@ -136,5 +140,41 @@ describe('campaignPrefill validation', () => {
       segmentCodes: ['ITM', 'itm', ' equity '],
     });
     expect(prefill.segmentCodes).toEqual(['itm', 'equity']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1 parity: tests/unit/test_campaign_prefill.py reads the SAME fixture.
+// Every case must produce the identical accept / reject / skip outcome on
+// both sides of the wire contract, so a drive-by change to either validator
+// (e.g. re-introducing display-layer alias folding here) breaks loudly
+// instead of silently forking the contract.
+// ---------------------------------------------------------------------------
+
+interface ParityCase {
+  input: string;
+  expect: string;
+}
+
+const parityCases: ParityCase[] = segmentParity.cases;
+
+describe('campaignPrefill segment validator parity (shared table)', () => {
+  it('fixture has cases', () => {
+    expect(parityCases.length).toBeGreaterThanOrEqual(10);
+    const outcomes = new Set(parityCases.map((c) => c.expect));
+    expect(outcomes.has('skip')).toBe(true);
+    expect(outcomes.has('reject')).toBe(true);
+  });
+
+  it.each(parityCases)('input $input → $expect', (c) => {
+    const build = () =>
+      makeCampaignPrefill({ level: 'state', state: 'IL', segmentCodes: [c.input] });
+    if (c.expect === 'reject') {
+      expect(build).toThrow(/unknown segment code/);
+    } else if (c.expect === 'skip') {
+      expect(build().segmentCodes).toEqual([]);
+    } else {
+      expect(build().segmentCodes).toEqual([c.expect]);
+    }
   });
 });

@@ -6,6 +6,9 @@ behaviour so a drive-by rename breaks loudly.
 """
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from backend.schemas.campaign_prefill import (
@@ -118,3 +121,48 @@ class TestValidation:
             level="state", state="IL", segment_codes=["ITM", "itm", " equity "]
         )
         assert prefill.segment_codes == ["itm", "equity"]
+
+
+# ---------------------------------------------------------------------------
+# F1 parity: the TS mirror (frontend/src/lib/campaignPrefill.ts) reads the
+# SAME fixture in frontend/src/lib/campaignPrefill.test.ts. Every case must
+# produce the identical accept / reject / skip outcome on both sides, so a
+# drive-by change to either validator (e.g. re-introducing display-layer
+# alias folding) breaks loudly instead of silently forking the contract.
+# ---------------------------------------------------------------------------
+
+_PARITY_FIXTURE = (
+    Path(__file__).resolve().parents[1]
+    / "fixtures"
+    / "campaign_prefill_segment_parity.json"
+)
+
+
+def _parity_cases() -> list[dict[str, str]]:
+    return json.loads(_PARITY_FIXTURE.read_text(encoding="utf-8"))["cases"]
+
+
+class TestSegmentValidatorParity:
+    def test_fixture_has_cases(self) -> None:
+        cases = _parity_cases()
+        assert len(cases) >= 10
+        assert {c["expect"] for c in cases} >= {"skip", "reject"}
+
+    @pytest.mark.parametrize(
+        "case",
+        _parity_cases(),
+        ids=lambda c: repr(c["input"]),
+    )
+    def test_segment_input_outcome_matches_shared_table(
+        self, case: dict[str, str]
+    ) -> None:
+        build = lambda: CampaignGeoPrefill(  # noqa: E731
+            level="state", state="IL", segment_codes=[case["input"]]
+        )
+        if case["expect"] == "reject":
+            with pytest.raises(ValueError):
+                build()
+        elif case["expect"] == "skip":
+            assert build().segment_codes == []
+        else:
+            assert build().segment_codes == [case["expect"]]

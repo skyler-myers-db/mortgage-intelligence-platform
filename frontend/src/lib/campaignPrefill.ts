@@ -1,5 +1,5 @@
 import type { SegmentCode } from '../types';
-import { normalizeSegmentCode } from './segmentMetadata';
+import { segmentByCode } from './segmentMetadata';
 
 /**
  * Typed campaign-draft prefill contract for the geo → campaigns handoff (S9).
@@ -107,20 +107,24 @@ function normZip(value: string | null | undefined): string | null {
 }
 
 /**
- * Normalise + dedupe segment codes. Unknown codes throw (mirrors the backend's
- * `_ALLOWED_SEGMENTS` gate) so a malformed marked link surfaces a warning
- * rather than silently dropping context.
+ * Normalise + dedupe segment codes — STRICT, exactly like the backend's
+ * `_segments` validator (trim + lowercase + exact registry membership).
+ * Display-layer alias folding (`normalizeSegmentCode`'s heloc → permit,
+ * space/hyphen → underscore) is deliberately NOT applied here: the wire
+ * contract must accept and reject the same payloads on both sides, and
+ * the parity table in tests/fixtures/campaign_prefill_segment_parity.json
+ * pins that equivalence. Unknown codes throw so a malformed marked link
+ * surfaces a warning rather than silently dropping context.
  */
 function normSegments(values: readonly string[] | undefined): SegmentCode[] {
   const out: SegmentCode[] = [];
   for (const raw of values ?? []) {
-    const trimmed = String(raw ?? '').trim();
-    if (!trimmed) continue;
-    const code = normalizeSegmentCode(trimmed);
-    if (!code) {
-      throw new PrefillError(`unknown segment code: ${trimmed.toLowerCase()}`);
+    const code = String(raw ?? '').trim().toLowerCase();
+    if (!code) continue;
+    if (!segmentByCode(code)) {
+      throw new PrefillError(`unknown segment code: ${code}`);
     }
-    if (!out.includes(code)) out.push(code);
+    if (!out.includes(code as SegmentCode)) out.push(code as SegmentCode);
   }
   return out;
 }
