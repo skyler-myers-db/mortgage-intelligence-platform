@@ -474,6 +474,8 @@ def test_uc_functions_are_wired_before_gold_ctas() -> None:
         "init_fn_in_the_money",
         "init_fn_lead_score",
         "init_fn_next_best_offer",
+        "init_fn_high_opportunity",
+        "init_fn_score_band",
     )
     expected_rendered_paths = (
         "sql/_rendered/uc_functions/fn_bounded_mortgage_rate.sql",
@@ -483,6 +485,8 @@ def test_uc_functions_are_wired_before_gold_ctas() -> None:
         "sql/_rendered/uc_functions/fn_in_the_money.sql",
         "sql/_rendered/uc_functions/fn_lead_score.sql",
         "sql/_rendered/uc_functions/fn_next_best_offer.sql",
+        "sql/_rendered/uc_functions/fn_high_opportunity.sql",
+        "sql/_rendered/uc_functions/fn_score_band.sql",
     )
     # 2026-06-11 audit P2-9: resources/jobs.yml mirror deleted —
     # databricks.yml is the single source of bundle truth.
@@ -738,3 +742,16 @@ def test_borrower_360_and_lead_scores_subscore_terms_stay_aligned() -> None:
     for borrower_term, lead_scores_term in aligned_terms:
         assert borrower_term in borrower_sql
         assert lead_scores_term in lead_scores_sql
+
+
+def test_high_opportunity_rollups_use_canonical_predicate() -> None:
+    """County rollup + daily funnel snapshot must count high-opportunity
+    borrowers through mip.gold.fn_high_opportunity — a raw `>= <n>` predicate
+    is threshold drift (S1; see tests/unit/test_score_threshold_guard.py)."""
+    county = (TRANSFORM_DIR / "gold_county_rollup.sql").read_text(encoding="utf-8")
+    funnel = (TRANSFORM_DIR / "gold_funnel_snapshot_daily.sql").read_text(encoding="utf-8")
+    assert "mip.gold.fn_high_opportunity(opportunity_score)" in county
+    assert funnel.count("mip.gold.fn_high_opportunity(opportunity_score)") == 2, (
+        "both the per-state and national snapshot branches must use the canonical predicate"
+    )
+

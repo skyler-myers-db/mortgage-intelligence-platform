@@ -140,7 +140,7 @@ class DatabricksBorrowerRepository:
     the top-20 ``evidence_events`` per CLIP into a single row keyed on
     ``borrower_id`` (Delta liquid cluster). The prior implementation fanned
     two warehouse statements out on a ``ThreadPoolExecutor`` to drop the
-    p95 from ~4.6 s to ~3.3 s; folding them into one indexed row read
+    p95 from ~4600 ms to ~3300 ms; folding them into one indexed row read
     collapses the warehouse round-trip count from 2 to 1 and pushes the
     p95 toward the 2-s load-test target.
     """

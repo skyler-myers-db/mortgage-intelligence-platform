@@ -86,14 +86,21 @@ class DatabricksPortfolioRepository:
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = cache_ttl_s
 
+    # S1: headline KPIs aggregate over the named semantic view
+    # mip.semantics.portfolio_headline_metric_view — the single home for
+    # every demoed headline measure. The high-opportunity threshold lives
+    # only in mip.gold.fn_high_opportunity (surfaced as the view's
+    # `is_high_opportunity` indicator); no score-threshold literal may
+    # appear here (tests/unit/test_score_threshold_guard.py enforces).
     _PREVIEW_SQL_TEMPLATE = (
         "SELECT "
-        "  COUNT(*)                                                              AS marketable_population, "
-        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)                         AS high_intent_leads, "
-        "  SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END)              AS top_tier_opportunities, "
-        "  SUM(CASE WHEN recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END)  AS offers_recommended, "
-        "  CAST(ROUND(AVG(opportunity_score)) AS INT)                            AS avg_score "
-        f"FROM {qualify('gold', 'borrower_360')} "
+        "  COUNT(*)                                                    AS marketable_population, "
+        "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)               AS high_intent_leads, "
+        "  SUM(CASE WHEN is_high_opportunity THEN 1 ELSE 0 END)        AS top_tier_opportunities, "
+        "  SUM(CASE WHEN offer_recommended THEN 1 ELSE 0 END)          AS offers_recommended, "
+        "  SUM(CASE WHEN offer_available THEN 1 ELSE 0 END)            AS offers_available, "
+        "  CAST(ROUND(AVG(opportunity_score)) AS INT)                  AS avg_score "
+        f"FROM {qualify('semantics', 'portfolio_headline_metric_view')} "
         "{where}"
     )
 
@@ -577,6 +584,11 @@ class DatabricksPortfolioRepository:
                 offers_recommended=(
                     int(row["offers_recommended"])
                     if row.get("offers_recommended") is not None
+                    else None
+                ),
+                offers_available=(
+                    int(row["offers_available"])
+                    if row.get("offers_available") is not None
                     else None
                 ),
                 avg_score=(int(row["avg_score"]) if row.get("avg_score") is not None else None),

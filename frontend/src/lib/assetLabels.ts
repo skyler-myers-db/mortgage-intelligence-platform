@@ -15,6 +15,7 @@ const FRIENDLY_BY_LEAF: Record<string, string> = {
   lockin_cohort: 'Lock-in cohort',
   household_rollup: 'Household rollup',
   // semantic views
+  portfolio_headline_metric_view: 'Portfolio headline metric view',
   lead_generation_metric_view: 'Lead-generation metric view',
   segment_performance_metric_view: 'Segment performance view',
   borrower_opportunity_metric_view: 'Borrower opportunity view',

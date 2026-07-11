@@ -19,6 +19,7 @@ import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
 import type { KpiTrend, PortfolioPreview } from '../types';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
 const FUTURE_MODULES = [
   { code: 'M1', title: 'Pre-Qualified Offer & Self-Serve Accept', desc: 'Borrower-facing pre-qualified offer with one-click accept → compliant application handoff (FCRA firm-offer + RESPA timing).' },
@@ -211,7 +212,7 @@ export default function Home() {
             source={DRAWER_SOURCES.itm}
           />
             <KpiCard
-              label="Opportunity score 75+"
+              label={HIGH_OPPORTUNITY_KPI_LABEL}
             valueAnimated={preview?.top_tier_opportunities ?? null}
             trend={preview?.trends?.top_tier_opportunities?.series}
             delta={formatDelta(preview?.trends?.top_tier_opportunities)}

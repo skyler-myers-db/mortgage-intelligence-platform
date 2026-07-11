@@ -18,6 +18,7 @@ const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.silver.listing_activity': 'listing_activity',
   'mip.silver.heloc_propensity': 'heloc_propensity',
   'mip.silver.refi_propensity': 'refi_propensity',
+  'mip.semantics.portfolio_headline_metric_view': 'portfolio_headline_metric_view',
   'mip.semantics.lead_generation_metric_view': 'lead_generation_metric_view',
   'mip.semantics.segment_performance_metric_view': 'segment_performance_metric_view',
   'mip.semantics.borrower_opportunity_metric_view': 'borrower_opportunity_metric_view',
@@ -82,6 +83,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('fn_in_the_money') || key.includes('itm')) return enrichAsset(DRAWER_SOURCES.itm);
   if (key.includes('fn_lead_score') || key.includes('lead_scores')) return enrichAsset(DRAWER_SOURCES.leadScore);
   if (key.includes('fn_next_best_offer') || key.includes('nbo')) return enrichAsset(DRAWER_SOURCES.nbo);
+  if (key.includes('portfolio_headline_metric_view')) return enrichAsset(DRAWER_SOURCES.portfolioHeadlineView);
   if (key.includes('segment_performance_metric_view')) return enrichAsset(DRAWER_SOURCES.segmentPerformanceView);
   if (key.includes('borrower_opportunity_metric_view')) return enrichAsset(DRAWER_SOURCES.borrowerOpportunityView);
   if (key.includes('lead_generation_metric_view')) return enrichAsset(DRAWER_SOURCES.leadGenerationView);
@@ -209,10 +211,12 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien' },
       { layer: 'ENTITY', name: 'entity.property_clip' },
       { layer: 'ENTITY', name: 'entity.owner_link' },
-      { layer: 'SEMANTIC', name: 'metrics.borrower_universe' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
-      { label: 'Borrower universe', source: 'metrics.borrower_universe', value: 'live count' },
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
+      { label: 'Underlying rows', source: 'mip.gold.borrower_360', value: 'borrower grain' },
       { label: 'Ownership graph', source: 'entity.owner_link', value: 'CLIP-grain' },
       { label: 'Tenant lens', source: 'mip.ref.lender_dictionary', value: 'gold refresh' },
     ],
@@ -525,9 +529,10 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SOURCE', name: 'cotality.avm.current' },
       { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_in_the_money' },
-      { layer: 'SEMANTIC', name: 'metrics.itm_flag' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view.in_the_money', value: 'SUM' },
       { label: 'Par refi rate', source: 'market_rates_weekly.market_rate_fraction', value: 'latest' },
       { label: 'Lien rate', source: 'voluntary_lien.current_rate', value: 'borrower' },
       { label: 'Rate spread', source: 'derived', value: 'lien minus par' },
@@ -551,6 +556,28 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { label: 'Market par rate', source: 'fred.MORTGAGE30US', value: 'latest' },
       { label: 'Borrower lien rate', source: 'voluntary_lien.current_rate', value: 'row' },
       { label: 'Spread (bps)', source: 'derived', value: 'lien - par x 100' },
+    ],
+  },
+
+  portfolioHeadlineView: {
+    title: 'Portfolio headline metric view',
+    short: 'Portfolio headline metric view',
+    assetKey: 'portfolio_headline_metric_view',
+    assetPath: 'mip.semantics.portfolio_headline_metric_view',
+    description:
+      'Borrower-grain semantic view defining every home headline KPI: marketable population, refi economics screen, high opportunity, offers available, and primary offer paths.',
+    lineage: [
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_high_opportunity' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_score_band' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
+    ],
+    signals: [
+      { label: 'Marketable population', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
+      { label: 'Refi economics screen', source: 'in_the_money', value: 'SUM' },
+      { label: 'High opportunity', source: 'is_high_opportunity', value: 'fn_high_opportunity' },
+      { label: 'Offers available', source: 'offer_available', value: 'non-null offer' },
+      { label: 'Primary offer paths', source: 'offer_recommended', value: 'actionable lane' },
     ],
   },
 
@@ -620,10 +647,12 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.lead_scores' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_lead_score' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_high_opportunity' },
       { layer: 'PARITY', name: 'backend/services/scoring.py' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.lead_generation_metric_view' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view.is_high_opportunity', value: 'fn_high_opportunity' },
       { label: 'Economic incentive', source: 'lead_scores.economic_incentive', value: '35% weight' },
       { label: 'Intent trigger', source: 'lead_scores.intent_trigger', value: '30% weight' },
       { label: 'Fit', source: 'lead_scores.fit', value: '15% weight' },
@@ -662,8 +691,11 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_next_best_offer' },
       { layer: 'PARITY', name: 'backend/services/scoring.py' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view.offer_recommended', value: 'SUM' },
+      { label: 'Offers available', source: 'portfolio_headline_metric_view.offer_available', value: 'non-null offer' },
       { label: 'Rate spread', source: 'borrower_360.rate_spread_bps', value: 'refi economics' },
       { label: 'Equity', source: 'borrower_360.equity_pct', value: 'product fit' },
       { label: 'HELOC intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'trigger' },

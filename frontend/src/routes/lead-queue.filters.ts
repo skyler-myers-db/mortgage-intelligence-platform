@@ -2,6 +2,7 @@ import { ApiError, type LeadFunnelStage } from '../lib/api';
 import { isPublicLenderRef, LENDER_RELATIONSHIP_OPTIONS } from '../lib/lenderFilters';
 import { SEGMENT_DEFINITIONS } from '../lib/segmentMetadata';
 import type { SegmentCode } from '../types';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
 // S1.3: codes, labels, and filter options derive from SEGMENT_DEFINITIONS
 // (the canonical presentation registry) so a segment added there appears in
@@ -35,7 +36,7 @@ export const AGING_FILTER_OPTIONS = ['Any age', 'Aged >7d', 'Aged >14d', 'Aged >
 export const FUNNEL_STAGE_LABELS: Record<LeadFunnelStage, string> = {
   addressable: 'Addressable',
   in_the_money: 'Refi economics',
-  high_opportunity: 'Opportunity score 75+',
+  high_opportunity: HIGH_OPPORTUNITY_KPI_LABEL,
   offer_recommended: 'Primary offer selected',
   approved: 'Approved',
   actioned: 'Actioned',

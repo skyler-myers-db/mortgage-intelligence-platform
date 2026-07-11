@@ -38,6 +38,7 @@ from backend.services.growth_agent_workflows import (
 )
 from backend.services.lakebase import LakebaseClient, LakebaseError
 from backend.services.property_lookup import lookup_property_loan
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 # S1.4: canonical fail-closed contactability predicate (single interface).
 _B_ELIGIBLE = eligible_sql_predicate("b")
@@ -339,7 +340,9 @@ WHERE {_B_ELIGIBLE}
 
 
 def _impl_dossier_evidence(ctx: ToolExecutionContext, params: dict[str, Any]) -> PlanStepResult:
-    sql_params: dict[str, Any] = {"min_score": int(params.get("min_opportunity_score") or 75)}
+    sql_params: dict[str, Any] = {
+        "min_score": int(params.get("min_opportunity_score") or HIGH_OPPORTUNITY_THRESHOLD)
+    }
     state_clause = _state_clause("d", list(params.get("states") or []), sql_params)
     row = _execute_one(
         ctx,

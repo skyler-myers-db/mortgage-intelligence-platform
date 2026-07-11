@@ -195,6 +195,20 @@ _DESCRIPTORS: tuple[AssetDescriptor, ...] = (
     ),
     _descriptor(
         "semantics",
+        "portfolio_headline_metric_view",
+        title="Portfolio Headline Metric View",
+        description=(
+            "Borrower-grain semantic view defining every demoed headline KPI: "
+            "marketable population, refi economics screen, high opportunity "
+            "(canonical fn_high_opportunity threshold), offers available "
+            "(non-null fn_next_best_offer), primary offer paths, and average "
+            "opportunity score."
+        ),
+        object_type="view",
+        aliases=("headline_metric_view",),
+    ),
+    _descriptor(
+        "semantics",
         "lead_generation_metric_view",
         title="Lead Generation Metric View",
         description="Business-friendly KPI view used by the home page and Genie answers.",

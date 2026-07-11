@@ -72,6 +72,53 @@ _LEAD_SCORE_WEIGHTS = (
 )
 _DECIMAL_ONE = Decimal("1")
 
+# ---------------------------------------------------------------------------
+# Canonical opportunity-score threshold + display bands (S1).
+# ---------------------------------------------------------------------------
+# THE single pinned backend site for the high-opportunity threshold and the
+# score display-band edges. Parity mirrors (change all together, never one
+# alone):
+#   - sql/uc_functions/fn_high_opportunity.sql   (UC layer, threshold)
+#   - sql/uc_functions/fn_score_band.sql         (UC layer, band edges)
+#   - frontend/src/lib/opportunityScore.ts       (frontend layer)
+# tests/unit/test_score_threshold_guard.py greps the repo so a stray literal
+# predicate fails CI and asserts the three layers agree; golden edge cases
+# (74/75/76, 84/85/86, 64/65/66) live in tests/fixtures/score_band_golden.json.
+# Every other backend consumer MUST import these — never re-declare the
+# numbers.
+HIGH_OPPORTUNITY_THRESHOLD: int = 75
+SCORE_BAND_HIGH_MIN: int = 85
+SCORE_BAND_MED_MIN: int = 65
+
+
+def is_high_opportunity(opportunity_score: int | None) -> bool:
+    """Return True iff the score clears the governed high-opportunity threshold.
+
+    Mirrors ``mip.gold.fn_high_opportunity`` EXACTLY: ``None`` returns
+    ``False`` (no score must not silently count as a top-tier opportunity
+    on a contact-prioritization surface — same fail-closed rationale as
+    ``in_the_money``).
+    """
+    if opportunity_score is None:
+        return False
+    return opportunity_score >= HIGH_OPPORTUNITY_THRESHOLD
+
+
+def score_band(opportunity_score: int | None) -> str:
+    """Return the canonical display band: ``'high'`` / ``'med'`` / ``'low'``.
+
+    Mirrors ``mip.gold.fn_score_band`` EXACTLY (and the prototype ScoreBadge
+    tiers): high at ``>= SCORE_BAND_HIGH_MIN``, med at ``>= SCORE_BAND_MED_MIN``,
+    else low. ``None`` coerces to 0 (a completely-unscored row is 'low'),
+    matching the SQL ``COALESCE(..., 0)`` contract.
+    """
+    score = opportunity_score or 0
+    if score >= SCORE_BAND_HIGH_MIN:
+        return "high"
+    if score >= SCORE_BAND_MED_MIN:
+        return "med"
+    return "low"
+
 # Canonical SQL-parity labels for the eight offer_codes. These mirror the
 # governed fixture and are intentionally stable for scoring/audit contracts.
 # User-facing APIs should call ``offer_display_label`` so legacy labels such as
@@ -158,6 +205,8 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.gold.fn_in_the_money":     "Refinance economics screen",
     "mip.gold.fn_next_best_offer":  "Primary offer rules",
     "mip.gold.fn_lead_score":       "Opportunity score",
+    "mip.gold.fn_high_opportunity": "High-opportunity threshold",
+    "mip.gold.fn_score_band":       "Opportunity score band",
     "mip.gold.fn_loan_product_type": "Loan product classification",
     # UC table evidence
     "mip.gold.borrower_360":        "Borrower dossier",
@@ -169,6 +218,7 @@ SOURCE_DISPLAY_LABELS: dict[str, str] = {
     "mip.silver.listing_activity":  "MLS listing activity",
     "mip.silver.heloc_propensity":  "HELOC propensity",
     "mip.silver.refi_propensity":   "Refi propensity",
+    "mip.semantics.portfolio_headline_metric_view": "Portfolio headline metrics",
     "mip.first_party.loan_applications": "First-party loan applications",
     # Short aliases used on RowPreview and app proof chips.
     "fn_rate_spread":               "Market rate comparison",

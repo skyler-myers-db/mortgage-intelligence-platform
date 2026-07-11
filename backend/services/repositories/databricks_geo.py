@@ -24,6 +24,7 @@ from backend.services.repositories.databricks_portfolio import DatabricksPortfol
 from backend.services.repositories.databricks_segment_gates import apply_source_gates
 from backend.services.repositories.databricks_shared import _SEGMENT_COLUMNS, _parse_facet_mix
 from backend.services.resilience import TTLCache
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 log = logging.getLogger("backend.services.repositories.databricks_repo")
 
@@ -344,7 +345,8 @@ class DatabricksGeoRepository:
         "  CAST(COUNT(*) AS INT)                         AS addressable, "
         "  CAST(SUM(CASE WHEN in_the_money "
         "                THEN 1 ELSE 0 END) AS INT)      AS in_the_money, "
-        "  CAST(SUM(CASE WHEN opportunity_score >= 75 "
+        "  CAST(SUM(CASE WHEN opportunity_score "
+        f"                >= {HIGH_OPPORTUNITY_THRESHOLD} "
         "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
         "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score "
         f"FROM {qualify('gold', 'borrower_360')} "
@@ -371,7 +373,7 @@ class DatabricksGeoRepository:
         "    ANY_VALUE(state) AS state, "
         "    CAST(COUNT(*) AS INT) AS addressable_borrowers, "
         "    CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
-        "    CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
+        f"    CAST(SUM(CASE WHEN opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD} THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
         "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_opportunity_score "
         "  FROM base "
         "  GROUP BY fips_5 "
