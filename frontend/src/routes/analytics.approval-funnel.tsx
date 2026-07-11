@@ -14,7 +14,7 @@ import {
   assignmentStatusLabel,
   assignmentStatusVariant,
 } from '../components/mortgage/LeadTable.logic';
-import { approvalFunnelStageDrawer } from '../lib/drawerSources';
+import { approvalFunnelStageDrawer } from '../lib/approvalFunnelDrawerSource';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 import { formatTimestamp } from '../lib/time';
 import { offerDisplayLabel } from '../lib/offerLanguage';

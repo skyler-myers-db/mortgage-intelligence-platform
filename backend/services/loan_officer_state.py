@@ -64,7 +64,7 @@ class IllegalStatusTransitionError(ValueError):
 def legal_next_status(status: str) -> AssignmentLifecycleStatus | None:
     """Return the only legal next lifecycle stage, or None at the end."""
     try:
-        index = ASSIGNMENT_LIFECYCLE.index(status)  # type: ignore[arg-type]
+        index = ASSIGNMENT_LIFECYCLE.index(status)
     except ValueError:
         return None
     if index + 1 >= len(ASSIGNMENT_LIFECYCLE):

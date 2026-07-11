@@ -1,3 +1,5 @@
+import type { AssignmentLifecycleStatus, LeadAssignment } from './types/loanOfficer';
+
 export type SegmentCode =
   | 'itm'
   | 'listed'
@@ -162,128 +164,6 @@ export interface LeadSummary {
    *  application in the connected LOS feed: loan_officer|digital|branch|
    *  call_center|unknown. null renders Unknown. */
   origination_channel?: string | null;
-}
-
-export interface SalesTeamMember {
-  email: string;
-  display_label: string;
-  role: 'loan_officer' | 'sales_manager' | 'admin';
-  region?: string | null;
-  manager_email?: string | null;
-  capacity_per_day: number;
-  active: boolean;
-}
-
-/** S2 assignment lifecycle — strictly ordered; transitions are one step
- *  forward and enforced server-side. */
-export type AssignmentLifecycleStatus =
-  | 'assigned'
-  | 'contact_drafted'
-  | 'approved'
-  | 'actioned'
-  | 'outcome_recorded';
-
-export interface LoanOfficer {
-  loan_officer_id: string;
-  email: string;
-  display_name: string;
-  coverage_states: string[];
-  coverage_counties: string[];
-  active: boolean;
-}
-
-export interface LoanOfficerAssignment {
-  assignment_id: string;
-  borrower_id: string;
-  loan_officer_id?: string | null;
-  loan_officer_email: string;
-  loan_officer_name?: string | null;
-  status: AssignmentLifecycleStatus;
-  assigned_by: string;
-  assigned_at: string;
-  status_updated_at?: string | null;
-  released_at?: string | null;
-}
-
-/** S6 recorded outcome for an actioned assignment — distinct from call
- *  disposition outcomes and customer-system lead outcome types. */
-export type AssignmentOutcome = 'success' | 'no_response' | 'declined';
-
-export interface AssignmentOutcomeResponse {
-  assignment: LoanOfficerAssignment;
-  outcome: AssignmentOutcome;
-  feedback_id: string;
-  audit_event_id?: string | null;
-}
-
-/** S6 approval funnel — five live stages spanning UC (population,
- *  high-opportunity) and Lakebase (approved, actioned, outcome_recorded). */
-export type ApprovalFunnelStageName =
-  | 'population'
-  | 'high_opportunity'
-  | 'approved'
-  | 'actioned'
-  | 'outcome_recorded';
-
-export interface ApprovalFunnelStage {
-  stage: ApprovalFunnelStageName;
-  stage_order: number;
-  label: string;
-  borrower_count: number;
-  source: string;
-}
-
-export interface ApproverActivityRow {
-  approval_id: string;
-  borrower_id: string;
-  offer_code?: string | null;
-  actor_email: string;
-  assigned_to_email?: string | null;
-  decided_at: string;
-}
-
-export interface AssignmentOutcomeCounts {
-  success: number;
-  no_response: number;
-  declined: number;
-}
-
-export interface LoanOfficerFunnelRow {
-  loan_officer_id: string;
-  display_name: string;
-  email: string;
-  assigned: number;
-  contact_drafted: number;
-  approved: number;
-  actioned: number;
-  outcome_recorded: number;
-  total_active: number;
-}
-
-export interface ApprovalFunnelResponse {
-  generated_at: string;
-  stages: ApprovalFunnelStage[];
-  approvals: ApproverActivityRow[];
-  loan_officers: LoanOfficerFunnelRow[];
-}
-
-export interface LoanOfficerFunnelDetailResponse {
-  officer: LoanOfficerFunnelRow;
-  assignments: LoanOfficerAssignment[];
-  outcome_counts: AssignmentOutcomeCounts;
-}
-
-export interface LeadAssignment {
-  assignment_id: string;
-  borrower_id: string;
-  assigned_to_email: string;
-  assigned_to_label?: string | null;
-  assigned_by: string;
-  assigned_at: string;
-  expires_at?: string | null;
-  released_at?: string | null;
-  strategy: 'manual' | 'round_robin' | 'score_balanced';
-  status?: AssignmentLifecycleStatus;
 }
 
 export interface CallDisposition {
@@ -1000,3 +880,6 @@ export type {
   ZipRollup,
   ZipRollupResponse,
 } from './types/geo';
+
+export type * from './types/loanOfficer';
+export type * from './types/approvalFunnel';
