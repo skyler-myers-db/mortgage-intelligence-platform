@@ -106,6 +106,15 @@ def get_sales_state_store(client: LakebaseDep) -> SalesStateStore:
 
 def clear_sales_state_cache() -> None:
     _SALES_STATE_CACHE.clear()
+    # S6: every approval-workflow write path (approve/reject, assignment
+    # lifecycle, outcome recording) already calls this hook, so the live
+    # approval funnel invalidates with it — a UI approval must move the
+    # funnel within one cache TTL. Late import: approval_funnel depends on
+    # schemas + lakebase only, but keeping it out of module scope avoids
+    # ever creating an import cycle with future funnel reads of sales state.
+    from backend.services.approval_funnel import clear_approval_funnel_cache
+
+    clear_approval_funnel_cache()
 
 
 def _sales_state_ttl_s() -> float:
@@ -1531,6 +1540,7 @@ def hydrate_leads_with_sales_state(
                     "assigned_at": assignment.assigned_at,
                     "assignment_expires_at": assignment.expires_at,
                     "assignment_status": assignment.status,
+                    "assignment_id": assignment.assignment_id,
                 }
             )
         disposition = dispositions.get(lead.borrower_id)

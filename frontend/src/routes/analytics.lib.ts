@@ -13,7 +13,7 @@ import type {
 } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
-export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'sales-ops';
+export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'approval-funnel' | 'sales-ops';
 
 export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map' | 'money' | 'layers' | 'audit' | 'target' }> = [
   { id: 'executive', label: 'Executive', icon: 'flow' },
@@ -21,6 +21,7 @@ export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map'
   { id: 'economics', label: 'Economics', icon: 'money' },
   { id: 'segments', label: 'Segments', icon: 'layers' },
   { id: 'signals', label: 'Signals', icon: 'audit' },
+  { id: 'approval-funnel', label: 'Approval funnel', icon: 'flow' },
   { id: 'sales-ops', label: 'Sales ops', icon: 'target' },
 ];
 

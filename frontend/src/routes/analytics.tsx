@@ -42,6 +42,7 @@ import {
   SignalsView,
 } from './analytics.sections';
 import { SalesOpsSection } from './analytics.sales-ops';
+import { ApprovalFunnelSection } from './analytics.approval-funnel';
 
 // Re-export the symbols imported from './analytics' by analytics.test.tsx so the
 // decomposition keeps every existing import path stable.
@@ -241,7 +242,7 @@ export default function AnalyticsRoute() {
           </button>
         ))}
       </div>
-      {tab !== 'sales-ops' && (
+      {tab !== 'sales-ops' && tab !== 'approval-funnel' && (
       <div className="filter-row filter-row--spaced analytics-filters" aria-label="Analytics filters">
         <MultiFilterSelect
           label="State"
@@ -328,6 +329,7 @@ export default function AnalyticsRoute() {
           {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days, ...leadParams }} />}
         </LoadState>
       )}
+      {tab === 'approval-funnel' && <ApprovalFunnelSection />}
       {tab === 'sales-ops' && <SalesOpsSection />}
     </PageShell>
   );

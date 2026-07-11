@@ -303,11 +303,64 @@ SELECT
 _APPROVAL_FOLLOWUP_KEY: str = "mip_bootstrap_approvals_followup"
 
 
+# S6 DDL -- assignment-outcome columns on the existing feedback table.
+# Outcomes reuse the feedback row shape (event_type carries the outcome
+# vocabulary); these additive columns join an outcome back to its
+# lifecycle assignment, its idempotency key, and its in-transaction
+# LEAD_OUTCOME_RECORDED audit row. Keep in sync with the S6 appendix in
+# ``lakebase/schema.sql``.
+_ASSIGNMENT_OUTCOME_DDL: tuple[str, ...] = (
+    "ALTER TABLE mip_app.feedback ADD COLUMN IF NOT EXISTS assignment_id UUID",
+    "ALTER TABLE mip_app.feedback ADD COLUMN IF NOT EXISTS request_id TEXT",
+    "ALTER TABLE mip_app.feedback ADD COLUMN IF NOT EXISTS audit_event_id UUID",
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_request_id "
+        "ON mip_app.feedback (request_id) WHERE request_id IS NOT NULL"
+    ),
+    (
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_assignment_outcome "
+        "ON mip_app.feedback (assignment_id) "
+        "WHERE assignment_id IS NOT NULL "
+        "AND event_type LIKE 'assignment_outcome_%'"
+    ),
+    (
+        "CREATE INDEX IF NOT EXISTS idx_feedback_assignment "
+        "ON mip_app.feedback (assignment_id, recorded_at DESC) "
+        "WHERE assignment_id IS NOT NULL"
+    ),
+)
+_ASSIGNMENT_OUTCOME_PREFLIGHT_SQL = """
+SELECT
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'feedback'
+      AND column_name = 'assignment_id'
+  ) AS has_assignment_id_column,
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'mip_app'
+      AND tablename = 'feedback'
+      AND indexname = 'idx_feedback_request_id'
+  ) AS has_request_id_index,
+  EXISTS (
+    SELECT 1
+    FROM pg_indexes
+    WHERE schemaname = 'mip_app'
+      AND tablename = 'feedback'
+      AND indexname = 'idx_feedback_assignment_outcome'
+  ) AS has_assignment_outcome_index
+"""
+_ASSIGNMENT_OUTCOME_KEY: str = "mip_bootstrap_s6_assignment_outcome"
+
 _LOCK = Lock()
 _APPROVAL_REQUEST_ID_BOOTSTRAPPED: bool = False
 _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED: bool = False
 _APPROVAL_FOLLOWUP_BOOTSTRAPPED: bool = False
 _LOAN_OFFICER_LIFECYCLE_BOOTSTRAPPED: bool = False
+_ASSIGNMENT_OUTCOME_BOOTSTRAPPED: bool = False
 
 
 def ensure_approval_idempotency_column(client: LakebaseClient) -> None:
@@ -729,14 +782,100 @@ def _release_advisory_lock_with_key(client: LakebaseClient, acquired: bool, key:
         )
 
 
+def _assignment_outcome_already_applied(client: LakebaseClient) -> bool:
+    """Return True when the S6 assignment-outcome feedback schema exists."""
+    fetchone = getattr(client, "fetchone", None)
+    if not callable(fetchone):
+        return False
+    row = fetchone(_ASSIGNMENT_OUTCOME_PREFLIGHT_SQL)
+    if not row:
+        return False
+    return (
+        bool(row.get("has_assignment_id_column"))
+        and bool(row.get("has_request_id_index"))
+        and bool(row.get("has_assignment_outcome_index"))
+    )
+
+
+def ensure_assignment_outcome_schema(client: LakebaseClient) -> None:
+    """Apply the S6 assignment-outcome feedback DDL once per process.
+
+    Same posture as the other bootstraps: read-only preflight first so an
+    already-migrated database never sees owner-only DDL, advisory lock so
+    the app bootstrap and the ``mip_lakebase_migrate`` job cannot
+    interleave, failures logged at WARNING and swallowed (the caller's
+    write surfaces the real outage), and the latch stays False on failure
+    so the next request retries the idempotent DDL.
+    """
+    global _ASSIGNMENT_OUTCOME_BOOTSTRAPPED
+    if _ASSIGNMENT_OUTCOME_BOOTSTRAPPED:
+        return
+    with _LOCK:
+        if _ASSIGNMENT_OUTCOME_BOOTSTRAPPED:
+            return
+        lock_acquired = False
+        try:
+            if _assignment_outcome_already_applied(client):
+                emit(
+                    log,
+                    "lakebase_bootstrap_already_applied",
+                    migration="s6_assignment_outcome",
+                )
+                _ASSIGNMENT_OUTCOME_BOOTSTRAPPED = True
+                return
+            client.execute(
+                "SELECT pg_advisory_lock(hashtext(%(key)s))",
+                {"key": _ASSIGNMENT_OUTCOME_KEY},
+            )
+            lock_acquired = True
+            for stmt in _ASSIGNMENT_OUTCOME_DDL:
+                client.execute(stmt)
+        except LakebaseError as exc:
+            emit(
+                log,
+                "lakebase_bootstrap_failed",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="s6_assignment_outcome",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
+            _release_advisory_lock_with_key(client, lock_acquired, _ASSIGNMENT_OUTCOME_KEY)
+            return
+        except Exception as exc:  # noqa: BLE001 -- bootstrap must never crash request path
+            emit(
+                log,
+                "lakebase_bootstrap_unexpected_failure",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                migration="s6_assignment_outcome",
+                exc_type=type(exc).__name__,
+                exc_msg=str(exc)[:500],
+            )
+            _release_advisory_lock_with_key(client, lock_acquired, _ASSIGNMENT_OUTCOME_KEY)
+            return
+        _release_advisory_lock_with_key(client, lock_acquired, _ASSIGNMENT_OUTCOME_KEY)
+        emit(
+            log,
+            "lakebase_bootstrap_applied",
+            migration="s6_assignment_outcome",
+            statements=len(_ASSIGNMENT_OUTCOME_DDL),
+        )
+        _ASSIGNMENT_OUTCOME_BOOTSTRAPPED = True
+
+
 def _reset_bootstrap_for_tests() -> None:
     """Test helper -- clear the per-process flag between tests."""
     global _APPROVAL_REQUEST_ID_BOOTSTRAPPED, _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED
     global _APPROVAL_FOLLOWUP_BOOTSTRAPPED, _LOAN_OFFICER_LIFECYCLE_BOOTSTRAPPED
+    global _ASSIGNMENT_OUTCOME_BOOTSTRAPPED
     _APPROVAL_REQUEST_ID_BOOTSTRAPPED = False
     _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED = False
     _APPROVAL_FOLLOWUP_BOOTSTRAPPED = False
     _LOAN_OFFICER_LIFECYCLE_BOOTSTRAPPED = False
+    _ASSIGNMENT_OUTCOME_BOOTSTRAPPED = False
 
 
 def _bootstrap_state_for_tests() -> dict[str, Any]:
@@ -746,4 +885,5 @@ def _bootstrap_state_for_tests() -> dict[str, Any]:
         "sales_workflow_request_id_bootstrapped": _SALES_WORKFLOW_REQUEST_ID_BOOTSTRAPPED,
         "approval_followup_bootstrapped": _APPROVAL_FOLLOWUP_BOOTSTRAPPED,
         "loan_officer_lifecycle_bootstrapped": _LOAN_OFFICER_LIFECYCLE_BOOTSTRAPPED,
+        "assignment_outcome_bootstrapped": _ASSIGNMENT_OUTCOME_BOOTSTRAPPED,
     }

@@ -10,6 +10,8 @@ from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.loan_officer import (
     AssignLoanOfficerRequest,
     AssignmentLifecycleStatus,
+    AssignmentOutcomeRequest,
+    AssignmentOutcomeResponse,
     AssignmentStatusUpdateRequest,
     LoanOfficer,
     LoanOfficerAssignment,
@@ -133,6 +135,48 @@ def update_assignment_status(
         )
         return LoanOfficerAssignmentResponse(
             assignment=assignment,
+            audit_event_id=audit_event_id or None,
+        )
+    except IllegalStatusTransitionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="assignment not found") from exc
+    except PermissionError as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
+@router.post(
+    "/loan-officers/assignments/{assignment_id}/outcome",
+    response_model=AssignmentOutcomeResponse,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
+def record_assignment_outcome(
+    assignment_id: str,
+    payload: AssignmentOutcomeRequest,
+    request: Request,
+    _: Annotated[None, Depends(require_json_content_type)],
+    store: LoanOfficerStateDep,
+) -> AssignmentOutcomeResponse:
+    """Record success / no_response / declined for an actioned assignment.
+
+    The server enforces the lifecycle gate: only an ``actioned`` assignment
+    (which itself passed the human ``approved`` stage) can record an
+    outcome — anything else is 409. No outreach is sent from this path.
+    """
+    actor = resolve_actor(request)
+    try:
+        assignment, feedback_id, audit_event_id = store.record_outcome(
+            assignment_id=assignment_id,
+            outcome=payload.outcome,
+            actor=actor,
+            request_id=payload.request_id,
+        )
+        return AssignmentOutcomeResponse(
+            assignment=assignment,
+            outcome=payload.outcome,
+            feedback_id=feedback_id,
             audit_event_id=audit_event_id or None,
         )
     except IllegalStatusTransitionError as exc:

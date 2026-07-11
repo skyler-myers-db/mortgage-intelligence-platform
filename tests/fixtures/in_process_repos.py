@@ -43,6 +43,7 @@ from backend.schemas.analytics import (
     TopZipOpportunityRow,
 )
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.funnel import FunnelPopulation
 from backend.schemas.geo import (
     CountyRollup,
     CountyRollupResponse,
@@ -71,7 +72,7 @@ from backend.services.genie_answers import (
     default_follow_up_questions,
 )
 from backend.services.repositories.databricks_borrowers import _build_borrower_proof
-from backend.services.scoring import score_band
+from backend.services.scoring import is_high_opportunity, score_band
 from tests.fixtures import mock_population as mock_data
 
 
@@ -177,6 +178,15 @@ class InProcessMockAnalyticsRepository:
                 ScoreBucket(score_bucket=bucket, borrower_count=count)
                 for bucket, count in sorted(buckets.items())
             ],
+        )
+
+    def funnel_population(self) -> FunnelPopulation:
+        borrowers = list(mock_data.BORROWERS)
+        return FunnelPopulation(
+            population=len(borrowers),
+            high_opportunity=sum(
+                1 for b in borrowers if is_high_opportunity(b.opportunity_score)
+            ),
         )
 
     def geography(self, filters: AnalyticsFilters | None = None) -> GeographyAnalyticsResponse:

@@ -24,7 +24,11 @@ import type {
   LineageManifestResponse,
   LoanOfficer,
   LoanOfficerAssignment,
+  LoanOfficerFunnelDetailResponse,
   AssignmentLifecycleStatus,
+  AssignmentOutcome,
+  AssignmentOutcomeResponse,
+  ApprovalFunnelResponse,
   OfferRecommendation,
   PortfolioCreateResponse,
   PortfolioPreview,
@@ -1175,6 +1179,34 @@ export const api = {
     }>(
       `/api/loan-officers/assignments/${encodeURIComponent(assignmentId)}/status`,
       { status, request_id: _newRequestId() },
+      signal,
+    ),
+
+  /** S6: record the terminal outcome for an actioned assignment. The server
+   *  enforces the lifecycle gate (409 outside 'actioned') and audits the
+   *  write; no outreach is sent from this path. */
+  recordAssignmentOutcome: (
+    assignmentId: string,
+    outcome: AssignmentOutcome,
+    signal?: AbortSignal,
+  ) =>
+    postJson<AssignmentOutcomeResponse, {
+      outcome: AssignmentOutcome;
+      request_id: string;
+    }>(
+      `/api/loan-officers/assignments/${encodeURIComponent(assignmentId)}/outcome`,
+      { outcome, request_id: _newRequestId() },
+      signal,
+    ),
+
+  /** S6: live approval funnel (UC population stages + Lakebase workflow stages). */
+  approvalFunnel: (signal?: AbortSignal) =>
+    getJson<ApprovalFunnelResponse>('/api/analytics/funnel', signal),
+
+  /** S6: per-loan-officer funnel drill-down. */
+  approvalFunnelLoanOfficer: (loanOfficerId: string, signal?: AbortSignal) =>
+    getJson<LoanOfficerFunnelDetailResponse>(
+      `/api/analytics/funnel/loan-officers/${encodeURIComponent(loanOfficerId)}`,
       signal,
     ),
 

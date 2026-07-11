@@ -230,6 +230,9 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "per_lo_counts",
         "disposition_id",
         "outcome",
+        # S6 assignment outcome recording (feedback-table pattern)
+        "assignment_outcome",
+        "feedback_id",
         "attempt_number",
         "occurred_at",
         "callback_at",
@@ -402,6 +405,11 @@ _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_b
 _ASSIGNMENT_LIFECYCLE_STATUSES: frozenset[str] = frozenset(
     {"assigned", "contact_drafted", "approved", "actioned", "outcome_recorded"}
 )
+# S6 recorded assignment outcome -- deliberately distinct from the call
+# disposition outcomes ("outcome" key) and the customer-system lead outcome
+# types ("lead_outcome_type" key). Mirrors ASSIGNMENT_OUTCOMES in
+# backend/schemas/loan_officer.py.
+_ASSIGNMENT_OUTCOMES: frozenset[str] = frozenset({"success", "no_response", "declined"})
 _SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
     {"called_no_answer", "called_left_voicemail", "connected", "callback_scheduled", "application_started", "not_interested", "not_now", "dead"}
 )
@@ -794,6 +802,16 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"outcome"}):
         if value is not None and str(value) not in _SALES_DISPOSITION_OUTCOMES:
             raise AuditMetadataValueViolation(field, "must be a governed call disposition outcome")
+    for field, value in _metadata_values_for(metadata, {"assignment_outcome"}):
+        if value is not None and str(value) not in _ASSIGNMENT_OUTCOMES:
+            raise AuditMetadataValueViolation(field, "must be a governed assignment outcome")
+    for field, value in _metadata_values_for(metadata, {"feedback_id"}):
+        if value is None:
+            continue
+        try:
+            validate_public_audit_identifier_or_none(str(value))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(field, "must be a public-safe feedback identifier") from exc
     for field, value in _metadata_values_for(metadata, {"from_status", "to_status"}):
         if value is not None and str(value) not in _ASSIGNMENT_LIFECYCLE_STATUSES:
             raise AuditMetadataValueViolation(field, "must be a governed assignment lifecycle status")

@@ -48,7 +48,7 @@ export function assetDetailHref(assetKey: string): string {
   return `/data-estate/assets/${encodeURIComponent(assetKey)}`;
 }
 
-function enrichAsset(source: DrawerSource): DrawerSource {
+export function enrichAsset(source: DrawerSource): DrawerSource {
   if (source.assetKey) return source;
   const assetKey = source.assetKey ?? assetKeyForSource(source.assetPath ?? source.short);
   return assetKey ? { ...source, assetKey } : source;
