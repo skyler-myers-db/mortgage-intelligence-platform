@@ -82,7 +82,7 @@ USING (
       segment_code,
       CAST(COUNT(*) AS INT)                                                       AS addressable_borrowers,
       CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT)                  AS in_the_money_borrowers,
-      CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT)       AS high_opportunity_borrowers,
+      CAST(SUM(CASE WHEN mip.gold.fn_high_opportunity(opportunity_score) THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers,
       CAST(SUM(CASE WHEN recommended_offer_code IS NOT NULL
                      AND recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END) AS INT)
                                                                                   AS offer_recommended_borrowers,
@@ -100,7 +100,7 @@ USING (
       segment_code,
       CAST(COUNT(*) AS INT)                                                       AS addressable_borrowers,
       CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT)                  AS in_the_money_borrowers,
-      CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT)       AS high_opportunity_borrowers,
+      CAST(SUM(CASE WHEN mip.gold.fn_high_opportunity(opportunity_score) THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers,
       CAST(SUM(CASE WHEN recommended_offer_code IS NOT NULL
                      AND recommended_offer_code <> 'nurture' THEN 1 ELSE 0 END) AS INT)
                                                                                   AS offer_recommended_borrowers,
