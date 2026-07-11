@@ -73,6 +73,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/leads/{borrower_id}/assignment"): "tests/unit/test_sales_manager_api.py",
     ("POST", "/api/leads/{borrower_id}/disposition"): "tests/unit/test_sales_manager_api.py",
     ("POST", "/api/leads/{borrower_id}/outcome"): "tests/unit/test_sales_manager_api.py",
+    ("GET", "/api/lineage/manifest"): "tests/unit/test_lineage_manifest.py",
     ("POST", "/api/lookup/property-loan"): "tests/unit/test_lookup_router.py",
     ("POST", "/api/offers/recommend"): "tests/unit/test_offers_router.py",
     ("POST", "/api/outreach/approve"): "tests/unit/test_api_routes.py",
