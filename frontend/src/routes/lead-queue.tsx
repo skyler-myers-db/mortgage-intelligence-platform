@@ -42,7 +42,9 @@ import {
   parseSegmentCodes,
   parseTargetLenderRef,
   portfolioFilterEntries,
+  searchParamsAfterSegmentRemoval,
   segmentDisplayLabel,
+  segmentFilterChips,
   segmentFilterDisplayValue,
 } from './lead-queue.filters';
 
@@ -147,6 +149,13 @@ export default function LeadQueue() {
   const salesTeamError = salesTeamQuery.error instanceof Error ? salesTeamQuery.error.message : null;
   const segmentFilter = segmentFilterDisplayValue(segment, segmentCodes, segmentMode);
   const segmentFilterOptions = optionsWithCurrentValue(SEGMENT_FILTER_OPTIONS, segmentFilter);
+  // S8: one removable chip per active segment. Removing a chip rewrites the
+  // segment URL params, which re-runs the composed predicate server-side —
+  // the ranked rows and the X-Total-Matching count both recompute in UC.
+  const segmentChips = segmentFilterChips(segment, segmentCodes);
+  const removeSegmentChip = (code: (typeof segmentChips)[number]['code']) => {
+    setSearchParams(searchParamsAfterSegmentRemoval(searchParams, code));
+  };
   const stateFilterDisplay = stateFilter
     ?? (stateFilters.length === 1
       ? stateFilters[0]
@@ -476,6 +485,27 @@ export default function LeadQueue() {
               </>
             ) : null}
           </div>
+          {segmentChips.length > 0 && (
+            <div className="chip-row mb-2" aria-label="Active segment filters">
+              {segmentChips.map((chip) => (
+                <Chip
+                  key={chip.code}
+                  variant="neutral"
+                  onRemove={() => removeSegmentChip(chip.code)}
+                  removeLabel={`Remove ${chip.label} segment filter`}
+                >
+                  {chip.label}
+                </Chip>
+              ))}
+              {segmentChips.length > 1 && (
+                <span className="muted fs-11">
+                  {segmentMode === 'all'
+                    ? 'Intersection — every borrower is in all selected segments.'
+                    : 'Union — borrowers in any selected segment, de-duplicated.'}
+                </span>
+              )}
+            </div>
+          )}
           <div className="filter-row filter-row--lead-queue">
             <FilterSelect
               label="STATE"
@@ -640,7 +670,9 @@ export default function LeadQueue() {
         <div className="muted body mb-grid">
           {countyFilter && countyZips && countyZips.size === 0
             ? 'No ZIP-level rollup for this county in the current Cotality data coverage.'
-            : 'No leads match this filter.'}
+            : segmentChips.length > 1 && segmentMode === 'all'
+              ? '0 borrowers sit in every selected segment — a real intersection result from the live query, not an error. Remove a segment chip to widen the cohort.'
+              : 'No leads match this filter.'}
         </div>
       )}
       {!loading && (
