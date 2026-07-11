@@ -43,6 +43,8 @@ GOLD_DDL_FILES: tuple[str, ...] = (
     "gold_zip_rollup.sql",
     "gold_state_top_segment.sql",
     "gold_source_readiness.sql",
+    # s7-economics-scatter: precomputed equity x rate-spread scatter surface.
+    "gold_equity_spread_points.sql",
 )
 
 GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
@@ -57,6 +59,7 @@ GOLD_TRANSFORMATION_FILES: tuple[str, ...] = (
     "gold_zip_rollup.sql",
     "gold_state_top_segment.sql",
     "gold_source_readiness.sql",
+    "gold_equity_spread_points.sql",
 )
 
 # Target UC paths. The manifest (003_gold_tables.sql) must reference each.
@@ -77,6 +80,7 @@ GOLD_TABLE_PATHS: tuple[str, ...] = (
     "mip.gold.zip_rollup",
     "mip.gold.state_top_segment",
     "mip.gold.source_readiness",
+    "mip.gold.equity_spread_points",
 )
 
 FORBIDDEN_PII_COLUMNS: tuple[str, ...] = (

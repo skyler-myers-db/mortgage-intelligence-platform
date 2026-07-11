@@ -760,16 +760,6 @@ export interface RateSpreadBucket {
   borrower_count: number;
 }
 
-export interface EquitySpreadPoint {
-  borrower_id: string;
-  display_name: string;
-  segment: string;
-  state: string;
-  equity_pct: number;
-  rate_spread_bps: number;
-  opportunity_score: number;
-}
-
 export interface TopBorrowerAnalyticsRow {
   borrower_id: string;
   display_name: string;
@@ -784,7 +774,7 @@ export interface TopBorrowerAnalyticsRow {
 
 export interface EconomicsAnalyticsResponse {
   rate_spread_histogram: RateSpreadBucket[];
-  equity_vs_spread: EquitySpreadPoint[];
+  equity_spread: import('./types/economicsScatter').EquitySpreadOverview;
   top_borrowers: TopBorrowerAnalyticsRow[];
 }
 
@@ -882,3 +872,4 @@ export type {
 export type { HomeSummary, HomeSummaryHighlight } from './types/homeSummary';
 export type * from './types/loanOfficer';
 export type * from './types/lineage';
+export type * from './types/economicsScatter';

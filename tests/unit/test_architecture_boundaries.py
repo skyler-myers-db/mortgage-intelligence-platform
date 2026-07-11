@@ -28,6 +28,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("GET", "/api/admin/settings"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/admin/sources"): "tests/unit/test_admin_rules.py",
     ("GET", "/api/analytics/economics"): "tests/unit/test_api_routes.py",
+    ("GET", "/api/analytics/economics/points"): "tests/unit/test_analytics_api.py",
     ("GET", "/api/analytics/executive"): "tests/unit/test_api_routes.py",
     ("GET", "/api/analytics/geography"): "tests/unit/test_api_routes.py",
     ("GET", "/api/analytics/segments"): "tests/unit/test_api_routes.py",

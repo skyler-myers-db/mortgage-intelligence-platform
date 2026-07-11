@@ -8,6 +8,18 @@ deprecation window first.
 
 ## Unreleased
 
+### 2026-07-11 S7 economics scatter
+
+- **Breaking (deliberate, single-consumer app API):**
+  `GET /api/v1/analytics/economics` replaces the raw-row
+  `equity_vs_spread` list with an `equity_spread` density-bin overview
+  served from the new precomputed `mip.gold.equity_spread_points` gold
+  table. The overview never ships borrower rows; real points moved to the
+  new `GET /api/v1/analytics/economics/points` endpoint, which caps at
+  5,000 rows server-side and returns an honest
+  `showing`/`total_matching`/`truncated` payload for the zoomed viewport.
+  `tests/fixtures/openapi_baseline.json` regenerated in the same commit.
+
 ### 2026-06-11 full-stack audit remediation
 
 - **Behavioral:** `lead_score` now computes in exact decimal arithmetic to

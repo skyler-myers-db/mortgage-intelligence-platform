@@ -1,0 +1,42 @@
+{
+  "description": "Golden pins for the S7 economics-scatter bin math. equity_bin_pct = FLOOR(equity_pct / 5) * 5; spread_bin_bps = FLOOR(rate_spread_bps / 25) * 25. Bin edges are lower bounds; FLOOR semantics keep negative spreads on their bin's lower edge. Parity sites: sql/transformations/gold_equity_spread_points.sql and backend/services/economics_scatter.py. Change all together or not at all.",
+  "equity_bin_pct": 5,
+  "spread_bin_bps": 25,
+  "equity_domain": [0, 100],
+  "spread_domain": [-100, 400],
+  "max_scatter_point_rows": 5000,
+  "equity_cases": [
+    {"equity_pct": 0, "bin": 0},
+    {"equity_pct": 1, "bin": 0},
+    {"equity_pct": 4, "bin": 0},
+    {"equity_pct": 5, "bin": 5},
+    {"equity_pct": 9, "bin": 5},
+    {"equity_pct": 10, "bin": 10},
+    {"equity_pct": 42, "bin": 40},
+    {"equity_pct": 49, "bin": 45},
+    {"equity_pct": 50, "bin": 50},
+    {"equity_pct": 74, "bin": 70},
+    {"equity_pct": 75, "bin": 75},
+    {"equity_pct": 99, "bin": 95},
+    {"equity_pct": 100, "bin": 100}
+  ],
+  "spread_cases": [
+    {"rate_spread_bps": -100, "bin": -100},
+    {"rate_spread_bps": -99, "bin": -100},
+    {"rate_spread_bps": -76, "bin": -100},
+    {"rate_spread_bps": -75, "bin": -75},
+    {"rate_spread_bps": -26, "bin": -50},
+    {"rate_spread_bps": -25, "bin": -25},
+    {"rate_spread_bps": -1, "bin": -25},
+    {"rate_spread_bps": 0, "bin": 0},
+    {"rate_spread_bps": 24, "bin": 0},
+    {"rate_spread_bps": 25, "bin": 25},
+    {"rate_spread_bps": 88, "bin": 75},
+    {"rate_spread_bps": 162, "bin": 150},
+    {"rate_spread_bps": 188, "bin": 175},
+    {"rate_spread_bps": 249, "bin": 225},
+    {"rate_spread_bps": 250, "bin": 250},
+    {"rate_spread_bps": 399, "bin": 375},
+    {"rate_spread_bps": 400, "bin": 400}
+  ]
+}
