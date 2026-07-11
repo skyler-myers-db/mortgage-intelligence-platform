@@ -16,6 +16,7 @@ from backend.schemas.growth_agent import GrowthAgentSpecialist
 from backend.schemas.usps import is_usps_state_code
 from backend.services.audit_metadata_value_policy import validate_source_assets
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 AgentToolParamKind = Literal[
     "state_list",
@@ -301,7 +302,7 @@ _TOOLS: dict[AgentToolName, AgentTool] = {
                 kind="int_range",
                 min_value=50,
                 max_value=100,
-                description="Minimum opportunity score for the dossier screen (default 75).",
+                description=f"Minimum opportunity score for the dossier screen (default {HIGH_OPPORTUNITY_THRESHOLD}).",
             ),
             AgentToolParam(name="states", kind="state_list", description="Optional USPS state scope."),
         ),

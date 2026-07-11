@@ -1,6 +1,6 @@
 import type { DrawerSource } from '../components/AppContext';
-import type { SegmentSummary } from '../types';
-import { SEGMENT_EVIDENCE_SPECS, SEGMENT_GATE_COPY } from './segmentEvidenceSpecs';
+
+export { segmentEvidenceSource } from './segmentEvidenceSource';
 
 const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.gold.lead_population': 'lead_population',
@@ -15,9 +15,11 @@ const ASSET_KEYS_BY_SOURCE: Record<string, string> = {
   'mip.gold.funnel_snapshot_daily': 'funnel_snapshot_daily',
   'mip.gold.county_rollup': 'county_rollup',
   'mip.gold.zip_rollup': 'zip_rollup',
+  'mip.gold.equity_spread_points': 'equity_spread_points',
   'mip.silver.listing_activity': 'listing_activity',
   'mip.silver.heloc_propensity': 'heloc_propensity',
   'mip.silver.refi_propensity': 'refi_propensity',
+  'mip.semantics.portfolio_headline_metric_view': 'portfolio_headline_metric_view',
   'mip.semantics.lead_generation_metric_view': 'lead_generation_metric_view',
   'mip.semantics.segment_performance_metric_view': 'segment_performance_metric_view',
   'mip.semantics.borrower_opportunity_metric_view': 'borrower_opportunity_metric_view',
@@ -46,7 +48,7 @@ export function assetDetailHref(assetKey: string): string {
   return `/data-estate/assets/${encodeURIComponent(assetKey)}`;
 }
 
-function enrichAsset(source: DrawerSource): DrawerSource {
+export function enrichAsset(source: DrawerSource): DrawerSource {
   if (source.assetKey) return source;
   const assetKey = source.assetKey ?? assetKeyForSource(source.assetPath ?? source.short);
   return assetKey ? { ...source, assetKey } : source;
@@ -75,6 +77,7 @@ export function descriptorFor(rawSource: string): DrawerSource {
 export function drawerForAsset(rawSource: string): DrawerSource | null {
   const key = rawSource.toLowerCase();
 
+  if (key.includes('equity_spread_points')) return enrichAsset(DRAWER_SOURCES.equitySpreadPoints);
   if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
   if (key.includes('fn_estimated_upb_confidence_band')) return enrichAsset(DRAWER_SOURCES.lien);
   if (key.includes('fn_estimated_upb')) return enrichAsset(DRAWER_SOURCES.lien);
@@ -82,6 +85,7 @@ export function drawerForAsset(rawSource: string): DrawerSource | null {
   if (key.includes('fn_in_the_money') || key.includes('itm')) return enrichAsset(DRAWER_SOURCES.itm);
   if (key.includes('fn_lead_score') || key.includes('lead_scores')) return enrichAsset(DRAWER_SOURCES.leadScore);
   if (key.includes('fn_next_best_offer') || key.includes('nbo')) return enrichAsset(DRAWER_SOURCES.nbo);
+  if (key.includes('portfolio_headline_metric_view')) return enrichAsset(DRAWER_SOURCES.portfolioHeadlineView);
   if (key.includes('segment_performance_metric_view')) return enrichAsset(DRAWER_SOURCES.segmentPerformanceView);
   if (key.includes('borrower_opportunity_metric_view')) return enrichAsset(DRAWER_SOURCES.borrowerOpportunityView);
   if (key.includes('lead_generation_metric_view')) return enrichAsset(DRAWER_SOURCES.leadGenerationView);
@@ -196,6 +200,7 @@ export function descriptorForEvidence(event: {
 export const DRAWER_SOURCES: Record<string, DrawerSource> = {
   population: {
     title: 'Marketable population',
+    lineageFamily: 'marketable_population',
     short: 'Marketable population',
     // Governed anchor (2026-06-11): the marketable-population KPI is
     // COUNT(*) over mip.gold.borrower_360, so this drawer reads that
@@ -209,17 +214,41 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien' },
       { layer: 'ENTITY', name: 'entity.property_clip' },
       { layer: 'ENTITY', name: 'entity.owner_link' },
-      { layer: 'SEMANTIC', name: 'metrics.borrower_universe' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
-      { label: 'Borrower universe', source: 'metrics.borrower_universe', value: 'live count' },
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
+      { label: 'Underlying rows', source: 'mip.gold.borrower_360', value: 'borrower grain' },
       { label: 'Ownership graph', source: 'entity.owner_link', value: 'CLIP-grain' },
       { label: 'Tenant lens', source: 'mip.ref.lender_dictionary', value: 'gold refresh' },
     ],
   },
 
+  equitySpreadPoints: {
+    title: 'Equity × rate-spread scatter',
+    short: 'Equity × spread points',
+    assetKey: 'equity_spread_points',
+    assetPath: 'mip.gold.equity_spread_points',
+    description:
+      'Precomputed per-borrower equity and rate-spread coordinates with canonical score bands. The overview shows server-side density bins; zooming loads real borrowers capped at the server limit.',
+    lineage: [
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_rate_spread' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_score_band' },
+      { layer: 'FEATURES', name: 'mip.gold.equity_spread_points' },
+    ],
+    signals: [
+      { label: 'X axis', source: 'equity_spread_points.equity_pct', value: 'AVM equity %' },
+      { label: 'Y axis', source: 'equity_spread_points.rate_spread_bps', value: 'fn_rate_spread' },
+      { label: 'Band', source: 'equity_spread_points.score_band', value: 'fn_score_band' },
+      { label: 'Bins', source: 'equity_spread_points.equity_bin_pct', value: 'precomputed' },
+    ],
+  },
+
   leadPopulation: {
     title: 'Ranked lead population',
+    lineageFamily: 'lead_queue_rank',
     short: 'Ranked lead population',
     assetKey: 'lead_population',
     assetPath: 'mip.gold.lead_population',
@@ -240,6 +269,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   segmentPopulation: {
     title: 'Segment population',
+    lineageFamily: 'segment_population',
     short: 'Segment population',
     assetKey: 'segment_population',
     assetPath: 'mip.gold.segment_population',
@@ -385,6 +415,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   rateSpread: {
     title: 'Rate spread evidence',
+    lineageFamily: 'rate_spread',
     short: 'Rate spread evidence',
     description:
       'Compares Cotality lien rate with the market-rate reference.',
@@ -512,6 +543,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   itm: {
     title: 'Refinance economics screen',
+    lineageFamily: 'in_the_money',
     short: 'Rate + equity screen',
     // Governed anchor (2026-06-11): the high-intent KPI sums the
     // in_the_money column on mip.gold.borrower_360 — same rationale as
@@ -525,9 +557,10 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'SOURCE', name: 'cotality.avm.current' },
       { layer: 'SOURCE', name: 'cotality.liens.voluntary_lien' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_in_the_money' },
-      { layer: 'SEMANTIC', name: 'metrics.itm_flag' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view.in_the_money', value: 'SUM' },
       { label: 'Par refi rate', source: 'market_rates_weekly.market_rate_fraction', value: 'latest' },
       { label: 'Lien rate', source: 'voluntary_lien.current_rate', value: 'borrower' },
       { label: 'Rate spread', source: 'derived', value: 'lien minus par' },
@@ -537,6 +570,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   marketRate: {
     title: 'Market rate comparison',
+    lineageFamily: 'rate_spread',
     short: 'Market rate comparison',
     description:
       'Basis-point spread between lien rate and market refi reference.',
@@ -554,8 +588,32 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     ],
   },
 
+  portfolioHeadlineView: {
+    title: 'Portfolio headline metric view',
+    lineageFamily: 'marketable_population',
+    short: 'Portfolio headline metric view',
+    assetKey: 'portfolio_headline_metric_view',
+    assetPath: 'mip.semantics.portfolio_headline_metric_view',
+    description:
+      'Borrower-grain semantic view defining every home headline KPI: marketable population, refi economics screen, high opportunity, offers available, and primary offer paths.',
+    lineage: [
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_high_opportunity' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_score_band' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
+    ],
+    signals: [
+      { label: 'Marketable population', source: 'portfolio_headline_metric_view', value: 'COUNT(*)' },
+      { label: 'Refi economics screen', source: 'in_the_money', value: 'SUM' },
+      { label: 'High opportunity', source: 'is_high_opportunity', value: 'fn_high_opportunity' },
+      { label: 'Offers available', source: 'offer_available', value: 'non-null offer' },
+      { label: 'Primary offer paths', source: 'offer_recommended', value: 'actionable lane' },
+    ],
+  },
+
   leadGenerationView: {
     title: 'Lead-generation metric view',
+    lineageFamily: 'lead_queue_rank',
     short: 'Lead-generation metric view',
     assetKey: 'lead_generation_metric_view',
     assetPath: 'mip.semantics.lead_generation_metric_view',
@@ -574,6 +632,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   segmentPerformanceView: {
     title: 'Segment performance metric view',
+    lineageFamily: 'segment_population',
     short: 'Segment performance metric view',
     assetKey: 'segment_performance_metric_view',
     assetPath: 'mip.semantics.segment_performance_metric_view',
@@ -612,6 +671,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   leadScore: {
     title: 'Opportunity score',
+    lineageFamily: 'opportunity_score',
     short: 'Opportunity score',
     assetKey: 'lead_scores',
     assetPath: 'mip.gold.lead_scores',
@@ -620,10 +680,12 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     lineage: [
       { layer: 'FEATURES', name: 'mip.gold.lead_scores' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_lead_score' },
+      { layer: 'PRIMITIVE', name: 'mip.gold.fn_high_opportunity' },
       { layer: 'PARITY', name: 'backend/services/scoring.py' },
-      { layer: 'SEMANTIC', name: 'mip.semantics.lead_generation_metric_view' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view.is_high_opportunity', value: 'fn_high_opportunity' },
       { label: 'Economic incentive', source: 'lead_scores.economic_incentive', value: '35% weight' },
       { label: 'Intent trigger', source: 'lead_scores.intent_trigger', value: '30% weight' },
       { label: 'Fit', source: 'lead_scores.fit', value: '15% weight' },
@@ -653,6 +715,7 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
 
   nbo: {
     title: 'Primary offer rules',
+    lineageFamily: 'next_best_offer',
     short: 'How the offer path was selected',
     assetKey: 'borrower_360',
     assetPath: 'mip.gold.borrower_360',
@@ -662,8 +725,11 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
       { layer: 'FEATURES', name: 'mip.gold.borrower_360' },
       { layer: 'PRIMITIVE', name: 'mip.gold.fn_next_best_offer' },
       { layer: 'PARITY', name: 'backend/services/scoring.py' },
+      { layer: 'SEMANTIC', name: 'mip.semantics.portfolio_headline_metric_view' },
     ],
     signals: [
+      { label: 'KPI measure', source: 'portfolio_headline_metric_view.offer_recommended', value: 'SUM' },
+      { label: 'Offers available', source: 'portfolio_headline_metric_view.offer_available', value: 'non-null offer' },
       { label: 'Rate spread', source: 'borrower_360.rate_spread_bps', value: 'refi economics' },
       { label: 'Equity', source: 'borrower_360.equity_pct', value: 'product fit' },
       { label: 'HELOC intent', source: 'borrower_360.has_heloc_propensity_trigger', value: 'trigger' },
@@ -793,6 +859,24 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     ],
   },
 
+  assignmentOverlay: {
+    title: 'Assigned vs. unattended coverage',
+    short: 'assignment_overlay',
+    description:
+      'Per-geography difference between the live lead queue and active loan-officer assignments — the leads nobody is working.',
+    lineage: [
+      { layer: 'STATE', name: 'mip_app.lead_assignments', meta: 'active only (released_at IS NULL)' },
+      { layer: 'FEATURES', name: 'mip.gold.borrower_360', meta: 'marketing-eligible geography join' },
+      { layer: 'STATE', name: 'mip_app.loan_officers', meta: 'coverage_states / coverage_counties arrays' },
+    ],
+    signals: [
+      { label: 'Leads', source: 'borrower_360.marketing_eligible', value: 'live queue population' },
+      { label: 'Assigned', source: 'lead_assignments.released_at IS NULL', value: 'active hold' },
+      { label: 'Unattended', source: 'lead_count - assigned_count', value: 'no active assignment' },
+      { label: 'LO coverage', source: 'loan_officers.coverage_*', value: 'array membership' },
+    ],
+  },
+
   config: {
     title: 'Campaign assumptions',
     short: 'config',
@@ -801,42 +885,3 @@ export const DRAWER_SOURCES: Record<string, DrawerSource> = {
     signals: [],
   },
 };
-
-export function segmentEvidenceSource(
-  segment: Pick<
-    SegmentSummary,
-    'code' | 'name' | 'count' | 'avg_score' | 'description' | 'source_status' | 'source_name'
-  >,
-): DrawerSource {
-  const spec = SEGMENT_EVIDENCE_SPECS[segment.code];
-  const predicate = spec?.[0];
-  const sources = spec?.[1];
-  const gated = segment.source_status === 'not_connected' || segment.source_status === 'not_licensed';
-  const gateCopy = gated ? SEGMENT_GATE_COPY[segment.source_status ?? ''] : null;
-  return enrichAsset({
-    title: `${segment.name} evidence`,
-    short: `segment_population.${segment.code}`,
-    assetKey: 'segment_population',
-    assetPath: 'mip.gold.segment_population',
-    description: gateCopy
-      ? `${segment.description} ${gateCopy}`
-      : `${segment.description} Live total from mip.gold.segment_population.`,
-    lineage: [
-      ...(sources?.map(([layer, name, meta]) => ({ layer, name, meta })) ?? []),
-      { layer: 'GOLD', name: 'mip.gold.borrower_360', meta: predicate ?? 'segment membership flag' },
-      { layer: 'GOLD', name: 'mip.gold.segment_population' },
-    ],
-    signals: gated
-      ? [
-          {
-            label: 'Source status',
-            source: 'source_readiness',
-            value: `${segment.source_name ?? 'source'}: ${segment.source_status === 'not_licensed' ? 'unlicensed' : 'not connected'}`,
-          },
-        ]
-      : [
-          { label: 'Members', source: `count['${segment.code}']`, value: segment.count.toLocaleString() },
-          { label: 'Average score', source: 'avg_score', value: String(segment.avg_score) },
-        ],
-  });
-}

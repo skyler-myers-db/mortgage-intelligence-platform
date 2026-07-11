@@ -42,18 +42,25 @@ import {
   SignalsView,
 } from './analytics.sections';
 import { SalesOpsSection } from './analytics.sales-ops';
+import { ApprovalFunnelSection } from './analytics.approval-funnel';
 
 // Re-export the symbols imported from './analytics' by analytics.test.tsx so the
 // decomposition keeps every existing import path stable.
 export {
+  binCellRect,
+  binDensityAlpha,
+  binZoomViewport,
   buildDailyEvidenceTotals,
-  compactScatterRows,
   leadQueueHref,
   leadQueueHrefForFunnelStage,
   normalizeAnalyticsSegmentCodes,
+  overviewScatterLayout,
+  scatterPosition,
   segmentIntelligenceHref,
+  zoomScatterLayout,
 } from './analytics.lib';
-export { DailyEvidenceLineChart, LineChart, ScatterPlot } from './analytics.charts';
+export { DailyEvidenceLineChart, LineChart } from './analytics.charts';
+export { EquitySpreadBinsView, EquitySpreadPointsView, EquitySpreadScatter } from './analytics.equity-scatter';
 
 export default function AnalyticsRoute() {
   const [searchParams, setSearchParams] = useSearchParams();
@@ -235,7 +242,7 @@ export default function AnalyticsRoute() {
           </button>
         ))}
       </div>
-      {tab !== 'sales-ops' && (
+      {tab !== 'sales-ops' && tab !== 'approval-funnel' && (
       <div className="filter-row filter-row--spaced analytics-filters" aria-label="Analytics filters">
         <MultiFilterSelect
           label="State"
@@ -309,7 +316,7 @@ export default function AnalyticsRoute() {
       )}
       {tab === 'economics' && (
         <LoadState query={economics} title="Economics analytics">
-          {(data) => <EconomicsView data={data} />}
+          {(data) => <EconomicsView data={data} filters={baseFilters} filterCriteria={baseCriteria} />}
         </LoadState>
       )}
       {tab === 'segments' && (
@@ -322,6 +329,7 @@ export default function AnalyticsRoute() {
           {(data) => <SignalsView data={data} filterParams={{ states, segmentCodes, days, ...leadParams }} />}
         </LoadState>
       )}
+      {tab === 'approval-funnel' && <ApprovalFunnelSection />}
       {tab === 'sales-ops' && <SalesOpsSection />}
     </PageShell>
   );

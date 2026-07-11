@@ -93,7 +93,7 @@ describe('LeadTableRow display fallbacks', () => {
           onToggleSelect={noop}
           onApprove={noop}
           onReject={noop}
-          onOpenDisposition={noop}
+          onOpenDisposition={noop}          onAssignmentUpdate={noop}
         />,
       );
     });
@@ -121,7 +121,7 @@ describe('LeadTableRow display fallbacks', () => {
           onToggleSelect={noop}
           onApprove={noop}
           onReject={noop}
-          onOpenDisposition={noop}
+          onOpenDisposition={noop}          onAssignmentUpdate={noop}
         />,
       );
     });
@@ -151,7 +151,7 @@ describe('LeadTableRow display fallbacks', () => {
           onToggleSelect={noop}
           onApprove={noop}
           onReject={noop}
-          onOpenDisposition={noop}
+          onOpenDisposition={noop}          onAssignmentUpdate={noop}
         />,
       );
     });
@@ -186,7 +186,7 @@ describe('LeadTableRow display fallbacks', () => {
           onToggleSelect={noop}
           onApprove={noop}
           onReject={noop}
-          onOpenDisposition={noop}
+          onOpenDisposition={noop}          onAssignmentUpdate={noop}
         />,
       );
     });
@@ -213,7 +213,7 @@ describe('LeadTableRow display fallbacks', () => {
           onToggleSelect={noop}
           onApprove={noop}
           onReject={noop}
-          onOpenDisposition={noop}
+          onOpenDisposition={noop}          onAssignmentUpdate={noop}
         />,
       );
     });
@@ -246,7 +246,7 @@ describe('LeadTableRow display fallbacks', () => {
           onToggleSelect={noop}
           onApprove={noop}
           onReject={noop}
-          onOpenDisposition={noop}
+          onOpenDisposition={noop}          onAssignmentUpdate={noop}
         />,
       );
     });

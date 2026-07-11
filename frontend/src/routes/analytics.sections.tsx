@@ -3,6 +3,7 @@
 'use no memo';
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../lib/opportunityScore';
 import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { GlossaryTerm } from '../components/GlossaryTerm';
@@ -47,17 +48,18 @@ import {
   FunnelBars,
   FunnelSankey,
   LineChart,
-  ScatterPlot,
   ScopeChip,
   SectionHeader,
 } from './analytics.charts';
+import { EquitySpreadScatter } from './analytics.equity-scatter';
+import type { AnalyticsQueryOptions } from '../lib/api';
 
 export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsResponse; leadParams: LenderFilterParams }) {
   return (
     <>
       <div className="kpi-row">
         <KpiCard label="Addressable Borrowers" value={fmt(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ?? undefined} deltaDir="flat" />
-        <KpiCard label="Refi Economics" value={fmt(data.totals.in_the_money_borrowers)} delta={`${fmt(data.totals.high_opportunity_borrowers)} score 75+`} deltaDir="up" />
+        <KpiCard label="Refi Economics" value={fmt(data.totals.in_the_money_borrowers)} delta={`${fmt(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
         <KpiCard label="Primary Offer Paths" value={fmt(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={fmt(data.totals.approved_borrowers)} delta={`${fmt(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>
@@ -157,7 +159,15 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
   );
 }
 
-export function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
+export function EconomicsView({
+  data,
+  filters,
+  filterCriteria,
+}: {
+  data: EconomicsAnalyticsResponse;
+  filters: AnalyticsQueryOptions;
+  filterCriteria: ReadonlyArray<string | number>;
+}) {
   return (
     <>
       <div className="layoutA-grid analytics-grid analytics-grid--wide-left">
@@ -201,12 +211,11 @@ export function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
           </div>
         </section>
       </div>
-      <section className="surface analytics-section">
-        <div className="surface__hdr"><h2 className="h-3">Equity vs Rate Spread</h2></div>
-        <div className="surface__body analytics-chart-panel analytics-chart-panel--scatter">
-          <ScatterPlot rows={data.equity_vs_spread} />
-        </div>
-      </section>
+      <EquitySpreadScatter
+        overview={data.equity_spread}
+        filters={filters}
+        filterCriteria={filterCriteria}
+      />
     </>
   );
 }

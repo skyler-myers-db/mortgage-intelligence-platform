@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.lead import SegmentCode
@@ -108,6 +108,72 @@ class EquitySpreadPoint(BaseModel):
     equity_pct: int = Field(ge=0, le=100)
     rate_spread_bps: int
     opportunity_score: int = Field(ge=0, le=100)
+    # Canonical band from mip.gold.fn_score_band, carried on the
+    # equity_spread_points gold row. Optional so pre-S7 fixtures stay valid.
+    score_band: Literal["high", "med", "low"] | None = None
+    in_the_money: bool | None = None
+
+
+# Bound literals below mirror the pinned plot-domain constants in
+# backend/services/economics_scatter.py (schemas must not import runtime
+# services); tests/unit/test_economics_scatter_api.py asserts the parity.
+class EquitySpreadViewport(BaseModel):
+    """Zoom window for the points endpoint, clamped to the plot domain."""
+
+    equity_min: int = Field(default=0, ge=0, le=100)
+    equity_max: int = Field(default=100, ge=0, le=100)
+    spread_min: int = Field(default=-100, ge=-100, le=400)
+    spread_max: int = Field(default=400, ge=-100, le=400)
+
+    @model_validator(mode="after")
+    def _ordered(self) -> EquitySpreadViewport:
+        if self.equity_min > self.equity_max:
+            raise ValueError("equity_min must be <= equity_max")
+        if self.spread_min > self.spread_max:
+            raise ValueError("spread_min must be <= spread_max")
+        return self
+
+
+class EquitySpreadBin(BaseModel):
+    """One density cell of the scatter overview (bin lower edges)."""
+
+    equity_bin_pct: int = Field(ge=0, le=100)
+    spread_bin_bps: int
+    borrower_count: int = Field(ge=0)
+    mean_opportunity_score: int = Field(ge=0, le=100)
+    in_the_money_borrowers: int = Field(ge=0)
+
+
+class EquitySpreadOverview(BaseModel):
+    """Server-side density bins for the economics scatter overview.
+
+    The overview never ships raw borrower rows; the zoomed points endpoint
+    returns real borrowers with an honest showing-N-of-M payload.
+    """
+
+    bins: list[EquitySpreadBin]
+    total_borrowers: int = Field(ge=0)
+    equity_bin_pct: int = Field(gt=0)
+    spread_bin_bps: int = Field(gt=0)
+    equity_domain_min: int
+    equity_domain_max: int
+    spread_domain_min: int
+    spread_domain_max: int
+    source_table: str
+    refreshed_at: str | None = None
+
+
+class EquitySpreadPointsResponse(BaseModel):
+    """Real borrower points for a zoomed viewport, capped server-side."""
+
+    points: list[EquitySpreadPoint]
+    total_matching: int = Field(ge=0)
+    showing: int = Field(ge=0)
+    point_cap: int = Field(gt=0)
+    truncated: bool
+    viewport: EquitySpreadViewport
+    source_table: str
+    refreshed_at: str | None = None
 
 
 class TopBorrowerAnalyticsRow(BaseModel):
@@ -124,7 +190,11 @@ class TopBorrowerAnalyticsRow(BaseModel):
 
 class EconomicsAnalyticsResponse(BaseModel):
     rate_spread_histogram: list[RateSpreadBucket]
-    equity_vs_spread: list[EquitySpreadPoint]
+    # S7: the scatter overview is server-side density bins over
+    # mip.gold.equity_spread_points; raw borrower rows moved to the
+    # dedicated capped points endpoint (deliberate wire change, see
+    # CHANGELOG).
+    equity_spread: EquitySpreadOverview
     top_borrowers: list[TopBorrowerAnalyticsRow]
 
 

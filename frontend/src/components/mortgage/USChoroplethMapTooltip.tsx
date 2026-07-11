@@ -57,6 +57,43 @@ export function USChoroplethMapTooltip({ hover, activeSegNames }: USChoroplethMa
           <span className="map-tip__seg-value">{hover.topSegment}</span>
         </div>
       )}
+      {hover.overlay && (
+        <div className="map-tip__overlay">
+          <div className="map-tip__row map-tip__row--compact">
+            <span>Leads</span>
+            <span className="v num map-tip__value--small">
+              {hover.overlay.leadCount !== null ? hover.overlay.leadCount.toLocaleString() : '—'}
+            </span>
+          </div>
+          <div className="map-tip__row map-tip__row--compact">
+            <span>Assigned</span>
+            <span className="v num map-tip__value--small">
+              {hover.overlay.assignedCount !== null ? hover.overlay.assignedCount.toLocaleString() : '—'}
+            </span>
+          </div>
+          <div className="map-tip__row map-tip__row--compact">
+            <span>Unattended</span>
+            <span className="v num map-tip__value--small">
+              {hover.overlay.unattendedCount !== null ? hover.overlay.unattendedCount.toLocaleString() : '—'}
+            </span>
+          </div>
+          <div className="map-tip__row map-tip__row--compact">
+            <span>LO coverage</span>
+            <span className="v num map-tip__value--small">
+              {hover.overlay.coveringOfficerCount !== null
+                ? hover.overlay.coveringOfficerCount.toLocaleString()
+                : '—'}
+            </span>
+          </div>
+          {hover.overlay.coveringOfficers && hover.overlay.coveringOfficers.length > 0 && (
+            <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
+              <span className="v map-tip__value--small">
+                {hover.overlay.coveringOfficers.join(', ')}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
       {activeSegNames !== null && (
         <div className="map-tip__row map-tip__row--compact map-tip__row--muted">
           <span>Filter</span>

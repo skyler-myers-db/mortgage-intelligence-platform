@@ -1031,3 +1031,192 @@ VALUES (
     'S1.5: persist default-off household dedup config and evidence-cited suppression summary on campaigns'
 )
 ON CONFLICT (version) DO NOTHING;
+
+-- Loan officers (S2) ---------------------------------------------------
+-- First-class loan-officer entity for assignment routing. The middle
+-- path: officers stay joined to the existing mip_app.sales_team roster
+-- by email (identity, role, manager scope), while this table owns the
+-- coverage footprint the assignment surfaces need. Coverage is stored
+-- as plain arrays -- two-letter state codes and 5-digit county FIPS --
+-- deliberately NO geometry columns; geo drill-down joins these codes
+-- against the existing gold geography rollups (S9).
+CREATE TABLE IF NOT EXISTS mip_app.loan_officers (
+    loan_officer_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    email             TEXT NOT NULL UNIQUE REFERENCES mip_app.sales_team(email),
+    display_name      TEXT NOT NULL,
+    coverage_states   TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    coverage_counties TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+    active            BOOLEAN NOT NULL DEFAULT true,
+    created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at        TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_loan_officers_active
+    ON mip_app.loan_officers (active, display_name);
+
+-- Assignment lifecycle (S2). Existing mip_app.lead_assignments rows are
+-- point-in-time distribution records; S2 adds the reviewed lifecycle the
+-- approval funnel (S6), geo assigned-vs-unattended (S9), campaigns (S10)
+-- and handoffs (S12) consume:
+--   assigned -> contact_drafted -> approved -> actioned -> outcome_recorded
+-- The repo's enum idiom is TEXT + named CHECK constraint (see
+-- call_dispositions.outcome, approvals.action); a Postgres ENUM type
+-- cannot be extended idempotently inside a re-runnable script.
+ALTER TABLE mip_app.lead_assignments
+    ADD COLUMN IF NOT EXISTS loan_officer_id UUID REFERENCES mip_app.loan_officers(loan_officer_id);
+ALTER TABLE mip_app.lead_assignments
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'assigned';
+ALTER TABLE mip_app.lead_assignments
+    ADD COLUMN IF NOT EXISTS status_updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_lead_assignments_status'
+          AND conrelid = 'mip_app.lead_assignments'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_assignments
+            ADD CONSTRAINT ck_lead_assignments_status
+            CHECK (status IN ('assigned','contact_drafted','approved','actioned','outcome_recorded'));
+    END IF;
+END $$;
+-- Masked-borrower-id format guard, same NOT VALID + tolerant VALIDATE
+-- pattern as approvals_borrower_id_format_chk: new writes are enforced
+-- immediately; one unexpected legacy row cannot fail the migrate job.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'lead_assignments_borrower_id_format_chk'
+          AND conrelid = 'mip_app.lead_assignments'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_assignments
+            ADD CONSTRAINT lead_assignments_borrower_id_format_chk
+            CHECK (borrower_id ~ '^B-[0-9A-Z]{13}$') NOT VALID;
+    END IF;
+END $$;
+DO $$
+BEGIN
+    ALTER TABLE mip_app.lead_assignments
+        VALIDATE CONSTRAINT lead_assignments_borrower_id_format_chk;
+EXCEPTION WHEN OTHERS THEN
+    RAISE NOTICE 'lead_assignments_borrower_id_format_chk left NOT VALID (new writes still enforced): %', SQLERRM;
+END $$;
+CREATE INDEX IF NOT EXISTS idx_lead_assignments_lo_status
+    ON mip_app.lead_assignments (loan_officer_id, status)
+    WHERE released_at IS NULL;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_10_s2_loan_officer_entity',
+    'S2: loan_officers entity with array coverage (no geometry) + assigned->contact_drafted->approved->actioned->outcome_recorded lifecycle on lead_assignments'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- =====================================================================
+-- S6 APPENDIX -- assignment outcome recording on the feedback table.
+-- (Appended at end of file on purpose: S2/S3 slices also append here;
+-- keeping S6 DDL in one clearly-bounded block minimises merge friction.)
+--
+-- The approval funnel's terminal stage (outcome_recorded) captures what
+-- happened after an actioned assignment: success | no_response | declined.
+-- Outcomes reuse the EXISTING mip_app.feedback row shape (event_type +
+-- borrower_id + actor_email); the outcome value is encoded in event_type
+-- ('assignment_outcome_success' / 'assignment_outcome_no_response' /
+-- 'assignment_outcome_declined') so per-outcome counts stay a GROUP BY on
+-- the already-indexed event_type column. Three additive nullable columns
+-- join the row back to governance objects; legacy feedback writers keep
+-- inserting without them:
+--   * assignment_id   -- the lifecycle row this outcome closed.
+--   * request_id      -- retry idempotency key (same partial-unique idiom
+--                        as approvals.request_id / call_dispositions).
+--   * audit_event_id  -- the LEAD_OUTCOME_RECORDED action_audit row written
+--                        in the SAME transaction as the status change.
+-- No CHECK on feedback.event_type: the table stays a generic feedback
+-- ledger; the outcome vocabulary is enforced by the API schema and by the
+-- partial-unique index predicate below (one recorded outcome per
+-- assignment).
+-- =====================================================================
+ALTER TABLE mip_app.feedback
+    ADD COLUMN IF NOT EXISTS assignment_id UUID;
+ALTER TABLE mip_app.feedback
+    ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE mip_app.feedback
+    ADD COLUMN IF NOT EXISTS audit_event_id UUID;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_request_id
+    ON mip_app.feedback (request_id)
+    WHERE request_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_feedback_assignment_outcome
+    ON mip_app.feedback (assignment_id)
+    WHERE assignment_id IS NOT NULL
+      AND event_type LIKE 'assignment_outcome_%';
+CREATE INDEX IF NOT EXISTS idx_feedback_assignment
+    ON mip_app.feedback (assignment_id, recorded_at DESC)
+    WHERE assignment_id IS NOT NULL;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_11_s6_assignment_outcome_feedback',
+    'S6: record assignment outcomes (success/no_response/declined) on mip_app.feedback -- additive assignment_id/request_id/audit_event_id columns, retry-safe request index, one outcome per assignment'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- KPI snapshots ---------------------------------------------------------
+-- S3: one row per day capturing the S1 headline aggregates measured over
+-- mip.semantics.portfolio_headline_metric_view (the named semantic home for
+-- every demoed headline KPI). Written by the mip_kpi_snapshot bundle job
+-- (jobs/kpi_snapshot.py) with a per-day upsert; the deploy script runs the
+-- job once post-gold-refresh so a fresh install never has an empty table.
+-- S4 ("since your last login" deltas) queries "the snapshot nearest a given
+-- past timestamp" -- the snapshot_at index makes both sides of that lookup
+-- (latest at-or-before / earliest after) an index-ordered LIMIT 1.
+-- Aggregates only: no borrower ids, owner names, or Cotality identifiers
+-- belong in this table.
+CREATE TABLE IF NOT EXISTS mip_app.kpi_snapshots (
+    snapshot_id            UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    snapshot_date          DATE NOT NULL,
+    snapshot_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    source_view            TEXT NOT NULL DEFAULT 'portfolio_headline_metric_view',
+    marketable_population  BIGINT NOT NULL CHECK (marketable_population >= 0),
+    refi_economics_screen  BIGINT NOT NULL CHECK (refi_economics_screen >= 0),
+    high_opportunity       BIGINT NOT NULL CHECK (high_opportunity >= 0),
+    offers_available       BIGINT NOT NULL CHECK (offers_available >= 0),
+    offers_recommended     BIGINT NOT NULL CHECK (offers_recommended >= 0),
+    avg_opportunity_score  DOUBLE PRECISION CHECK (
+        avg_opportunity_score IS NULL
+        OR (avg_opportunity_score >= 0 AND avg_opportunity_score <= 100)
+    ),
+    created_at             TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+-- Per-day idempotency: jobs upsert via ON CONFLICT (snapshot_date), so a
+-- re-run (or a deploy backfill on a day the scheduled job already ran)
+-- updates the day's row instead of duplicating it.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_kpi_snapshots_snapshot_date
+    ON mip_app.kpi_snapshots (snapshot_date);
+CREATE INDEX IF NOT EXISTS idx_kpi_snapshots_snapshot_at
+    ON mip_app.kpi_snapshots (snapshot_at DESC);
+COMMENT ON TABLE mip_app.kpi_snapshots IS
+    'Daily aggregates of mip.semantics.portfolio_headline_metric_view headline KPIs; upserted per day by the mip_kpi_snapshot job. No borrower-level data.';
+
+-- User visits -----------------------------------------------------------
+-- S3: authenticated app visits recorded by the backend visit-tracking
+-- middleware (backend/services/visit_tracking.py). One row per actor per
+-- dedupe window (default 15 minutes), never one row per request. Stores
+-- ONLY the existing actor identity model (workspace email forwarded by the
+-- Databricks Apps edge) + a timestamp -- no routes, IPs, user agents, or
+-- any borrower-linked data.
+CREATE TABLE IF NOT EXISTS mip_app.user_visits (
+    actor_email TEXT NOT NULL,
+    visited_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (actor_email, visited_at)
+);
+CREATE INDEX IF NOT EXISTS idx_user_visits_actor_visited
+    ON mip_app.user_visits (actor_email, visited_at DESC);
+COMMENT ON TABLE mip_app.user_visits IS
+    'Throttled authenticated-visit ledger (actor email + timestamp only) backing "since your last login" KPI deltas.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_10_s3_kpi_snapshots_user_visits',
+    'S3: daily headline-KPI snapshot table (per-day upsert target for mip_kpi_snapshot job) and throttled user_visits ledger for last-login deltas'
+)
+ON CONFLICT (version) DO NOTHING;

@@ -1,0 +1,535 @@
+{
+  "schema_version": 1,
+  "description": "Governed lineage manifest for Module 0 KPI/score/recommendation families. Single source of truth for the EvidenceDrawer Lineage tab: each family traces a product number from the raw Cotality share through silver lifts, UC scoring functions, and gold tables to the metric view the app reads. Kept consistent with sql/transformations/*, sql/uc_functions/*, and sql/metric_views/* — the live integration test (tests/integration/test_lineage_manifest_live.py) verifies every object here exists in Unity Catalog. A null catalog resolves to the deployed default catalog (MIP_DEFAULT_CATALOG).",
+  "families": [
+    {
+      "id": "marketable_population",
+      "title": "Marketable population",
+      "description": "COUNT(*) over the portfolio headline metric view: every deduplicated borrower with an open first-position lien in the refreshed Cotality footprint.",
+      "nodes": [
+        {
+          "id": "raw_property_domain",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_property_domain_v3",
+          "label": "Cotality Property Domain share",
+          "note": "CLIP-mastered property records (geography, occupancy, owner type)."
+        },
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Open-lien status, balance, rate, and lender reference per CLIP."
+        },
+        {
+          "id": "silver_property_master",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "property_master",
+          "label": "Silver property master",
+          "note": "Typed 1:1 lift of the property domain share (sql/transformations/silver_property_master.sql)."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed 1:1 lift of the voluntary lien share (sql/transformations/silver_lien_current.sql)."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Canonical borrower-grain feature table (sql/transformations/gold_borrower_360.sql)."
+        },
+        {
+          "id": "mv_portfolio_headline",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "portfolio_headline_metric_view",
+          "label": "Portfolio headline metric view",
+          "note": "Home KPIs aggregate over this borrower-grain semantic view."
+        }
+      ]
+    },
+    {
+      "id": "in_the_money",
+      "title": "Refi economics screen",
+      "description": "Borrowers whose lien rate sits far enough above the market reference with enough equity: fn_rate_spread feeds fn_in_the_money, materialized on borrower_360 and summed by the headline metric view.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Borrower lien rate, balance, and AVM equity inputs."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed lien rows joined to the market-rate reference."
+        },
+        {
+          "id": "silver_market_rates_weekly",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "market_rates_weekly",
+          "label": "Silver weekly market rates",
+          "note": "FRED MORTGAGE30US reference (is_latest=TRUE row supplies the par rate)."
+        },
+        {
+          "id": "fn_rate_spread",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_rate_spread",
+          "label": "fn_rate_spread",
+          "note": "Basis-point spread between the borrower lien rate and the market reference."
+        },
+        {
+          "id": "fn_in_the_money",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_in_the_money",
+          "label": "fn_in_the_money",
+          "note": "Canonical refi-economics screen over rate spread + equity thresholds."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Carries the materialized in_the_money flag per borrower."
+        },
+        {
+          "id": "mv_portfolio_headline",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "portfolio_headline_metric_view",
+          "label": "Portfolio headline metric view",
+          "note": "The KPI is SUM(in_the_money) over this view."
+        }
+      ]
+    },
+    {
+      "id": "opportunity_score",
+      "title": "Opportunity score",
+      "description": "0-100 borrower score from economics, intent, fit, relationship, and evidence sub-scores; fn_high_opportunity applies the canonical high-opportunity threshold read by the headline KPI.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Economic-incentive inputs (rate, balance, equity) start here."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed lien economics feeding the scored borrower spine."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Feature inputs for the five scoring sub-scores."
+        },
+        {
+          "id": "fn_lead_score",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_lead_score",
+          "label": "fn_lead_score",
+          "note": "Canonical weighted 0-100 opportunity score (parity-pinned with backend/services/scoring.py)."
+        },
+        {
+          "id": "fn_high_opportunity",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_high_opportunity",
+          "label": "fn_high_opportunity",
+          "note": "Canonical high-opportunity threshold over the opportunity score."
+        },
+        {
+          "id": "gold_lead_scores",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "lead_scores",
+          "label": "Gold lead scores",
+          "note": "Deterministic score table with the five sub-scores (sql/transformations/gold_lead_scores.sql)."
+        },
+        {
+          "id": "mv_portfolio_headline",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "portfolio_headline_metric_view",
+          "label": "Portfolio headline metric view",
+          "note": "The KPI is SUM(is_high_opportunity) over this view."
+        }
+      ]
+    },
+    {
+      "id": "next_best_offer",
+      "title": "Primary offer path",
+      "description": "fn_next_best_offer selects one offer path (purchase, refi, HELOC/equity review, retention, or nurture) from current borrower signals; the headline KPI counts actionable recommendations.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Rate-spread and equity inputs to the refi/HELOC branches."
+        },
+        {
+          "id": "raw_mls_listing",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_mls_listing_v1",
+          "label": "Cotality MLS Listing share",
+          "note": "Active/under-contract listings drive the purchase branch."
+        },
+        {
+          "id": "raw_heloc_propensity",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_heloc_propensity_score_v1",
+          "label": "Cotality HELOC Propensity share",
+          "note": "Model propensity scores feeding the HELOC-intent trigger."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed lien economics per CLIP."
+        },
+        {
+          "id": "silver_listing_activity",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "listing_activity",
+          "label": "Silver MLS listing activity",
+          "note": "CLIP-keyed listing lift with address/agent/lockbox fields excluded."
+        },
+        {
+          "id": "silver_heloc_propensity",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "heloc_propensity",
+          "label": "Silver HELOC propensity",
+          "note": "CLIP-keyed propensity scores (a model feed, not filed permits)."
+        },
+        {
+          "id": "fn_next_best_offer",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_next_best_offer",
+          "label": "fn_next_best_offer",
+          "note": "Canonical offer-path decision rules (parity-pinned with backend/services/scoring.py)."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Carries recommended_offer_code per borrower."
+        },
+        {
+          "id": "mv_portfolio_headline",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "portfolio_headline_metric_view",
+          "label": "Portfolio headline metric view",
+          "note": "The KPI is SUM(offer_recommended) over this view."
+        }
+      ]
+    },
+    {
+      "id": "rate_spread",
+      "title": "Rate spread evidence",
+      "description": "Basis-point spread between the borrower lien rate and the FRED market reference; surfaced as borrower evidence rows and as the rate_spread_bps decision input.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Borrower-side lien rate."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed lien rows per CLIP."
+        },
+        {
+          "id": "silver_market_rates_weekly",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "market_rates_weekly",
+          "label": "Silver weekly market rates",
+          "note": "FRED MORTGAGE30US reference with a repo-committed seed."
+        },
+        {
+          "id": "fn_rate_spread",
+          "layer": "uc_function",
+          "object_type": "function",
+          "catalog": null,
+          "schema": "gold",
+          "object": "fn_rate_spread",
+          "label": "fn_rate_spread",
+          "note": "Lien rate minus market reference, in basis points."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Carries rate_spread_bps as a materialized decision input."
+        },
+        {
+          "id": "gold_evidence_events",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "evidence_events",
+          "label": "Gold evidence events",
+          "note": "Append-only borrower-safe evidence stream citing this signal."
+        }
+      ]
+    },
+    {
+      "id": "lead_queue_rank",
+      "title": "Lead Queue ranking",
+      "description": "Ranked, quality-filtered borrowers eligible for the Lead Queue: scored on lead_scores, filtered and ranked into lead_population, read through the lead-generation metric view.",
+      "nodes": [
+        {
+          "id": "raw_voluntary_lien",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_voluntary_lien_status_marketing_v2",
+          "label": "Cotality Voluntary Lien share",
+          "note": "Economic inputs to the ranked score."
+        },
+        {
+          "id": "silver_lien_current",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "lien_current",
+          "label": "Silver current liens",
+          "note": "Typed lien economics per CLIP."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Borrower-grain feature spine."
+        },
+        {
+          "id": "gold_lead_scores",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "lead_scores",
+          "label": "Gold lead scores",
+          "note": "Deterministic sub-scores + opportunity score per borrower."
+        },
+        {
+          "id": "gold_lead_population",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "lead_population",
+          "label": "Gold lead population",
+          "note": "Score-floored, ranked queue rows with evidence refs and approval state."
+        },
+        {
+          "id": "mv_lead_generation",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "lead_generation_metric_view",
+          "label": "Lead generation metric view",
+          "note": "Semantic view for lead KPIs, ranks, geography, and score bands."
+        }
+      ]
+    },
+    {
+      "id": "segment_population",
+      "title": "Segment membership",
+      "description": "Segment rollup counts and average scores per predicate: intent triggers land on borrower_360 flags, roll up into segment_population, and read through the segment-performance metric view.",
+      "nodes": [
+        {
+          "id": "raw_mls_listing",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_mls_listing_v1",
+          "label": "Cotality MLS Listing share",
+          "note": "Listed-for-sale segment trigger."
+        },
+        {
+          "id": "raw_heloc_propensity",
+          "layer": "raw_share",
+          "object_type": "table",
+          "catalog": "cotality_mortgage_data",
+          "schema": "corelogic",
+          "object": "entrada_eval_heloc_propensity_score_v1",
+          "label": "Cotality HELOC Propensity share",
+          "note": "HELOC-intent segment trigger."
+        },
+        {
+          "id": "silver_listing_activity",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "listing_activity",
+          "label": "Silver MLS listing activity",
+          "note": "CLIP-keyed listing lift."
+        },
+        {
+          "id": "silver_heloc_propensity",
+          "layer": "silver",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "silver",
+          "object": "heloc_propensity",
+          "label": "Silver HELOC propensity",
+          "note": "CLIP-keyed propensity scores."
+        },
+        {
+          "id": "gold_borrower_360",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "borrower_360",
+          "label": "Gold borrower 360",
+          "note": "Segment membership flags per borrower."
+        },
+        {
+          "id": "gold_segment_population",
+          "layer": "gold",
+          "object_type": "table",
+          "catalog": null,
+          "schema": "gold",
+          "object": "segment_population",
+          "label": "Gold segment population",
+          "note": "Predicate, mode, geography, count, and average score per segment."
+        },
+        {
+          "id": "mv_segment_performance",
+          "layer": "metric_view",
+          "object_type": "view",
+          "catalog": null,
+          "schema": "semantics",
+          "object": "segment_performance_metric_view",
+          "label": "Segment performance metric view",
+          "note": "Semantic view for segment comparisons."
+        }
+      ]
+    }
+  ]
+}

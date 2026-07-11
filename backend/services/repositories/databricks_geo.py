@@ -24,6 +24,11 @@ from backend.services.repositories.databricks_portfolio import DatabricksPortfol
 from backend.services.repositories.databricks_segment_gates import apply_source_gates
 from backend.services.repositories.databricks_shared import _SEGMENT_COLUMNS, _parse_facet_mix
 from backend.services.resilience import TTLCache
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
+from backend.services.segment_predicates import (
+    compose_segment_predicate,
+    normalise_segment_codes,
+)
 
 log = logging.getLogger("backend.services.repositories.databricks_repo")
 
@@ -344,7 +349,8 @@ class DatabricksGeoRepository:
         "  CAST(COUNT(*) AS INT)                         AS addressable, "
         "  CAST(SUM(CASE WHEN in_the_money "
         "                THEN 1 ELSE 0 END) AS INT)      AS in_the_money, "
-        "  CAST(SUM(CASE WHEN opportunity_score >= 75 "
+        "  CAST(SUM(CASE WHEN opportunity_score "
+        f"                >= {HIGH_OPPORTUNITY_THRESHOLD} "
         "                THEN 1 ELSE 0 END) AS INT)      AS top_tier_opportunities, "
         "  CAST(ROUND(AVG(opportunity_score)) AS INT)    AS avg_score "
         f"FROM {qualify('gold', 'borrower_360')} "
@@ -371,7 +377,7 @@ class DatabricksGeoRepository:
         "    ANY_VALUE(state) AS state, "
         "    CAST(COUNT(*) AS INT) AS addressable_borrowers, "
         "    CAST(SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END) AS INT) AS in_the_money_borrowers, "
-        "    CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
+        f"    CAST(SUM(CASE WHEN opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD} THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers, "
         "    CAST(ROUND(AVG(opportunity_score)) AS INT) AS avg_opportunity_score "
         "  FROM base "
         "  GROUP BY fips_5 "
@@ -578,19 +584,9 @@ class DatabricksGeoRepository:
         *,
         segment_mode: str,
     ) -> tuple[str, dict[str, object]]:
-        if len(segment_codes) == 1:
-            return "array_contains(segment_codes, :segment)", {"segment": segment_codes[0]}
-        if segment_mode == "all":
-            params = {f"segment_{i}": code for i, code in enumerate(segment_codes)}
-            clause = " AND ".join(
-                f"array_contains(segment_codes, :segment_{i})" for i in range(len(segment_codes))
-            )
-            return clause, params
-        params = {f"segment_{i}": code for i, code in enumerate(segment_codes)}
-        clause = " OR ".join(
-            f"array_contains(segment_codes, :segment_{i})" for i in range(len(segment_codes))
-        )
-        return f"({clause})", params
+        # S8: delegate to the canonical composer so map rollups, card
+        # cohorts, and the Lead Queue all compose one predicate per segment.
+        return compose_segment_predicate(segment_codes, mode=segment_mode)
 
     @staticmethod
     def _portfolio_cache_key(portfolio_criteria: PortfolioCriteria | None) -> str:
@@ -625,17 +621,9 @@ class DatabricksGeoRepository:
 
     @staticmethod
     def _normalise_geo_segments(segment_codes: list[str] | None) -> list[str]:
-        if not segment_codes:
-            return []
-        out: list[str] = []
-        seen: set[str] = set()
-        for code in segment_codes:
-            normalised = str(code or "").strip()
-            if not normalised or normalised in seen:
-                continue
-            seen.add(normalised)
-            out.append(normalised)
-        return sorted(out)
+        # Sorted (unlike the lead repository's caller-order contract) so two
+        # map interactions selecting the same set share one cache entry.
+        return sorted(normalise_segment_codes(segment_codes))
 
     @staticmethod
     def _filtered_geo_cache_key(

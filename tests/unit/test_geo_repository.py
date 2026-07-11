@@ -194,7 +194,7 @@ def test_segment_filtered_rollup_counts_distinct_clips() -> None:
     assert "SELECT clip, segment_codes, opportunity_score" in normalized
     assert "SELECT DISTINCT clip, sc AS segment_code, opportunity_score" in normalized
     assert "COUNT(DISTINCT clip)" in normalized
-    assert "array_contains(segment_codes, :segment_0) AND array_contains(segment_codes, :segment_1)" in normalized
+    assert "array_contains(segment_codes, :seg_0) AND array_contains(segment_codes, :seg_1)" in normalized
     assert set(params.values()) == {"itm", "equity"}
 
 
@@ -297,13 +297,13 @@ def test_state_rollups_filtered_all_mode_reads_borrower_360() -> None:
     assert result.rollups[0].addressable == 308
     sql, params = client.calls[0]
     assert ".gold.borrower_360" in sql
-    assert "array_contains(segment_codes, :segment_0)" in sql
-    assert "array_contains(segment_codes, :segment_3)" in sql
+    assert "array_contains(segment_codes, :seg_0)" in sql
+    assert "array_contains(segment_codes, :seg_3)" in sql
     assert params == {
-        "segment_0": "equity",
-        "segment_1": "investor",
-        "segment_2": "itm",
-        "segment_3": "retention",
+        "seg_0": "equity",
+        "seg_1": "investor",
+        "seg_2": "itm",
+        "seg_3": "retention",
     }
 
 
@@ -468,13 +468,13 @@ def test_county_rollups_filtered_all_mode_reads_borrower_360_with_state() -> Non
     sql, params = client.calls[0]
     assert ".gold.borrower_360" in sql
     assert "state = :state" in sql
-    assert "array_contains(segment_codes, :segment_0)" in sql
-    assert "array_contains(segment_codes, :segment_3)" in sql
+    assert "array_contains(segment_codes, :seg_0)" in sql
+    assert "array_contains(segment_codes, :seg_3)" in sql
     assert params == {
-        "segment_0": "equity",
-        "segment_1": "investor",
-        "segment_2": "itm",
-        "segment_3": "retention",
+        "seg_0": "equity",
+        "seg_1": "investor",
+        "seg_2": "itm",
+        "seg_3": "retention",
         "state": "FL",
     }
 
@@ -566,13 +566,13 @@ def test_zip_rollups_filtered_all_mode_reads_borrower_360_with_fips() -> None:
     sql, params = client.calls[0]
     assert ".gold.borrower_360" in sql
     assert "county_fips_5 = :fips_5" in sql
-    assert "array_contains(segment_codes, :segment_0)" in sql
-    assert "array_contains(segment_codes, :segment_3)" in sql
+    assert "array_contains(segment_codes, :seg_0)" in sql
+    assert "array_contains(segment_codes, :seg_3)" in sql
     assert params == {
-        "segment_0": "equity",
-        "segment_1": "investor",
-        "segment_2": "itm",
-        "segment_3": "retention",
+        "seg_0": "equity",
+        "seg_1": "investor",
+        "seg_2": "itm",
+        "seg_3": "retention",
         "fips_5": "12011",
     }
 

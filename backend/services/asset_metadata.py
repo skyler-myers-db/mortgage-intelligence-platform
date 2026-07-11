@@ -194,6 +194,30 @@ _DESCRIPTORS: tuple[AssetDescriptor, ...] = (
         aliases=("zip_code_rollup",),
     ),
     _descriptor(
+        "gold",
+        "equity_spread_points",
+        title="Gold Equity Spread Points",
+        description=(
+            "Precomputed economics scatter surface: per-borrower equity x "
+            "rate-spread points with fn_score_band bands and density-bin "
+            "coordinates for the Analytics economics overview and zoom."
+        ),
+    ),
+    _descriptor(
+        "semantics",
+        "portfolio_headline_metric_view",
+        title="Portfolio Headline Metric View",
+        description=(
+            "Borrower-grain semantic view defining every demoed headline KPI: "
+            "marketable population, refi economics screen, high opportunity "
+            "(canonical fn_high_opportunity threshold), offers available "
+            "(non-null fn_next_best_offer), primary offer paths, and average "
+            "opportunity score."
+        ),
+        object_type="view",
+        aliases=("headline_metric_view",),
+    ),
+    _descriptor(
         "semantics",
         "lead_generation_metric_view",
         title="Lead Generation Metric View",

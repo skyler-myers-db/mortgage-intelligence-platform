@@ -37,6 +37,13 @@ export interface DrawerSource {
   assetPath?: string;
   usedIn?: string[];
   notExposed?: string;
+  /**
+   * Family id in the governed lineage manifest
+   * (backend/resources/lineage_manifest.json). Drives the drawer's
+   * Lineage tab; sources without one show an explicit "lineage not
+   * mapped" state — the UI never invents nodes.
+   */
+  lineageFamily?: string;
 }
 
 interface AppCtxValue {

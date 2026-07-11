@@ -3888,73 +3888,208 @@
       },
       "EconomicsAnalyticsResponse": {
         "properties": {
-          "equity_vs_spread": {
-            "items": {
-              "$ref": "#/components/schemas/EquitySpreadPoint"
-            },
-            "title": "Equity Vs Spread",
-            "type": "array"
-          },
           "rate_spread_histogram": {
             "items": {
               "$ref": "#/components/schemas/RateSpreadBucket"
             },
-            "title": "Rate Spread Histogram",
-            "type": "array"
+            "type": "array",
+            "title": "Rate Spread Histogram"
+          },
+          "equity_spread": {
+            "$ref": "#/components/schemas/EquitySpreadOverview"
           },
           "top_borrowers": {
             "items": {
               "$ref": "#/components/schemas/TopBorrowerAnalyticsRow"
             },
-            "title": "Top Borrowers",
-            "type": "array"
+            "type": "array",
+            "title": "Top Borrowers"
           }
         },
+        "type": "object",
         "required": [
           "rate_spread_histogram",
-          "equity_vs_spread",
+          "equity_spread",
           "top_borrowers"
         ],
-        "title": "EconomicsAnalyticsResponse",
-        "type": "object"
+        "title": "EconomicsAnalyticsResponse"
+      },
+      "EquitySpreadBin": {
+        "properties": {
+          "equity_bin_pct": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Equity Bin Pct"
+          },
+          "spread_bin_bps": {
+            "type": "integer",
+            "title": "Spread Bin Bps"
+          },
+          "borrower_count": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Borrower Count"
+          },
+          "mean_opportunity_score": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Mean Opportunity Score"
+          },
+          "in_the_money_borrowers": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "In The Money Borrowers"
+          }
+        },
+        "type": "object",
+        "required": [
+          "equity_bin_pct",
+          "spread_bin_bps",
+          "borrower_count",
+          "mean_opportunity_score",
+          "in_the_money_borrowers"
+        ],
+        "title": "EquitySpreadBin",
+        "description": "One density cell of the scatter overview (bin lower edges)."
+      },
+      "EquitySpreadOverview": {
+        "properties": {
+          "bins": {
+            "items": {
+              "$ref": "#/components/schemas/EquitySpreadBin"
+            },
+            "type": "array",
+            "title": "Bins"
+          },
+          "total_borrowers": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Borrowers"
+          },
+          "equity_bin_pct": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Equity Bin Pct"
+          },
+          "spread_bin_bps": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Spread Bin Bps"
+          },
+          "equity_domain_min": {
+            "type": "integer",
+            "title": "Equity Domain Min"
+          },
+          "equity_domain_max": {
+            "type": "integer",
+            "title": "Equity Domain Max"
+          },
+          "spread_domain_min": {
+            "type": "integer",
+            "title": "Spread Domain Min"
+          },
+          "spread_domain_max": {
+            "type": "integer",
+            "title": "Spread Domain Max"
+          },
+          "source_table": {
+            "type": "string",
+            "title": "Source Table"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "bins",
+          "total_borrowers",
+          "equity_bin_pct",
+          "spread_bin_bps",
+          "equity_domain_min",
+          "equity_domain_max",
+          "spread_domain_min",
+          "spread_domain_max",
+          "source_table"
+        ],
+        "title": "EquitySpreadOverview",
+        "description": "Server-side density bins for the economics scatter overview.\n\nThe overview never ships raw borrower rows; the zoomed points endpoint\nreturns real borrowers with an honest showing-N-of-M payload."
       },
       "EquitySpreadPoint": {
         "properties": {
           "borrower_id": {
-            "title": "Borrower Id",
-            "type": "string"
+            "type": "string",
+            "title": "Borrower Id"
           },
           "display_name": {
-            "title": "Display Name",
-            "type": "string"
-          },
-          "equity_pct": {
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Equity Pct",
-            "type": "integer"
-          },
-          "opportunity_score": {
-            "maximum": 100.0,
-            "minimum": 0.0,
-            "title": "Opportunity Score",
-            "type": "integer"
-          },
-          "rate_spread_bps": {
-            "title": "Rate Spread Bps",
-            "type": "integer"
+            "type": "string",
+            "title": "Display Name"
           },
           "segment": {
-            "title": "Segment",
-            "type": "string"
+            "type": "string",
+            "title": "Segment"
           },
           "state": {
+            "type": "string",
             "maxLength": 2,
             "minLength": 2,
-            "title": "State",
-            "type": "string"
+            "title": "State"
+          },
+          "equity_pct": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Equity Pct"
+          },
+          "rate_spread_bps": {
+            "type": "integer",
+            "title": "Rate Spread Bps"
+          },
+          "opportunity_score": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Opportunity Score"
+          },
+          "score_band": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "high",
+                  "med",
+                  "low"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score Band"
+          },
+          "in_the_money": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "In The Money"
           }
         },
+        "type": "object",
         "required": [
           "borrower_id",
           "display_name",
@@ -3964,8 +4099,102 @@
           "rate_spread_bps",
           "opportunity_score"
         ],
-        "title": "EquitySpreadPoint",
-        "type": "object"
+        "title": "EquitySpreadPoint"
+      },
+      "EquitySpreadPointsResponse": {
+        "properties": {
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/EquitySpreadPoint"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "total_matching": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Total Matching"
+          },
+          "showing": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Showing"
+          },
+          "point_cap": {
+            "type": "integer",
+            "exclusiveMinimum": 0.0,
+            "title": "Point Cap"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "viewport": {
+            "$ref": "#/components/schemas/EquitySpreadViewport"
+          },
+          "source_table": {
+            "type": "string",
+            "title": "Source Table"
+          },
+          "refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Refreshed At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "points",
+          "total_matching",
+          "showing",
+          "point_cap",
+          "truncated",
+          "viewport",
+          "source_table"
+        ],
+        "title": "EquitySpreadPointsResponse",
+        "description": "Real borrower points for a zoomed viewport, capped server-side."
+      },
+      "EquitySpreadViewport": {
+        "properties": {
+          "equity_min": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Equity Min",
+            "default": 0
+          },
+          "equity_max": {
+            "type": "integer",
+            "maximum": 100.0,
+            "minimum": 0.0,
+            "title": "Equity Max",
+            "default": 100
+          },
+          "spread_min": {
+            "type": "integer",
+            "maximum": 400.0,
+            "minimum": -100.0,
+            "title": "Spread Min",
+            "default": -100
+          },
+          "spread_max": {
+            "type": "integer",
+            "maximum": 400.0,
+            "minimum": -100.0,
+            "title": "Spread Max",
+            "default": 400
+          }
+        },
+        "type": "object",
+        "title": "EquitySpreadViewport",
+        "description": "Zoom window for the points endpoint, clamped to the plot domain."
       },
       "EvidenceBySignalRow": {
         "properties": {
@@ -11553,6 +11782,251 @@
         ]
       }
     },
+    "/api/analytics/economics/points": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Economics Points",
+        "description": "Real borrower points for a zoomed scatter viewport.\n\nCapped server-side; the payload carries the honest pre-cap total so the\nUI renders \"showing N of M\" instead of implying the page is everything.",
+        "operationId": "get_api_analytics_economics_points_economics_points",
+        "deprecated": true,
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 2
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            },
+            "description": "Deprecated single-state alias. Prefer states."
+          },
+          {
+            "name": "states",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            },
+            "description": "Optional comma-separated 2-letter state filters."
+          },
+          {
+            "name": "segment_codes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            },
+            "description": "Optional comma-separated segment code filter."
+          },
+          {
+            "name": "segment_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Segment filter mode for multi-select codes.",
+              "default": "any",
+              "title": "Segment Mode"
+            },
+            "description": "Segment filter mode for multi-select codes."
+          },
+          {
+            "name": "lender_relationship",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            },
+            "description": "Optional governed lender relationship filter."
+          },
+          {
+            "name": "target_lender_ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            },
+            "description": "Optional public-safe current lien-holder alias."
+          },
+          {
+            "name": "signal_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            },
+            "description": "Deprecated single-signal alias. Prefer signal_types."
+          },
+          {
+            "name": "signal_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            },
+            "description": "Optional comma-separated evidence signal filters for the Signals tab."
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
+              "description": "Evidence lookback window for the Signals tab.",
+              "default": 30,
+              "title": "Days"
+            },
+            "description": "Evidence lookback window for the Signals tab."
+          },
+          {
+            "name": "equity_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 0,
+              "description": "Zoom window lower equity bound (pct).",
+              "default": 0,
+              "title": "Equity Min"
+            },
+            "description": "Zoom window lower equity bound (pct)."
+          },
+          {
+            "name": "equity_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 0,
+              "description": "Zoom window upper equity bound (pct).",
+              "default": 100,
+              "title": "Equity Max"
+            },
+            "description": "Zoom window upper equity bound (pct)."
+          },
+          {
+            "name": "spread_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 400,
+              "minimum": -100,
+              "description": "Zoom window lower rate-spread bound (bps).",
+              "default": -100,
+              "title": "Spread Min"
+            },
+            "description": "Zoom window lower rate-spread bound (bps)."
+          },
+          {
+            "name": "spread_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 400,
+              "minimum": -100,
+              "description": "Zoom window upper rate-spread bound (bps).",
+              "default": 400,
+              "title": "Spread Max"
+            },
+            "description": "Zoom window upper rate-spread bound (bps)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EquitySpreadPointsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/analytics/executive": {
       "get": {
         "deprecated": true,
@@ -17521,6 +17995,250 @@
         "tags": [
           "analytics"
         ]
+      }
+    },
+    "/api/v1/analytics/economics/points": {
+      "get": {
+        "tags": [
+          "analytics"
+        ],
+        "summary": "Economics Points",
+        "description": "Real borrower points for a zoomed scatter viewport.\n\nCapped server-side; the payload carries the honest pre-cap total so the\nUI renders \"showing N of M\" instead of implying the page is everything.",
+        "operationId": "get_api_v1_analytics_economics_points_economics_points",
+        "parameters": [
+          {
+            "name": "state",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 2,
+                  "maxLength": 2
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-state alias. Prefer states.",
+              "title": "State"
+            },
+            "description": "Deprecated single-state alias. Prefer states."
+          },
+          {
+            "name": "states",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated 2-letter state filters.",
+              "title": "States"
+            },
+            "description": "Optional comma-separated 2-letter state filters."
+          },
+          {
+            "name": "segment_codes",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated segment code filter.",
+              "title": "Segment Codes"
+            },
+            "description": "Optional comma-separated segment code filter."
+          },
+          {
+            "name": "segment_mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "Segment filter mode for multi-select codes.",
+              "default": "any",
+              "title": "Segment Mode"
+            },
+            "description": "Segment filter mode for multi-select codes."
+          },
+          {
+            "name": "lender_relationship",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional governed lender relationship filter.",
+              "title": "Lender Relationship"
+            },
+            "description": "Optional governed lender relationship filter."
+          },
+          {
+            "name": "target_lender_ref",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional public-safe current lien-holder alias.",
+              "title": "Target Lender Ref"
+            },
+            "description": "Optional public-safe current lien-holder alias."
+          },
+          {
+            "name": "signal_type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Deprecated single-signal alias. Prefer signal_types.",
+              "title": "Signal Type"
+            },
+            "description": "Deprecated single-signal alias. Prefer signal_types."
+          },
+          {
+            "name": "signal_types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Optional comma-separated evidence signal filters for the Signals tab.",
+              "title": "Signal Types"
+            },
+            "description": "Optional comma-separated evidence signal filters for the Signals tab."
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 90,
+              "minimum": 1,
+              "description": "Evidence lookback window for the Signals tab.",
+              "default": 30,
+              "title": "Days"
+            },
+            "description": "Evidence lookback window for the Signals tab."
+          },
+          {
+            "name": "equity_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 0,
+              "description": "Zoom window lower equity bound (pct).",
+              "default": 0,
+              "title": "Equity Min"
+            },
+            "description": "Zoom window lower equity bound (pct)."
+          },
+          {
+            "name": "equity_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 0,
+              "description": "Zoom window upper equity bound (pct).",
+              "default": 100,
+              "title": "Equity Max"
+            },
+            "description": "Zoom window upper equity bound (pct)."
+          },
+          {
+            "name": "spread_min",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 400,
+              "minimum": -100,
+              "description": "Zoom window lower rate-spread bound (bps).",
+              "default": -100,
+              "title": "Spread Min"
+            },
+            "description": "Zoom window lower rate-spread bound (bps)."
+          },
+          {
+            "name": "spread_max",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 400,
+              "minimum": -100,
+              "description": "Zoom window upper rate-spread bound (bps).",
+              "default": 400,
+              "title": "Spread Max"
+            },
+            "description": "Zoom window upper rate-spread bound (bps)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EquitySpreadPointsResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
       }
     },
     "/api/v1/analytics/executive": {

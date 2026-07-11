@@ -23,11 +23,12 @@ from backend.api.leads import DEFAULT_LEAD_LIMIT, MAX_LEAD_LIMIT
 from backend.main import app
 from backend.schemas.lead import LeadSummary
 from backend.services.repositories.databricks_repo import DatabricksLeadRepository
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 FUNNEL_STAGE_PREDICATES = {
     "addressable": "",
     "in_the_money": "b.in_the_money = TRUE",
-    "high_opportunity": "b.opportunity_score >= 75",
+    "high_opportunity": f"b.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}",
     "offer_recommended": (
         "b.recommended_offer_code IS NOT NULL "
         "AND b.recommended_offer_code <> 'nurture'"
@@ -43,8 +44,8 @@ FUNNEL_SNAPSHOT_EXPRESSIONS = {
         "AS in_the_money_borrowers"
     ),
     "high_opportunity": (
-        "CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT)       "
-        "AS high_opportunity_borrowers"
+        "CAST(SUM(CASE WHEN mip.gold.fn_high_opportunity(opportunity_score) "
+        "THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers"
     ),
     "offer_recommended": (
         "recommended_offer_code IS NOT NULL\n"
@@ -294,6 +295,37 @@ def test_lead_repository_caches_identical_list_and_count_reads() -> None:
     assert calls["execute_one"] == 1
 
 
+def test_count_cache_key_covers_segment_set_and_mode() -> None:
+    """S8 cross-review N2: the count cache key (behind X-Total-Matching)
+    must incorporate BOTH the full segment selection AND segment_mode —
+    otherwise an `any` union count could be served for an `all`
+    intersection request (or one selection for another) within the TTL."""
+    calls: dict[str, int] = {"execute_one": 0}
+
+    class _Client:
+        def execute_one(
+            self,
+            sql: str,
+            params: dict[str, object] | None = None,
+        ) -> dict[str, object]:
+            _ = (sql, params)
+            calls["execute_one"] += 1
+            return {"n": 7}
+
+    repo = DatabricksLeadRepository(_Client(), cache_ttl_s=60.0)  # type: ignore[arg-type]
+    codes = ["refi_propensity", "investor"]
+
+    assert repo.count(segment=None, portfolio_id=None, segment_codes=codes, segment_mode="all") == 7
+    assert repo.count(segment=None, portfolio_id=None, segment_codes=codes, segment_mode="any") == 7
+    assert calls["execute_one"] == 2, "all vs any over the same codes must be distinct cache keys"
+
+    assert repo.count(segment=None, portfolio_id=None, segment_codes=["refi_propensity"], segment_mode="all") == 7
+    assert calls["execute_one"] == 3, "a different segment set must be a distinct cache key"
+
+    assert repo.count(segment=None, portfolio_id=None, segment_codes=codes, segment_mode="all") == 7
+    assert calls["execute_one"] == 3, "the identical selection+mode must be served from cache"
+
+
 def test_segment_filter_clause_supports_multi_select_all_mode():
     """Segments-page multi-select is a narrowing filter: selecting ITM
     plus equity should require both segment codes, not either one."""
@@ -303,10 +335,10 @@ def test_segment_filter_clause_supports_multi_select_all_mode():
         segment_mode="all",
     )
     assert clause == (
-        "array_contains(segment_codes, :segment_0) AND "
-        "array_contains(segment_codes, :segment_1)"
+        "array_contains(segment_codes, :seg_0) AND "
+        "array_contains(segment_codes, :seg_1)"
     )
-    assert params == {"segment_0": "itm", "segment_1": "equity"}
+    assert params == {"seg_0": "itm", "seg_1": "equity"}
 
 
 def test_segment_filter_clause_supports_multi_select_any_mode():
@@ -317,10 +349,10 @@ def test_segment_filter_clause_supports_multi_select_any_mode():
         segment_mode="any",
     )
     assert clause == (
-        "(array_contains(segment_codes, :segment_0) OR "
-        "array_contains(segment_codes, :segment_1))"
+        "(array_contains(segment_codes, :seg_0) OR "
+        "array_contains(segment_codes, :seg_1))"
     )
-    assert params == {"segment_0": "itm", "segment_1": "equity"}
+    assert params == {"seg_0": "itm", "seg_1": "equity"}
 
 
 def test_leads_route_segment_mode_any_vs_all_changes_membership() -> None:

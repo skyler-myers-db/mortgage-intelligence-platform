@@ -3,14 +3,17 @@
 // 'use no memo' React Compiler pragma (unlike analytics.sections.tsx).
 import type { LeadFunnelStage } from '../lib/api';
 import type {
-  EquitySpreadPoint,
+  EquitySpreadBin,
+  EquitySpreadOverview,
+  EquitySpreadViewport,
   EvidenceDailyRow,
   FunnelStage,
   SegmentCode,
   TopBorrowerAnalyticsRow,
 } from '../types';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
-export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'sales-ops';
+export type AnalyticsTab = 'executive' | 'geography' | 'economics' | 'segments' | 'signals' | 'approval-funnel' | 'sales-ops';
 
 export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map' | 'money' | 'layers' | 'audit' | 'target' }> = [
   { id: 'executive', label: 'Executive', icon: 'flow' },
@@ -18,6 +21,7 @@ export const TABS: Array<{ id: AnalyticsTab; label: string; icon: 'flow' | 'map'
   { id: 'economics', label: 'Economics', icon: 'money' },
   { id: 'segments', label: 'Segments', icon: 'layers' },
   { id: 'signals', label: 'Signals', icon: 'audit' },
+  { id: 'approval-funnel', label: 'Approval funnel', icon: 'flow' },
   { id: 'sales-ops', label: 'Sales ops', icon: 'target' },
 ];
 
@@ -74,14 +78,10 @@ export const COMPACT_FORMAT = new Intl.NumberFormat('en-US', {
   notation: 'compact',
   maximumFractionDigits: 2,
 });
+// DOM budget for zoom-mode scatter dots. The server caps the honest payload
+// at its own limit; this only bounds how many of those we absolutely-position
+// at once, and the meta copy says so whenever it bites.
 export const MAX_SCATTER_POINTS = 1_200;
-export const SCATTER_SPREAD_BUCKET_BPS = 25;
-
-export type PreparedScatterPoint = {
-  row: EquitySpreadPoint;
-  xPct: number;
-  yPct: number;
-};
 
 export type LenderFilterParams = {
   lender_relationship?: string | null;
@@ -163,7 +163,7 @@ export function leadQueueHrefForFunnelStage(
     'in the money': 'in_the_money',
     'refi economics': 'in_the_money',
     'high opportunity': 'high_opportunity',
-    'opportunity score 75+': 'high_opportunity',
+    [HIGH_OPPORTUNITY_KPI_LABEL.toLowerCase()]: 'high_opportunity',
     'top-tier score': 'high_opportunity',
     'offer recommended': 'offer_recommended',
     'primary offer selected': 'offer_recommended',
@@ -178,7 +178,7 @@ export function funnelStageDisplayLabel(row: Pick<FunnelStage, 'stage' | 'stage_
   const byOrder: Record<number, string> = {
     1: 'Addressable',
     2: 'Refi economics',
-    3: 'Opportunity score 75+',
+    3: HIGH_OPPORTUNITY_KPI_LABEL,
     4: 'Primary offer selected',
     5: 'Approved',
     6: 'Actioned',
@@ -288,58 +288,96 @@ export function categoricalTickIndexes(length: number, maxTicks = 6): number[] {
   return [...indexes].sort((a, b) => a - b);
 }
 
-export function segmentClass(value: string): string {
-  const text = value.toLowerCase();
-  if (text.includes('equity')) return 'analytics-segment--equity';
-  if (text.includes('money') || text === 'itm') return 'analytics-segment--itm';
-  if (text.includes('investor')) return 'analytics-segment--investor';
-  if (text.includes('listed')) return 'analytics-segment--listed';
-  if (text.includes('permit') || text.includes('heloc') || text.includes('propensity')) {
-    return 'analytics-segment--permit';
-  }
-  if (text.includes('retention')) return 'analytics-segment--retention';
-  return 'analytics-segment--none';
+// ---------------------------------------------------------------------------
+// S7 economics scatter geometry. Pure, deterministic layout math over the
+// server's density-bin overview + zoomed real-point payloads, so the SVG/DOM
+// components stay thin renderers and the math is unit-pinnable.
+// ---------------------------------------------------------------------------
+
+export interface ScatterLayout {
+  xMin: number;
+  xRange: number;
+  yMin: number;
+  yRange: number;
 }
 
-export function compactScatterRows(rows: EquitySpreadPoint[], limit = MAX_SCATTER_POINTS): EquitySpreadPoint[] {
-  const byBucket = new Map<string, EquitySpreadPoint>();
-  const ordered = [...rows].sort((a, b) => (
-    b.opportunity_score - a.opportunity_score || a.borrower_id.localeCompare(b.borrower_id)
-  ));
-  for (const row of ordered) {
-    const key = [
-      Math.round(row.equity_pct),
-      Math.round(row.rate_spread_bps / SCATTER_SPREAD_BUCKET_BPS) * SCATTER_SPREAD_BUCKET_BPS,
-      row.segment,
-    ].join(':');
-    if (!byBucket.has(key)) byBucket.set(key, row);
-    if (byBucket.size >= limit) break;
-  }
-  return [...byBucket.values()].sort((a, b) => a.equity_pct - b.equity_pct || a.rate_spread_bps - b.rate_spread_bps);
+/**
+ * Overview layout. The plot range extends one bin width past the domain max
+ * on each axis so the boundary bins (equity 100, spread 400 — real bins,
+ * since the domain bounds are inclusive) render as full-size cells instead
+ * of zero-width slivers. Ticks/dots use the same layout, so positioning
+ * stays mutually consistent.
+ */
+export function overviewScatterLayout(overview: EquitySpreadOverview): ScatterLayout {
+  return {
+    xMin: overview.equity_domain_min,
+    xRange: overview.equity_domain_max + overview.equity_bin_pct - overview.equity_domain_min,
+    yMin: overview.spread_domain_min,
+    yRange: overview.spread_domain_max + overview.spread_bin_bps - overview.spread_domain_min,
+  };
 }
 
-export function prepareScatterPoints(rows: EquitySpreadPoint[], minSpread: number, maxSpread: number): PreparedScatterPoint[] {
-  const points = compactScatterRows(rows).map((row) => ({
-    row,
-    xPct: pct(row.equity_pct, 100),
-    yPct: 100 - pct(row.rate_spread_bps - minSpread, maxSpread - minSpread),
-  }));
-  const groups = new Map<string, PreparedScatterPoint[]>();
-  for (const point of points) {
-    const key = `${point.xPct.toFixed(2)}:${point.yPct.toFixed(2)}`;
-    groups.set(key, [...(groups.get(key) ?? []), point]);
-  }
-  for (const group of groups.values()) {
-    if (group.length <= 1) continue;
-    const radiusX = Math.min(1.2, 0.35 + group.length * 0.1);
-    const radiusY = Math.min(2.8, 0.8 + group.length * 0.22);
-    group.forEach((point, idx) => {
-      const angle = (Math.PI * 2 * idx) / group.length;
-      point.xPct = Math.max(0, Math.min(100, point.xPct + Math.cos(angle) * radiusX));
-      point.yPct = Math.max(0, Math.min(100, point.yPct + Math.sin(angle) * radiusY));
-    });
-  }
-  return points;
+/** Zoom layout over an integer-inclusive viewport (hence the +1 ranges). */
+export function zoomScatterLayout(viewport: EquitySpreadViewport): ScatterLayout {
+  return {
+    xMin: viewport.equity_min,
+    xRange: Math.max(1, viewport.equity_max - viewport.equity_min + 1),
+    yMin: viewport.spread_min,
+    yRange: Math.max(1, viewport.spread_max - viewport.spread_min + 1),
+  };
+}
+
+/** Map a (equity, spread) pair onto CSS percentages (yPct is top-based). */
+export function scatterPosition(
+  equityPct: number,
+  spreadBps: number,
+  layout: ScatterLayout,
+): { xPct: number; yPct: number } {
+  return {
+    xPct: pct(equityPct - layout.xMin, layout.xRange),
+    yPct: 100 - pct(spreadBps - layout.yMin, layout.yRange),
+  };
+}
+
+/** CSS rect for one density cell (top-left corner + size, in percent). */
+export function binCellRect(
+  bin: EquitySpreadBin,
+  overview: EquitySpreadOverview,
+): { xPct: number; yPct: number; wPct: number; hPct: number } {
+  const layout = overviewScatterLayout(overview);
+  const corner = scatterPosition(bin.equity_bin_pct, bin.spread_bin_bps + overview.spread_bin_bps, layout);
+  return {
+    xPct: corner.xPct,
+    yPct: corner.yPct,
+    wPct: pct(overview.equity_bin_pct, layout.xRange),
+    hPct: pct(overview.spread_bin_bps, layout.yRange),
+  };
+}
+
+/**
+ * Zoom window for a clicked bin. Values are integers, so the inclusive
+ * upper bound is `bin + width - 1` — bins stay disjoint and the zoomed
+ * total_matching equals the bin's borrower_count under identical filters.
+ */
+export function binZoomViewport(
+  bin: EquitySpreadBin,
+  overview: EquitySpreadOverview,
+): EquitySpreadViewport {
+  return {
+    equity_min: bin.equity_bin_pct,
+    equity_max: Math.min(bin.equity_bin_pct + overview.equity_bin_pct - 1, overview.equity_domain_max),
+    spread_min: bin.spread_bin_bps,
+    spread_max: Math.min(bin.spread_bin_bps + overview.spread_bin_bps - 1, overview.spread_domain_max),
+  };
+}
+
+/**
+ * Density opacity for a cell: sqrt scaling keeps the long tail visible
+ * while the hottest cell saturates. Clamped to [0.18, 1].
+ */
+export function binDensityAlpha(count: number, maxCount: number): number {
+  if (!Number.isFinite(count) || !Number.isFinite(maxCount) || maxCount <= 0 || count <= 0) return 0.18;
+  return Math.min(1, 0.18 + 0.82 * Math.sqrt(Math.min(1, count / maxCount)));
 }
 
 export function analyticsHref(params: Record<string, RouteParamValue>): string {

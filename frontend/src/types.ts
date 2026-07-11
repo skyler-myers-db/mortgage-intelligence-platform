@@ -1,3 +1,5 @@
+import type { AssignmentLifecycleStatus, LeadAssignment } from './types/loanOfficer';
+
 export type SegmentCode =
   | 'itm'
   | 'listed'
@@ -145,6 +147,11 @@ export interface LeadSummary {
   assigned_to_label?: string | null;
   assigned_at?: string | null;
   assignment_expires_at?: string | null;
+  /** S2 assignment lifecycle stage of the active assignment; null/absent
+   *  when the lead is unassigned or outside the actor scope. */
+  assignment_status?: AssignmentLifecycleStatus | null;
+  /** S6: active assignment id so the row can host the lifecycle-advance control. */
+  assignment_id?: string | null;
   latest_disposition_outcome?: string | null;
   latest_disposition_at?: string | null;
   latest_callback_at?: string | null;
@@ -157,28 +164,6 @@ export interface LeadSummary {
    *  application in the connected LOS feed: loan_officer|digital|branch|
    *  call_center|unknown. null renders Unknown. */
   origination_channel?: string | null;
-}
-
-export interface SalesTeamMember {
-  email: string;
-  display_label: string;
-  role: 'loan_officer' | 'sales_manager' | 'admin';
-  region?: string | null;
-  manager_email?: string | null;
-  capacity_per_day: number;
-  active: boolean;
-}
-
-export interface LeadAssignment {
-  assignment_id: string;
-  borrower_id: string;
-  assigned_to_email: string;
-  assigned_to_label?: string | null;
-  assigned_by: string;
-  assigned_at: string;
-  expires_at?: string | null;
-  released_at?: string | null;
-  strategy: 'manual' | 'round_robin' | 'score_balanced';
 }
 
 export interface CallDisposition {
@@ -777,16 +762,6 @@ export interface RateSpreadBucket {
   borrower_count: number;
 }
 
-export interface EquitySpreadPoint {
-  borrower_id: string;
-  display_name: string;
-  segment: string;
-  state: string;
-  equity_pct: number;
-  rate_spread_bps: number;
-  opportunity_score: number;
-}
-
 export interface TopBorrowerAnalyticsRow {
   borrower_id: string;
   display_name: string;
@@ -801,7 +776,7 @@ export interface TopBorrowerAnalyticsRow {
 
 export interface EconomicsAnalyticsResponse {
   rate_spread_histogram: RateSpreadBucket[];
-  equity_vs_spread: EquitySpreadPoint[];
+  equity_spread: import('./types/economicsScatter').EquitySpreadOverview;
   top_borrowers: TopBorrowerAnalyticsRow[];
 }
 
@@ -895,3 +870,9 @@ export type {
   ZipRollup,
   ZipRollupResponse,
 } from './types/geo';
+
+export type { HomeSummary, HomeSummaryHighlight } from './types/homeSummary';
+export type * from './types/loanOfficer';
+export type * from './types/lineage';
+export type * from './types/economicsScatter';
+export type * from './types/approvalFunnel';

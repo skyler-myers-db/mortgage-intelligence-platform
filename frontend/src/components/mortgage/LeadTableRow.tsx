@@ -7,6 +7,8 @@ import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
 import { ConfidenceMeter } from './ConfidenceMeter';
 import {
+  assignmentStatusLabel,
+  assignmentStatusVariant,
   dispositionLabel,
   dispositionVariant,
   formatDateTimeShort,
@@ -15,6 +17,7 @@ import {
   relationshipLabel,
   relationshipVariant,
 } from './LeadTable.logic';
+import { AssignmentLifecycleAdvance } from './AssignmentLifecycleAdvance';
 import { RowPreview } from './LeadRowPreview';
 import { ScoreBadge } from './ScoreBadge';
 
@@ -35,6 +38,7 @@ interface LeadTableRowProps {
   onApprove: (borrowerId: string) => void;
   onReject: (borrowerId: string) => void;
   onOpenDisposition: (borrowerId: string) => void;
+  onAssignmentUpdate: (borrowerId: string, update: Partial<LeadSummary>) => void;
 }
 
 export function LeadTableRow({
@@ -54,6 +58,7 @@ export function LeadTableRow({
   onApprove,
   onReject,
   onOpenDisposition,
+  onAssignmentUpdate,
 }: LeadTableRowProps) {
   const stop = (e: ReactMouseEvent) => e.stopPropagation();
   const toggleRow = () => onToggleRow(lead, isOpen);
@@ -136,6 +141,22 @@ export function LeadTableRow({
             <Chip variant={lead.assigned_to_email ? 'success' : 'neutral'}>
               {lead.assigned_to_label ?? lead.assigned_to_email ?? 'Unassigned'}
             </Chip>
+            {lead.assigned_to_email && lead.assignment_status && (
+              <Chip
+                variant={assignmentStatusVariant(lead.assignment_status)}
+                title="Assignment lifecycle stage"
+              >
+                {assignmentStatusLabel(lead.assignment_status)}
+              </Chip>
+            )}
+            {lead.assigned_to_email && lead.assignment_status && lead.assignment_id && (
+              <AssignmentLifecycleAdvance
+                assignmentId={lead.assignment_id}
+                status={lead.assignment_status}
+                borrowerId={lead.borrower_id}
+                onAdvanced={onAssignmentUpdate}
+              />
+            )}
             {lead.assigned_at && (
               <span className="muted mono fs-11">{formatDateTimeShort(lead.assigned_at)}</span>
             )}

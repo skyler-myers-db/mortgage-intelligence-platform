@@ -56,8 +56,22 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql import _reset_sql_client_for_tests
 from backend.services.genie_client import _reset_genie_client_for_tests
+from backend.services.home_summary import (
+    HomeSummaryService,
+    get_home_summary_service,
+)
+from backend.services.home_summary import (
+    _reset_service_for_tests as _reset_home_summary_service_for_tests,
+)
+from backend.services.kpi_deltas import KpiDeltaService
+from backend.services.kpi_deltas import (
+    _reset_service_for_tests as _reset_kpi_delta_service_for_tests,
+)
 from backend.services.lakebase import (
     _reset_client_for_tests as _reset_lakebase_client_for_tests,
+)
+from backend.services.geo_assignment_overlay import (
+    get_geo_assignment_overlay_service,
 )
 from backend.services.lakebase import (
     get_lakebase_client,
@@ -86,6 +100,7 @@ from tests.fixtures.in_process_repos import (
     InProcessMockAnalyticsRepository,
     InProcessMockBorrowerRepository,
     InProcessMockGenieAnswerRepository,
+    InProcessMockGeoOverlayService,
     InProcessMockGeoRepository,
     InProcessMockLeadRepository,
     InProcessMockOfferRepository,
@@ -134,6 +149,25 @@ class _FakeLakebaseClient:
                 "active": True,
             },
         ]
+        # S2 loan-officer entity roster; ids mirror lakebase/seed_campaigns.sql.
+        self.loan_officers: list[dict[str, Any]] = [
+            {
+                "loan_officer_id": "55555555-5555-4555-8555-555555555501",
+                "email": "lo01@summit.example",
+                "display_name": "Summit LO 01",
+                "coverage_states": ["IL", "IN", "WI"],
+                "coverage_counties": ["17031", "17043", "17089"],
+                "active": True,
+            },
+            {
+                "loan_officer_id": "55555555-5555-4555-8555-555555555502",
+                "email": "lo02@summit.example",
+                "display_name": "Summit LO 02",
+                "coverage_states": ["CA", "NV"],
+                "coverage_counties": ["06037", "06059", "06073"],
+                "active": True,
+            },
+        ]
         self.reset_for_test()
 
     def reset_for_test(self) -> None:
@@ -171,6 +205,24 @@ class _FakeLakebaseClient:
         ]
         self.approvals: list[dict[str, Any]] = []
         self.audit_events: list[dict[str, Any]] = []
+        # S6 assignment outcomes reuse the feedback table pattern.
+        self.feedback: list[dict[str, Any]] = []
+
+    def _loan_officer_assignment_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        officer = next(
+            (
+                o
+                for o in self.loan_officers
+                if o["loan_officer_id"] == str(row.get("loan_officer_id") or "")
+            ),
+            None,
+        )
+        return {
+            **row,
+            "loan_officer_email": row.get("assigned_to_email"),
+            "loan_officer_name": officer.get("display_name") if officer else None,
+            "status": row.get("status") or "assigned",
+        }
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         self.executes.append((sql, params or {}))
@@ -207,6 +259,24 @@ class _FakeLakebaseClient:
             for row in self.sales_team:
                 if row["email"] == email and row["active"]:
                     return dict(row)
+            return None
+        if "FROM mip_app.loan_officers" in sql:
+            loan_officer_id = str((params or {}).get("loan_officer_id") or "")
+            for row in self.loan_officers:
+                if row["loan_officer_id"] == loan_officer_id and row["active"]:
+                    return dict(row)
+            return None
+        if "FROM mip_app.lead_assignments a" in sql and "WHERE a.assignment_id" in sql:
+            assignment_id = str((params or {}).get("assignment_id") or "")
+            for row in self.assignments:
+                if str(row["assignment_id"]) == assignment_id:
+                    return self._loan_officer_assignment_row(row)
+            return None
+        if "FROM mip_app.lead_assignments a" in sql and "WHERE a.request_id" in sql:
+            request_id = (params or {}).get("request_id")
+            for row in self.assignments:
+                if row.get("request_id") == request_id:
+                    return self._loan_officer_assignment_row(row)
             return None
         if "FROM mip_app.lead_assignments" in sql and "WHERE a.borrower_id" in sql:
             borrower_id = (params or {}).get("borrower_id")
@@ -278,6 +348,28 @@ class _FakeLakebaseClient:
                 }.get(str(row.get("status")), 5)
             )
             return dict(rows[0]) if rows else None
+        if "FROM mip_app.feedback" in sql and "WHERE request_id" in sql:
+            request_id = (params or {}).get("request_id")
+            for row in self.feedback:
+                if row.get("request_id") == request_id:
+                    return dict(row)
+            return None
+        if "approved_union" in sql:
+            # S6 funnel: distinct borrowers at-or-past 'approved' via the
+            # active assignment lifecycle UNION human approve decisions.
+            lifecycle_borrowers = {
+                row["borrower_id"]
+                for row in self.assignments
+                if row.get("released_at") is None
+                and (row.get("status") or "assigned")
+                in {"approved", "actioned", "outcome_recorded"}
+            }
+            approval_borrowers = {
+                row["borrower_id"]
+                for row in self.approvals
+                if row.get("action") == "approve"
+            }
+            return {"n": len(lifecycle_borrowers | approval_borrowers)}
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
             return None
         if "FROM mip_app.tenant_disclosures" in sql:
@@ -315,6 +407,10 @@ class _FakeLakebaseClient:
                 "created_at": datetime.now(UTC),
                 "updated_at": datetime.now(UTC),
             }
+        if "FROM mip_app.user_visits" in sql or "FROM mip_app.kpi_snapshots" in sql:
+            # S4 home summary: no recorded visits or snapshots in the fake ->
+            # the delta service resolves the honest first-visit shape.
+            return None
         return {"audit_id": uuid4(), "event_at": datetime.now(UTC)}
 
     def fetchall(
@@ -324,8 +420,102 @@ class _FakeLakebaseClient:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         self.fetchalls.append((sql, params or {}, limit))
+        if "GROUP BY COALESCE(status, 'assigned')" in sql:
+            # S6 funnel: distinct borrowers per lifecycle status (active rows).
+            by_status: dict[str, set[str]] = {}
+            for row in self.assignments:
+                if row.get("released_at") is not None:
+                    continue
+                status = str(row.get("status") or "assigned")
+                by_status.setdefault(status, set()).add(str(row["borrower_id"]))
+            return [
+                {"status": status, "n": len(borrowers)}
+                for status, borrowers in sorted(by_status.items())
+            ][:limit]
+        if "GROUP BY o.loan_officer_id" in sql:
+            # S6 funnel: per-officer active-assignment counts by status,
+            # LEFT JOIN semantics -- officers with no assignments still
+            # emit one zero row.
+            out = []
+            for officer in self.loan_officers:
+                if not officer["active"]:
+                    continue
+                counts: dict[str, int] = {}
+                for row in self.assignments:
+                    if row.get("released_at") is not None:
+                        continue
+                    if str(row.get("loan_officer_id") or "") != officer["loan_officer_id"]:
+                        continue
+                    status = str(row.get("status") or "assigned")
+                    counts[status] = counts.get(status, 0) + 1
+                if not counts:
+                    counts = {"assigned": 0}
+                for status, n in sorted(counts.items()):
+                    out.append(
+                        {
+                            "loan_officer_id": officer["loan_officer_id"],
+                            "display_name": officer["display_name"],
+                            "email": officer["email"],
+                            "status": status,
+                            "n": n,
+                        }
+                    )
+            return out[:limit]
+        if "FROM mip_app.feedback f" in sql:
+            # S6 funnel: per-officer recorded-outcome counts.
+            loan_officer_id = str((params or {}).get("loan_officer_id") or "")
+            assignment_ids = {
+                str(row["assignment_id"])
+                for row in self.assignments
+                if str(row.get("loan_officer_id") or "") == loan_officer_id
+            }
+            counts: dict[str, int] = {}
+            for row in self.feedback:
+                event_type = str(row.get("event_type") or "")
+                if not event_type.startswith("assignment_outcome_"):
+                    continue
+                if str(row.get("assignment_id")) not in assignment_ids:
+                    continue
+                counts[event_type] = counts.get(event_type, 0) + 1
+            return [
+                {"event_type": event_type, "n": n}
+                for event_type, n in sorted(counts.items())
+            ][:limit]
+        if "FROM mip_app.approvals" in sql and "ORDER BY decided_at DESC" in sql:
+            rows = [
+                {
+                    "approval_id": row.get("approval_id"),
+                    "borrower_id": row.get("borrower_id"),
+                    "offer_code": row.get("offer_code"),
+                    "actor_email": row.get("actor_email"),
+                    "assigned_to_email": row.get("assigned_to_email"),
+                    "decided_at": row.get("decided_at"),
+                }
+                for row in self.approvals
+                if row.get("action") == "approve"
+            ]
+            rows.sort(key=lambda r: r["decided_at"], reverse=True)
+            return rows[:limit]
         if "FROM mip_app.sales_team" in sql:
             return [dict(row) for row in self.sales_team if row["active"]][:limit]
+        if "FROM mip_app.loan_officers" in sql:
+            return [dict(row) for row in self.loan_officers if row["active"]][:limit]
+        if "LEFT JOIN mip_app.loan_officers o" in sql:
+            loan_officer_id = (params or {}).get("loan_officer_id")
+            borrower_id = (params or {}).get("borrower_id")
+            status = (params or {}).get("status")
+            out = []
+            for row in self.assignments:
+                if row.get("released_at") is not None:
+                    continue
+                if loan_officer_id and str(row.get("loan_officer_id") or "") != str(loan_officer_id):
+                    continue
+                if borrower_id and row.get("borrower_id") != borrower_id:
+                    continue
+                if status and (row.get("status") or "assigned") != status:
+                    continue
+                out.append(self._loan_officer_assignment_row(row))
+            return out[:limit]
         if "FROM mip_app.lead_assignments a" in sql:
             if "a.request_id" in sql:
                 request_id = (params or {}).get("request_id")
@@ -525,7 +715,18 @@ class _FakeLakebaseClient:
                 params = params or {}
                 client.executes.append((sql, params))
                 now = datetime.now(UTC)
-                if "UPDATE mip_app.lead_assignments" in sql:
+                if "UPDATE mip_app.lead_assignments" in sql and "SET status" in sql:
+                    self._last = None
+                    for row in client.assignments:
+                        if (
+                            str(row["assignment_id"]) == str(params.get("assignment_id"))
+                            and (row.get("status") or "assigned") == params.get("from_status")
+                            and row.get("released_at") is None
+                        ):
+                            row["status"] = params.get("to_status")
+                            row["status_updated_at"] = now
+                            self._last = client._loan_officer_assignment_row(row)
+                elif "UPDATE mip_app.lead_assignments" in sql:
                     for row in client.assignments:
                         if row["borrower_id"] == params.get("borrower_id") and row.get("released_at") is None:
                             row["released_at"] = now
@@ -584,9 +785,12 @@ class _FakeLakebaseClient:
                         "strategy": params.get("strategy") or "manual",
                         "request_id": request_id,
                         "assignment_scope": assignment_scope,
+                        "loan_officer_id": params.get("loan_officer_id"),
+                        "status": params.get("status") or "assigned",
+                        "status_updated_at": now,
                     }
                     client.assignments.append(row)
-                    self._last = row
+                    self._last = client._loan_officer_assignment_row(row)
                 elif "MAX(attempt_number)" in sql:
                     borrower_id = params.get("borrower_id")
                     attempts = [r["attempt_number"] for r in client.dispositions if r["borrower_id"] == borrower_id]
@@ -657,6 +861,43 @@ class _FakeLakebaseClient:
                     }
                     client.outcomes.append(row)
                     self._last = row
+                elif "INSERT INTO mip_app.feedback" in sql:
+                    request_id = params.get("request_id")
+                    assignment_id = params.get("assignment_id")
+                    event_type = str(params.get("event_type") or "")
+                    if request_id and any(
+                        row.get("request_id") == request_id for row in client.feedback
+                    ):
+                        raise RuntimeError("duplicate feedback.request_id")
+                    if (
+                        assignment_id
+                        and event_type.startswith("assignment_outcome_")
+                        and any(
+                            str(row.get("assignment_id")) == str(assignment_id)
+                            and str(row.get("event_type") or "").startswith("assignment_outcome_")
+                            for row in client.feedback
+                        )
+                    ):
+                        raise RuntimeError("duplicate assignment outcome for assignment_id")
+                    row = {
+                        "feedback_id": uuid4(),
+                        "borrower_id": params.get("borrower_id"),
+                        "event_type": event_type,
+                        "rating": params.get("rating"),
+                        "comment": params.get("comment"),
+                        "actor_email": params.get("actor_email"),
+                        "assignment_id": assignment_id,
+                        "request_id": request_id,
+                        "audit_event_id": None,
+                        "recorded_at": now,
+                    }
+                    client.feedback.append(row)
+                    self._last = row
+                elif "UPDATE mip_app.feedback" in sql:
+                    for row in client.feedback:
+                        if str(row["feedback_id"]) == str(params.get("feedback_id")):
+                            row["audit_event_id"] = params.get("audit_event_id")
+                    self._last = None
                 elif "INSERT INTO mip_app.action_audit" in sql:
                     row = {
                         "audit_id": uuid4(),
@@ -742,6 +983,18 @@ class _FakeAdminSqlClient:
     ) -> dict[str, Any] | None:
         rows = self.execute(statement, parameters)
         return rows[0] if rows else None
+
+
+class _FakeHeadlineSqlClient:
+    """Test-only warehouse stub for the KPI delta service's live headline
+    read. Returns an empty row -> all-zero headline aggregates."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute_one(self, statement: str, parameters: Any = None) -> dict[str, Any] | None:
+        self.statements.append(statement)
+        return {}
 
 
 class _FakeAssetSqlClient:
@@ -877,6 +1130,8 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_asset_metadata_service_for_tests()
     _reset_config_cache_for_tests()
     _reset_breakers_for_tests()
+    _reset_kpi_delta_service_for_tests()
+    _reset_home_summary_service_for_tests()
 
 
 def _reset_fake_dependency_state_for_tests() -> None:
@@ -943,11 +1198,21 @@ def _install_dependency_overrides() -> Iterator[None]:
     outreach = InProcessMockOutreachRepository()
     genie = InProcessMockGenieAnswerRepository()
     geo = InProcessMockGeoRepository()
+    geo_overlay = InProcessMockGeoOverlayService()
     audit = InMemoryAuditStore()
     lakebase = _FakeLakebaseClient()
     workspace = InMemoryWorkspaceStore()
     admin_rules = AdminRulesService(_FakeAdminSqlClient())
     asset_metadata = AssetMetadataService(_FakeAssetSqlClient())
+    # Home summary: real service logic over the shared fake Lakebase (no
+    # visit rows -> first-visit path) and a zero-row headline SQL stub;
+    # spawn is a no-op so generic route tests can never fire a Genie turn.
+    home_summary = HomeSummaryService(
+        delta_service=KpiDeltaService(
+            lakebase_client=lakebase, sql_client=_FakeHeadlineSqlClient()
+        ),
+        spawn=lambda work: None,
+    )
 
     app.dependency_overrides[get_portfolio_repository] = lambda: portfolio
     app.dependency_overrides[get_analytics_repository] = lambda: analytics
@@ -958,11 +1223,13 @@ def _install_dependency_overrides() -> Iterator[None]:
     app.dependency_overrides[get_outreach_repository] = lambda: outreach
     app.dependency_overrides[get_genie_answer_repository] = lambda: genie
     app.dependency_overrides[get_geo_repository] = lambda: geo
+    app.dependency_overrides[get_geo_assignment_overlay_service] = lambda: geo_overlay
     app.dependency_overrides[get_audit_store] = lambda: audit
     app.dependency_overrides[get_lakebase_client] = lambda: lakebase
     app.dependency_overrides[get_workspace_store] = lambda: workspace
     app.dependency_overrides[get_admin_rules_service] = lambda: admin_rules
     app.dependency_overrides[get_asset_metadata_service] = lambda: asset_metadata
+    app.dependency_overrides[get_home_summary_service] = lambda: home_summary
     _BASE_DEPENDENCY_OVERRIDES.clear()
     _BASE_DEPENDENCY_OVERRIDES.update(app.dependency_overrides)
     try:
