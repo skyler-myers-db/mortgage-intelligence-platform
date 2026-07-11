@@ -22,12 +22,17 @@ from fastapi import Depends
 from backend.schemas.loan_officer import (
     ASSIGNMENT_LIFECYCLE,
     AssignmentLifecycleStatus,
+    AssignmentOutcome,
     LoanOfficer,
     LoanOfficerAssignment,
+    assignment_outcome_event_type,
 )
 from backend.services.audit_lakebase_store import _build_insert_params
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
-from backend.services.lakebase_bootstrap import ensure_loan_officer_lifecycle_schema
+from backend.services.lakebase_bootstrap import (
+    ensure_assignment_outcome_schema,
+    ensure_loan_officer_lifecycle_schema,
+)
 from backend.services.sales_state import clear_sales_state_cache
 
 _AUDIT_INSERT_SQL = """
@@ -350,6 +355,133 @@ class LoanOfficerStateStore:
         clear_sales_state_cache()
         return assignment, audit_event_id
 
+    def record_outcome(
+        self,
+        *,
+        assignment_id: str,
+        outcome: AssignmentOutcome,
+        actor: str,
+        request_id: str | None = None,
+    ) -> tuple[LoanOfficerAssignment, str, str]:
+        """Record the terminal outcome for an actioned assignment.
+
+        One Lakebase transaction advances the lifecycle to
+        ``outcome_recorded``, writes the outcome as a ``mip_app.feedback``
+        row (event_type = ``assignment_outcome_<outcome>``), and appends
+        the ``LEAD_OUTCOME_RECORDED`` action_audit row. Every validation
+        runs BEFORE the transaction opens, so a rejected request writes
+        nothing. Returns ``(assignment, feedback_id, audit_event_id)``;
+        an idempotent replay returns the existing feedback row with an
+        empty audit id (no duplicate ledger entry).
+        """
+        ensure_loan_officer_lifecycle_schema(self._client)
+        ensure_assignment_outcome_schema(self._client)
+        member = self._actor_member(actor)
+        current = self._assignment_by_id(assignment_id)
+        if current is None:
+            raise KeyError(assignment_id)
+        if member.get("role") not in {"admin", "sales_manager"} and (
+            str(member.get("email") or "").lower() != current.loan_officer_email.lower()
+        ):
+            raise PermissionError("assignment outcome is outside the actor scope")
+        if request_id:
+            existing = self._feedback_for_request(request_id)
+            if existing is not None:
+                if (
+                    str(existing.get("assignment_id") or "") == current.assignment_id
+                    and existing.get("event_type") == assignment_outcome_event_type(outcome)
+                ):
+                    return current, str(existing["feedback_id"]), ""
+                raise PermissionError("request_id already belongs to a different outcome")
+        if current.released_at is not None:
+            raise IllegalStatusTransitionError("assignment is released; lifecycle is closed")
+        validate_status_transition(current.status, "outcome_recorded")
+        with self._client.transaction() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE mip_app.lead_assignments
+                SET status = %(to_status)s,
+                    status_updated_at = now()
+                WHERE assignment_id = %(assignment_id)s
+                  AND COALESCE(status, 'assigned') = %(from_status)s
+                  AND released_at IS NULL
+                RETURNING assignment_id, borrower_id, loan_officer_id,
+                          assigned_to_email AS loan_officer_email,
+                          status, assigned_by, assigned_at,
+                          status_updated_at, released_at
+                """,
+                {
+                    "assignment_id": assignment_id,
+                    "from_status": current.status,
+                    "to_status": "outcome_recorded",
+                },
+            )
+            row = dict(cur.fetchone() or {})
+            assignment = _assignment_from_row(
+                {**row, "loan_officer_name": current.loan_officer_name}
+            )
+            if assignment is None:
+                # Same optimistic guard as transition_status: a concurrent
+                # writer moved the row between the read and the UPDATE.
+                raise IllegalStatusTransitionError(
+                    f"assignment {assignment_id} is no longer in status {current.status!r}"
+                )
+            cur.execute(
+                """
+                INSERT INTO mip_app.feedback (
+                    borrower_id, event_type, actor_email,
+                    assignment_id, request_id
+                ) VALUES (
+                    %(borrower_id)s, %(event_type)s, %(actor_email)s,
+                    %(assignment_id)s, %(request_id)s
+                )
+                RETURNING feedback_id, recorded_at
+                """,
+                {
+                    "borrower_id": assignment.borrower_id,
+                    "event_type": assignment_outcome_event_type(outcome),
+                    "actor_email": actor.lower(),
+                    "assignment_id": assignment.assignment_id,
+                    "request_id": request_id,
+                },
+            )
+            feedback_row = dict(cur.fetchone() or {})
+            feedback_id = feedback_row.get("feedback_id")
+            if feedback_id is None:
+                raise LakebaseError("assignment outcome feedback insert returned no row")
+            audit_event_id = self._insert_audit_event(
+                cur,
+                actor=actor,
+                action="lead.outcome_recorded",
+                entity_type="borrower",
+                entity_id=assignment.borrower_id,
+                payload_json={
+                    "borrower_id": assignment.borrower_id,
+                    "assignment_id": assignment.assignment_id,
+                    "loan_officer_id": assignment.loan_officer_id,
+                    "assigned_to_email": assignment.loan_officer_email,
+                    "from_status": current.status,
+                    "to_status": assignment.status,
+                    "assignment_outcome": outcome,
+                    "feedback_id": str(feedback_id),
+                },
+                event_type="LEAD_OUTCOME_RECORDED",
+                request_id=request_id,
+            )
+            cur.execute(
+                """
+                UPDATE mip_app.feedback
+                SET audit_event_id = %(audit_event_id)s
+                WHERE feedback_id = %(feedback_id)s
+                """,
+                {
+                    "audit_event_id": audit_event_id,
+                    "feedback_id": feedback_id,
+                },
+            )
+        clear_sales_state_cache()
+        return assignment, str(feedback_id), audit_event_id
+
     # -- reads ------------------------------------------------------------
 
     def list_assignments(
@@ -403,6 +535,20 @@ class LoanOfficerStateStore:
                 {"assignment_id": assignment_id},
             )
         )
+
+    def _feedback_for_request(self, request_id: str | None) -> dict[str, Any] | None:
+        if not request_id:
+            return None
+        row = self._client.fetchone(
+            """
+            SELECT feedback_id, assignment_id, event_type
+            FROM mip_app.feedback
+            WHERE request_id = %(request_id)s
+            LIMIT 1
+            """,
+            {"request_id": request_id},
+        )
+        return dict(row) if row else None
 
     def _assignment_for_request(self, request_id: str | None) -> LoanOfficerAssignment | None:
         if not request_id:

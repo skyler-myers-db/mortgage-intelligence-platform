@@ -33,6 +33,29 @@ ASSIGNMENT_LIFECYCLE: tuple[AssignmentLifecycleStatus, ...] = (
     "outcome_recorded",
 )
 
+# S6 recorded outcome for an actioned assignment. This is the reviewed
+# terminal-verdict vocabulary; it is intentionally DISTINCT from the call
+# disposition outcomes (connected / callback_scheduled / ...) and from the
+# customer-system lead outcome types (closed_funded / ...).
+AssignmentOutcome = Literal["success", "no_response", "declined"]
+
+ASSIGNMENT_OUTCOMES: tuple[AssignmentOutcome, ...] = (
+    "success",
+    "no_response",
+    "declined",
+)
+
+# Outcomes reuse the existing mip_app.feedback row shape; the outcome value
+# is encoded in feedback.event_type so per-outcome counts remain a GROUP BY
+# on the indexed event_type column. Keep in sync with the partial-unique
+# index predicate in lakebase/schema.sql (S6 appendix).
+ASSIGNMENT_OUTCOME_EVENT_PREFIX = "assignment_outcome_"
+
+
+def assignment_outcome_event_type(outcome: AssignmentOutcome) -> str:
+    """Return the feedback.event_type token for a recorded outcome."""
+    return f"{ASSIGNMENT_OUTCOME_EVENT_PREFIX}{outcome}"
+
 _STATE_CODE_PATTERN = re.compile(r"^[A-Z]{2}$")
 _COUNTY_FIPS_PATTERN = re.compile(r"^\d{5}$")
 
@@ -129,4 +152,25 @@ class AssignmentStatusUpdateRequest(BaseModel):
 
 class LoanOfficerAssignmentResponse(BaseModel):
     assignment: LoanOfficerAssignment
+    audit_event_id: str | None = None
+
+
+class AssignmentOutcomeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    outcome: AssignmentOutcome
+    request_id: str | None = None
+
+    @field_validator("request_id")
+    @classmethod
+    def _request_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        return validate_public_opaque_id(value)
+
+
+class AssignmentOutcomeResponse(BaseModel):
+    assignment: LoanOfficerAssignment
+    outcome: AssignmentOutcome
+    feedback_id: str
     audit_event_id: str | None = None

@@ -190,6 +190,8 @@ class _FakeLakebaseClient:
         ]
         self.approvals: list[dict[str, Any]] = []
         self.audit_events: list[dict[str, Any]] = []
+        # S6 assignment outcomes reuse the feedback table pattern.
+        self.feedback: list[dict[str, Any]] = []
 
     def _loan_officer_assignment_row(self, row: dict[str, Any]) -> dict[str, Any]:
         officer = next(
@@ -331,6 +333,12 @@ class _FakeLakebaseClient:
                 }.get(str(row.get("status")), 5)
             )
             return dict(rows[0]) if rows else None
+        if "FROM mip_app.feedback" in sql and "WHERE request_id" in sql:
+            request_id = (params or {}).get("request_id")
+            for row in self.feedback:
+                if row.get("request_id") == request_id:
+                    return dict(row)
+            return None
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
             return None
         if "FROM mip_app.tenant_disclosures" in sql:
@@ -742,6 +750,43 @@ class _FakeLakebaseClient:
                     }
                     client.outcomes.append(row)
                     self._last = row
+                elif "INSERT INTO mip_app.feedback" in sql:
+                    request_id = params.get("request_id")
+                    assignment_id = params.get("assignment_id")
+                    event_type = str(params.get("event_type") or "")
+                    if request_id and any(
+                        row.get("request_id") == request_id for row in client.feedback
+                    ):
+                        raise RuntimeError("duplicate feedback.request_id")
+                    if (
+                        assignment_id
+                        and event_type.startswith("assignment_outcome_")
+                        and any(
+                            str(row.get("assignment_id")) == str(assignment_id)
+                            and str(row.get("event_type") or "").startswith("assignment_outcome_")
+                            for row in client.feedback
+                        )
+                    ):
+                        raise RuntimeError("duplicate assignment outcome for assignment_id")
+                    row = {
+                        "feedback_id": uuid4(),
+                        "borrower_id": params.get("borrower_id"),
+                        "event_type": event_type,
+                        "rating": params.get("rating"),
+                        "comment": params.get("comment"),
+                        "actor_email": params.get("actor_email"),
+                        "assignment_id": assignment_id,
+                        "request_id": request_id,
+                        "audit_event_id": None,
+                        "recorded_at": now,
+                    }
+                    client.feedback.append(row)
+                    self._last = row
+                elif "UPDATE mip_app.feedback" in sql:
+                    for row in client.feedback:
+                        if str(row["feedback_id"]) == str(params.get("feedback_id")):
+                            row["audit_event_id"] = params.get("audit_event_id")
+                    self._last = None
                 elif "INSERT INTO mip_app.action_audit" in sql:
                     row = {
                         "audit_id": uuid4(),
