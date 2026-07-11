@@ -1,0 +1,20 @@
+{
+  "_note": "Shared parity table for the CampaignGeoPrefill segment validators. Read by BOTH tests/unit/test_campaign_prefill.py and frontend/src/lib/campaignPrefill.test.ts so the two mirrors (backend/schemas/campaign_prefill.py and frontend/src/lib/campaignPrefill.ts) cannot drift: every input must produce the identical outcome on both sides. Semantics per case: the validator receives [input] as the segment list; expect 'skip' -> empty result, expect 'reject' -> validation error, any other value -> single-element result with that canonical code. The wire contract is STRICT (trim + lowercase + exact membership) - display-layer alias folding (heloc -> permit, space/hyphen -> underscore) is deliberately NOT part of the contract.",
+  "cases": [
+    { "input": "itm", "expect": "itm" },
+    { "input": "ITM", "expect": "itm" },
+    { "input": "  equity  ", "expect": "equity" },
+    { "input": "Retention", "expect": "retention" },
+    { "input": "second_lien_itm", "expect": "second_lien_itm" },
+    { "input": "heloc_draw_to_payback", "expect": "heloc_draw_to_payback" },
+    { "input": "heloc", "expect": "reject" },
+    { "input": "heloc_intent", "expect": "reject" },
+    { "input": "heloc intent", "expect": "reject" },
+    { "input": "second-lien-itm", "expect": "reject" },
+    { "input": "itm equity", "expect": "reject" },
+    { "input": "granite", "expect": "reject" },
+    { "input": "itm,equity", "expect": "reject" },
+    { "input": "", "expect": "skip" },
+    { "input": "   ", "expect": "skip" }
+  ]
+}

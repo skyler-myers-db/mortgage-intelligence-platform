@@ -3,8 +3,12 @@ import { useNavigate } from 'react-router-dom';
 import type { FeatureCollection } from 'geojson';
 import type { GeometryCollection, Topology } from 'topojson-specification';
 import { Icon } from '../Icon';
-import { Chip } from '../Primitives';
+import { Chip, EvidenceChip } from '../Primitives';
 import { api } from '../../lib/api';
+import type { GeoAssignmentOverlayResponse, GeoAssignmentOverlayUnit, GeoOverlayLevel } from '../../lib/api';
+import { ApiError } from '../../lib/api';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
+import { buildCampaignPrefillSearch, makeCampaignPrefill } from '../../lib/campaignPrefill';
 import { useOptionalFootprint } from '../FootprintProvider';
 import type { CountyRollup, StateRollup, ZipRollup } from '../../types';
 import {
@@ -137,6 +141,14 @@ export function USChoroplethMap({
   // backend carries `scope_note` on the response. Keyed by uppercase
   // state code.
   const [countyScopeByState, setCountyScopeByState] = useState<Record<string, string>>({});
+  // S9 assigned-vs-unattended overlay. `overlayOn` toggles the recolor +
+  // tooltip extension. `overlayData` is the response for the CURRENT drill
+  // level; `null` = not yet loaded, `overlayError` = fetch failed (degraded
+  // note in the legend, base borrower view stays functional).
+  const [overlayOn, setOverlayOn] = useState(false);
+  const [overlayData, setOverlayData] = useState<GeoAssignmentOverlayResponse | null>(null);
+  const [overlayError, setOverlayError] = useState<string | null>(null);
+  const [overlayLoading, setOverlayLoading] = useState(false);
   const navigate = useNavigate();
   const footprint = useOptionalFootprint();
 
@@ -353,6 +365,86 @@ export function USChoroplethMap({
     };
   }, [level, countyStateId, countiesByState, supportedCountyStates, countyTopologyLoader]);
 
+  // S9 overlay fetch. Re-runs on drill level + toggle. Each level maps to a
+  // distinct /api/geo/assignment-overlay call (state | county+state |
+  // zip+county_fips). A fetch failure sets an honest degraded note and
+  // leaves the base borrower view untouched -- never a silent fallback.
+  const overlayCountyFips = selected?.level === 'county' ? selected.id : null;
+  useEffect(() => {
+    if (!overlayOn) {
+      setOverlayData(null);
+      setOverlayError(null);
+      setOverlayLoading(false);
+      return;
+    }
+    // Determine the request for the current drill level. Skip until the
+    // parent geo needed for a county/zip request is known.
+    let request: { level: GeoOverlayLevel; state?: string | null; countyFips?: string | null } | null = null;
+    if (level === 'state') {
+      request = { level: 'state' };
+    } else if (level === 'county' && countyStateId) {
+      request = { level: 'county', state: countyStateId.toUpperCase() };
+    } else if (level === 'zip' && overlayCountyFips) {
+      request = { level: 'zip', countyFips: overlayCountyFips };
+    }
+    if (!request) {
+      setOverlayData(null);
+      return;
+    }
+    const controller = new AbortController();
+    let cancelled = false;
+    setOverlayLoading(true);
+    setOverlayError(null);
+    setOverlayData(null);
+    api
+      .assignmentOverlay(request.level, {
+        state: request.state,
+        countyFips: request.countyFips,
+        signal: controller.signal,
+      })
+      .then((payload) => {
+        if (cancelled) return;
+        setOverlayData(payload);
+        setOverlayLoading(false);
+      })
+      .catch((err: unknown) => {
+        if (cancelled || (err instanceof ApiError && err.aborted)) return;
+        const dep = err instanceof ApiError && err.dependency ? ` (${err.dependency})` : '';
+        setOverlayError(`Coverage overlay unavailable${dep}. Showing borrower counts.`);
+        setOverlayData(null);
+        setOverlayLoading(false);
+      });
+    return () => {
+      cancelled = true;
+      controller.abort();
+    };
+  }, [overlayOn, level, countyStateId, overlayCountyFips]);
+
+  // The overlay only drives coloring once its payload is actually loaded;
+  // while loading or degraded the base borrower coloring stays up (the
+  // legend explains the state) — toggling the overlay must never blank
+  // the map.
+  const overlayActive = overlayOn && overlayData !== null;
+
+  // Overlay units keyed by unit_id (USPS lowercase at state level to match
+  // map location ids; FIPS / ZIP verbatim otherwise) for O(1) lookup.
+  const overlayByUnit = useMemo(() => {
+    const out: Record<string, GeoAssignmentOverlayUnit> = {};
+    if (!overlayData) return out;
+    for (const unit of overlayData.units) {
+      const key = overlayData.level === 'state' ? unit.unit_id.toLowerCase() : unit.unit_id;
+      out[key] = unit;
+    }
+    return out;
+  }, [overlayData]);
+
+  // Quantile bucketer over unattended counts for the active overlay level.
+  const overlayBucketer = useMemo(() => {
+    if (!overlayData) return lvlFromCount;
+    const counts = overlayData.units.map((u) => u.unattended_count);
+    return buildQuantileBucketer(counts);
+  }, [overlayData]);
+
   const activeSegNames = useMemo(() => {
     if (!segmentFilter || segmentFilter.length === 0) return null;
     return new Set(
@@ -536,6 +628,80 @@ export function USChoroplethMap({
     return `opportunity within ${labels.join(', ')}`;
   }, [segmentFilter]);
 
+  // The state USPS code for the currently-drilled geography, resolved from
+  // whichever level the user is on. Used for the "Start campaign" prefill.
+  const activeStateCode = useMemo(() => {
+    if (selected?.level === 'state') return selected.id.toUpperCase();
+    if (countyStateId) return countyStateId.toUpperCase();
+    return null;
+  }, [selected, countyStateId]);
+
+  // S9 "Start campaign from this geography" link target. Built from the
+  // drilled unit the map can actually hold selected: a state at US level,
+  // or a county — which stays the drilled context while its ZIP grid is on
+  // screen, because a zip-tile click deep-links to the Lead Queue by the
+  // existing map contract (a persistent per-ZIP selection does not exist
+  // today; the typed prefill contract still carries `zip` for S10).
+  // Carries the current segment filter + mode and, when the overlay is
+  // loaded, the drilled unit's lead / unattended snapshot counts.
+  const campaignPrefillPath = useMemo(() => {
+    if (!activeStateCode) return null;
+    let campaignLevel: GeoOverlayLevel;
+    let countyFips: string | null = null;
+    let countyName: string | null = null;
+    let leadCount: number | null = null;
+    let unattendedCount: number | null = null;
+    if (selected?.level === 'county') {
+      campaignLevel = 'county';
+      countyFips = selected.id;
+      countyName = selected.name;
+      if (overlayOn && overlayData) {
+        if (overlayData.level === 'zip' && overlayData.county_fips === selected.id) {
+          // ZIP grid on screen: the county snapshot is the sum of its
+          // ZIP units — the totals the overlay response already carries.
+          leadCount = overlayData.total_leads;
+          unattendedCount = overlayData.total_unattended;
+        } else {
+          const unit = overlayByUnit[selected.id];
+          leadCount = unit ? unit.lead_count : null;
+          unattendedCount = unit ? unit.unattended_count : null;
+        }
+      }
+    } else if (selected?.level === 'state') {
+      campaignLevel = 'state';
+      const unit = overlayOn ? overlayByUnit[selected.id.toLowerCase()] : undefined;
+      leadCount = unit ? unit.lead_count : null;
+      unattendedCount = unit ? unit.unattended_count : null;
+    } else {
+      return null;
+    }
+    try {
+      const prefill = makeCampaignPrefill({
+        level: campaignLevel,
+        state: activeStateCode,
+        countyFips,
+        countyName,
+        segmentCodes: segmentFilter ?? [],
+        segmentMode: segmentFilterMode,
+        leadCount,
+        unattendedCount,
+      });
+      return `/portfolio-builder?${buildCampaignPrefillSearch(prefill).toString()}`;
+    } catch {
+      // A geography we can't encode coherently (e.g. a non-FIPS parent) just
+      // hides the affordance rather than shipping a broken link.
+      return null;
+    }
+  }, [
+    activeStateCode,
+    selected,
+    overlayOn,
+    overlayData,
+    overlayByUnit,
+    segmentFilter,
+    segmentFilterMode,
+  ]);
+
   // ----- STATE level: real US paths via us-atlas ---------------------------
   const renderStateLevel = () => {
     if (!usaMap) {
@@ -555,15 +721,24 @@ export function USChoroplethMap({
         const facts = factsFor(loc.id);
         const inFootprint = Boolean(supportedCountyStates[loc.id]);
         const stateFactsLoading = liveStateFacts === null;
-        const lvl = facts?.lvl ?? 1;
+        const overlayUnit = overlayActive ? overlayByUnit[loc.id] : undefined;
+        // When the overlay is loaded, the fill tier reflects UNATTENDED
+        // leads, not addressable borrowers. Base borrower facts stay in
+        // the hover.
+        const overlayLvl =
+          overlayUnit && overlayUnit.unattended_count > 0
+            ? overlayBucketer(overlayUnit.unattended_count)
+            : null;
+        const lvl = overlayActive ? overlayLvl ?? 1 : facts?.lvl ?? 1;
+        const hasFill = overlayActive ? overlayLvl !== null : Boolean(facts);
         const dim =
           activeSegNames !== null && facts && facts.topSegment && !activeSegNames.has(facts.topSegment);
         const classes = [
           'map-region',
           stateFactsLoading ? 'is-loading' : '',
-          !stateFactsLoading && facts ? 'has-data' : '',
-          !stateFactsLoading && !facts ? 'is-empty' : '',
-          facts ? `lvl-${lvl}` : '',
+          !stateFactsLoading && hasFill ? 'has-data' : '',
+          !stateFactsLoading && !hasFill ? 'is-empty' : '',
+          hasFill ? `lvl-${lvl}` : '',
           selected?.level === 'state' && selected.id === loc.id ? 'is-selected' : '',
         ]
           .filter(Boolean)
@@ -596,6 +771,18 @@ export function USChoroplethMap({
                 sourceHint: inFootprint
                   ? 'mip.gold.state_rollup'
                   : 'Outside Cotality evaluation scope',
+                overlay: overlayUnit
+                  ? {
+                      leadCount: overlayUnit.lead_count,
+                      assignedCount: overlayUnit.assigned_count,
+                      unattendedCount: overlayUnit.unattended_count,
+                      coveringOfficerCount: overlayUnit.covering_officer_count,
+                      coveringOfficers:
+                        selected?.level === 'state' && selected.id === loc.id
+                          ? overlayUnit.covering_officers
+                          : undefined,
+                    }
+                  : undefined,
               })
             }
             onMouseMove={(e) =>
@@ -753,13 +940,19 @@ export function USChoroplethMap({
           const avgScore = liveFacts?.avg_opportunity_score ?? null;
           const topSegCode = liveFacts?.top_segment_code ?? null;
           const topSegment = topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined;
+          const overlayUnit = overlayActive ? overlayByUnit[f.id] : undefined;
+          const overlayLvl =
+            overlayUnit && overlayUnit.unattended_count > 0
+              ? overlayBucketer(overlayUnit.unattended_count)
+              : null;
           const hasPositiveCount = count !== null && count > 0;
-          const lvl = hasPositiveCount ? countyBucketer(count) : null;
+          const hasFill = overlayActive ? overlayLvl !== null : hasPositiveCount;
+          const lvl = overlayActive ? overlayLvl : hasPositiveCount ? countyBucketer(count) : null;
           const classes = [
             'map-region',
             countyFactsLoading ? 'is-loading' : '',
-            !countyFactsLoading && hasPositiveCount ? 'has-data' : '',
-            !countyFactsLoading && !hasPositiveCount ? 'is-empty' : '',
+            !countyFactsLoading && hasFill ? 'has-data' : '',
+            !countyFactsLoading && !hasFill ? 'is-empty' : '',
             lvl ? `lvl-${lvl}` : '',
             selected?.level === 'county' && selected.id === f.id ? 'is-selected' : '',
           ]
@@ -787,6 +980,15 @@ export function USChoroplethMap({
                   avgScore,
                   topSegment,
                   sourceHint: 'mip.gold.county_rollup',
+                  overlay: overlayUnit
+                    ? {
+                        leadCount: overlayUnit.lead_count,
+                        assignedCount: overlayUnit.assigned_count,
+                        unattendedCount: overlayUnit.unattended_count,
+                        coveringOfficerCount: overlayUnit.covering_officer_count,
+                        coveringOfficers: overlayUnit.covering_officers,
+                      }
+                    : undefined,
                 })
               }
               onMouseMove={(e) =>
@@ -880,7 +1082,11 @@ export function USChoroplethMap({
           const avgScore = rollup.avg_opportunity_score ?? null;
           const topSegCode = rollup.top_segment_code ?? null;
           const topSegment = topSegCode ? (safeSegmentName(topSegCode) ?? undefined) : undefined;
-          const lvl = zipBucketer(count);
+          const overlayUnit = overlayActive ? overlayByUnit[rollup.zip] : undefined;
+          const unattended = overlayUnit ? overlayUnit.unattended_count : null;
+          const lvl = overlayActive
+            ? (overlayUnit ? overlayBucketer(overlayUnit.unattended_count) : 1)
+            : zipBucketer(count);
           const isSelected =
             selected?.level === 'zip' && selected.id === rollup.zip;
           const classes = [
@@ -910,6 +1116,16 @@ export function USChoroplethMap({
                   avgScore,
                   topSegment,
                   sourceHint: 'mip.gold.zip_rollup',
+                  overlay: overlayUnit
+                    ? {
+                        leadCount: overlayUnit.lead_count,
+                        assignedCount: overlayUnit.assigned_count,
+                        unattendedCount: overlayUnit.unattended_count,
+                        coveringOfficerCount: overlayUnit.covering_officer_count,
+                        coveringOfficers:
+                          isSelected ? overlayUnit.covering_officers : undefined,
+                      }
+                    : undefined,
                 })
               }
               onMouseMove={(e) =>
@@ -925,6 +1141,11 @@ export function USChoroplethMap({
               <span className="zip-tile__count">
                 {count !== null ? count.toLocaleString() : '—'}
               </span>
+              {overlayActive && (
+                <span className="zip-tile__overlay">
+                  {unattended !== null ? unattended.toLocaleString() : '—'} unattended
+                </span>
+              )}
             </button>
           );
         })}
@@ -1002,6 +1223,38 @@ export function USChoroplethMap({
               {countyScopeByState[countyStateId.toUpperCase()]}
             </Chip>
           )}
+          {/* S9 overlay toggle — two .filter-style buttons in the prototype's
+              vocabulary. "Borrowers" is the default (current behavior);
+              "Unattended leads" recolors + extends the tooltip from the
+              assigned-vs-unattended overlay. */}
+          <div className="map-overlay-toggle" role="group" aria-label="Map coloring">
+            <button
+              type="button"
+              className={`filter filter--compact ${overlayOn ? '' : 'is-active'}`}
+              aria-pressed={!overlayOn}
+              onClick={() => setOverlayOn(false)}
+            >
+              <span className="filter__value">Borrowers</span>
+            </button>
+            <button
+              type="button"
+              className={`filter filter--compact ${overlayOn ? 'is-active' : ''}`}
+              aria-pressed={overlayOn}
+              onClick={() => setOverlayOn(true)}
+            >
+              <span className="filter__value">Unattended leads</span>
+            </button>
+          </div>
+          {campaignPrefillPath && (
+            <button
+              type="button"
+              className="btn btn--primary btn--sm map-start-campaign"
+              onClick={() => navigate(campaignPrefillPath)}
+            >
+              <Icon name="send" size={12} />
+              Start campaign
+            </button>
+          )}
         </div>
       </div>
 
@@ -1029,12 +1282,29 @@ export function USChoroplethMap({
       <div className="map-legend">
         <div className="map-legend__header">
           <span>
-            Borrowers in selection{' '}
+            {overlayOn ? 'Unattended leads in selection' : 'Borrowers in selection'}{' '}
             <span className="map-legend__value">
-              {totalCount.toLocaleString()}
+              {overlayOn
+                ? overlayData
+                  ? overlayData.total_unattended.toLocaleString()
+                  : '—'
+                : totalCount.toLocaleString()}
             </span>
           </span>
         </div>
+        {overlayOn && overlayData && (
+          // S9 overlay facts: the two inputs of the subtraction, plus the
+          // evidence affordance tracing them to Lakebase + Unity Catalog.
+          <div className="map-legend__overlay-facts">
+            <span>
+              {overlayData.total_leads.toLocaleString()} leads ·{' '}
+              {overlayData.total_assigned.toLocaleString()} assigned
+            </span>
+            <EvidenceChip source={DRAWER_SOURCES.assignmentOverlay}>
+              {DRAWER_SOURCES.assignmentOverlay.short}
+            </EvidenceChip>
+          </div>
+        )}
         <div className="map-legend__bar">
           <span className="lvl-0" />
           <span className="lvl-1" />
@@ -1049,9 +1319,30 @@ export function USChoroplethMap({
         <div className="map-legend__caption">
           Colored by:{' '}
           <span className="text-2">
-            {segmentCaption}
+            {overlayOn
+              ? overlayData
+                ? `unattended leads — ${overlayData.lead_definition} minus active assignments${
+                    // N2 honesty: the overlay is segment-agnostic. When a
+                    // segment filter is shading the borrower view, say so
+                    // instead of letting the two numbers read as one scope.
+                    segmentFilter && segmentFilter.length > 0
+                      ? ' · overlay counts cover ALL marketing-eligible leads, not just the selected segments'
+                      : ''
+                  }`
+                : overlayLoading
+                  ? 'unattended leads (loading coverage overlay…)'
+                  : 'unattended leads'
+              : segmentCaption}
           </span>
         </div>
+        {overlayOn && overlayError && (
+          // Explicit degraded state: the overlay dependency is down; the
+          // base borrower view stays fully functional. Never a silent
+          // fallback.
+          <div className="map-legend__caption map-legend__caption--degraded" role="status">
+            {overlayError}
+          </div>
+        )}
         {/* Keyboard affordance: always in the DOM for screen readers,
             revealed visually by .map-wrap:focus-within when a region is
             focused. Copy matches the actual handlers — Enter/Space drill

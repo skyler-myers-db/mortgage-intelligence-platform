@@ -3391,6 +3391,44 @@ a.lineage-node__chip:focus-visible {
   overflow-wrap: anywhere;
   line-height: var(--lh-snug);
 }
+/* S9 assigned-vs-unattended overlay chrome. The corner-chip tray is
+   pointer-events:none so passive chips never eat map hovers; the overlay
+   toggle and the start-campaign action are interactive and opt back in. */
+.map-overlay-toggle {
+  display: inline-flex;
+  gap: var(--sp-1);
+  pointer-events: auto;
+}
+.map-start-campaign { pointer-events: auto; }
+/* Legend facts row: the two inputs of the unattended subtraction plus the
+   evidence chip tracing them to Lakebase + Unity Catalog.
+   font-size 10px: the map micro-copy hairline scale shared by
+   .map-legend__range / .map-legend__caption / .map-tip__row--muted — no
+   --fs-* token exists below --fs-11, and minting one for map hairline
+   text alone would invite drive-by use at body scale. */
+.map-legend__overlay-facts {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--sp-2);
+  margin-top: var(--sp-1);
+  font-size: 10px;
+  color: var(--text-3);
+}
+.map-legend__caption--degraded { color: var(--status-danger-ink); }
+[data-theme="light"] .map-legend__caption--degraded { color: var(--signal-danger); }
+/* Secondary line on a ZIP tile while the overlay is active.
+   font-size 10px: matches .zip-tile__count's hairline scale (no token
+   below --fs-11; see the .map-legend__overlay-facts note). */
+.zip-tile__overlay {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: var(--accent-ink);
+}
+/* Grouped overlay rows inside the hover tooltip. */
+.map-tip__overlay {
+  margin-top: var(--sp-1);
+}
 .map-region {
   fill: var(--map-region-fill);
   stroke: color-mix(in oklab, var(--accent) 50%, transparent);

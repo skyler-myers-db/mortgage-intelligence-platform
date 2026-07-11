@@ -25,13 +25,23 @@ from backend.schemas.geo import (
     StateRollupResponse,
     ZipRollupResponse,
 )
+from backend.schemas.geo_overlay import GeoAssignmentOverlayResponse
 from backend.schemas.lead import SEGMENT_CODE_VALUES
 from backend.schemas.portfolio import PortfolioCriteria
+from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.geo_assignment_overlay import (
+    GeoAssignmentOverlayService,
+    get_geo_assignment_overlay_service,
+)
+from backend.services.lakebase import LakebaseError
 from backend.services.repositories import GeoRepository, get_geo_repository
 
 router = APIRouter(prefix="/geo", tags=["geo"])
 
 RepoDep = Annotated[GeoRepository, Depends(get_geo_repository)]
+OverlayDep = Annotated[
+    GeoAssignmentOverlayService, Depends(get_geo_assignment_overlay_service)
+]
 _ALLOWED_SEGMENT_CODES: frozenset[str] = frozenset(SEGMENT_CODE_VALUES)
 
 
@@ -242,6 +252,58 @@ def county_rollups(
             recency=recency,
         ),
     )
+
+
+@router.get("/assignment-overlay", response_model=GeoAssignmentOverlayResponse)
+def assignment_overlay(
+    service: OverlayDep,
+    level: Annotated[
+        Literal["state", "county", "zip"],
+        Query(description="Drill level the overlay units are keyed at."),
+    ] = "state",
+    state: Annotated[
+        str | None,
+        Query(
+            min_length=2,
+            max_length=2,
+            pattern=r"^[A-Za-z]{2}$",
+            description="2-char USPS state code. Required when level=county.",
+        ),
+    ] = None,
+    county_fips: Annotated[
+        str | None,
+        Query(
+            alias="county_fips",
+            min_length=5,
+            max_length=5,
+            pattern=r"^\d{5}$",
+            description="5-char county FIPS. Required when level=zip.",
+        ),
+    ] = None,
+) -> GeoAssignmentOverlayResponse:
+    """Assigned-vs-unattended overlay for the geography drill-down.
+
+    Per unit: live marketing-eligible lead count (Unity Catalog
+    ``borrower_360``), active-assignment count (Lakebase
+    ``lead_assignments`` joined back to ``borrower_360`` geography),
+    ``unattended = leads - assigned``, and the active loan officers whose
+    ``coverage_states`` / ``coverage_counties`` arrays include the unit.
+    Both live dependencies fail visibly (503 via the resilience layer) —
+    there is no mock substitution.
+    """
+    if level == "county" and not state:
+        raise HTTPException(status_code=422, detail="state is required when level=county")
+    if level == "zip" and not county_fips:
+        raise HTTPException(status_code=422, detail="county_fips is required when level=zip")
+    try:
+        return service.overlay(level, state=state, county_fips=county_fips)
+    except LakebaseError as exc:
+        # Same fail-visible posture as the loan-officers router: the
+        # breaker path raises DependencyDownError (handled globally as
+        # 503); a bare connect/protocol failure gets the same status.
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail("lakebase")
+        ) from exc
 
 
 @router.get("/zip-rollups", response_model=ZipRollupResponse)
