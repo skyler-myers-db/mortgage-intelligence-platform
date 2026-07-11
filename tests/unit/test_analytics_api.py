@@ -211,9 +211,10 @@ def test_analytics_repository_binds_filters_without_string_interpolation() -> No
     )
     assert filtered.evidence_by_signal[0].event_count == 3
     assert any("b.state IN (:state_0, :state_1)" in sql for sql in client.statements)
-    # S8: the canonical composer binds a single code as `:segment` (the same
-    # parameter-name contract the lead + geo repositories pin).
-    assert any("array_contains(b.segment_codes, :segment)" in sql for sql in client.statements)
+    # S8 cross-review B1: the canonical composer binds inside its reserved
+    # `seg` namespace so merged sibling params (state_0, signal_type_0, a
+    # historical segment_0…) can never collide.
+    assert any("array_contains(b.segment_codes, :seg)" in sql for sql in client.statements)
     assert any("b.is_competitor_lien = TRUE" in sql for sql in client.statements)
     assert any("b.current_lender_ref = :target_lender_ref" in sql for sql in client.statements)
     assert any("e.signal_type IN (:signal_type_0, :signal_type_1)" in sql for sql in client.statements)
@@ -221,7 +222,7 @@ def test_analytics_repository_binds_filters_without_string_interpolation() -> No
     assert {
         "state_0": "IL",
         "state_1": "CA",
-        "segment": "itm",
+        "seg": "itm",
         "target_lender_ref": "Competitor B",
         "signal_type_0": "equity",
         "signal_type_1": "rate_spread",

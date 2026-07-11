@@ -78,16 +78,10 @@ class DatabricksLeadRepository:
         "LIMIT {limit}"
     )
 
-    _LIST_BY_SEGMENT_SQL_TEMPLATE = (
-        f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
-        f"FROM {qualify('gold', 'lead_population')} lp "
-        f"LEFT JOIN {qualify('gold', 'borrower_lifecycle_state')} ls "
-        "  ON ls.borrower_id = lp.borrower_id "
-        "WHERE array_contains(segment_codes, :segment) {lifecycle_clause} "
-        "ORDER BY lp.rank_overall ASC, lp.borrower_id ASC "
-        "LIMIT {limit}"
-    )
-
+    # S8 cross-review B1: the old single-segment template died when the
+    # canonical composer took over clause building; _LIST_FILTERED_SQL_TEMPLATE
+    # covers one segment and many alike, so no SQL here may hardcode a
+    # segment bind-parameter name.
     _LIST_FILTERED_SQL_TEMPLATE = (
         f"SELECT {_LEAD_POPULATION_SELECT_FROM_LP} "
         f"FROM {qualify('gold', 'lead_population')} lp "
