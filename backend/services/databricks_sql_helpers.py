@@ -38,6 +38,7 @@ _ALLOWED_RELATIONS: frozenset[tuple[str, str]] = frozenset(
         ("gold", "borrower_dossier"),
         ("gold", "borrower_lifecycle_state"),
         ("gold", "county_rollup"),
+        ("gold", "equity_spread_points"),
         ("gold", "evidence_events"),
         ("gold", "fn_build_cohort"),
         ("gold", "fn_bounded_mortgage_rate"),

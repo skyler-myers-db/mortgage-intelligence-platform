@@ -56,6 +56,17 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql import _reset_sql_client_for_tests
 from backend.services.genie_client import _reset_genie_client_for_tests
+from backend.services.home_summary import (
+    HomeSummaryService,
+    get_home_summary_service,
+)
+from backend.services.home_summary import (
+    _reset_service_for_tests as _reset_home_summary_service_for_tests,
+)
+from backend.services.kpi_deltas import KpiDeltaService
+from backend.services.kpi_deltas import (
+    _reset_service_for_tests as _reset_kpi_delta_service_for_tests,
+)
 from backend.services.lakebase import (
     _reset_client_for_tests as _reset_lakebase_client_for_tests,
 )
@@ -392,6 +403,10 @@ class _FakeLakebaseClient:
                 "created_at": datetime.now(UTC),
                 "updated_at": datetime.now(UTC),
             }
+        if "FROM mip_app.user_visits" in sql or "FROM mip_app.kpi_snapshots" in sql:
+            # S4 home summary: no recorded visits or snapshots in the fake ->
+            # the delta service resolves the honest first-visit shape.
+            return None
         return {"audit_id": uuid4(), "event_at": datetime.now(UTC)}
 
     def fetchall(
@@ -966,6 +981,18 @@ class _FakeAdminSqlClient:
         return rows[0] if rows else None
 
 
+class _FakeHeadlineSqlClient:
+    """Test-only warehouse stub for the KPI delta service's live headline
+    read. Returns an empty row -> all-zero headline aggregates."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute_one(self, statement: str, parameters: Any = None) -> dict[str, Any] | None:
+        self.statements.append(statement)
+        return {}
+
+
 class _FakeAssetSqlClient:
     """Test-only SQL client for governed asset metadata."""
 
@@ -1099,6 +1126,8 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_asset_metadata_service_for_tests()
     _reset_config_cache_for_tests()
     _reset_breakers_for_tests()
+    _reset_kpi_delta_service_for_tests()
+    _reset_home_summary_service_for_tests()
 
 
 def _reset_fake_dependency_state_for_tests() -> None:
@@ -1170,6 +1199,15 @@ def _install_dependency_overrides() -> Iterator[None]:
     workspace = InMemoryWorkspaceStore()
     admin_rules = AdminRulesService(_FakeAdminSqlClient())
     asset_metadata = AssetMetadataService(_FakeAssetSqlClient())
+    # Home summary: real service logic over the shared fake Lakebase (no
+    # visit rows -> first-visit path) and a zero-row headline SQL stub;
+    # spawn is a no-op so generic route tests can never fire a Genie turn.
+    home_summary = HomeSummaryService(
+        delta_service=KpiDeltaService(
+            lakebase_client=lakebase, sql_client=_FakeHeadlineSqlClient()
+        ),
+        spawn=lambda work: None,
+    )
 
     app.dependency_overrides[get_portfolio_repository] = lambda: portfolio
     app.dependency_overrides[get_analytics_repository] = lambda: analytics
@@ -1185,6 +1223,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     app.dependency_overrides[get_workspace_store] = lambda: workspace
     app.dependency_overrides[get_admin_rules_service] = lambda: admin_rules
     app.dependency_overrides[get_asset_metadata_service] = lambda: asset_metadata
+    app.dependency_overrides[get_home_summary_service] = lambda: home_summary
     _BASE_DEPENDENCY_OVERRIDES.clear()
     _BASE_DEPENDENCY_OVERRIDES.update(app.dependency_overrides)
     try:

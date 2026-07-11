@@ -15,7 +15,6 @@ import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { type UseWarmingUpRetryResult } from '../lib/useWarmingUpRetry';
 import { useFirstAppearance } from '../lib/useFirstAppearance';
 import type {
-  EquitySpreadPoint,
   FunnelStage,
   RateSpreadBucket,
   ScoreBucket,
@@ -31,8 +30,6 @@ import {
   leadQueueHrefForFunnelStage,
   makeTicks,
   pct,
-  prepareScatterPoints,
-  segmentClass,
   type DailyEvidenceTotal,
   type LenderFilterParams,
 } from './analytics.lib';
@@ -443,87 +440,9 @@ export function DailyEvidenceLineChart({ rows }: { rows: DailyEvidenceTotal[] })
   );
 }
 
-export function ScatterPlot({ rows }: { rows: EquitySpreadPoint[] }) {
-  if (rows.length === 0) return <div className="analytics-empty">No borrower points returned.</div>;
-  const minSpread = Math.min(-100, ...rows.map((row) => row.rate_spread_bps));
-  const maxSpread = Math.max(400, ...rows.map((row) => row.rate_spread_bps));
-  const yTicks = makeTicks(minSpread, maxSpread);
-  const xTicks = makeTicks(0, 100);
-  const points = prepareScatterPoints(rows, minSpread, maxSpread);
-  return (
-    <div className="analytics-scatter-wrap">
-      <div className="analytics-chart__plot">
-        <div className="analytics-chart__y-ticks" aria-hidden="true">
-          {[...yTicks].reverse().map((tick) => (
-            <span
-              key={tick}
-              className="analytics-chart__tick analytics-chart__tick--y"
-              style={{ '--tick-pos': `${100 - pct(tick - minSpread, maxSpread - minSpread)}%` } as CSSProperties}
-            >
-              {formatAxisTick(tick)}
-            </span>
-          ))}
-        </div>
-        <div className="analytics-chart__canvas">
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-scatter" role="img" aria-label="Equity versus rate spread grid">
-            {yTicks.map((tick) => (
-              <line
-                key={`y-${tick}`}
-                x1="0"
-                x2="100"
-                y1={100 - pct(tick - minSpread, maxSpread - minSpread)}
-                y2={100 - pct(tick - minSpread, maxSpread - minSpread)}
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            {xTicks.map((tick) => (
-              <line
-                key={`x-${tick}`}
-                x1={tick}
-                x2={tick}
-                y1="0"
-                y2="100"
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            <line x1="0" y1="50" x2="100" y2="50" className="analytics-scatter__guide" vectorEffect="non-scaling-stroke" />
-            <line x1="15" y1="0" x2="15" y2="100" className="analytics-scatter__guide" vectorEffect="non-scaling-stroke" />
-          </svg>
-          <div className="analytics-scatter__points" aria-label="Borrower drilldown points">
-            {points.map(({ row, xPct, yPct }) => (
-              <Link
-                key={row.borrower_id}
-                className={`analytics-scatter__dot ${segmentClass(row.segment)}`}
-                to={`/borrower-360/${encodeURIComponent(row.borrower_id)}`}
-                style={{
-                  '--dot-x': `${xPct}%`,
-                  '--dot-y': `${yPct}%`,
-                } as CSSProperties}
-                aria-label={`${row.display_name}: ${row.equity_pct}% equity, ${row.rate_spread_bps} bps spread, ${row.opportunity_score} score`}
-                title={`${row.display_name} · ${row.segment} · ${row.state} · ${row.equity_pct}% equity · ${row.rate_spread_bps} bps`}
-              />
-            ))}
-          </div>
-          <div className="analytics-chart__x-ticks" aria-hidden="true">
-            {xTicks.map((tick) => (
-              <span
-                key={tick}
-                className="analytics-chart__tick analytics-chart__tick--x"
-                style={{ '--tick-pos': `${tick}%` } as CSSProperties}
-              >
-                {formatAxisTick(tick)}
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
-      <div className="analytics-chart__axis analytics-chart__axis--x">Equity percent</div>
-      <div className="analytics-chart__axis analytics-chart__axis--y">Rate spread bps</div>
-    </div>
-  );
-}
+// The equity × spread scatter moved to analytics.equity-scatter.tsx (S7):
+// the overview is server-side density bins and the zoom loads capped real
+// points, so the old raw-row ScatterPlot renderer was retired with it.
 
 export function DataTable<T>({
   columns,

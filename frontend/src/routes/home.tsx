@@ -5,6 +5,7 @@ import { KpiCard } from '../components/mortgage/KpiCard';
 import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { PortfolioSummaryCard } from '../components/mortgage/PortfolioSummaryCard';
+import { LastLoginSummary } from '../components/mortgage/LastLoginSummary';
 import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
@@ -18,7 +19,7 @@ import { useApp } from '../components/AppContext';
 import { useOptionalHealth } from '../components/HealthProvider';
 import { EntradaWordmark } from '../components/brand/Entrada';
 import { formatRefreshed } from '../lib/formatRefreshed';
-import type { KpiTrend, PortfolioPreview } from '../types';
+import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
 const FUTURE_MODULES = [
@@ -33,6 +34,10 @@ export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
 
 export function requestHomePortfolioPreview(signal?: AbortSignal) {
   return api.portfolioPreview(HOME_PORTFOLIO_PREVIEW_CRITERIA, signal);
+}
+
+export function requestHomeSummary(signal?: AbortSignal) {
+  return api.homeSummary(signal);
 }
 
 /** Format a signed percent-delta for the KPI delta slot. `null` → undefined
@@ -78,6 +83,18 @@ export default function Home() {
       ? previewErrorObj.message
       : "Couldn't load portfolio KPIs."
     : null;
+
+  // S4 "since your last login" summary: additive fetch — the KPI row above
+  // owns the degraded-state story, so a warming/erroring summary simply
+  // renders nothing rather than stacking a second callout.
+  const {
+    data: summary,
+    warmingUp: summaryWarming,
+    error: summaryError,
+  } = useWarmingUpRetry<HomeSummary>(requestHomeSummary, ['home', 'summary'], {
+    queryKey: queryKeys.homeSummary(),
+  });
+  const summaryLoading = !summary && !summaryError && !summaryWarming;
 
   useEffect(() => {
     if (previousWarehouseDown.current && !warehouseDown && previewErrorObj) retryPreview();
@@ -189,6 +206,15 @@ export default function Home() {
       {/* Pinned insights (Buyer-Wow #9): operator's pinned Genie answers —
           renders nothing when empty, so it adds no chrome until used. */}
       <PinnedInsights />
+      {/* S4: personalized "since your last login" deltas over the unfiltered
+          headline set. First-visit / no-baseline states render honest
+          welcome copy; fetch errors render nothing (KPI row owns errors). */}
+      {!isDayZero && !previewWarming && (
+        <LastLoginSummary
+          summary={summary ?? null}
+          loading={summaryLoading || Boolean(summaryWarming)}
+        />
+      )}
       {!isDayZero && !previewWarming && (
         <div className="kpi-row">
           <KpiCard

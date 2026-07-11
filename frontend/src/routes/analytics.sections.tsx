@@ -48,10 +48,11 @@ import {
   FunnelBars,
   FunnelSankey,
   LineChart,
-  ScatterPlot,
   ScopeChip,
   SectionHeader,
 } from './analytics.charts';
+import { EquitySpreadScatter } from './analytics.equity-scatter';
+import type { AnalyticsQueryOptions } from '../lib/api';
 
 export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsResponse; leadParams: LenderFilterParams }) {
   return (
@@ -158,7 +159,15 @@ export function GeographyView({ data, leadParams }: { data: GeographyAnalyticsRe
   );
 }
 
-export function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
+export function EconomicsView({
+  data,
+  filters,
+  filterCriteria,
+}: {
+  data: EconomicsAnalyticsResponse;
+  filters: AnalyticsQueryOptions;
+  filterCriteria: ReadonlyArray<string | number>;
+}) {
   return (
     <>
       <div className="layoutA-grid analytics-grid analytics-grid--wide-left">
@@ -202,12 +211,11 @@ export function EconomicsView({ data }: { data: EconomicsAnalyticsResponse }) {
           </div>
         </section>
       </div>
-      <section className="surface analytics-section">
-        <div className="surface__hdr"><h2 className="h-3">Equity vs Rate Spread</h2></div>
-        <div className="surface__body analytics-chart-panel analytics-chart-panel--scatter">
-          <ScatterPlot rows={data.equity_vs_spread} />
-        </div>
-      </section>
+      <EquitySpreadScatter
+        overview={data.equity_spread}
+        filters={filters}
+        filterCriteria={filterCriteria}
+      />
     </>
   );
 }

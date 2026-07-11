@@ -9,11 +9,14 @@ from datetime import UTC, datetime
 from typing import Annotated, Literal, get_args
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import ValidationError
 
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.analytics import (
     AnalyticsFilters,
     EconomicsAnalyticsResponse,
+    EquitySpreadPointsResponse,
+    EquitySpreadViewport,
     ExecutiveAnalyticsResponse,
     GeographyAnalyticsResponse,
     SegmentAnalyticsResponse,
@@ -211,6 +214,52 @@ def geography(repo: RepoDep, filters: FiltersDep) -> GeographyAnalyticsResponse:
 @router.get("/economics", response_model=EconomicsAnalyticsResponse)
 def economics(repo: RepoDep, filters: FiltersDep) -> EconomicsAnalyticsResponse:
     return repo.economics(filters)
+
+
+def _equity_spread_viewport(
+    equity_min: Annotated[
+        int,
+        Query(ge=0, le=100, description="Zoom window lower equity bound (pct)."),
+    ] = 0,
+    equity_max: Annotated[
+        int,
+        Query(ge=0, le=100, description="Zoom window upper equity bound (pct)."),
+    ] = 100,
+    spread_min: Annotated[
+        int,
+        Query(ge=-100, le=400, description="Zoom window lower rate-spread bound (bps)."),
+    ] = -100,
+    spread_max: Annotated[
+        int,
+        Query(ge=-100, le=400, description="Zoom window upper rate-spread bound (bps)."),
+    ] = 400,
+) -> EquitySpreadViewport:
+    try:
+        return EquitySpreadViewport(
+            equity_min=equity_min,
+            equity_max=equity_max,
+            spread_min=spread_min,
+            spread_max=spread_max,
+        )
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail="viewport bounds must satisfy min <= max") from exc
+
+
+ViewportDep = Annotated[EquitySpreadViewport, Depends(_equity_spread_viewport)]
+
+
+@router.get("/economics/points", response_model=EquitySpreadPointsResponse)
+def economics_points(
+    repo: RepoDep,
+    filters: FiltersDep,
+    viewport: ViewportDep,
+) -> EquitySpreadPointsResponse:
+    """Real borrower points for a zoomed scatter viewport.
+
+    Capped server-side; the payload carries the honest pre-cap total so the
+    UI renders "showing N of M" instead of implying the page is everything.
+    """
+    return repo.economics_points(filters, viewport)
 
 
 @router.get("/segments", response_model=SegmentAnalyticsResponse)

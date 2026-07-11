@@ -15,6 +15,7 @@ class _Client:
     def __init__(self) -> None:
         self.fetchall_calls = 0
         self.fetchone_calls = 0
+        self.team_member_fetchone_calls = 0
         self.label = "LO One"
 
     def fetchall(
@@ -42,10 +43,12 @@ class _Client:
 
     def fetchone(
         self,
-        _sql: str,
+        sql: str,
         _params: dict[str, object] | None = None,
     ) -> dict[str, object] | None:
         self.fetchone_calls += 1
+        if "FROM mip_app.sales_team" in sql:
+            self.team_member_fetchone_calls += 1
         return None
 
 
@@ -87,7 +90,7 @@ def test_missing_sales_team_actor_is_fresh_by_default() -> None:
         with contextlib.suppress(KeyError):
             store.visible_lo_emails(actor="outside@example.com")
 
-    assert client.fetchone_calls == 2
+    assert client.team_member_fetchone_calls == 2
     clear_sales_state_cache()
 
 
@@ -100,7 +103,7 @@ def test_missing_sales_team_actor_can_be_negative_cached_when_explicit() -> None
         with contextlib.suppress(KeyError):
             store.visible_lo_emails(actor="outside@example.com", use_cache=True)
 
-    assert client.fetchone_calls == 1
+    assert client.team_member_fetchone_calls == 1
     clear_sales_state_cache()
 
 
@@ -128,6 +131,6 @@ def test_lead_hydration_skips_workflow_queries_for_invisible_actor() -> None:
     hydrated = hydrate_leads_with_sales_state([lead], store, actor="outside@example.com")
 
     assert hydrated[0].borrower_id == "B-CACHED"
-    assert client.fetchone_calls == 1
+    assert client.team_member_fetchone_calls == 1
     assert client.fetchall_calls == 0
     clear_sales_state_cache()

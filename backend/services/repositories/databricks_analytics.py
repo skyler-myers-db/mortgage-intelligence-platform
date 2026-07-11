@@ -15,7 +15,8 @@ from backend.schemas.analytics import (
     AnalyticsFilters,
     AnalyticsScope,
     EconomicsAnalyticsResponse,
-    EquitySpreadPoint,
+    EquitySpreadPointsResponse,
+    EquitySpreadViewport,
     EvidenceBySignalRow,
     EvidenceDailyRow,
     ExecutiveAnalyticsResponse,
@@ -39,8 +40,15 @@ from backend.schemas.analytics import (
 from backend.schemas.funnel import FunnelPopulation
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
+from backend.services.repositories.databricks_economics_scatter import (
+    economics_points as build_economics_points,
+)
+from backend.services.repositories.databricks_economics_scatter import (
+    equity_spread_overview,
+)
 from backend.services.resilience import TTLCache
 from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD, source_display_label
+from backend.services.segment_predicates import compose_segment_predicate
 
 
 def _date_text(value: object) -> str | None:
@@ -140,13 +148,16 @@ class DatabricksAnalyticsRepository:
                 state_keys.append(f":{key}")
             predicates.append(f"{alias}.state IN (" + ", ".join(state_keys) + ")")
         if filters.segment_codes:
-            segment_predicates: list[str] = []
-            for idx, code in enumerate(filters.segment_codes):
-                key = f"segment_{idx}"
-                out_params[key] = code
-                segment_predicates.append(f"array_contains({alias}.segment_codes, :{key})")
-            joiner = " AND " if filters.segment_mode == "all" else " OR "
-            predicates.append("(" + joiner.join(segment_predicates) + ")")
+            # S8: same canonical composer as the lead + geo repositories so
+            # analytics drilldowns count the identical segment cohort.
+            segment_clause, segment_params = compose_segment_predicate(
+                filters.segment_codes,
+                mode=filters.segment_mode,
+                column=f"{alias}.segment_codes",
+            )
+            if segment_clause:
+                out_params.update(segment_params)
+                predicates.append(f"({segment_clause})")
         if filters.lender_relationship == "Current customer":
             predicates.append(f"{alias}.is_current_customer = TRUE")
         elif filters.lender_relationship == "Former customer":
@@ -292,29 +303,6 @@ class DatabricksAnalyticsRepository:
         "{where} "
         "GROUP BY CAST(FLOOR(rate_spread_bps / 25) * 25 AS INT) "
         "ORDER BY spread_bucket_bps"
-    )
-
-    _EQUITY_VS_SPREAD_SQL = (
-        "SELECT "
-        "  b.borrower_id AS borrower_id, "
-        "  b.display_name AS display_name, "
-        "  CASE "
-        "    WHEN SIZE(b.segment_codes) = 0 THEN 'None / Unsegmented' "
-        "    WHEN b.segment_codes[0] = 'equity' THEN 'Home Equity Candidate' "
-        "    WHEN b.segment_codes[0] = 'itm' THEN 'Prime Refi Candidates' "
-        "    WHEN b.segment_codes[0] = 'investor' THEN 'Investor / Multi-Property' "
-        "    WHEN b.segment_codes[0] = 'listed' THEN 'Listed for Sale' "
-        "    WHEN b.segment_codes[0] = 'permit' THEN 'HELOC Intent' "
-        "    WHEN b.segment_codes[0] = 'retention' THEN 'Retention Risk' "
-        "    ELSE 'None / Unsegmented' "
-        "  END AS segment, "
-        "  b.state AS state, "
-        "  b.equity_pct AS equity_pct, "
-        "  b.rate_spread_bps AS rate_spread_bps, "
-        "  b.opportunity_score AS opportunity_score "
-        f"FROM {qualify('gold', 'borrower_360')} AS b "
-        "{where} "
-        "LIMIT 5000"
     )
 
     _TOP_BORROWERS_SQL = (
@@ -657,25 +645,7 @@ class DatabricksAnalyticsRepository:
                         extra=["b.rate_spread_bps BETWEEN -100 AND 400"],
                     )
                 ],
-                equity_vs_spread=[
-                    EquitySpreadPoint(
-                        borrower_id=str(row.get("borrower_id") or ""),
-                        display_name=str(row.get("display_name") or "Borrower"),
-                        segment=str(row.get("segment") or "None / Unsegmented"),
-                        state=str(row.get("state") or ""),
-                        equity_pct=_int(row.get("equity_pct")),
-                        rate_spread_bps=_int(row.get("rate_spread_bps")),
-                        opportunity_score=_int(row.get("opportunity_score")),
-                    )
-                    for row in self._execute_template(
-                        self._EQUITY_VS_SPREAD_SQL,
-                        analytics_filters,
-                        extra=[
-                            "b.rate_spread_bps BETWEEN -100 AND 400",
-                            "b.equity_pct BETWEEN 0 AND 100",
-                        ],
-                    )
-                ],
+                equity_spread=equity_spread_overview(self, analytics_filters),
                 top_borrowers=[
                     TopBorrowerAnalyticsRow(
                         borrower_id=str(row.get("borrower_id") or ""),
@@ -697,6 +667,13 @@ class DatabricksAnalyticsRepository:
             )
 
         return self._cached(f"analytics.economics:{_filter_key(analytics_filters)}", build)
+
+    def economics_points(
+        self,
+        filters: AnalyticsFilters | None = None,
+        viewport: EquitySpreadViewport | None = None,
+    ) -> EquitySpreadPointsResponse:
+        return build_economics_points(self, filters, viewport)
 
     def segments(self, filters: AnalyticsFilters | None = None) -> SegmentAnalyticsResponse:
         analytics_filters = _filters(filters)
