@@ -56,6 +56,17 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql import _reset_sql_client_for_tests
 from backend.services.genie_client import _reset_genie_client_for_tests
+from backend.services.home_summary import (
+    HomeSummaryService,
+    get_home_summary_service,
+)
+from backend.services.home_summary import (
+    _reset_service_for_tests as _reset_home_summary_service_for_tests,
+)
+from backend.services.kpi_deltas import KpiDeltaService
+from backend.services.kpi_deltas import (
+    _reset_service_for_tests as _reset_kpi_delta_service_for_tests,
+)
 from backend.services.lakebase import (
     _reset_client_for_tests as _reset_lakebase_client_for_tests,
 )
@@ -134,6 +145,25 @@ class _FakeLakebaseClient:
                 "active": True,
             },
         ]
+        # S2 loan-officer entity roster; ids mirror lakebase/seed_campaigns.sql.
+        self.loan_officers: list[dict[str, Any]] = [
+            {
+                "loan_officer_id": "55555555-5555-4555-8555-555555555501",
+                "email": "lo01@summit.example",
+                "display_name": "Summit LO 01",
+                "coverage_states": ["IL", "IN", "WI"],
+                "coverage_counties": ["17031", "17043", "17089"],
+                "active": True,
+            },
+            {
+                "loan_officer_id": "55555555-5555-4555-8555-555555555502",
+                "email": "lo02@summit.example",
+                "display_name": "Summit LO 02",
+                "coverage_states": ["CA", "NV"],
+                "coverage_counties": ["06037", "06059", "06073"],
+                "active": True,
+            },
+        ]
         self.reset_for_test()
 
     def reset_for_test(self) -> None:
@@ -172,6 +202,22 @@ class _FakeLakebaseClient:
         self.approvals: list[dict[str, Any]] = []
         self.audit_events: list[dict[str, Any]] = []
 
+    def _loan_officer_assignment_row(self, row: dict[str, Any]) -> dict[str, Any]:
+        officer = next(
+            (
+                o
+                for o in self.loan_officers
+                if o["loan_officer_id"] == str(row.get("loan_officer_id") or "")
+            ),
+            None,
+        )
+        return {
+            **row,
+            "loan_officer_email": row.get("assigned_to_email"),
+            "loan_officer_name": officer.get("display_name") if officer else None,
+            "status": row.get("status") or "assigned",
+        }
+
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         self.executes.append((sql, params or {}))
         if "INSERT INTO mip_app.approvals" in sql and params:
@@ -207,6 +253,24 @@ class _FakeLakebaseClient:
             for row in self.sales_team:
                 if row["email"] == email and row["active"]:
                     return dict(row)
+            return None
+        if "FROM mip_app.loan_officers" in sql:
+            loan_officer_id = str((params or {}).get("loan_officer_id") or "")
+            for row in self.loan_officers:
+                if row["loan_officer_id"] == loan_officer_id and row["active"]:
+                    return dict(row)
+            return None
+        if "FROM mip_app.lead_assignments a" in sql and "WHERE a.assignment_id" in sql:
+            assignment_id = str((params or {}).get("assignment_id") or "")
+            for row in self.assignments:
+                if str(row["assignment_id"]) == assignment_id:
+                    return self._loan_officer_assignment_row(row)
+            return None
+        if "FROM mip_app.lead_assignments a" in sql and "WHERE a.request_id" in sql:
+            request_id = (params or {}).get("request_id")
+            for row in self.assignments:
+                if row.get("request_id") == request_id:
+                    return self._loan_officer_assignment_row(row)
             return None
         if "FROM mip_app.lead_assignments" in sql and "WHERE a.borrower_id" in sql:
             borrower_id = (params or {}).get("borrower_id")
@@ -315,6 +379,10 @@ class _FakeLakebaseClient:
                 "created_at": datetime.now(UTC),
                 "updated_at": datetime.now(UTC),
             }
+        if "FROM mip_app.user_visits" in sql or "FROM mip_app.kpi_snapshots" in sql:
+            # S4 home summary: no recorded visits or snapshots in the fake ->
+            # the delta service resolves the honest first-visit shape.
+            return None
         return {"audit_id": uuid4(), "event_at": datetime.now(UTC)}
 
     def fetchall(
@@ -326,6 +394,24 @@ class _FakeLakebaseClient:
         self.fetchalls.append((sql, params or {}, limit))
         if "FROM mip_app.sales_team" in sql:
             return [dict(row) for row in self.sales_team if row["active"]][:limit]
+        if "FROM mip_app.loan_officers" in sql:
+            return [dict(row) for row in self.loan_officers if row["active"]][:limit]
+        if "LEFT JOIN mip_app.loan_officers o" in sql:
+            loan_officer_id = (params or {}).get("loan_officer_id")
+            borrower_id = (params or {}).get("borrower_id")
+            status = (params or {}).get("status")
+            out = []
+            for row in self.assignments:
+                if row.get("released_at") is not None:
+                    continue
+                if loan_officer_id and str(row.get("loan_officer_id") or "") != str(loan_officer_id):
+                    continue
+                if borrower_id and row.get("borrower_id") != borrower_id:
+                    continue
+                if status and (row.get("status") or "assigned") != status:
+                    continue
+                out.append(self._loan_officer_assignment_row(row))
+            return out[:limit]
         if "FROM mip_app.lead_assignments a" in sql:
             if "a.request_id" in sql:
                 request_id = (params or {}).get("request_id")
@@ -525,7 +611,18 @@ class _FakeLakebaseClient:
                 params = params or {}
                 client.executes.append((sql, params))
                 now = datetime.now(UTC)
-                if "UPDATE mip_app.lead_assignments" in sql:
+                if "UPDATE mip_app.lead_assignments" in sql and "SET status" in sql:
+                    self._last = None
+                    for row in client.assignments:
+                        if (
+                            str(row["assignment_id"]) == str(params.get("assignment_id"))
+                            and (row.get("status") or "assigned") == params.get("from_status")
+                            and row.get("released_at") is None
+                        ):
+                            row["status"] = params.get("to_status")
+                            row["status_updated_at"] = now
+                            self._last = client._loan_officer_assignment_row(row)
+                elif "UPDATE mip_app.lead_assignments" in sql:
                     for row in client.assignments:
                         if row["borrower_id"] == params.get("borrower_id") and row.get("released_at") is None:
                             row["released_at"] = now
@@ -584,9 +681,12 @@ class _FakeLakebaseClient:
                         "strategy": params.get("strategy") or "manual",
                         "request_id": request_id,
                         "assignment_scope": assignment_scope,
+                        "loan_officer_id": params.get("loan_officer_id"),
+                        "status": params.get("status") or "assigned",
+                        "status_updated_at": now,
                     }
                     client.assignments.append(row)
-                    self._last = row
+                    self._last = client._loan_officer_assignment_row(row)
                 elif "MAX(attempt_number)" in sql:
                     borrower_id = params.get("borrower_id")
                     attempts = [r["attempt_number"] for r in client.dispositions if r["borrower_id"] == borrower_id]
@@ -744,6 +844,18 @@ class _FakeAdminSqlClient:
         return rows[0] if rows else None
 
 
+class _FakeHeadlineSqlClient:
+    """Test-only warehouse stub for the KPI delta service's live headline
+    read. Returns an empty row -> all-zero headline aggregates."""
+
+    def __init__(self) -> None:
+        self.statements: list[str] = []
+
+    def execute_one(self, statement: str, parameters: Any = None) -> dict[str, Any] | None:
+        self.statements.append(statement)
+        return {}
+
+
 class _FakeAssetSqlClient:
     """Test-only SQL client for governed asset metadata."""
 
@@ -877,6 +989,8 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_asset_metadata_service_for_tests()
     _reset_config_cache_for_tests()
     _reset_breakers_for_tests()
+    _reset_kpi_delta_service_for_tests()
+    _reset_home_summary_service_for_tests()
 
 
 def _reset_fake_dependency_state_for_tests() -> None:
@@ -948,6 +1062,15 @@ def _install_dependency_overrides() -> Iterator[None]:
     workspace = InMemoryWorkspaceStore()
     admin_rules = AdminRulesService(_FakeAdminSqlClient())
     asset_metadata = AssetMetadataService(_FakeAssetSqlClient())
+    # Home summary: real service logic over the shared fake Lakebase (no
+    # visit rows -> first-visit path) and a zero-row headline SQL stub;
+    # spawn is a no-op so generic route tests can never fire a Genie turn.
+    home_summary = HomeSummaryService(
+        delta_service=KpiDeltaService(
+            lakebase_client=lakebase, sql_client=_FakeHeadlineSqlClient()
+        ),
+        spawn=lambda work: None,
+    )
 
     app.dependency_overrides[get_portfolio_repository] = lambda: portfolio
     app.dependency_overrides[get_analytics_repository] = lambda: analytics
@@ -963,6 +1086,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     app.dependency_overrides[get_workspace_store] = lambda: workspace
     app.dependency_overrides[get_admin_rules_service] = lambda: admin_rules
     app.dependency_overrides[get_asset_metadata_service] = lambda: asset_metadata
+    app.dependency_overrides[get_home_summary_service] = lambda: home_summary
     _BASE_DEPENDENCY_OVERRIDES.clear()
     _BASE_DEPENDENCY_OVERRIDES.update(app.dependency_overrides)
     try:

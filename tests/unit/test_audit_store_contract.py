@@ -157,6 +157,10 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "approve_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
     "reject_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
     "assign_lead": ("store.assign_lead(",),
+    # S2 loan-officer lifecycle: both writes insert the audit row inside
+    # the same Lakebase transaction as the state change.
+    "assign_loan_officer": ("store.assign_lead(",),
+    "update_assignment_status": ("store.transition_status(",),
     "distribute_leads": ("store.distribute(",),
     "log_disposition": ("store.log_disposition(",),
     "record_lead_outcome": ("store.record_outcome(",),

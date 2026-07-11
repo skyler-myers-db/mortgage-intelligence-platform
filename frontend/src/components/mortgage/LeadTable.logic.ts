@@ -81,6 +81,28 @@ export function sortValue(lead: LeadSummary, key: SortKey): string | number {
   return 0;
 }
 
+/** S2 assignment lifecycle chip copy. Stages render as short labels in the
+ *  Assigned-to column; unknown/absent statuses render nothing (caller skips). */
+export function assignmentStatusLabel(status?: string | null): string {
+  if (status === 'assigned') return 'Assigned';
+  if (status === 'contact_drafted') return 'Contact drafted';
+  if (status === 'approved') return 'Approved';
+  if (status === 'actioned') return 'Actioned';
+  if (status === 'outcome_recorded') return 'Outcome recorded';
+  return '';
+}
+
+/** Prototype chip variants only (design_files/index.html .chip--*):
+ *  entry stage neutral, in-review warning, human-approved/actioned success,
+ *  closed-loop neutral. */
+export function assignmentStatusVariant(
+  status?: string | null,
+): 'success' | 'warning' | 'neutral' {
+  if (status === 'approved' || status === 'actioned') return 'success';
+  if (status === 'contact_drafted') return 'warning';
+  return 'neutral';
+}
+
 export function outreachLabel(status?: string | null): string {
   if (!status || status === 'none') return 'None';
   return status.charAt(0).toUpperCase() + status.slice(1);

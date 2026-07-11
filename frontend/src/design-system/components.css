@@ -538,6 +538,23 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* S8 BEM extension: dismiss affordance for removable filter chips (segment
+ * intersection on the Lead Queue). The prototype `.chip` block has no
+ * dismiss element; this adds one without touching the base chip metrics. */
+.chip__remove {
+  display: inline-flex; align-items: center; justify-content: center;
+  /* 2px/1px are deliberate sub-token hairlines: the spacing scale bottoms
+   * out at --sp-1 (4px), which would visibly inflate the 3px-padded chip.
+   * The prototype's own .chip block (design_files/index.html §CHIPS) uses
+   * raw 3px/6px/8px metrics below the token scale for the same reason. */
+  margin-inline-start: 2px; padding: 1px;
+  border: none; border-radius: var(--r-pill);
+  background: transparent; color: inherit;
+  cursor: pointer; opacity: 0.65;
+  transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease;
+}
+.chip__remove:hover,
+.chip__remove:focus-visible { opacity: 1; background: var(--bg-3); }
 .chip--neutral { background: var(--bg-3); border-color: var(--line-1); color: var(--text-2); }
 .chip--success { background: var(--status-success-soft-muted); border-color: var(--status-success-line-strong); color: var(--status-success-ink); }
 .chip--warning { background: var(--status-warning-soft-muted); border-color: var(--status-warning-line-strong); color: var(--status-warning-ink); }
@@ -1572,6 +1589,57 @@ kbd {
 .borrower-story__verdict--warn { color: var(--status-warning-ink); }
 [data-theme="light"] .borrower-story__verdict--ok { color: var(--signal-success); }
 [data-theme="light"] .borrower-story__verdict--warn { color: var(--entrada-navy); }
+
+/* "Since your last login" personalized summary (Home, S4). The narrative
+   sentence carries inline evidence numbers: each figure is a button that
+   opens the EvidenceDrawer citing the kpi_snapshots baseline row + the
+   live headline metric view. */
+.login-summary__narrative {
+  font-size: var(--fs-16);
+  line-height: var(--lh-body);
+  color: var(--text-1);
+  margin: 0;
+}
+.login-summary__skeleton {
+  display: block;
+  block-size: var(--sp-5);
+  inline-size: 28rem;
+  max-inline-size: 80%;
+  border-radius: var(--r-sm);
+}
+.login-summary__num {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--chip-bg);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline dotted var(--chip-line);
+  /* 3px: baseline-hugging underline offset, below the 4px (--sp-1) spacing
+     scale; intentional raw-px hairline. */
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard);
+}
+.login-summary__num:hover { color: var(--accent-ink); text-decoration-color: var(--accent-ink); }
+.login-summary__num:focus-visible {
+  /* 2px/1px: focus-ring hairlines below the 4px token scale; intentional
+     raw px, matching .portfolio-summary__claim:focus-visible. */
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 1px;
+}
+.login-summary__num-ico { opacity: 0.6; }
+.login-summary__num-static {
+  font-family: var(--font-mono);
+  font-size: var(--fs-14);
+  font-variant-numeric: tabular-nums;
+}
 
 /* "Your book today" current-state portfolio summary (Home). Mirrors the
    borrower "Tell the story" pattern: grounded narrative + verified claim

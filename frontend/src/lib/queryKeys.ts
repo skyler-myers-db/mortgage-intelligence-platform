@@ -6,6 +6,7 @@ export const queryKeys = {
   footprint: () => ['mip', 'config', 'footprint'] as const,
   configOptions: () => ['mip', 'config', 'options'] as const,
   homePreview: () => ['mip', 'portfolio', 'preview', 'home'] as const,
+  homeSummary: () => ['mip', 'home', 'summary'] as const,
   dataEstate: () => ['mip', 'data-estate'] as const,
   assetMetadata: (assetKey: string | null | undefined) => ['mip', 'asset', assetKey ?? ''] as const,
   lineageManifest: () => ['mip', 'lineage', 'manifest'] as const,
