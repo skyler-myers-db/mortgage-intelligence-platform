@@ -23,11 +23,12 @@ from backend.api.leads import DEFAULT_LEAD_LIMIT, MAX_LEAD_LIMIT
 from backend.main import app
 from backend.schemas.lead import LeadSummary
 from backend.services.repositories.databricks_repo import DatabricksLeadRepository
+from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
 
 FUNNEL_STAGE_PREDICATES = {
     "addressable": "",
     "in_the_money": "b.in_the_money = TRUE",
-    "high_opportunity": "b.opportunity_score >= 75",
+    "high_opportunity": f"b.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}",
     "offer_recommended": (
         "b.recommended_offer_code IS NOT NULL "
         "AND b.recommended_offer_code <> 'nurture'"
@@ -43,8 +44,8 @@ FUNNEL_SNAPSHOT_EXPRESSIONS = {
         "AS in_the_money_borrowers"
     ),
     "high_opportunity": (
-        "CAST(SUM(CASE WHEN opportunity_score >= 75 THEN 1 ELSE 0 END) AS INT)       "
-        "AS high_opportunity_borrowers"
+        "CAST(SUM(CASE WHEN mip.gold.fn_high_opportunity(opportunity_score) "
+        "THEN 1 ELSE 0 END) AS INT) AS high_opportunity_borrowers"
     ),
     "offer_recommended": (
         "recommended_offer_code IS NOT NULL\n"

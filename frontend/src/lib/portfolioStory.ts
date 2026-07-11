@@ -1,9 +1,10 @@
 import type { PortfolioPreview } from '../types';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from './opportunityScore';
 
 /**
  * "Your book today" — a current-state portfolio summary for Home. A plain-
  * English orientation of the lender's book RIGHT NOW (scale, refinance
- * economics, score-75+ count, offer paths), NOT a day-over-day delta (the
+ * economics, high-opportunity count, offer paths), NOT a day-over-day delta (the
  * morning-briefing delta card was removed because the snapshot data carries no
  * honest "what changed" signal).
  *
@@ -105,7 +106,7 @@ export function buildPortfolioStory(preview: PortfolioPreview | null | undefined
   if (preview.top_tier_opportunities != null && preview.top_tier_opportunities > 0) {
     s2 += `, and ${register(
       intToken(preview.top_tier_opportunities),
-      'Opportunity score 75+ count',
+      `${HIGH_OPPORTUNITY_KPI_LABEL} count`,
       'leadScore',
       preview.top_tier_opportunities,
     )} meet the strongest opportunity-score tier`;

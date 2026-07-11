@@ -494,6 +494,18 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/uc_functions/fn_refi_propensity_heuristic.sql
+        - task_key: init_fn_high_opportunity
+          description: "CREATE OR REPLACE mip.gold.fn_high_opportunity (canonical high-opportunity threshold) before rollup/snapshot CTAS."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_high_opportunity.sql
+        - task_key: init_fn_score_band
+          description: "CREATE OR REPLACE mip.gold.fn_score_band (canonical score display bands) before semantics views."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_score_band.sql
         - task_key: init_gold_ddl
           description: "Idempotent CREATE TABLE IF NOT EXISTS for every mip.gold.* table."
           depends_on:
@@ -506,6 +518,8 @@ resources:
             - task_key: init_fn_next_best_offer
             - task_key: init_fn_loan_product_type
             - task_key: init_fn_refi_propensity_heuristic
+            - task_key: init_fn_high_opportunity
+            - task_key: init_fn_score_band
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
@@ -683,14 +697,14 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_source_readiness.sql
-        # Zero-click Genie provisioning — publish the three mip.semantics.*
-        # views so the Genie trusted_assets list in
+        # Zero-click Genie + app-serving semantics — publish the four
+        # mip.semantics.* views so the Genie trusted_assets list in
         # genie/mortgage_lead_intelligence_space.yml binds on first deploy.
         # Runs AFTER every gold table the views read from is built.
         # The DDL file is idempotent (CREATE OR REPLACE VIEW); re-running
         # this task is a byte-stable no-op at the view definition level.
         - task_key: refresh_semantics_views
-          description: "CREATE OR REPLACE the three mip.semantics.* metric views (Genie + dashboards)."
+          description: "CREATE OR REPLACE the four mip.semantics.* metric views (Genie + dashboards + headline KPIs)."
           depends_on:
             - task_key: ctas_lead_population
             - task_key: ctas_segment_population
@@ -838,6 +852,52 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_funnel_snapshot_daily.sql
+
+    # S3: daily headline-KPI snapshot. Aggregates the S1 headline measures
+    # over <catalog>.semantics.portfolio_headline_metric_view (real UC read;
+    # the view is landed by mip_refresh_scores task refresh_semantics_views)
+    # and upserts ONE row per day into Lakebase mip_app.kpi_snapshots via
+    # ON CONFLICT (snapshot_date) DO UPDATE -- re-runs refresh the day's row,
+    # never duplicate it. S4 reads this table for "since your last login"
+    # deltas via backend/services/kpi_deltas.py.
+    #
+    # Daily 05:30 America/Chicago cron (after the 04:00 lifecycle-sync slot
+    # when an operator enables both). Ships PAUSED like every scheduled job
+    # in this bundle (cost-control posture ratified on
+    # mip_sync_lifecycle_state / mip_fred_rates_ingest above); freshness on
+    # the dev cadence comes from ./scripts/deploy.sh, which runs this job
+    # after every gold refresh -- that run is also the first-install
+    # backfill, so kpi_snapshots is never empty after a zero-click deploy.
+    mip_kpi_snapshot:
+      name: mip_kpi_snapshot
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: s3-kpi-snapshots
+      max_concurrent_runs: 1
+      schedule:
+        quartz_cron_expression: "0 30 5 ? * * *"
+        timezone_id: America/Chicago
+        pause_status: PAUSED
+      environments:
+        - environment_key: py_default
+          spec:
+            # Serverless Python env version 5 -- see comment on the
+            # mip_sync_lifecycle_state job for the upgrade rationale.
+            environment_version: "5"
+            dependencies:
+              - psycopg[binary]==3.2.10
+              - databricks-sdk>=0.30.0
+      tasks:
+        - task_key: snapshot_headline_kpis
+          description: "Aggregate semantics.portfolio_headline_metric_view and upsert today's row into mip_app.kpi_snapshots."
+          environment_key: py_default
+          spark_python_task:
+            python_file: jobs/kpi_snapshot.py
+            parameters: ["--catalog=${var.uc_catalog}"]
+          max_retries: 2
+          retry_on_timeout: true
 
     # Draft-only scheduled Mortgage Growth Agent monitor runner. The job calls
     # the deployed Databricks App through its OAuth proxy and hits the

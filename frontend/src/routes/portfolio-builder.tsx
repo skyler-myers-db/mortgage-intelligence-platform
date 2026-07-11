@@ -41,6 +41,7 @@ import {
   parseStateCodesFromUrl,
   type CampaignSetupState,
 } from './portfolio-builder.logic';
+import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
 /**
  * Portfolio Builder — prototype `.surface` + `.filter-row` composition.
@@ -551,7 +552,7 @@ export default function PortfolioBuilder() {
               source={DRAWER_SOURCES.leadScore}
             />
             <KpiCard
-              label="Opportunity score 75+"
+              label={HIGH_OPPORTUNITY_KPI_LABEL}
               valueAnimated={dayZeroSafe(preview, preview?.top_tier_opportunities)}
               trend={preview?.trends?.top_tier_opportunities?.series}
               delta={formatDelta(preview?.trends?.top_tier_opportunities)}

@@ -3,6 +3,7 @@
 'use no memo';
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from 'react';
+import { HIGH_OPPORTUNITY_SCORE_LABEL } from '../lib/opportunityScore';
 import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { GlossaryTerm } from '../components/GlossaryTerm';
@@ -57,7 +58,7 @@ export function ExecutiveView({ data, leadParams }: { data: ExecutiveAnalyticsRe
     <>
       <div className="kpi-row">
         <KpiCard label="Addressable Borrowers" value={fmt(data.totals.addressable_borrowers)} delta={data.totals.snapshot_date ?? undefined} deltaDir="flat" />
-        <KpiCard label="Refi Economics" value={fmt(data.totals.in_the_money_borrowers)} delta={`${fmt(data.totals.high_opportunity_borrowers)} score 75+`} deltaDir="up" />
+        <KpiCard label="Refi Economics" value={fmt(data.totals.in_the_money_borrowers)} delta={`${fmt(data.totals.high_opportunity_borrowers)} score ${HIGH_OPPORTUNITY_SCORE_LABEL}`} deltaDir="up" />
         <KpiCard label="Primary Offer Paths" value={fmt(data.totals.offer_recommended_borrowers)} delta="Offer path assigned" deltaDir="up" />
         <KpiCard label="Approved Outreach" value={fmt(data.totals.approved_borrowers)} delta={`${fmt(data.totals.actioned_borrowers)} actioned`} deltaDir="flat" />
       </div>

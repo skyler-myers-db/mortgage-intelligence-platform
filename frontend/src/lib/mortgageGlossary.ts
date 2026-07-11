@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { HIGH_OPPORTUNITY_SCORE_LABEL } from './opportunityScore';
 
 export type GlossaryCategory =
   | 'property'
@@ -212,10 +213,10 @@ export const mortgageGlossary = {
   opportunityScore: {
     id: 'opportunity-score',
     term: 'Opportunity score',
-    aliases: ['lead score', 'score 75+'],
+    aliases: ['lead score', `score ${HIGH_OPPORTUNITY_SCORE_LABEL}`],
     category: 'scoring',
     short: 'A 0-100 ranking score for how strong the borrower is for review.',
-    appContext: 'A score of 75+ marks strong review candidates. It is broader than refinance economics because it also considers intent, fit, relationship, and evidence.',
+    appContext: `A score of ${HIGH_OPPORTUNITY_SCORE_LABEL} marks strong review candidates. It is broader than refinance economics because it also considers intent, fit, relationship, and evidence.`,
     proof: 'Proof shows the five weighted sub-scores that make up the final score.',
   },
   ownerLink: {
