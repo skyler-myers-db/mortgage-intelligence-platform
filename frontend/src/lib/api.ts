@@ -18,6 +18,9 @@ import type {
   GeographyAnalyticsResponse,
   LeadSummary,
   LeadAssignment,
+  LoanOfficer,
+  LoanOfficerAssignment,
+  AssignmentLifecycleStatus,
   OfferRecommendation,
   PortfolioCreateResponse,
   PortfolioPreview,
@@ -1096,6 +1099,49 @@ export const api = {
 
   salesTeam: (signal?: AbortSignal) =>
     getJson<SalesTeamMember[]>('/api/sales/team', signal),
+
+  loanOfficers: (signal?: AbortSignal) =>
+    getJson<LoanOfficer[]>('/api/loan-officers', signal),
+
+  loanOfficerAssignments: (
+    filters: { loanOfficerId?: string; borrowerId?: string; status?: AssignmentLifecycleStatus } = {},
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    if (filters.loanOfficerId) params.set('loan_officer_id', filters.loanOfficerId);
+    if (filters.borrowerId) params.set('borrower_id', filters.borrowerId);
+    if (filters.status) params.set('status', filters.status);
+    const query = params.toString();
+    return getJson<LoanOfficerAssignment[]>(
+      `/api/loan-officers/assignments${query ? `?${query}` : ''}`,
+      signal,
+    );
+  },
+
+  assignLoanOfficer: (borrowerId: string, loanOfficerId: string, signal?: AbortSignal) =>
+    postJson<{ assignment: LoanOfficerAssignment; audit_event_id?: string | null }, {
+      borrower_id: string;
+      loan_officer_id: string;
+      request_id: string;
+    }>(
+      '/api/loan-officers/assignments',
+      { borrower_id: borrowerId, loan_officer_id: loanOfficerId, request_id: _newRequestId() },
+      signal,
+    ),
+
+  updateAssignmentStatus: (
+    assignmentId: string,
+    status: AssignmentLifecycleStatus,
+    signal?: AbortSignal,
+  ) =>
+    patchJson<{ assignment: LoanOfficerAssignment; audit_event_id?: string | null }, {
+      status: AssignmentLifecycleStatus;
+      request_id: string;
+    }>(
+      `/api/loan-officers/assignments/${encodeURIComponent(assignmentId)}/status`,
+      { status, request_id: _newRequestId() },
+      signal,
+    ),
 
   assignLead: (
     borrowerId: string,

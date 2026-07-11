@@ -30,6 +30,37 @@ DO UPDATE SET
     active = EXCLUDED.active,
     updated_at = now();
 
+-- Loan officers (S2) ---------------------------------------------------
+-- Six synthetic officers joined to the sales_team roster above by email.
+-- Fixed UUIDs keep re-runs a no-op. Coverage is two-letter state codes
+-- plus 5-digit county FIPS -- arrays only, no geometry. Display names
+-- mirror sales_team.display_label so assignment chips and the sales
+-- surfaces never show two names for the same person.
+INSERT INTO mip_app.loan_officers (
+    loan_officer_id, email, display_name, coverage_states, coverage_counties, active
+)
+VALUES
+    ('55555555-5555-4555-8555-555555555501', 'lo01@summit.example', 'Summit LO 01',
+     ARRAY['IL','IN','WI']::TEXT[], ARRAY['17031','17043','17089']::TEXT[], true),
+    ('55555555-5555-4555-8555-555555555502', 'lo02@summit.example', 'Summit LO 02',
+     ARRAY['CA','NV']::TEXT[], ARRAY['06037','06059','06073']::TEXT[], true),
+    ('55555555-5555-4555-8555-555555555503', 'lo03@summit.example', 'Summit LO 03',
+     ARRAY['TX','OK']::TEXT[], ARRAY['48029','48113','48201']::TEXT[], true),
+    ('55555555-5555-4555-8555-555555555504', 'lo04@summit.example', 'Summit LO 04',
+     ARRAY['FL','GA']::TEXT[], ARRAY['12011','12086','12099']::TEXT[], true),
+    ('55555555-5555-4555-8555-555555555505', 'lo05@summit.example', 'Summit LO 05',
+     ARRAY['WA','OR','ID']::TEXT[], ARRAY['53033','53053','53061']::TEXT[], true),
+    ('55555555-5555-4555-8555-555555555506', 'lo06@summit.example', 'Summit LO 06',
+     ARRAY['CO','UT','AZ']::TEXT[], ARRAY['08005','08031','08059']::TEXT[], true)
+ON CONFLICT (loan_officer_id)
+DO UPDATE SET
+    email = EXCLUDED.email,
+    display_name = EXCLUDED.display_name,
+    coverage_states = EXCLUDED.coverage_states,
+    coverage_counties = EXCLUDED.coverage_counties,
+    active = EXCLUDED.active,
+    updated_at = now();
+
 -- Campaigns -----------------------------------------------------------
 -- Fixed UUIDs so re-running the seed is a no-op and so approvals below
 -- can reference the same campaigns without a lookup.

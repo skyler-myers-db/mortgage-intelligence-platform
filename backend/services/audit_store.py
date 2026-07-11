@@ -218,6 +218,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "assigned_at",
         "expires_at",
         "strategy",
+        # S2 loan-officer entity + assignment lifecycle. ``loan_officer_id``
+        # is a server-issued UUID; ``from_status``/``to_status`` are the
+        # reviewed lifecycle stages, never free text.
+        "loan_officer_id",
+        "from_status",
+        "to_status",
         "assigned_count",
         "lo_email",
         "lo_emails",
@@ -386,12 +392,16 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "disposition_id",
         "lead_outcome_id",
         "activation_id",
+        "loan_officer_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset({"variant_name", "recommended_offer", "workspace_offer_code"})
 _INTERNAL_STAFF_EMAIL_METADATA_KEYS: frozenset[str] = frozenset({"assigned_to_email", "assigned_by", "lo_email"})
 _INTERNAL_STAFF_EMAIL_LIST_METADATA_KEYS: frozenset[str] = frozenset({"lo_emails"})
 _SALES_STRATEGIES: frozenset[str] = frozenset({"manual", "round_robin", "score_balanced"})
+_ASSIGNMENT_LIFECYCLE_STATUSES: frozenset[str] = frozenset(
+    {"assigned", "contact_drafted", "approved", "actioned", "outcome_recorded"}
+)
 _SALES_DISPOSITION_OUTCOMES: frozenset[str] = frozenset(
     {"called_no_answer", "called_left_voicemail", "connected", "callback_scheduled", "application_started", "not_interested", "not_now", "dead"}
 )
@@ -784,6 +794,9 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"outcome"}):
         if value is not None and str(value) not in _SALES_DISPOSITION_OUTCOMES:
             raise AuditMetadataValueViolation(field, "must be a governed call disposition outcome")
+    for field, value in _metadata_values_for(metadata, {"from_status", "to_status"}):
+        if value is not None and str(value) not in _ASSIGNMENT_LIFECYCLE_STATUSES:
+            raise AuditMetadataValueViolation(field, "must be a governed assignment lifecycle status")
     for field, value in _metadata_values_for(metadata, {"lead_outcome_type"}):
         if value is not None and str(value) not in _LEAD_OUTCOME_TYPES:
             raise AuditMetadataValueViolation(field, "must be a governed lead outcome type")

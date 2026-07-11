@@ -25,6 +25,7 @@ from backend.schemas.sales import (
 )
 from backend.services.audit_lakebase_store import _build_insert_params
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.lakebase_bootstrap import ensure_loan_officer_lifecycle_schema
 from backend.services.pii_redaction import normalize_public_lender_ref, scrub_free_text
 from backend.services.resilience import TTLCache
 
@@ -182,6 +183,7 @@ def _assignment_from_row(row: dict[str, Any] | None) -> LeadAssignment | None:
         expires_at=row.get("expires_at"),
         released_at=row.get("released_at"),
         strategy=row.get("strategy") or "manual",
+        status=row.get("status") or "assigned",
     )
 
 
@@ -475,7 +477,8 @@ class SalesStateStore:
                 """
                 SELECT a.assignment_id, a.borrower_id, a.assigned_to_email,
                        t.display_label AS assigned_to_label, a.assigned_by,
-                       a.assigned_at, a.expires_at, a.released_at, a.strategy
+                       a.assigned_at, a.expires_at, a.released_at, a.strategy,
+                       COALESCE(a.status, 'assigned') AS status
                 FROM mip_app.lead_assignments a
                 LEFT JOIN mip_app.sales_team t ON t.email = a.assigned_to_email
                 WHERE a.borrower_id = %(borrower_id)s
@@ -525,7 +528,8 @@ class SalesStateStore:
             """
             SELECT a.assignment_id, a.borrower_id, a.assigned_to_email,
                    t.display_label AS assigned_to_label, a.assigned_by,
-                   a.assigned_at, a.expires_at, a.released_at, a.strategy
+                   a.assigned_at, a.expires_at, a.released_at, a.strategy,
+                   COALESCE(a.status, 'assigned') AS status
             FROM mip_app.lead_assignments a
             LEFT JOIN mip_app.sales_team t ON t.email = a.assigned_to_email
             WHERE a.borrower_id = ANY(%(borrower_ids)s)
@@ -558,7 +562,8 @@ class SalesStateStore:
             SELECT a.assignment_id, a.borrower_id, a.assigned_to_email,
                    t.display_label AS assigned_to_label, a.assigned_by,
                    a.assigned_at, a.expires_at, a.released_at, a.strategy,
-                   COALESCE(a.assignment_scope, 'single') AS assignment_scope
+                   COALESCE(a.assignment_scope, 'single') AS assignment_scope,
+                   COALESCE(a.status, 'assigned') AS status
             FROM mip_app.lead_assignments a
             LEFT JOIN mip_app.sales_team t ON t.email = a.assigned_to_email
             WHERE a.request_id = %(request_id)s
@@ -1488,6 +1493,10 @@ def hydrate_leads_with_sales_state(
     if not leads:
         return leads
     store = store or SalesStateStore()
+    # S2 backstop: assignment queries read the lifecycle ``status`` column,
+    # which the deploy-time migrate job owns; this per-process memoized
+    # bootstrap covers instances running new code before the next migrate.
+    ensure_loan_officer_lifecycle_schema(store._client)
     visible_lo_emails: set[str] | None
     if actor is None:
         visible_lo_emails = set()
@@ -1521,6 +1530,7 @@ def hydrate_leads_with_sales_state(
                     "assigned_to_label": assignment.assigned_to_label,
                     "assigned_at": assignment.assigned_at,
                     "assignment_expires_at": assignment.expires_at,
+                    "assignment_status": assignment.status,
                 }
             )
         disposition = dispositions.get(lead.borrower_id)

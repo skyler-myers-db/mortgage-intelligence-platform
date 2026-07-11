@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import EvidenceEvent
+from backend.schemas.loan_officer import AssignmentLifecycleStatus
 from backend.schemas.why import WhyPanel
 
 SegmentCode = Literal[
@@ -171,6 +172,9 @@ class LeadSummary(BaseModel):
     assigned_to_label: str | None = None
     assigned_at: datetime | None = None
     assignment_expires_at: datetime | None = None
+    # S2 assignment lifecycle stage for the active assignment; None when
+    # the lead is unassigned (or the assignment is outside the actor scope).
+    assignment_status: AssignmentLifecycleStatus | None = None
     latest_disposition_outcome: str | None = None
     latest_disposition_at: datetime | None = None
     latest_callback_at: datetime | None = None
