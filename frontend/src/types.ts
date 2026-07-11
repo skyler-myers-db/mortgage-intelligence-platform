@@ -148,6 +148,8 @@ export interface LeadSummary {
   /** S2 assignment lifecycle stage of the active assignment; null/absent
    *  when the lead is unassigned or outside the actor scope. */
   assignment_status?: AssignmentLifecycleStatus | null;
+  /** S6: active assignment id so the row can host the lifecycle-advance control. */
+  assignment_id?: string | null;
   latest_disposition_outcome?: string | null;
   latest_disposition_at?: string | null;
   latest_callback_at?: string | null;

@@ -175,6 +175,9 @@ class LeadSummary(BaseModel):
     # S2 assignment lifecycle stage for the active assignment; None when
     # the lead is unassigned (or the assignment is outside the actor scope).
     assignment_status: AssignmentLifecycleStatus | None = None
+    # S6: the active assignment id so the row can host the lifecycle-advance
+    # control (PATCH status / record outcome) without a second lookup.
+    assignment_id: str | None = None
     latest_disposition_outcome: str | None = None
     latest_disposition_at: datetime | None = None
     latest_callback_at: datetime | None = None

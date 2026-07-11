@@ -1540,6 +1540,7 @@ def hydrate_leads_with_sales_state(
                     "assigned_at": assignment.assigned_at,
                     "assignment_expires_at": assignment.expires_at,
                     "assignment_status": assignment.status,
+                    "assignment_id": assignment.assignment_id,
                 }
             )
         disposition = dispositions.get(lead.borrower_id)

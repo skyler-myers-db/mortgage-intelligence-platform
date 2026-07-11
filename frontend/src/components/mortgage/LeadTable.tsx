@@ -356,7 +356,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     })
     .map((l) => l.borrower_id);
 
-  function applyAssignmentOverrides(assignments: { borrower_id: string; assigned_to_email: string; assigned_to_label?: string | null; assigned_at: string; expires_at?: string | null; status?: LeadSummary['assignment_status'] }[]) {
+  function applyAssignmentOverrides(assignments: { borrower_id: string; assigned_to_email: string; assigned_to_label?: string | null; assigned_at: string; expires_at?: string | null; status?: LeadSummary['assignment_status']; assignment_id?: string | null }[]) {
     setSalesOverrides((current) => {
       const next = { ...current };
       assignments.forEach((assignment) => {
@@ -368,10 +368,20 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           assignment_expires_at: assignment.expires_at ?? null,
           // S2 lifecycle chip: a fresh assignment always enters at 'assigned'.
           assignment_status: assignment.status ?? 'assigned',
+          // S6: keep the assignment id so the row's lifecycle-advance
+          // control can PATCH without a second lookup.
+          assignment_id: assignment.assignment_id ?? null,
         };
       });
       return next;
     });
+  }
+
+  function applyLeadUpdate(borrowerId: string, update: Partial<LeadSummary>) {
+    setSalesOverrides((current) => ({
+      ...current,
+      [borrowerId]: { ...(current[borrowerId] ?? {}), ...update },
+    }));
   }
 
   async function assignSelected(mode: 'selected-lo' | 'round-robin') {
@@ -929,6 +939,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                   onApprove={(borrowerId) => void approveLead(borrowerId)}
                   onReject={setPendingReject}
                   onOpenDisposition={openDisposition}
+                  onAssignmentUpdate={applyLeadUpdate}
                 />
               );
             })}

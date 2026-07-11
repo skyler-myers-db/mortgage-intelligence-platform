@@ -92,7 +92,7 @@ function renderRow(root: Root, lead: LeadSummary) {
         onToggleSelect={noop}
         onApprove={noop}
         onReject={noop}
-        onOpenDisposition={noop}
+        onOpenDisposition={noop}        onAssignmentUpdate={noop}
       />,
     );
   });
