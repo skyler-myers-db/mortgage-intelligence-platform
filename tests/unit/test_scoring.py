@@ -21,8 +21,10 @@ from backend.services.scoring import (
     bounded_mortgage_rate,
     estimated_upb,
     estimated_upb_confidence_band,
+    is_high_opportunity,
     lead_score,
     refi_propensity_heuristic,
+    score_band,
     source_display_label,
 )
 
@@ -50,6 +52,12 @@ REFI_PROPENSITY_FIXTURE_PATH = (
     / "fixtures"
     / "refi_propensity_heuristic_golden.json"
 )
+SCORE_BAND_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "score_band_golden.json"
+)
 
 with FIXTURE_PATH.open() as f:
     GOLDEN_CASES = json.load(f)
@@ -62,6 +70,9 @@ with ESTIMATED_UPB_BAND_FIXTURE_PATH.open() as f:
 
 with REFI_PROPENSITY_FIXTURE_PATH.open() as f:
     REFI_PROPENSITY_CASES = json.load(f)["cases"]
+
+with SCORE_BAND_FIXTURE_PATH.open() as f:
+    SCORE_BAND_CASES = json.load(f)["cases"]
 
 
 @pytest.mark.parametrize(
@@ -226,3 +237,48 @@ def test_lead_score_matches_exact_oracle_on_half_boundary_lattice() -> None:
 def test_itm_ruleset_label_matches_lineage_drawer_title() -> None:
     """The RowPreview chip should not imply a different source than the drawer."""
     assert source_display_label("rules.itm_v3") == "Refinance economics screen"
+
+
+# ---------------------------------------------------------------------------
+# Canonical high-opportunity threshold + score display bands (S1).
+# Golden fixture pins the 74/75/76, 84/85/86, and 64/65/66 edge triplets for
+# mip.gold.fn_high_opportunity / fn_score_band; the SQL side validates the
+# same rows via sql/fixtures/score_band_validation.sql.
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    "case",
+    SCORE_BAND_CASES,
+    ids=[c["id"] for c in SCORE_BAND_CASES],
+)
+def test_score_band_matches_golden_fixture(case: dict) -> None:
+    """Every golden case must produce the SQL-pinned band + threshold flag."""
+    score = case["inputs"]["opportunity_score"]
+    assert score_band(score) == case["expected_band"], case.get("note", "")
+    assert is_high_opportunity(score) == case["expected_high_opportunity"], case.get("note", "")
+
+
+def test_score_band_constants_are_importable_from_services() -> None:
+    """Threshold + band edges are exported beside the other scoring mirrors."""
+    from backend.services import scoring
+
+    assert isinstance(scoring.HIGH_OPPORTUNITY_THRESHOLD, int)
+    assert isinstance(scoring.SCORE_BAND_HIGH_MIN, int)
+    assert isinstance(scoring.SCORE_BAND_MED_MIN, int)
+    assert callable(scoring.score_band)
+    assert callable(scoring.is_high_opportunity)
+
+
+def test_score_band_covers_full_score_range() -> None:
+    """Sweep 0..100: bands partition the range and the threshold flag is
+    monotonic (once high-opportunity, always high-opportunity above it)."""
+    seen_bands = set()
+    previous_flag = False
+    for score in range(0, 101):
+        band = score_band(score)
+        assert band in {"low", "med", "high"}
+        seen_bands.add(band)
+        flag = is_high_opportunity(score)
+        assert flag >= previous_flag, "threshold flag must never flip back off as score rises"
+        previous_flag = flag
+    assert seen_bands == {"low", "med", "high"}
+

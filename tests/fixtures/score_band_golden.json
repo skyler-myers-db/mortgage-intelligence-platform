@@ -1,0 +1,89 @@
+{
+  "contract": "Canonical opportunity-score threshold + display bands (S1). Pins mip.gold.fn_high_opportunity (>= 75) and mip.gold.fn_score_band (high >= 85, med >= 65, else low; NULL coerces to low/FALSE) against backend/services/scoring.py::is_high_opportunity/score_band and frontend/src/lib/opportunityScore.ts::scoreBand. Edge triplets 74/75/76, 84/85/86, 64/65/66 lock every inclusive boundary.",
+  "cases": [
+    {
+      "id": "case_01_null_score",
+      "inputs": {"opportunity_score": null},
+      "expected_band": "low",
+      "expected_high_opportunity": false,
+      "note": "NULL coerces to 0: 'no signal == no opportunity' -- low band, never high-opportunity."
+    },
+    {
+      "id": "case_02_zero",
+      "inputs": {"opportunity_score": 0},
+      "expected_band": "low",
+      "expected_high_opportunity": false,
+      "note": "Floor of the score range."
+    },
+    {
+      "id": "case_03_band_edge_64",
+      "inputs": {"opportunity_score": 64},
+      "expected_band": "low",
+      "expected_high_opportunity": false,
+      "note": "One below the med edge stays low."
+    },
+    {
+      "id": "case_04_band_edge_65",
+      "inputs": {"opportunity_score": 65},
+      "expected_band": "med",
+      "expected_high_opportunity": false,
+      "note": "Med edge is inclusive (>= 65)."
+    },
+    {
+      "id": "case_05_band_edge_66",
+      "inputs": {"opportunity_score": 66},
+      "expected_band": "med",
+      "expected_high_opportunity": false,
+      "note": "One above the med edge."
+    },
+    {
+      "id": "case_06_threshold_edge_74",
+      "inputs": {"opportunity_score": 74},
+      "expected_band": "med",
+      "expected_high_opportunity": false,
+      "note": "One below the high-opportunity threshold is NOT a top-tier opportunity."
+    },
+    {
+      "id": "case_07_threshold_edge_75",
+      "inputs": {"opportunity_score": 75},
+      "expected_band": "med",
+      "expected_high_opportunity": true,
+      "note": "High-opportunity threshold is inclusive (>= 75). Band stays med: 75 < 85 -- the threshold and the display bands are separate governed constants."
+    },
+    {
+      "id": "case_08_threshold_edge_76",
+      "inputs": {"opportunity_score": 76},
+      "expected_band": "med",
+      "expected_high_opportunity": true,
+      "note": "One above the threshold."
+    },
+    {
+      "id": "case_09_band_edge_84",
+      "inputs": {"opportunity_score": 84},
+      "expected_band": "med",
+      "expected_high_opportunity": true,
+      "note": "One below the high band edge stays med while still high-opportunity."
+    },
+    {
+      "id": "case_10_band_edge_85",
+      "inputs": {"opportunity_score": 85},
+      "expected_band": "high",
+      "expected_high_opportunity": true,
+      "note": "High band edge is inclusive (>= 85)."
+    },
+    {
+      "id": "case_11_band_edge_86",
+      "inputs": {"opportunity_score": 86},
+      "expected_band": "high",
+      "expected_high_opportunity": true,
+      "note": "One above the high band edge."
+    },
+    {
+      "id": "case_12_ceiling_100",
+      "inputs": {"opportunity_score": 100},
+      "expected_band": "high",
+      "expected_high_opportunity": true,
+      "note": "Ceiling of the score range."
+    }
+  ]
+}

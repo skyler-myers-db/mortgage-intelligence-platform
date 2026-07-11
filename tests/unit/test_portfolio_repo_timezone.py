@@ -529,7 +529,9 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
         )
     )
 
-    preview_index = next(i for i, sql in enumerate(client.statements) if "borrower_360" in sql)
+    preview_index = next(
+        i for i, sql in enumerate(client.statements) if "portfolio_headline_metric_view" in sql
+    )
     preview_sql = client.statements[preview_index]
     preview_params = client.parameters[preview_index]
     assert "is_owner_occupied = TRUE" in preview_sql
