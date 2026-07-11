@@ -9,8 +9,10 @@ Covers the three pieces the integration suite can't pin cheaply:
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
@@ -98,10 +100,31 @@ class TestBuildOverlayUnits:
         assert [u.unit_id for u in units] == ["IL"]
         assert units[0].unattended_count == 3
 
-    def test_assigned_capped_at_lead_count(self) -> None:
-        units = build_overlay_units({"60611": 4}, {"60611": 9}, {})
+    def test_assigned_capped_at_lead_count_and_divergence_logged(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        # The clamp keeps the response shape sane, but assigned > leads is
+        # a data bug (both sides share one eligibility predicate) — it must
+        # surface as a WARNING, not vanish into the min()/max().
+        with caplog.at_level(
+            logging.WARNING, logger="backend.services.geo_assignment_overlay"
+        ):
+            units = build_overlay_units({"60611": 4}, {"60611": 9}, {})
         assert units[0].assigned_count == 4
         assert units[0].unattended_count == 0
+        assert any(
+            "geo_overlay_assigned_exceeds_leads" in record.getMessage()
+            for record in caplog.records
+        )
+
+    def test_no_divergence_warning_on_normal_counts(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        with caplog.at_level(
+            logging.WARNING, logger="backend.services.geo_assignment_overlay"
+        ):
+            build_overlay_units({"IL": 10}, {"IL": 10}, {})
+        assert not caplog.records
 
     def test_sorted_by_lead_count_then_unit_id(self) -> None:
         units = build_overlay_units({"B": 10, "A": 10, "C": 90}, {}, {})

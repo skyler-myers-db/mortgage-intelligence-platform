@@ -102,18 +102,36 @@ def build_overlay_units(
     borrower has no marketing-eligible row cannot create a unit (and
     cannot make ``unattended`` negative). Sorted by lead_count DESC then
     unit_id, matching the rollup endpoints' ordering contract.
+
+    Both sides of the subtraction share one eligibility predicate, so
+    ``assigned > leads`` should be impossible; the clamp is a response-
+    shape guarantee, not an expected path. When it fires anyway (a data
+    bug — e.g. the two queries reading different snapshots) it logs a
+    WARNING so the divergence surfaces in ops telemetry instead of
+    silently vanishing into the clamp.
     """
-    units = [
-        GeoAssignmentOverlayUnit(
-            unit_id=unit_id,
-            lead_count=leads,
-            assigned_count=min(assigned_counts.get(unit_id, 0), leads),
-            unattended_count=max(leads - assigned_counts.get(unit_id, 0), 0),
-            covering_officer_count=len(officer_names_by_unit.get(unit_id, [])),
-            covering_officers=officer_names_by_unit.get(unit_id, []),
+    units: list[GeoAssignmentOverlayUnit] = []
+    for unit_id, leads in lead_counts.items():
+        assigned = assigned_counts.get(unit_id, 0)
+        if assigned > leads:
+            emit(
+                log,
+                "geo_overlay_assigned_exceeds_leads",
+                level=logging.WARNING,
+                unit_id=unit_id,
+                lead_count=leads,
+                assigned_count=assigned,
+            )
+        units.append(
+            GeoAssignmentOverlayUnit(
+                unit_id=unit_id,
+                lead_count=leads,
+                assigned_count=min(assigned, leads),
+                unattended_count=max(leads - assigned, 0),
+                covering_officer_count=len(officer_names_by_unit.get(unit_id, [])),
+                covering_officers=officer_names_by_unit.get(unit_id, []),
+            )
         )
-        for unit_id, leads in lead_counts.items()
-    ]
     units.sort(key=lambda u: (-u.lead_count, u.unit_id))
     return units
 
@@ -157,6 +175,10 @@ class GeoAssignmentOverlayService:
         "GROUP BY county_fips_5"
     )
 
+    # ANY_VALUE(state) is safe ONLY because the WHERE clause scopes the
+    # query to a single county_fips_5 — every row in a county shares one
+    # state, so any value IS the value. Do not reuse this projection in a
+    # multi-county query.
     _LEAD_ZIP_SQL = (
         "SELECT zip AS unit_id, CAST(COUNT(*) AS INT) AS lead_count, "
         "  ANY_VALUE(state) AS state "

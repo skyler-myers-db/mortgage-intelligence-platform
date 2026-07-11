@@ -76,12 +76,14 @@ export function CampaignPrefillBanner({
             </Chip>
           )}
           {prefill.leadCount !== null && (
+            // The overlay snapshot is segment-agnostic; the "(all segments)"
+            // qualifier keeps these counts honest next to the segment chips.
             <Chip variant="neutral" icon="db">
               {prefill.leadCount.toLocaleString()} leads
               {prefill.unattendedCount !== null
                 ? ` · ${prefill.unattendedCount.toLocaleString()} unattended`
                 : ''}{' '}
-              at draft time
+              at draft time (all segments)
             </Chip>
           )}
         </div>

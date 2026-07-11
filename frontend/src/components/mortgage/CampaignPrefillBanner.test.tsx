@@ -28,7 +28,9 @@ describe('CampaignPrefillBanner', () => {
     expect(html).toContain('ZIP 60611 — draft context');
     // Honest copy: county/ZIP + segments are context until S10 ships.
     expect(html).toContain('when the campaign builder (S10) ships');
-    expect(html).toContain('64 leads · 43 unattended at draft time');
+    // Overlay snapshot counts are segment-agnostic; the qualifier is pinned
+    // so the counts can never read as segment-filtered next to the segment chips.
+    expect(html).toContain('64 leads · 43 unattended at draft time (all segments)');
   });
 
   it('renders a single honest line for a malformed marked link', () => {

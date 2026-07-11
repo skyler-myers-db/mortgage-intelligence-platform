@@ -1321,7 +1321,14 @@ export function USChoroplethMap({
           <span className="text-2">
             {overlayOn
               ? overlayData
-                ? `unattended leads — ${overlayData.lead_definition} minus active assignments`
+                ? `unattended leads — ${overlayData.lead_definition} minus active assignments${
+                    // N2 honesty: the overlay is segment-agnostic. When a
+                    // segment filter is shading the borrower view, say so
+                    // instead of letting the two numbers read as one scope.
+                    segmentFilter && segmentFilter.length > 0
+                      ? ' · overlay counts cover ALL marketing-eligible leads, not just the selected segments'
+                      : ''
+                  }`
                 : overlayLoading
                   ? 'unattended leads (loading coverage overlay…)'
                   : 'unattended leads'

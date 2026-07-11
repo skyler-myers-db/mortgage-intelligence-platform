@@ -3293,7 +3293,11 @@ kbd {
 }
 .map-start-campaign { pointer-events: auto; }
 /* Legend facts row: the two inputs of the unattended subtraction plus the
-   evidence chip tracing them to Lakebase + Unity Catalog. */
+   evidence chip tracing them to Lakebase + Unity Catalog.
+   font-size 10px: the map micro-copy hairline scale shared by
+   .map-legend__range / .map-legend__caption / .map-tip__row--muted — no
+   --fs-* token exists below --fs-11, and minting one for map hairline
+   text alone would invite drive-by use at body scale. */
 .map-legend__overlay-facts {
   display: flex;
   align-items: center;
@@ -3305,7 +3309,9 @@ kbd {
 }
 .map-legend__caption--degraded { color: var(--status-danger-ink); }
 [data-theme="light"] .map-legend__caption--degraded { color: var(--signal-danger); }
-/* Secondary line on a ZIP tile while the overlay is active. */
+/* Secondary line on a ZIP tile while the overlay is active.
+   font-size 10px: matches .zip-tile__count's hairline scale (no token
+   below --fs-11; see the .map-legend__overlay-facts note). */
 .zip-tile__overlay {
   font-family: var(--font-mono);
   font-size: 10px;
