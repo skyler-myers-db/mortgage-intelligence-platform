@@ -663,6 +663,19 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/transformations/gold_zip_rollup.sql
+        # S7 economics scatter: precomputed equity x rate-spread points with
+        # density-bin coordinates. Reads gold.borrower_360 only (plus the
+        # shared refresh anchor), so it parallelizes with the sibling
+        # rollups behind the borrower_360 freshness sentinel. Uses
+        # mip.gold.fn_score_band, which init_gold_ddl already orders after.
+        - task_key: ctas_equity_spread_points
+          description: "Rebuild mip.gold.equity_spread_points via CTAS (S7 economics scatter surface)."
+          depends_on:
+            - task_key: assert_borrower_360_fresh
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/transformations/gold_equity_spread_points.sql
         - task_key: ctas_state_top_segment
           description: "Rebuild mip.gold.state_top_segment via CTAS (per-state dominant SegmentCode + share %)."
           depends_on:
