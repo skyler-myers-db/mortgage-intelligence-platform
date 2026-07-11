@@ -59,6 +59,9 @@ from backend.services.genie_client import _reset_genie_client_for_tests
 from backend.services.lakebase import (
     _reset_client_for_tests as _reset_lakebase_client_for_tests,
 )
+from backend.services.geo_assignment_overlay import (
+    get_geo_assignment_overlay_service,
+)
 from backend.services.lakebase import (
     get_lakebase_client,
 )
@@ -86,6 +89,7 @@ from tests.fixtures.in_process_repos import (
     InProcessMockAnalyticsRepository,
     InProcessMockBorrowerRepository,
     InProcessMockGenieAnswerRepository,
+    InProcessMockGeoOverlayService,
     InProcessMockGeoRepository,
     InProcessMockLeadRepository,
     InProcessMockOfferRepository,
@@ -1028,6 +1032,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     outreach = InProcessMockOutreachRepository()
     genie = InProcessMockGenieAnswerRepository()
     geo = InProcessMockGeoRepository()
+    geo_overlay = InProcessMockGeoOverlayService()
     audit = InMemoryAuditStore()
     lakebase = _FakeLakebaseClient()
     workspace = InMemoryWorkspaceStore()
@@ -1043,6 +1048,7 @@ def _install_dependency_overrides() -> Iterator[None]:
     app.dependency_overrides[get_outreach_repository] = lambda: outreach
     app.dependency_overrides[get_genie_answer_repository] = lambda: genie
     app.dependency_overrides[get_geo_repository] = lambda: geo
+    app.dependency_overrides[get_geo_assignment_overlay_service] = lambda: geo_overlay
     app.dependency_overrides[get_audit_store] = lambda: audit
     app.dependency_overrides[get_lakebase_client] = lambda: lakebase
     app.dependency_overrides[get_workspace_store] = lambda: workspace

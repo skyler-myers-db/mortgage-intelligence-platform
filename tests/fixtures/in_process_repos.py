@@ -47,6 +47,10 @@ from backend.schemas.geo import (
     ZipRollup,
     ZipRollupResponse,
 )
+from backend.schemas.geo_overlay import (
+    GeoAssignmentOverlayResponse,
+    GeoAssignmentOverlayUnit,
+)
 from backend.schemas.lead import Borrower360, LeadSummary, SegmentSummary
 from backend.schemas.portfolio import (
     CampaignListResponse,
@@ -899,4 +903,54 @@ class InProcessMockGeoRepository:
             fips_5=normalised,
             rollups=list(_FIXTURE_ZIP_ROLLUPS.get(normalised, [])),
             snapshot_date="2026-04-22",
+        )
+
+
+# Fixture overlay units aligned with the rollup fixtures above so a
+# TestClient can drill state -> county (IL) -> zip (17031) and see a
+# coherent assigned/unattended story at every level.
+_FIXTURE_OVERLAY_UNITS: dict[tuple[str, str], list[GeoAssignmentOverlayUnit]] = {
+    ("state", "_"): [
+        GeoAssignmentOverlayUnit(unit_id="IL", lead_count=1240, assigned_count=140, unattended_count=1100, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+        GeoAssignmentOverlayUnit(unit_id="CA", lead_count=610, assigned_count=25, unattended_count=585, covering_officer_count=1, covering_officers=["Summit LO 02"]),
+        GeoAssignmentOverlayUnit(unit_id="TX", lead_count=505, assigned_count=0, unattended_count=505, covering_officer_count=1, covering_officers=["Summit LO 03"]),
+    ],
+    ("county", "IL"): [
+        GeoAssignmentOverlayUnit(unit_id="17031", lead_count=410, assigned_count=96, unattended_count=314, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+        GeoAssignmentOverlayUnit(unit_id="17043", lead_count=210, assigned_count=30, unattended_count=180, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+        GeoAssignmentOverlayUnit(unit_id="17097", lead_count=180, assigned_count=14, unattended_count=166, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+    ],
+    ("zip", "17031"): [
+        GeoAssignmentOverlayUnit(unit_id="60611", lead_count=64, assigned_count=21, unattended_count=43, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+        GeoAssignmentOverlayUnit(unit_id="60647", lead_count=48, assigned_count=9, unattended_count=39, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+        GeoAssignmentOverlayUnit(unit_id="60613", lead_count=39, assigned_count=0, unattended_count=39, covering_officer_count=1, covering_officers=["Summit LO 01"]),
+    ],
+}
+
+
+class InProcessMockGeoOverlayService:
+    """Test fixture implementing the ``GeoAssignmentOverlayService`` read."""
+
+    def overlay(
+        self,
+        level: str,
+        *,
+        state: str | None = None,
+        county_fips: str | None = None,
+    ) -> GeoAssignmentOverlayResponse:
+        if level == "county":
+            key = ("county", str(state or "").upper()[:2])
+        elif level == "zip":
+            key = ("zip", str(county_fips or "")[:5])
+        else:
+            key = ("state", "_")
+        units = list(_FIXTURE_OVERLAY_UNITS.get(key, []))
+        return GeoAssignmentOverlayResponse(
+            level=level,  # type: ignore[arg-type]
+            state=(state or ("IL" if level == "zip" and units else None)),
+            county_fips=county_fips if level == "zip" else None,
+            units=units,
+            total_leads=sum(u.lead_count for u in units),
+            total_assigned=sum(u.assigned_count for u in units),
+            total_unattended=sum(u.unattended_count for u in units),
         )
