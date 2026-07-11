@@ -2097,6 +2097,33 @@ kbd {
   gap: var(--sp-2);
   margin-top: var(--sp-4);
 }
+/* Drawer tabs — the prototype's `.layout-tabs` tablist pattern
+   (design_files/Module 0 Prototype.html:958-960) placed under the
+   drawer header: Overview keeps the source explanation, Lineage renders
+   the governed manifest chain. */
+.drawer__tabs {
+  display: flex;
+  gap: var(--sp-1);
+  margin: var(--sp-3) var(--sp-5) 0;
+  padding: var(--sp-1);
+  background: var(--bg-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+}
+.drawer__tab {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  padding: var(--sp-1) var(--sp-3);
+  font-size: var(--fs-12);
+  font-family: var(--font-sans);
+  font-weight: 500;
+  color: var(--text-2);
+  cursor: pointer;
+  border-radius: var(--r-sm);
+}
+.drawer__tab:hover { color: var(--text-1); }
+.drawer__tab.is-active { background: var(--accent-soft); color: var(--accent); }
 .source-summary,
 .source-card {
   padding: var(--sp-3);
@@ -2297,6 +2324,19 @@ kbd {
   overflow-wrap: anywhere;
 }
 .lineage-node__meta { font-size: var(--fs-11); color: var(--text-3); margin-top: var(--sp-1); }
+/* Manifest lineage chips — prototype `.chip` carrying a full UC FQN, so it
+   must wrap instead of the base chip's nowrap; anchors deep-link to Catalog
+   Explorer with the accent hover the drawer's link nodes already use. */
+.lineage-node__chip {
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-decoration: none;
+}
+a.lineage-node__chip:hover,
+a.lineage-node__chip:focus-visible {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
 .lineage-node--signal {
   display: grid;
   /* fit-content(50%): the value column only takes the width it needs and

@@ -871,4 +871,5 @@ export type {
 
 export type { HomeSummary, HomeSummaryHighlight } from './types/homeSummary';
 export type * from './types/loanOfficer';
+export type * from './types/lineage';
 export type * from './types/economicsScatter';
