@@ -543,6 +543,10 @@ kbd {
  * dismiss element; this adds one without touching the base chip metrics. */
 .chip__remove {
   display: inline-flex; align-items: center; justify-content: center;
+  /* 2px/1px are deliberate sub-token hairlines: the spacing scale bottoms
+   * out at --sp-1 (4px), which would visibly inflate the 3px-padded chip.
+   * The prototype's own .chip block (design_files/index.html §CHIPS) uses
+   * raw 3px/6px/8px metrics below the token scale for the same reason. */
   margin-inline-start: 2px; padding: 1px;
   border: none; border-radius: var(--r-pill);
   background: transparent; color: inherit;

@@ -369,6 +369,33 @@ describe('LeadQueue filter state', () => {
     );
   });
 
+  it('states the real zero for an empty all-mode intersection instead of an error (S8)', async () => {
+    // Cross-review N8: the e2e assumes a non-empty live intersection, so the
+    // empty-intersection copy is pinned here with a mocked zero-row result.
+    retryMocks.state.data = { leads: [], totalMatching: 0, returnedRows: 0, truncatedAt: null };
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter
+            initialEntries={['/lead-queue?segment_codes=refi_propensity,investor&segment_mode=all']}
+          >
+            <LeadQueue />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+    await settle();
+
+    expect(document.body.textContent).toContain(
+      '0 borrowers sit in every selected segment — a real intersection result from the live query, not an error.',
+    );
+    // Honest state, not a failure state: no alert callout, chips still removable.
+    expect(document.querySelector('[role="alert"]')).toBeNull();
+    expect(
+      document.querySelector('button[aria-label="Remove Investor / Multi-Property segment filter"]'),
+    ).toBeTruthy();
+  });
+
   it('renders one removable chip per intersected segment and recomputes on removal (S8)', async () => {
     await act(async () => {
       root.render(
