@@ -1573,6 +1573,53 @@ kbd {
 [data-theme="light"] .borrower-story__verdict--ok { color: var(--signal-success); }
 [data-theme="light"] .borrower-story__verdict--warn { color: var(--entrada-navy); }
 
+/* "Since your last login" personalized summary (Home, S4). The narrative
+   sentence carries inline evidence numbers: each figure is a button that
+   opens the EvidenceDrawer citing the kpi_snapshots baseline row + the
+   live headline metric view. */
+.login-summary__narrative {
+  font-size: var(--fs-16);
+  line-height: var(--lh-body);
+  color: var(--text-1);
+  margin: 0;
+}
+.login-summary__skeleton {
+  display: block;
+  block-size: 20px;
+  inline-size: 28rem;
+  max-inline-size: 80%;
+  border-radius: var(--r-sm);
+}
+.login-summary__num {
+  display: inline-flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-1);
+  border: 0;
+  border-radius: var(--r-sm);
+  background: var(--chip-bg);
+  color: var(--text-1);
+  font-family: var(--font-mono);
+  font-size: var(--fs-14);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-decoration: underline dotted var(--chip-line);
+  text-underline-offset: 3px;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-standard);
+}
+.login-summary__num:hover { color: var(--accent-ink); text-decoration-color: var(--accent-ink); }
+.login-summary__num:focus-visible {
+  outline: 2px solid var(--accent-ink);
+  outline-offset: 1px;
+}
+.login-summary__num-ico { opacity: 0.6; }
+.login-summary__num-static {
+  font-family: var(--font-mono);
+  font-size: var(--fs-14);
+  font-variant-numeric: tabular-nums;
+}
+
 /* "Your book today" current-state portfolio summary (Home). Mirrors the
    borrower "Tell the story" pattern: grounded narrative + verified claim
    chips, each linking to its gold-table source drawer. */
