@@ -787,6 +787,24 @@ def test_create_rejects_same_request_for_different_campaign_without_write(monkey
     assert client.preview_calls == preview_calls_after_first
 
 
+def test_campaign_replay_treats_malformed_stored_response_as_dependency_failure():
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    with pytest.raises(LakebaseError, match="idempotency record is invalid"):
+        repo._campaign_create_response_from_idempotency_row(
+            {
+                "request_payload_hash": "expected",
+                "campaign_id": "11111111-1111-4111-8111-111111111115",
+                "creation_response": {
+                    "name": "Illinois refinance review",
+                    "marketable_population": "not-a-number",
+                    "household_summary": {},
+                },
+            },
+            expected_payload_hash="expected",
+        )
+
+
 def test_create_resolves_concurrent_insert_with_bounded_separate_lookup(monkeypatch):
     client = _StubClient(_preview_row(), [])
     lakebase = _ConcurrentCampaignLakebase(publish_after_lookup=3)

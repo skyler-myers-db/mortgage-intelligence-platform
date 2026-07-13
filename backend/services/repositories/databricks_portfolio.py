@@ -932,23 +932,28 @@ class DatabricksPortfolioRepository:
         stored_hash = str(row.get("request_payload_hash") or "")
         if stored_hash != expected_payload_hash:
             raise ValueError("Idempotency-Key already belongs to a different campaign payload")
-        response_data = self._json_value(row.get("creation_response"), {})
-        if not isinstance(response_data, dict):
-            raise LakebaseError("campaign idempotency record is missing its creation response")
-        campaign_id = str(row.get("campaign_id") or "")
-        if not campaign_id:
-            raise LakebaseError("campaign idempotency record is missing its campaign id")
-        household = HouseholdDedupSummary.model_validate(
-            response_data.get("household_summary") or {}
-        )
-        return PortfolioCreateResponse(
-            portfolio_id=campaign_id,
-            campaign_id=campaign_id,
-            name=str(response_data.get("name") or "Portfolio build"),
-            marketable_population=int(response_data.get("marketable_population") or 0),
-            household_summary=household,
-            audit_event_id=str(row["audit_id"]) if row.get("audit_id") else None,
-        )
+        try:
+            response_data = self._json_value(row.get("creation_response"), {})
+            if not isinstance(response_data, dict):
+                raise LakebaseError("campaign idempotency record is missing its creation response")
+            campaign_id = str(row.get("campaign_id") or "")
+            if not campaign_id:
+                raise LakebaseError("campaign idempotency record is missing its campaign id")
+            household = HouseholdDedupSummary.model_validate(
+                response_data.get("household_summary") or {}
+            )
+            return PortfolioCreateResponse(
+                portfolio_id=campaign_id,
+                campaign_id=campaign_id,
+                name=str(response_data.get("name") or "Portfolio build"),
+                marketable_population=int(response_data.get("marketable_population") or 0),
+                household_summary=household,
+                audit_event_id=str(row["audit_id"]) if row.get("audit_id") else None,
+            )
+        except LakebaseError:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise LakebaseError("campaign idempotency record is invalid") from exc
 
     @staticmethod
     def _json_value(value: Any, fallback: Any) -> Any:

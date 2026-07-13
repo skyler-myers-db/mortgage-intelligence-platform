@@ -14,9 +14,7 @@ interface AuditRollupRow {
   event_count: number;
 }
 
-type AdminAuditEvent = AuditEventRow & {
-  correlation_id?: string | null;
-};
+type AdminAuditEvent = AuditEventRow;
 
 interface AuditCopyState {
   value: string;

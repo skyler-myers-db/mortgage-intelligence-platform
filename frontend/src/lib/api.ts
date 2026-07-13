@@ -192,6 +192,7 @@ export interface AuditEventRow {
   subject_clip?: string | null;
   subject_segment?: string | null;
   request_id?: string | null;
+  correlation_id?: string | null;
 }
 
 /**
