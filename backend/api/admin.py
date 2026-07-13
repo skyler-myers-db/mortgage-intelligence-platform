@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import logging
 from datetime import UTC, datetime, timedelta
+from functools import wraps
+from threading import Lock
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -44,10 +46,12 @@ from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.capabilities import probe_capabilities
 from backend.services.capability_request import collect_request_live_capability_statuses
 from backend.services.databricks_jobs import (
+    MANAGED_JOBS,
     DatabricksJobOperations,
     JobAlreadyRunningError,
     JobLaunch,
     JobOperationError,
+    ManagedJobKey,
     ManagedJobRun,
     ManagedJobStatus,
     get_job_operations,
@@ -77,6 +81,9 @@ _JOB_COOLDOWN_SECONDS: dict[str, int] = {
     "silver_refresh": 60 * 60,
     "gold_refresh": 30 * 60,
     "lifecycle_sync": 5 * 60,
+}
+_OPERATION_LOCKS: dict[ManagedJobKey, Lock] = {
+    key: Lock() for key in MANAGED_JOBS
 }
 
 
@@ -193,6 +200,66 @@ def _write_operation_audit(
         request_id=payload.request_id,
         payload_json=_operation_payload(payload, **(extra or {})),
     )
+
+
+def _serialize_operation_launch(function: Any) -> Any:
+    """Serialize each job's check/audit/launch decision in this app process."""
+
+    @wraps(function)
+    def wrapped(payload: AdminOperationRunRequest, *args: Any, **kwargs: Any) -> Any:
+        with _OPERATION_LOCKS[payload.job_key]:
+            return function(payload, *args, **kwargs)
+
+    return wrapped
+
+
+def _operation_audit_event(
+    audit: AuditStore,
+    *,
+    actor: str,
+    payload: AdminOperationRunRequest,
+    event_type: str,
+) -> Any | None:
+    rows = audit.list(
+        limit=20,
+        actor=actor,
+        entity_id=payload.job_key,
+        event_type=event_type,
+    )
+    return next((row for row in rows if row.request_id == payload.request_id), None)
+
+
+def _assert_operation_replay_matches(
+    event: Any,
+    payload: AdminOperationRunRequest,
+) -> None:
+    metadata = event.payload_json or {}
+    expected_reason = payload.reason or "operator_refresh"
+    if metadata.get("job_key") != payload.job_key or metadata.get("reason") != expected_reason:
+        raise HTTPException(
+            status_code=409,
+            detail="request_id already belongs to a different admin operation",
+        )
+
+
+def _operation_response_from_audit(
+    event: Any,
+    payload: AdminOperationRunRequest,
+) -> dict[str, object]:
+    metadata = event.payload_json or {}
+    definition = MANAGED_JOBS[payload.job_key]
+    return {
+        "accepted": True,
+        "key": payload.job_key,
+        "label": definition.label,
+        "job_name": str(metadata.get("job_name") or definition.job_name),
+        "job_id": int(metadata.get("job_id") or 0),
+        "run_id": (
+            None if metadata.get("run_id") is None else int(metadata["run_id"])
+        ),
+        "run_page_url": None,
+        "audit_event_id": event.event_id,
+    }
 
 
 @router.get("/rules", response_model=AdminRulesResponse)
@@ -325,6 +392,7 @@ def get_operations(_actor: AdminDep, jobs: JobsDep, audit: AdminAuditDep) -> dic
     status_code=202,
     responses=JSON_CONTENT_TYPE_RESPONSE,
 )
+@_serialize_operation_launch
 def post_operation_run(
     payload: AdminOperationRunRequest,
     _actor: AdminDep,
@@ -343,46 +411,82 @@ def post_operation_run(
         raise HTTPException(status_code=400, detail="confirmation required")
 
     try:
-        cooldown_s = _cooldown_remaining_s(audit, payload.job_key)
+        accepted_replay = _operation_audit_event(
+            audit,
+            actor=_actor,
+            payload=payload,
+            event_type="ADMIN_OPERATION_RUN",
+        )
+        if accepted_replay is not None:
+            _assert_operation_replay_matches(accepted_replay, payload)
+            return _operation_response_from_audit(accepted_replay, payload)
+        requested_replay = _operation_audit_event(
+            audit,
+            actor=_actor,
+            payload=payload,
+            event_type="ADMIN_OPERATION_REQUESTED",
+        )
+        if requested_replay is not None:
+            _assert_operation_replay_matches(requested_replay, payload)
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503,
             detail=safe_dependency_detail("lakebase"),
         ) from exc
-    if cooldown_s > 0:
+
+    if requested_replay is None:
         try:
-            _write_operation_audit(
-                audit,
-                actor=_actor,
-                payload=payload,
-                action="admin.operation.cooldown",
-                event_type="ADMIN_OPERATION_COOLDOWN",
-                extra={"cooldown_seconds": cooldown_s},
-            )
+            cooldown_s = _cooldown_remaining_s(audit, payload.job_key)
         except LakebaseError as exc:
             raise HTTPException(
                 status_code=503,
                 detail=safe_dependency_detail("lakebase"),
             ) from exc
-        raise HTTPException(
-            status_code=429,
-            detail="job cooldown active",
-            headers={"Retry-After": str(cooldown_s)},
-        )
+        if cooldown_s > 0:
+            try:
+                _write_operation_audit(
+                    audit,
+                    actor=_actor,
+                    payload=payload,
+                    action="admin.operation.cooldown",
+                    event_type="ADMIN_OPERATION_COOLDOWN",
+                    extra={"cooldown_seconds": cooldown_s},
+                )
+            except LakebaseError as exc:
+                raise HTTPException(
+                    status_code=503,
+                    detail=safe_dependency_detail("lakebase"),
+                ) from exc
+            raise HTTPException(
+                status_code=429,
+                detail="job cooldown active",
+                headers={"Retry-After": str(cooldown_s)},
+            )
 
-    try:
-        request_event = _write_operation_audit(
-            audit,
-            actor=_actor,
-            payload=payload,
-            action="admin.operation.requested",
-            event_type="ADMIN_OPERATION_REQUESTED",
-        )
-    except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail=safe_dependency_detail("lakebase"),
-        ) from exc
+        try:
+            _write_operation_audit(
+                audit,
+                actor=_actor,
+                payload=payload,
+                action="admin.operation.requested",
+                event_type="ADMIN_OPERATION_REQUESTED",
+            )
+        except LakebaseError as exc:
+            # A concurrent app process may have won the unique request/event
+            # insert. Re-read that durable reservation before classifying the
+            # database as unavailable.
+            requested_replay = _operation_audit_event(
+                audit,
+                actor=_actor,
+                payload=payload,
+                event_type="ADMIN_OPERATION_REQUESTED",
+            )
+            if requested_replay is None:
+                raise HTTPException(
+                    status_code=503,
+                    detail=safe_dependency_detail("lakebase"),
+                ) from exc
+            _assert_operation_replay_matches(requested_replay, payload)
 
     try:
         if payload.job_key == "lifecycle_sync":
@@ -404,7 +508,11 @@ def post_operation_run(
                 "funnel_snapshot_row_count": result.funnel_snapshot_rows,
             }
         else:
-            launch = jobs.run_now(payload.job_key)
+            launch = jobs.run_now(
+                payload.job_key,
+                idempotency_token=payload.request_id,
+                replay=requested_replay is not None,
+            )
             lifecycle_extra = {}
     except JobAlreadyRunningError as exc:
         try:
@@ -502,7 +610,7 @@ def post_operation_run(
                 **lifecycle_extra,
             },
         )
-    except LakebaseError:
+    except LakebaseError as exc:
         emit(
             log,
             "admin_operation_success_audit_dropped",
@@ -511,7 +619,10 @@ def post_operation_run(
             job_id=launch.job_id,
             run_id=launch.run_id,
         )
-        accepted_event = request_event
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
 
     return {
         "accepted": True,
