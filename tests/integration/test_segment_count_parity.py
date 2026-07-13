@@ -251,50 +251,135 @@ def _run_sql(
 # ---------------------------------------------------------------------------
 
 
+def _borrower_economics_reference_ctes() -> str:
+    """Raw-share current-balance and equity calculation used by parity paths.
+
+    This deliberately repeats the published 360-month amortization contract
+    instead of calling the gold UDF or reading a silver/gold borrower output.
+    The only non-source dependency is ``ref.refresh_run_state``: gold captures
+    that same immutable timestamp before each rebuild so elapsed-month math
+    cannot drift merely because the parity test runs after midnight.
+    """
+    return """
+    refresh_anchor AS (
+      SELECT refresh_at
+      FROM mip.ref.refresh_run_state
+      ORDER BY captured_at DESC
+      LIMIT 1
+    ),
+    src AS (
+      SELECT
+        situs_state AS state,
+        clip,
+        CASE
+          WHEN first_position_mortgage_interest_rate IS NULL
+            OR isnan(CAST(first_position_mortgage_interest_rate AS DOUBLE)) THEN NULL
+          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
+          ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
+        END AS first_rate_frac,
+        CASE
+          WHEN second_position_mortgage_interest_rate IS NULL
+            OR isnan(CAST(second_position_mortgage_interest_rate AS DOUBLE)) THEN NULL
+          WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
+          WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
+          ELSE CAST(second_position_mortgage_interest_rate AS DOUBLE) / 100.0
+        END AS second_rate_frac,
+        TRY_TO_DATE(CAST(NULLIF(first_position_mortgage_date, 0) AS STRING), 'yyyyMMdd')
+          AS first_pos_date,
+        CAST(first_position_mortgage_amount AS BIGINT) AS first_pos_amount,
+        CAST(second_position_mortgage_amount AS BIGINT) AS second_pos,
+        CAST(estimated_value_mktg AS BIGINT) AS avm,
+        CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS raw_lien,
+        CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv
+      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
+      WHERE situs_state IS NOT NULL
+        AND clip IS NOT NULL
+      QUALIFY ROW_NUMBER() OVER (
+        PARTITION BY clip
+        ORDER BY
+          TRY_TO_DATE(NULLIF(CAST(value_as_of_date_mktg AS STRING), '0'), 'yyyyMMdd') DESC,
+          TRY_TO_DATE(CAST(NULLIF(first_position_mortgage_date, 0) AS STRING), 'yyyyMMdd') DESC,
+          CAST(total_amount_of_open_mortgage_liens AS BIGINT) DESC
+      ) = 1
+    ),
+    amortization_inputs AS (
+      SELECT
+        s.*,
+        LEAST(360, GREATEST(0, COALESCE(
+          CAST(FLOOR(months_between(DATE(ra.refresh_at), s.first_pos_date)) AS INT),
+          0
+        ))) AS elapsed_months
+      FROM src AS s
+      CROSS JOIN refresh_anchor AS ra
+    ),
+    current_balances AS (
+      SELECT
+        a.*,
+        CAST(CASE
+          WHEN a.first_pos_amount IS NOT NULL AND a.first_pos_amount > 0 THEN
+            CAST(GREATEST(0.0, BROUND(CASE
+              WHEN a.elapsed_months >= 360 THEN 0.0
+              WHEN a.first_rate_frac IS NULL OR a.first_rate_frac <= 0 THEN
+                CAST(a.first_pos_amount AS DOUBLE) * (360 - a.elapsed_months) / 360.0
+              ELSE
+                CAST(a.first_pos_amount AS DOUBLE)
+                * (
+                    POWER(1.0 + a.first_rate_frac / 12.0, 360)
+                    - POWER(1.0 + a.first_rate_frac / 12.0, a.elapsed_months)
+                  )
+                / (POWER(1.0 + a.first_rate_frac / 12.0, 360) - 1.0)
+            END)) AS BIGINT) + COALESCE(a.second_pos, 0)
+          ELSE COALESCE(a.raw_lien, 0)
+        END AS BIGINT) AS estimated_current_lien_balance
+      FROM amortization_inputs AS a
+    ),
+    economics AS (
+      SELECT
+        b.*,
+        CAST(CASE
+          WHEN b.avm IS NOT NULL AND b.avm > 0 THEN GREATEST(
+            0,
+            LEAST(
+              100,
+              100 - GREATEST(
+                0,
+                ROUND(100.0 * COALESCE(b.estimated_current_lien_balance, 0) / b.avm)
+              )
+            )
+          )
+          WHEN b.cltv IS NOT NULL AND b.cltv > 0
+            THEN GREATEST(0, LEAST(100, 100 - GREATEST(0, ROUND(b.cltv))))
+          ELSE 0
+        END AS INT) AS equity_pct
+      FROM current_balances AS b
+    )
+    """
+
+
 def _itm_reference_sql(mortgage30us_fraction: float) -> str:
     """Reference ITM count per state.
 
     Mirrors gold_borrower_360.sql WHERE:
         * rate_spread_bps from fn_rate_spread(first_pos_rate, market)
-          which is ROUND((current - market) * 10000) per
+          which is BROUND((current - market) * 10000) per
           sql/uc_functions/fn_rate_spread.sql.
-        * equity_pct: GREATEST(0, LEAST(100, CASE
-              WHEN estimated_combined_ltv > 0 THEN ROUND(100 - estimated_combined_ltv)
-              WHEN estimated_value_mktg  > 0 THEN ROUND(100 * (avm - lien) / avm)
-              ELSE 0 END))
+        * equity_pct from AVM and independently amortized current lien balance,
+          with Cotality estimated CLTV used only when AVM is unavailable.
         * Rate conversion: share rate is PERCENT (6.40 == 6.40%); divide
           by 100 before feeding to fn_rate_spread. Rates below 1% are
           treated as missing and source outliers above 15% APR clamp to 15%
           before scoring.
     """
     return f"""
-    WITH src AS (
-      SELECT
-        situs_state AS state,
-        clip,
-        CASE
-          WHEN first_position_mortgage_interest_rate IS NULL THEN NULL
-          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
-          WHEN CAST(first_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
-          ELSE CAST(first_position_mortgage_interest_rate AS DOUBLE) / 100.0
-        END AS rate_frac,
-        CAST(estimated_value_mktg AS BIGINT) AS avm,
-        CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS lien,
-        CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv
-      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-      WHERE situs_state IS NOT NULL
-        AND clip IS NOT NULL
-    ),
+    WITH {_borrower_economics_reference_ctes()},
     calc AS (
       SELECT
         state, clip,
-        CAST(ROUND((rate_frac - {mortgage30us_fraction}) * 10000.0) AS INT) AS rate_spread_bps,
-        CAST(GREATEST(0, LEAST(100, CASE
-          WHEN cltv IS NOT NULL AND cltv > 0 THEN ROUND(100 - cltv)
-          WHEN avm  IS NOT NULL AND avm  > 0 THEN ROUND(100.0 * (avm - COALESCE(lien, 0)) / avm)
-          ELSE 0
-        END)) AS INT) AS equity_pct
-      FROM src
+        CAST(BROUND((first_rate_frac - {mortgage30us_fraction}) * 10000.0) AS INT)
+          AS rate_spread_bps,
+        equity_pct
+      FROM economics
     )
     SELECT state, COUNT(*) AS n
     FROM calc
@@ -307,36 +392,28 @@ def _equity_reference_sql() -> str:
     """Reference equity-segment count per state.
 
     Segment rule (gold_borrower_360.sql line 185):
-        equity_pct >= 35 AND second_pos_amount IS NULL
+        equity_pct >= 35 AND COALESCE(second_pos_amount, 0) = 0
     """
     return f"""
-    WITH src AS (
-      SELECT
-        situs_state AS state,
-        clip,
-        CAST(estimated_value_mktg AS BIGINT) AS avm,
-        CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS lien,
-        CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv,
-        CAST(second_position_mortgage_amount AS BIGINT) AS second_pos
-      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-      WHERE situs_state IS NOT NULL
-        AND clip IS NOT NULL
-    ),
-    calc AS (
-      SELECT
-        state, clip, second_pos,
-        CAST(GREATEST(0, LEAST(100, CASE
-          WHEN cltv IS NOT NULL AND cltv > 0 THEN ROUND(100 - cltv)
-          WHEN avm  IS NOT NULL AND avm  > 0 THEN ROUND(100.0 * (avm - COALESCE(lien, 0)) / avm)
-          ELSE 0
-        END)) AS INT) AS equity_pct
-      FROM src
-    )
+    WITH {_borrower_economics_reference_ctes()}
     SELECT state, COUNT(*) AS n
-    FROM calc
-    WHERE equity_pct >= {HELOC_EQUITY_MIN} AND second_pos IS NULL
+    FROM economics
+    WHERE equity_pct >= {HELOC_EQUITY_MIN} AND COALESCE(second_pos, 0) = 0
     GROUP BY state ORDER BY state
     """
+
+
+def test_equity_references_repeat_current_balance_contract_without_gold_outputs() -> None:
+    """The independent path must not regress to original-balance/CLTV-first math."""
+    for sql in (
+        _itm_reference_sql(0.05),
+        _equity_reference_sql(),
+        _second_lien_itm_reference_sql(0.05),
+    ):
+        assert "POWER(1.0 + a.first_rate_frac / 12.0, 360)" in sql
+        assert "estimated_current_lien_balance" in sql
+        assert "mip.gold.borrower_360" not in sql
+        assert "mip.gold.fn_estimated_upb" not in sql
 
 
 def _investor_reference_sql() -> str:
@@ -586,39 +663,18 @@ def _second_lien_itm_reference_sql(mortgage30us_fraction: float) -> str:
     clears the SAME governed spread threshold against the first-lien par
     reference, with the shared equity screen. The rate bounding matches
     silver_lien_current.sql (rates below 1% treated as missing; outliers
-    above 15% APR clamp to 15%). Equity uses the same cltv-first
-    approximation as the ITM reference; the shared REL_TOLERANCE covers
-    the amortized-UPB refinement gold applies on top.
+    above 15% APR clamp to 15%). Equity independently repeats the same
+    amortized-current-UPB contract as the first-lien ITM reference.
     """
     return f"""
-    WITH src AS (
-      SELECT
-        situs_state AS state,
-        clip,
-        CASE
-          WHEN second_position_mortgage_interest_rate IS NULL THEN NULL
-          WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) < 1 THEN NULL
-          WHEN CAST(second_position_mortgage_interest_rate AS DOUBLE) > 15 THEN 0.15
-          ELSE CAST(second_position_mortgage_interest_rate AS DOUBLE) / 100.0
-        END AS rate2_frac,
-        CAST(second_position_mortgage_amount AS BIGINT) AS second_pos,
-        CAST(estimated_value_mktg AS BIGINT) AS avm,
-        CAST(total_amount_of_open_mortgage_liens AS BIGINT) AS lien,
-        CAST(estimated_combined_ltv_loan_to_value AS DOUBLE) AS cltv
-      FROM cotality_mortgage_data.corelogic.entrada_eval_voluntary_lien_status_marketing_v2
-      WHERE situs_state IS NOT NULL
-        AND clip IS NOT NULL
-    ),
+    WITH {_borrower_economics_reference_ctes()},
     calc AS (
       SELECT
         state, clip, second_pos,
-        CAST(ROUND((rate2_frac - {mortgage30us_fraction}) * 10000.0) AS INT) AS rate_spread_bps,
-        CAST(GREATEST(0, LEAST(100, CASE
-          WHEN cltv IS NOT NULL AND cltv > 0 THEN ROUND(100 - cltv)
-          WHEN avm  IS NOT NULL AND avm  > 0 THEN ROUND(100.0 * (avm - COALESCE(lien, 0)) / avm)
-          ELSE 0
-        END)) AS INT) AS equity_pct
-      FROM src
+        CAST(BROUND((second_rate_frac - {mortgage30us_fraction}) * 10000.0) AS INT)
+          AS rate_spread_bps,
+        equity_pct
+      FROM economics
     )
     SELECT state, COUNT(*) AS n
     FROM calc
