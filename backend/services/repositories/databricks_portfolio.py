@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import sys
+import time
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -38,6 +39,9 @@ from backend.services.observability import emit, get_correlation_id
 from backend.services.resilience import TTLCache
 
 log = logging.getLogger(__name__)
+
+_CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS = 3
+_CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
 
 
 def _get_lakebase_client():
@@ -300,17 +304,6 @@ class DatabricksPortfolioRepository:
       DO NOTHING
       RETURNING campaign_id, request_payload_hash, creation_response
     ),
-    selected_campaign AS (
-      SELECT campaign_id, request_payload_hash, creation_response, TRUE AS created
-      FROM inserted_campaign
-      UNION ALL
-      SELECT c.campaign_id, c.request_payload_hash, c.creation_response, FALSE AS created
-      FROM mip_app.campaigns c
-      WHERE c.owner_email = %(owner_email)s
-        AND c.idempotency_key = %(idempotency_key)s
-        AND NOT EXISTS (SELECT 1 FROM inserted_campaign)
-      LIMIT 1
-    ),
     inserted_audit AS (
       INSERT INTO mip_app.action_audit (
         event_type, actor_email, entity_type, entity_id,
@@ -355,24 +348,13 @@ class DatabricksPortfolioRepository:
       RETURNING campaign_id
     )
     SELECT
-      selected_campaign.campaign_id,
-      COALESCE(
-        inserted_audit.audit_id,
-        (
-          SELECT audit_id
-          FROM mip_app.action_audit
-          WHERE entity_type = 'campaign'
-            AND entity_id = selected_campaign.campaign_id::text
-            AND event_type = 'PORTFOLIO_CREATE'
-          ORDER BY occurred_at ASC
-          LIMIT 1
-        )
-      ) AS audit_id,
-      selected_campaign.request_payload_hash,
-      selected_campaign.creation_response,
-      selected_campaign.created,
+      inserted_campaign.campaign_id,
+      inserted_audit.audit_id,
+      inserted_campaign.request_payload_hash,
+      inserted_campaign.creation_response,
+      TRUE AS created,
       (SELECT COUNT(*) FROM inserted_variants) AS variant_count
-    FROM selected_campaign
+    FROM inserted_campaign
     LEFT JOIN inserted_audit ON TRUE
     """
 
@@ -910,11 +892,36 @@ class DatabricksPortfolioRepository:
             },
         )
         if row is None or not row.get("campaign_id"):
-            raise LakebaseError("campaign insert returned no row")
+            return self._campaign_create_response_after_insert_conflict(
+                lakebase,
+                owner_email=owner_email,
+                idempotency_key=idempotency_key,
+                expected_payload_hash=request_payload_hash,
+            )
         return self._campaign_create_response_from_idempotency_row(
             row,
             expected_payload_hash=request_payload_hash,
         )
+
+    def _campaign_create_response_after_insert_conflict(
+        self,
+        lakebase: Any,
+        *,
+        owner_email: str,
+        idempotency_key: str,
+        expected_payload_hash: str,
+    ) -> PortfolioCreateResponse:
+        params = {"owner_email": owner_email, "idempotency_key": idempotency_key}
+        for attempt in range(_CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS):
+            if attempt:
+                time.sleep(_CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S * attempt)
+            existing = lakebase.fetchone(self._CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL, params)
+            if existing is not None:
+                return self._campaign_create_response_from_idempotency_row(
+                    existing,
+                    expected_payload_hash=expected_payload_hash,
+                )
+        raise LakebaseError("campaign insert returned no row and idempotency lookup was empty")
 
     def _campaign_create_response_from_idempotency_row(
         self,

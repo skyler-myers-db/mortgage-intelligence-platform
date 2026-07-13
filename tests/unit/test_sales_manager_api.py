@@ -522,19 +522,32 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
 
 def test_campaign_performance_uses_nested_same_borrower_sets(fake_lakebase_client) -> None:
     today = datetime.now(UTC).date().isoformat()
+    base = datetime.now(UTC)
     fake_lakebase_client.dispositions.extend(
         [
             {
                 "borrower_id": "B-REACHED-ONLY",
                 "lo_email": "lo01@summit.example",
                 "outcome": "connected",
-                "occurred_at": datetime.now(UTC),
+                "occurred_at": base,
             },
             {
                 "borrower_id": "B-NESTED",
                 "lo_email": "lo01@summit.example",
                 "outcome": "application_started",
-                "occurred_at": datetime.now(UTC),
+                "occurred_at": base,
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "lo_email": "lo01@summit.example",
+                "outcome": "application_started",
+                "occurred_at": base + timedelta(seconds=2),
+            },
+            {
+                "borrower_id": "B-BACKWARDS",
+                "lo_email": "lo01@summit.example",
+                "outcome": "application_started",
+                "occurred_at": base + timedelta(seconds=2),
             },
         ]
     )
@@ -544,19 +557,49 @@ def test_campaign_performance_uses_nested_same_borrower_sets(fake_lakebase_clien
                 "borrower_id": "B-DISJOINT",
                 "assigned_to_email": "lo01@summit.example",
                 "outcome_type": "closed_funded",
-                "occurred_at": datetime.now(UTC),
+                "occurred_at": base,
             },
             {
                 "borrower_id": "B-NESTED",
                 "assigned_to_email": "lo01@summit.example",
                 "outcome_type": "application_submitted",
-                "occurred_at": datetime.now(UTC),
+                "occurred_at": base + timedelta(seconds=1),
             },
             {
                 "borrower_id": "B-NESTED",
                 "assigned_to_email": "lo01@summit.example",
                 "outcome_type": "closed_funded",
-                "occurred_at": datetime.now(UTC),
+                "occurred_at": base + timedelta(seconds=2),
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": base + timedelta(seconds=1),
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": base + timedelta(seconds=3),
+            },
+            {
+                "borrower_id": "B-EARLIEST-VALID",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": base + timedelta(seconds=4),
+            },
+            {
+                "borrower_id": "B-BACKWARDS",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": base + timedelta(seconds=1),
+            },
+            {
+                "borrower_id": "B-BACKWARDS",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": base + timedelta(seconds=3),
             },
         ]
     )
@@ -566,10 +609,11 @@ def test_campaign_performance_uses_nested_same_borrower_sets(fake_lakebase_clien
     assert response.json() == {
         "from_date": today,
         "to_date": today,
-        "unique_contacts_reached": 2,
-        "unique_application_starts": 1,
-        "unique_applications_submitted": 1,
-        "unique_closed_funded": 1,
+        "unique_leads_attempted": 4,
+        "unique_contacts_reached": 4,
+        "unique_application_starts": 3,
+        "unique_applications_submitted": 2,
+        "unique_closed_funded": 2,
         "methodology": "same_borrower_nested_funnel",
     }
 

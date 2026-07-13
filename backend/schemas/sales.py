@@ -384,6 +384,7 @@ class SalesConversionResponse(BaseModel):
 class CampaignPerformanceFunnelResponse(BaseModel):
     from_date: str
     to_date: str
+    unique_leads_attempted: int
     unique_contacts_reached: int
     unique_application_starts: int
     unique_applications_submitted: int

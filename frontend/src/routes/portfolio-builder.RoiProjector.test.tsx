@@ -25,6 +25,7 @@ const PREVIEW = {
 const PERFORMANCE = {
   from_date: '2026-04-14',
   to_date: '2026-07-13',
+  unique_leads_attempted: 100,
   unique_contacts_reached: 80,
   unique_application_starts: 20,
   unique_applications_submitted: 10,
@@ -75,15 +76,30 @@ describe('RoiProjector', () => {
     });
   }
 
-  it('derives expected fundings and volume from exact cohort facts and observed outcomes', () => {
+  function click(testid: string) {
+    const button = container.querySelector<HTMLButtonElement>(`[data-testid="${testid}"]`)!;
+    act(() => button.dispatchEvent(new MouseEvent('click', { bubbles: true })));
+  }
+
+  it('projects every current lead through observed reach and downstream conditional rates', () => {
     mount();
-    expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('75');
+    expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('60');
+    expect(container.textContent).toContain('Lead → reached80.0%');
     expect(container.textContent).toContain('Reached → application start25.0%');
     expect(container.textContent).toContain('Application start → submitted50.0%');
     expect(container.textContent).toContain('Submitted → funded50.0%');
-    expect(container.textContent).toContain('Expected origination volume$24.0M');
+    expect(container.textContent).toContain('Expected origination volume$19.2M');
     expect(container.textContent).toContain('Average refi-economics balance$320K');
     expect(container.textContent).not.toContain('$432K');
+  });
+
+  it('shows qualified-source provenance and a Wilson 95% funding range', () => {
+    mount();
+    expect(container.textContent).toContain('Funding range (Wilson 95%)26–134');
+    expect(container.textContent).toContain('Projection qualificationQualified observed baseline');
+    expect(container.textContent).toContain('Activity sourceCall dispositions');
+    expect(container.textContent).toContain('Outcome sourceLead outcomes');
+    expect(container.textContent).toContain('unique funded / attempted borrowers');
   });
 
   it('withholds projections when outcome history is insufficient', () => {
@@ -99,7 +115,7 @@ describe('RoiProjector', () => {
     setInput('roi-revenue-rate', '1.5');
     expect(container.textContent).toContain('Net revenueAdd tenant economics');
     setInput('roi-cost-per-lead', '2');
-    expect(container.textContent).toContain('Net revenue$358K');
+    expect(container.textContent).toContain('Net revenue$286K');
   });
 
   it('rejects a non-monotonic funnel instead of manufacturing a rate', () => {
@@ -110,7 +126,24 @@ describe('RoiProjector', () => {
 
   it('discloses that the observed rate chain is a same-borrower benchmark', () => {
     mount();
-    expect(container.textContent).toContain('same-borrower 90-day funnel benchmark');
-    expect(container.textContent).toContain('Each downstream stage is a subset of the previous stage');
+    expect(container.textContent).toContain('Observed baseline');
+    expect(container.textContent).toContain('Sources: mip_app.call_dispositions and mip_app.lead_outcomes');
+  });
+
+  it('keeps manual scenarios distinct and requires four explicit rate overrides', () => {
+    mount();
+    click('roi-mode-manual');
+    expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('—');
+    expect(container.textContent).toContain('Projection qualificationOverrides required');
+    setInput('roi-manual-reach', '50');
+    setInput('roi-manual-application', '25');
+    setInput('roi-manual-submission', '50');
+    setInput('roi-manual-funding', '50');
+    expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('38');
+    expect(container.textContent).toContain('Projection qualificationExplicit manual override');
+    expect(container.textContent).toContain('Funding range (Wilson 95%)Observed baseline only');
+    expect(container.textContent).toContain('does not inherit the observed baseline or its Wilson interval');
+    click('roi-mode-baseline');
+    expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('60');
   });
 });

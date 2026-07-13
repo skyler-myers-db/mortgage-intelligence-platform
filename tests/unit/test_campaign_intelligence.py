@@ -48,6 +48,7 @@ def test_recommendation_adds_only_sample_qualified_observed_performance() -> Non
     result = recommend_campaign(
         _preview(),
         performance=CampaignPerformanceContext(
+            unique_leads_attempted=100,
             unique_contacts_reached=80,
             unique_application_starts=20,
             unique_applications_submitted=12,
@@ -59,8 +60,8 @@ def test_recommendation_adds_only_sample_qualified_observed_performance() -> Non
     assert result.performance_status == "qualified"
     evidence = {row.label: row.value for row in result.evidence}
     assert (
-        evidence["Team 90-day same-borrower reached to application start"]
-        == "20 / 80 unique reached"
+        evidence["Team 90-day same-borrower attempted, reached, and application start"]
+        == "100 attempted / 80 reached / 20 starts"
     )
     assert (
         evidence["Team 90-day same-borrower application to submitted"]
@@ -71,6 +72,7 @@ def test_recommendation_adds_only_sample_qualified_observed_performance() -> Non
     insufficient = recommend_campaign(
         _preview(),
         performance=CampaignPerformanceContext(
+            unique_leads_attempted=40,
             unique_contacts_reached=29,
             unique_application_starts=20,
             unique_applications_submitted=9,
@@ -80,6 +82,20 @@ def test_recommendation_adds_only_sample_qualified_observed_performance() -> Non
     )
     assert insufficient.performance_status == "insufficient_sample"
     assert not any(row.source_asset.startswith("mip_app.") for row in insufficient.evidence)
+
+    non_monotonic = recommend_campaign(
+        _preview(),
+        performance=CampaignPerformanceContext(
+            unique_leads_attempted=70,
+            unique_contacts_reached=80,
+            unique_application_starts=20,
+            unique_applications_submitted=12,
+            unique_closed_funded=3,
+        ),
+        settings=Settings(mip_agent_orchestrator=False),
+    )
+    assert non_monotonic.performance_status == "insufficient_sample"
+    assert not any(row.source_asset.startswith("mip_app.") for row in non_monotonic.evidence)
 
 
 def test_campaign_recommendation_route_returns_reviewed_strategy() -> None:

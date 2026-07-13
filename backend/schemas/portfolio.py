@@ -1,5 +1,6 @@
 """Portfolio criteria, preview, campaign, and saved-build contracts."""
 
+import math
 import re
 from datetime import datetime
 from typing import Literal
@@ -748,6 +749,29 @@ class PortfolioCreateRequest(BaseModel):
         if value is None:
             return None
         _assert_json_public(value, field_name="campaign ROI assumptions")
+
+        def require_finite(number: float, *, field_name: str) -> float:
+            if not math.isfinite(number):
+                raise ValueError(f"{field_name} must be finite")
+            return number
+
+        def reject_non_finite_numbers(item: object, *, field_name: str) -> None:
+            if isinstance(item, dict):
+                for key, nested in item.items():
+                    reject_non_finite_numbers(
+                        nested,
+                        field_name=f"{field_name}.{key}",
+                    )
+            elif isinstance(item, list):
+                for index, nested in enumerate(item):
+                    reject_non_finite_numbers(
+                        nested,
+                        field_name=f"{field_name}[{index}]",
+                    )
+            elif isinstance(item, int | float) and not isinstance(item, bool):
+                require_finite(float(item), field_name=field_name)
+
+        reject_non_finite_numbers(value, field_name="roi_assumptions")
         numeric_keys = {
             "budget_usd",
             "expected_conversion_rate",
@@ -765,8 +789,13 @@ class PortfolioCreateRequest(BaseModel):
                 normalized.pop(key)
                 continue
             try:
-                numeric = float(normalized[key])
+                numeric = require_finite(
+                    float(normalized[key]),
+                    field_name=f"roi_assumptions.{key}",
+                )
             except (TypeError, ValueError) as exc:
+                if "must be finite" in str(exc):
+                    raise
                 raise ValueError(f"roi_assumptions.{key} must be numeric") from exc
             if numeric < 0:
                 raise ValueError(f"roi_assumptions.{key} must be non-negative")
@@ -783,8 +812,16 @@ class PortfolioCreateRequest(BaseModel):
                 if amount is None:
                     continue
                 try:
-                    numeric = float(amount)
+                    numeric = require_finite(
+                        float(amount),
+                        field_name=(
+                            "roi_assumptions.cost_per_contact_usd "
+                            f"value for {channel_key}"
+                        ),
+                    )
                 except (TypeError, ValueError) as exc:
+                    if "must be finite" in str(exc):
+                        raise
                     raise ValueError(
                         "roi_assumptions.cost_per_contact_usd values must be numeric"
                     ) from exc
@@ -794,6 +831,21 @@ class PortfolioCreateRequest(BaseModel):
                     )
                 checked[channel_key] = numeric
             normalized["cost_per_contact_usd"] = checked
+        elif cost is None:
+            normalized.pop("cost_per_contact_usd", None)
+        elif cost is not None:
+            try:
+                numeric_cost = require_finite(
+                    float(cost),
+                    field_name="roi_assumptions.cost_per_contact_usd",
+                )
+            except (TypeError, ValueError) as exc:
+                if "must be finite" in str(exc):
+                    raise
+                raise ValueError("roi_assumptions.cost_per_contact_usd must be numeric") from exc
+            if numeric_cost < 0:
+                raise ValueError("roi_assumptions.cost_per_contact_usd must be non-negative")
+            normalized["cost_per_contact_usd"] = numeric_cost
         return normalized
 
 

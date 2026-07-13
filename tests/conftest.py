@@ -625,37 +625,63 @@ class _FakeLakebaseClient:
                 for row in self.dispositions
                 if not lo_emails or str(row.get("lo_email")) in lo_emails
             ]
-            reached = {
-                str(row["borrower_id"])
-                for row in scoped_dispositions
-                if row.get("outcome")
-                in {"connected", "callback_scheduled", "application_started"}
-            }
-            started = {
-                str(row["borrower_id"])
-                for row in scoped_dispositions
-                if row.get("outcome") == "application_started"
-                and str(row["borrower_id"]) in reached
-            }
+            attempted: dict[str, datetime] = {}
+            for row in scoped_dispositions:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if borrower_id not in attempted or occurred_at < attempted[borrower_id]:
+                    attempted[borrower_id] = occurred_at
+            reached: dict[str, datetime] = {}
+            for row in scoped_dispositions:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome") in {"connected", "callback_scheduled", "application_started"}
+                    and occurred_at >= attempted[borrower_id]
+                    and (borrower_id not in reached or occurred_at < reached[borrower_id])
+                ):
+                    reached[borrower_id] = occurred_at
+            started: dict[str, datetime] = {}
+            for row in scoped_dispositions:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome") == "application_started"
+                    and borrower_id in reached
+                    and occurred_at >= reached[borrower_id]
+                    and (borrower_id not in started or occurred_at < started[borrower_id])
+                ):
+                    started[borrower_id] = occurred_at
             scoped_outcomes = [
                 row
                 for row in self.outcomes
                 if not lo_emails or str(row.get("assigned_to_email")) in lo_emails
             ]
-            submitted = {
-                str(row["borrower_id"])
-                for row in scoped_outcomes
-                if row.get("outcome_type") == "application_submitted"
-                and str(row["borrower_id"]) in started
-            }
-            funded = {
-                str(row["borrower_id"])
-                for row in scoped_outcomes
-                if row.get("outcome_type") == "closed_funded"
-                and str(row["borrower_id"]) in submitted
-            }
+            submitted: dict[str, datetime] = {}
+            for row in scoped_outcomes:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome_type") == "application_submitted"
+                    and borrower_id in started
+                    and occurred_at >= started[borrower_id]
+                    and (borrower_id not in submitted or occurred_at < submitted[borrower_id])
+                ):
+                    submitted[borrower_id] = occurred_at
+            funded: dict[str, datetime] = {}
+            for row in scoped_outcomes:
+                borrower_id = str(row["borrower_id"])
+                occurred_at = row["occurred_at"]
+                if (
+                    row.get("outcome_type") == "closed_funded"
+                    and borrower_id in submitted
+                    and occurred_at >= submitted[borrower_id]
+                    and (borrower_id not in funded or occurred_at < funded[borrower_id])
+                ):
+                    funded[borrower_id] = occurred_at
             return [
                 {
+                    "unique_leads_attempted": len(attempted),
                     "unique_contacts_reached": len(reached),
                     "unique_application_starts": len(started),
                     "unique_applications_submitted": len(submitted),

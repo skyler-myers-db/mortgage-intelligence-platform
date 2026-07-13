@@ -22,6 +22,7 @@ from backend.schemas.portfolio import (
     PortfolioCriteria,
     PortfolioPreviewRequest,
 )
+from backend.services.lakebase import LakebaseError
 from backend.services.repositories.databricks_repo import (
     DatabricksPortfolioRepository,
 )
@@ -121,6 +122,41 @@ class _IdempotentCampaignLakebase:
         if "FROM mip_app.campaigns c" in sql:
             self.lookup_calls += 1
             return dict(self.stored) if self.stored is not None else None
+        raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
+
+
+class _ConcurrentCampaignLakebase:
+    """Model an insert loser whose winner becomes visible on a later SELECT."""
+
+    def __init__(self, *, publish_after_lookup: int | None, mismatch: bool = False) -> None:
+        self.publish_after_lookup = publish_after_lookup
+        self.mismatch = mismatch
+        self.stored: dict[str, Any] | None = None
+        self.insert_calls = 0
+        self.lookup_calls = 0
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        values = params or {}
+        if "WITH inserted_campaign AS" in sql:
+            self.insert_calls += 1
+            assert "selected_campaign" not in sql
+            payload_hash = str(values["request_payload_hash"])
+            self.stored = {
+                "campaign_id": "11111111-1111-4111-8111-111111111118",
+                "audit_id": "22222222-2222-4222-8222-222222222228",
+                "request_payload_hash": "different-hash" if self.mismatch else payload_hash,
+                "creation_response": json.loads(str(values["creation_response"])),
+            }
+            return None
+        if "FROM mip_app.campaigns c" in sql:
+            self.lookup_calls += 1
+            if (
+                self.stored is not None
+                and self.publish_after_lookup is not None
+                and self.lookup_calls >= self.publish_after_lookup
+            ):
+                return dict(self.stored)
+            return None
         raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
 
 
@@ -635,6 +671,8 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     write = next(row for row in lakebase.rows if "INSERT INTO mip_app.campaigns" in str(row["sql"]))
     sql = str(write["sql"])
     assert "WITH inserted_campaign AS" in sql
+    assert "selected_campaign" not in sql
+    assert "FROM mip_app.campaigns c" not in sql
     assert "inserted_audit AS" in sql
     assert "inserted_variants AS" in sql
     assert "jsonb_to_recordset(%(variant_rows)s::jsonb)" in sql
@@ -747,6 +785,71 @@ def test_create_rejects_same_request_for_different_campaign_without_write(monkey
 
     assert lakebase.insert_calls == 1
     assert client.preview_calls == preview_calls_after_first
+
+
+def test_create_resolves_concurrent_insert_with_bounded_separate_lookup(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _ConcurrentCampaignLakebase(publish_after_lookup=3)
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.time.sleep",
+        lambda _delay: None,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    result = repo.create(
+        PortfolioCreateRequest(name="Illinois refinance review"),
+        actor="manager@example.com",
+        idempotency_key="11111111-1111-4111-8111-111111111118",
+    )
+
+    assert result.campaign_id == "11111111-1111-4111-8111-111111111118"
+    assert lakebase.insert_calls == 1
+    assert lakebase.lookup_calls == 3
+
+
+def test_create_rejects_concurrent_idempotency_payload_mismatch(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _ConcurrentCampaignLakebase(publish_after_lookup=2, mismatch=True)
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="different campaign payload"):
+        repo.create(
+            PortfolioCreateRequest(name="Illinois refinance review"),
+            actor="manager@example.com",
+            idempotency_key="11111111-1111-4111-8111-111111111119",
+        )
+
+
+def test_create_bounds_empty_post_conflict_idempotency_lookup(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _ConcurrentCampaignLakebase(publish_after_lookup=None)
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.time.sleep",
+        lambda _delay: None,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    with pytest.raises(LakebaseError, match="idempotency lookup was empty"):
+        repo.create(
+            PortfolioCreateRequest(name="Illinois refinance review"),
+            actor="manager@example.com",
+            idempotency_key="11111111-1111-4111-8111-111111111120",
+        )
+
+    assert lakebase.insert_calls == 1
+    assert lakebase.lookup_calls == 4
 
 
 @pytest.mark.parametrize(

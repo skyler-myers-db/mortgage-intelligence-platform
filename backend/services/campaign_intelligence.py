@@ -50,40 +50,52 @@ _OFFER_AUDIENCE: dict[str, str] = {
 
 @dataclass(frozen=True)
 class CampaignPerformanceContext:
+    unique_leads_attempted: int = 0
     unique_contacts_reached: int = 0
     unique_application_starts: int = 0
     unique_applications_submitted: int = 0
     unique_closed_funded: int = 0
 
     @property
-    def application_start_rate(self) -> float | None:
-        if self.unique_contacts_reached < 30:
+    def is_monotonic(self) -> bool:
+        return (
+            self.unique_leads_attempted
+            >= self.unique_contacts_reached
+            >= self.unique_application_starts
+            >= self.unique_applications_submitted
+            >= self.unique_closed_funded
+            >= 0
+        )
+
+    @property
+    def reach_rate(self) -> float | None:
+        if self.unique_leads_attempted < 30 or not self.is_monotonic:
             return None
-        if self.unique_application_starts > self.unique_contacts_reached:
+        return self.unique_contacts_reached / self.unique_leads_attempted
+
+    @property
+    def application_start_rate(self) -> float | None:
+        if self.unique_contacts_reached < 30 or not self.is_monotonic:
             return None
         return self.unique_application_starts / self.unique_contacts_reached
 
     @property
     def submission_rate(self) -> float | None:
-        if self.unique_application_starts < 10:
-            return None
-        if self.unique_applications_submitted > self.unique_application_starts:
+        if self.unique_application_starts < 10 or not self.is_monotonic:
             return None
         return self.unique_applications_submitted / self.unique_application_starts
 
     @property
     def close_rate(self) -> float | None:
-        if (
-            self.unique_applications_submitted < 10
-            or self.unique_closed_funded > self.unique_applications_submitted
-        ):
+        if self.unique_applications_submitted < 10 or not self.is_monotonic:
             return None
         return self.unique_closed_funded / self.unique_applications_submitted
 
     @property
     def is_qualified(self) -> bool:
         return (
-            self.application_start_rate is not None
+            self.reach_rate is not None
+            and self.application_start_rate is not None
             and self.submission_rate is not None
             and self.close_rate is not None
         )
@@ -150,10 +162,11 @@ def _evidence(
     if performance is not None and performance.is_qualified:
         rows.append(
             CampaignRecommendationEvidence(
-                label="Team 90-day same-borrower reached to application start",
+                label="Team 90-day same-borrower attempted, reached, and application start",
                 value=(
-                    f"{performance.unique_application_starts:,} / "
-                    f"{performance.unique_contacts_reached:,} unique reached"
+                    f"{performance.unique_leads_attempted:,} attempted / "
+                    f"{performance.unique_contacts_reached:,} reached / "
+                    f"{performance.unique_application_starts:,} starts"
                 ),
                 source_asset="mip_app.call_dispositions",
             )
@@ -254,6 +267,9 @@ def _prompt(
         "dominant_offer_code": offer_code,
         "dominant_offer_borrowers": offer_count,
         "lender_label": lender_name,
+        "team_90d_unique_leads_attempted": (
+            performance.unique_leads_attempted if performance is not None else None
+        ),
         "team_90d_unique_contacts_reached": (
             performance.unique_contacts_reached if performance is not None else None
         ),

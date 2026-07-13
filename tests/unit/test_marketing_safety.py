@@ -591,6 +591,36 @@ def test_campaign_roi_null_channel_costs_mean_omitted_not_rejected() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    "roi_assumptions",
+    [
+        {"budget_usd": float("nan")},
+        {"expected_conversion_rate_pct": float("inf")},
+        {"lo_capacity": float("-inf")},
+        {"cost_per_contact_usd": float("nan")},
+        {"cost_per_contact_usd": {"email": float("inf")}},
+        {"cost_per_contact_usd": {"sms": "Infinity"}},
+    ],
+)
+def test_campaign_roi_rejects_non_finite_scalars_and_channel_costs(
+    roi_assumptions: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError, match="must be finite"):
+        PortfolioCreateRequest(
+            name="Q3 recapture",
+            roi_assumptions=roi_assumptions,
+        )
+
+
+def test_campaign_roi_accepts_finite_scalar_cost_per_contact() -> None:
+    payload = PortfolioCreateRequest(
+        name="Q3 recapture",
+        roi_assumptions={"cost_per_contact_usd": "1.25"},
+    )
+
+    assert payload.roi_assumptions == {"cost_per_contact_usd": 1.25}
+
+
 def test_campaign_create_accepts_configured_lender_phrase(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

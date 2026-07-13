@@ -3201,6 +3201,10 @@
             "title": "Unique Closed Funded",
             "type": "integer"
           },
+          "unique_leads_attempted": {
+            "title": "Unique Leads Attempted",
+            "type": "integer"
+          },
           "unique_contacts_reached": {
             "title": "Unique Contacts Reached",
             "type": "integer"
@@ -3209,6 +3213,7 @@
         "required": [
           "from_date",
           "to_date",
+          "unique_leads_attempted",
           "unique_contacts_reached",
           "unique_application_starts",
           "unique_applications_submitted",
