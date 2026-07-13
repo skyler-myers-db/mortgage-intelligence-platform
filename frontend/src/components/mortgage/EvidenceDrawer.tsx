@@ -233,11 +233,13 @@ export function EvidenceDrawer() {
     : metadata?.freshness;
   const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
   const selectTabFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
+    const tabs: DrawerTab[] = ['overview', 'lineage'];
+    const currentIndex = tabs.indexOf(tab);
     let next: DrawerTab | null = null;
     if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-      next = tab === 'overview' ? 'lineage' : 'overview';
+      next = tabs[(currentIndex + 1) % tabs.length];
     } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-      next = tab === 'overview' ? 'lineage' : 'overview';
+      next = tabs[(currentIndex - 1 + tabs.length) % tabs.length];
     } else if (event.key === 'Home') {
       next = 'overview';
     } else if (event.key === 'End') {

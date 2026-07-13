@@ -369,6 +369,15 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(overview.tabIndex).toBe(-1);
 
     await act(async () => {
+      lineage.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
+    });
+    expect(document.activeElement).toBe(overview);
+    expect(overview.getAttribute('aria-selected')).toBe('true');
+
+    await act(async () => {
+      overview.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    });
+    await act(async () => {
       lineage.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
     });
     expect(document.activeElement).toBe(overview);
