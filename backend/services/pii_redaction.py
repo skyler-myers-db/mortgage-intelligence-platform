@@ -284,7 +284,7 @@ _FORBIDDEN_OUTPUT_KEYS: frozenset[str] = frozenset(
 
 _STREET_NUMBER_PATTERN = re.compile(r"\d")
 _ID_MASK_NAMESPACE = "mip-cotality-id-mask-v1"
-_ID_MASK_FALLBACK_APP_ENVS = frozenset({"local", "dev", "sandbox"})
+_ID_MASK_FALLBACK_APP_ENVS = frozenset({"local", "test"})
 _ID_MASK_PLACEHOLDER_SECRETS = frozenset(
     {
         "redacted",
@@ -394,7 +394,7 @@ def _id_mask_secret() -> str:
         return _ID_MASK_NAMESPACE
 
     raise RuntimeError(
-        "MIP_COTALITY_ID_MASK_SECRET is required outside local/dev/sandbox app environments"
+        "MIP_COTALITY_ID_MASK_SECRET is required outside local/test app environments"
     )
 
 

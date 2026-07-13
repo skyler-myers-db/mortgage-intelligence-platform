@@ -31,6 +31,7 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 from backend.config.settings import Settings, get_settings
 from backend.services.ai_gateway_capability_probe import probe_ai_gateway
@@ -653,20 +654,21 @@ def _probe_lakebase_synced_tables(
             _validate_identifier("table", table)
     except ValueError as exc:
         return LiveCapabilityStatus(False, str(exc))
-    metadata_permission_denied = False
     try:
         for table in tables:
             full_name = f"{catalog}.{schema}.{table}"
             try:
                 synced = workspace_client.database.get_synced_database_table(full_name)
-                status = synced.data_synchronization_status
-                state = _enum_value(getattr(status, "detailed_state", ""))
-                if not _synced_table_is_ready(state):
-                    return LiveCapabilityStatus(False, f"{full_name} sync state is {state or 'unknown'}.")
-            except Exception as exc:  # noqa: BLE001 - app SP may have SQL access but not Database API metadata
-                if type(exc).__name__ != "PermissionDenied":
-                    raise
-                metadata_permission_denied = True
+            except Exception as exc:  # noqa: BLE001 - fail closed on inaccessible metadata
+                return LiveCapabilityStatus(
+                    False,
+                    f"Database API metadata for {full_name} is unavailable "
+                    f"({type(exc).__name__}); SQL rows alone do not prove sync state.",
+                )
+            status = getattr(synced, "data_synchronization_status", None)
+            state = _enum_value(getattr(status, "detailed_state", ""))
+            if not _synced_table_is_ready(state):
+                return LiveCapabilityStatus(False, f"{full_name} sync state is {state or 'unknown'}.")
             row_count = _count_relation_rows(sql_client, full_name)
             if row_count <= 0:
                 return LiveCapabilityStatus(
@@ -675,14 +677,10 @@ def _probe_lakebase_synced_tables(
                 )
     except Exception as exc:  # noqa: BLE001 - dependency details stay bounded
         return LiveCapabilityStatus(False, f"Lakebase synced-table probe failed ({type(exc).__name__}).")
-    metadata_detail = (
-        "; Database API metadata was not visible to the app service principal, so SQL row-count proof was used"
-        if metadata_permission_denied
-        else " with metadata state verification"
-    )
     return LiveCapabilityStatus(
         True,
-        f"Live Lakebase synced-table probes passed for {len(tables)} MIP-owned serving tables{metadata_detail}.",
+        f"Live Lakebase synced-table metadata and row-count probes passed for "
+        f"{len(tables)} MIP-owned serving tables.",
     )
 
 
@@ -830,6 +828,22 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
     if not endpoint or not supervisor_id:
         return LiveCapabilityStatus(False, "Agent id metadata or serving endpoint is not configured.")
     try:
+        metadata_path = f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}"
+        metadata = workspace_client.api_client.do("GET", metadata_path)
+        if not isinstance(metadata, Mapping):
+            return LiveCapabilityStatus(False, "Supervisor Agent metadata response was not an object.")
+        metadata_id = str(metadata.get("supervisor_agent_id") or "").strip()
+        metadata_endpoint = str(metadata.get("endpoint_name") or "").strip()
+        if metadata_id != supervisor_id:
+            return LiveCapabilityStatus(
+                False,
+                "Supervisor Agent metadata did not match MIP_AGENT_SUPERVISOR_ID.",
+            )
+        if metadata_endpoint != endpoint:
+            return LiveCapabilityStatus(
+                False,
+                "Configured Supervisor Agent does not map to MIP_AGENT_SERVING_ENDPOINT.",
+            )
         details = workspace_client.serving_endpoints.get(endpoint)
         state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
         task = getattr(details, "task", None)
@@ -853,8 +867,9 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
         response_proof = f", response {execution.response_id}" if execution.response_id else ""
         return LiveCapabilityStatus(
             True,
-            f"Live Agent Responses endpoint returned output ({endpoint}, task agent/v1/responses, "
-            f"transport {execution.transport}{response_proof}).",
+            f"Supervisor Agent metadata maps {supervisor_id} to {endpoint}; live Agent Responses "
+            f"endpoint returned output (task agent/v1/responses, transport "
+            f"{execution.transport}{response_proof}).",
         )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"Agent Orchestrator probe failed ({type(exc).__name__}).")

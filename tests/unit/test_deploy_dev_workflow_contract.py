@@ -41,6 +41,22 @@ def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
     assert "echo \"$DATABRICKS_TOKEN\"" not in text
 
 
+def test_deploy_dev_binds_required_and_rotation_secrets() -> None:
+    text = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    for binding in (
+        "MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}",
+        "MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}",
+        "MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}",
+        "MIP_GENIE_ACTION_SECRET_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_KID }}",
+        "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_PREVIOUS_KID }}",
+    ):
+        assert binding in text
+    assert "MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT" in text
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS=${MIP_GENIE_ACTION_SECRET_PREVIOUS}" in text
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID=${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID}" in text
+
+
 def test_deploy_dev_has_cost_and_permission_guards() -> None:
     text = DEPLOY_DEV.read_text(encoding="utf-8")
 
@@ -69,7 +85,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
 
     assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
     assert "MIP_COTALITY_ID_MASK_SECRET is required for target" in text
-    assert "source-committed fallback is allowed only for the dev sandbox" in text
+    assert "source-known compatibility namespace is allowed only for local/test" in text
 
     repo = tmp_path / "repo"
     script_dir = repo / "scripts"
@@ -90,6 +106,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
 
     env = {
         **os.environ,
+        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
     }
     env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
@@ -109,6 +126,54 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
         in result.stderr
     )
     assert "step 1: preflight" in result.stdout
+    assert "step 2:" not in result.stdout
+
+
+def test_deploy_script_rejects_placeholder_current_action_secret_for_sandbox(
+    tmp_path: Path,
+) -> None:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    repo = tmp_path / "repo"
+    script_dir = repo / "scripts"
+    bin_dir = tmp_path / "bin"
+    script_dir.mkdir(parents=True)
+    bin_dir.mkdir()
+    deploy_copy = script_dir / "deploy.sh"
+    deploy_copy.write_text(text, encoding="utf-8")
+    deploy_copy.chmod(0o755)
+    (repo / ".env.local").write_text(
+        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
+        "DATABRICKS_WAREHOUSE_ID=abc123\n"
+        "MIP_COTALITY_ID_MASK_SECRET=stable-sandbox-mask-secret\n"
+        "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n",
+        encoding="utf-8",
+    )
+    fake_databricks = bin_dir / "databricks"
+    fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
+    fake_databricks.chmod(0o755)
+
+    env = {
+        **os.environ,
+        "MIP_GENIE_ACTION_SECRET_CURRENT": "REDACTED",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+    for name in ("APP_ENV", "MIP_GENIE_ACTION_SECRET"):
+        env.pop(name, None)
+    result = subprocess.run(
+        ["bash", str(deploy_copy), "-t", "dev", "--dry-run", "--no-confirm"],
+        cwd=repo,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 1
+    assert (
+        "MIP_GENIE_ACTION_SECRET_CURRENT is required for target 'dev' (APP_ENV=sandbox)"
+        in result.stderr
+    )
     assert "step 2:" not in result.stdout
 
 
@@ -137,6 +202,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_customer_runtime_env(
     env = {
         **os.environ,
         "APP_ENV": "customer",
+        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
     }
     env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
@@ -180,6 +246,7 @@ def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path
 
     env = {
         **os.environ,
+        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
     }
     env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
@@ -224,6 +291,7 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
 
     env = {
         **os.environ,
+        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-customer-campaign-secret",
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
     }
     result = subprocess.run(

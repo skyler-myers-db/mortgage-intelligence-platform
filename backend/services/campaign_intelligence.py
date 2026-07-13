@@ -15,7 +15,6 @@ import hashlib
 import hmac
 import json
 import re
-import secrets
 import time
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
@@ -58,8 +57,20 @@ _OFFER_AUDIENCE: dict[str, str] = {
 
 _CAMPAIGN_PROVENANCE_VERSION = 1
 _CAMPAIGN_PROVENANCE_TTL_S = 60 * 60
-_PROCESS_CAMPAIGN_PROVENANCE_SECRET = secrets.token_bytes(32)
-_PROCESS_PROVENANCE_APP_ENVS = frozenset({"local", "dev", "development", "test"})
+_LOCAL_TEST_PROVENANCE_SECRET = b"mip-local-test-campaign-provenance-v1"
+_LOCAL_TEST_PROVENANCE_APP_ENVS = frozenset({"local", "test"})
+_PLACEHOLDER_PROVENANCE_SECRETS = frozenset(
+    {
+        "redacted",
+        "changeme",
+        "change-me",
+        "change_me",
+        "placeholder",
+        "example",
+        "your-secret",
+        "your_secret",
+    }
+)
 _GENERATOR_LABELS: dict[str, str] = {
     "supervisor": "Agent endpoint-generated recommendation",
     "reviewed_fallback": "Reviewed campaign framework",
@@ -213,9 +224,16 @@ def campaign_criteria_fingerprint(criteria: object) -> str:
 def _configured_secret(value: object) -> bytes | None:
     getter = getattr(value, "get_secret_value", None)
     raw = getter() if callable(getter) else value
-    if not isinstance(raw, str) or not raw.strip():
+    if not isinstance(raw, str):
         return None
-    return raw.strip().encode("utf-8")
+    configured = raw.strip()
+    normalized = configured.lower()
+    is_placeholder = normalized in _PLACEHOLDER_PROVENANCE_SECRETS or (
+        normalized.startswith("<") and normalized.endswith(">")
+    )
+    if not configured or is_placeholder:
+        return None
+    return configured.encode("utf-8")
 
 
 def _campaign_provenance_keys(
@@ -223,23 +241,25 @@ def _campaign_provenance_keys(
     *,
     for_issuance: bool = False,
 ) -> list[bytes]:
-    current_values = (
-        settings.mip_genie_action_secret_current,
-        settings.mip_genie_action_secret,
-    )
-    current = [
-        secret for value in current_values if (secret := _configured_secret(value)) is not None
-    ]
-    previous = _configured_secret(settings.mip_genie_action_secret_previous)
-    configured = current if for_issuance else [*current, *([previous] if previous else [])]
-    if configured:
-        return configured
+    current = _configured_secret(settings.mip_genie_action_secret_current)
     app_env = (settings.app_env or "").strip().lower()
-    if app_env not in _PROCESS_PROVENANCE_APP_ENVS:
-        raise RuntimeError(
-            "campaign provenance requires a configured HMAC secret outside local/dev/test"
+    if current is None:
+        if app_env not in _LOCAL_TEST_PROVENANCE_APP_ENVS:
+            raise RuntimeError(
+                "campaign provenance requires a configured HMAC secret in "
+                "MIP_GENIE_ACTION_SECRET_CURRENT outside local/test"
+            )
+        current = (
+            _configured_secret(settings.mip_genie_action_secret)
+            or _LOCAL_TEST_PROVENANCE_SECRET
         )
-    return [_PROCESS_CAMPAIGN_PROVENANCE_SECRET]
+
+    keys = [current]
+    if not for_issuance:
+        previous = _configured_secret(settings.mip_genie_action_secret_previous)
+        if previous is not None and previous != current:
+            keys.append(previous)
+    return keys
 
 
 def _campaign_copy_hash(subject: object, body: object) -> str:

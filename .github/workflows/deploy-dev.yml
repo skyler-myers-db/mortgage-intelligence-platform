@@ -41,12 +41,17 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+          MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
+          MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}
+          MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}
+          MIP_GENIE_ACTION_SECRET_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_KID }}
+          MIP_GENIE_ACTION_SECRET_PREVIOUS_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_PREVIOUS_KID }}
           MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}
           MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID; do
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi
@@ -76,6 +81,17 @@ jobs:
             echo "MIP_DEFAULT_CATALOG=mip"
             echo "MIP_DEFAULT_SCHEMA=gold"
             echo "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1"
+            echo "MIP_COTALITY_ID_MASK_SECRET=${MIP_COTALITY_ID_MASK_SECRET}"
+            echo "MIP_GENIE_ACTION_SECRET_CURRENT=${MIP_GENIE_ACTION_SECRET_CURRENT}"
+            if [ -n "${MIP_GENIE_ACTION_SECRET_PREVIOUS:-}" ]; then
+              echo "MIP_GENIE_ACTION_SECRET_PREVIOUS=${MIP_GENIE_ACTION_SECRET_PREVIOUS}"
+            fi
+            if [ -n "${MIP_GENIE_ACTION_SECRET_KID:-}" ]; then
+              echo "MIP_GENIE_ACTION_SECRET_KID=${MIP_GENIE_ACTION_SECRET_KID}"
+            fi
+            if [ -n "${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID:-}" ]; then
+              echo "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID=${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID}"
+            fi
             if [ -n "${MIP_ADMIN_EMAILS:-}" ]; then
               echo "MIP_ADMIN_EMAILS=${MIP_ADMIN_EMAILS}"
             fi

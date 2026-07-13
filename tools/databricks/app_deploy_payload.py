@@ -95,6 +95,11 @@ PLACEHOLDER_SECRET_VALUES = {
     "your_secret",
     "mip-cotality-id-mask-v1",
 }
+LOCAL_TEST_APP_ENVS = frozenset({"local", "test"})
+REQUIRED_DURABLE_SECRETS = (
+    "MIP_COTALITY_ID_MASK_SECRET",
+    "MIP_GENIE_ACTION_SECRET_CURRENT",
+)
 
 
 def _dotenv_overlay() -> dict[str, str]:
@@ -136,6 +141,14 @@ def build_payload(
     mode: str = "SNAPSHOT",
 ) -> dict[str, object]:
     dotenv = _dotenv_overlay()
+    secret_values = {name: _secret_value(name, dotenv) for name in SECRET_OPERATOR_VARS}
+    if app_env.strip().lower() not in LOCAL_TEST_APP_ENVS:
+        missing = [name for name in REQUIRED_DURABLE_SECRETS if not secret_values[name]]
+        if missing:
+            raise ValueError(
+                f"{', '.join(missing)} required for APP_ENV={app_env}; "
+                "deployed runtimes must use durable operator-supplied secrets"
+            )
     env_vars: list[dict[str, str]] = [
         {"name": "APP_ENV", "value": app_env},
         {"name": "DATABRICKS_WAREHOUSE_ID", "value_from": "sql_warehouse"},
@@ -157,7 +170,7 @@ def build_payload(
             _env_value(name, dotenv) or SAFE_RUNTIME_DEFAULTS.get(name, ""),
         )
     for name in SECRET_OPERATOR_VARS:
-        _append_value(env_vars, name, _secret_value(name, dotenv))
+        _append_value(env_vars, name, secret_values[name])
 
     return {
         "source_code_path": source_code_path,

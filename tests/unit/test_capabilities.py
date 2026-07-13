@@ -212,12 +212,20 @@ class _SyncedTable:
 
 
 class _FakeDatabaseApi:
-    def __init__(self, *, permission_denied: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        permission_denied: bool = False,
+        metadata_error: Exception | None = None,
+    ) -> None:
         self.requested: list[str] = []
         self.permission_denied = permission_denied
+        self.metadata_error = metadata_error
 
     def get_synced_database_table(self, name: str) -> _SyncedTable:
         self.requested.append(name)
+        if self.metadata_error is not None:
+            raise self.metadata_error
         if self.permission_denied:
             class PermissionDenied(Exception):
                 pass
@@ -231,9 +239,13 @@ class _FakeWorkspaceClient:
         self,
         *,
         permission_denied: bool = False,
+        database_metadata_error: Exception | None = None,
         serving_ready: bool = True,
         serving_task: str = "agent/v1/responses",
         empty_serving_response: bool = False,
+        supervisor_metadata_id: str = "supervisor-1",
+        supervisor_metadata_endpoint: str = "mip-supervisor-endpoint",
+        supervisor_metadata_error: Exception | None = None,
         inference_enabled: bool = True,
         inference_catalog: str = "mip_app_state",
         inference_schema: str = "mip_sync",
@@ -255,10 +267,16 @@ class _FakeWorkspaceClient:
         eval_experiment_id: str = "exp-1",
         eval_run_experiment_id: str | None = None,
     ) -> None:
-        self.database = _FakeDatabaseApi(permission_denied=permission_denied)
+        self.database = _FakeDatabaseApi(
+            permission_denied=permission_denied,
+            metadata_error=database_metadata_error,
+        )
         self.api_client = _FakeApiClient(
             empty_response=empty_serving_response,
             error=responses_api_error,
+            supervisor_id=supervisor_metadata_id,
+            supervisor_endpoint=supervisor_metadata_endpoint,
+            supervisor_error=supervisor_metadata_error,
         )
         self.serving_endpoints = _FakeServingEndpoints(
             ready=serving_ready,
@@ -336,13 +354,31 @@ class _FakeServingEndpoints:
 
 
 class _FakeApiClient:
-    def __init__(self, *, empty_response: bool = False, error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        empty_response: bool = False,
+        error: Exception | None = None,
+        supervisor_id: str = "supervisor-1",
+        supervisor_endpoint: str = "mip-supervisor-endpoint",
+        supervisor_error: Exception | None = None,
+    ) -> None:
         self.empty_response = empty_response
         self.error = error
+        self.supervisor_id = supervisor_id
+        self.supervisor_endpoint = supervisor_endpoint
+        self.supervisor_error = supervisor_error
         self.requests: list[tuple[str, str, dict[str, object] | None]] = []
 
     def do(self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object) -> object:
         self.requests.append((method, path, body))
+        if method == "GET" and path.startswith("/api/2.1/supervisor-agents/"):
+            if self.supervisor_error is not None:
+                raise self.supervisor_error
+            return {
+                "supervisor_agent_id": self.supervisor_id,
+                "endpoint_name": self.supervisor_endpoint,
+            }
         if self.error is not None:
             raise self.error
         if self.empty_response:
@@ -703,7 +739,7 @@ def test_lakebase_sync_live_probe_runs_without_lakebase_client() -> None:
     assert "source_readiness" in sql.statements[-1]
 
 
-def test_lakebase_sync_probe_falls_back_to_sql_when_metadata_acl_denied() -> None:
+def test_lakebase_sync_probe_fails_closed_when_metadata_acl_denied() -> None:
     sql = _LiveSqlClient()
     statuses = collect_live_capability_statuses(
         settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
@@ -711,9 +747,25 @@ def test_lakebase_sync_probe_falls_back_to_sql_when_metadata_acl_denied() -> Non
         workspace_client=_FakeWorkspaceClient(permission_denied=True),
     )
 
-    assert statuses["lakebase_sync"].available is True
-    assert "SQL row-count proof" in statuses["lakebase_sync"].detail
-    assert "source_readiness" in sql.statements[-1]
+    assert statuses["lakebase_sync"].available is False
+    assert "Database API metadata" in statuses["lakebase_sync"].detail
+    assert "SQL rows alone do not prove sync state" in statuses["lakebase_sync"].detail
+    assert not any("source_readiness" in statement for statement in sql.statements)
+
+
+def test_lakebase_sync_probe_fails_closed_when_metadata_api_is_unavailable() -> None:
+    sql = _LiveSqlClient()
+    statuses = collect_live_capability_statuses(
+        settings=_settings(mip_lakebase_sync=True, mip_lakebase_sync_tables="source_readiness"),
+        sql_client=sql,
+        workspace_client=_FakeWorkspaceClient(
+            database_metadata_error=RuntimeError("Database API unavailable")
+        ),
+    )
+
+    assert statuses["lakebase_sync"].available is False
+    assert "RuntimeError" in statuses["lakebase_sync"].detail
+    assert not any("source_readiness" in statement for statement in sql.statements)
 
 
 def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
@@ -728,12 +780,71 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
     )
 
     assert statuses["agent_orchestrator"].available is True
-    assert workspace.api_client.requests
-    method, path, body = workspace.api_client.requests[0]
+    assert len(workspace.api_client.requests) == 2
+    metadata_method, metadata_path, _metadata_body = workspace.api_client.requests[0]
+    assert metadata_method == "GET"
+    assert metadata_path == "/api/2.1/supervisor-agents/supervisor-1"
+    method, path, body = workspace.api_client.requests[1]
     assert method == "POST"
     assert path == "/serving-endpoints/responses"
     assert body is not None
     assert body["model"] == "mip-supervisor-endpoint"
+
+
+def test_agent_orchestrator_rejects_supervisor_endpoint_metadata_mismatch() -> None:
+    workspace = _FakeWorkspaceClient(supervisor_metadata_endpoint="different-endpoint")
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is False
+    assert "does not map" in statuses["agent_orchestrator"].detail
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.serving_endpoints.queries == []
+
+
+def test_agent_orchestrator_rejects_supervisor_identity_metadata_mismatch() -> None:
+    workspace = _FakeWorkspaceClient(supervisor_metadata_id="different-supervisor")
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is False
+    assert "did not match" in statuses["agent_orchestrator"].detail
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.serving_endpoints.queries == []
+
+
+def test_agent_orchestrator_fails_closed_when_supervisor_metadata_is_unavailable() -> None:
+    class PermissionDenied(Exception):
+        pass
+
+    workspace = _FakeWorkspaceClient(
+        supervisor_metadata_error=PermissionDenied("metadata denied")
+    )
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is False
+    assert "PermissionDenied" in statuses["agent_orchestrator"].detail
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.serving_endpoints.queries == []
 
 
 def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transport() -> None:
@@ -750,7 +861,7 @@ def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transpor
     )
 
     assert statuses["agent_orchestrator"].available is True
-    assert workspace.api_client.requests[0][1] == "/serving-endpoints/responses"
+    assert workspace.api_client.requests[1][1] == "/serving-endpoints/responses"
 
 
 def test_agent_orchestrator_live_probe_falls_back_when_responses_route_returns_non_json() -> None:

@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+import pytest
+from pydantic import SecretStr
+
+from backend.config.settings import Settings, settings
+from backend.services.campaign_intelligence import (
+    issue_campaign_variant_provenance,
+    verify_campaign_variant_provenance,
+)
+from backend.services.genie_actions import _current_action_token_key
+
+
+@pytest.mark.parametrize("app_env", ["dev", "sandbox", "customer", "production"])
+def test_genie_action_token_requires_current_secret_outside_local_test(
+    monkeypatch: pytest.MonkeyPatch,
+    app_env: str,
+) -> None:
+    monkeypatch.setattr(settings, "app_env", app_env)
+    monkeypatch.setattr(settings, "mip_genie_action_secret", SecretStr("legacy-secret"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", None)
+
+    with pytest.raises(RuntimeError, match="MIP_GENIE_ACTION_SECRET_CURRENT"):
+        _current_action_token_key()
+
+
+def test_genie_action_token_keeps_legacy_secret_usable_locally(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "app_env", "local")
+    monkeypatch.setattr(settings, "mip_genie_action_secret", SecretStr("legacy-secret"))
+    monkeypatch.setattr(settings, "mip_genie_action_secret_current", None)
+
+    key_id, secret = _current_action_token_key()
+
+    assert key_id == settings.mip_genie_action_secret_kid
+    assert secret == b"legacy-secret"
+
+
+def test_campaign_provenance_rejects_legacy_current_key_outside_local_test() -> None:
+    with pytest.raises(RuntimeError, match="MIP_GENIE_ACTION_SECRET_CURRENT"):
+        issue_campaign_variant_provenance(
+            generation_mode="reviewed_fallback",
+            generator_label="Reviewed campaign framework",
+            subject="Review your mortgage options",
+            body="Explore options with a licensed loan officer.",
+            criteria_fingerprint="criteria-v1",
+            settings=Settings(
+                app_env="sandbox",
+                mip_genie_action_secret="legacy-key-does-not-count",
+                mip_genie_action_secret_current=None,
+            ),
+        )
+
+
+def test_campaign_provenance_previous_key_is_bounded_by_existing_ttl() -> None:
+    old_settings = Settings(
+        app_env="production",
+        mip_genie_action_secret_current="old-current-key",
+    )
+    criteria_fingerprint = "criteria-v1"
+    token = issue_campaign_variant_provenance(
+        generation_mode="reviewed_fallback",
+        generator_label="Reviewed campaign framework",
+        subject="Review your mortgage options",
+        body="Explore options with a licensed loan officer.",
+        criteria_fingerprint=criteria_fingerprint,
+        settings=old_settings,
+        now=100,
+    )
+    rotated_settings = Settings(
+        app_env="production",
+        mip_genie_action_secret_current="new-current-key",
+        mip_genie_action_secret_previous="old-current-key",
+    )
+    variant = {
+        "subject": "Review your mortgage options",
+        "body": "Explore options with a licensed loan officer.",
+        "provenance_token": token,
+    }
+
+    assert verify_campaign_variant_provenance(
+        variant,
+        criteria_fingerprint=criteria_fingerprint,
+        settings=rotated_settings,
+        now=3_700,
+    ) == ("reviewed_fallback", "Reviewed campaign framework")
+    assert (
+        verify_campaign_variant_provenance(
+            variant,
+            criteria_fingerprint=criteria_fingerprint,
+            settings=rotated_settings,
+            now=3_701,
+        )
+        is None
+    )

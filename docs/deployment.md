@@ -28,8 +28,13 @@ MIP_LENDER_NAME="Acme Mortgage"
 # Optional; defaults from MIP_LENDER_NAME when unset.
 MIP_TENANT_ID="acme_mortgage"
 MIP_DEFAULT_CATALOG="acme_mip"
-# Required for customer/non-dev targets; dev warns when omitted.
+# Required for every deployed runtime, including the dev sandbox.
 MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
+MIP_GENIE_ACTION_SECRET_CURRENT="<deployment-scoped-random-secret>"
+# Optional during rotation; retain for at least the two-hour action-token TTL.
+MIP_GENIE_ACTION_SECRET_PREVIOUS="<prior-deployment-secret>"
+MIP_GENIE_ACTION_SECRET_KID="v2"
+MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="v1"
 ```
 
    See [`docs/se-onboarding.md`](se-onboarding.md) for the full
@@ -65,6 +70,15 @@ an exact inference-log row for the current `MIP_GIT_SHA`. Set
 `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=1` for release signoff when the deploy must
 fail if that exact proof has not landed yet.
 
+`MIP_COTALITY_ID_MASK_SECRET` and `MIP_GENIE_ACTION_SECRET_CURRENT` are
+mandatory for sandbox, staging, customer, and production app payloads. Only
+`APP_ENV=local` and `APP_ENV=test` may use compatibility keys. During action-key
+rotation, deploy the new current key/KID together with the prior key/KID, keep
+the prior key available for at least two hours so existing action confirmations
+and one-hour campaign provenance tokens can expire, then remove it in a later
+deployment. The previous key is verification-only; new tokens always use the
+current key.
+
 The Entrada dev target also supports the plain Databricks bundle resource path:
 
 ```bash
@@ -78,10 +92,11 @@ shipping workflow: use `./scripts/deploy.sh` when you also need frontend build,
 app snapshot promotion, refresh jobs, Genie rebinding, and smoke checks.
 
 For a narrow resource-only recovery, `make bundle-validate`,
-`make bundle-plan`, and `make bundle-deploy` are safe because they use
-`tools/databricks/bundle_env.py`.
-After a resource-only deploy, promote the uploaded source with
-`databricks apps deploy mip-app --mode SNAPSHOT`.
+`make bundle-plan`, and `make bundle-deploy` use
+`tools/databricks/bundle_env.py`, but they do not promote app source. Run
+`./scripts/deploy.sh` for promotion so the complete resource bindings, durable
+secrets, refreshes, and smoke gates are preserved. Do not invoke a bare
+`databricks apps deploy`; it bypasses the required full deployment payload.
 
 For disaster-recovery rollback paths, including Lakebase point-in-time
 restore, prior app snapshots, source-regression rollback via

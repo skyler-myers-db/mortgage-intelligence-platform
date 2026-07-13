@@ -219,10 +219,14 @@ def test_mask_cotality_id_ignores_legacy_raw_id_escape_hatch(monkeypatch: pytest
     )
 
 
-def test_mask_cotality_id_requires_secret_outside_sandbox(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("app_env", ["dev", "sandbox", "customer", "production"])
+def test_mask_cotality_id_requires_secret_outside_local_test(
+    monkeypatch: pytest.MonkeyPatch,
+    app_env: str,
+) -> None:
     monkeypatch.delenv("MIP_COTALITY_ID_MASK_SECRET", raising=False)
     monkeypatch.delenv("MIP_GENIE_ACTION_SECRET", raising=False)
-    monkeypatch.setattr(settings, "app_env", "customer")
+    monkeypatch.setattr(settings, "app_env", app_env)
 
     with pytest.raises(RuntimeError, match="MIP_COTALITY_ID_MASK_SECRET"):
         mask_cotality_id("clip", "1234567890")
@@ -239,7 +243,7 @@ def test_mask_cotality_id_ignores_genie_action_secret_for_masking(
         mask_cotality_id("clip", "1234567890")
 
 
-def test_mask_cotality_id_rejects_placeholder_secret_outside_sandbox(
+def test_mask_cotality_id_rejects_placeholder_secret_outside_local_test(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")

@@ -24,6 +24,8 @@ def _hermetic_operator_config(monkeypatch, tmp_path):
         monkeypatch.delenv(name, raising=False)
     for name in app_deploy_payload.SECRET_OPERATOR_VARS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-mask-secret")
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "test-action-secret")
 
 
 def _env_map(payload: dict[str, object]) -> dict[str, dict[str, str]]:
@@ -167,10 +169,35 @@ def test_payload_includes_rotation_aware_genie_action_secrets(monkeypatch) -> No
 def test_payload_omits_placeholder_cotality_mask_secret(monkeypatch) -> None:
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")
 
+    with pytest.raises(ValueError, match="MIP_COTALITY_ID_MASK_SECRET required"):
+        build_payload(
+            source_code_path="/Workspace/app/files",
+            target="prod",
+            app_env="prod",
+        )
+
+
+def test_payload_requires_current_action_secret_for_deployed_runtime(monkeypatch) -> None:
+    monkeypatch.delenv("MIP_GENIE_ACTION_SECRET_CURRENT")
+
+    with pytest.raises(ValueError, match="MIP_GENIE_ACTION_SECRET_CURRENT required"):
+        build_payload(
+            source_code_path="/Workspace/app/files",
+            target="dev",
+            app_env="sandbox",
+        )
+
+
+def test_payload_local_runtime_can_omit_durable_secrets(monkeypatch) -> None:
+    monkeypatch.delenv("MIP_COTALITY_ID_MASK_SECRET")
+    monkeypatch.delenv("MIP_GENIE_ACTION_SECRET_CURRENT")
+
     payload = build_payload(
         source_code_path="/Workspace/app/files",
-        target="prod",
-        app_env="prod",
+        target="dev",
+        app_env="local",
     )
 
-    assert "MIP_COTALITY_ID_MASK_SECRET" not in _env_map(payload)
+    env = _env_map(payload)
+    assert "MIP_COTALITY_ID_MASK_SECRET" not in env
+    assert "MIP_GENIE_ACTION_SECRET_CURRENT" not in env

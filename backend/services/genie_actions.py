@@ -47,6 +47,19 @@ _ALLOWED_ACTION_TYPES = frozenset(
 
 _ACTION_TOKEN_TTL_S = 2 * 60 * 60
 _PROCESS_ACTION_SECRET = secrets.token_urlsafe(32)
+_LOCAL_TEST_APP_ENVS = frozenset({"local", "test"})
+_PLACEHOLDER_ACTION_SECRETS = frozenset(
+    {
+        "redacted",
+        "changeme",
+        "change-me",
+        "change_me",
+        "placeholder",
+        "example",
+        "your-secret",
+        "your_secret",
+    }
+)
 _MAX_ACTION_FILTER_VALUES = 500
 _MAX_ACTION_STATE_VALUES = 56
 _LEAD_QUEUE_REPLAY_KEYS = frozenset(
@@ -310,7 +323,11 @@ def _validated_source_assets(criteria: dict[str, Any]) -> list[str]:
 def _configured_secret_bytes(configured: Any) -> bytes | None:
     if configured is not None:
         value = configured.get_secret_value().strip()
-        if value:
+        normalized = value.lower()
+        is_placeholder = normalized in _PLACEHOLDER_ACTION_SECRETS or (
+            normalized.startswith("<") and normalized.endswith(">")
+        )
+        if value and not is_placeholder:
             return value.encode("utf-8")
     return None
 
@@ -321,10 +338,19 @@ def _action_token_key_id() -> str:
 
 
 def _current_action_token_key() -> tuple[str, bytes]:
-    configured = settings.mip_genie_action_secret_current or settings.mip_genie_action_secret
-    secret = _configured_secret_bytes(configured)
+    secret = _configured_secret_bytes(settings.mip_genie_action_secret_current)
     if secret is not None:
         return _action_token_key_id(), secret
+
+    app_env = (settings.app_env or "").strip().lower()
+    if app_env not in _LOCAL_TEST_APP_ENVS:
+        raise RuntimeError(
+            "MIP_GENIE_ACTION_SECRET_CURRENT is required outside local/test app environments"
+        )
+
+    legacy_secret = _configured_secret_bytes(settings.mip_genie_action_secret)
+    if legacy_secret is not None:
+        return _action_token_key_id(), legacy_secret
     return "process", _PROCESS_ACTION_SECRET.encode("utf-8")
 
 
