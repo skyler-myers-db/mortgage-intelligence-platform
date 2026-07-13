@@ -1,7 +1,7 @@
 """Safe Mortgage Growth co-pilot planner.
 
-The co-pilot accepts a natural-language objective and, when a Supervisor Agent
-endpoint is configured and live, may ask it to choose one reviewed workflow id.
+The co-pilot accepts a natural-language objective and, when a configured Agent
+Responses endpoint is live, may ask it to choose one reviewed workflow id.
 The selection is untrusted until it matches the local allowlist; criteria, SQL,
 counts, routes, audit rows, and watchlist writes stay in the reviewed
 deterministic executor.
@@ -53,6 +53,8 @@ class GrowthAgentCopilotEvidence:
     deterministic_workflow_id: str | None = None
     workflow_override_review_required: bool = False
     gateway_client_request_id: str | None = None
+    serving_endpoint: str | None = None
+    serving_task: str | None = None
 
     def criteria_json(self) -> dict[str, object]:
         """Bounded, non-PII representation safe for Lakebase criteria."""
@@ -77,6 +79,8 @@ class GrowthAgentCopilotEvidence:
             "deterministic_workflow_id": self.deterministic_workflow_id,
             "workflow_override_review_required": self.workflow_override_review_required,
             "gateway_client_request_id": self.gateway_client_request_id,
+            "serving_endpoint": self.serving_endpoint,
+            "serving_task": self.serving_task,
         }
         payload.update({key: value for key, value in optional.items() if value not in (None, [], "")})
         return payload
@@ -90,7 +94,7 @@ def plan_growth_agent_prompt(
     """Return a reviewed workflow plus honest co-pilot evidence.
 
     The normal Genie answer path can compile and execute SQL, so this planner
-    does not call it. A configured Supervisor Agent endpoint may choose exactly
+    does not call it. A configured Agent Responses endpoint may choose exactly
     one reviewed workflow id from the allowlist. Deterministic code still owns
     SQL predicates, counts, handoff routes, Lakebase writes, audit rows, and
     fallbacks.
@@ -161,20 +165,20 @@ def _agent_framework_plan(
     except Exception:  # noqa: BLE001 - framework failure must not block reviewed fallback
         return None
     diverged = selected.id != deterministic_workflow.id
-    interpreted_intent = f"Databricks Supervisor Agent selected reviewed workflow: {selected.title}."
+    interpreted_intent = f"Databricks Agent Responses endpoint selected reviewed workflow: {selected.title}."
     reasoning_summary = (
-        f"Databricks Supervisor Agent selected the reviewed {selected.title} workflow "
+        f"Databricks Agent Responses endpoint selected the reviewed {selected.title} workflow "
         "from an allowlist. Deterministic tools produced counts, filters, audit, "
         "and the human-review handoff; no model SQL, DML, outreach, or raw "
         "identity data was executed."
     )
     if diverged:
         interpreted_intent = (
-            f"Databricks Supervisor Agent selected reviewed workflow: {selected.title}; "
+            f"Databricks Agent Responses endpoint selected reviewed workflow: {selected.title}; "
             f"deterministic fallback candidate was {deterministic_workflow.title}."
         )
         reasoning_summary = (
-            f"Databricks Supervisor Agent selected {selected.title} instead of the "
+            f"Databricks Agent Responses endpoint selected {selected.title} instead of the "
             f"deterministic fallback candidate {deterministic_workflow.title}. "
             "Both workflows are reviewed and allowlisted, but the mismatch is marked "
             "review-required before any human action. Deterministic tools produced "
@@ -184,14 +188,11 @@ def _agent_framework_plan(
     return selected, GrowthAgentCopilotEvidence(
         execution_mode="agent_framework",
         trace_kind="agent_framework",
-        planner_label="Databricks Supervisor Agent",
+        planner_label="Databricks Agent Responses endpoint",
         interpreted_intent=interpreted_intent,
         reasoning_summary=reasoning_summary,
         question_hash=_prompt_hash(payload.prompt),
-        trusted_assets=(
-            f"databricks.serving_endpoint.{endpoint}",
-            f"databricks.supervisor_agent.{supervisor_id}",
-        ),
+        trusted_assets=(f"databricks.serving_endpoint.{endpoint}",),
         thoughts=(
             f"supervisor_workflow_id={selected.id}",
             f"deterministic_candidate={deterministic_workflow.id}",
@@ -201,6 +202,8 @@ def _agent_framework_plan(
         deterministic_workflow_id=deterministic_workflow.id,
         workflow_override_review_required=diverged,
         gateway_client_request_id=gateway_client_request_id,
+        serving_endpoint=endpoint,
+        serving_task=task,
     )
 
 
@@ -239,7 +242,7 @@ def _supervisor_prompt(
         for workflow in WORKFLOWS.values()
     )
     return (
-        "You are the Mortgage Growth Agent Supervisor for Module 0 lead generation. "
+        "You are the Mortgage Growth Agent planner for Module 0 lead generation. "
         "The user objective has already passed app-side PII, protected-class, raw "
         "identifier, and SQL-injection validation. You may choose exactly one "
         "reviewed workflow id below. Do not write SQL, do not name borrowers, do "
@@ -383,10 +386,10 @@ def _agent_task_if_ready(workspace_client: object, endpoint: str) -> str | None:
     ready = _enum_value(getattr(getattr(details, "state", None), "ready", None))
     if ready != "READY":
         return None
-    task = str(getattr(details, "task", "") or "")
+    task = getattr(details, "task", None)
     if not _is_agent_responses_task(task):
         return None
-    return task
+    return "agent/v1/responses"
 
 
 def _is_agent_responses_task(task: object) -> bool:

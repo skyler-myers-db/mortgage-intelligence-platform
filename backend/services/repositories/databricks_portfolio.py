@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from backend.schemas.campaign_status import validate_campaign_status_transition
 from backend.schemas.portfolio import (
     CampaignListResponse,
     CampaignStatusPatchRequest,
@@ -26,6 +27,10 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services.audit_store import build_safe_audit_metadata
+from backend.services.campaign_intelligence import (
+    campaign_criteria_fingerprint,
+    verify_campaign_variant_provenance,
+)
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate, suppressed_sql_predicate
@@ -66,7 +71,6 @@ PORTFOLIO_EQUITY_THRESHOLDS: dict[str, int] = {
     "≥ 25%": 25,
     "≥ 40%": 40,
 }
-
 class DatabricksPortfolioRepository:
     """Portfolio preview rollup over ``gold.borrower_360``.
 
@@ -416,6 +420,7 @@ class DatabricksPortfolioRepository:
       UPDATE mip_app.campaigns
       SET status = %(status)s, updated_at = now()
       WHERE campaign_id = %(campaign_id)s::uuid
+        AND status = %(current_status)s
       RETURNING campaign_id::text, name, owner_email, status, criteria,
                 suppression_policy, message_variants, channel_cascade, send_window,
                 holdout, roi_assumptions, household_dedup, household_summary, created_at, updated_at
@@ -432,7 +437,7 @@ class DatabricksPortfolioRepository:
         updated_campaign.campaign_id,
         %(request_id)s,
         %(correlation_id)s,
-        ARRAY[]::TEXT[],
+        %(evidence_ids)s::TEXT[],
         %(metadata)s::jsonb
       FROM updated_campaign
       RETURNING audit_id
@@ -775,21 +780,43 @@ class DatabricksPortfolioRepository:
         household_summary = self._load_household_dedup_summary(payload)
         household_summary_dict = household_summary.model_dump()
         household_dedup_dict = payload.household_dedup.model_dump()
-        variant_rows = [
-            {
-                "variant_name": str(
-                    variant.get("variant_name") or variant.get("name") or "default"
-                )[:64],
-                "channel": str(variant.get("channel") or "email"),
-                "subject": variant.get("subject"),
-                "body": str(variant.get("body") or ""),
-                "weight_pct": variant.get("weight_pct"),
-                "generation_mode": variant.get("generation_mode") or "operator",
-                "generator_label": variant.get("generator_label") or "Operator edited",
-            }
-            for variant in payload.message_variants
-            if str(variant.get("body") or "").strip()
-        ]
+        criteria_fingerprint = campaign_criteria_fingerprint(payload.criteria)
+        variant_rows: list[dict[str, object]] = []
+        for variant in payload.message_variants:
+            if not str(variant.get("body") or "").strip():
+                continue
+            requested_mode = str(variant.get("generation_mode") or "operator")
+            requested_label = str(variant.get("generator_label") or "Operator edited")
+            if requested_mode == "operator":
+                generation_mode = "operator"
+                generator_label = "Operator edited"
+            else:
+                verified = verify_campaign_variant_provenance(
+                    variant,
+                    criteria_fingerprint=criteria_fingerprint,
+                )
+                if verified is None:
+                    raise ValueError(
+                        "model-generated campaign provenance is missing, expired, or invalid"
+                    )
+                generation_mode, generator_label = verified
+                if requested_mode != generation_mode or requested_label != generator_label:
+                    raise ValueError(
+                        "model-generated campaign provenance does not match the server proof"
+                    )
+            variant_rows.append(
+                {
+                    "variant_name": str(
+                        variant.get("variant_name") or variant.get("name") or "default"
+                    )[:64],
+                    "channel": str(variant.get("channel") or "email"),
+                    "subject": variant.get("subject"),
+                    "body": str(variant.get("body") or ""),
+                    "weight_pct": variant.get("weight_pct"),
+                    "generation_mode": generation_mode,
+                    "generator_label": generator_label,
+                }
+            )
         generation_modes = {
             str(variant.get("generation_mode") or "operator") for variant in variant_rows
         }
@@ -830,7 +857,7 @@ class DatabricksPortfolioRepository:
                 "owner_email": owner_email,
                 "criteria": json.dumps(payload.criteria.model_dump(exclude_none=True)),
                 "suppression_policy": json.dumps(payload.suppression_policy, sort_keys=True),
-                "message_variants": json.dumps(payload.message_variants, sort_keys=True),
+                "message_variants": json.dumps(variant_rows, sort_keys=True),
                 "channel_cascade": json.dumps(payload.channel_cascade, sort_keys=True),
                 "send_window": json.dumps(payload.send_window, sort_keys=True),
                 "holdout": json.dumps(payload.holdout, sort_keys=True)
@@ -999,6 +1026,14 @@ class DatabricksPortfolioRepository:
         )
         if existing is None:
             raise LakebaseError("campaign status update returned no row")
+        actor_email = actor or "unknown"
+        current_status = str(existing.get("status") or "")
+        transition_evidence = validate_campaign_status_transition(
+            payload,
+            campaign_id=portfolio_id,
+            current_status=current_status,
+            actor=actor_email,
+        )
         if payload.status in {"pending_review", "approved", "live", "active"}:
             criteria = self._json_value(existing.get("criteria"), {})
             suppression_policy = self._json_value(existing.get("suppression_policy"), {})
@@ -1019,20 +1054,32 @@ class DatabricksPortfolioRepository:
                 raise ValueError(
                     "campaign cannot advance without an Eligible only contactability policy"
                 )
+        metadata: dict[str, object] = {
+            "status": payload.status,
+            "rationale": payload.rationale,
+        }
+        evidence_ids: list[str] = []
+        if transition_evidence is not None:
+            metadata.update(
+                {
+                    "approval_id": transition_evidence.approval_id,
+                    "occurred_at": transition_evidence.authorized_at,
+                }
+            )
+            evidence_ids.append(transition_evidence.approval_id)
         row = _get_lakebase_client().fetchone(
             self._CAMPAIGN_PATCH_SQL,
             {
                 "campaign_id": portfolio_id,
+                "current_status": current_status,
                 "status": payload.status,
-                "actor": actor or "unknown",
+                "actor": actor_email,
                 "request_id": f"campaign-status-{uuid.uuid4()}",
                 "correlation_id": get_correlation_id(),
+                "evidence_ids": evidence_ids,
                 "metadata": json.dumps(
                     build_safe_audit_metadata(
-                        {
-                            "status": payload.status,
-                            "rationale": payload.rationale,
-                        },
+                        metadata,
                         action="campaign.status_update",
                     ),
                     sort_keys=True,

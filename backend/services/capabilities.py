@@ -39,8 +39,7 @@ from backend.services.capability_genie_probe import (
     probe_native_visualization,
 )
 from backend.services.capability_serving_probes import (
-    query_serving_endpoint,
-    serving_response_has_payload,
+    query_serving_endpoint_with_proof,
 )
 from backend.services.databricks_sql_helpers import _validate_identifier, qualify
 
@@ -379,10 +378,10 @@ def probe_capabilities(
             key="agent_orchestrator",
             configured=True,
             configured_detail=(
-                "Supervisor agent id and serving endpoint are configured; a live "
-                "serving endpoint probe must pass before this row is claimable."
+                "Agent id metadata and an Agent Responses serving endpoint are configured; "
+                "an exact live endpoint probe must pass before this row is claimable."
             ),
-            not_provisioned_detail="Supervisor agent id or serving endpoint missing.",
+            not_provisioned_detail="Agent id metadata or serving endpoint missing.",
             live_statuses=live_statuses,
         )
     else:
@@ -394,7 +393,7 @@ def probe_capabilities(
     caps.append(
         Capability(
             key="agent_orchestrator",
-            label="Agent Framework orchestration",
+            label="Agent Responses orchestration",
             ga=True,
             status=orchestrator_status,
             detail=orchestrator_detail,
@@ -547,9 +546,17 @@ def collect_live_capability_statuses(
         conversation_status, response = probe_genie_turn(
             genie_client, make_status=LiveCapabilityStatus
         )
+        conversation_status = _exact_genie_turn_status(conversation_status, response)
         statuses["genie_conversation_api"] = conversation_status
-        statuses["genie_native_visualization"] = probe_native_visualization(
-            genie_client, response, make_status=LiveCapabilityStatus
+        statuses["genie_native_visualization"] = (
+            probe_native_visualization(
+                genie_client, response, make_status=LiveCapabilityStatus
+            )
+            if conversation_status.available
+            else LiveCapabilityStatus(
+                False,
+                "Native visualization was not probed because the Genie turn lacked exact completed-turn proof.",
+            )
         )
     if sql_client is not None:
         statuses["certified_metric_views"] = _probe_metric_views(sql_client)
@@ -601,6 +608,28 @@ def _probe_uc_functions(sql_client: Any) -> LiveCapabilityStatus:
         return LiveCapabilityStatus(False, f"UC-function probe failed ({type(exc).__name__}).")
     return LiveCapabilityStatus(
         True, "Live UC function probes passed for all reviewed Growth Agent tools."
+    )
+
+
+def _exact_genie_turn_status(
+    initial: LiveCapabilityStatus,
+    response: Any | None,
+) -> LiveCapabilityStatus:
+    if not initial.available or response is None:
+        return initial
+    conversation_id = str(getattr(response, "conversation_id", "") or "").strip()
+    message_id = str(getattr(response, "message_id", "") or "").strip()
+    terminal_status = str(getattr(response, "genie_status", "") or "").strip().upper()
+    if not conversation_id or not message_id:
+        return LiveCapabilityStatus(False, "Genie turn did not return conversation/message proof.")
+    if terminal_status != "COMPLETED":
+        return LiveCapabilityStatus(
+            False,
+            f"Genie turn returned ids but terminal status was {terminal_status or 'missing'}, not COMPLETED.",
+        )
+    return LiveCapabilityStatus(
+        True,
+        "Live Genie Conversation API turn returned conversation/message ids with terminal status COMPLETED.",
     )
 
 
@@ -799,7 +828,7 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
     endpoint = (settings.mip_agent_serving_endpoint or "").strip()
     supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
     if not endpoint or not supervisor_id:
-        return LiveCapabilityStatus(False, "Supervisor id or serving endpoint is not configured.")
+        return LiveCapabilityStatus(False, "Agent id metadata or serving endpoint is not configured.")
     try:
         details = workspace_client.serving_endpoints.get(endpoint)
         state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
@@ -808,20 +837,24 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
             return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} is not READY ({state}).")
         if not _is_agent_responses_task(task):
             return LiveCapabilityStatus(False, f"Endpoint {endpoint} task is {task}, not agent.")
-        response = query_serving_endpoint(
+        execution = query_serving_endpoint_with_proof(
             workspace_client,
             endpoint,
-            task=str(task),
+            task="agent/v1/responses",
             prompt=(
                 "Capability readiness check. Reply with a one-sentence acknowledgement "
                 "that the Mortgage Growth Agent endpoint is reachable."
             ),
         )
-        if not serving_response_has_payload(response):
-            return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} returned no response payload.")
+        if not execution.proves_agent_response:
+            return LiveCapabilityStatus(
+                False, f"Agent endpoint {endpoint} returned no response payload."
+            )
+        response_proof = f", response {execution.response_id}" if execution.response_id else ""
         return LiveCapabilityStatus(
             True,
-            f"Live Supervisor Agent endpoint accepted a bounded query ({endpoint}, supervisor {supervisor_id}).",
+            f"Live Agent Responses endpoint returned output ({endpoint}, task agent/v1/responses, "
+            f"transport {execution.transport}{response_proof}).",
         )
     except Exception as exc:  # noqa: BLE001
         return LiveCapabilityStatus(False, f"Agent Orchestrator probe failed ({type(exc).__name__}).")

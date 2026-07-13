@@ -5,6 +5,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
     CampaignListResponse,
@@ -18,11 +19,16 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services.audit_store import resolve_actor
-from backend.services.campaign_intelligence import CampaignPerformanceContext, recommend_campaign
+from backend.services.campaign_intelligence import (
+    CampaignPerformanceContext,
+    campaign_criteria_fingerprint,
+    campaign_performance_fingerprint,
+    recommend_campaign,
+)
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
-from backend.services.rbac import require_admin
+from backend.services.rbac import require_admin, require_approver
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
 from backend.services.sales_state import SalesStateStore, get_sales_state_store
 
@@ -75,8 +81,8 @@ def campaign_recommendation(
 ) -> CampaignRecommendationResponse:
     """Generate a validated strategy over the exact governed cohort.
 
-    The Supervisor receives aggregate facts only. Metrics, citations, holdout
-    bounds, and the approval boundary are enforced by the server response
+    The configured Agent Responses endpoint receives aggregate facts only.
+    Metrics, citations, holdout bounds, and the approval boundary are enforced by the server response
     contract; an unavailable or invalid model response is labelled as a
     reviewed fallback rather than masquerading as AI output.
     """
@@ -95,20 +101,33 @@ def campaign_recommendation(
             to_date=end_date.isoformat(),
             visible_lo_emails=visible_los,
         )
+        observation_fingerprint = campaign_performance_fingerprint(
+            observed_from=start_date,
+            observed_to=end_date,
+            visible_lo_emails=visible_los,
+            counts=observed_funnel,
+        )
         performance = CampaignPerformanceContext(
             unique_leads_attempted=int(observed_funnel["unique_leads_attempted"]),
-            unique_contacts_reached=observed_funnel["unique_contacts_reached"],
-            unique_application_starts=observed_funnel["unique_application_starts"],
-            unique_applications_submitted=int(
-                observed_funnel["unique_applications_submitted"]
-            ),
+            unique_contacts_reached=int(observed_funnel["unique_contacts_reached"]),
+            unique_application_starts=int(observed_funnel["unique_application_starts"]),
+            unique_applications_submitted=int(observed_funnel["unique_applications_submitted"]),
             unique_closed_funded=int(observed_funnel["unique_closed_funded"]),
+            observed_from=start_date,
+            observed_to=end_date,
+            snapshot_at=datetime.now(UTC),
+            interval_days=(end_date - start_date).days + 1,
+            observation_fingerprint=observation_fingerprint,
         )
     except (KeyError, PermissionError, LakebaseError):
         # Campaign recommendations remain available from exact UC cohort facts
         # when the actor lacks Sales Ops scope or Lakebase is unavailable.
         performance = None
-    return recommend_campaign(preview, performance=performance)
+    return recommend_campaign(
+        preview,
+        performance=performance,
+        criteria_fingerprint=campaign_criteria_fingerprint(payload.criteria),
+    )
 
 
 @router.post("/create", response_model=PortfolioCreateResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
@@ -203,8 +222,19 @@ def patch_portfolio(
         result = repo.get(portfolio_id)
         if not result:
             raise HTTPException(status_code=404, detail="portfolio not found")
-        _assert_portfolio_visible(result, actor=resolve_actor(request), is_admin=_is_admin(request))
-        return repo.patch_status(portfolio_id, payload, actor=resolve_actor(request))
+        actor = resolve_actor(request)
+        _assert_portfolio_visible(result, actor=actor, is_admin=_is_admin(request))
+        current_status = str(result.get("status") or "")
+        if payload.status in {"approved", "live", "active"}:
+            approver = require_approver(request)
+            payload = authorize_campaign_status_transition(
+                payload,
+                campaign_id=portfolio_id,
+                current_status=current_status,
+                approver_email=approver,
+            )
+            actor = approver
+        return repo.patch_status(portfolio_id, payload, actor=actor)
     except HTTPException:
         raise
     except ValueError as exc:

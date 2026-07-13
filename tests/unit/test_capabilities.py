@@ -108,12 +108,14 @@ class _LiveGenieClient:
         ok: bool = True,
         conversation_id: str = "conv-live",
         message_id: str | None = "msg-live",
+        genie_status: str | None = "COMPLETED",
         native_visualization: dict[str, object] | None = None,
         download_ok: bool = False,
     ) -> None:
         self.ok = ok
         self.conversation_id = conversation_id
         self.message_id = message_id
+        self.genie_status = genie_status
         self.native_visualization = native_visualization
         self.download_ok = download_ok
         self.download_calls: list[tuple[str, str, str]] = []
@@ -125,6 +127,7 @@ class _LiveGenieClient:
         return SimpleNamespace(
             conversation_id=self.conversation_id,
             message_id=self.message_id,
+            genie_status=self.genie_status,
             native_visualization=self.native_visualization,
         )
 
@@ -569,6 +572,16 @@ def test_genie_live_probe_requires_conversation_and_message_ids() -> None:
     assert "conversation and message id" in statuses["genie_conversation_api"].detail
 
 
+def test_genie_live_probe_requires_completed_terminal_status() -> None:
+    statuses = collect_live_capability_statuses(
+        genie_client=_LiveGenieClient(genie_status=None),
+    )
+
+    assert statuses["genie_conversation_api"].available is False
+    assert "terminal status was missing" in statuses["genie_conversation_api"].detail
+    assert statuses["genie_native_visualization"].available is False
+
+
 def test_genie_native_visualization_configured_not_claimed_by_default() -> None:
     """Genie configured but no live probe -> native-viz row is configured only."""
     cap = _by_key(probe_capabilities(_settings()), "genie_native_visualization")
@@ -721,6 +734,23 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
     assert path == "/serving-endpoints/responses"
     assert body is not None
     assert body["model"] == "mip-supervisor-endpoint"
+
+
+def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transport() -> None:
+    workspace = _FakeWorkspaceClient()
+    workspace.serving_endpoints.task = SimpleNamespace(value="AGENT_V1_RESPONSES")
+
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_agent_orchestrator=True,
+            mip_agent_supervisor_id="supervisor-1",
+            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+        ),
+        workspace_client=workspace,
+    )
+
+    assert statuses["agent_orchestrator"].available is True
+    assert workspace.api_client.requests[0][1] == "/serving-endpoints/responses"
 
 
 def test_agent_orchestrator_live_probe_falls_back_when_responses_route_returns_non_json() -> None:
@@ -1686,7 +1716,15 @@ def test_serving_response_has_payload_accepts_list_response() -> None:
     from backend.services.capability_serving_probes import serving_response_has_payload
 
     assert serving_response_has_payload([{"output": "ok"}]) is True
+    assert serving_response_has_payload([{"generated_text": "ok"}]) is True
     assert serving_response_has_payload([]) is False
+    assert serving_response_has_payload({"id": "resp-only"}) is False
+    assert (
+        serving_response_has_payload(
+            {"id": "resp-failed", "status": "failed", "output": [{"content": "not proof"}]}
+        )
+        is False
+    )
 
 
 def test_count_inference_log_rows_content_matches_when_no_client_request_id_column() -> None:

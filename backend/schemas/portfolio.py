@@ -25,7 +25,6 @@ from backend.schemas.portfolio_campaign import (
     assert_borrower_campaign_copy,
     assert_public_campaign_text,
     bind_portfolio_criteria,
-    remove_allowed_public_titlecase_phrases,
 )
 
 _OCCUPANCY_LABELS: frozenset[str] = frozenset(
@@ -583,24 +582,7 @@ class PortfolioCreateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def _validate_name(cls, value: str) -> str:
-        cleaned = re.sub(r"\s+", " ", value.strip())
-        if not cleaned:
-            raise ValueError("name is required")
-        if len(cleaned) > 80:
-            raise ValueError("name must be 80 characters or fewer")
-        pii_patterns = (
-            r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
-            r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b",
-            r"\b\d{9,}\b",
-            r"\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way)\b",
-            r"\b(?:raw[_\s-]?clip|owner[_\s-]?name|street[_\s-]?address|mailing[_\s-]?address)\b",
-        )
-        if any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in pii_patterns):
-            raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
-        name_scan = remove_allowed_public_titlecase_phrases(cleaned)
-        if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", name_scan):
-            raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
-        return cleaned
+        return assert_public_campaign_text(value, field_name="campaign name", max_length=80)
 
     @field_validator("message_variants")
     @classmethod
@@ -642,6 +624,12 @@ class PortfolioCreateRequest(BaseModel):
                 field_name="variant generator_label",
                 max_length=80,
             )
+            provenance_token_raw = raw.get("provenance_token")
+            provenance_token = (
+                str(provenance_token_raw).strip() if provenance_token_raw is not None else None
+            )
+            if provenance_token is not None and not 32 <= len(provenance_token) <= 4096:
+                raise ValueError("variant provenance_token must be a bounded server-issued token")
             weight_raw = raw.get("weight_pct", 100)
             try:
                 weight = float(weight_raw)
@@ -658,6 +646,7 @@ class PortfolioCreateRequest(BaseModel):
                     "weight_pct": weight,
                     "generation_mode": generation_mode,
                     "generator_label": generator_label,
+                    "provenance_token": provenance_token,
                 }
             )
         return normalized

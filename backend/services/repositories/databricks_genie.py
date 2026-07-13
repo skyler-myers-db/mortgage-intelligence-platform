@@ -624,20 +624,21 @@ def _restore_live_voice(
     proof = canonical.proof
     narrative = (result.answer_text or "").strip()
     updates: dict[str, Any] = {}
-    contradicted, claimed = _narrative_contradicts_metric(narrative, canonical.metric_value)
-    if narrative and contradicted:
-        # Trust boundary (external audit 2026-07-08): never lead a
-        # ``trusted_sql`` answer with model prose asserting a figure the
-        # governed recomputation disproves. The verified deterministic
-        # statement leads; the discrepancy is disclosed as a gap, not
-        # displayed as fact. Live-intelligence fields still carry through —
-        # the turn was genuinely live, only its numeric claim lost.
+    unsupported_claims = _unsupported_answer_numeric_claims(
+        narrative,
+        canonical.table_rows,
+        canonical.question,
+    )
+    if narrative and unsupported_claims:
+        # Recognized shapes must obey the same all-claims rule as generic
+        # Genie turns. One matching count cannot launder another unsupported
+        # rate, balance, percentage, or count in the same narrative.
         updates["answer"] = canonical.answer
         if proof is not None:
             gap = (
-                f"Genie's draft narrative stated {claimed}; the governed "
-                f"recomputation returned {canonical.metric_value} and "
-                "superseded it."
+                "Genie's draft narrative included numeric or financial claims "
+                "that were not supported by the governed recomputation; the "
+                "unsupported prose was removed."
             )
             if gap not in proof.known_data_gaps:
                 proof = proof.model_copy(

@@ -1,3 +1,4 @@
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
 from fastapi.testclient import TestClient
@@ -26,6 +27,21 @@ def _preview() -> PortfolioPreview:
     )
 
 
+def _qualified_performance() -> CampaignPerformanceContext:
+    return CampaignPerformanceContext(
+        unique_leads_attempted=100,
+        unique_contacts_reached=80,
+        unique_application_starts=20,
+        unique_applications_submitted=12,
+        unique_closed_funded=3,
+        observed_from=date(2026, 4, 15),
+        observed_to=date(2026, 7, 13),
+        snapshot_at=datetime(2026, 7, 13, 16, 0, tzinfo=UTC),
+        interval_days=90,
+        observation_fingerprint="a" * 64,
+    )
+
+
 def test_reviewed_fallback_is_labelled_and_uses_governed_cohort_metrics() -> None:
     result = recommend_campaign(
         _preview(),
@@ -47,27 +63,21 @@ def test_reviewed_fallback_is_labelled_and_uses_governed_cohort_metrics() -> Non
 def test_recommendation_adds_only_sample_qualified_observed_performance() -> None:
     result = recommend_campaign(
         _preview(),
-        performance=CampaignPerformanceContext(
-            unique_leads_attempted=100,
-            unique_contacts_reached=80,
-            unique_application_starts=20,
-            unique_applications_submitted=12,
-            unique_closed_funded=3,
-        ),
+        performance=_qualified_performance(),
         settings=Settings(mip_agent_orchestrator=False, mip_lender_name="Summit Mortgage"),
     )
 
     assert result.performance_status == "qualified"
     evidence = {row.label: row.value for row in result.evidence}
+    assert evidence["Qualified performance observation"].endswith("fp aaaaaaaaaaaa")
     assert (
-        evidence["Team 90-day same-borrower attempted, reached, and application start"]
+        evidence["Same-borrower attempted, reached, and application start"]
         == "100 attempted / 80 reached / 20 starts"
     )
     assert (
-        evidence["Team 90-day same-borrower application to submitted"]
-        == "12 / 20 application starts"
+        evidence["Same-borrower application starts, submitted, and funded"]
+        == "20 starts / 12 submitted / 3 funded"
     )
-    assert evidence["Team 90-day same-borrower submitted to funded"] == "3 / 12 submitted"
 
     insufficient = recommend_campaign(
         _preview(),
@@ -156,6 +166,16 @@ class _ServingEndpoints:
         )
 
 
+class _PromptCaptureApiClient(_ApiClient):
+    def __init__(self) -> None:
+        self.prompts: list[str] = []
+
+    def do(self, method: str, path: str, *, body: dict[str, object]):
+        prompt = str(body["input"][0]["content"])  # type: ignore[index]
+        self.prompts.append(prompt)
+        return super().do(method, path, body=body)
+
+
 def test_supervisor_copy_is_validated_while_evidence_remains_server_derived() -> None:
     client = SimpleNamespace(serving_endpoints=_ServingEndpoints(), api_client=_ApiClient())
     result = recommend_campaign(
@@ -171,9 +191,54 @@ def test_supervisor_copy_is_validated_while_evidence_remains_server_derived() ->
 
     assert result.generation_mode == "supervisor"
     assert result.holdout_pct == 12
-    assert result.generator_label == "Supervisor-generated recommendation"
+    assert result.generator_label == "Agent endpoint-generated recommendation"
+    assert all(variant.provenance_token for variant in result.variants)
     assert result.evidence[0].value == "2,119 borrowers"
     assert result.warnings == []
+
+
+def test_model_prompt_omits_unqualified_performance_and_includes_complete_proof() -> None:
+    api_client = _PromptCaptureApiClient()
+    serving = SimpleNamespace(serving_endpoints=_ServingEndpoints(), api_client=api_client)
+    settings = Settings(
+        mip_agent_orchestrator=True,
+        mip_agent_serving_endpoint="mip-supervisor",
+        mip_agent_supervisor_id="supervisor-id",
+    )
+    low_quality = CampaignPerformanceContext(
+        unique_leads_attempted=100,
+        unique_contacts_reached=80,
+        unique_application_starts=20,
+        unique_applications_submitted=12,
+        unique_closed_funded=3,
+    )
+
+    low_quality_result = recommend_campaign(
+        _preview(),
+        performance=low_quality,
+        settings=settings,
+        serving_client=serving,
+    )
+    qualified_result = recommend_campaign(
+        _preview(),
+        performance=_qualified_performance(),
+        settings=settings,
+        serving_client=serving,
+    )
+
+    assert low_quality_result.performance_status == "insufficient_sample"
+    assert "qualified_observed_performance" not in api_client.prompts[0]
+    assert "unique_leads_attempted" not in api_client.prompts[0]
+    assert qualified_result.performance_status == "qualified"
+    assert "qualified_observed_performance" in api_client.prompts[1]
+    for field in (
+        "observed_from",
+        "observed_to",
+        "snapshot_at",
+        "interval_days",
+        "observation_fingerprint",
+    ):
+        assert field in api_client.prompts[1]
 
 
 class _UnsafeApiClient(_ApiClient):

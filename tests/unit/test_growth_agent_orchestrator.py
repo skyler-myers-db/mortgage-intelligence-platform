@@ -126,10 +126,10 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert "listing_watch" in calls[0]["prompt"]
     assert body["execution_mode"] == "agent_framework"
     assert body["trace_kind"] == "agent_framework"
-    assert body["planner_label"] == "Databricks Supervisor Agent"
+    assert body["planner_label"] == "Databricks Agent Responses endpoint"
     assert body["workflow"]["id"] == "listing_watch"
     assert body["route"] == "/lead-queue?segment=listed&marketing_eligibility=Eligible+only&states=IL"
-    assert "Supervisor Agent selected reviewed workflow" in body["interpreted_intent"]
+    assert "Agent Responses endpoint selected reviewed workflow" in body["interpreted_intent"]
     assert "deterministic fallback candidate" in body["interpreted_intent"]
     assert "Daily Refi Opportunity Brief" in body["agent_reasoning"]
     selection_check = next(
@@ -140,7 +140,6 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert "daily_refi_brief" in selection_check["detail"]
     assert body["genie_trusted_assets"] == [
         "databricks.serving_endpoint.mip-supervisor-endpoint",
-        "databricks.supervisor_agent.supervisor-1",
     ]
     framework_chip = next(
         chip for chip in body["governance_chips"] if chip["label"] == "Multi-agent framework"
@@ -159,6 +158,8 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert evidence["deterministic_workflow_id"] == "daily_refi_brief"
     assert evidence["workflow_override_review_required"] is True
     assert evidence["gateway_client_request_id"] == calls[0]["client_request_id"]
+    assert evidence["serving_endpoint"] == "mip-supervisor-endpoint"
+    assert evidence["serving_task"] == "agent/v1/responses"
     assert prompt_text.lower() not in json.dumps(body).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.runs, default=str).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.audit_events, default=str).lower()

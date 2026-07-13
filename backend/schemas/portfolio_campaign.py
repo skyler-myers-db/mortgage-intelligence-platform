@@ -84,13 +84,13 @@ def assert_public_campaign_text(value: object, *, field_name: str, max_length: i
     name_scan_text = remove_allowed_public_titlecase_phrases(text)
     if contains_prompt_injection_text(text):
         raise ValueError(f"{field_name} cannot contain instruction-override language")
+    assert_no_protected_class_marketing_text(text, field_name=field_name)
     if (
         _HUMAN_NAME_SHAPE_RE.search(name_scan_text)
         or contains_contextual_human_name(name_scan_text)
         or contains_human_name_shape(name_scan_text)
     ):
         raise ValueError(f"{field_name} cannot contain human-name-shaped text")
-    assert_no_protected_class_marketing_text(text, field_name=field_name)
     return text
 
 
@@ -150,6 +150,7 @@ class CampaignRecommendationVariant(BaseModel):
     subject: str = Field(min_length=1, max_length=120)
     body: str = Field(min_length=1, max_length=1000)
     hypothesis: str = Field(min_length=1, max_length=280)
+    provenance_token: str | None = Field(default=None, min_length=32, max_length=4096)
 
     @field_validator("subject", "body", "hypothesis")
     @classmethod

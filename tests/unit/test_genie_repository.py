@@ -821,9 +821,11 @@ def test_top_borrowers_by_state_uses_canonical_lead_population_rows() -> None:
     assert sql.parameters == [{"state": "IL"}]
     assert result.row_count == 10
     assert result.table_rows == rows
-    # Voice-first: Genie's own narrative leads, plus an appended verification note.
-    assert result.answer.startswith("The top borrower has score 91, but no rows were attached.")
-    assert "Verified against" in result.answer
+    # The verified rows support score 90, not the model's 91 claim, so the
+    # canonical answer replaces the entire unsupported narrative.
+    assert result.answer.startswith("I ranked the top 10 Illinois (IL) borrowers")
+    assert "score 91" not in result.answer
+    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_text_only_best_retention_empty_answer_explains_eligibility_gate() -> None:
@@ -2157,6 +2159,38 @@ def test_trusted_genie_answer_with_unsupported_numeric_claim_is_policy_blocked()
     assert result.proof.known_data_gaps
 
 
+def test_numeric_claim_cannot_use_unrelated_matching_count_as_financial_support() -> None:
+    live = GenieResponse(
+        answer_text="The average current balance is $123.",
+        sql_query="SELECT 123 AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 123}],
+        conversation_id="conv-financial-type-mismatch",
+        message_id="msg-financial-type-mismatch",
+    )
+    result = DatabricksGenieRepository(  # type: ignore[arg-type]
+        _StubClient(_make_breaker("closed"), response=live)
+    ).respond("Summarize the trusted cohort.")
+
+    assert result.source == "policy_blocked"
+    assert "$123" not in result.answer
+
+
+def test_numeric_claim_is_not_waived_by_unbound_snapshot_date_language() -> None:
+    live = GenieResponse(
+        answer_text="There are 2026 borrowers; snapshot date is available separately.",
+        sql_query="SELECT 123 AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 123}],
+        conversation_id="conv-unbound-date-context",
+        message_id="msg-unbound-date-context",
+    )
+    result = DatabricksGenieRepository(  # type: ignore[arg-type]
+        _StubClient(_make_breaker("closed"), response=live)
+    ).respond("Summarize the trusted cohort.")
+
+    assert result.source == "policy_blocked"
+    assert "2026" not in result.answer
+
+
 def test_trusted_genie_numeric_check_accepts_rounded_percent_claim() -> None:
     live = GenieResponse(
         answer_text="The high-equity share is 17% of borrowers.",
@@ -2866,7 +2900,8 @@ def test_in_the_money_count_uses_canonical_gold_grain() -> None:
     assert "277,139" not in result.answer
     assert "147,742" in result.answer
     assert result.proof is not None
-    assert any("277,139" in gap and "superseded" in gap for gap in result.proof.known_data_gaps)
+    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
+    assert all("277,139" not in gap for gap in result.proof.known_data_gaps)
     assert result.table_rows == [
         {
             "in_the_money_borrowers": 147742,
@@ -3083,7 +3118,7 @@ def test_in_the_money_count_applies_state_scope_when_present() -> None:
     assert "277,139" not in result.answer
     assert "70,939" in result.answer
     assert result.proof is not None
-    assert any("superseded" in gap for gap in result.proof.known_data_gaps)
+    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
     assert result.table_rows == [
         {
             "in_the_money_borrowers": 70939,
@@ -3188,18 +3223,12 @@ def test_in_the_money_count_applies_city_scope_when_present(
 
     result = repo.respond(question)
 
-    if count >= 1000:
-        # The model's all-footprint 147,742 contradicts the city-scoped
-        # verified count -> governed figure leads, draft figure superseded.
-        assert "147,742" not in result.answer
-        assert f"{count:,}" in result.answer
-        assert result.proof is not None
-        assert any("superseded" in gap for gap in result.proof.known_data_gaps)
-    else:
-        # Sub-1000 verified counts sit outside the model claim's magnitude
-        # band, so no contradiction fires: voice leads, verification appends.
-        assert result.answer.startswith("Genie returned the all-footprint count: 147,742.")
-        assert f"Verified against mip.gold.borrower_360: {count:,}" in result.answer
+    # Unsupported all-footprint claims are removed regardless of their
+    # magnitude relative to the governed city-scoped count.
+    assert "147,742" not in result.answer
+    assert f"{count:,}" in result.answer
+    assert result.proof is not None
+    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
     assert result.table_rows == [
         {
             "city": city,
@@ -3728,6 +3757,35 @@ def test_recognized_shape_verification_note_appends_not_replaces() -> None:
     assert result.answer.startswith("There are about 147,742 borrowers in the money.")
     assert "Verified against mip.gold.borrower_360: 147,742" in result.answer
     assert result.answer.index("about 147,742") < result.answer.index("Verified against")
+
+
+def test_recognized_shape_strips_entire_narrative_when_any_financial_claim_is_unsupported() -> None:
+    live = GenieResponse(
+        answer_text=(
+            "There are 147,742 borrowers in the money with an average balance of "
+            "$999,999 and a 7.25% rate."
+        ),
+        sql_query=(
+            "SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360 " "WHERE in_the_money = true"
+        ),
+        sql_result_rows=[{"borrowers": 147742}],
+        conversation_id="conv-mixed-numeric-claims",
+        message_id="msg-mixed-numeric-claims",
+    )
+    result = _adapt_genie_response(
+        "How many borrowers are currently in-the-money?",
+        live,
+        sql_client=_StubSqlClient(
+            [{"in_the_money_borrowers": 147742, "refreshed_at": "2026-06-17T00:00:00Z"}]
+        ),  # type: ignore[arg-type]
+    )
+
+    assert result.source == "trusted_sql"
+    assert "147,742" in result.answer
+    assert "$999,999" not in result.answer
+    assert "7.25%" not in result.answer
+    assert result.proof is not None
+    assert any("unsupported prose was removed" in gap for gap in result.proof.known_data_gaps)
 
 
 def test_recognized_shape_empty_narrative_falls_back_with_honest_gap() -> None:

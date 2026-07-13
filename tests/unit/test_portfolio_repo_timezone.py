@@ -16,11 +16,16 @@ from typing import Any
 
 import pytest
 
+from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.portfolio import (
     CampaignStatusPatchRequest,
     PortfolioCreateRequest,
     PortfolioCriteria,
     PortfolioPreviewRequest,
+)
+from backend.services.campaign_intelligence import (
+    campaign_criteria_fingerprint,
+    issue_campaign_variant_provenance,
 )
 from backend.services.lakebase import LakebaseError
 from backend.services.repositories.databricks_repo import (
@@ -192,8 +197,14 @@ class _CampaignListLakebase:
 
 
 class _CampaignPatchLakebase:
-    def __init__(self, *, suppression_policy: dict[str, object]) -> None:
+    def __init__(
+        self,
+        *,
+        suppression_policy: dict[str, object],
+        current_status: str = "draft",
+    ) -> None:
         self.suppression_policy = suppression_policy
+        self.current_status = current_status
         self.calls: list[dict[str, object]] = []
 
     def _row(self, *, status: str = "draft") -> dict[str, object]:
@@ -215,7 +226,7 @@ class _CampaignPatchLakebase:
         self.calls.append({"sql": sql, "params": params or {}})
         if "UPDATE mip_app.campaigns" in sql:
             return self._row(status=str((params or {}).get("status") or "pending_review"))  # type: ignore[return-value]
-        return self._row()  # type: ignore[return-value]
+        return self._row(status=self.current_status)  # type: ignore[return-value]
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
         self.calls.append({"sql": sql, "params": params or {}})
@@ -228,6 +239,26 @@ def _preview_row() -> dict[str, Any]:
         "top_tier_opportunities": 120,
         "offers_recommended": 250,
         "avg_score": 72,
+    }
+
+
+def _server_provenance(
+    subject: str,
+    body: str,
+    *,
+    criteria: PortfolioCriteria | None = None,
+) -> dict[str, str]:
+    label = "Agent endpoint-generated recommendation"
+    return {
+        "generation_mode": "supervisor",
+        "generator_label": label,
+        "provenance_token": issue_campaign_variant_provenance(
+            generation_mode="supervisor",
+            generator_label=label,
+            subject=subject,
+            body=body,
+            criteria_fingerprint=campaign_criteria_fingerprint(criteria or PortfolioCriteria()),
+        ),
     }
 
 
@@ -633,6 +664,16 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
         lambda: lakebase,
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    subject_a = "Review your current mortgage options"
+    body_a = (
+        "A loan officer can explain the available options and tradeoffs. "
+        "Would you like to schedule a review?"
+    )
+    subject_b = "A clearer mortgage review"
+    body_b = (
+        "Compare your current mortgage with other available options. "
+        "Would a review with a loan officer be useful?"
+    )
 
     repo.create(
         PortfolioCreateRequest(
@@ -641,26 +682,18 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
                 {
                     "variant_name": "A",
                     "channel": "email",
-                    "subject": "Review your current mortgage options",
-                    "body": (
-                        "A loan officer can explain the available options and tradeoffs. "
-                        "Would you like to schedule a review?"
-                    ),
+                    "subject": subject_a,
+                    "body": body_a,
                     "weight_pct": 45,
-                    "generation_mode": "supervisor",
-                    "generator_label": "Supervisor-generated recommendation",
+                    **_server_provenance(subject_a, body_a),
                 },
                 {
                     "variant_name": "B",
                     "channel": "email",
-                    "subject": "A clearer mortgage review",
-                    "body": (
-                        "Compare your current mortgage with other available options. "
-                        "Would a review with a loan officer be useful?"
-                    ),
+                    "subject": subject_b,
+                    "body": body_b,
                     "weight_pct": 45,
-                    "generation_mode": "supervisor",
-                    "generator_label": "Supervisor-generated recommendation",
+                    **_server_provenance(subject_b, body_b),
                 },
             ],
         ),
@@ -682,11 +715,11 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     assert [variant["variant_name"] for variant in variants] == ["A", "B"]
     assert {variant["generation_mode"] for variant in variants} == {"supervisor"}
     assert {variant["generator_label"] for variant in variants} == {
-        "Supervisor-generated recommendation"
+        "Agent endpoint-generated recommendation"
     }
     metadata = json.loads(str(params["metadata"]))
     assert metadata["campaign_generation_mode"] == "supervisor"
-    assert metadata["generator_label"] == "Supervisor-generated recommendation"
+    assert metadata["generator_label"] == "Agent endpoint-generated recommendation"
 
 
 def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
@@ -697,6 +730,7 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
         lambda: lakebase,
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    generated_body = "Compare your current mortgage options with a loan officer."
 
     repo.create(
         PortfolioCreateRequest(
@@ -705,9 +739,8 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
                 {
                     "variant_name": "A",
                     "channel": "email",
-                    "body": "Compare your current mortgage options with a loan officer.",
-                    "generation_mode": "supervisor",
-                    "generator_label": "Supervisor-generated recommendation",
+                    "body": generated_body,
+                    **_server_provenance("", generated_body),
                 },
                 {
                     "variant_name": "B",
@@ -728,7 +761,7 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
     assert metadata["variant_provenance"] == [
         {
             "generation_mode": "supervisor",
-            "generator_label": "Supervisor-generated recommendation",
+            "generator_label": "Agent endpoint-generated recommendation",
             "variant_name": "A",
         },
         {
@@ -737,6 +770,72 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
             "variant_name": "B",
         },
     ]
+
+
+def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _StubLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    original_body = "Compare your current mortgage options with a loan officer."
+    provenance = _server_provenance("", original_body)
+
+    with pytest.raises(ValueError, match="provenance is missing, expired, or invalid"):
+        repo.create(
+            PortfolioCreateRequest(
+                name="Forged provenance review",
+                message_variants=[
+                    {
+                        "variant_name": "A",
+                        "channel": "email",
+                        "body": "Schedule a different mortgage review with a loan officer.",
+                        **provenance,
+                    }
+                ],
+            ),
+            idempotency_key="11111111-1111-4111-8111-111111111121",
+        )
+
+    with pytest.raises(ValueError, match="provenance is missing, expired, or invalid"):
+        repo.create(
+            PortfolioCreateRequest(
+                name="Unsigned provenance review",
+                message_variants=[
+                    {
+                        "variant_name": "A",
+                        "channel": "email",
+                        "body": original_body,
+                        "generation_mode": "supervisor",
+                        "generator_label": "Agent endpoint-generated recommendation",
+                    }
+                ],
+            ),
+            idempotency_key="11111111-1111-4111-8111-111111111122",
+        )
+
+    with pytest.raises(ValueError, match="provenance is missing, expired, or invalid"):
+        repo.create(
+            PortfolioCreateRequest(
+                name="Cohort transplant review",
+                criteria=PortfolioCriteria(),
+                message_variants=[
+                    {
+                        "variant_name": "A",
+                        "channel": "email",
+                        "body": original_body,
+                        **_server_provenance(
+                            "",
+                            original_body,
+                            criteria=PortfolioCriteria(states=["IL"]),
+                        ),
+                    }
+                ],
+            ),
+            idempotency_key="11111111-1111-4111-8111-111111111123",
+        )
 
 
 def test_create_replays_same_request_without_second_campaign_or_audit(monkeypatch):
@@ -913,6 +1012,139 @@ def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
         "rationale": None,
         "status": "pending_review",
     }
+
+
+@pytest.mark.parametrize(
+    ("current_status", "target_status"),
+    [
+        ("pending_review", "approved"),
+        ("approved", "live"),
+        ("live", "active"),
+    ],
+)
+def test_governed_campaign_statuses_reject_missing_server_authorization(
+    monkeypatch,
+    current_status: str,
+    target_status: str,
+):
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status=current_status,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="governed approver authorization"):
+        repo.patch_status(
+            "11111111-1111-4111-8111-111111111111",
+            CampaignStatusPatchRequest(
+                status=target_status,  # type: ignore[arg-type]
+                rationale="Governance and legal review completed",
+            ),
+            actor="approver@example.com",
+        )
+
+
+def test_approved_campaign_transition_persists_signed_approval_evidence(monkeypatch):
+    campaign_id = "11111111-1111-4111-8111-111111111111"
+    actor = "approver@example.com"
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status="pending_review",
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    payload = authorize_campaign_status_transition(
+        CampaignStatusPatchRequest(
+            status="approved",
+            rationale="Governance and legal review completed",
+        ),
+        campaign_id=campaign_id,
+        current_status="pending_review",
+        approver_email=actor,
+        now=datetime(2026, 7, 13, 18, 0, tzinfo=UTC),
+    )
+
+    summary = repo.patch_status(campaign_id, payload, actor=actor)
+
+    assert summary.status == "approved"
+    patch_call = next(
+        call for call in lakebase.calls if "UPDATE mip_app.campaigns" in str(call["sql"])
+    )
+    params = patch_call["params"]
+    assert isinstance(params, dict)
+    assert params["current_status"] == "pending_review"
+    assert len(params["evidence_ids"]) == 1
+    assert "AND status = %(current_status)s" in str(patch_call["sql"])
+    metadata = json.loads(str(params["metadata"]))
+    assert metadata["approval_id"] == params["evidence_ids"][0]
+    assert metadata["occurred_at"] == "2026-07-13T18:00:00+00:00"
+    assert metadata["status"] == "approved"
+
+
+def test_campaign_approval_evidence_is_bound_to_the_authorized_actor(monkeypatch):
+    campaign_id = "11111111-1111-4111-8111-111111111111"
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status="pending_review",
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    payload = authorize_campaign_status_transition(
+        CampaignStatusPatchRequest(
+            status="approved",
+            rationale="Governance and legal review completed",
+        ),
+        campaign_id=campaign_id,
+        current_status="pending_review",
+        approver_email="authorized@example.com",
+    )
+
+    with pytest.raises(ValueError, match="approval evidence does not match"):
+        repo.patch_status(campaign_id, payload, actor="different@example.com")
+
+    with pytest.raises(ValueError, match="governed approver identity"):
+        authorize_campaign_status_transition(
+            CampaignStatusPatchRequest(
+                status="approved",
+                rationale="Governance and legal review completed",
+            ),
+            campaign_id=campaign_id,
+            current_status="pending_review",
+            approver_email=" ",
+        )
+
+
+def test_campaign_status_rejects_illegal_skip_even_with_approver_proof(monkeypatch):
+    campaign_id = "11111111-1111-4111-8111-111111111111"
+    actor = "approver@example.com"
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status="draft",
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    payload = authorize_campaign_status_transition(
+        CampaignStatusPatchRequest(status="approved", rationale="Governance review completed"),
+        campaign_id=campaign_id,
+        current_status="draft",
+        approver_email=actor,
+    )
+
+    with pytest.raises(ValueError, match="from draft to approved is not allowed"):
+        repo.patch_status(campaign_id, payload, actor=actor)
 
 
 def test_empty_filtered_cohort_keeps_avg_score_null_not_zero():
