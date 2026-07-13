@@ -1,4 +1,5 @@
 """Shared schema validators with no service-layer dependencies."""
+
 from __future__ import annotations
 
 import re
@@ -12,12 +13,166 @@ _public_lender_name_provider: _PublicLenderNameProvider | None = None
 _state_footprint_provider: _StateFootprintProvider | None = None
 
 _PROTECTED_CLASS_MARKETING_RE = re.compile(
-    r"\b(?:age|aged|asian|black|color|disab(?:ility|led)|elderly|ethnic(?:ity)?|"
+    r"\b(?:age|aged|asian|autis(?:m|tic)|black|blind|buddhist|color|deaf|"
+    r"disab(?:ility|led)|wheelchair(?:\s+users?)?|elderly|ethnic(?:ity)?|"
     r"familial status|families? with children|family status|female|gender|handicap(?:ped)?|"
-    r"hispanic|latino|male|marital status|military status|national origin|native american|"
+    r"gay|lesbian|bisexual|transgender|non[- ]?binary|queer|gender identity|"
+    r"hispanic|latino|male|marital status|military status|muslim|islam(?:ic)?|"
+    r"christian|hindu|jewish|jew|sikh|national origin|native american|"
     r"pacific islander|pregnan(?:cy|t)|public assistance|race|racial|religion|religious|"
-    r"senior citizens?|sex|sexual orientation|source of income|veteran|white|woman|women)\b",
+    r"senior citizens?|sex|sexual orientation|single (?:mothers?|fathers?|parents?)|"
+    r"source of income|veteran|white|woman|women)\b",
     re.IGNORECASE,
+)
+
+_PROMPT_INJECTION_RE = re.compile(
+    r"\b(?:ignore|disregard|override|bypass|forget)\b.{0,80}\b"
+    r"(?:previous|prior|system|developer|safety|guardrail|policy|rules?|instructions?|prompt)\b|"
+    r"\b(?:system|developer)\s+(?:message|prompt)\b|"
+    r"\b(?:reveal|show|print|return|expose)\b.{0,60}\b(?:hidden|system|developer)\s+prompt\b|"
+    r"\b(?:jailbreak|prompt injection|do anything now|follow these new instructions)\b|"
+    r"<\|(?:system|developer|assistant|user)\|>|"
+    r"^\s*(?:system|developer)\s*:",
+    re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+
+_TITLECASE_HUMAN_NAME_RE = re.compile(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b")
+_LEADING_ANALYTICS_COMMAND_RE = re.compile(
+    r"\b(?:Compare|Explain|Find|List|Open|Prioritize|Rank|Review|Show|Target)\s+(?=[A-Z])"
+)
+_NON_PERSON_TITLECASE_SUFFIXES = frozenset(
+    {"borough", "city", "county", "metro", "msa", "parish", "region", "township"}
+)
+_COMMON_FIRST_NAMES = frozenset(
+    {
+        "alice",
+        "barbara",
+        "david",
+        "elizabeth",
+        "james",
+        "jane",
+        "jennifer",
+        "john",
+        "joseph",
+        "linda",
+        "maria",
+        "mary",
+        "michael",
+        "patricia",
+        "richard",
+        "robert",
+        "sarah",
+        "thomas",
+        "william",
+    }
+)
+_COMMON_LAST_NAMES = frozenset(
+    {
+        "anderson",
+        "brown",
+        "davis",
+        "doe",
+        "garcia",
+        "gonzalez",
+        "hernandez",
+        "johnson",
+        "jones",
+        "lee",
+        "lopez",
+        "martinez",
+        "miller",
+        "moore",
+        "rodriguez",
+        "smith",
+        "taylor",
+        "thomas",
+        "williams",
+        "wilson",
+    }
+)
+
+_REVIEWED_NON_PERSON_PHRASES: tuple[str, ...] = (
+    "Mortgage Intelligence Platform",
+    "Mortgage Growth Agent",
+    "Daily Refi Opportunity Brief",
+    "Listed-for-Sale Purchase Watch",
+    "Competitor Recapture Monitor",
+    "High-Equity HELOC Watch",
+    "Borrower Dossier Review",
+    "Branch Manager Capacity Review",
+    "Custom Segment Workflow",
+    "Source Freshness Sentinel",
+    "Building Permits",
+    "Equal Housing Lender",
+    "Equal Housing",
+    "Offer Orchestrator",
+    "Portfolio Builder",
+    "Genie Conversation",
+    "Databricks Genie",
+    "Unity Catalog",
+    "Supervisor Agent",
+    "Growth Agent",
+    "Lead Queue",
+    "Borrower Dossier",
+    "Mosaic AI",
+    "Agent Bricks",
+    "New Hampshire",
+    "New Jersey",
+    "New Mexico",
+    "New York",
+    "North Carolina",
+    "North Dakota",
+    "Rhode Island",
+    "South Carolina",
+    "South Dakota",
+    "West Virginia",
+    "United States",
+)
+
+_PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(?:loan|lien)\s+ages?\b", re.IGNORECASE),
+    re.compile(r"\bages?\s+of\s+(?:the\s+)?(?:loan|lien)s?\b", re.IGNORECASE),
+    re.compile(r"\b(?:loan|lien)\s+aging\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:white|black)\s+(?:plains|settlement|salmon|center|creek|river|"
+        r"falls|rock|oaks?|haven|bluffs?|stone|mountain|hills?|city|county|lake|"
+        r"earth|water|sands?|house|hall|bear|fish|hawk|diamond)\b",
+        re.IGNORECASE,
+    ),
+)
+
+_MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE),
+    re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
+    re.compile(r"(?<!\d)(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}(?!\d)"),
+    re.compile(
+        r"\b\d{1,6}\s+[A-Za-z0-9.'-]+(?:\s+[A-Za-z0-9.'-]+){0,4}\s+"
+        r"(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|"
+        r"ter|terrace|way|pl|place|pkwy|parkway)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:clip_ref|raw[_\s-]?clip|owner[_\s-]?link(?:[_\s-]?id)?|"
+        r"owner[_\s-]?name|borrower[_\s-]?name|customer[_\s-]?name|"
+        r"prospect[_\s-]?name|street[_\s-]?address|mailing[_\s-]?address)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:clip|owner[_\s-]?(?:link|identifier|id)|borrower[_\s-]?identifier)\b"
+        r"\s*[:#=]\s*[A-Za-z0-9_-]{6,}\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:account|loan)\s+(?:number|id)\s*[:#=]?\s*[A-Za-z0-9_-]{6,}\b", re.IGNORECASE),
+    re.compile(
+        r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b\d{9,}\b"),
+    re.compile(
+        r"\[(?:first|last|full)[_\s-]?name\]|\{(?:first|last|full)[_\s-]?name\}|"
+        r"\binsert governed\b",
+        re.IGNORECASE,
+    ),
 )
 
 _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
@@ -122,9 +277,88 @@ def assert_no_protected_class_marketing_text(value: str, *, field_name: str) -> 
     language must fail closed instead of being silently scrubbed or persisted.
     """
 
-    if _PROTECTED_CLASS_MARKETING_RE.search(value):
+    if contains_protected_class_marketing_text(value):
         raise ValueError(f"{field_name} cannot contain protected-class targeting language")
     return value
+
+
+def contains_protected_class_marketing_text(value: str) -> bool:
+    """Return true for protected-class or obvious proxy targeting language."""
+
+    scannable = str(value)
+    for pattern in _PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS:
+        scannable = pattern.sub(" ", scannable)
+    return bool(_PROTECTED_CLASS_MARKETING_RE.search(scannable))
+
+
+def contains_prompt_injection_text(value: str) -> bool:
+    """Return true for instruction-override language at governed text boundaries."""
+
+    return bool(_PROMPT_INJECTION_RE.search(str(value)))
+
+
+def contains_human_name_shape(
+    value: str,
+    *,
+    allowed_phrases: Sequence[str] = (),
+    include_titlecase: bool = True,
+) -> bool:
+    """Detect title-case names and reviewed common lowercase first/last pairs.
+
+    General two-word lowercase prose is not treated as an identity. The common
+    pair vocabulary closes the audited ``john smith`` class without turning
+    ordinary mortgage phrases into false positives.
+    """
+
+    text = _remove_reviewed_non_person_phrases(str(value), allowed_phrases=allowed_phrases)
+    text = _LEADING_ANALYTICS_COMMAND_RE.sub(" ", text)
+    if include_titlecase and any(
+        match.group(0).split()[-1].casefold() not in _NON_PERSON_TITLECASE_SUFFIXES
+        for match in _TITLECASE_HUMAN_NAME_RE.finditer(text)
+    ):
+        return True
+    if _CONTEXTUAL_HUMAN_NAME_RE.search(text):
+        return True
+    words = re.findall(r"[A-Za-z]{2,30}", text.casefold())
+    return any(
+        first in _COMMON_FIRST_NAMES and last in _COMMON_LAST_NAMES
+        for first, last in zip(words, words[1:], strict=False)
+    )
+
+
+def contains_mechanical_pii_or_raw_identifier(value: str) -> bool:
+    """Detect mechanical PII, unresolved placeholders, and raw source identifiers."""
+
+    text = str(value)
+    return any(pattern.search(text) for pattern in _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS)
+
+
+def contains_unsafe_ai_text(value: str, *, include_titlecase: bool = True) -> bool:
+    """Shared fail-closed guard for model-authored or model-directed prose."""
+
+    text = str(value)
+    return (
+        contains_mechanical_pii_or_raw_identifier(text)
+        or contains_protected_class_marketing_text(text)
+        or contains_prompt_injection_text(text)
+        or contains_human_name_shape(text, include_titlecase=include_titlecase)
+    )
+
+
+def _remove_reviewed_non_person_phrases(
+    value: str,
+    *,
+    allowed_phrases: Sequence[str],
+) -> str:
+    phrases = {
+        *_REVIEWED_NON_PERSON_PHRASES,
+        _configured_public_lender_name(),
+        *allowed_phrases,
+    }
+    cleaned = value
+    for phrase in sorted((item.strip() for item in phrases if item.strip()), key=len, reverse=True):
+        cleaned = re.sub(re.escape(phrase), " ", cleaned, flags=re.IGNORECASE)
+    return cleaned
 
 
 def contains_contextual_human_name(value: str) -> bool:

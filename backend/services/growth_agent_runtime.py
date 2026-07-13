@@ -75,13 +75,9 @@ def tool_steps(
             "human review is required before acting."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
-        planner_detail = (
-            "Supervisor selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
-        )
+        planner_detail = "Supervisor selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
     else:
-        planner_detail = (
-            "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
-        )
+        planner_detail = "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
     planner_step = GrowthAgentToolStep(
         label="Interpret mortgage-growth objective",
         status="review_required" if supervisor_override else "completed",
@@ -228,8 +224,7 @@ def policy_checks(
     actionable_total = int(metrics["actionable_total"])
     reconciliation_status: Literal["passed", "review_required"] = "passed"
     reconciliation_detail = (
-        f"{broad_total:,} broad opportunities reconcile to "
-        f"{actionable_total:,} eligible leads."
+        f"{broad_total:,} broad opportunities reconcile to " f"{actionable_total:,} eligible leads."
     )
     if actionable_total > broad_total:
         reconciliation_status = "review_required"
@@ -238,11 +233,6 @@ def policy_checks(
             "review source filters before acting."
         )
     checks = [
-        GrowthAgentPolicyCheck(
-            label="Masked borrower references",
-            status="passed",
-            detail="The workflow returns counts, app-scoped route filters, and governed source assets.",
-        ),
         GrowthAgentPolicyCheck(
             label="Approval gate required",
             status="passed",
@@ -284,8 +274,7 @@ def policy_checks(
                 label="Reviewed custom workflow",
                 status="passed",
                 detail=(
-                    "Custom workflow criteria are reviewed segment codes and explicit Any/All mode only; "
-                    "no arbitrary SQL or outbound activation is stored."
+                    "Custom workflow criteria use reviewed segment codes and an explicit Any/All mode."
                 ),
             )
         )
@@ -295,14 +284,6 @@ def policy_checks(
                 label="Manager review only",
                 status="passed",
                 detail="The workflow surfaces stale approved leads; it does not reassign LOs or change outreach state.",
-            )
-        )
-    if workflow.id == "borrower_dossier_review":
-        checks.append(
-            GrowthAgentPolicyCheck(
-                label="Dossier privacy",
-                status="passed",
-                detail="The handoff opens a scored queue for review; borrower dossier details still require row-level user action.",
             )
         )
     if workflow.id == "source_freshness_sentinel":
@@ -324,10 +305,7 @@ def policy_checks(
             GrowthAgentPolicyCheck(
                 label="Watchlist saved to Lakebase",
                 status="passed",
-                detail=(
-                    "The saved watchlist stores reviewed filters and counts only; "
-                    "it does not create a scheduled run, outbound activation, borrower identity export, or raw prompt record."
-                ),
+                detail="The selected cadence is stored with the reviewed cohort filters.",
             )
         )
     return checks
@@ -344,7 +322,9 @@ def governance_chips(
 ) -> list[GrowthAgentGovernanceChip]:
     blocked = any(check.status == "blocked" for check in policy_checks)
     review = any(check.status == "review_required" for check in policy_checks)
-    policy_status: Literal["passed", "review_required"] = "review_required" if blocked or review else "passed"
+    policy_status: Literal["passed", "review_required"] = (
+        "review_required" if blocked or review else "passed"
+    )
     if copilot_evidence.workflow_override_review_required:
         framework_status: Literal["passed", "review_required", "not_attached"] = "review_required"
         framework_detail = (
@@ -353,21 +333,11 @@ def governance_chips(
         )
     elif copilot_evidence.execution_mode == "agent_framework":
         framework_status = "passed"
-        framework_detail = (
-            "Databricks Supervisor Agent selected a reviewed workflow; reviewed deterministic tools executed the run."
-        )
+        framework_detail = "Databricks Supervisor Agent selected a reviewed workflow; reviewed deterministic tools executed the run."
     else:
         framework_status = "not_attached"
-        framework_detail = (
-            "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
-        )
+        framework_detail = "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."
     chips: list[GrowthAgentGovernanceChip] = [
-        GrowthAgentGovernanceChip(
-            label="Masked references only",
-            status="passed",
-            detail="The run returns counts, source assets, governed hashes, and app-scoped route filters.",
-            evidence_ref=trace_id,
-        ),
         GrowthAgentGovernanceChip(
             label="Human approval required",
             status="passed",
@@ -378,11 +348,13 @@ def governance_chips(
             label="Policy checks",
             status=policy_status,
             detail=f"{len(policy_checks):,} policy checks evaluated for this workflow.",
-            evidence_ref=audit_event_id,
+            evidence_ref=audit_event_id or trace_id,
         ),
         GrowthAgentGovernanceChip(
             label="Genie Conversation",
-            status="passed" if copilot_evidence.execution_mode == "genie_conversation" else "not_attached",
+            status="passed"
+            if copilot_evidence.execution_mode == "genie_conversation"
+            else "not_attached",
             detail=(
                 "Prompt interpretation is linked to a Genie Conversation message; deterministic tools executed the run."
                 if copilot_evidence.execution_mode == "genie_conversation"
@@ -394,7 +366,9 @@ def governance_chips(
             label="Multi-agent framework",
             status=framework_status,
             detail=framework_detail,
-            evidence_ref=copilot_evidence.question_hash if copilot_evidence.execution_mode == "agent_framework" else None,
+            evidence_ref=copilot_evidence.question_hash
+            if copilot_evidence.execution_mode == "agent_framework"
+            else None,
         ),
         GrowthAgentGovernanceChip(
             label="AI Gateway",
@@ -427,7 +401,8 @@ def governance_chips(
                 label="Freshness signal",
                 status=(
                     "passed"
-                    if int(metrics.get("warning_total") or 0) == 0 and int(metrics.get("stale_total") or 0) == 0
+                    if int(metrics.get("warning_total") or 0) == 0
+                    and int(metrics.get("stale_total") or 0) == 0
                     else "review_required"
                 ),
                 detail="Backed by global gold.source_readiness rows.",
@@ -465,7 +440,9 @@ def _reviewed_tool_step(
 ) -> GrowthAgentToolStep:
     tool = assert_tool_allowed_for_specialist(tool_name, workflow.specialist_agent)
     if tool.writes_state:
-        raise ValueError(f"{tool.name} writes state and cannot run inside reviewed read-only workflow")
+        raise ValueError(
+            f"{tool.name} writes state and cannot run inside reviewed read-only workflow"
+        )
     return GrowthAgentToolStep(
         label=label,
         status=status,

@@ -1041,7 +1041,8 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
     assert lakebase.monitors[0]["last_run_id"] == lakebase.runs[0]["run_id"]
     assert len(lakebase.audit_events) == 3
     draft_audits = [
-        event for event in lakebase.audit_events
+        event
+        for event in lakebase.audit_events
         if event.get("event_type") == "GROWTH_AGENT_NOTIFICATION_DRAFT"
     ]
     assert len(draft_audits) == 2
@@ -1236,7 +1237,9 @@ def test_growth_agent_due_monitor_all_actor_runner_retries_without_duplicate_row
         first = client.post("/api/growth-agent/monitors/run-due-all", json=payload, headers=headers)
         for monitor in lakebase.monitors:
             monitor["updated_at"] = datetime.now(UTC) - timedelta(days=2)
-        replay = client.post("/api/growth-agent/monitors/run-due-all", json=payload, headers=headers)
+        replay = client.post(
+            "/api/growth-agent/monitors/run-due-all", json=payload, headers=headers
+        )
     finally:
         _clear_overrides()
 
@@ -1642,7 +1645,9 @@ def test_prompt_agent_routes_dossier_story_to_borrower_dossier_specialist() -> N
     ]
     assert dossier_steps
     assert dossier_steps[0]["source_asset"] == "mip.gold.borrower_dossier"
-    assert "Dossier privacy" in json.dumps(body["policy_checks"])
+    policy_labels = {check["label"] for check in body["policy_checks"]}
+    assert "Approval gate required" in policy_labels
+    assert "Dossier privacy" not in policy_labels
     statement, _params = sql.calls[0]
     assert "d.opportunity_score >= 75" in statement
 
@@ -1829,9 +1834,14 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
         body["route"]
         == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL%2CTX"
     )
-    assert body["policy_checks"][2]["label"] == "Broad vs actionable reconciliation"
-    assert "117,404" in body["policy_checks"][2]["detail"]
-    assert "5,394" in body["policy_checks"][2]["detail"]
+    reconciliation = next(
+        check
+        for check in body["policy_checks"]
+        if check["label"] == "Broad vs actionable reconciliation"
+    )
+    assert "117,404" in reconciliation["detail"]
+    assert "5,394" in reconciliation["detail"]
+    assert "Masked references only" not in {chip["label"] for chip in body["governance_chips"]}
 
     statement, params = sql.calls[0]
     assert statement.count("COUNT(DISTINCT b.clip)") == 2
@@ -1847,7 +1857,8 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert metadata["trace_id"].startswith("agent-trace-")
     assert metadata["tool_result_hash"] == body["tool_result_hash"]
     assert metadata["specialist_agent"] == "structured_data_agent"
-    assert metadata["governance_chips"][0]["label"] == "Masked references only"
+    assert metadata["governance_chips"][0]["label"] == "Human approval required"
+    assert "Masked references only" not in {chip["label"] for chip in metadata["governance_chips"]}
     assert "Multi-agent framework" in json.dumps(metadata["governance_chips"])
     assert metadata["result_filters"]["segment_codes"] == ["itm"]
     assert (
@@ -1972,12 +1983,21 @@ def test_impossible_reconciliation_requires_review_instead_of_false_pass() -> No
         _clear_overrides()
 
     assert response.status_code == 200, response.text
-    check = response.json()["policy_checks"][2]
+    check = next(
+        item
+        for item in response.json()["policy_checks"]
+        if item["label"] == "Broad vs actionable reconciliation"
+    )
     assert check["label"] == "Broad vs actionable reconciliation"
     assert check["status"] == "review_required"
     assert "20 eligible leads exceeds 10 broad opportunities" in check["detail"]
     metadata = json.loads(lakebase.audit_events[0]["metadata"])
-    assert metadata["policy_checks"][2]["status"] == "review_required"
+    persisted_check = next(
+        item
+        for item in metadata["policy_checks"]
+        if item["label"] == "Broad vs actionable reconciliation"
+    )
+    assert persisted_check["status"] == "review_required"
 
 
 def test_save_monitor_persists_reviewed_filters_without_borrower_ids() -> None:
@@ -2007,8 +2027,7 @@ def test_save_monitor_persists_reviewed_filters_without_borrower_ids() -> None:
     assert "borrower_id" not in json.dumps(body["monitor"]["criteria"]).lower()
     assert body["policy_checks"][-1]["label"] == "Watchlist saved to Lakebase"
     assert body["policy_checks"][-1]["detail"] == (
-        "The saved watchlist stores reviewed filters and counts only; "
-        "it does not create a scheduled run, outbound activation, borrower identity export, or raw prompt record."
+        "The selected cadence is stored with the reviewed cohort filters."
     )
     assert lakebase.monitors[0]["actionable_total"] == 5394
 
@@ -2353,7 +2372,9 @@ def _compose(
     body: dict[str, Any],
     lakebase: Any | None = None,
 ) -> Any:
-    monkeypatch.setattr(growth_agent_compose_api, "compose_growth_agent_plan", lambda payload: outcome)
+    monkeypatch.setattr(
+        growth_agent_compose_api, "compose_growth_agent_plan", lambda payload: outcome
+    )
     sql = _FakeSqlClient()
     lakebase = lakebase or _FakeLakebaseClient()
     client = _client(sql, lakebase)
@@ -2411,7 +2432,9 @@ def test_compose_executes_read_plan_and_records_trace(monkeypatch: pytest.Monkey
     assert [step["status"] for step in payload["trace"]] == ["completed", "completed"]
     # Two per-step audit rows + one compose summary row landed in Lakebase.
     assert len(payload["audit_event_ids"]) == 3
-    audit_actions = {json.loads(row.get("metadata", "{}")).get("action") for row in lakebase.audit_events}
+    audit_actions = {
+        json.loads(row.get("metadata", "{}")).get("action") for row in lakebase.audit_events
+    }
     assert "growth_agent.plan_step" in audit_actions
     assert "growth_agent.compose" in audit_actions
 

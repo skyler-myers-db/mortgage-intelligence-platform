@@ -10,6 +10,9 @@ from backend.schemas._validators import (
     assert_no_protected_class_marketing_text,
     configured_public_lender_name,
     contains_contextual_human_name,
+    contains_human_name_shape,
+    contains_mechanical_pii_or_raw_identifier,
+    contains_prompt_injection_text,
 )
 
 if TYPE_CHECKING:
@@ -31,6 +34,7 @@ _HUMAN_NAME_SHAPE_RE = re.compile(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]
 _PUBLIC_TITLECASE_PHRASE_ALLOWLIST: tuple[str, ...] = (
     "Summit Mortgage",
     "Equal Housing",
+    "Building Permits",
     "New York",
     "New Jersey",
     "New Mexico",
@@ -45,9 +49,16 @@ _PUBLIC_TITLECASE_PHRASE_ALLOWLIST: tuple[str, ...] = (
 _BORROWER_COPY_UNSUPPORTED_CLAIM_RE = re.compile(
     r"(?:\$|\b\d+(?:\.\d+)?\s*(?:%|percent|bps|basis points?|dollars?)\b|"
     r"\b(?:guarantee(?:d)?|pre[- ]?approved|lowest rate|best rate|save money|"
+    r"qualif(?:y|ies|ied)(?:\s+for)?|lower (?:your )?(?:monthly )?payment|"
+    r"you(?:'re| are| may be| can be) (?:eligible|approved|qualified)|"
+    r"your (?:monthly )?payment (?:will|would|can|could) (?:be )?lower|"
     r"instant approval|act now|urgent|limited time|expires? today|final notice)\b|"
     r"\b(?:score|scoring|ranked|ranking|algorithm|model(?:ed)?|propensity|"
     r"segment|signal|trigger|target(?:ed|ing)?|eligible cohort|public record)\b)",
+    re.IGNORECASE,
+)
+_SUMMARY_NUMERIC_CLAIM_RE = re.compile(
+    r"(?:[$€£]|\b\d+(?:[,.]\d+)*(?:\.\d+)?\b|\b(?:percent|percentage|bps|basis points?|dollars?)\b)",
     re.IGNORECASE,
 )
 _BORROWER_COPY_CTA_RE = re.compile(
@@ -64,11 +75,19 @@ def assert_public_campaign_text(value: object, *, field_name: str, max_length: i
     text = re.sub(r"\s+", " ", str(value).strip())
     if len(text) > max_length:
         raise ValueError(f"{field_name} must be {max_length} characters or fewer")
-    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PUBLIC_TEXT_DENYLIST):
-        raise ValueError(f"{field_name} cannot contain PII, raw identifiers, or unresolved placeholders")
+    if contains_mechanical_pii_or_raw_identifier(text) or any(
+        re.search(pattern, text, re.IGNORECASE) for pattern in _PUBLIC_TEXT_DENYLIST
+    ):
+        raise ValueError(
+            f"{field_name} cannot contain PII, raw identifiers, or unresolved placeholders"
+        )
     name_scan_text = remove_allowed_public_titlecase_phrases(text)
-    if _HUMAN_NAME_SHAPE_RE.search(name_scan_text) or contains_contextual_human_name(
-        name_scan_text
+    if contains_prompt_injection_text(text):
+        raise ValueError(f"{field_name} cannot contain instruction-override language")
+    if (
+        _HUMAN_NAME_SHAPE_RE.search(name_scan_text)
+        or contains_contextual_human_name(name_scan_text)
+        or contains_human_name_shape(name_scan_text)
     ):
         raise ValueError(f"{field_name} cannot contain human-name-shaped text")
     assert_no_protected_class_marketing_text(text, field_name=field_name)
@@ -186,13 +205,20 @@ class CampaignRecommendationResponse(BaseModel):
     @field_validator("generator_label", "audience_summary", "strategy")
     @classmethod
     def _validate_public_summary(cls, value: str, info) -> str:
-        return assert_public_campaign_text(
+        text = assert_public_campaign_text(
             value,
             field_name=f"campaign recommendation {info.field_name}",
             max_length={"generator_label": 80, "audience_summary": 280, "strategy": 500}[
                 info.field_name
             ],
         )
+        if info.field_name in {"audience_summary", "strategy"} and _SUMMARY_NUMERIC_CLAIM_RE.search(
+            text
+        ):
+            raise ValueError(
+                f"campaign recommendation {info.field_name} must keep numeric facts in evidence"
+            )
+        return text
 
     @field_validator("warnings")
     @classmethod

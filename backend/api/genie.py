@@ -21,6 +21,11 @@ from pydantic import BaseModel, Field, field_validator
 
 from backend.api import genie_guardrails as prompt_guardrails
 from backend.config.settings import settings
+from backend.schemas._validators import (
+    contains_human_name_shape,
+    contains_protected_class_marketing_text,
+    contains_unsafe_ai_text,
+)
 from backend.services.audit_store import (
     AuditStore,
     get_audit_store,
@@ -314,7 +319,73 @@ def _protected_prompt_match(question: str) -> str | None:
         pattern = r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])"
         if re.search(pattern, scannable, flags=re.IGNORECASE):
             return term
+    if contains_protected_class_marketing_text(scannable):
+        return "protected_class_language"
     return None
+
+
+def _identity_prompt_match(question: str) -> bool:
+    """Reject person-name-shaped prompts before they reach or enter session state."""
+
+    return contains_human_name_shape(_mask_safe_phrases(question))
+
+
+def _genie_response_has_unsafe_visible_text(response: GenieMessageResponse) -> bool:
+    """Check every model-authored text field that can be rendered by the Genie UI."""
+
+    values = [response.answer, *response.follow_up_questions]
+    values.extend(step.kind for step in response.reasoning_trace)
+    values.extend(step.content for step in response.reasoning_trace)
+    if response.proof is not None:
+        values.extend(step.kind for step in response.proof.reasoning_trace)
+        values.extend(step.content for step in response.proof.reasoning_trace)
+    if response.native_visualization is not None and response.native_visualization.title:
+        values.append(response.native_visualization.title)
+    if response.visualization is not None:
+        values.extend(
+            value
+            for value in (
+                response.visualization.title,
+                response.visualization.reason,
+                response.visualization.x,
+                response.visualization.y,
+                response.visualization.series,
+            )
+            if value
+        )
+    return any(contains_unsafe_ai_text(value) for value in values)
+
+
+def _policy_blocked_genie_output_response(
+    payload: GenieMessageRequest,
+    response: GenieMessageResponse,
+) -> GenieMessageResponse:
+    question_hash = (
+        response.question_hash or hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
+    )
+    return GenieMessageResponse(
+        conversation_id=response.conversation_id or payload.conversation_id or "",
+        message_id=response.message_id,
+        question="",
+        question_hash=question_hash,
+        answer=(
+            "The generated response did not pass the governed output policy, so it was not "
+            "displayed. Ask a scoped Module 0 question using aggregate mortgage signals."
+        ),
+        source="policy_blocked",
+        trusted_assets=[],
+        row_count=0,
+        proof=GenieProof(
+            source_assets=[],
+            row_count=0,
+            trusted=False,
+            filters=[],
+            known_data_gaps=["generated response blocked by the governed text-output policy"],
+            conversation_id=response.conversation_id or payload.conversation_id,
+            message_id=response.message_id,
+        ),
+        table_rows=[],
+    )
 
 
 def _refused_genie_response(
@@ -427,10 +498,7 @@ def genie_message(
                 "proxies. Ask for a permitted Module 0 strategy using trusted "
                 "mortgage, lien, equity, segment, and offer signals."
             ),
-            known_gap=(
-                "prompt refused before Genie execution due protected-class "
-                "term in the prompt"
-            ),
+            known_gap="prompt refused before Genie execution due protected-class term in the prompt",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
     override_match = prompt_guardrails.instruction_override_prompt_match(payload.question)
@@ -516,6 +584,8 @@ def genie_message(
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
     pii_match = prompt_guardrails.pii_prompt_match(payload.question)
+    if pii_match is None and _identity_prompt_match(payload.question):
+        pii_match = "person_name"
     if pii_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -580,9 +650,7 @@ def genie_message(
                 "outside the trusted assets, or run DDL/DML. Ask a scoped borrower, "
                 "segment, geography, trigger, or offer question instead."
             ),
-            known_gap=(
-                "prompt refused before Genie execution due scope-bypass pattern"
-            ),
+            known_gap="prompt refused before Genie execution due scope-bypass pattern",
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
     source_gap_match = prompt_guardrails.source_gap_prompt_match(payload.question)
@@ -699,8 +767,7 @@ def genie_message(
                 "analytics scope."
             ),
             known_gap=(
-                "prompt refused before Genie execution due cross-lender customer-list "
-                "pattern"
+                "prompt refused before Genie execution due cross-lender customer-list pattern"
             ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
@@ -852,6 +919,30 @@ def genie_message(
             last_error=exc,
             kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
         ) from exc
+    if _genie_response_has_unsafe_visible_text(result):  # type: ignore[arg-type]
+        blocked = _policy_blocked_genie_output_response(payload, result)  # type: ignore[arg-type]
+        _required_audit_write(
+            audit,
+            actor=actor,
+            action="genie.response_blocked",
+            entity_type="genie_message",
+            entity_id=_safe_genie_audit_entity_id(
+                payload,
+                question_hash=blocked.question_hash or "genie",
+                message_id=blocked.message_id,
+            ),
+            payload_json={
+                "conversation_id": blocked.conversation_id,
+                "message_id": blocked.message_id,
+                "question_hash": blocked.question_hash,
+                "row_count": 0,
+                "source_assets": [],
+                "visualization_kind": None,
+                "action_type": "response_blocked",
+            },
+            event_type="RUN_GENIE",
+        )
+        return _finalize_genie_response(lakebase, actor=actor, response=blocked)
     _ = background
     _required_audit_write(
         audit,

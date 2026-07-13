@@ -8,6 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from backend.schemas._validators import contains_unsafe_ai_text
 from backend.schemas.common import (
     contains_pii_marker,
     validate_public_campaign_label,
@@ -38,7 +39,9 @@ GrowthAgentSpecialist = Literal[
     "data_ops_agent",
 ]
 GrowthAgentExecutionMode = Literal["deterministic", "genie_conversation", "agent_framework"]
-GrowthAgentTraceKind = Literal["local_hash", "genie_conversation", "agent_framework", "mlflow_trace"]
+GrowthAgentTraceKind = Literal[
+    "local_hash", "genie_conversation", "agent_framework", "mlflow_trace"
+]
 
 _STATE_RE = re.compile(r"^[A-Z]{2}$")
 _MONITOR_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 &.,:+/-]{0,79}$")
@@ -220,11 +223,11 @@ _PROMPT_UNREVIEWED_LENDER_TARGET_RE = re.compile(
     re.IGNORECASE,
 )
 _WORKFLOW_MONITOR_TITLE_RE = re.compile(
-	r"^(?:Daily Refi Opportunity Brief|Listed-for-Sale Purchase Watch|"
-	r"Competitor Recapture Monitor|High-Equity / HELOC Watch|"
-	r"Borrower Dossier Review|Branch Manager Capacity Review|Source/Freshness Sentinel|"
-	r"Custom Segment Workflow|Mortgage Growth Agent)"
-	r"(?: - [A-Z]{2}(?:, [A-Z]{2}){0,19})?$"
+    r"^(?:Daily Refi Opportunity Brief|Listed-for-Sale Purchase Watch|"
+    r"Competitor Recapture Monitor|High-Equity / HELOC Watch|"
+    r"Borrower Dossier Review|Branch Manager Capacity Review|Source/Freshness Sentinel|"
+    r"Custom Segment Workflow|Mortgage Growth Agent)"
+    r"(?: - [A-Z]{2}(?:, [A-Z]{2}){0,19})?$"
 )
 _CUSTOM_WORKFLOW_MONITOR_TITLE_RE = re.compile(
     r"^Custom Segment Workflow - (?:(?:ANY|ALL) - )?"
@@ -310,9 +313,35 @@ def assert_reviewed_growth_objective(value: str) -> str:
         or _PROMPT_JAILBREAK_RE.search(clean)
         or _PROMPT_UNAVAILABLE_SOURCE_RE.search(clean)
         or _PROMPT_UNREVIEWED_LENDER_TARGET_RE.search(clean)
+        or contains_unsafe_ai_text(clean)
     ):
         raise ValueError("prompt must use reviewed, non-PII mortgage-growth criteria")
     return clean
+
+
+def validate_growth_agent_monitor_name(value: str | None) -> str | None:
+    """Return a reviewed monitor label before model use, persistence, or display."""
+
+    if value is None:
+        return None
+    clean = re.sub(r"\s+", " ", value.strip())
+    if not clean:
+        return None
+    if _WORKFLOW_MONITOR_TITLE_RE.fullmatch(clean) or _CUSTOM_WORKFLOW_MONITOR_TITLE_RE.fullmatch(
+        clean
+    ):
+        return clean
+    if (
+        contains_unsafe_ai_text(clean, include_titlecase=False)
+        or contains_pii_marker(clean)
+        or _RAW_IDENTIFIER_RE.search(clean)
+        or not _MONITOR_NAME_RE.fullmatch(clean)
+    ):
+        raise ValueError("monitor_name must be a public-safe workflow label")
+    try:
+        return validate_public_campaign_label(clean, field_name="monitor_name")
+    except ValueError as exc:
+        raise ValueError("monitor_name must be a public-safe workflow label") from exc
 
 
 class GrowthAgentWorkflow(BaseModel):
@@ -363,6 +392,14 @@ class GrowthAgentMonitor(BaseModel):
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _name(cls, value: str) -> str:
+        clean = validate_growth_agent_monitor_name(value)
+        if clean is None:
+            raise ValueError("monitor_name must be a public-safe workflow label")
+        return clean
+
 
 class GrowthAgentNotificationDraft(BaseModel):
     draft_id: str
@@ -405,22 +442,7 @@ class GrowthAgentRunRequest(BaseModel):
     @field_validator("monitor_name")
     @classmethod
     def _monitor_name(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        clean = re.sub(r"\s+", " ", value.strip())
-        if not clean:
-            return None
-        if contains_pii_marker(clean) or _RAW_IDENTIFIER_RE.search(clean):
-            raise ValueError("monitor_name must be a public-safe workflow label")
-        if _WORKFLOW_MONITOR_TITLE_RE.fullmatch(clean) or _CUSTOM_WORKFLOW_MONITOR_TITLE_RE.fullmatch(clean):
-            return clean
-        if not _MONITOR_NAME_RE.fullmatch(clean):
-            raise ValueError("monitor_name must be a public-safe workflow label")
-        try:
-            validate_public_campaign_label(clean, field_name="monitor_name")
-        except ValueError as exc:
-            raise ValueError("monitor_name must be a public-safe workflow label") from exc
-        return clean
+        return validate_growth_agent_monitor_name(value)
 
     @field_validator("request_id")
     @classmethod
@@ -433,12 +455,16 @@ class GrowthAgentRunRequest(BaseModel):
 class GrowthAgentMonitorDraftRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    channels: list[GrowthAgentNotificationChannel] = Field(default_factory=_default_notification_channels)
+    channels: list[GrowthAgentNotificationChannel] = Field(
+        default_factory=_default_notification_channels
+    )
     request_id: str | None = None
 
     @field_validator("channels")
     @classmethod
-    def _channels(cls, values: list[GrowthAgentNotificationChannel]) -> list[GrowthAgentNotificationChannel]:
+    def _channels(
+        cls, values: list[GrowthAgentNotificationChannel]
+    ) -> list[GrowthAgentNotificationChannel]:
         deduped: list[GrowthAgentNotificationChannel] = []
         for value in values:
             if value not in deduped:
@@ -489,7 +515,9 @@ class GrowthAgentPromptRunRequest(GrowthAgentRunRequest):
 
     @field_validator("segment_codes")
     @classmethod
-    def _prompt_segment_codes(cls, values: list[GrowthAgentSegmentCode]) -> list[GrowthAgentSegmentCode]:
+    def _prompt_segment_codes(
+        cls, values: list[GrowthAgentSegmentCode]
+    ) -> list[GrowthAgentSegmentCode]:
         out: list[GrowthAgentSegmentCode] = []
         for value in values:
             if value not in out:

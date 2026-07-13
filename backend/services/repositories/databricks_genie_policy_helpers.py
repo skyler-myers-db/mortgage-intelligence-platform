@@ -7,6 +7,7 @@ import re
 from typing import Any
 
 from backend.config.settings import settings
+from backend.schemas._validators import contains_unsafe_ai_text
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_answers import GenieNativeVisualization, GenieReasoningStep
 from backend.services.genie_client import GenieResponse
@@ -218,16 +219,19 @@ _PII_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
 def _answer_text_contains_pii(text: str | None) -> bool:
     if not text:
         return False
-    return any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS)
+    return any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS) or contains_unsafe_ai_text(
+        text
+    )
 
 
 # ---------------------------------------------------------------------------
 # Genie enhancement fields (2026-07). The live Genie turn can carry a native
 # visualization reference, model-suggested follow-up questions, and an exposed
 # planning trace. Each string that ships in the response body is routed through
-# ``scrub_free_text`` -- the same output-guard the answer text is checked
-# against -- so a drifting Space cannot leak PII through a suggestion, a viz
-# title, or a reasoning step. Deterministic trusted_sql / refused paths do NOT
+# the same fail-closed output guard as the answer text, before optional
+# scrubbing, so a drifting Space cannot leak or visibly redact unsafe text
+# through a suggestion, a viz title, or a reasoning step. Deterministic
+# trusted_sql / refused paths do NOT
 # call these builders; they emit empty list / None (no fabrication).
 # ---------------------------------------------------------------------------
 
@@ -235,20 +239,6 @@ def _answer_text_contains_pii(text: str | None) -> bool:
 # response body; length-cap each step so one step stays a sentence.
 _GENIE_MAX_REASONING_STEPS = 12
 _GENIE_REASONING_CONTENT_MAX_LEN = 500
-_REASONING_TITLECASE_NAME_RE = re.compile(
-    r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b"
-)
-_REASONING_CONTEXT_NAME_RE = re.compile(
-    r"\b(?:call|contact|email|message|text|ask|target|prioritize)\s+"
-    r"[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\b|"
-    r"\b[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\s+(?=qualifies?|is the top borrower)\b",
-    re.IGNORECASE,
-)
-
-
-def _redact_reasoning_identity_shapes(value: str) -> str:
-    text = _REASONING_CONTEXT_NAME_RE.sub("[IDENTITY-REDACTED]", value)
-    return _REASONING_TITLECASE_NAME_RE.sub("[IDENTITY-REDACTED]", text)
 
 
 def genie_reasoning_trace_from_thoughts(
@@ -259,14 +249,14 @@ def genie_reasoning_trace_from_thoughts(
     for raw in thoughts or []:
         if not isinstance(raw, dict):
             continue
-        content = _redact_reasoning_identity_shapes(
-            scrub_free_text(str(raw.get("content") or "").strip())
-        )[
-            :_GENIE_REASONING_CONTENT_MAX_LEN
-        ].strip()
+        raw_content = str(raw.get("content") or "").strip()
+        raw_kind = str(raw.get("kind") or "thought").strip() or "thought"
+        if _answer_text_contains_pii(raw_content) or _answer_text_contains_pii(raw_kind):
+            continue
+        content = scrub_free_text(raw_content)[:_GENIE_REASONING_CONTENT_MAX_LEN].strip()
         if not content:
             continue
-        kind = scrub_free_text(str(raw.get("kind") or "thought").strip()) or "thought"
+        kind = scrub_free_text(raw_kind) or "thought"
         steps.append(GenieReasoningStep(kind=kind, content=content))
         if len(steps) >= _GENIE_MAX_REASONING_STEPS:
             break
@@ -282,7 +272,10 @@ def genie_follow_up_questions(suggested: list[str] | None) -> list[str]:
     """
     out: list[str] = []
     for raw in suggested or []:
-        text = scrub_free_text(str(raw).strip()).strip()
+        raw_text = str(raw).strip()
+        if _answer_text_contains_pii(raw_text):
+            continue
+        text = scrub_free_text(raw_text).strip()
         if text and text not in out:
             out.append(text)
         if len(out) >= 5:
@@ -301,8 +294,12 @@ def genie_native_visualization(
         return None
     title = native.get("title")
     query_attachment_id = native.get("query_attachment_id")
+    raw_title = str(title).strip() if title else None
+    safe_title = None
+    if raw_title and not _answer_text_contains_pii(raw_title):
+        safe_title = scrub_free_text(raw_title).strip() or None
     return GenieNativeVisualization(
         attachment_id=str(attachment_id),
         query_attachment_id=str(query_attachment_id) if query_attachment_id else None,
-        title=scrub_free_text(str(title)).strip() or None if title else None,
+        title=safe_title or None,
     )
