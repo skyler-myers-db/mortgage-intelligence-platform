@@ -1,4 +1,5 @@
 import { Suspense, useEffect } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
@@ -18,6 +19,8 @@ import {
   SegmentIntelligenceRoute,
   preloadLikelyNextRoutes,
 } from './lib/routePreloaders';
+import { api } from './lib/api';
+import type { SessionResponse } from './types';
 
 function RouteFallback() {
   return (
@@ -33,6 +36,24 @@ function RouteFallback() {
       </div>
     </div>
   );
+}
+
+/**
+ * AdminRouteGate keeps the server-authoritative session decision at the route
+ * boundary. Backend AdminDep checks remain the security boundary; this guard
+ * prevents a denied deep link from rendering an operator console full of 403
+ * panels while the navigation correctly hides the same destination.
+ */
+export function AdminRouteGate() {
+  const session = useQuery<SessionResponse>({
+    queryKey: ['session', 'access'],
+    queryFn: ({ signal }) => api.session(signal),
+    retry: false,
+  });
+
+  if (session.isPending) return <RouteFallback />;
+  if (!session.data?.can_access_admin) return <Navigate to="/" replace />;
+  return <AdminConfigRoute />;
 }
 
 /**
@@ -59,7 +80,7 @@ function RouteTransition() {
           <Route path="/offer-orchestrator" element={<OfferOrchestratorRoute />} />
           <Route path="/offer-orchestrator/:id" element={<OfferOrchestratorRoute />} />
           <Route path="/ask-genie" element={<AskGenieRoute />} />
-          <Route path="/admin-config" element={<AdminConfigRoute />} />
+          <Route path="/admin-config" element={<AdminRouteGate />} />
           {/* Outreach drafting lives inside /offer-orchestrator; any
               legacy /outreach-composer link redirects to the lead queue
               so a visitor never lands on a blank shell. */}

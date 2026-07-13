@@ -219,6 +219,9 @@ export function EvidenceDrawer() {
   const metadata = metadataQuery.data;
   const destination = evidenceDestinationFor(d);
   const compactNodes = lineageFamily ? compactFamilyNodes(lineageFamily.nodes) : [];
+  const catalogLinksUnavailable = Boolean(
+    lineageFamily?.nodes.some((node) => !node.catalog_explorer_url),
+  );
   // View-state for the freshness chip: only mapped assets ever issue the
   // governed metadata read, so loading/error states are scoped to them.
   const freshnessView: FreshnessView = d?.assetKey
@@ -317,6 +320,14 @@ export function EvidenceDrawer() {
           </div>
         )}
         <div className="drawer__body">
+          {catalogLinksUnavailable && (
+            <div className="source-card source-card--warning" role="alert">
+              One or more Catalog Explorer links are unavailable because the
+              Databricks workspace host or asset mapping is not configured. The
+              governed asset names remain visible, but click-through lineage is not
+              fully ready in this deployment.
+            </div>
+          )}
           {d && tab === 'lineage' && (
             <div role="tabpanel" id="drawer-panel-lineage" aria-labelledby="drawer-tab-lineage">
               {!d.lineageFamily && destination.kind === 'lakebase' ? (

@@ -121,6 +121,9 @@ def create_portfolio(
 ) -> PortfolioCreateResponse:
     try:
         safe_idempotency_key = validate_public_opaque_id(idempotency_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    try:
         return repo.create(
             payload,
             actor=resolve_actor(request),

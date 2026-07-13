@@ -80,6 +80,17 @@ def test_required_routes_exist_and_respond():
         )
 
 
+def test_portfolio_create_rejects_malformed_idempotency_key_as_input_error():
+    response = client.post(
+        "/api/portfolio/create",
+        json={"name": "Malformed key"},
+        headers={"Idempotency-Key": "not a public opaque id"},
+    )
+
+    assert response.status_code == 422
+    assert "Idempotency-Key" not in response.text
+
+
 def test_structured_post_routes_require_and_document_json_content_type():
     schema = app.openapi()
     missing: list[str] = []

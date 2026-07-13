@@ -197,6 +197,9 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(apiMocks.lineageManifest).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).toContain('Governed assets');
     expect(document.body.textContent).toContain('Compact semantics');
+    expect(document.body.textContent).toContain(
+      'One or more Catalog Explorer links are unavailable because the Databricks workspace host or asset mapping is not configured.',
+    );
     expect(document.querySelectorAll('.governed-assets__list .lineage-node__chip')).toHaveLength(3);
     const signalLinks = Array.from(
       document.querySelectorAll<HTMLAnchorElement>('.lineage-node--signal a'),
