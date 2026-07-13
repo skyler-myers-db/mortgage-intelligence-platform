@@ -59,6 +59,7 @@ _OFFER_AUDIENCE: dict[str, str] = {
 _CAMPAIGN_PROVENANCE_VERSION = 1
 _CAMPAIGN_PROVENANCE_TTL_S = 60 * 60
 _PROCESS_CAMPAIGN_PROVENANCE_SECRET = secrets.token_bytes(32)
+_PROCESS_PROVENANCE_APP_ENVS = frozenset({"local", "dev", "development", "test", "sandbox"})
 _GENERATOR_LABELS: dict[str, str] = {
     "supervisor": "Agent endpoint-generated recommendation",
     "reviewed_fallback": "Reviewed campaign framework",
@@ -217,14 +218,28 @@ def _configured_secret(value: object) -> bytes | None:
     return raw.strip().encode("utf-8")
 
 
-def _campaign_provenance_keys(settings: Settings) -> list[bytes]:
-    values = (
+def _campaign_provenance_keys(
+    settings: Settings,
+    *,
+    for_issuance: bool = False,
+) -> list[bytes]:
+    current_values = (
         settings.mip_genie_action_secret_current,
         settings.mip_genie_action_secret,
-        settings.mip_genie_action_secret_previous,
     )
-    configured = [secret for value in values if (secret := _configured_secret(value)) is not None]
-    return configured or [_PROCESS_CAMPAIGN_PROVENANCE_SECRET]
+    current = [
+        secret for value in current_values if (secret := _configured_secret(value)) is not None
+    ]
+    previous = _configured_secret(settings.mip_genie_action_secret_previous)
+    configured = current if for_issuance else [*current, *([previous] if previous else [])]
+    if configured:
+        return configured
+    app_env = (settings.app_env or "").strip().lower()
+    if app_env not in _PROCESS_PROVENANCE_APP_ENVS:
+        raise RuntimeError(
+            "campaign provenance requires a configured HMAC secret outside local/dev/sandbox"
+        )
+    return [_PROCESS_CAMPAIGN_PROVENANCE_SECRET]
 
 
 def _campaign_copy_hash(subject: object, body: object) -> str:
@@ -245,7 +260,9 @@ def _encode_provenance_claims(claims: dict[str, object], settings: Settings) -> 
         .rstrip("=")
     )
     signature = hmac.new(
-        _campaign_provenance_keys(settings)[0], body.encode("ascii"), hashlib.sha256
+        _campaign_provenance_keys(settings, for_issuance=True)[0],
+        body.encode("ascii"),
+        hashlib.sha256,
     )
     return f"{body}.{signature.hexdigest()}"
 

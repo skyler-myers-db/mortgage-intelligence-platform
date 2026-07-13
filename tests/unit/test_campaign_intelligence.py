@@ -1,6 +1,7 @@
 from datetime import UTC, date, datetime
 from types import SimpleNamespace
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.config.settings import Settings
@@ -58,6 +59,63 @@ def test_reviewed_fallback_is_labelled_and_uses_governed_cohort_metrics() -> Non
     }
     assert result.variants[0].body != result.variants[1].body
     assert all("guarantee" not in variant.body.lower() for variant in result.variants)
+
+
+@pytest.mark.parametrize("app_env", ["staging", "production", "customer"])
+def test_non_dev_campaign_provenance_refuses_process_local_key(app_env: str) -> None:
+    with pytest.raises(RuntimeError, match="requires a configured HMAC secret"):
+        recommend_campaign(
+            _preview(),
+            settings=Settings(
+                app_env=app_env,
+                mip_agent_orchestrator=False,
+                mip_genie_action_secret=None,
+                mip_genie_action_secret_current=None,
+                mip_genie_action_secret_previous=None,
+            ),
+        )
+
+
+def test_sandbox_campaign_provenance_allows_process_local_key() -> None:
+    result = recommend_campaign(
+        _preview(),
+        settings=Settings(
+            app_env="sandbox",
+            mip_agent_orchestrator=False,
+            mip_genie_action_secret=None,
+            mip_genie_action_secret_current=None,
+            mip_genie_action_secret_previous=None,
+        ),
+    )
+
+    assert all(variant.provenance_token for variant in result.variants)
+
+
+def test_non_dev_campaign_provenance_uses_configured_key() -> None:
+    result = recommend_campaign(
+        _preview(),
+        settings=Settings(
+            app_env="production",
+            mip_agent_orchestrator=False,
+            mip_genie_action_secret_current="configured-campaign-key-0123456789abcdef",
+        ),
+    )
+
+    assert all(variant.provenance_token for variant in result.variants)
+
+
+def test_non_dev_campaign_provenance_does_not_mint_with_previous_key_only() -> None:
+    with pytest.raises(RuntimeError, match="requires a configured HMAC secret"):
+        recommend_campaign(
+            _preview(),
+            settings=Settings(
+                app_env="production",
+                mip_agent_orchestrator=False,
+                mip_genie_action_secret=None,
+                mip_genie_action_secret_current=None,
+                mip_genie_action_secret_previous="previous-key-is-verification-only-0123456789",
+            ),
+        )
 
 
 def test_recommendation_adds_only_sample_qualified_observed_performance() -> None:

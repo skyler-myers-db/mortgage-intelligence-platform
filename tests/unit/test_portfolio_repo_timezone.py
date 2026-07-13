@@ -1060,6 +1060,7 @@ def test_approved_campaign_transition_persists_signed_approval_evidence(monkeypa
         lambda: lakebase,
     )
     repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    authorized_at = datetime.now(UTC)
     payload = authorize_campaign_status_transition(
         CampaignStatusPatchRequest(
             status="approved",
@@ -1068,7 +1069,7 @@ def test_approved_campaign_transition_persists_signed_approval_evidence(monkeypa
         campaign_id=campaign_id,
         current_status="pending_review",
         approver_email=actor,
-        now=datetime(2026, 7, 13, 18, 0, tzinfo=UTC),
+        now=authorized_at,
     )
 
     summary = repo.patch_status(campaign_id, payload, actor=actor)
@@ -1084,7 +1085,7 @@ def test_approved_campaign_transition_persists_signed_approval_evidence(monkeypa
     assert "AND status = %(current_status)s" in str(patch_call["sql"])
     metadata = json.loads(str(params["metadata"]))
     assert metadata["approval_id"] == params["evidence_ids"][0]
-    assert metadata["occurred_at"] == "2026-07-13T18:00:00+00:00"
+    assert metadata["occurred_at"] == authorized_at.isoformat()
     assert metadata["status"] == "approved"
 
 

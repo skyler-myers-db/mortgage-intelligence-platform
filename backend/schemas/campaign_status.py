@@ -6,7 +6,7 @@ import json
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Literal
 from uuid import uuid4
 
@@ -38,6 +38,8 @@ _LEGAL_TRANSITIONS: dict[str, frozenset[str]] = {
     "archived": frozenset(),
 }
 _TRANSITION_SECRET = secrets.token_bytes(32)
+_TRANSITION_PROOF_TTL = timedelta(minutes=5)
+_TRANSITION_PROOF_FUTURE_SKEW = timedelta(seconds=30)
 
 
 @dataclass(frozen=True)
@@ -142,6 +144,7 @@ def validate_campaign_status_transition(
     campaign_id: str,
     current_status: str,
     actor: str,
+    now: datetime | None = None,
 ) -> CampaignTransitionEvidence | None:
     """Validate lifecycle legality and return verified approval evidence."""
 
@@ -179,4 +182,10 @@ def validate_campaign_status_transition(
         raise ValueError("campaign transition approval evidence has an invalid timestamp") from exc
     if authorized_at.tzinfo is None:
         raise ValueError("campaign transition approval evidence has an invalid timestamp")
+    checked_at = (now or datetime.now(UTC)).astimezone(UTC)
+    authorized_at = authorized_at.astimezone(UTC)
+    if authorized_at > checked_at + _TRANSITION_PROOF_FUTURE_SKEW:
+        raise ValueError("campaign transition approval evidence is future-dated")
+    if checked_at - authorized_at > _TRANSITION_PROOF_TTL:
+        raise ValueError("campaign transition approval evidence is stale")
     return evidence
