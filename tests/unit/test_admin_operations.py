@@ -686,6 +686,7 @@ def test_databricks_job_operations_handles_run_now_waiter_shape(monkeypatch) -> 
 
     monkeypatch.setenv("MIP_FRED_RATES_JOB_ID", "321")
     monkeypatch.setattr(settings, "databricks_host", "")
+    run_now_calls: list[dict[str, Any]] = []
     workspace = SimpleNamespace(
         _api=SimpleNamespace(
             _cfg=SimpleNamespace(
@@ -695,7 +696,7 @@ def test_databricks_job_operations_handles_run_now_waiter_shape(monkeypatch) -> 
         ),
         jobs=SimpleNamespace(
             list_runs=lambda **_: [],
-            run_now=lambda **_: _RunNowWaiter(999),
+            run_now=lambda **kwargs: run_now_calls.append(kwargs) or _RunNowWaiter(999),
         ),
     )
     ops = DatabricksJobOperations(workspace)
@@ -706,6 +707,12 @@ def test_databricks_job_operations_handles_run_now_waiter_shape(monkeypatch) -> 
     )
 
     assert launch.run_id == 999
+    assert run_now_calls == [
+        {
+            "job_id": 321,
+            "idempotency_token": "16111111-1111-4111-8111-111111111111",
+        }
+    ]
     assert launch.run_page_url == "https://dbc-example.cloud.databricks.com/?o=12345#job/321/run/999"
 
 
