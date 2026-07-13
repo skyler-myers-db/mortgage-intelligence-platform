@@ -208,7 +208,7 @@ export function RoiProjector({
           <div>
             <div className="h-4">Campaign economics projection</div>
             <div className="muted fs-12">
-              Current refinance-economics cohort with a qualified baseline or explicit manual overrides.
+              Selected cohort facts projected through the team&apos;s qualified 90-day funnel, or explicit manual overrides.
             </div>
           </div>
         </div>
@@ -216,12 +216,12 @@ export function RoiProjector({
           {scenarioMode === 'manual'
             ? manual.qualified ? 'manual · explicit overrides' : 'manual · overrides required'
             : performanceStatus === 'loading'
-            ? 'cohort exact · loading performance'
+            ? 'selected cohort · loading team benchmark'
             : performanceStatus === 'unavailable'
-              ? 'cohort exact · performance unavailable'
+              ? 'selected cohort · team benchmark unavailable'
               : observed.qualified
-                ? 'cohort exact · qualified 90d funnel'
-                : 'cohort exact · sample not qualified'}
+                ? 'selected cohort · qualified team benchmark'
+                : 'selected cohort · team sample not qualified'}
         </span>
       </div>
       <div className="surface__body">
@@ -229,7 +229,7 @@ export function RoiProjector({
           <div>
             <div className="eyebrow">Projection mode</div>
             <div className="segment-mode-control__total">
-              <span className="num">{scenarioMode === 'baseline' ? 'Observed baseline' : 'Manual scenario'}</span>
+              <span className="num">{scenarioMode === 'baseline' ? 'Observed team benchmark' : 'Manual scenario'}</span>
             </div>
           </div>
           <div className="segmented" role="group" aria-label="Projection mode">
@@ -239,7 +239,7 @@ export function RoiProjector({
               onClick={() => setScenarioMode('baseline')}
               data-testid="roi-mode-baseline"
             >
-              Observed baseline
+              Team benchmark
             </button>
             <button
               type="button"
@@ -256,7 +256,7 @@ export function RoiProjector({
             {projection.projectedFundings === null ? '—' : Math.round(projection.projectedFundings).toLocaleString()}
           </div>
           <div className="roi-projector__headline-label">
-            {scenarioMode === 'baseline' ? 'baseline fundings' : 'manual scenario fundings'}
+            {scenarioMode === 'baseline' ? 'benchmark fundings' : 'manual scenario fundings'}
             <span className="muted">
               {' '}from {preview.high_intent_leads.toLocaleString()} refinance-economics leads
             </span>
@@ -313,7 +313,7 @@ export function RoiProjector({
           <RoiStat
             label="Funding range (Wilson 95%)"
             value={scenarioMode === 'manual'
-              ? 'Observed baseline only'
+              ? 'Team benchmark only'
               : projection.fundingRange === null
                 ? 'Not qualified'
                 : `${Math.round(projection.fundingRange[0]).toLocaleString()}–${Math.round(projection.fundingRange[1]).toLocaleString()}`}
@@ -322,7 +322,7 @@ export function RoiProjector({
             label="Projection qualification"
             value={scenarioMode === 'manual'
               ? manual.qualified ? 'Explicit manual override' : 'Overrides required'
-              : observed.qualified ? 'Qualified observed baseline' : observed.coherent ? 'Insufficient denominators' : 'Non-monotonic counts'}
+              : observed.qualified ? 'Qualified team benchmark' : observed.coherent ? 'Insufficient denominators' : 'Non-monotonic counts'}
           />
           <RoiStat label="Activity source" value="Call dispositions" />
           <RoiStat label="Outcome source" value="Lead outcomes" />
@@ -341,17 +341,17 @@ export function RoiProjector({
         )}
         {scenarioMode === 'baseline' && performanceStatus === 'available' && !observed.qualified && (
           <div className="roi-projector__invalid muted fs-12" role="status">
-            The observed baseline needs at least 30 attempted borrowers, 30 reached borrowers, 10 application starts, and 10 submitted applications with monotonic stage counts. No benchmark rate is substituted.
+            The team benchmark needs at least 30 attempted borrowers, 30 reached borrowers, 10 application starts, and 10 submitted applications with monotonic stage counts. No fallback rate is substituted.
           </div>
         )}
         {scenarioMode === 'baseline' && observed.qualified && (
           <div className="muted fs-12 mt-2">
-            Observed baseline projects leads through reach, application start, submission, and funding. The funding range is a Wilson 95% interval over unique funded / attempted borrowers. Sources: mip_app.call_dispositions and mip_app.lead_outcomes.
+            Cohort size, average balance, equity, and rate spread come from the selected population. Conversion rates are lender-team-wide over the last 90 days, not measured performance of this cohort. The funding range is a Wilson 95% interval over unique funded / attempted borrowers. Sources: mip_app.call_dispositions and mip_app.lead_outcomes.
           </div>
         )}
         {scenarioMode === 'manual' && manual.qualified && (
           <div className="muted fs-12 mt-2">
-            Manual scenario uses only the four operator-entered stage-rate overrides. It does not inherit the observed baseline or its Wilson interval.
+            Manual scenario uses only the four operator-entered stage-rate overrides. It does not inherit the team benchmark or its Wilson interval.
           </div>
         )}
       </div>

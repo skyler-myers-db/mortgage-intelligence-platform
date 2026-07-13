@@ -4325,6 +4325,12 @@ a.lineage-node__chip:focus-visible {
   box-shadow: 0 0 0 1px color-mix(in oklab, var(--bg-0) 45%, transparent);
   transition: opacity var(--dur-fast) var(--ease), transform var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
 }
+.analytics-scatter__dot::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--sp-2));
+  border-radius: var(--r-pill);
+}
 .analytics-scatter__dot:hover,
 .analytics-scatter__dot:focus-visible {
   opacity: 1;

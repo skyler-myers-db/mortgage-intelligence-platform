@@ -428,7 +428,7 @@ function AuditEventTableRow({
                 <AuditDetailValue label="Event ID" value={event.event_id} />
                 <AuditDetailValue label="Request ID" value={event.request_id} />
                 <AuditDetailValue label="Correlation ID" value={event.correlation_id} />
-                <AuditDetailValue label="Subject CLIP" value={event.subject_clip} />
+                <AuditDetailValue label="Masked subject reference" value={event.subject_clip} />
                 <AuditDetailValue label="Subject segment" value={event.subject_segment} />
               </div>
 

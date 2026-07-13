@@ -122,4 +122,56 @@ describe('CampaignSetupPanel', () => {
     act(() => applyButton?.click());
     expect(apply).toHaveBeenCalledTimes(1);
   });
+
+  it('requires confirmation before replacing operator-edited campaign copy', () => {
+    const apply = vi.fn();
+    const editedSetup = {
+      ...DEFAULT_CAMPAIGN_SETUP,
+      subjectA: 'Operator-edited subject',
+      bodyA: 'Operator-edited message',
+    };
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <CampaignSetupPanel
+            setup={editedSetup}
+            recommendation={{
+              generation_mode: 'supervisor',
+              generator_label: 'Mortgage Growth Supervisor',
+              performance_status: 'insufficient_sample',
+              audience_summary: 'Selected cohort.',
+              strategy: 'Use a reviewed benefit-led test.',
+              variants: [
+                { variant_name: 'Benefit-led', subject: 'A', body: 'B', hypothesis: 'C' },
+                { variant_name: 'Guidance-led', subject: 'D', body: 'E', hypothesis: 'F' },
+              ],
+              holdout_pct: 10,
+              evidence: [],
+              warnings: [],
+            }}
+            recommendationPending={false}
+            recommendationError={false}
+            recommendationFetching={false}
+            canRecommend
+            onFieldChange={() => vi.fn()}
+            onToggleHouseholdDedup={vi.fn()}
+            onRegenerate={vi.fn()}
+            onApply={apply}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const applyButton = [...document.querySelectorAll('button')].find((button) => (
+      button.textContent?.includes('Apply variants')
+    ));
+    act(() => applyButton?.click());
+    expect(apply).not.toHaveBeenCalled();
+    expect(document.body.textContent).toContain('replaces the campaign copy currently in the editor');
+    const replace = [...document.querySelectorAll('button')].find((button) => (
+      button.textContent?.includes('Replace edited copy')
+    ));
+    act(() => replace?.click());
+    expect(apply).toHaveBeenCalledTimes(1);
+  });
 });

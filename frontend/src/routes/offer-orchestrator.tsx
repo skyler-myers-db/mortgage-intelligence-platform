@@ -757,7 +757,7 @@ export default function OfferOrchestrator() {
               text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
               onApprove={() => void onApprove()}
               onReject={() => void onReject()}
-              disabled={!draftReady}
+              approveDisabled={!draftReady}
               isSubmitting={approving}
             />
           </div>

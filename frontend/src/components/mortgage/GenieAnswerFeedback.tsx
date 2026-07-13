@@ -62,6 +62,9 @@ export function GenieAnswerFeedback({
       // Surface only the fixed backend detail.
       if (err instanceof ApiError && err.status === 422) {
         setError(err.message || 'Feedback could not be recorded.');
+      } else if (err instanceof ApiError && err.status === 409) {
+        delete requestIdsRef.current[vote];
+        setError('This feedback request conflicts with an earlier vote. Try again to record a new vote.');
       } else {
         setError('Feedback could not be recorded. Please try again.');
       }

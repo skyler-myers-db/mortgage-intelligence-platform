@@ -309,6 +309,21 @@ describe('EvidenceDrawer lineage tab', () => {
     );
   });
 
+  it('keeps governed explanations visible when metadata and lineage requests fail', async () => {
+    apiMocks.assetMetadata.mockRejectedValue(new Error('metadata unavailable'));
+    apiMocks.lineageManifest.mockRejectedValue(new Error('manifest unavailable'));
+    appMocks.drawer = MAPPED_SOURCE;
+    await render();
+
+    expect(document.body.textContent).toContain('Metadata not loaded');
+    expect(document.body.textContent).toContain('Governed asset metadata requires admin access');
+    expect(document.body.textContent).toContain('Governed assets unavailable; manifest not loaded');
+
+    await openLineageTab();
+    expect(document.body.textContent).toContain('governed lineage manifest could not be loaded');
+    expect(document.body.textContent).toContain('Observed relationships unavailable');
+  });
+
   it('flags a family id missing from the manifest as drift, not lineage', async () => {
     appMocks.drawer = { ...MAPPED_SOURCE, lineageFamily: 'not_a_family' };
     await render();

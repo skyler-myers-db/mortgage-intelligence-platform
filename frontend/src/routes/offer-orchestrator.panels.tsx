@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
@@ -376,6 +377,7 @@ function DraftOutreachPanel({
   resetCurrentDraft,
   draftReady,
 }: DraftOutreachPanelProps) {
+  const [regenerateReviewOpen, setRegenerateReviewOpen] = useState(false);
   return (
     <div className="surface">
       <div className="surface__hdr">
@@ -429,6 +431,9 @@ function DraftOutreachPanel({
           data-testid="outreach-draft"
           className="route-textarea route-textarea--outreach"
         />
+        <p className="muted fs-12 mt-2">
+          A licensed loan officer must review the offer, disclosures, and borrower-facing copy before approval.
+        </p>
         {draftGeneratorLabel && (
           <div className="offer-message-intelligence mt-3" data-testid="offer-message-intelligence">
             <div className="split-row">
@@ -442,12 +447,36 @@ function DraftOutreachPanel({
                 variant="ghost"
                 size="sm"
                 icon="sparkle"
-                onClick={regenerateDraft}
+                onClick={() => setRegenerateReviewOpen(true)}
                 disabled={approving || !borrowerId}
               >
                 Regenerate
               </Button>
             </div>
+            {regenerateReviewOpen && (
+              <div className="status-callout status-callout--warning" role="alert">
+                <span>Regenerating replaces the subject and message currently in the editor.</span>
+                <div className="chip-row mt-2">
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => {
+                      setRegenerateReviewOpen(false);
+                      regenerateDraft();
+                    }}
+                  >
+                    Replace current draft
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setRegenerateReviewOpen(false)}
+                  >
+                    Keep current draft
+                  </Button>
+                </div>
+              </div>
+            )}
             {draftStrategy && <p className="body flush">{draftStrategy}</p>}
             {draftEvidence.length > 0 && (
               <div className="chip-row" aria-label="Message evidence">

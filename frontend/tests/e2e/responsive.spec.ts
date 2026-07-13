@@ -218,6 +218,49 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
     expect(overflow, 'segment intelligence should not create document-level horizontal scroll').toBeLessThanOrEqual(2);
   });
 
+  test('analytics scatter stays legible and keyboard-navigable at phone width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/analytics');
+
+    await expect(page.getByRole('heading', { name: 'Analytics', exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    const scatterHeading = page.getByRole('heading', { name: 'Equity vs Rate Spread' });
+    await expect(scatterHeading).toBeVisible({ timeout: 60_000 });
+    await scatterHeading.scrollIntoViewIfNeeded();
+    await expect(page.getByText('Opportunity score 75–100')).toBeVisible();
+    await expect(page.getByText('Opportunity score 50–74')).toBeVisible();
+    await expect(page.getByText('Opportunity score 0–49')).toBeVisible();
+
+    const markers = page.locator('[data-scatter-marker]');
+    await expect.poll(() => markers.count(), { timeout: 60_000 }).toBeGreaterThan(1);
+    await markers.first().focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(markers.nth(1)).toBeFocused();
+
+    const metrics = await page.evaluate(() => {
+      const plot = document.querySelector('.analytics-scatter') as HTMLElement | null;
+      const legend = document.querySelector('.analytics-scatter-legend') as HTMLElement | null;
+      if (!plot || !legend) return null;
+      const plotRect = plot.getBoundingClientRect();
+      const legendRect = legend.getBoundingClientRect();
+      return {
+        documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        plotLeft: plotRect.left,
+        plotRight: plotRect.right,
+        legendLeft: legendRect.left,
+        legendRight: legendRect.right,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+    expect(metrics, 'scatter and legend should render').toBeTruthy();
+    expect(metrics!.documentOverflow, 'analytics should not create document-level horizontal scroll').toBeLessThanOrEqual(2);
+    expect(metrics!.plotLeft).toBeGreaterThanOrEqual(0);
+    expect(metrics!.plotRight).toBeLessThanOrEqual(metrics!.viewportWidth + 2);
+    expect(metrics!.legendLeft).toBeGreaterThanOrEqual(0);
+    expect(metrics!.legendRight).toBeLessThanOrEqual(metrics!.viewportWidth + 2);
+  });
+
   test('lead queue phone viewport keeps approval column reachable inside table scroller', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/lead-queue');

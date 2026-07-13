@@ -189,6 +189,13 @@ describe('PortfolioBuilder recommendation ownership', () => {
     expect(field('Benefit-led message').value).toBe('');
 
     act(() => applyButton()!.click());
+    expect(container.textContent).toContain(
+      'Applying this recommendation replaces the campaign copy currently in the editor.',
+    );
+    const replaceButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent?.includes('Replace edited copy'));
+    expect(replaceButton).toBeTruthy();
+    act(() => replaceButton!.click());
     expect(field('Benefit-led subject').value).toBe('Recommended benefit subject');
     expect(field('Benefit-led message').value).toBe('Recommended benefit body');
   });

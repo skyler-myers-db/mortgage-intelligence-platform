@@ -29,7 +29,8 @@ describe('OfferReviewGrid message intelligence', () => {
     container.remove();
   });
 
-  it('shows the honest generator, strategy, evidence, and regeneration control', () => {
+  it('shows the honest generator, strategy, evidence, and guarded regeneration control', () => {
+    const regenerate = vi.fn();
     act(() => root.render(
       <MemoryRouter>
         <OfferReviewGrid
@@ -62,7 +63,7 @@ describe('OfferReviewGrid message intelligence', () => {
             'mip.gold.borrower_360',
             'mip.gold.evidence_events',
           ]}
-          regenerateDraft={vi.fn()}
+          regenerateDraft={regenerate}
           draftIsSaved={false}
           saveCurrentDraft={vi.fn()}
           savedDraftExists={false}
@@ -81,9 +82,18 @@ describe('OfferReviewGrid message intelligence', () => {
     expect(intelligence?.querySelectorAll('.evidence-chip')).toHaveLength(2);
     expect(container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value)
       .toBe('A clearer mortgage review');
-    const regenerate = Array.from(container.querySelectorAll('button')).find(
+    const regenerateButton = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === 'Regenerate',
     );
-    expect(regenerate?.disabled).toBe(false);
+    expect(regenerateButton?.disabled).toBe(false);
+    expect(container.textContent).toContain('A licensed loan officer must review');
+    act(() => regenerateButton?.click());
+    expect(regenerate).not.toHaveBeenCalled();
+    expect(container.textContent).toContain('Regenerating replaces the subject and message');
+    const replace = Array.from(container.querySelectorAll('button')).find(
+      (button) => button.textContent?.trim() === 'Replace current draft',
+    );
+    act(() => replace?.click());
+    expect(regenerate).toHaveBeenCalledTimes(1);
   });
 });

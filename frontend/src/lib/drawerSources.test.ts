@@ -259,6 +259,15 @@ describe('descriptorFor', () => {
     }
   });
 
+  it('resolves destinations by stable asset key when display copy is overridden', () => {
+    const source = {
+      ...DRAWER_SOURCES.leadPopulation,
+      title: 'Tenant-specific ranked population',
+      short: 'Customized copy',
+    };
+    expect(evidenceDestinationFor(source).kind).toBe('unity_catalog');
+  });
+
   it('documents estimated UPB confidence-band lineage and inputs', () => {
     const lineageNames = DRAWER_SOURCES.lien.lineage?.map((node) => node.name) ?? [];
     const signalSources = DRAWER_SOURCES.lien.signals?.map((signal) => signal.source) ?? [];

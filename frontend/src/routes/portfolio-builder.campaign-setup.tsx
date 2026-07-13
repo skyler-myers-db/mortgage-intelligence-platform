@@ -1,4 +1,4 @@
-import type { ChangeEvent } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip } from '../components/Primitives';
@@ -37,6 +37,20 @@ export function CampaignSetupPanel({
   onApply: () => void;
 }) {
   const navigate = useNavigate();
+  const [applyReviewOpen, setApplyReviewOpen] = useState(false);
+  const hasEditedCopy = setup.generationMode === 'operator' && [
+    setup.subjectA,
+    setup.subjectB,
+    setup.bodyA,
+    setup.bodyB,
+  ].some((value) => value.trim().length > 0);
+  const applyRecommendation = () => {
+    if (hasEditedCopy) {
+      setApplyReviewOpen(true);
+      return;
+    }
+    onApply();
+  };
   return (
     <div className="surface mt-4">
       <div className="surface__hdr surface__hdr--split">
@@ -81,7 +95,10 @@ export function CampaignSetupPanel({
                 variant="ghost"
                 size="sm"
                 icon="sparkle"
-                onClick={onRegenerate}
+                onClick={() => {
+                  setApplyReviewOpen(false);
+                  onRegenerate();
+                }}
                 disabled={!canRecommend || recommendationFetching}
               >
                 {recommendationFetching ? 'Analyzing…' : 'Regenerate'}
@@ -90,13 +107,37 @@ export function CampaignSetupPanel({
                 variant="primary"
                 size="sm"
                 icon="check"
-                onClick={onApply}
+                onClick={applyRecommendation}
                 disabled={!recommendation}
               >
                 Apply variants
               </Button>
             </div>
           </div>
+          {applyReviewOpen && (
+            <div className="status-callout status-callout--warning" role="alert">
+              <span>Applying this recommendation replaces the campaign copy currently in the editor.</span>
+              <div className="chip-row mt-2">
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => {
+                    setApplyReviewOpen(false);
+                    onApply();
+                  }}
+                >
+                  Replace edited copy
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setApplyReviewOpen(false)}
+                >
+                  Keep current copy
+                </Button>
+              </div>
+            </div>
+          )}
           {!canRecommend ? (
             <div className="muted fs-12">
               Run a non-empty portfolio build to generate cohort-specific strategy and copy.

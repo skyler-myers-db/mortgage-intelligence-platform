@@ -216,6 +216,39 @@ describe('Equity versus rate spread score-band legend', () => {
     }
   });
 
+  it('moves keyboard focus across borrower markers with arrow, Home, and End keys', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <EquitySpreadPointsView payload={collisionDrilldown} />
+          </MemoryRouter>,
+        );
+      });
+      const markers = [...container.querySelectorAll<HTMLElement>('[data-scatter-marker]')];
+      expect(markers).toHaveLength(2);
+      markers[0].focus();
+      act(() => markers[0].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowRight', bubbles: true,
+      })));
+      expect(document.activeElement).toBe(markers[1]);
+      act(() => markers[1].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'Home', bubbles: true,
+      })));
+      expect(document.activeElement).toBe(markers[0]);
+      act(() => markers[0].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'End', bubbles: true,
+      })));
+      expect(document.activeElement).toBe(markers[1]);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
   it('keeps scatter loading height stable while reducing the chart height on narrow containers', () => {
     const css = [
       join(process.cwd(), 'src', 'design-system', 'components.css'),

@@ -2,7 +2,14 @@
 // budget. Keep this route module explicit, like its analytics siblings.
 'use no memo';
 
-import { useId, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import {
+  useId,
+  useRef,
+  useState,
+  type CSSProperties,
+  type KeyboardEvent,
+  type ReactNode,
+} from 'react';
 import { Link } from 'react-router-dom';
 import { EvidenceChip } from '../components/Primitives';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
@@ -218,7 +225,7 @@ export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
         ))}
         {scope === 'borrower' && (
           <span className="analytics-scatter-legend__cluster">
-            <span className="analytics-scatter-legend__cluster-count" aria-hidden="true">3</span>
+            <span className="analytics-scatter-legend__cluster-count" aria-hidden="true">2+</span>
             Exact-coordinate cluster count
           </span>
         )}
@@ -251,7 +258,11 @@ export function EquitySpreadBinsView({
       yTicks={makeTicks(overview.spread_domain_min, overview.spread_domain_max)}
       scoreScope="overview"
       overlay={
-        <div className="analytics-scatter__points" aria-label="Borrower density cells">
+        <div
+          className="analytics-scatter__points"
+          aria-label="Borrower density cells"
+          onKeyDown={handleScatterMarkerNavigation}
+        >
           {overview.bins.map((bin) => {
             const rect = binCellRect(bin, overview);
             const band = scoreBand(bin.mean_opportunity_score);
@@ -270,6 +281,7 @@ export function EquitySpreadBinsView({
                 onClick={() => onZoom(binZoomViewport(bin, overview))}
                 aria-label={`${fmt(bin.borrower_count)} borrowers near ${bin.equity_bin_pct}% equity and ${bin.spread_bin_bps} bps spread, mean score ${bin.mean_opportunity_score}. Zoom in to load real borrowers.`}
                 title={`${fmt(bin.borrower_count)} borrowers · mean score ${bin.mean_opportunity_score} · ${fmt(bin.in_the_money_borrowers)} in the money`}
+                data-scatter-marker
               />
             );
           })}
@@ -319,7 +331,11 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
       yTicks={makeTicks(payload.viewport.spread_min, payload.viewport.spread_max)}
       scoreScope="borrower"
       overlay={
-        <div className="analytics-scatter__points" aria-label="Borrower drilldown points">
+        <div
+          className="analytics-scatter__points"
+          aria-label="Borrower drilldown points"
+          onKeyDown={handleScatterMarkerNavigation}
+        >
           {coordinateGroups.map((group) => (
             group.points.length === 1 ? (
               <ScatterPointLink key={group.key} point={group.points[0]} layout={layout} />
@@ -338,6 +354,25 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
       meta={meta}
     />
   );
+}
+
+function handleScatterMarkerNavigation(event: KeyboardEvent<HTMLDivElement>) {
+  const direction = event.key === 'ArrowRight' || event.key === 'ArrowDown'
+    ? 1
+    : event.key === 'ArrowLeft' || event.key === 'ArrowUp'
+      ? -1
+      : 0;
+  if (direction === 0 && event.key !== 'Home' && event.key !== 'End') return;
+  const markers = [...event.currentTarget.querySelectorAll<HTMLElement>('[data-scatter-marker]')];
+  const current = event.target instanceof HTMLElement ? markers.indexOf(event.target) : -1;
+  if (current < 0 || markers.length === 0) return;
+  event.preventDefault();
+  const next = event.key === 'Home'
+    ? 0
+    : event.key === 'End'
+      ? markers.length - 1
+      : (current + direction + markers.length) % markers.length;
+  markers[next]?.focus();
 }
 
 function pointCoordinateKey(point: Pick<EquitySpreadPoint, 'equity_pct' | 'rate_spread_bps'>): string {
@@ -383,6 +418,7 @@ function ScatterPointLink({ point, layout }: { point: EquitySpreadPoint; layout:
       } as CSSProperties}
       aria-label={`${point.display_name}: ${point.equity_pct}% equity, ${point.rate_spread_bps} bps spread, score ${point.opportunity_score} (${band}). Open Borrower 360.`}
       title={`${point.display_name} · ${point.segment} · ${point.state} · ${point.equity_pct}% equity · ${point.rate_spread_bps} bps · score ${point.opportunity_score}`}
+      data-scatter-marker
     />
   );
 }
@@ -433,6 +469,7 @@ function ScatterPointCluster({
         aria-label={`${group.points.length} borrowers at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread. Open exact-coordinate cluster.`}
         title={`${group.points.length} borrowers at the same coordinate`}
         onClick={() => onOpenChange(!open)}
+        data-scatter-marker
       >
         {group.points.length}
       </button>

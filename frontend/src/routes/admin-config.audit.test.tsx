@@ -34,6 +34,7 @@ const fixtures = vi.hoisted(() => ({
 
 const apiMocks = vi.hoisted(() => ({
   dataEstate: vi.fn(),
+  hookKeys: [] as ReadonlyArray<unknown>[],
 }));
 
 vi.mock('../lib/useWarmingUpRetry', () => ({
@@ -43,6 +44,7 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
     options?: { queryKey?: readonly unknown[] },
   ) => {
     const key = options?.queryKey ?? [];
+    apiMocks.hookKeys.push(key);
     const data = key.includes('explorer') || key.includes('latest')
       ? [fixtures.auditEvent]
       : key.includes('rollups')
@@ -133,6 +135,12 @@ function buttonByLabel(label: RegExp): HTMLButtonElement {
   return button;
 }
 
+function setNativeValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  setter?.call(input, value);
+  input.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
 describe('AdminConfig audit explorer', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
@@ -148,6 +156,7 @@ describe('AdminConfig audit explorer', () => {
       known_data_gaps: [],
       proof_assets: [],
     });
+    apiMocks.hookKeys.length = 0;
     writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -184,6 +193,7 @@ describe('AdminConfig audit explorer', () => {
     expect(details?.textContent).toContain('evt-8ecf7294');
     expect(details?.textContent).toContain('req-approval-42');
     expect(details?.textContent).toContain('corr-admin-audit-42');
+    expect(details?.textContent).toContain('Masked subject reference');
     expect(details?.textContent).toContain('ev-001');
     expect(details?.textContent).toContain('ev-002');
     expect(details?.textContent).toContain('offer_code');
@@ -193,6 +203,32 @@ describe('AdminConfig audit explorer', () => {
     act(() => expand.click());
     expect(expand.getAttribute('aria-expanded')).toBe('false');
     expect(document.getElementById(detailId as string)).toBeNull();
+  });
+
+  it('applies borrower, action, and event filters to the audit query key', async () => {
+    await renderAdmin();
+    const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
+    const action = document.querySelector<HTMLInputElement>('input[placeholder="outreach.approve"]');
+    const eventType = document.querySelector<HTMLInputElement>('input[placeholder="APPROVE"]');
+    expect(entity && action && eventType).toBeTruthy();
+
+    act(() => {
+      setNativeValue(entity!, 'B-ABC123');
+      setNativeValue(action!, 'outreach.approve');
+      setNativeValue(eventType!, 'APPROVE');
+    });
+    act(() => buttonByLabel(/^Apply filters$/).click());
+
+    const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
+    expect(explorerKeys[explorerKeys.length - 1]).toEqual(expect.arrayContaining([
+      'B-ABC123',
+      true,
+      'outreach.approve',
+      'APPROVE',
+    ]));
+    expect(document.body.textContent).toContain('entity = B-ABC123');
+    expect(document.body.textContent).toContain('action = outreach.approve');
+    expect(document.body.textContent).toContain('event = APPROVE');
   });
 
   it('copies the real table context and an exact record query without creating a row URL', async () => {

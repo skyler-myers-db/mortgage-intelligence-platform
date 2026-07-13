@@ -353,6 +353,13 @@ const DESTINATION_BY_SOURCE = {
 
 export function evidenceDestinationFor(source?: DrawerSource | null): EvidenceDestination {
   if (!source) return UNMAPPED_DESTINATION;
+  if (source.assetKey && source.assetKey in DRAWER_SOURCES) {
+    return DESTINATION_BY_SOURCE[source.assetKey as DrawerSourceKey];
+  }
+  const registeredKey = assetKeyForSource(source.assetPath ?? source.assetKey);
+  if (registeredKey && registeredKey in DRAWER_SOURCES) {
+    return DESTINATION_BY_SOURCE[registeredKey as DrawerSourceKey];
+  }
   const entry = (Object.entries(DRAWER_SOURCES) as Array<[
     DrawerSourceKey,
     DrawerSource,
@@ -362,8 +369,5 @@ export function evidenceDestinationFor(source?: DrawerSource | null): EvidenceDe
     candidate.short === source.short,
   );
   if (entry) return DESTINATION_BY_SOURCE[entry[0]];
-  const registeredKey = assetKeyForSource(source.assetPath ?? source.assetKey);
-  return source.assetKey && registeredKey === source.assetKey
-    ? UNITY_CATALOG_DESTINATION
-    : UNMAPPED_DESTINATION;
+  return registeredKey ? UNITY_CATALOG_DESTINATION : UNMAPPED_DESTINATION;
 }

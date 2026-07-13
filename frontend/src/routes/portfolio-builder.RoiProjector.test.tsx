@@ -96,7 +96,7 @@ describe('RoiProjector', () => {
   it('shows qualified-source provenance and a Wilson 95% funding range', () => {
     mount();
     expect(container.textContent).toContain('Funding range (Wilson 95%)26–134');
-    expect(container.textContent).toContain('Projection qualificationQualified observed baseline');
+    expect(container.textContent).toContain('Projection qualificationQualified team benchmark');
     expect(container.textContent).toContain('Activity sourceCall dispositions');
     expect(container.textContent).toContain('Outcome sourceLead outcomes');
     expect(container.textContent).toContain('unique funded / attempted borrowers');
@@ -106,7 +106,7 @@ describe('RoiProjector', () => {
     mountWithoutHistory();
     expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('—');
     expect(container.textContent).toContain('No zero or benchmark rate is substituted');
-    expect(container.textContent).toContain('performance unavailable');
+    expect(container.textContent).toContain('team benchmark unavailable');
     expect(container.textContent).toContain('Net revenueAdd tenant economics');
   });
 
@@ -126,7 +126,8 @@ describe('RoiProjector', () => {
 
   it('discloses that the observed rate chain is a same-borrower benchmark', () => {
     mount();
-    expect(container.textContent).toContain('Observed baseline');
+    expect(container.textContent).toContain('Observed team benchmark');
+    expect(container.textContent).toContain('not measured performance of this cohort');
     expect(container.textContent).toContain('Sources: mip_app.call_dispositions and mip_app.lead_outcomes');
   });
 
@@ -141,8 +142,8 @@ describe('RoiProjector', () => {
     setInput('roi-manual-funding', '50');
     expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('38');
     expect(container.textContent).toContain('Projection qualificationExplicit manual override');
-    expect(container.textContent).toContain('Funding range (Wilson 95%)Observed baseline only');
-    expect(container.textContent).toContain('does not inherit the observed baseline or its Wilson interval');
+    expect(container.textContent).toContain('Funding range (Wilson 95%)Team benchmark only');
+    expect(container.textContent).toContain('does not inherit the team benchmark or its Wilson interval');
     click('roi-mode-baseline');
     expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('60');
   });

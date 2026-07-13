@@ -36,7 +36,10 @@ _PROMPT_INJECTION_RE = re.compile(
     re.IGNORECASE | re.DOTALL | re.MULTILINE,
 )
 
-_TITLECASE_HUMAN_NAME_RE = re.compile(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b")
+_TITLECASE_HUMAN_NAME_RE = re.compile(
+    r"\b[A-Z][a-z]{1,30}(?:\s+|\s*\|\s*)(?:[A-Z](?:\s+|\s*\|\s*))?"
+    r"[A-Z][a-z]{1,30}\b"
+)
 _LEADING_ANALYTICS_COMMAND_RE = re.compile(
     r"\b(?:Compare|Explain|Find|List|Open|Prioritize|Rank|Review|Show|Target)\s+(?=[A-Z])"
 )
@@ -313,7 +316,8 @@ def contains_human_name_shape(
     text = _remove_reviewed_non_person_phrases(str(value), allowed_phrases=allowed_phrases)
     text = _LEADING_ANALYTICS_COMMAND_RE.sub(" ", text)
     if include_titlecase and any(
-        match.group(0).split()[-1].casefold() not in _NON_PERSON_TITLECASE_SUFFIXES
+        re.split(r"\s+|\|", match.group(0))[-1].casefold()
+        not in _NON_PERSON_TITLECASE_SUFFIXES
         for match in _TITLECASE_HUMAN_NAME_RE.finditer(text)
     ):
         return True

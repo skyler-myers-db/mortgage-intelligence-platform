@@ -267,7 +267,8 @@ export function EvidenceDrawer() {
         className={`drawer ${open ? 'is-open' : ''}`}
         role="dialog"
         aria-modal="true"
-        aria-label="Data source and lineage"
+        aria-labelledby={d ? 'evidence-drawer-title' : undefined}
+        aria-label={d ? undefined : 'Data source and lineage'}
         aria-hidden={!open}
       >
         <div className="drawer__hdr">
@@ -275,7 +276,7 @@ export function EvidenceDrawer() {
             <Icon name="db" size={16} />
           </div>
           <div className="drawer__hdr-main">
-            <div className="drawer__title">{d?.title ?? 'Data source'}</div>
+            <div className="drawer__title" id="evidence-drawer-title">{d?.title ?? 'Data source'}</div>
             <div className="drawer__subtitle">{d?.short ?? d?.assetPath ?? 'Source proof'}</div>
           </div>
           <button ref={closeBtnRef} className="drawer__close" onClick={() => setDrawer(null)} aria-label="Close drawer" type="button">
