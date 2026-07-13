@@ -832,7 +832,19 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const canonicalQ =
       'How many borrowers across current refreshed coverage are currently in-the-money?';
     await panel.getByLabel('Ask Genie').fill(canonicalQ);
+    const canonicalResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && /\/api\/(?:v1\/)?genie\/message$/.test(response.url())
+    ), { timeout: 60_000 });
     await panel.getByRole('button', { name: /Ask/i }).click();
+    const canonicalResponse = await canonicalResponsePromise;
+    expect(canonicalResponse.status(), 'canonical Genie message returned non-200').toBe(200);
+    const canonicalPayload = await canonicalResponse.json() as {
+      conversation_id?: string | null;
+      message_id?: string | null;
+    };
+    expect(canonicalPayload.conversation_id, 'canonical answer must retain its live conversation id').toBeTruthy();
+    expect(canonicalPayload.message_id, 'canonical answer must retain its live message id').toBeTruthy();
 
     // Cold Genie space = 10-15s; allow 40s (a cold warehouse + Genie
     // compilation can push past 20s on the first question of a session).
@@ -846,6 +858,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect
       .poll(async () => (await answer.innerText()).trim().length, { timeout: 40_000 })
       .toBeGreaterThan(20);
+    await expect(aiMessage.getByTestId('genie-feedback-up')).toBeVisible();
+    await expect(aiMessage.getByTestId('genie-feedback-down')).toBeVisible();
 
     const sourceChip = aiMessage.locator('.sources .evidence-chip').first();
     await expect(sourceChip).toBeVisible({ timeout: 10_000 });
@@ -1528,7 +1542,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .locator('textarea[aria-label="Ask Genie — question"]')
       .fill('Which ZIPs have the most in-the-money refinance candidates?');
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
-    await expect(page.getByText(/Opening a governed Genie turn|Selecting trusted Unity Catalog assets/)).toBeVisible({
+    await expect(page.getByText('Waiting for Genie response')).toBeVisible({
       timeout: 2_000,
     });
     await expect(page.locator('.surface', { hasText: /Source:/i }).first()).toBeVisible({ timeout: 45_000 });

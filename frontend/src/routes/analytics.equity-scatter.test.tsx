@@ -281,11 +281,15 @@ describe('Equity versus rate spread score-band legend', () => {
       });
       const markers = [...container.querySelectorAll<HTMLElement>('[data-scatter-marker]')];
       expect(markers).toHaveLength(2);
+      expect(markers.filter((marker) => marker.tabIndex === 0)).toHaveLength(1);
+      expect(markers.filter((marker) => marker.tabIndex === -1)).toHaveLength(1);
       markers[0].focus();
       act(() => markers[0].dispatchEvent(new KeyboardEvent('keydown', {
         key: 'ArrowRight', bubbles: true,
       })));
       expect(document.activeElement).toBe(markers[1]);
+      expect(markers[0].tabIndex).toBe(-1);
+      expect(markers[1].tabIndex).toBe(0);
       act(() => markers[1].dispatchEvent(new KeyboardEvent('keydown', {
         key: 'Home', bubbles: true,
       })));
@@ -306,6 +310,38 @@ describe('Equity versus rate spread score-band legend', () => {
         key: 'ArrowDown', bubbles: true,
       })));
       expect(document.activeElement).toBe(markers[0]);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('keeps a 1,200-point scatter to one Tab stop', () => {
+    const points = Array.from({ length: 1_200 }, (_, index) => ({
+      ...drilldown.points[0],
+      borrower_id: `B-${String(index).padStart(13, '0')}`,
+      equity_pct: 40 + (index / 10_000),
+      rate_spread_bps: 75 + (index / 10_000),
+      coordinate_total: 1,
+    }));
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      act(() => root.render(
+        <MemoryRouter>
+          <EquitySpreadPointsView payload={{
+            ...drilldown,
+            points,
+            showing: points.length,
+            total_matching: points.length,
+          }} />
+        </MemoryRouter>,
+      ));
+      const markers = [...container.querySelectorAll<HTMLElement>('[data-scatter-marker]')];
+      expect(markers).toHaveLength(1_200);
+      expect(markers.filter((marker) => marker.tabIndex === 0)).toHaveLength(1);
+      expect(markers.filter((marker) => marker.tabIndex === -1)).toHaveLength(1_199);
     } finally {
       act(() => root.unmount());
       container.remove();

@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { ApiError, api } from '../../lib/api';
-import { Icon } from '../Icon';
+import { Icon, ThumbsDown, ThumbsUp } from '../Icon';
 
 /**
  * GenieAnswerFeedback — thumbs-up / thumbs-down on a Genie answer with an
@@ -95,7 +95,7 @@ export function GenieAnswerFeedback({
           aria-label="Mark this answer helpful"
           data-testid="genie-feedback-up"
         >
-          <Icon name="thumbup" size={14} />
+          <ThumbsUp size={14} />
         </button>
         <button
           type="button"
@@ -105,7 +105,7 @@ export function GenieAnswerFeedback({
           aria-label="Mark this answer not helpful"
           data-testid="genie-feedback-down"
         >
-          <Icon name="thumbdown" size={14} />
+          <ThumbsDown size={14} />
         </button>
       </div>
       {error && (

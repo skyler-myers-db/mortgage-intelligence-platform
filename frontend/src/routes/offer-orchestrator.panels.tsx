@@ -159,10 +159,13 @@ interface OfferReviewGridProps {
   regenerateDraft: () => void;
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
+  draftSavePending?: boolean;
+  draftSaveError?: string | null;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
   borrowerId: string | null;
+  canAccessAdmin?: boolean;
 }
 
 export function OfferReviewGrid({
@@ -193,10 +196,13 @@ export function OfferReviewGrid({
   regenerateDraft,
   draftIsSaved,
   saveCurrentDraft,
+  draftSavePending = false,
+  draftSaveError = null,
   savedDraftExists,
   resetCurrentDraft,
   draftReady,
   borrowerId,
+  canAccessAdmin = false,
 }: OfferReviewGridProps) {
   return (
     <div className="layoutA-grid">
@@ -232,9 +238,12 @@ export function OfferReviewGrid({
         regenerateDraft={regenerateDraft}
         draftIsSaved={draftIsSaved}
         saveCurrentDraft={saveCurrentDraft}
+        draftSavePending={draftSavePending}
+        draftSaveError={draftSaveError}
         savedDraftExists={savedDraftExists}
         resetCurrentDraft={resetCurrentDraft}
         draftReady={draftReady}
+        canAccessAdmin={canAccessAdmin}
       />
     </div>
   );
@@ -353,9 +362,12 @@ interface DraftOutreachPanelProps {
   regenerateDraft: () => void;
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
+  draftSavePending?: boolean;
+  draftSaveError?: string | null;
   savedDraftExists: boolean;
   resetCurrentDraft: () => void;
   draftReady: boolean;
+  canAccessAdmin?: boolean;
 }
 
 function DraftOutreachPanel({
@@ -383,9 +395,12 @@ function DraftOutreachPanel({
   regenerateDraft,
   draftIsSaved,
   saveCurrentDraft,
+  draftSavePending = false,
+  draftSaveError = null,
   savedDraftExists,
   resetCurrentDraft,
   draftReady,
+  canAccessAdmin = false,
 }: DraftOutreachPanelProps) {
   const [regenerateReviewOpen, setRegenerateReviewOpen] = useState(false);
   const [pendingChannel, setPendingChannel] = useState<OutreachChannel | null>(null);
@@ -443,7 +458,7 @@ function DraftOutreachPanel({
                 if (!draftLoaded) return;
                 onDraftSubjectChange(e.target.value);
               }}
-              disabled={!draftLoaded}
+              disabled={!draftLoaded || draftSavePending}
               data-testid="outreach-subject"
             />
           </label>
@@ -456,7 +471,7 @@ function DraftOutreachPanel({
             if (!draftLoaded) return;
             onDraftChange(e.target.value);
           }}
-          disabled={!draftLoaded}
+          disabled={!draftLoaded || draftSavePending}
           data-testid="outreach-draft"
           className="route-textarea route-textarea--outreach"
         />
@@ -477,7 +492,7 @@ function DraftOutreachPanel({
                 size="sm"
                 icon="sparkle"
                 onClick={() => setRegenerateReviewOpen(true)}
-                disabled={approving || !borrowerId}
+                disabled={approving || draftSavePending || !borrowerId}
               >
                 Regenerate
               </Button>
@@ -540,19 +555,23 @@ function DraftOutreachPanel({
                 }
                 onDraftChannelChange(channel);
               }}
-              disabled={approving}
+              disabled={approving || draftSavePending}
             >
               {channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase()}
             </Button>
           ))}
-          <Link
-            className="chip chip--neutral offer-cadence-link"
-            to="/admin-config#offer-rules"
-            title="Open governed offer rules for follow-up cadence context"
-          >
-            <Icon name="link" size={10} />
-            <span className="chip__label">LO call follow-up within 5 days</span>
-          </Link>
+          {canAccessAdmin ? (
+            <Link
+              className="chip chip--neutral offer-cadence-link"
+              to="/admin-config#offer-rules"
+              title="Open governed offer rules for follow-up cadence context"
+            >
+              <Icon name="link" size={10} />
+              <span className="chip__label">LO call follow-up within 5 days</span>
+            </Link>
+          ) : (
+            <Chip variant="neutral">LO call follow-up within 5 days</Chip>
+          )}
           {draftDisclosureVersion && (
             <Chip variant="success" icon="shield">
               Disclosure {draftDisclosureVersion} · {draftDisclosureState ?? 'state fallback'}
@@ -562,11 +581,11 @@ function DraftOutreachPanel({
             variant={draftIsSaved ? 'ghost' : 'default'}
             size="sm"
             icon={draftIsSaved ? 'check' : 'doc'}
-            onClick={saveCurrentDraft}
-            disabled={!borrowerId || !draftReady}
+            onClick={() => void saveCurrentDraft()}
+            disabled={!borrowerId || !draftReady || draftSavePending}
             aria-label={`Save outreach draft for ${borrowerId ?? 'borrower'}`}
           >
-            {draftIsSaved ? 'Draft saved' : 'Save draft'}
+            {draftSavePending ? 'Saving…' : draftIsSaved ? 'Draft saved' : 'Save draft'}
           </Button>
           {savedDraftExists && (
             <Button
@@ -574,12 +593,18 @@ function DraftOutreachPanel({
               size="sm"
               icon="cross"
               onClick={resetCurrentDraft}
+              disabled={draftSavePending}
               aria-label={`Reset saved outreach draft for ${borrowerId ?? 'borrower'}`}
             >
               Reset draft
             </Button>
           )}
         </div>
+        {draftSaveError && (
+          <div className="status-callout status-callout--danger mt-3" role="alert">
+            {draftSaveError}
+          </div>
+        )}
         {pendingChannel && (
           <div className="status-callout status-callout--warning mt-3" role="alert">
             <span>
@@ -595,6 +620,7 @@ function DraftOutreachPanel({
                   setPendingChannel(null);
                   onDraftChannelChange(channel);
                 }}
+                disabled={draftSavePending}
               >
                 Switch channel
               </Button>

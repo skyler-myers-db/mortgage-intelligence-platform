@@ -78,6 +78,8 @@ export default function OfferOrchestrator() {
   const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
   const [draftPending, setDraftPending] = useState<boolean>(true);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftSavePending, setDraftSavePending] = useState(false);
+  const [draftSaveError, setDraftSaveError] = useState<string | null>(null);
   const [draftBaselineBody, setDraftBaselineBody] = useState('');
   const [draftBaselineSubject, setDraftBaselineSubject] = useState('');
   const [draftDisclosureVersion, setDraftDisclosureVersion] = useState<string | null>(null);
@@ -136,6 +138,7 @@ export default function OfferOrchestrator() {
     savedDrafts,
     saveDraft,
     removeSavedDraft,
+    canAccessAdmin,
   } = useApp();
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${draftChannel}` : null;
@@ -435,20 +438,31 @@ export default function OfferOrchestrator() {
       confidence: b.confidence,
     });
   };
-  const saveCurrentDraft = () => {
-    if (!id || !draftReady) return;
-    saveDraft({
-      borrower_id: id,
-      offer_code: rec?.offer_code ?? b?.recommended_offer_code ?? null,
-      channel: draftChannel,
-      subject: draftChannel === 'sms' ? null : draftSubject,
-      body: draftText,
-    });
-    setDraftBaselineBody(draftText);
-    setDraftBaselineSubject(draftChannel === 'sms' ? '' : draftSubject);
+  const saveCurrentDraft = async () => {
+    if (!id || !draftReady || draftSavePending) return;
+    setDraftSavePending(true);
+    setDraftSaveError(null);
+    try {
+      await saveDraft({
+        borrower_id: id,
+        offer_code: rec?.offer_code ?? b?.recommended_offer_code ?? null,
+        channel: draftChannel,
+        subject: draftChannel === 'sms' ? null : draftSubject,
+        body: draftText,
+      });
+      setDraftBaselineBody(draftText);
+      setDraftBaselineSubject(draftChannel === 'sms' ? '' : draftSubject);
+    } catch (err) {
+      setDraftSaveError(
+        err instanceof Error ? `Couldn't save draft: ${err.message}` : "Couldn't save draft.",
+      );
+    } finally {
+      setDraftSavePending(false);
+    }
   };
   const resetCurrentDraft = () => {
     if (!id) return;
+    setDraftSaveError(null);
     removeSavedDraft(id, draftChannel);
     const cached = BORROWER_CACHE.get(id);
     if (cached) {
@@ -705,12 +719,19 @@ export default function OfferOrchestrator() {
         draftLoaded={draftLoaded}
         draftError={draftError}
         draftSubject={draftSubject}
-        onDraftSubjectChange={setDraftSubject}
+        onDraftSubjectChange={(subject) => {
+          setDraftSubject(subject);
+          setDraftSaveError(null);
+        }}
         draftText={draftText}
-        onDraftChange={setDraftBody}
+        onDraftChange={(body) => {
+          setDraftBody(body);
+          setDraftSaveError(null);
+        }}
         draftChannel={draftChannel}
         draftDirty={draftDirty}
         onDraftChannelChange={(channel) => {
+          setDraftSaveError(null);
           setDraftChannel(channel);
           setDraftLoaded(false);
           setDraftPending(true);
@@ -737,10 +758,13 @@ export default function OfferOrchestrator() {
         regenerateDraft={regenerateDraft}
         draftIsSaved={draftIsSaved}
         saveCurrentDraft={saveCurrentDraft}
+        draftSavePending={draftSavePending}
+        draftSaveError={draftSaveError}
         savedDraftExists={Boolean(savedDraft)}
         resetCurrentDraft={resetCurrentDraft}
         draftReady={draftReady}
         borrowerId={id}
+        canAccessAdmin={canAccessAdmin}
       />
 
       <OfferDetailsRows recommendation={rec} />

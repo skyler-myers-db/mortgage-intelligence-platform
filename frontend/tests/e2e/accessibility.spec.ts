@@ -66,6 +66,7 @@ const ROUTES: Array<{ path: string; readySelector?: RegExp | string }> = [
   { path: '/segment-intelligence',   readySelector: /borrower segment/i },
   { path: '/lead-queue',             readySelector: /Lead queue|Ranked borrower queue/i },
   { path: '/ask-genie',              readySelector: /Ask a question|Ask Genie/i },
+  { path: '/analytics?view=economics', readySelector: /Equity vs Rate Spread/i },
   { path: '/offer-orchestrator',     readySelector: /Offer Orchestrator|Choose a borrower/i },
 ];
 

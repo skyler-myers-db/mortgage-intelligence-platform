@@ -246,9 +246,14 @@ export function EquitySpreadBinsView({
   overview: EquitySpreadOverview;
   onZoom: (viewport: EquitySpreadViewport) => void;
 }) {
+  const binKeys = overview.bins.map((bin) => `${bin.equity_bin_pct}:${bin.spread_bin_bps}`);
+  const [activeMarkerKey, setActiveMarkerKey] = useState<string | null>(binKeys[0] ?? null);
   if (overview.bins.length === 0) {
     return <div className="analytics-empty">No borrower points returned.</div>;
   }
+  const resolvedActiveMarkerKey = activeMarkerKey && binKeys.includes(activeMarkerKey)
+    ? activeMarkerKey
+    : binKeys[0];
   const layout = overviewScatterLayout(overview);
   const maxCount = Math.max(1, ...overview.bins.map((bin) => bin.borrower_count));
   return (
@@ -264,11 +269,12 @@ export function EquitySpreadBinsView({
           onKeyDown={handleScatterMarkerNavigation}
         >
           {overview.bins.map((bin) => {
+            const markerKey = `${bin.equity_bin_pct}:${bin.spread_bin_bps}`;
             const rect = binCellRect(bin, overview);
             const band = scoreBand(bin.mean_opportunity_score);
             return (
               <button
-                key={`${bin.equity_bin_pct}:${bin.spread_bin_bps}`}
+                key={markerKey}
                 type="button"
                 className={`analytics-scatter__bin score--${band}`}
                 style={{
@@ -282,6 +288,9 @@ export function EquitySpreadBinsView({
                 aria-label={`${fmt(bin.borrower_count)} borrowers near ${bin.equity_bin_pct}% equity and ${bin.spread_bin_bps} bps spread, mean score ${bin.mean_opportunity_score}. Zoom in to load real borrowers.`}
                 title={`${fmt(bin.borrower_count)} borrowers · mean score ${bin.mean_opportunity_score} · ${fmt(bin.in_the_money_borrowers)} in the money`}
                 data-scatter-marker
+                data-scatter-key={markerKey}
+                tabIndex={markerKey === resolvedActiveMarkerKey ? 0 : -1}
+                onFocus={() => setActiveMarkerKey(markerKey)}
               />
             );
           })}
@@ -299,6 +308,7 @@ export function EquitySpreadBinsView({
 
 export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPointsResponse }) {
   const [openClusterKey, setOpenClusterKey] = useState<string | null>(null);
+  const [activeMarkerKey, setActiveMarkerKey] = useState<string | null>(null);
   const layout = zoomScatterLayout(payload.viewport);
   // The server orders by opportunity score DESC and caps at point_cap. Limit
   // the number of displayed coordinates to those represented by the first
@@ -310,6 +320,10 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
   const coordinateGroups = groupExactCoordinatePoints(payload.points).filter(
     (group) => plottedCoordinates.has(group.key),
   );
+  const resolvedActiveMarkerKey = activeMarkerKey
+    && coordinateGroups.some((group) => group.key === activeMarkerKey)
+    ? activeMarkerKey
+    : coordinateGroups[0]?.key ?? null;
   const meta = (
     <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
       Plotting {fmt(plotted.length)} of {fmt(payload.showing)} returned borrowers
@@ -342,7 +356,13 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
         >
           {coordinateGroups.map((group) => (
             group.coordinate_total === 1 ? (
-              <ScatterPointLink key={group.key} point={group.points[0]} layout={layout} />
+              <ScatterPointLink
+                key={group.key}
+                point={group.points[0]}
+                layout={layout}
+                tabIndex={group.key === resolvedActiveMarkerKey ? 0 : -1}
+                onFocus={() => setActiveMarkerKey(group.key)}
+              />
             ) : (
               <ScatterPointCluster
                 key={group.key}
@@ -350,6 +370,8 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
                 layout={layout}
                 open={openClusterKey === group.key}
                 onOpenChange={(open) => setOpenClusterKey(open ? group.key : null)}
+                tabIndex={group.key === resolvedActiveMarkerKey ? 0 : -1}
+                onFocus={() => setActiveMarkerKey(group.key)}
               />
             )
           ))}
@@ -411,7 +433,17 @@ export function groupExactCoordinatePoints(
   return [...groups.values()];
 }
 
-function ScatterPointLink({ point, layout }: { point: EquitySpreadPoint; layout: ScatterLayout }) {
+function ScatterPointLink({
+  point,
+  layout,
+  tabIndex,
+  onFocus,
+}: {
+  point: EquitySpreadPoint;
+  layout: ScatterLayout;
+  tabIndex: number;
+  onFocus: () => void;
+}) {
   const position = scatterPosition(point.equity_pct, point.rate_spread_bps, layout);
   const band = point.score_band ?? scoreBand(point.opportunity_score);
   return (
@@ -425,6 +457,9 @@ function ScatterPointLink({ point, layout }: { point: EquitySpreadPoint; layout:
       aria-label={`${point.display_name}: ${point.equity_pct}% equity, ${point.rate_spread_bps} bps spread, score ${point.opportunity_score} (${band}). Open Borrower 360.`}
       title={`${point.display_name} · ${point.segment} · ${point.state} · ${point.equity_pct}% equity · ${point.rate_spread_bps} bps · score ${point.opportunity_score}`}
       data-scatter-marker
+      data-scatter-key={pointCoordinateKey(point)}
+      tabIndex={tabIndex}
+      onFocus={onFocus}
     />
   );
 }
@@ -434,11 +469,15 @@ function ScatterPointCluster({
   layout,
   open,
   onOpenChange,
+  tabIndex,
+  onFocus,
 }: {
   group: EquitySpreadCoordinateGroup;
   layout: ScatterLayout;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  tabIndex: number;
+  onFocus: () => void;
 }) {
   const panelId = useId();
   const [visibleCount, setVisibleCount] = useState(CLUSTER_PAGE_SIZE);
@@ -481,6 +520,9 @@ function ScatterPointCluster({
         title={`${membershipLabel} at the same coordinate`}
         onClick={() => onOpenChange(!open)}
         data-scatter-marker
+        data-scatter-key={group.key}
+        tabIndex={tabIndex}
+        onFocus={onFocus}
       >
         {group.coordinate_total}
       </button>

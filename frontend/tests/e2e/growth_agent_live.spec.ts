@@ -509,8 +509,9 @@ test('natural-language dossier and data-ops specialists use governed traces and 
     expect.arrayContaining(['fn_borrower_dossier_evidence', 'fn_lead_queue_url']),
   );
   expect(dossierRun.policy_checks.map((check) => check.label)).toEqual(
-    expect.arrayContaining(['Dossier privacy', 'Broad vs actionable reconciliation']),
+    expect.arrayContaining(['Approval gate required', 'Broad vs actionable reconciliation']),
   );
+  expect(dossierRun.policy_checks.map((check) => check.label)).not.toContain('Dossier privacy');
   await expect(page.getByText(/Owner:\s*Borrower dossier lens/)).toBeVisible();
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('PII-safe output');
   await expectLeadQueueHandoffMatchesActionableTotal(request, dossierRun);

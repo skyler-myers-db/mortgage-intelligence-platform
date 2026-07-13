@@ -73,6 +73,7 @@ describe('OfferReviewGrid message intelligence', () => {
           savedDraftExists={false}
           resetCurrentDraft={vi.fn()}
           draftReady
+          canAccessAdmin
         />
       </MemoryRouter>,
     ));
@@ -91,6 +92,7 @@ describe('OfferReviewGrid message intelligence', () => {
     );
     expect(regenerateButton?.disabled).toBe(false);
     expect(container.textContent).toContain('A licensed loan officer must review');
+    expect(container.querySelector('a[href="/admin-config#offer-rules"]')).not.toBeNull();
     act(() => regenerateButton?.click());
     expect(regenerate).not.toHaveBeenCalled();
     expect(container.textContent).toContain('Regenerating replaces the subject and message');
@@ -195,6 +197,8 @@ describe('OfferReviewGrid message intelligence', () => {
       .toBe(true);
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Save outreach draft for B-WARMING"]')?.disabled)
       .toBe(true);
+    expect(container.textContent).toContain('LO call follow-up within 5 days');
+    expect(container.querySelector('a[href="/admin-config#offer-rules"]')).toBeNull();
   });
 
   it('surfaces a draft failure and prevents editing or saving stale copy', () => {

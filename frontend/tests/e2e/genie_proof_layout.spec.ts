@@ -245,7 +245,7 @@ test.describe('Genie proof drawer layout', () => {
 
     const progress = page.locator('.genie-progress');
     await expect(progress).toBeVisible();
-    await expect(progress).toContainText('Opening a governed Genie turn');
+    await expect(progress).toContainText('Waiting for Genie response');
     await expect(composer).toHaveValue(question);
     await expect(page.getByRole('button', { name: /Asking/i })).toBeDisabled();
     await page.waitForTimeout(250);

@@ -106,6 +106,16 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
       { timeout: 60_000 },
     ).toBeGreaterThan(0);
 
+    const markers = scatter.locator('[data-scatter-marker]');
+    const activeMarker = scatter.locator('[data-scatter-marker][tabindex="0"]');
+    await expect(activeMarker).toHaveCount(1);
+    await expect(scatter.locator('[data-scatter-marker][tabindex="-1"]'))
+      .toHaveCount((await markers.count()) - 1);
+    const firstMarker = activeMarker;
+    await firstMarker.focus();
+    await page.keyboard.press('ArrowRight');
+    await expect(activeMarker).toBeFocused();
+
     // Every marker carries a canonical S1 band class.
     expect(
       await page.locator([

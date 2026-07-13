@@ -87,3 +87,13 @@ export function Icon({ name, size = 16, className, style, ...rest }: IconProps) 
     </svg>
   );
 }
+
+type NamedIconProps = Omit<IconProps, 'name'>;
+
+export function ThumbsUp(props: NamedIconProps) {
+  return <Icon name="thumbup" {...props} />;
+}
+
+export function ThumbsDown(props: NamedIconProps) {
+  return <Icon name="thumbdown" {...props} />;
+}

@@ -41,11 +41,28 @@ function formatDelta(trend: KpiTrend | undefined): string | undefined {
   return `${sign}${pct.toFixed(1)}% ${trend?.comparison_label ?? 'vs prior snapshot'}`;
 }
 
+export function HomeDayZeroStatus({ canAccessAdmin }: { canAccessAdmin: boolean }) {
+  return (
+    <div role="status" className="status-callout status-callout--day-zero">
+      <strong>First data refresh pending.</strong>{' '}
+      Unity Catalog gold tables are empty.{' '}
+      {canAccessAdmin ? (
+        <>
+          Start and monitor the refresh in{' '}
+          <Link to="/admin-config#data-operations">Admin Data Operations</Link>.
+        </>
+      ) : (
+        'Contact an administrator to start and monitor the refresh.'
+      )}
+    </div>
+  );
+}
+
 export default function Home() {
   // Home KPIs read straight from /api/v1/portfolio/preview. While the request is
   // in flight we show skeletons rather than design-time numbers or em-dashes,
   // so normal loading is visually distinct from a genuinely unknown value.
-  const { lender } = useApp();
+  const { lender, canAccessAdmin } = useApp();
   const navigate = useNavigate();
   const healthCtx = useOptionalHealth();
   // True when the shared health poll has confirmed warehouse / lakebase is
@@ -178,15 +195,7 @@ export default function Home() {
         </div>
       )}
       {isDayZero && (
-        <div
-          role="status"
-          className="status-callout status-callout--day-zero"
-        >
-          <strong>First data refresh pending.</strong>{' '}
-          Unity Catalog gold tables are empty. Authorized operators can start
-          and monitor the refresh in{' '}
-          <Link to="/admin-config#data-operations">Admin Data Operations</Link>.
-        </div>
+        <HomeDayZeroStatus canAccessAdmin={canAccessAdmin} />
       )}
       {!isDayZero && !previewWarming && preview?.trend_note && (
         <div role="status" className="status-callout status-callout--info">

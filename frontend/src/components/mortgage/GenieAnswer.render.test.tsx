@@ -171,4 +171,25 @@ describe('GenieAnswer render surfaces', () => {
     );
     expect(container.querySelector('[data-testid="genie-feedback-up"]')).toBeNull();
   });
+
+  it('keeps canonical feedback visible using live ids preserved in proof', () => {
+    act(() => root.render(
+      <GenieAnswer
+        payload={payload({
+          source: 'trusted_sql',
+          conversation_id: undefined,
+          message_id: null,
+          proof: {
+            conversation_id: 'conv-live',
+            message_id: 'msg-live',
+            trusted: true,
+          },
+        })}
+        question="Q"
+      />,
+    ));
+
+    expect(container.querySelector('[data-testid="genie-feedback-up"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="genie-feedback-down"]')).not.toBeNull();
+  });
 });

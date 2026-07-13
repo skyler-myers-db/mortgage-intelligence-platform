@@ -92,9 +92,15 @@ export function GenieAnswer({
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
   const isGenieApiAnswer = payload.source === 'genie';
+  // Live Genie identifiers are duplicated into proof so the governed audit
+  // binding survives canonical answer rewrites. Prefer the top-level wire
+  // fields and consume the proof copies when an older response shape omits
+  // them; never synthesize an identifier client-side.
+  const liveConversationId = payload.conversation_id ?? payload.proof?.conversation_id;
+  const liveMessageId = payload.message_id ?? payload.proof?.message_id;
   const hasApiReasoning = Boolean(
-    payload.conversation_id
-    && payload.message_id
+    liveConversationId
+    && liveMessageId
     && payload.genie_status === 'COMPLETED'
     && Array.isArray(payload.reasoning_trace)
     && payload.reasoning_trace.length > 0,
@@ -359,8 +365,8 @@ export function GenieAnswer({
           lacks a conversation_id / message_id to attribute the vote to. */}
       {isTrustedGenieSource(payload.source) && (
         <GenieAnswerFeedback
-          conversationId={payload.conversation_id}
-          messageId={payload.message_id}
+          conversationId={liveConversationId}
+          messageId={liveMessageId}
         />
       )}
     </div>

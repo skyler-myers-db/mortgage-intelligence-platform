@@ -12,6 +12,7 @@ import type {
   BorrowerLifecycle,
   OfferRecommendation,
   SavedDraft,
+  SavedDraftInput,
 } from '../types';
 
 const apiMocks = vi.hoisted(() => ({
@@ -71,6 +72,7 @@ vi.mock('../components/AppContext', () => ({
     setDrawer: appMocks.setDrawer,
     showEvidence: true,
     showConfidence: true,
+    canAccessAdmin: false,
   }),
 }));
 
@@ -182,6 +184,15 @@ describe('OfferOrchestrator route behavior', () => {
     appMocks.savedDrafts = {};
     appMocks.setApproval.mockImplementation((borrowerId: string, status: 'approved' | 'rejected') => {
       appMocks.approvals[borrowerId] = status;
+    });
+    appMocks.saveDraft.mockReset().mockImplementation(async (draft: SavedDraftInput) => {
+      const saved: SavedDraft = {
+        ...draft,
+        saved_at: '2026-07-13T12:00:00Z',
+        updated_at: '2026-07-13T12:00:00Z',
+      };
+      appMocks.savedDrafts[`${saved.borrower_id}::${saved.channel}`] = saved;
+      return saved;
     });
     apiMocks.borrower.mockReset().mockResolvedValue(BORROWER);
     apiMocks.recommendOffer.mockReset().mockResolvedValue(RECOMMENDATION);
@@ -315,6 +326,56 @@ describe('OfferOrchestrator route behavior', () => {
     expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.value)
       .toBe('Saved operator body.');
     expect(button('Draft saved').disabled).toBe(false);
+  });
+
+  it('keeps the draft dirty and locked until persistence succeeds', async () => {
+    const pendingSave = deferred<SavedDraft>();
+    appMocks.saveDraft.mockImplementation((draft: SavedDraftInput) => (
+      pendingSave.promise.then((saved) => {
+        appMocks.savedDrafts[`${draft.borrower_id}::${draft.channel}`] = saved;
+        return saved;
+      })
+    ));
+    mount();
+    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
+    const body = container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!;
+    setInputValue(body, 'Persist this operator edit.');
+
+    act(() => button('Save draft').click());
+    await waitUntil(() => container.textContent?.includes('Saving…') === true);
+    expect(button('Saving…').disabled).toBe(true);
+    expect(body.disabled).toBe(true);
+    expect(appMocks.savedDrafts[`${BORROWER_ID}::email`]).toBeUndefined();
+
+    await act(async () => pendingSave.resolve({
+      borrower_id: BORROWER_ID,
+      offer_code: 'rate_term_refi',
+      channel: 'email',
+      subject: 'email subject',
+      body: 'Persist this operator edit.',
+      saved_at: '2026-07-13T12:00:00Z',
+      updated_at: '2026-07-13T12:00:00Z',
+    }));
+    await waitUntil(() => container.textContent?.includes('Draft saved') === true);
+    expect(body.disabled).toBe(false);
+  });
+
+  it('surfaces persistence failure and preserves the dirty baseline', async () => {
+    appMocks.saveDraft.mockRejectedValue(new Error('Lakebase unavailable'));
+    mount();
+    await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
+    setInputValue(
+      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!,
+      'Unsaved operator edit.',
+    );
+
+    act(() => button('Save draft').click());
+    await waitUntil(() => container.textContent?.includes("Couldn't save draft: Lakebase unavailable") === true);
+    expect(button('Save draft').disabled).toBe(false);
+    expect(appMocks.savedDrafts[`${BORROWER_ID}::email`]).toBeUndefined();
+
+    act(() => button('SMS').click());
+    expect(container.textContent).toContain('replaces the unsaved subject and message');
   });
 
   it('uses persisted lifecycle approval after reload', async () => {

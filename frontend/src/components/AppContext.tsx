@@ -82,7 +82,7 @@ interface AppCtxValue {
   removeSavedLead: (borrowerId: string) => void;
   isLeadSaved: (borrowerId: string) => boolean;
   savedDrafts: Record<string, SavedDraft>;
-  saveDraft: (draft: SavedDraftInput) => void;
+  saveDraft: (draft: SavedDraftInput) => Promise<SavedDraft>;
   removeSavedDraft: (borrowerId: string, channel?: SavedDraft['channel']) => void;
   workspaceStatus: 'loading' | 'ready' | 'error';
   workspaceError: string | null;
@@ -354,43 +354,29 @@ export function AppProvider({ children }: PropsWithChildren) {
     (borrowerId: string) => Boolean(savedLeads[borrowerId]),
     [savedLeads],
   );
-  const saveDraft = useCallback((draft: SavedDraftInput) => {
-    if (!draft.borrower_id || draft.body.trim().length === 0) return;
-    const now = new Date().toISOString();
+  const saveDraft = useCallback(async (draft: SavedDraftInput): Promise<SavedDraft> => {
+    if (!draft.borrower_id || draft.body.trim().length === 0) {
+      throw new Error('A borrower and non-empty draft are required.');
+    }
     setLastBorrowerIdState(draft.borrower_id);
-    let prior: SavedDraft | undefined;
-    const key = draftKey(draft.borrower_id, draft.channel);
-    setSavedDrafts((cur) => {
-      prior = cur[key];
-      return {
+    try {
+      const saved = await api.saveWorkspaceDraft(draft);
+      setSavedDrafts((cur) => ({
         ...cur,
-        [key]: {
-          ...prior,
-          ...draft,
-          channel: draft.channel,
-          saved_at: prior?.saved_at ?? now,
-          updated_at: now,
-        },
-      };
-    });
-    void api.saveWorkspaceDraft(draft)
-      .then((saved) => {
-        setSavedDrafts((cur) => ({ ...cur, [draftKey(saved.borrower_id, saved.channel)]: saved }));
-        setWorkspaceStatus('ready');
-        setWorkspaceError(null);
-      })
-      .catch((err: unknown) => {
-        setSavedDrafts((cur) => {
-          const { [key]: _discard, ...rest } = cur;
-          return prior ? { ...rest, [key]: prior } : rest;
-        });
-        setWorkspaceStatus('error');
-        setWorkspaceError(
-          err instanceof Error
-            ? `Couldn't save draft: ${err.message}`
-            : "Couldn't save draft.",
-        );
-      });
+        [draftKey(saved.borrower_id, saved.channel)]: saved,
+      }));
+      setWorkspaceStatus('ready');
+      setWorkspaceError(null);
+      return saved;
+    } catch (err: unknown) {
+      setWorkspaceStatus('error');
+      setWorkspaceError(
+        err instanceof Error
+          ? `Couldn't save draft: ${err.message}`
+          : "Couldn't save draft.",
+      );
+      throw err;
+    }
   }, []);
   const removeSavedDraft = useCallback((borrowerId: string, channel: SavedDraft['channel'] = 'email') => {
     let prior: SavedDraft | undefined;

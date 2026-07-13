@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   COMMAND_ACTIONS,
+  commandActionsForAccess,
   filterCommandActions,
   scoreAction,
   type CommandAction,
@@ -25,6 +26,11 @@ describe('command palette action registry', () => {
     ]) {
       expect(routes).toContain(to);
     }
+  });
+
+  it('removes the Admin destination unless access is affirmative', () => {
+    expect(commandActionsForAccess(false).map((action) => action.id)).not.toContain('nav-admin');
+    expect(commandActionsForAccess(true).map((action) => action.id)).toContain('nav-admin');
   });
 
   it('returns the full registry (in order) for an empty query', () => {
