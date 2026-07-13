@@ -228,9 +228,9 @@ test.describe('Module 0 — theme / density / narrow canaries', () => {
     const scatterHeading = page.getByRole('heading', { name: 'Equity vs Rate Spread' });
     await expect(scatterHeading).toBeVisible({ timeout: 60_000 });
     await scatterHeading.scrollIntoViewIfNeeded();
-    await expect(page.getByText('Opportunity score 75–100')).toBeVisible();
-    await expect(page.getByText('Opportunity score 50–74')).toBeVisible();
-    await expect(page.getByText('Opportunity score 0–49')).toBeVisible();
+    await expect(page.getByText('High 85-100', { exact: true })).toBeVisible();
+    await expect(page.getByText('Medium 65-84', { exact: true })).toBeVisible();
+    await expect(page.getByText('Low 0-64', { exact: true })).toBeVisible();
 
     const markers = page.locator('[data-scatter-marker]');
     await expect.poll(() => markers.count(), { timeout: 60_000 }).toBeGreaterThan(1);
