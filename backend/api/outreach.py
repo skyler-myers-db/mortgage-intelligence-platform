@@ -539,6 +539,44 @@ def _assert_disclosure_backed_draft_body(
     return body
 
 
+def _assert_final_draft_subject(*, draft_subject: str | None, channel: str) -> str | None:
+    """Validate the exact subject shown to the human approver.
+
+    Email and direct mail require a concrete subject. SMS has no subject and
+    rejects non-empty text so a client cannot audit copy that the channel will
+    never deliver.
+    """
+
+    subject = (draft_subject or "").strip()
+    if channel == "sms":
+        if subject:
+            raise HTTPException(status_code=422, detail="approved SMS drafts must not include a subject")
+        return None
+    if not subject:
+        raise HTTPException(
+            status_code=422,
+            detail="approved draft_subject is required for email and direct mail",
+        )
+    if scrub_free_text(subject) != subject:
+        raise HTTPException(
+            status_code=422,
+            detail="approved draft_subject contains PII-like text and cannot be audited",
+        )
+    try:
+        assert_public_campaign_text(
+            subject,
+            field_name="approved draft_subject",
+            max_length=120,
+        )
+        assert_borrower_campaign_copy(
+            subject,
+            field_name="approved draft_subject",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return subject
+
+
 @router.post("/draft", response_model=OutreachDraft, responses=JSON_CONTENT_TYPE_RESPONSE)
 def draft_outreach(
     payload: OutreachDraftRequest,
@@ -677,6 +715,10 @@ def approve_outreach(
         disclosure=disclosure,
         channel=payload.channel,
     )
+    approved_draft_subject = _assert_final_draft_subject(
+        draft_subject=payload.draft_subject,
+        channel=payload.channel,
+    )
     audit_evidence_ids = _decision_evidence_ids(
         payload.evidence_ids,
         borrower,
@@ -721,6 +763,7 @@ def approve_outreach(
         # same approval_id" across the decision ledger and audit log.
         audit_payload["request_id"] = payload.request_id
     audit_payload["draft_body"] = approved_draft_body
+    audit_payload["draft_subject"] = approved_draft_subject
     audit_payload["rationale"] = approval_rationale
     if payload.bulk_id:
         audit_payload["bulk_id"] = payload.bulk_id

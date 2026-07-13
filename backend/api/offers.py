@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Annotated, cast
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.schemas.offer import (
     OfferAlternative,
@@ -16,9 +15,9 @@ from backend.schemas.offer import (
 )
 from backend.services.audit_decision_inputs import decision_inputs_from_offer_inputs
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
-from backend.services.observability import emit
 from backend.services.repositories import (
     BorrowerRepository,
     OfferRepository,
@@ -27,27 +26,11 @@ from backend.services.repositories import (
 )
 from backend.services.scoring import NBO_PRODUCT_LABELS, offer_display_label, source_display_label
 
-log = logging.getLogger(__name__)
-
 router = APIRouter(prefix="/offers", tags=["offers"])
 
 BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 OfferRepoDep = Annotated[OfferRepository, Depends(get_offer_repository)]
 AuditStoreDep = Annotated[AuditStore, Depends(get_audit_store)]
-
-
-def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
-    try:
-        store.write(**kwargs)  # type: ignore[arg-type]
-    except LakebaseError as exc:
-        emit(
-            log,
-            "audit_write_dropped",
-            level=logging.WARNING,
-            dependency="lakebase",
-            outcome="error",
-            exc_type=type(exc).__name__,
-        )
 
 # The eight codes ``fn_next_best_offer`` returns are all valid OfferType
 # literals. This cast is safe because NBO_PRODUCT_LABELS is the contract.
@@ -268,7 +251,6 @@ def _alternatives_for(
 def recommend_offer(
     payload: OfferRecommendRequest,
     request: Request,
-    background: BackgroundTasks,
     borrower_repo: BorrowerRepoDep,
     offer_repo: OfferRepoDep,
     audit: AuditStoreDep,
@@ -296,23 +278,27 @@ def recommend_offer(
     }
     decision_inputs = decision_inputs_from_offer_inputs(inputs)
 
-    background.add_task(
-        _safe_audit_write,
-        audit,
-        actor=resolve_actor(request),
-        action="recommend_offer",
-        entity_type="borrower",
-        entity_id=borrower.borrower_id,
-        payload_json={
-            "offer_code": code,
-            "confidence": borrower.confidence,
-            "thresholds_applied": thresholds_applied,
-            "decision_inputs": decision_inputs,
-        },
-        evidence_ids=list(borrower.evidence_ids),
-        event_type="RECOMMEND_OFFER",
-        subject_clip=borrower.clip_id,
-    )
+    try:
+        audit.write(
+            actor=resolve_actor(request),
+            action="recommend_offer",
+            entity_type="borrower",
+            entity_id=borrower.borrower_id,
+            payload_json={
+                "offer_code": code,
+                "confidence": borrower.confidence,
+                "thresholds_applied": thresholds_applied,
+                "decision_inputs": decision_inputs,
+            },
+            evidence_ids=list(borrower.evidence_ids),
+            event_type="RECOMMEND_OFFER",
+            subject_clip=borrower.clip_id,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
 
     sources = _sources_for(code)
     source_labels = [

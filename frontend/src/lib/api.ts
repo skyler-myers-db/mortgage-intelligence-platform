@@ -1082,6 +1082,7 @@ export const api = {
       actor?: string;
       offer_code?: string | null;
       evidence_ids?: string[];
+      draft_subject?: string | null;
       draft_body?: string | null;
       rationale?: string | null;
       bulk_id?: string | null;
@@ -1104,6 +1105,7 @@ export const api = {
         actor: string;
         offer_code?: string | null;
         evidence_ids?: string[];
+        draft_subject?: string | null;
         draft_body?: string | null;
         rationale?: string | null;
         bulk_id?: string | null;
@@ -1122,6 +1124,7 @@ export const api = {
         actor: opts.actor ?? 'anonymous',
         offer_code: opts.offer_code ?? null,
         evidence_ids: opts.evidence_ids ?? [],
+        draft_subject: opts.draft_subject ?? null,
         draft_body: opts.draft_body ?? null,
         rationale: opts.rationale ?? null,
         bulk_id: opts.bulk_id ?? null,

@@ -277,45 +277,15 @@ export interface SalesOutcomeSummaryResponse {
   }>;
 }
 
-export interface SavedLead {
-  borrower_id: string;
-  city?: string | null;
-  state?: string | null;
-  zip?: string | null;
-  recommended_offer?: string | null;
-  opportunity_score?: number | null;
-  confidence?: number | null;
-  saved_at: string;
-  updated_at: string;
-}
-
-export type SavedLeadInput = Omit<SavedLead, 'saved_at' | 'updated_at'>;
-
-export interface SavedDraft {
-  borrower_id: string;
-  offer_code?: string | null;
-  channel: 'email' | 'sms' | 'direct_mail';
-  body: string;
-  saved_at: string;
-  updated_at: string;
-}
-
-export type SavedDraftInput = Omit<SavedDraft, 'saved_at' | 'updated_at'>;
-
-export interface WorkspaceState {
-  saved_leads: SavedLead[];
-  saved_drafts: SavedDraft[];
-}
-
-export interface SessionResponse {
-  can_access_admin: boolean;
-}
-
-export interface WorkspaceMutationResult {
-  ok: boolean;
-  borrower_id: string;
-  audit_event_id?: string | null;
-}
+export type {
+  SavedDraft,
+  SavedDraftInput,
+  SavedLead,
+  SavedLeadInput,
+  SessionResponse,
+  WorkspaceMutationResult,
+  WorkspaceState,
+} from './types/workspace';
 
 export type ActivationDestinationType = 'salesforce' | 'crm_cdp' | 'los_pos' | 'servicing' | 'webhook';
 export type ActivationDestinationStatus = 'not_configured' | 'dry_run' | 'connected' | 'disabled';

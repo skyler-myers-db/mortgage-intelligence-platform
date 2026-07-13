@@ -139,6 +139,8 @@ interface OfferReviewGridProps {
   draftWarming: WarmingUpState | null;
   draftLoaded: boolean;
   draftError: string | null;
+  draftSubject: string;
+  onDraftSubjectChange: (subject: string) => void;
   draftText: string;
   onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
@@ -169,6 +171,8 @@ export function OfferReviewGrid({
   draftWarming,
   draftLoaded,
   draftError,
+  draftSubject,
+  onDraftSubjectChange,
   draftText,
   onDraftChange,
   draftChannel,
@@ -204,6 +208,8 @@ export function OfferReviewGrid({
         draftWarming={draftWarming}
         draftLoaded={draftLoaded}
         draftError={draftError}
+        draftSubject={draftSubject}
+        onDraftSubjectChange={onDraftSubjectChange}
         draftText={draftText}
         onDraftChange={onDraftChange}
         draftChannel={draftChannel}
@@ -321,6 +327,8 @@ interface DraftOutreachPanelProps {
   draftWarming: WarmingUpState | null;
   draftLoaded: boolean;
   draftError: string | null;
+  draftSubject: string;
+  onDraftSubjectChange: (subject: string) => void;
   draftText: string;
   onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
@@ -347,6 +355,8 @@ function DraftOutreachPanel({
   draftWarming,
   draftLoaded,
   draftError,
+  draftSubject,
+  onDraftSubjectChange,
   draftText,
   onDraftChange,
   draftChannel,
@@ -390,6 +400,22 @@ function DraftOutreachPanel({
           >
             {draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}
           </div>
+        )}
+        {draftChannel !== 'sms' && (
+          <label className="field mb-3">
+            <span className="field__label">Subject</span>
+            <input
+              aria-label="Outreach subject — review only"
+              value={draftSubject}
+              maxLength={120}
+              onChange={(e) => {
+                if (!draftLoaded) return;
+                onDraftSubjectChange(e.target.value);
+              }}
+              disabled={!draftLoaded}
+              data-testid="outreach-subject"
+            />
+          </label>
         )}
         <textarea
           key={borrower?.borrower_id ?? 'empty'}

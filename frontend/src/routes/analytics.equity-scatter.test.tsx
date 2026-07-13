@@ -143,10 +143,42 @@ describe('Equity versus rate spread score-band legend', () => {
     expect(html).toContain('analytics-scatter__cluster-marker score--high');
     expect(html).toContain('aria-expanded="false"');
     expect(html).toContain('2 borrowers at 42% equity and 88 bps spread');
-    expect(html.indexOf('/borrower-360/B-0000000000001')).toBeLessThan(
-      html.indexOf('/borrower-360/B-0000000000002'),
-    );
+    expect(html).not.toContain('/borrower-360/B-0000000000001');
     expect(html).toContain('/borrower-360/B-0000000000003');
+  });
+
+  it('progressively reveals dense cluster links instead of rendering them all while closed', () => {
+    const dense = {
+      ...drilldown,
+      points: Array.from({ length: 75 }, (_, index) => ({
+        ...drilldown.points[0],
+        borrower_id: `B-${String(index).padStart(13, '0')}`,
+      })),
+      showing: 75,
+      total_matching: 75,
+    };
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <EquitySpreadPointsView payload={dense} />
+          </MemoryRouter>,
+        );
+      });
+      expect(container.querySelectorAll('.analytics-scatter__cluster-link')).toHaveLength(0);
+      act(() => container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-marker')!.click());
+      expect(container.querySelectorAll('.analytics-scatter__cluster-link')).toHaveLength(50);
+      const more = container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-more');
+      expect(more?.textContent).toContain('Show 25 more');
+      act(() => more!.click());
+      expect(container.querySelectorAll('.analytics-scatter__cluster-link')).toHaveLength(75);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
   });
 
   it('opens a cluster from its native button and Escape closes it back to the marker', () => {

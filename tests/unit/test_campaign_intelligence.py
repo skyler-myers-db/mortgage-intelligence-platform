@@ -34,7 +34,7 @@ def test_reviewed_fallback_is_labelled_and_uses_governed_cohort_metrics() -> Non
 
     assert result.generation_mode == "reviewed_fallback"
     assert result.performance_status == "unavailable"
-    assert "2,119 eligible borrowers" in result.audience_summary
+    assert result.evidence[0].value == "2,119 borrowers"
     assert result.holdout_pct == 10
     assert {row.source_asset for row in result.evidence} == {
         "mip.semantics.portfolio_headline_metric_view",

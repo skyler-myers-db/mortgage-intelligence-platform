@@ -23,6 +23,7 @@ import type {
   EquitySpreadViewport,
 } from '../types';
 import { LoadState } from './analytics.charts';
+import './analytics.scatter.css';
 import {
   MAX_SCATTER_POINTS,
   binCellRect,
@@ -198,6 +199,8 @@ const SCORE_BAND_LEGEND: ReadonlyArray<{
   { band: 'low', label: 'Low', range: `0-${SCORE_BAND_MED_MIN - 1}` },
 ];
 
+const CLUSTER_PAGE_SIZE = 50;
+
 export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
   const scopeLabel = scope === 'overview' ? 'overview cell means' : 'borrower drilldown points';
   return (
@@ -287,20 +290,17 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
   const layout = zoomScatterLayout(payload.viewport);
   // The server orders by opportunity score DESC and caps at point_cap; keep
   // the plot responsive by selecting at most MAX_SCATTER_POINTS top-ranked
-  // coordinates. Once a coordinate is selected, include every borrower at
-  // that exact coordinate so a cluster never masks a deep link.
-  const topPoints = payload.points.slice(0, MAX_SCATTER_POINTS);
-  const selectedCoordinates = new Set(topPoints.map(pointCoordinateKey));
-  const plotted = payload.points.filter(
-    (point, index) => index < MAX_SCATTER_POINTS || selectedCoordinates.has(pointCoordinateKey(point)),
-  );
+  // borrowers. Exact-coordinate groups are progressively disclosed when
+  // opened so a dense cluster does not add thousands of hidden links to the
+  // initial DOM.
+  const plotted = payload.points.slice(0, MAX_SCATTER_POINTS);
   const coordinateGroups = groupExactCoordinatePoints(plotted);
   const meta = (
     <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
       Showing {fmt(payload.showing)} of {fmt(payload.total_matching)} borrowers in this window
       {payload.truncated ? ` (server cap ${fmt(payload.point_cap)})` : ''}
       {plotted.length < payload.points.length
-        ? `; plotting ${fmt(plotted.length)} borrowers across ${fmt(coordinateGroups.length)} coordinate markers selected from the top ${fmt(MAX_SCATTER_POINTS)} by opportunity score`
+        ? `; plotting the top ${fmt(plotted.length)} by opportunity score across ${fmt(coordinateGroups.length)} coordinate markers`
         : ''}
       . Single points open Borrower 360; numbered clusters reveal every borrower at that coordinate.
     </p>
@@ -399,6 +399,7 @@ function ScatterPointCluster({
   onOpenChange: (open: boolean) => void;
 }) {
   const panelId = useId();
+  const [visibleCount, setVisibleCount] = useState(CLUSTER_PAGE_SIZE);
   const markerRef = useRef<HTMLButtonElement>(null);
   const position = scatterPosition(group.equity_pct, group.rate_spread_bps, layout);
   const highestScore = Math.max(...group.points.map((point) => point.opportunity_score));
@@ -445,8 +446,8 @@ function ScatterPointCluster({
         <div className="analytics-scatter__cluster-title">
           {group.points.length} borrowers · {group.equity_pct}% equity · {group.rate_spread_bps} bps
         </div>
-        <ul className="analytics-scatter__cluster-list">
-          {group.points.map((point) => {
+        {open && <ul className="analytics-scatter__cluster-list">
+          {group.points.slice(0, visibleCount).map((point) => {
             const pointBand = point.score_band ?? scoreBand(point.opportunity_score);
             return (
               <li key={point.borrower_id}>
@@ -465,7 +466,18 @@ function ScatterPointCluster({
               </li>
             );
           })}
-        </ul>
+          {visibleCount < group.points.length && (
+            <li>
+              <button
+                type="button"
+                className="analytics-scatter__cluster-more"
+                onClick={() => setVisibleCount((count) => Math.min(count + CLUSTER_PAGE_SIZE, group.points.length))}
+              >
+                Show {Math.min(CLUSTER_PAGE_SIZE, group.points.length - visibleCount)} more
+              </button>
+            </li>
+          )}
+        </ul>}
       </div>
     </div>
   );

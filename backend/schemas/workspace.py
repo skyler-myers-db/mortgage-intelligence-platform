@@ -7,6 +7,10 @@ from typing import Literal
 from pydantic import BaseModel, Field, field_validator
 
 from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.portfolio_campaign import (
+    assert_borrower_campaign_copy,
+    assert_public_campaign_text,
+)
 
 
 class SavedLeadInput(BaseModel):
@@ -33,6 +37,7 @@ class SavedDraftInput(BaseModel):
     borrower_id: str = Field(min_length=1, max_length=128)
     offer_code: str | None = Field(default=None, max_length=128)
     channel: Literal["email", "sms", "direct_mail"] = "email"
+    subject: str | None = Field(default=None, max_length=120)
     body: str = Field(min_length=1, max_length=5000)
 
     @field_validator("borrower_id")
@@ -40,6 +45,17 @@ class SavedDraftInput(BaseModel):
     def _borrower_id_is_public_safe(cls, value: str) -> str:
         return validate_public_borrower_id(value)
 
+    @field_validator("subject")
+    @classmethod
+    def _subject_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        subject = value.strip()
+        if not subject:
+            return None
+        assert_public_campaign_text(subject, field_name="saved draft subject", max_length=120)
+        assert_borrower_campaign_copy(subject, field_name="saved draft subject")
+        return subject
 
 class SavedDraft(SavedDraftInput):
     saved_at: str

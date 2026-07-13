@@ -149,6 +149,10 @@ class OutreachApproveRequest(BaseModel):
     # nullable so FastAPI can return the endpoint's clearer 422 detail
     # instead of a generic request-body parse failure.
     draft_body: str | None = None
+    # The exact approver-visible subject for channels that support one.
+    # SMS is intentionally subjectless and is rejected when a caller sends
+    # non-empty subject text.
+    draft_subject: str | None = Field(default=None, max_length=120)
     # R5-01 idempotency key. When present, the router short-circuits a
     # retry that arrived after a successful INSERT whose response was
     # lost: the partial unique index on ``mip_app.approvals.request_id``

@@ -12,6 +12,10 @@ from backend.schemas._validators import (
     reviewed_geography_labels,
     reviewed_state_codes,
 )
+from backend.schemas.campaign_status import (
+    CampaignStatus,  # noqa: F401 - compatibility re-export
+    CampaignStatusPatchRequest,  # noqa: F401 - compatibility re-export
+)
 from backend.schemas.portfolio_campaign import (
     CampaignRecommendationEvidence,  # noqa: F401 - compatibility re-export
     CampaignRecommendationRequest,  # noqa: F401 - compatibility re-export
@@ -858,9 +862,6 @@ class PortfolioCreateResponse(BaseModel):
     audit_event_id: str | None = None
 
 
-CampaignStatus = Literal["draft", "pending_review", "approved", "live", "active", "rejected", "archived"]
-
-
 class CampaignSummary(BaseModel):
     campaign_id: str
     name: str
@@ -881,26 +882,3 @@ class CampaignSummary(BaseModel):
 
 class CampaignListResponse(BaseModel):
     campaigns: list[CampaignSummary]
-
-
-class CampaignStatusPatchRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    status: CampaignStatus
-    rationale: str | None = Field(default=None, max_length=500)
-
-    @field_validator("rationale")
-    @classmethod
-    def _validate_rationale(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        cleaned = assert_public_campaign_text(
-            value,
-            field_name="campaign status rationale",
-            max_length=500,
-        )
-        if not cleaned:
-            return None
-        if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", cleaned):
-            raise ValueError("campaign status rationale cannot contain human-name-shaped values")
-        return cleaned

@@ -80,6 +80,7 @@ def _approve_and_assign(borrower_id: str) -> None:
             "borrower_id": borrower_id,
             "offer_code": "refi_plus_heloc",
             "channel": "email",
+            "draft_subject": "Your mortgage review",
             "draft_body": body,
             "request_id": str(uuid4()),
         },

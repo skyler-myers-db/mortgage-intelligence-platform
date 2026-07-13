@@ -30,6 +30,7 @@ def _approve_payload(**overrides: object) -> dict[str, object]:
         "borrower_id": "B-48291",
         "offer_code": "refi_plus_heloc",
         "channel": "email",
+        "draft_subject": "Your mortgage review",
         "draft_body": _DRAFT_BODY,
     }
     payload.update(overrides)

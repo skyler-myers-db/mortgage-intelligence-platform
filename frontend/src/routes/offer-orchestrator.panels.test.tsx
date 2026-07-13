@@ -42,6 +42,8 @@ describe('OfferReviewGrid message intelligence', () => {
           draftWarming={null}
           draftLoaded
           draftError={null}
+          draftSubject="A clearer mortgage review"
+          onDraftSubjectChange={vi.fn()}
           draftText="A useful governed draft."
           onDraftChange={vi.fn()}
           draftChannel="email"
@@ -77,6 +79,8 @@ describe('OfferReviewGrid message intelligence', () => {
     expect(intelligence?.textContent).toContain('Primary offer:');
     expect(intelligence?.textContent).toContain('mip.gold.borrower_360');
     expect(intelligence?.querySelectorAll('.evidence-chip')).toHaveLength(2);
+    expect(container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value)
+      .toBe('A clearer mortgage review');
     const regenerate = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === 'Regenerate',
     );

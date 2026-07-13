@@ -122,6 +122,7 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
             "borrower_id": "B-48291",
             "offer_code": "refi",
             "actor": "anonymous",
+            "draft_subject": "Your mortgage review",
             "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )

@@ -201,7 +201,7 @@ def _fallback(
     performance: CampaignPerformanceContext | None,
     warning: str,
 ) -> CampaignRecommendationResponse:
-    offer_code, offer_count = _dominant_offer(preview)
+    offer_code, _offer_count = _dominant_offer(preview)
     offer_label = offer_display_label(offer_code, NBO_PRODUCT_LABELS[offer_code]).lower()
     audience = _OFFER_AUDIENCE[offer_code]
     lender = lender_name.strip() or "your lender"
@@ -210,7 +210,7 @@ def _fallback(
         generator_label="Reviewed campaign framework",
         performance_status=_performance_status(performance),
         audience_summary=(
-            f"{preview.marketable_population:,} eligible borrowers, including {offer_count:,} {audience}."
+            f"The selected audience is led by {audience} and is ready for a controlled message test."
         ),
         strategy=(
             "Test a concrete benefit-led explanation against a guidance-led review. Keep one call to "
@@ -290,8 +290,10 @@ def _prompt(
         "Use only the aggregate cohort facts below. Create two genuinely distinct email tests: one "
         "benefit-led and one guidance-led. Use plain language, one low-friction call to action, and no "
         "guaranteed savings, quoted rates, false urgency, protected traits, personal data, placeholders, "
-        "or unsupported claims. Observed performance is strategy context only: never expose cohort counts "
-        "or performance metrics in the borrower-facing subject or body. The hypotheses must say what "
+        "or unsupported claims. Observed performance is strategy context only. Do not put any numeric "
+        "claim, count, percentage, rate, currency amount, or performance metric in audience_summary, "
+        "strategy, or borrower-facing copy; exact figures are rendered separately from governed evidence. "
+        "The hypotheses must say what "
         "behavior each variant tests. Return JSON "
         "only with keys audience_summary, strategy, holdout_pct, variants. variants must contain exactly "
         "two objects with variant_name (Benefit-led or Guidance-led), subject, body, hypothesis. Set "

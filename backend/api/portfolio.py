@@ -96,6 +96,7 @@ def campaign_recommendation(
             visible_lo_emails=visible_los,
         )
         performance = CampaignPerformanceContext(
+            unique_leads_attempted=int(observed_funnel["unique_leads_attempted"]),
             unique_contacts_reached=observed_funnel["unique_contacts_reached"],
             unique_application_starts=observed_funnel["unique_application_starts"],
             unique_applications_submitted=int(

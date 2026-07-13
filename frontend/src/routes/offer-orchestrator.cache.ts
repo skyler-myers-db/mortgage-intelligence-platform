@@ -18,6 +18,7 @@ import type { OutreachChannel } from './offer-orchestrator.constants';
 export interface BorrowerCacheEntry {
   borrower: Borrower360Type;
   recommendation: OfferRecommendation;
+  draftSubject: string | null;
   draftBody: string | null;
   draftChannel: OutreachChannel | null;
   fetched: number;

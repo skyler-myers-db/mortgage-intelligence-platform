@@ -73,6 +73,7 @@ export default function OfferOrchestrator() {
   // 2026-05-08: fail closed if the backend draft endpoint is unavailable;
   // the UI must not generate or approve local outreach copy.
   const [draftBody, setDraftBody] = useState<string>('');
+  const [draftSubject, setDraftSubject] = useState<string>('');
   const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
   const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
   const [draftError, setDraftError] = useState<string | null>(null);
@@ -136,6 +137,7 @@ export default function OfferOrchestrator() {
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${draftChannel}` : null;
   const savedDraftBody = savedDraftKey ? savedDrafts[savedDraftKey]?.body : undefined;
+  const savedDraftSubject = savedDraftKey ? savedDrafts[savedDraftKey]?.subject : undefined;
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
@@ -166,6 +168,12 @@ export default function OfferOrchestrator() {
           : cached.draftChannel === draftChannel
             ? cached.draftBody
             : null;
+      const cachedDraftSubject =
+        savedDraftSubject && savedDraftSubject.trim().length > 0
+          ? savedDraftSubject
+          : cached.draftChannel === draftChannel
+            ? cached.draftSubject
+            : null;
       setB(cached.borrower);
       setRec(cached.recommendation);
       setLifecycle(null);
@@ -176,9 +184,11 @@ export default function OfferOrchestrator() {
       setWarmingUp(null);
       if (cachedDraftBody && cachedDraftBody.trim().length > 0) {
         setDraftBody(cachedDraftBody);
+        setDraftSubject(cachedDraftSubject ?? '');
         setDraftLoaded(true);
       } else {
           setDraftBody('');
+          setDraftSubject('');
           setDraftLoaded(false);
           setDraftDisclosureVersion(null);
           setDraftDisclosureState(null);
@@ -193,6 +203,7 @@ export default function OfferOrchestrator() {
       setLoadErrorStatus(null);
       setWarmingUp(null);
       setDraftBody('');
+      setDraftSubject('');
       setDraftLoaded(false);
     }
 
@@ -218,6 +229,7 @@ export default function OfferOrchestrator() {
         BORROWER_CACHE.set(id, {
           borrower,
           recommendation,
+          draftSubject: prev?.draftChannel === draftChannel ? (prev?.draftSubject ?? null) : null,
           draftBody: prev?.draftChannel === draftChannel ? (prev?.draftBody ?? null) : null,
           draftChannel: prev?.draftChannel === draftChannel ? draftChannel : null,
           fetched: Date.now(),
@@ -272,7 +284,12 @@ export default function OfferOrchestrator() {
             savedDraftBody && savedDraftBody.trim().length > 0
               ? savedDraftBody
               : draft.body;
+          const subject =
+            savedDraftSubject && savedDraftSubject.trim().length > 0
+              ? savedDraftSubject
+              : (draft.subject ?? '');
           setDraftBody(body);
+          setDraftSubject(subject);
           setDraftLoaded(true);
           setDraftDisclosureVersion(draft.disclosure_version);
           setDraftDisclosureState(draft.disclosure_state);
@@ -285,6 +302,7 @@ export default function OfferOrchestrator() {
           if (prev) {
             BORROWER_CACHE.set(id, {
               ...prev,
+              draftSubject: subject || null,
               draftBody: body,
               draftChannel,
               fetched: Date.now(),
@@ -292,6 +310,7 @@ export default function OfferOrchestrator() {
           }
         } else {
           setDraftLoaded(false);
+          setDraftSubject('');
           setDraftDisclosureVersion(null);
           setDraftDisclosureState(null);
           setDraftGeneratorLabel(null);
@@ -341,7 +360,7 @@ export default function OfferOrchestrator() {
       if (draftTimeoutId !== null) clearTimeout(draftTimeoutId);
       ctrl.abort();
     };
-  }, [draftChannel, id, reloadToken, savedDraftBody]);
+  }, [draftChannel, id, reloadToken, savedDraftBody, savedDraftSubject]);
 
   // Offer Orchestrator is a per-borrower action page; without an id
   // render an empty-state landing page so the tab click isn't a silent
@@ -374,9 +393,14 @@ export default function OfferOrchestrator() {
     b?.approval_status,
   );
   const draftText = draftLoaded ? draftBody : '';
-  const draftReady = draftLoaded && draftText.trim().length > 0;
+  const subjectReady = draftChannel === 'sms' || draftSubject.trim().length > 0;
+  const draftReady = draftLoaded && subjectReady && draftText.trim().length > 0;
   const savedDraft = savedDraftKey ? savedDrafts[savedDraftKey] : undefined;
-  const draftIsSaved = Boolean(savedDraft && savedDraft.body === draftText);
+  const draftIsSaved = Boolean(
+    savedDraft
+      && savedDraft.body === draftText
+      && (savedDraft.subject ?? '') === (draftChannel === 'sms' ? '' : draftSubject),
+  );
   const leadIsSaved = b ? isLeadSaved(b.borrower_id) : false;
   const saveCurrentLead = () => {
     if (!b) return;
@@ -396,6 +420,7 @@ export default function OfferOrchestrator() {
       borrower_id: id,
       offer_code: rec?.offer_code ?? b?.recommended_offer_code ?? null,
       channel: draftChannel,
+      subject: draftChannel === 'sms' ? null : draftSubject,
       body: draftText,
     });
   };
@@ -404,9 +429,10 @@ export default function OfferOrchestrator() {
     removeSavedDraft(id, draftChannel);
     const cached = BORROWER_CACHE.get(id);
     if (cached) {
-      BORROWER_CACHE.set(id, { ...cached, draftBody: null, fetched: 0 });
+      BORROWER_CACHE.set(id, { ...cached, draftSubject: null, draftBody: null, fetched: 0 });
     }
     setDraftBody('');
+    setDraftSubject('');
     setDraftLoaded(false);
     setDraftDisclosureVersion(null);
     setDraftDisclosureState(null);
@@ -421,9 +447,10 @@ export default function OfferOrchestrator() {
   const regenerateDraft = () => {
     if (!id || approving) return;
     const cached = BORROWER_CACHE.get(id);
-    if (cached) BORROWER_CACHE.set(id, { ...cached, draftBody: null, fetched: 0 });
+    if (cached) BORROWER_CACHE.set(id, { ...cached, draftSubject: null, draftBody: null, fetched: 0 });
     setDraftLoaded(false);
     setDraftBody('');
+    setDraftSubject('');
     setDraftError(null);
     setDraftGeneratorLabel(null);
     setDraftGenerationMode(null);
@@ -449,9 +476,11 @@ export default function OfferOrchestrator() {
       const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
       const draft_body = draftText;
+      const draft_subject = draftChannel === 'sms' ? null : draftSubject;
       const res = await api.approve(id, {
         offer_code,
         evidence_ids,
+        draft_subject,
         draft_body,
         channel: draftChannel,
         assigned_to_email: assignedTo || null,
@@ -645,6 +674,8 @@ export default function OfferOrchestrator() {
         draftWarming={draftWarming}
         draftLoaded={draftLoaded}
         draftError={draftError}
+        draftSubject={draftSubject}
+        onDraftSubjectChange={setDraftSubject}
         draftText={draftText}
         onDraftChange={setDraftBody}
         draftChannel={draftChannel}
@@ -652,6 +683,7 @@ export default function OfferOrchestrator() {
           setDraftChannel(channel);
           setDraftLoaded(false);
           setDraftBody('');
+          setDraftSubject('');
           setDraftDisclosureVersion(null);
           setDraftDisclosureState(null);
           setDraftGeneratorLabel(null);

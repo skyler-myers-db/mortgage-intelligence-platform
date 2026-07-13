@@ -72,11 +72,17 @@ def test_session_returns_only_admin_capability_from_same_group_rule(
         "/api/v1/session",
         headers={"X-Forwarded-Groups": "analysts,loan-officers"},
     )
+    compat = client.get(
+        "/api/session",
+        headers={"X-Forwarded-Groups": settings.admin_group_name},
+    )
 
     assert admitted.status_code == 200
     assert admitted.json() == {"can_access_admin": True}
     assert denied.status_code == 200
     assert denied.json() == {"can_access_admin": False}
+    assert compat.status_code == 200
+    assert compat.json() == admitted.json()
 
 
 def test_session_and_admin_gate_share_email_allowlist_rule(

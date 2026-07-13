@@ -307,6 +307,7 @@ CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     borrower_id  TEXT NOT NULL,
     offer_code   TEXT,
     channel      TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','sms','direct_mail')),
+    subject      TEXT CHECK (subject IS NULL OR length(subject) <= 120),
     body         TEXT NOT NULL CHECK (length(body) <= 5000),
     status       TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','released')),
     saved_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -315,12 +316,26 @@ CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     PRIMARY KEY (actor_email, borrower_id, channel)
 );
 ALTER TABLE mip_app.outreach_drafts
+    ADD COLUMN IF NOT EXISTS subject TEXT;
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_subject_check;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_subject_check
+    CHECK (subject IS NULL OR length(subject) <= 120);
+ALTER TABLE mip_app.outreach_drafts
     DROP CONSTRAINT IF EXISTS outreach_drafts_channel_check;
 ALTER TABLE mip_app.outreach_drafts
     ADD CONSTRAINT outreach_drafts_channel_check CHECK (channel IN ('email','sms','direct_mail'));
 CREATE INDEX IF NOT EXISTS idx_outreach_drafts_actor_updated
     ON mip_app.outreach_drafts (actor_email, updated_at DESC)
     WHERE deleted_at IS NULL;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_13_outreach_draft_subject',
+    'Persist the exact email or direct-mail subject through workspace review and approval audit'
+)
+ON CONFLICT (version) DO NOTHING;
 
 -- Activation / customer writeback --------------------------------------
 -- Product boundary: Module 0 can stage an approved lead or campaign for a

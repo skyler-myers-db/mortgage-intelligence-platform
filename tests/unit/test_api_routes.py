@@ -37,6 +37,7 @@ def test_required_routes_exist_and_respond():
             {
                 "borrower_id": "B-48291",
                 "actor": "anonymous",
+                "draft_subject": "Your mortgage review",
                 "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
             },
             200,

@@ -1,6 +1,5 @@
 from fastapi.testclient import TestClient
 
-from backend.api import offers
 from backend.main import app
 from backend.services.audit_decision_inputs import (
     DECISION_INPUT_KEYS,
@@ -15,26 +14,25 @@ from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 client = TestClient(app)
 
 
-def test_safe_offer_audit_log_omits_raw_exception_message(monkeypatch) -> None:
-    captured: dict[str, object] = {}
-
+def test_offer_recommendation_fails_closed_when_audit_is_unavailable() -> None:
     class FailingAuditStore:
         def write(self, **kwargs: object) -> None:
             raise LakebaseError("SQL failed for subject_clip=1234567890 with host=db.internal")
 
-    def capture_emit(log, event: str, **kwargs: object) -> None:
-        captured["event"] = event
-        captured.update(kwargs)
+    previous = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_audit_store] = FailingAuditStore
+    try:
+        response = client.post("/api/offers/recommend", json={"borrower_id": "B-48291"})
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = previous
 
-    monkeypatch.setattr(offers, "emit", capture_emit)
-
-    offers._safe_audit_write(FailingAuditStore(), event_type="RECOMMEND_OFFER")
-
-    assert captured["event"] == "audit_write_dropped"
-    assert captured["dependency"] == "lakebase"
-    assert captured["outcome"] == "error"
-    assert captured["exc_type"] == "LakebaseError"
-    assert "exc_msg" not in captured
+    assert response.status_code == 503
+    assert response.json()["detail"] == "lakebase is temporarily unavailable"
+    assert "subject_clip" not in response.text
+    assert "db.internal" not in response.text
 
 
 def test_offers_router_recommends_governed_offer() -> None:

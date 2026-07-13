@@ -153,7 +153,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "create_portfolio": ("repo.create(",),
     "patch_portfolio": ("repo.patch_status(",),
     "patch_campaign": ("repo.patch_status(",),
-    "recommend_offer": ("_safe_audit_write",),
+    "recommend_offer": ("audit.write(",),
     "draft_outreach": ("_safe_audit_write",),
     "approve_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
     "reject_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),

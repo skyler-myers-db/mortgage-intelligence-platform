@@ -48,6 +48,7 @@ class _RecordingLakebase:
                 "borrower_id": p["borrower_id"],
                 "offer_code": p.get("offer_code"),
                 "channel": p.get("channel"),
+                "subject": p.get("subject"),
                 "body": p.get("body"),
                 "saved_at": now,
                 "updated_at": now,
@@ -106,6 +107,7 @@ def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
             borrower_id="B-123",
             offer_code="OFFER-123",
             channel="email",
+            subject="Review your mortgage options",
             body="Call 212-555-1212 at 123 Main St.",
         ),
     )
@@ -122,9 +124,11 @@ def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
         "borrower_id": "B-123",
         "workspace_offer_code": "OFFER-123",
         "channel": "email",
+        "has_subject": True,
         "request_id": params["request_id"],
     }
     assert "draft_body" not in metadata
+    assert saved.subject == "Review your mortgage options"
 
 
 def test_genie_save_action_sql_avoids_raw_percent_predicates() -> None:

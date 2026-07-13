@@ -86,6 +86,7 @@ def _draft_from_row(row: dict[str, Any]) -> SavedDraft:
         borrower_id=str(row["borrower_id"]),
         offer_code=row.get("offer_code"),
         channel=row.get("channel") or "email",
+        subject=row.get("subject"),
         body=row.get("body") or "",
         saved_at=_iso(row.get("saved_at")),
         updated_at=_iso(row.get("updated_at")),
@@ -226,19 +227,20 @@ FROM changed CROSS JOIN audit
 _SAVE_DRAFT_SQL = """
 WITH upsert AS (
   INSERT INTO mip_app.outreach_drafts (
-    actor_email, borrower_id, offer_code, channel, body,
+    actor_email, borrower_id, offer_code, channel, subject, body,
     status, saved_at, updated_at, deleted_at
   ) VALUES (
-    %(actor_email)s, %(borrower_id)s, %(offer_code)s, %(channel)s, %(body)s,
+    %(actor_email)s, %(borrower_id)s, %(offer_code)s, %(channel)s, %(subject)s, %(body)s,
     'draft', now(), now(), NULL
   )
   ON CONFLICT (actor_email, borrower_id, channel) DO UPDATE SET
     offer_code = EXCLUDED.offer_code,
+    subject = EXCLUDED.subject,
     body = EXCLUDED.body,
     status = 'draft',
     updated_at = now(),
     deleted_at = NULL
-  RETURNING borrower_id, offer_code, channel, body, saved_at, updated_at
+  RETURNING borrower_id, offer_code, channel, subject, body, saved_at, updated_at
 ),
 audit AS (
   INSERT INTO mip_app.action_audit (
@@ -294,7 +296,7 @@ LIMIT %(limit)s
 
 
 _LIST_DRAFTS_SQL = """
-SELECT borrower_id, offer_code, channel, body, saved_at, updated_at
+SELECT borrower_id, offer_code, channel, subject, body, saved_at, updated_at
 FROM mip_app.outreach_drafts
 WHERE actor_email = %(actor_email)s
   AND deleted_at IS NULL
@@ -389,11 +391,13 @@ class LakebaseWorkspaceStore:
     def save_draft(self, *, actor: str, draft: SavedDraftInput) -> SavedDraft:
         request_id = str(uuid4())
         clean_body = scrub_free_text(draft.body)
+        clean_subject = scrub_free_text(draft.subject) if draft.subject else None
         params: dict[str, Any] = {
             "actor_email": actor,
             "borrower_id": draft.borrower_id,
             "offer_code": draft.offer_code,
             "channel": draft.channel,
+            "subject": clean_subject,
             "body": clean_body,
             "request_id": request_id,
             "correlation_id": get_correlation_id(),
@@ -403,6 +407,7 @@ class LakebaseWorkspaceStore:
                     "borrower_id": draft.borrower_id,
                     "workspace_offer_code": draft.offer_code,
                     "channel": draft.channel,
+                    "has_subject": bool(clean_subject),
                     "request_id": request_id,
                 },
             ),

@@ -52,6 +52,7 @@ def _approve(borrower_id: str) -> dict:
             "borrower_id": borrower_id,
             "offer_code": "refi_plus_heloc",
             "channel": "email",
+            "draft_subject": "Your mortgage review",
             "draft_body": _DRAFT_BODY,
             "request_id": str(uuid4()),
         },

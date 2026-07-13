@@ -126,7 +126,7 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #   backend/api/outreach.py::draft_outreach
 #     channel, offer_code
 #   backend/api/outreach.py::approve_outreach
-#     approval_id, offer_code, borrower_id, request_id, draft_body,
+#     approval_id, offer_code, borrower_id, request_id, draft_subject, draft_body,
 #     rationale, bulk_id, bulk_rationale, decision_inputs
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code
@@ -168,7 +168,9 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "approval_id",
         "borrower_id",
         "request_id",
+        "draft_subject",
         "draft_body",
+        "has_subject",
         "rationale",
         "rationale_code",
         "bulk_id",
@@ -329,7 +331,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
 )
 
 _FREE_TEXT_METADATA_KEYS: frozenset[str] = frozenset(
-    {"draft_body", "rationale", "bulk_rationale", "reason", "notes"}
+    {"draft_subject", "draft_body", "rationale", "bulk_rationale", "reason", "notes"}
 )
 _NESTED_METADATA_KEYS_WITH_OWN_POLICY: frozenset[str] = frozenset(
     {

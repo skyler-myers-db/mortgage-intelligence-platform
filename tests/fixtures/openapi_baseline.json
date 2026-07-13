@@ -3201,12 +3201,12 @@
             "title": "Unique Closed Funded",
             "type": "integer"
           },
-          "unique_leads_attempted": {
-            "title": "Unique Leads Attempted",
-            "type": "integer"
-          },
           "unique_contacts_reached": {
             "title": "Unique Contacts Reached",
+            "type": "integer"
+          },
+          "unique_leads_attempted": {
+            "title": "Unique Leads Attempted",
             "type": "integer"
           }
         },
@@ -9282,6 +9282,18 @@
             ],
             "title": "Draft Body"
           },
+          "draft_subject": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Subject"
+          },
           "evidence_ids": {
             "items": {
               "type": "string"
@@ -11317,6 +11329,18 @@
             "title": "Saved At",
             "type": "string"
           },
+          "subject": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
+          },
           "updated_at": {
             "title": "Updated At",
             "type": "string"
@@ -11366,6 +11390,18 @@
               }
             ],
             "title": "Offer Code"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "maxLength": 120,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject"
           }
         },
         "required": [
@@ -11922,6 +11958,19 @@
           "color"
         ],
         "title": "SegmentSummary",
+        "type": "object"
+      },
+      "SessionResponse": {
+        "properties": {
+          "can_access_admin": {
+            "title": "Can Access Admin",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "can_access_admin"
+        ],
+        "title": "SessionResponse",
         "type": "object"
       },
       "SignalAnalyticsResponse": {
@@ -19448,6 +19497,28 @@
         ]
       }
     },
+    "/api/session": {
+      "get": {
+        "deprecated": true,
+        "operationId": "get_api_session_get_session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "session"
+        ]
+      }
+    },
     "/api/telemetry/rum": {
       "post": {
         "deprecated": true,
@@ -26222,6 +26293,27 @@
         "summary": "List Segments",
         "tags": [
           "segments"
+        ]
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "operationId": "get_api_v1_session_get_session",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Get Session",
+        "tags": [
+          "session"
         ]
       }
     },

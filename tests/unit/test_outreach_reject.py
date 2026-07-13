@@ -441,6 +441,7 @@ def test_atomic_decision_rolls_back_if_audit_insert_fails(
         json={
             "borrower_id": "B-48291",
             "offer_code": "heloc",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -474,6 +475,7 @@ def test_atomic_conflict_does_not_write_audit_for_uninserted_approval(
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "request_id": "11111111-1111-4111-8111-111111111111",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -516,6 +518,7 @@ def test_atomic_conflict_rejects_request_id_for_different_decision(
             "borrower_id": "B-48291",
             "offer_code": "heloc",
             "request_id": "11111111-1111-4111-8111-111111111111",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -550,6 +553,7 @@ def test_approve_audit_captures_decision_inputs(
         json={
             "borrower_id": "B-48291",
             "offer_code": "heloc",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={
@@ -620,7 +624,7 @@ def test_reject_surfaces_503_on_lakebase_failure(override_deps) -> None:
     assert audit.list(limit=10) == []
 
 
-def test_approve_forwards_draft_body_into_audit_metadata(
+def test_approve_forwards_final_subject_and_body_into_audit_metadata(
     override_deps, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Audit finding 2026-04-22: the Offer Orchestrator now forwards
@@ -647,12 +651,14 @@ def test_approve_forwards_draft_body_into_audit_metadata(
         json={
             "borrower_id": "B-48291",
             "actor": "anonymous",
+            "draft_subject": "Your mortgage review",
             "draft_body": draft,
         },
     )
     assert resp.status_code == 200, resp.text
     events = audit.list(limit=5)
     assert len(events) == 1
+    assert events[0].payload_json.get("draft_subject") == "Your mortgage review"
     assert events[0].payload_json.get("draft_body") == draft
 
 
@@ -673,6 +679,7 @@ def test_approve_rejects_protected_class_language_before_write(
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
+            "draft_subject": "Your mortgage review",
             "draft_body": f"Women homeowners should call for a review. {DISCLOSURE_BODY}",
         },
     )
@@ -714,6 +721,7 @@ def test_approve_rejects_unsupported_or_identity_shaped_borrower_copy_before_wri
         "/api/outreach/approve",
         json={
             "borrower_id": "B-48291",
+            "draft_subject": "Your mortgage review",
             "draft_body": f"{unsafe_copy} {DISCLOSURE_BODY}",
         },
     )
@@ -777,6 +785,7 @@ def test_approve_idempotent_on_retry_with_same_request_id(
         "borrower_id": "B-48291",
         "actor": "anonymous",
         "request_id": "22222222-2222-4222-8222-222222222222",
+        "draft_subject": "Your mortgage review",
         "draft_body": APPROVAL_DRAFT_BODY,
     }
     first = client.post("/api/outreach/approve", json=body)
@@ -883,6 +892,7 @@ def test_request_id_conflict_for_different_decision_is_rejected(
         json={
             "borrower_id": "B-48291",
             "request_id": "44444444-4444-4444-8444-444444444444",
+            "draft_subject": "Your mortgage review",
             "draft_body": APPROVAL_DRAFT_BODY,
         },
         headers={"X-Forwarded-Email": "lo@example.com"},
@@ -940,7 +950,11 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
-    body = {"borrower_id": "B-48291", "draft_body": APPROVAL_DRAFT_BODY}
+    body = {
+        "borrower_id": "B-48291",
+        "draft_subject": "Your mortgage review",
+        "draft_body": APPROVAL_DRAFT_BODY,
+    }
     headers = {"X-Forwarded-Email": "lo@example.com"}
     first = client.post("/api/outreach/approve", json=body, headers=headers)
     second = client.post("/api/outreach/approve", json=body, headers=headers)
@@ -1001,7 +1015,11 @@ def test_approve_without_request_id_cross_minute_produces_two_rows(
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
-    body = {"borrower_id": "B-48291", "draft_body": APPROVAL_DRAFT_BODY}
+    body = {
+        "borrower_id": "B-48291",
+        "draft_subject": "Your mortgage review",
+        "draft_body": APPROVAL_DRAFT_BODY,
+    }
     headers = {"X-Forwarded-Email": "lo@example.com"}
     first = client.post("/api/outreach/approve", json=body, headers=headers)
     clock["t"] += 61.0  # bump to the next minute bucket
@@ -1058,6 +1076,7 @@ def test_approve_body_not_in_logs(
         json={
             "borrower_id": "B-48291",
             "actor": f"{sentinel}@example.com",
+            "draft_subject": "Your mortgage review",
             "draft_body": f"{sentinel} {APPROVAL_DRAFT_BODY}",
         },
     )

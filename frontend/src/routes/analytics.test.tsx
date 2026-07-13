@@ -181,7 +181,15 @@ describe('analytics chart readability', () => {
       <MemoryRouter>
         <EquitySpreadPointsView
           payload={pointsPayload({
-            points: [pointFixture(), pointFixture({ borrower_id: 'B-0000000000075', score_band: 'low', opportunity_score: 40 })],
+            points: [
+              pointFixture(),
+              pointFixture({
+                borrower_id: 'B-0000000000075',
+                equity_pct: 43,
+                score_band: 'low',
+                opportunity_score: 40,
+              }),
+            ],
             total_matching: 970,
             showing: 2,
             truncated: true,
@@ -194,7 +202,7 @@ describe('analytics chart readability', () => {
     expect(html).toContain('server cap 5K');
     expect(html).toContain('/borrower-360/B-0000000000025');
     expect(html).toContain('/borrower-360/B-0000000000075');
-    // Dots carry the canonical band classes from the payload.
+    // Individual dots carry the canonical band classes from the payload.
     expect(html).toContain('analytics-scatter__dot--band score--high');
     expect(html).toContain('analytics-scatter__dot--band score--low');
   });
@@ -221,7 +229,8 @@ describe('analytics chart readability', () => {
       </MemoryRouter>,
     );
     expect(html).toContain(`plotting the top ${(MAX_SCATTER_POINTS / 1000).toFixed(1)}K by opportunity score`);
-    expect((html.match(/analytics-scatter__dot/g) ?? []).length).toBeLessThanOrEqual(MAX_SCATTER_POINTS * 2);
+    expect(html).toContain(`${MAX_SCATTER_POINTS} borrowers at 42% equity and 88 bps spread`);
+    expect(html).not.toContain('/borrower-360/B-0000000001249');
   });
 
   it('renders evidence daily dates as dates instead of mangled integers', () => {
