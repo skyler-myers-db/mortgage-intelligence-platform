@@ -626,6 +626,14 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event
 CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_genie_request_actor_event_v2
     ON mip_app.action_audit (actor_email, request_id, event_type)
     WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_';
+-- Admin refresh launches use the caller-supplied request id as both the
+-- Lakebase lifecycle key and the Databricks Jobs idempotency token. Keep one
+-- requested and one terminal run record per actor/request even when a retry is
+-- handled by another app process.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_admin_request_actor_event
+    ON mip_app.action_audit (actor_email, request_id, event_type)
+    WHERE request_id IS NOT NULL
+      AND event_type IN ('ADMIN_OPERATION_REQUESTED', 'ADMIN_OPERATION_RUN');
 
 -- Append-only enforcement must not rely solely on GRANT shape. The
 -- Databricks Apps / migration identity can own or receive broader table

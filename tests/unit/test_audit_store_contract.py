@@ -124,6 +124,8 @@ def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
     assert "FOR EACH STATEMENT" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS correlation_id TEXT" in schema_sql
     assert "CREATE INDEX IF NOT EXISTS idx_action_audit_correlation" in schema_sql
+    assert "idx_action_audit_admin_request_actor_event" in schema_sql
+    assert "'ADMIN_OPERATION_REQUESTED', 'ADMIN_OPERATION_RUN'" in schema_sql
 
 
 def test_every_backend_action_audit_insert_carries_correlation_id() -> None:
