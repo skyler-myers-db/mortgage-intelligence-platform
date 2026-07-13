@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from backend.schemas._validators import (
     assert_no_protected_class_marketing_text,
     configured_public_lender_name,
+    contains_confidential_or_internal_text,
     contains_contextual_human_name,
     contains_human_name_shape,
     contains_mechanical_pii_or_raw_identifier,
@@ -48,11 +49,20 @@ _PUBLIC_TITLECASE_PHRASE_ALLOWLIST: tuple[str, ...] = (
 )
 _BORROWER_COPY_UNSUPPORTED_CLAIM_RE = re.compile(
     r"(?:\$|\b\d+(?:\.\d+)?\s*(?:%|percent|bps|basis points?|dollars?)\b|"
-    r"\b(?:guarantee(?:d)?|pre[- ]?approved|lowest rate|best rate|save money|"
+    r"\b(?:guarantee(?:d|s)?|pre[- ]?approved|lowest rate|best rate|save money|"
     r"qualif(?:y|ies|ied)(?:\s+for)?|lower (?:your )?(?:monthly )?payment|"
     r"you(?:'re| are| may be| can be) (?:eligible|approved|qualified)|"
     r"your (?:monthly )?payment (?:will|would|can|could) (?:be )?lower|"
     r"instant approval|act now|urgent|limited time|expires? today|final notice)\b|"
+    r"\bsav(?:e|es|ed|ing)\s+(?:you\s+)?thousands\b|"
+    r"\bthousands(?:\s+of\s+dollars)?\s+(?:in|on)\s+(?:savings?|interest|fees?)\b|"
+    r"\b(?:no|zero|\$0)\s+(?:(?:lender|origination|application)\s+)?"
+    r"(?:closing[- ]+costs?|fees?)\b|"
+    r"\b(?:closing[- ]+costs?|fees?)[- ]free\b|"
+    r"\bwithout\s+(?:any\s+)?(?:closing[- ]+costs?|fees?)\b|"
+    r"\brate\s+guarantee\b|"
+    r"\b(?:will|would|can|could)\s+(?:reduce|lower)\s+"
+    r"(?:your\s+|the\s+)?total\s+interest\b|"
     r"\b(?:score|scoring|ranked|ranking|algorithm|model(?:ed)?|propensity|"
     r"segment|signal|trigger|target(?:ed|ing)?|eligible cohort|public record)\b)",
     re.IGNORECASE,
@@ -75,6 +85,11 @@ def assert_public_campaign_text(value: object, *, field_name: str, max_length: i
     text = re.sub(r"\s+", " ", str(value).strip())
     if len(text) > max_length:
         raise ValueError(f"{field_name} must be {max_length} characters or fewer")
+    if contains_confidential_or_internal_text(text):
+        raise ValueError(
+            f"{field_name} cannot contain secrets, internal instructions, credentials, "
+            "tokens, URLs, or endpoints"
+        )
     if contains_mechanical_pii_or_raw_identifier(text) or any(
         re.search(pattern, text, re.IGNORECASE) for pattern in _PUBLIC_TEXT_DENYLIST
     ):

@@ -714,6 +714,11 @@ def test_mls_listing_prompt_is_not_treated_as_source_gap() -> None:
             "out_of_scope",
         ),
         (
+            "Rank majority-minority ZIP codes for refinance outreach.",
+            "refused",
+            "protected_class_proxy",
+        ),
+        (
             "How many building permits were filed in the last 30 days in Seattle?",
             "data_gap",
             None,
@@ -773,7 +778,11 @@ def test_genie_message_guardrails_fire_before_repository(
     if expected_reason is not None:
         events = audit.list(action="genie.refused_prompt")
         assert len(events) == 1
-        assert events[0].payload_json["refusal_reason"] == expected_reason
+        if expected_reason == "protected_class_proxy":
+            assert events[0].payload_json["refusal_reason"] == "protected_class"
+            assert events[0].payload_json["reason"] == expected_reason
+        else:
+            assert events[0].payload_json["refusal_reason"] == expected_reason
     else:
         events = audit.list(action="genie.source_gap")
         assert len(events) == 1

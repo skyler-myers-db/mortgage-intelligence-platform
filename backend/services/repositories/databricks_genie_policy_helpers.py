@@ -217,11 +217,27 @@ _PII_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 
 def _answer_text_contains_pii(text: str | None) -> bool:
+    """Return true for any text unsafe to render, retaining the legacy name."""
+
     if not text:
         return False
     return any(pattern.search(text) for pattern in _PII_TEXT_PATTERNS) or contains_unsafe_ai_text(
         text
     )
+
+
+def _safe_rendered_summary(text: object, *, max_length: int | None = None) -> str | None:
+    """Return scrubbed public text, or drop the field when either pass is unsafe."""
+
+    raw = str(text or "").strip()
+    if not raw or _answer_text_contains_pii(raw):
+        return None
+    cleaned = scrub_free_text(raw).strip()
+    if max_length is not None:
+        cleaned = cleaned[:max_length].strip()
+    if not cleaned or _answer_text_contains_pii(cleaned):
+        return None
+    return cleaned
 
 
 # ---------------------------------------------------------------------------
@@ -251,12 +267,13 @@ def genie_reasoning_trace_from_thoughts(
             continue
         raw_content = str(raw.get("content") or "").strip()
         raw_kind = str(raw.get("kind") or "thought").strip() or "thought"
-        if _answer_text_contains_pii(raw_content) or _answer_text_contains_pii(raw_kind):
+        content = _safe_rendered_summary(
+            raw_content,
+            max_length=_GENIE_REASONING_CONTENT_MAX_LEN,
+        )
+        kind = _safe_rendered_summary(raw_kind)
+        if content is None or kind is None:
             continue
-        content = scrub_free_text(raw_content)[:_GENIE_REASONING_CONTENT_MAX_LEN].strip()
-        if not content:
-            continue
-        kind = scrub_free_text(raw_kind) or "thought"
         steps.append(GenieReasoningStep(kind=kind, content=content))
         if len(steps) >= _GENIE_MAX_REASONING_STEPS:
             break
@@ -272,11 +289,8 @@ def genie_follow_up_questions(suggested: list[str] | None) -> list[str]:
     """
     out: list[str] = []
     for raw in suggested or []:
-        raw_text = str(raw).strip()
-        if _answer_text_contains_pii(raw_text):
-            continue
-        text = scrub_free_text(raw_text).strip()
-        if text and text not in out:
+        text = _safe_rendered_summary(raw)
+        if text is not None and text not in out:
             out.append(text)
         if len(out) >= 5:
             break
@@ -294,10 +308,7 @@ def genie_native_visualization(
         return None
     title = native.get("title")
     query_attachment_id = native.get("query_attachment_id")
-    raw_title = str(title).strip() if title else None
-    safe_title = None
-    if raw_title and not _answer_text_contains_pii(raw_title):
-        safe_title = scrub_free_text(raw_title).strip() or None
+    safe_title = _safe_rendered_summary(title) if title else None
     return GenieNativeVisualization(
         attachment_id=str(attachment_id),
         query_attachment_id=str(query_attachment_id) if query_attachment_id else None,

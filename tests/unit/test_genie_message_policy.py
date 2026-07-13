@@ -3,7 +3,10 @@
 import pytest
 
 from backend.services.genie_answers import GenieMessageResponse
-from backend.services.genie_message_policy import genie_response_has_unsafe_visible_text
+from backend.services.genie_message_policy import (
+    genie_response_has_unsafe_visible_text,
+    protected_prompt_match,
+)
 
 
 def _response(**overrides: object) -> GenieMessageResponse:
@@ -51,3 +54,36 @@ def test_response_policy_allows_only_explicit_governed_staff_labels() -> None:
         allowed_literals=["John Smith"],
     ) is False
     assert genie_response_has_unsafe_visible_text(response) is True
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Rank majority-minority ZIP codes for a refinance campaign.",
+        "Prioritize majority minority neighborhoods for outreach.",
+        "Show Spanish-speaking communities with the most home equity.",
+        "List limited-English borrowers for direct mail.",
+        "Target immigrant and refugee households for mortgage offers.",
+        "Find ZIP codes near mosques for prospecting.",
+        "Segment Section 8 recipients by opportunity score.",
+        "Rank housing-voucher households for outreach.",
+        "Prioritize public-assistance recipients for refinance offers.",
+    ],
+)
+def test_protected_proxy_prompts_return_specific_policy_match(question: str) -> None:
+    assert protected_prompt_match(question) == "protected_class_proxy"
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "Which loan officers are Spanish-speaking for language support coverage?",
+        "Review limited-English support materials for borrowers.",
+        "Show branch service coverage near mosques.",
+        "Review Section 8 of the policy appendix.",
+        "Summarize public-assistance program disclosure requirements.",
+        "Compare refinance demand in Spanish Fork, Utah.",
+    ],
+)
+def test_protected_proxy_policy_allows_non_targeting_context(question: str) -> None:
+    assert protected_prompt_match(question) is None

@@ -19,7 +19,7 @@ _PROTECTED_CLASS_MARKETING_RE = re.compile(
     r"gay|lesbian|bisexual|transgender|non[- ]?binary|queer|gender identity|"
     r"hispanic|latino|male|marital status|military status|muslim|islam(?:ic)?|"
     r"christian|hindu|jewish|jew|sikh|national origin|native american|"
-    r"pacific islander|pregnan(?:cy|t)|public assistance|race|racial|religion|religious|"
+    r"pacific islander|pregnan(?:cy|t)|race|racial|religion|religious|"
     r"senior citizens?|sex|sexual orientation|single (?:mothers?|fathers?|parents?)|"
     r"source of income|veteran|white|woman|women)\b",
     re.IGNORECASE,
@@ -34,6 +34,41 @@ _PROMPT_INJECTION_RE = re.compile(
     r"<\|(?:system|developer|assistant|user)\|>|"
     r"^\s*(?:system|developer)\s*:",
     re.IGNORECASE | re.DOTALL | re.MULTILINE,
+)
+
+_CONFIDENTIAL_OR_INTERNAL_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\b(?:api[-_ ]?keys?|client[-_ ]?secrets?|passwords?|passwds?|credentials?|"
+        r"access[-_ ]?tokens?|refresh[-_ ]?tokens?|authorization\s*[:=]|"
+        r"bearer\s+[A-Za-z0-9._~+/=-]{4,}|(?:databricks|lakebase|oauth|session|auth)"
+        r"[-_ ]?tokens?)\b|\b[A-Z][A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|API_KEY)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:dapi[a-z0-9]{16,}|AKIA[0-9A-Z]{16}|"
+        r"eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,})\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:system|developer|internal|hidden|private)\s+"
+        r"(?:prompt|message|instructions?|policy|configuration)\b|"
+        r"\b(?:chain[- ]of[- ]thought|hidden reasoning|model scratchpad)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\b(?:https?|wss?|ftp|jdbc|databricks|s3|dbfs)://\S+|"
+        r"\bwww\.[A-Za-z0-9.-]+(?:/\S*)?|"
+        r"\b(?:localhost|127\.0\.0\.1)(?::\d{2,5})?(?:/\S*)?|"
+        r"\b[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?\."
+        r"(?:com|net|org|io|ai|cloud|internal|local|dev)(?::\d{2,5})?(?:/\S*)?",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"(?<![A-Za-z0-9])/(?:api|oauth2?|serving-endpoints?|secrets?|sql|warehouses?)"
+        r"(?:/[A-Za-z0-9._~:@!$&'()*+,;=-]+)+|"
+        r"\b(?:serving|model|workspace|internal|private|databricks|lakebase)[-_ ]endpoints?\b",
+        re.IGNORECASE,
+    ),
 )
 
 _TITLECASE_HUMAN_NAME_RE = re.compile(
@@ -142,6 +177,49 @@ _PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
         r"earth|water|sands?|house|hall|bear|fish|hawk|diamond)\b",
         re.IGNORECASE,
     ),
+)
+
+_PROTECTED_CLASS_PROXY_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bmajority[- ]minority\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:spanish[- ]speaking|limited[- ]english(?: proficiency)?|"
+        r"limited english proficient)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(r"\b(?:immigrants?|refugees?)\b", re.IGNORECASE),
+    re.compile(r"\bmosques?\b", re.IGNORECASE),
+    re.compile(
+        r"\b(?:section\s*8(?:\s+housing)?|housing[- ]vouchers?|public[- ]assistance)\b",
+        re.IGNORECASE,
+    ),
+)
+_PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\bspanish[- ]speaking\s+(?:loan officers?|staff|representatives?|"
+        r"support|services?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\blimited[- ]english(?: proficiency)?\s+"
+        r"(?:support|services?|materials?|disclosures?|translations?)\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"\bsection\s*8\s+of\s+(?:the\s+)?(?:document|report|review|policy|appendix)\b",
+        re.IGNORECASE,
+    ),
+)
+_PROTECTED_CLASS_PROXY_HARD_TARGETING_RE = re.compile(
+    r"\b(?:target|targeting|prioritize|rank|score|segment|filter|exclude|select|"
+    r"redline|steer|solicit|prospect|market to|advertise to|campaign to|outreach to|"
+    r"contact)\b",
+    re.IGNORECASE,
+)
+_PROTECTED_CLASS_PROXY_POPULATION_RE = re.compile(
+    r"\b(?:applicants?|borrowers?|communities|community|customers?|households?|"
+    r"homeowners?|leads?|neighbou?rhoods?|postal codes?|prospects?|recipients?|"
+    r"residents?|tracts?|zip codes?|zips?)\b",
+    re.IGNORECASE,
 )
 
 _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
@@ -291,13 +369,44 @@ def contains_protected_class_marketing_text(value: str) -> bool:
     scannable = str(value)
     for pattern in _PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS:
         scannable = pattern.sub(" ", scannable)
-    return bool(_PROTECTED_CLASS_MARKETING_RE.search(scannable))
+    return bool(
+        _PROTECTED_CLASS_MARKETING_RE.search(scannable)
+        or contains_protected_class_proxy_marketing_text(scannable)
+    )
+
+
+def contains_protected_class_proxy_marketing_text(value: str) -> bool:
+    """Detect protected-class proxies only when used for people or targeting.
+
+    The proxy terms are not intrinsically unsafe. Language-access support,
+    branch-service coverage, and document section references remain usable;
+    borrower/geography selection and explicit targeting fail closed.
+    """
+
+    text = str(value)
+    for safe_pattern in _PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
+        text = safe_pattern.sub(" ", text)
+    for pattern in _PROTECTED_CLASS_PROXY_PATTERNS:
+        for match in pattern.finditer(text):
+            window = text[max(0, match.start() - 120) : match.end() + 120]
+            if _PROTECTED_CLASS_PROXY_HARD_TARGETING_RE.search(window):
+                return True
+            if _PROTECTED_CLASS_PROXY_POPULATION_RE.search(window):
+                return True
+    return False
 
 
 def contains_prompt_injection_text(value: str) -> bool:
     """Return true for instruction-override language at governed text boundaries."""
 
     return bool(_PROMPT_INJECTION_RE.search(str(value)))
+
+
+def contains_confidential_or_internal_text(value: str) -> bool:
+    """Detect secrets, credentials, internal instructions, URLs, and endpoints."""
+
+    text = str(value)
+    return any(pattern.search(text) for pattern in _CONFIDENTIAL_OR_INTERNAL_TEXT_PATTERNS)
 
 
 def contains_human_name_shape(
@@ -345,6 +454,7 @@ def contains_unsafe_ai_text(value: str, *, include_titlecase: bool = True) -> bo
         contains_mechanical_pii_or_raw_identifier(text)
         or contains_protected_class_marketing_text(text)
         or contains_prompt_injection_text(text)
+        or contains_confidential_or_internal_text(text)
         or contains_human_name_shape(text, include_titlecase=include_titlecase)
     )
 

@@ -388,6 +388,11 @@ def genie_message(
     )
     protected_term = _protected_prompt_match(payload.question)
     if protected_term:
+        refusal_reason = (
+            "protected_class_proxy"
+            if protected_term == "protected_class_proxy"
+            else "protected_class"
+        )
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
         _required_audit_write(
@@ -405,6 +410,7 @@ def genie_message(
                 "visualization_kind": None,
                 "action_type": "refused_prompt",
                 "refusal_reason": "protected_class",
+                "reason": refusal_reason,
             },
             event_type="RUN_GENIE",
         )
@@ -417,7 +423,11 @@ def genie_message(
                 "proxies. Ask for a permitted Module 0 strategy using trusted "
                 "mortgage, lien, equity, segment, and offer signals."
             ),
-            known_gap="prompt refused before Genie execution due protected-class term in the prompt",
+            known_gap=(
+                "prompt refused before Genie execution due protected-class proxy in the prompt"
+                if refusal_reason == "protected_class_proxy"
+                else "prompt refused before Genie execution due protected-class term in the prompt"
+            ),
         )
         return _finalize_genie_response(lakebase, actor=actor, response=response)
     override_match = prompt_guardrails.instruction_override_prompt_match(payload.question)

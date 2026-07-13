@@ -316,6 +316,40 @@ class _UnsafeApiClient(_ApiClient):
         }
 
 
+class _InternalSummaryApiClient(_ApiClient):
+    def do(self, method: str, path: str, *, body: dict[str, object]):
+        _ = method, path, body
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "text": """{
+                              "audience_summary": "Call https://workspace.internal/api/2.0/serving-endpoints/mip-supervisor with DATABRICKS_TOKEN=dapi1234567890abcdef.",
+                              "strategy": "Use a controlled message test with a review invitation.",
+                              "holdout_pct": 10,
+                              "variants": [
+                                {
+                                  "variant_name": "Benefit-led",
+                                  "subject": "Review whether your mortgage options have improved",
+                                  "body": "Compare available mortgage options with a licensed loan officer.",
+                                  "hypothesis": "A concrete review invitation may support qualified responses."
+                                },
+                                {
+                                  "variant_name": "Guidance-led",
+                                  "subject": "A guided mortgage review",
+                                  "body": "Explore current mortgage options with a licensed loan officer.",
+                                  "hypothesis": "A guidance frame may support review requests."
+                                }
+                              ]
+                            }"""
+                        }
+                    ]
+                }
+            ]
+        }
+
+
 def test_unsafe_supervisor_copy_fails_closed_to_reviewed_fallback() -> None:
     serving = SimpleNamespace(
         serving_endpoints=_ServingEndpoints(),
@@ -340,3 +374,25 @@ def test_unsafe_supervisor_copy_fails_closed_to_reviewed_fallback() -> None:
     assert "women" not in rendered
     assert "guarantee" not in rendered
     assert "score" not in rendered
+
+
+def test_internal_supervisor_summary_is_dropped_via_reviewed_fallback() -> None:
+    serving = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_InternalSummaryApiClient(),
+    )
+    result = recommend_campaign(
+        _preview(),
+        settings=Settings(
+            mip_agent_orchestrator=True,
+            mip_agent_serving_endpoint="mip-supervisor",
+            mip_agent_supervisor_id="supervisor-id",
+            mip_lender_name="Summit Mortgage",
+        ),
+        serving_client=serving,
+    )
+
+    assert result.generation_mode == "reviewed_fallback"
+    rendered = " ".join([result.audience_summary, result.strategy]).lower()
+    assert "dapi1234567890abcdef" not in rendered
+    assert "workspace.internal" not in rendered

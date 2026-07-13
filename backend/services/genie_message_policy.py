@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator
 from backend.schemas._validators import (
     contains_human_name_shape,
     contains_protected_class_marketing_text,
+    contains_protected_class_proxy_marketing_text,
     contains_unsafe_ai_text,
 )
 from backend.services.genie_answers import GenieMessageResponse
@@ -86,6 +87,8 @@ def protected_prompt_match(question: str) -> str | None:
         pattern = r"(?<![a-z0-9])" + re.escape(term) + r"(?![a-z0-9])"
         if re.search(pattern, scannable, flags=re.IGNORECASE):
             return term
+    if contains_protected_class_proxy_marketing_text(scannable):
+        return "protected_class_proxy"
     if contains_protected_class_marketing_text(scannable):
         return "protected_class_language"
     return None
