@@ -189,6 +189,22 @@ class TestExplorerUrls:
         monkeypatch.setattr(settings, "databricks_host", None)
         assert catalog_explorer_url_for("table", "mip", "gold", "borrower_360") is None
 
+    @pytest.mark.parametrize(
+        "host",
+        [
+            "httpx://evil.example",
+            "javascript://evil.example",
+            "https://user:secret@evil.example",
+            "https://dbc-unit.cloud.databricks.com/path",
+            "https://dbc-unit.cloud.databricks.com?redirect=evil",
+        ],
+    )
+    def test_urls_reject_non_workspace_origins(
+        self, monkeypatch: pytest.MonkeyPatch, host: str
+    ) -> None:
+        monkeypatch.setattr(settings, "databricks_host", host)
+        assert catalog_explorer_url_for("table", "mip", "gold", "borrower_360") is None
+
     def test_response_resolves_default_catalog_and_links(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

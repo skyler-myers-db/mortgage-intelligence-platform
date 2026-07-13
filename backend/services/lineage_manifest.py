@@ -28,6 +28,7 @@ from backend.schemas.lineage import (
     LineageManifestResponse,
     LineageNode,
 )
+from backend.services.asset_metadata_utils import workspace_origin
 
 MANIFEST_REPO_PATH = "backend/resources/lineage_manifest.json"
 _MANIFEST_FILE = Path(__file__).resolve().parents[1] / "resources" / "lineage_manifest.json"
@@ -63,11 +64,9 @@ def catalog_explorer_url_for(
     """Workspace deep link for a UC object, or None when no host is
     configured. Functions live under ``/explore/data/functions/``;
     tables and views share the plain ``/explore/data/`` path."""
-    host = (settings.databricks_host or "").strip()
-    if not host:
+    host = workspace_origin(settings.databricks_host)
+    if host is None:
         return None
-    if not host.startswith("http"):
-        host = f"https://{host}"
     segment = "functions/" if object_type == "function" else ""
     return (
         f"{host.rstrip('/')}/explore/data/{segment}"

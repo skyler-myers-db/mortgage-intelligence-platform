@@ -112,6 +112,10 @@ class EquitySpreadPoint(BaseModel):
     # equity_spread_points gold row. Optional so pre-S7 fixtures stay valid.
     score_band: Literal["high", "med", "low"] | None = None
     in_the_money: bool | None = None
+    # Exact population at this equity/spread coordinate before the response
+    # cap is applied. This prevents client-side cluster counts from becoming
+    # an understated sample when a dense coordinate crosses the server cap.
+    coordinate_total: int = Field(default=1, ge=1)
 
 
 # Bound literals below mirror the pinned plot-domain constants in

@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Any
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from backend.config.settings import settings
 from backend.schemas.assets import AssetFreshness, AssetObjectType
@@ -64,16 +64,35 @@ def catalog_explorer_url(
     *,
     object_type: AssetObjectType = "table",
 ) -> str | None:
-    host = (settings.databricks_host or "").strip()
-    if not host:
+    host = workspace_origin(settings.databricks_host)
+    if host is None:
         return None
-    if not host.startswith("http"):
-        host = f"https://{host}"
     explorer_path = "explore/data/functions/" if object_type == "function" else "explore/data/"
     return (
         f"{host.rstrip('/')}/{explorer_path}"
         f"{quote(catalog)}/{quote(schema_name)}/{quote(object_name)}"
     )
+
+
+def workspace_origin(value: str | None) -> str | None:
+    """Return a normalized workspace origin, rejecting URL-like impostors."""
+
+    raw = (value or "").strip()
+    if not raw or any(character.isspace() for character in raw):
+        return None
+    candidate = raw if "://" in raw else f"https://{raw}"
+    parsed = urlsplit(candidate)
+    if (
+        parsed.scheme.lower() not in {"http", "https"}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+        or parsed.path not in {"", "/"}
+    ):
+        return None
+    return f"{parsed.scheme.lower()}://{parsed.netloc.rstrip('/')}"
 
 
 def is_sensitive(value: Any) -> bool:

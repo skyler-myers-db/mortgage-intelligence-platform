@@ -114,7 +114,12 @@ def test_viewport_rejects_inverted_bounds() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _point_row(i: int) -> dict[str, Any]:
+def _point_row(
+    i: int,
+    *,
+    total_matching: int = 1,
+    coordinate_total: int | None = None,
+) -> dict[str, Any]:
     return {
         "borrower_id": f"B-{i:013d}",
         "display_name": f"Owner {i}",
@@ -125,11 +130,14 @@ def _point_row(i: int) -> dict[str, Any]:
         "opportunity_score": 80,
         "score_band": "med",
         "in_the_money": True,
+        "total_matching": total_matching,
+        "coordinate_total": coordinate_total or total_matching,
+        "refreshed_at": "2026-07-10 06:00:00",
     }
 
 
 class _ScatterSqlClient:
-    """Serves the points/count statement pair with configurable volumes."""
+    """Serves one snapshot-consistent points statement with window metadata."""
 
     def __init__(self, *, point_rows: int, total_matching: int) -> None:
         self._point_rows = point_rows
@@ -140,10 +148,8 @@ class _ScatterSqlClient:
     def execute(self, statement: str, parameters: Any | None = None) -> list[dict[str, Any]]:
         self.statements.append(statement)
         self.parameters.append(parameters)
-        if "AS total_matching" in statement:
-            return [{"total_matching": self._total, "refreshed_at": "2026-07-10 06:00:00"}]
         if "ORDER BY p.opportunity_score DESC, p.borrower_id" in statement:
-            return [_point_row(i) for i in range(self._point_rows)]
+            return [_point_row(i, total_matching=self._total) for i in range(self._point_rows)]
         raise AssertionError(statement)
 
 
@@ -160,19 +166,23 @@ def test_points_showing_n_of_m_is_honest() -> None:
     assert payload.truncated is True
     assert payload.point_cap == economics_scatter.MAX_SCATTER_POINT_ROWS
     assert payload.source_table == economics_scatter.EQUITY_SPREAD_SOURCE_TABLE
-    # The count statement must carry the SAME viewport predicate + bindings
-    # as the points statement, or M would answer a different question.
-    points_sql = next(s for s in client.statements if "ORDER BY p.opportunity_score" in s)
-    count_sql = next(s for s in client.statements if "AS total_matching" in s)
+    # Count, refresh time, and points must come from one filtered statement so
+    # a concurrent refresh cannot make the chart say "N of M" across snapshots.
+    assert len(client.statements) == 1
+    points_sql = client.statements[0]
+    assert "CAST(COUNT(*) OVER () AS BIGINT) AS total_matching" in points_sql
+    assert (
+        "COUNT(*) OVER (PARTITION BY p.equity_pct, p.rate_spread_bps)" in points_sql
+    )
+    assert "MAX(p.refreshed_at) OVER () AS refreshed_at" in points_sql
     for predicate in (
         "p.equity_pct BETWEEN :vp_equity_min AND :vp_equity_max",
         "p.rate_spread_bps BETWEEN :vp_spread_min AND :vp_spread_max",
     ):
         assert predicate in points_sql
-        assert predicate in count_sql
-    assert client.parameters[0] == client.parameters[1]
     assert client.parameters[0]["vp_equity_min"] == 40
     assert client.parameters[0]["vp_spread_max"] == 200
+    assert {point.coordinate_total for point in payload.points} == {970}
 
 
 def test_points_not_truncated_when_everything_fits() -> None:
@@ -182,6 +192,13 @@ def test_points_not_truncated_when_everything_fits() -> None:
     assert payload.showing == 2
     assert payload.total_matching == 2
     assert payload.truncated is False
+
+
+def test_points_reject_internally_inconsistent_snapshot_metadata() -> None:
+    client = _ScatterSqlClient(point_rows=3, total_matching=2)
+    repo = DatabricksAnalyticsRepository(client)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="snapshot count"):
+        repo.economics_points(AnalyticsFilters(), EquitySpreadViewport())
 
 
 def test_points_cap_enforced_server_side_even_against_overserving_sql() -> None:

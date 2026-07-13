@@ -64,19 +64,15 @@ _EQUITY_SPREAD_POINTS_SQL = (
     "  p.rate_spread_bps AS rate_spread_bps, "
     "  p.opportunity_score AS opportunity_score, "
     "  p.score_band AS score_band, "
-    "  p.in_the_money AS in_the_money "
+    "  p.in_the_money AS in_the_money, "
+    "  CAST(COUNT(*) OVER () AS BIGINT) AS total_matching, "
+    "  CAST(COUNT(*) OVER (PARTITION BY p.equity_pct, p.rate_spread_bps) AS BIGINT) "
+    "    AS coordinate_total, "
+    "  MAX(p.refreshed_at) OVER () AS refreshed_at "
     f"FROM {qualify('gold', 'equity_spread_points')} AS p "
     "{where} "
     "ORDER BY p.opportunity_score DESC, p.borrower_id "
     f"LIMIT {MAX_SCATTER_POINT_ROWS}"
-)
-
-_EQUITY_SPREAD_POINTS_COUNT_SQL = (
-    "SELECT "
-    "  CAST(COUNT(*) AS BIGINT) AS total_matching, "
-    "  MAX(p.refreshed_at) AS refreshed_at "
-    f"FROM {qualify('gold', 'equity_spread_points')} AS p "
-    "{where}"
 )
 
 
@@ -151,16 +147,6 @@ def economics_points(
             extra=extra,
             params=params,
         )
-        count_row = (
-            repository._execute_template(
-                _EQUITY_SPREAD_POINTS_COUNT_SQL,
-                analytics_filters,
-                alias="p",
-                extra=extra,
-                params=params,
-            )
-            or [{}]
-        )[0]
         points = [
             EquitySpreadPoint(
                 borrower_id=str(row.get("borrower_id") or ""),
@@ -172,11 +158,15 @@ def economics_points(
                 opportunity_score=_int(row.get("opportunity_score")),
                 score_band=row.get("score_band"),
                 in_the_money=bool(row.get("in_the_money")),
+                coordinate_total=_int(row.get("coordinate_total"), 1),
             )
             for row in point_rows[:MAX_SCATTER_POINT_ROWS]
         ]
-        total_matching = max(_int(count_row.get("total_matching")), len(points))
-        refreshed_at = count_row.get("refreshed_at")
+        snapshot_row = point_rows[0] if point_rows else {}
+        total_matching = _int(snapshot_row.get("total_matching"))
+        if total_matching < len(points):
+            raise ValueError("scatter snapshot count is smaller than the returned point set")
+        refreshed_at = snapshot_row.get("refreshed_at")
         return EquitySpreadPointsResponse(
             points=points,
             total_matching=total_matching,
