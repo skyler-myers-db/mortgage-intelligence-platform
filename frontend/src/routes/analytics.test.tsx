@@ -198,7 +198,8 @@ describe('analytics chart readability', () => {
       </MemoryRouter>,
     );
 
-    expect(html).toContain('Showing 2 of 970 borrowers in this window');
+    expect(html).toContain('Plotting 2 of 2 returned borrowers');
+    expect(html).toContain('(970 total matching this window)');
     expect(html).toContain('server cap 5K');
     expect(html).toContain('/borrower-360/B-0000000000025');
     expect(html).toContain('/borrower-360/B-0000000000075');
@@ -228,7 +229,7 @@ describe('analytics chart readability', () => {
         />
       </MemoryRouter>,
     );
-    expect(html).toContain(`plotting the top ${(MAX_SCATTER_POINTS / 1000).toFixed(1)}K by opportunity score`);
+    expect(html).toContain(`the plotted points are the top ${(MAX_SCATTER_POINTS / 1000).toFixed(1)}K by opportunity score`);
     expect(html).toContain(`${MAX_SCATTER_POINTS} borrowers at 42% equity and 88 bps spread`);
     expect(html).not.toContain('/borrower-360/B-0000000001249');
   });
