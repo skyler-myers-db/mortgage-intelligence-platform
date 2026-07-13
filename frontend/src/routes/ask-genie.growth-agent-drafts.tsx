@@ -41,7 +41,11 @@ export function GrowthAgentDraftPanel({ drafts }: GrowthAgentDraftPanelProps) {
               <div className="muted fs-12 mt-2">
                 {draft.strategy_summary ?? 'Reviewed internal notification framing.'}
               </div>
-              <p className="growth-agent-card__copy">{draft.body}</p>
+              <p
+                className={`growth-agent-card__copy${draft.channel === 'teams' ? ' growth-agent-card__copy--structured' : ''}`}
+              >
+                {draft.body}
+              </p>
               <Chip variant="neutral" icon="audit">Status: {draft.status}</Chip>
             </article>
           ))}

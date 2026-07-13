@@ -357,7 +357,7 @@ WHERE d.opportunity_score >= :min_score{state_clause}
     return PlanStepResult(
         detail=(
             f"Summarized governed dossier evidence at score >= {sql_params['min_score']}: "
-            f"{count:,} borrowers, no identities exposed."
+            f"{count:,} borrowers matched the review criteria."
         ),
         source_asset=BORROWER_DOSSIER,
         row_summary=count,

@@ -17,6 +17,8 @@ from backend.agents.mortgage_growth_copilot import (
     workspace_client,
 )
 from backend.config.settings import Settings, get_settings
+from backend.schemas._validators import contains_contextual_human_name
+from backend.schemas.portfolio_campaign import assert_public_campaign_text
 from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
@@ -45,6 +47,16 @@ class _NotificationFragments(BaseModel):
         clean = " ".join(value.split())
         if _UNSAFE_FRAGMENT_RE.search(clean):
             raise ValueError("notification fragment contains a server-controlled or unsafe value")
+        try:
+            clean = assert_public_campaign_text(
+                clean,
+                field_name="notification fragment",
+                max_length=220,
+            )
+        except ValueError as exc:
+            raise ValueError("notification fragment contains unsafe targeting or identity text") from exc
+        if contains_contextual_human_name(clean):
+            raise ValueError("notification fragment contains identity-shaped text")
         return clean.rstrip(".")
 
 
@@ -131,6 +143,14 @@ def recommend_notification_intelligence(
             strategy = " ".join(str(parsed.get("strategy_summary") or "").split())
             if not 10 <= len(strategy) <= 240 or _UNSAFE_FRAGMENT_RE.search(strategy):
                 raise ValueError("strategy summary failed validation")
+            try:
+                strategy = assert_public_campaign_text(
+                    strategy,
+                    field_name="notification strategy",
+                    max_length=240,
+                )
+            except ValueError as exc:
+                raise ValueError("strategy summary failed validation") from exc
             return NotificationIntelligence(
                 slack_context=fragments.slack_context,
                 teams_summary=fragments.teams_summary,

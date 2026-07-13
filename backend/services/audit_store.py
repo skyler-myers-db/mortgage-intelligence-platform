@@ -178,6 +178,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "generation_mode",
         "campaign_generation_mode",
         "generator_label",
+        "variant_provenance",
         # Marketing-contactability and disclosure proof
         "marketing_eligible",
         "consent_status",
@@ -716,6 +717,7 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             "supervisor",
             "reviewed_fallback",
             "operator",
+            "mixed",
         }:
             raise AuditMetadataValueViolation(
                 field,

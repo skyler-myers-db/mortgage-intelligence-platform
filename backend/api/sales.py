@@ -14,6 +14,7 @@ from backend.schemas.sales import (
     AssignLeadRequest,
     AssignmentResponse,
     BorrowerLifecycleResponse,
+    CampaignPerformanceFunnelResponse,
     DispositionRequest,
     DispositionResponse,
     DistributeLeadsRequest,
@@ -421,6 +422,36 @@ def sales_conversion(
             to_date=to_date.isoformat(),
             group_by=group_by,
             rows=rows,
+        )
+    except (KeyError, PermissionError) as exc:
+        raise _forbidden(exc) from exc
+    except LakebaseError as exc:
+        raise _lakebase_503(exc) from exc
+
+
+@router.get("/sales/campaign-performance", response_model=CampaignPerformanceFunnelResponse)
+def sales_campaign_performance(
+    request: Request,
+    store: SalesStateDep,
+    from_date: Annotated[date, Query(alias="from")],
+    to_date: Annotated[date, Query(alias="to")],
+) -> CampaignPerformanceFunnelResponse:
+    """Return a manager-visible, same-borrower nested campaign funnel."""
+
+    if to_date < from_date:
+        raise HTTPException(status_code=422, detail="to must be on or after from")
+    actor = resolve_actor(request)
+    try:
+        store.require_manager_actor(actor)
+        funnel = store.campaign_performance_funnel(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            visible_lo_emails=store.visible_lo_emails(actor=actor),
+        )
+        return CampaignPerformanceFunnelResponse(
+            from_date=from_date.isoformat(),
+            to_date=to_date.isoformat(),
+            **funnel,
         )
     except (KeyError, PermissionError) as exc:
         raise _forbidden(exc) from exc

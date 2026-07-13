@@ -1435,6 +1435,91 @@ class SalesStateStore:
             )
         return out
 
+    def campaign_performance_funnel(
+        self,
+        *,
+        from_date: str,
+        to_date: str,
+        visible_lo_emails: set[str] | None = None,
+    ) -> dict[str, int]:
+        """Return a same-borrower, nested observed funnel for campaign benchmarks.
+
+        Each downstream set is explicitly joined to the preceding set inside
+        one query. This prevents independently counted disposition and outcome
+        populations from being multiplied together as though they represented
+        one cohort. The result is a manager-visible team benchmark, not a
+        claim that these borrowers belong to the Portfolio Builder selection.
+        """
+
+        disposition_scope = (
+            "AND d.lo_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        )
+        outcome_scope = (
+            "AND o.assigned_to_email = ANY(%(lo_emails)s)"
+            if visible_lo_emails is not None
+            else ""
+        )
+        rows = self._client.fetchall(
+            f"""
+            /* campaign_performance_funnel: same-borrower nested sets */
+            WITH reached AS (
+              SELECT DISTINCT d.borrower_id
+              FROM mip_app.call_dispositions d
+              WHERE d.occurred_at >= %(from_date)s::date
+                AND d.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND d.outcome IN ('connected','callback_scheduled','application_started')
+                {disposition_scope}
+            ),
+            started AS (
+              SELECT DISTINCT d.borrower_id
+              FROM mip_app.call_dispositions d
+              INNER JOIN reached r ON r.borrower_id = d.borrower_id
+              WHERE d.occurred_at >= %(from_date)s::date
+                AND d.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND d.outcome = 'application_started'
+                {disposition_scope}
+            ),
+            submitted AS (
+              SELECT DISTINCT o.borrower_id
+              FROM mip_app.lead_outcomes o
+              INNER JOIN started s ON s.borrower_id = o.borrower_id
+              WHERE o.occurred_at >= %(from_date)s::date
+                AND o.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND o.outcome_type = 'application_submitted'
+                {outcome_scope}
+            ),
+            funded AS (
+              SELECT DISTINCT o.borrower_id
+              FROM mip_app.lead_outcomes o
+              INNER JOIN submitted s ON s.borrower_id = o.borrower_id
+              WHERE o.occurred_at >= %(from_date)s::date
+                AND o.occurred_at < (%(to_date)s::date + interval '1 day')
+                AND o.outcome_type = 'closed_funded'
+                {outcome_scope}
+            )
+            SELECT
+              (SELECT COUNT(*) FROM reached) AS unique_contacts_reached,
+              (SELECT COUNT(*) FROM started) AS unique_application_starts,
+              (SELECT COUNT(*) FROM submitted) AS unique_applications_submitted,
+              (SELECT COUNT(*) FROM funded) AS unique_closed_funded
+            """,
+            {
+                "from_date": from_date,
+                "to_date": to_date,
+                "lo_emails": sorted(visible_lo_emails or []),
+            },
+            limit=1,
+        )
+        row = rows[0] if rows else {}
+        return {
+            "unique_contacts_reached": int(row.get("unique_contacts_reached") or 0),
+            "unique_application_starts": int(row.get("unique_application_starts") or 0),
+            "unique_applications_submitted": int(
+                row.get("unique_applications_submitted") or 0
+            ),
+            "unique_closed_funded": int(row.get("unique_closed_funded") or 0),
+        }
+
     def outcome_summary(
         self,
         *,

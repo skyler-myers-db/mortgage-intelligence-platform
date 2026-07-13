@@ -235,6 +235,20 @@ def _answer_text_contains_pii(text: str | None) -> bool:
 # response body; length-cap each step so one step stays a sentence.
 _GENIE_MAX_REASONING_STEPS = 12
 _GENIE_REASONING_CONTENT_MAX_LEN = 500
+_REASONING_TITLECASE_NAME_RE = re.compile(
+    r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b"
+)
+_REASONING_CONTEXT_NAME_RE = re.compile(
+    r"\b(?:call|contact|email|message|text|ask|target|prioritize)\s+"
+    r"[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\b|"
+    r"\b[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\s+(?=qualifies?|is the top borrower)\b",
+    re.IGNORECASE,
+)
+
+
+def _redact_reasoning_identity_shapes(value: str) -> str:
+    text = _REASONING_CONTEXT_NAME_RE.sub("[IDENTITY-REDACTED]", value)
+    return _REASONING_TITLECASE_NAME_RE.sub("[IDENTITY-REDACTED]", text)
 
 
 def genie_reasoning_trace_from_thoughts(
@@ -245,7 +259,9 @@ def genie_reasoning_trace_from_thoughts(
     for raw in thoughts or []:
         if not isinstance(raw, dict):
             continue
-        content = scrub_free_text(str(raw.get("content") or "").strip())[
+        content = _redact_reasoning_identity_shapes(
+            scrub_free_text(str(raw.get("content") or "").strip())
+        )[
             :_GENIE_REASONING_CONTENT_MAX_LEN
         ].strip()
         if not content:

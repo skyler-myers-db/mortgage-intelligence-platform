@@ -321,6 +321,17 @@ function nullableMoney(raw: string): number | null {
   return Number(parsed.toFixed(2));
 }
 
+function configuredChannelCosts(setup: CampaignSetupState): Record<string, number> {
+  const costs = {
+    email: nullableMoney(setup.emailCost),
+    sms: nullableMoney(setup.smsCost),
+    direct_mail: nullableMoney(setup.mailCost),
+  };
+  return Object.fromEntries(
+    Object.entries(costs).filter((entry): entry is [string, number] => entry[1] !== null),
+  );
+}
+
 export function buildCampaignConfig(setup: CampaignSetupState): {
   suppression_policy: Record<string, unknown>;
   message_variants: Record<string, unknown>[];
@@ -367,11 +378,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
     holdout: { method: 'hash_modulo', size_pct: holdoutPct },
     roi_assumptions: {
       budget_usd: nullableMoney(setup.budget),
-      cost_per_contact_usd: {
-        email: nullableMoney(setup.emailCost),
-        sms: nullableMoney(setup.smsCost),
-        direct_mail: nullableMoney(setup.mailCost),
-      },
+      cost_per_contact_usd: configuredChannelCosts(setup),
       source: 'operator_configured',
     },
     household_dedup: {

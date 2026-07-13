@@ -68,7 +68,12 @@ def test_required_routes_exist_and_respond():
 
     for method, path, payload, expected in checks:
         call = getattr(client, method)
-        response = call(path, json=payload) if payload is not None else call(path)
+        headers = (
+            {"Idempotency-Key": "11111111-1111-4111-8111-111111111112"}
+            if path == "/api/portfolio/create"
+            else None
+        )
+        response = call(path, json=payload, headers=headers) if payload is not None else call(path)
         assert response.status_code == expected, (
             f"{method.upper()} {path} returned {response.status_code}: {response.text}"
         )

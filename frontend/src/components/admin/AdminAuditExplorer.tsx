@@ -243,7 +243,7 @@ export function AdminAuditExplorer() {
           </div>
         )}
         <div className="admin-rollups mt-3">
-          <div className="h-5">Approval status by week</div>
+          <div className="h-5">Workflow events by week</div>
           {rollupsWarming && (
             <WarmingUpBlock state={rollupsWarming} title="Audit rollups loading" compact />
           )}
@@ -261,7 +261,7 @@ export function AdminAuditExplorer() {
               ))}
               {rollups?.length === 0 && (
                 <div className="muted fs-12">
-                  No approval/rejection events in the current rollup window.
+                  No workflow events in the current rollup window.
                 </div>
               )}
             </div>

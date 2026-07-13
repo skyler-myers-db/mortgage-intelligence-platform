@@ -30,6 +30,7 @@ def test_growth_agent_tool_registry_is_reviewed_and_deterministic() -> None:
         assert tool.deterministic is True
         assert tool.writes_state is False
         assert tool.specialists
+        assert "identit" not in tool.description.lower()
         validate_source_assets([tool.source_asset])
         assert ".silver." not in tool.source_asset
         assert not tool.source_asset.startswith("cotality_mortgage_data.")

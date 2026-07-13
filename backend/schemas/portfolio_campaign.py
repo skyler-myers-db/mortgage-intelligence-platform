@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from backend.schemas._validators import (
     assert_no_protected_class_marketing_text,
     configured_public_lender_name,
+    contains_contextual_human_name,
 )
 
 if TYPE_CHECKING:
@@ -66,7 +67,9 @@ def assert_public_campaign_text(value: object, *, field_name: str, max_length: i
     if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PUBLIC_TEXT_DENYLIST):
         raise ValueError(f"{field_name} cannot contain PII, raw identifiers, or unresolved placeholders")
     name_scan_text = remove_allowed_public_titlecase_phrases(text)
-    if _HUMAN_NAME_SHAPE_RE.search(name_scan_text):
+    if _HUMAN_NAME_SHAPE_RE.search(name_scan_text) or contains_contextual_human_name(
+        name_scan_text
+    ):
         raise ValueError(f"{field_name} cannot contain human-name-shaped text")
     assert_no_protected_class_marketing_text(text, field_name=field_name)
     return text

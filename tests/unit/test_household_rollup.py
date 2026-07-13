@@ -153,4 +153,8 @@ def test_household_rollup_is_deployable_and_lakebase_persisted() -> None:
     assert "sql/_rendered/transformations/gold_household_rollup.sql" in bundle
     assert "household_dedup JSONB" in lakebase
     assert "household_summary JSONB" in lakebase
+    assert "idempotency_key TEXT" in lakebase
+    assert "request_payload_hash TEXT" in lakebase
+    assert "creation_response JSONB" in lakebase
+    assert "idx_campaigns_owner_idempotency" in lakebase
     assert "2026_07_09_campaign_household_dedup" in lakebase

@@ -21,13 +21,6 @@ import { formatRefreshed } from '../lib/formatRefreshed';
 import type { HomeSummary, KpiTrend, PortfolioPreview } from '../types';
 import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
 
-const FUTURE_MODULES = [
-  { code: 'M1', title: 'Pre-Qualified Offer & Self-Serve Accept', desc: 'Borrower-facing pre-qualified offer with one-click accept → compliant application handoff (FCRA firm-offer + RESPA timing).' },
-  { code: 'M2', title: 'LO Workbench',          desc: 'Officer assist with explainable borrower guidance.' },
-  { code: 'M3', title: 'Underwriting Copilot',  desc: 'Condition handling and exception triage.' },
-  { code: 'M4', title: 'Risk & Retention',      desc: 'Portfolio-level retention and recapture.' },
-];
-
 export const HOME_PORTFOLIO_PREVIEW_CRITERIA = { marketing_eligibility: 'Any' } as const;
 export const APPROVAL_QUEUE_STATE_LABEL = 'current lifecycle state';
 
@@ -190,11 +183,9 @@ export default function Home() {
           className="status-callout status-callout--day-zero"
         >
           <strong>First data refresh pending.</strong>{' '}
-          Unity Catalog gold tables are empty. Run{' '}
-          <code className="callout-code">
-            databricks bundle run mip_refresh_scores -t dev
-          </code>{' '}
-          to populate them.
+          Unity Catalog gold tables are empty. Authorized operators can start
+          and monitor the refresh in{' '}
+          <Link to="/admin-config#data-operations">Admin Data Operations</Link>.
         </div>
       )}
       {!isDayZero && !previewWarming && preview?.trend_note && (
@@ -301,26 +292,6 @@ export default function Home() {
           the filtered Lead Queue. Lead Queue remains the source-of-truth
           index for borrower selection. Audit exploration is admin-only. */}
       <USChoroplethMap drillBehavior="filter" />
-
-      <Reveal>
-        <div className="section-hdr">
-          <div>
-            <div className="eyebrow">Roadmap</div>
-            <div className="h-2">Planned modules</div>
-          </div>
-        </div>
-        <div className="roadmap-grid">
-          {FUTURE_MODULES.map((m) => (
-            <div className="surface" key={m.code}>
-              <div className="surface__body">
-                <div className="eyebrow">{m.code} · planned</div>
-                <div className="h-3 mt-2">{m.title}</div>
-                <p className="body mt-2">{m.desc}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      </Reveal>
 
       <div className="section-actions">
         <Link to="/portfolio-builder" className="btn btn--primary" aria-label="Build a lead portfolio">

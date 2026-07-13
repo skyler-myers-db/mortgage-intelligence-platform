@@ -538,6 +538,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('5,394 eligible borrowers in Mortgage Growth Agent - IL.');
     expect(container.textContent).toContain('Teams operations brief');
     expect(container.textContent).toContain('Operator action: Review the current watchlist');
+    expect(container.querySelector('.growth-agent-card__copy--structured')?.textContent).toContain('Operations brief\nWatchlist:');
     expect(container.textContent).toContain('Status: draft');
     expect(container.textContent).not.toContain('No borrower identities');
     expect(container.textContent).not.toContain('Not sent');

@@ -295,7 +295,7 @@ _TOOLS: dict[AgentToolName, AgentTool] = {
         label="Summarize borrower evidence",
         source_asset=_BORROWER_DOSSIER,
         specialists=("borrower_dossier_agent",),
-        description="Reads the pre-joined borrower dossier evidence surface without exposing identities.",
+        description="Reads the pre-joined borrower dossier evidence surface for aggregate review.",
         params=(
             AgentToolParam(
                 name="min_opportunity_score",

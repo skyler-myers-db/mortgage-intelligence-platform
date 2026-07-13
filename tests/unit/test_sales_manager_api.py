@@ -520,6 +520,65 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
     assert isinstance(aging.json(), list)
 
 
+def test_campaign_performance_uses_nested_same_borrower_sets(fake_lakebase_client) -> None:
+    today = datetime.now(UTC).date().isoformat()
+    fake_lakebase_client.dispositions.extend(
+        [
+            {
+                "borrower_id": "B-REACHED-ONLY",
+                "lo_email": "lo01@summit.example",
+                "outcome": "connected",
+                "occurred_at": datetime.now(UTC),
+            },
+            {
+                "borrower_id": "B-NESTED",
+                "lo_email": "lo01@summit.example",
+                "outcome": "application_started",
+                "occurred_at": datetime.now(UTC),
+            },
+        ]
+    )
+    fake_lakebase_client.outcomes.extend(
+        [
+            {
+                "borrower_id": "B-DISJOINT",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": datetime.now(UTC),
+            },
+            {
+                "borrower_id": "B-NESTED",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "application_submitted",
+                "occurred_at": datetime.now(UTC),
+            },
+            {
+                "borrower_id": "B-NESTED",
+                "assigned_to_email": "lo01@summit.example",
+                "outcome_type": "closed_funded",
+                "occurred_at": datetime.now(UTC),
+            },
+        ]
+    )
+
+    response = client.get(f"/api/sales/campaign-performance?from={today}&to={today}")
+    assert response.status_code == 200
+    assert response.json() == {
+        "from_date": today,
+        "to_date": today,
+        "unique_contacts_reached": 2,
+        "unique_application_starts": 1,
+        "unique_applications_submitted": 1,
+        "unique_closed_funded": 1,
+        "methodology": "same_borrower_nested_funnel",
+    }
+
+    invalid = client.get(
+        f"/api/sales/campaign-performance?from={today}&to=2020-01-01"
+    )
+    assert invalid.status_code == 422
+
+
 def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_client) -> None:
     borrower_id = mock_data.BORROWERS[2].borrower_id
     request_id = str(uuid4())

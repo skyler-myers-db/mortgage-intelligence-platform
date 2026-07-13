@@ -5,10 +5,8 @@ Genie feedback endpoint. A client request id scopes retries to one logical
 rating. Native rating delivery is replay-safe because Databricks models the
 operation as setting ``POSITIVE`` or ``NEGATIVE`` on the message.
 
-Optional free text is never stored in Lakebase or audit metadata. After the
-rating and final audit row are durable, the scrubbed note is posted through the
-separate best-effort comment endpoint. This ordering prevents an uncertain
-rating retry from duplicating an append-style comment.
+Free-text feedback is rejected by the API. The service accepts thumbs only,
+so neither caller prose nor a synthetic comment is forwarded to Genie.
 """
 
 from __future__ import annotations
@@ -23,14 +21,11 @@ from backend.services.genie_audit import genie_audit_entity_id_from_parts
 from backend.services.genie_client import GenieClientError, ResilientGenieClient
 from backend.services.lakebase import LakebaseClient, LakebaseError
 from backend.services.observability import emit
-from backend.services.pii_redaction import scrub_free_text
 
 log = logging.getLogger("backend.services.genie_feedback")
 
 GenieFeedbackRating = Literal["POSITIVE", "NEGATIVE"]
 
-_HELPFUL_COMMENT = "MIP feedback: helpful"
-_NOT_HELPFUL_COMMENT = "MIP feedback: not helpful"
 _REQUEST_NAMESPACE = UUID("df508632-9ce2-4a17-bce1-eb3991fbcdf5")
 
 _INSERT_INTENT_SQL = """
@@ -140,42 +135,6 @@ def resolve_genie_feedback_request_id(
 def _execute_one(conn: Any, sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
     row = conn.execute(sql, params).fetchone()
     return dict(row) if row is not None else None
-
-
-def _governed_comment_text(*, helpful: bool, comment: str | None) -> str:
-    prefix = _HELPFUL_COMMENT if helpful else _NOT_HELPFUL_COMMENT
-    note = scrub_free_text((comment or "").strip()).strip()
-    return f"{prefix} - {note}" if note else prefix
-
-
-def _post_comment_best_effort(
-    genie: ResilientGenieClient,
-    *,
-    conversation_id: str,
-    message_id: str,
-    text: str,
-) -> None:
-    """Post after rating durability; never log or return caller comment text."""
-    try:
-        posted = genie.post_message_comment(conversation_id, message_id, text)
-    except Exception as exc:  # noqa: BLE001 - optional comment must not undo rating
-        emit(
-            log,
-            "genie_feedback_comment_failed",
-            level=logging.WARNING,
-            dependency="genie",
-            outcome="degraded",
-            exc_type=type(exc).__name__,
-        )
-        return
-    if not posted:
-        emit(
-            log,
-            "genie_feedback_comment_not_posted",
-            level=logging.WARNING,
-            dependency="genie",
-            outcome="degraded",
-        )
 
 
 def _assert_same_intent(
@@ -384,6 +343,8 @@ def record_genie_feedback(
     comment: str | None,
 ) -> str:
     """Durably deliver one native rating and return its final audit event id."""
+    if (comment or "").strip():
+        raise ValueError("Free-text feedback is disabled")
     rating: GenieFeedbackRating = "POSITIVE" if helpful else "NEGATIVE"
     resolved_request_id = resolve_genie_feedback_request_id(
         actor=actor,
@@ -392,7 +353,7 @@ def record_genie_feedback(
         helpful=helpful,
         request_id=request_id,
     )
-    comment_present = bool((comment or "").strip())
+    comment_present = False
     claim = _claim_feedback_intent(
         lakebase,
         actor=actor,
@@ -427,7 +388,7 @@ def record_genie_feedback(
             )
         raise GenieFeedbackDeliveryError from exc
 
-    audit_event_id, completed_here = _mark_succeeded(
+    audit_event_id, _completed_here = _mark_succeeded(
         lakebase,
         feedback_request_id=claim.feedback_request_id,
         actor=actor,
@@ -437,11 +398,4 @@ def record_genie_feedback(
         rating=rating,
         comment_present=comment_present,
     )
-    if comment_present and completed_here:
-        _post_comment_best_effort(
-            genie,
-            conversation_id=conversation_id,
-            message_id=message_id,
-            text=_governed_comment_text(helpful=helpful, comment=comment),
-        )
     return audit_event_id

@@ -92,8 +92,9 @@ class InProcessMockPortfolioRepository:
         payload: PortfolioCreateRequest,
         *,
         actor: str | None = None,
+        idempotency_key: str,
     ) -> PortfolioCreateResponse:
-        _ = actor
+        _ = actor, idempotency_key
         return PortfolioCreateResponse(
             portfolio_id="11111111-1111-4111-8111-111111111111",
             campaign_id="11111111-1111-4111-8111-111111111111",

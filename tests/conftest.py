@@ -22,6 +22,7 @@ from __future__ import annotations
 
 # ruff: noqa: E402,I001
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -177,6 +178,7 @@ class _FakeLakebaseClient:
         self.assignments: list[dict[str, Any]] = []
         self.dispositions: list[dict[str, Any]] = []
         self.outcomes: list[dict[str, Any]] = []
+        self.campaigns: list[dict[str, Any]] = []
         self.activation_destinations: list[dict[str, Any]] = [
             {
                 "source_system": "salesforce",
@@ -385,12 +387,48 @@ class _FakeLakebaseClient:
                 "disclosure_version": "test-disclosure-v1",
                 "body": body,
             }
+        if (
+            "FROM mip_app.campaigns c" in sql
+            and "c.idempotency_key" in sql
+            and "INSERT INTO mip_app.campaigns" not in sql
+        ):
+            return next(
+                (
+                    dict(row)
+                    for row in self.campaigns
+                    if row.get("owner_email") == (params or {}).get("owner_email")
+                    and row.get("idempotency_key") == (params or {}).get("idempotency_key")
+                ),
+                None,
+            )
         if "INSERT INTO mip_app.campaigns" in sql:
-            return {
+            owner_email = (params or {}).get("owner_email")
+            idempotency_key = (params or {}).get("idempotency_key")
+            existing = next(
+                (
+                    row
+                    for row in self.campaigns
+                    if row.get("owner_email") == owner_email
+                    and row.get("idempotency_key") == idempotency_key
+                ),
+                None,
+            )
+            if existing is not None:
+                return dict(existing)
+            row = {
                 "campaign_id": uuid4(),
                 "audit_id": uuid4(),
                 "event_at": datetime.now(UTC),
+                "owner_email": owner_email,
+                "idempotency_key": idempotency_key,
+                "request_payload_hash": (params or {}).get("request_payload_hash"),
+                "creation_response": json.loads(
+                    str((params or {}).get("creation_response") or "{}")
+                ),
+                "created": True,
             }
+            self.campaigns.append(row)
+            return dict(row)
         if "FROM mip_app.campaigns" in sql:
             return {
                 "campaign_id": (params or {}).get("campaign_id", uuid4()),
@@ -580,6 +618,50 @@ class _FakeLakebaseClient:
                 }
                 for lo_email, counts in sorted(by_lo.items())
             ][:limit]
+        if "campaign_performance_funnel" in sql:
+            lo_emails = set((params or {}).get("lo_emails") or [])
+            scoped_dispositions = [
+                row
+                for row in self.dispositions
+                if not lo_emails or str(row.get("lo_email")) in lo_emails
+            ]
+            reached = {
+                str(row["borrower_id"])
+                for row in scoped_dispositions
+                if row.get("outcome")
+                in {"connected", "callback_scheduled", "application_started"}
+            }
+            started = {
+                str(row["borrower_id"])
+                for row in scoped_dispositions
+                if row.get("outcome") == "application_started"
+                and str(row["borrower_id"]) in reached
+            }
+            scoped_outcomes = [
+                row
+                for row in self.outcomes
+                if not lo_emails or str(row.get("assigned_to_email")) in lo_emails
+            ]
+            submitted = {
+                str(row["borrower_id"])
+                for row in scoped_outcomes
+                if row.get("outcome_type") == "application_submitted"
+                and str(row["borrower_id"]) in started
+            }
+            funded = {
+                str(row["borrower_id"])
+                for row in scoped_outcomes
+                if row.get("outcome_type") == "closed_funded"
+                and str(row["borrower_id"]) in submitted
+            }
+            return [
+                {
+                    "unique_contacts_reached": len(reached),
+                    "unique_application_starts": len(started),
+                    "unique_applications_submitted": len(submitted),
+                    "unique_closed_funded": len(funded),
+                }
+            ]
         if "FROM mip_app.call_dispositions" in sql and "GROUP BY lo_email, outcome" in sql:
             counts: dict[tuple[str, str], int] = {}
             for row in self.dispositions:

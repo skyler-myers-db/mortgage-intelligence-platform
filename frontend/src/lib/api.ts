@@ -40,6 +40,7 @@ import type {
   SalesTeamMember,
   SalesAgingLead,
   SalesConversionResponse,
+  CampaignPerformanceFunnelResponse,
   SalesOutcomeSummaryResponse,
   SalesStandupResponse,
   SegmentAnalyticsResponse,
@@ -856,6 +857,7 @@ export const api = {
       holdout: Record<string, unknown>;
       roi_assumptions: Record<string, unknown>;
       household_dedup: Record<string, unknown>;
+      request_id: string;
     }> = {},
     signal?: AbortSignal,
   ) =>
@@ -891,6 +893,7 @@ export const api = {
         },
       },
       signal,
+      { 'Idempotency-Key': config.request_id ?? _newRequestId() },
     ),
 
   segments: (
@@ -1383,6 +1386,20 @@ export const api = {
     return getJson<SalesConversionResponse>(`/api/sales/conversion?${params.toString()}`, signal);
   },
 
+  salesCampaignPerformance: (
+    fromDate: string,
+    toDate: string,
+    signal?: AbortSignal,
+  ) => {
+    const params = new URLSearchParams();
+    params.set('from', fromDate);
+    params.set('to', toDate);
+    return getJson<CampaignPerformanceFunnelResponse>(
+      `/api/sales/campaign-performance?${params.toString()}`,
+      signal,
+    );
+  },
+
   salesOutcomeSummary: (
     fromDate: string,
     toDate: string,
@@ -1504,24 +1521,19 @@ export const api = {
       signal,
     ),
 
-  /**
-   * Record thumbs-up/down feedback on a Genie answer. Writes a governed
-   * audit row on the backend. The comment is optional and must never
-   * contain PII — the backend rejects PII with 422 and we surface the
-   * `detail` verbatim WITHOUT echoing the rejected comment text back.
-   * A wrong content-type yields 415. Both flow through `_throwFromResponse`
-   * so the ApiError carries the backend `detail`.
-   */
+  /** Record replay-safe thumbs-up/down feedback on a Genie answer. */
   genieFeedback: (
     payload: {
       conversation_id: string;
       message_id: string;
       helpful: boolean;
       comment?: string;
+      request_id?: string;
     },
     signal?: AbortSignal,
-  ) =>
-    postJson<
+  ) => {
+    const { request_id: requestId, ...body } = payload;
+    return postJson<
       GenieFeedbackResult,
       {
         conversation_id: string;
@@ -1531,10 +1543,11 @@ export const api = {
       }
     >(
       '/api/genie/feedback',
-      payload,
+      body,
       signal,
-      { 'Idempotency-Key': crypto.randomUUID() },
-    ),
+      { 'Idempotency-Key': requestId ?? crypto.randomUUID() },
+    );
+  },
 
   growthAgent: (signal?: AbortSignal) =>
     getJson<GrowthAgentHomeResponse>('/api/growth-agent', signal),

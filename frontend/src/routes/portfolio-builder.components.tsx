@@ -1,6 +1,6 @@
 import { type ChangeEvent, useMemo, useState } from 'react';
 import { Icon } from '../components/Icon';
-import type { PortfolioPreview, SalesConversionResponse, SalesOutcomeSummaryResponse } from '../types';
+import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../types';
 import type { FootprintState } from './portfolio-builder.logic';
 import { formatUsdCompact, stateLabel } from './portfolio-builder.logic';
 
@@ -83,29 +83,20 @@ export function StateMultiSelect({
 /** Cohort economics use gold-layer facts and observed sales outcomes. */
 export function RoiProjector({
   preview,
-  conversion,
-  outcomes,
+  performance,
   performanceStatus = 'available',
 }: {
   preview: PortfolioPreview;
-  conversion?: SalesConversionResponse;
-  outcomes?: SalesOutcomeSummaryResponse;
+  performance?: CampaignPerformanceFunnelResponse;
   performanceStatus?: 'loading' | 'available' | 'unavailable';
 }) {
   const [unitEconomics, setUnitEconomics] = useState({ revenueRatePct: '', costPerLeadUsd: '' });
   const observed = useMemo(() => {
-    const hasObservedData = performanceStatus === 'available' && conversion !== undefined && outcomes !== undefined;
-    const calls = hasObservedData
-      ? conversion.rows.reduce((sum, row) => sum + row.calls_attempted, 0)
-      : null;
-    const contacted = hasObservedData && conversion.rows.every((row) => row.unique_contacts_reached != null)
-      ? conversion.rows.reduce((sum, row) => sum + (row.unique_contacts_reached ?? 0), 0)
-      : null;
-    const applications = hasObservedData && conversion.rows.every((row) => row.unique_application_starts != null)
-      ? conversion.rows.reduce((sum, row) => sum + (row.unique_application_starts ?? 0), 0)
-      : null;
-    const submitted = hasObservedData ? outcomes.unique_applications_submitted ?? null : null;
-    const funded = hasObservedData ? outcomes.unique_closed_funded ?? null : null;
+    const hasObservedData = performanceStatus === 'available' && performance !== undefined;
+    const contacted = hasObservedData ? performance.unique_contacts_reached : null;
+    const applications = hasObservedData ? performance.unique_application_starts : null;
+    const submitted = hasObservedData ? performance.unique_applications_submitted : null;
+    const funded = hasObservedData ? performance.unique_closed_funded : null;
     const coherent = contacted !== null
       && applications !== null
       && submitted !== null
@@ -129,7 +120,6 @@ export function RoiProjector({
       ? null
       : projectedFundings * preview.avg_high_intent_lien_balance_usd;
     return {
-      calls,
       contacted,
       applications,
       submitted,
@@ -142,7 +132,7 @@ export function RoiProjector({
       projectedFundings,
       projectedVolume,
     };
-  }, [conversion, outcomes, performanceStatus, preview]);
+  }, [performance, performanceStatus, preview]);
   const revenueRate = Number.parseFloat(unitEconomics.revenueRatePct);
   const costPerLead = Number.parseFloat(unitEconomics.costPerLeadUsd);
   const hasUnitEconomics = Number.isFinite(revenueRate) && revenueRate >= 0 && revenueRate <= 100
@@ -163,7 +153,7 @@ export function RoiProjector({
           <div>
             <div className="h-4">Observed-rate economics scenario</div>
             <div className="muted fs-12">
-              Current refinance-economics cohort with your team&apos;s distinct-borrower 90-day funnel.
+              Current refinance-economics cohort with your team&apos;s same-borrower 90-day funnel benchmark.
             </div>
           </div>
         </div>
@@ -248,7 +238,7 @@ export function RoiProjector({
         )}
         {observed.qualified && (
           <div className="muted fs-12 mt-2">
-            Scenario applies tenant-wide observed rates to the current refinance-economics cohort; it is not a commitment or a borrower-level prediction.
+            Scenario applies tenant-wide, same-borrower observed rates to the current refinance-economics cohort. Each downstream stage is a subset of the previous stage; this is not a commitment or a borrower-level prediction.
           </div>
         )}
       </div>

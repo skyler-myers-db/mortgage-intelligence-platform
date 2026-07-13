@@ -4,25 +4,19 @@ import { Icon } from '../Icon';
 
 /**
  * GenieAnswerFeedback — thumbs-up / thumbs-down on a Genie answer with an
- * optional short comment. Submits to POST /api/genie/feedback, which writes a
- * governed audit row.
+ * governed audit row. The app intentionally collects only the binary vote;
+ * free-text comments can carry borrower details and are not accepted.
  *
  * Contract notes:
  *   - Requires both conversation_id and message_id (the audit key). When
  *     either is missing the whole control renders nothing — feedback that
  *     can't be attributed to a message is dropped rather than shown.
- *   - The comment is capped at 280 chars. The backend rejects PII with 422;
- *     we surface that `detail` inline but NEVER echo the rejected comment
- *     back as a quoted string (that would re-surface the PII the backend just
- *     refused).
  *   - 415 (wrong content-type) / 5xx surface a generic inline error.
  *   - The submit handler is async-latched via a ref so a double-click or a
  *     second vote while a request is in flight cannot fire two POSTs.
  *   - On success the control locks to a subtle "Feedback recorded" state and
  *     both vote buttons disable. There is deliberately NO un-vote flow.
  */
-
-const MAX_COMMENT = 280;
 
 type Vote = 'up' | 'down';
 
@@ -35,13 +29,13 @@ export function GenieAnswerFeedback({
   conversationId,
   messageId,
 }: GenieAnswerFeedbackProps) {
-  const [comment, setComment] = useState('');
   const [pending, setPending] = useState<Vote | null>(null);
   const [recorded, setRecorded] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Async latch: guards against a double-submit before React re-renders the
   // disabled state. Mirrors the approval handler latch pattern.
   const inFlightRef = useRef(false);
+  const requestIdsRef = useRef<Partial<Record<Vote, string>>>({});
 
   // Feedback needs a message to attach to. Without the audit key there is
   // nothing to record, so render nothing rather than a dead control.
@@ -52,22 +46,22 @@ export function GenieAnswerFeedback({
     inFlightRef.current = true;
     setPending(helpful ? 'up' : 'down');
     setError(null);
-    const trimmed = comment.trim();
+    const vote: Vote = helpful ? 'up' : 'down';
+    const requestId = requestIdsRef.current[vote] ?? crypto.randomUUID();
+    requestIdsRef.current[vote] = requestId;
     try {
       await api.genieFeedback({
         conversation_id: conversationId,
         message_id: messageId,
         helpful,
-        // Only send a comment when the user typed one — the field is optional.
-        ...(trimmed.length > 0 ? { comment: trimmed } : {}),
+        request_id: requestId,
       });
       setRecorded(true);
     } catch (err) {
-      // 422 → surface the backend detail (e.g. "Comment appears to contain
-      // personal data."). We show the detail message only, never the
-      // rejected comment text. 415 / 5xx → generic copy.
+      // A policy rejection can still return 422 for a stale client payload.
+      // Surface only the fixed backend detail.
       if (err instanceof ApiError && err.status === 422) {
-        setError(err.message || 'That comment could not be accepted.');
+        setError(err.message || 'Feedback could not be recorded.');
       } else {
         setError('Feedback could not be recorded. Please try again.');
       }
@@ -111,16 +105,6 @@ export function GenieAnswerFeedback({
           <Icon name="thumbdown" size={14} />
         </button>
       </div>
-      <textarea
-        className="genie-feedback__comment"
-        value={comment}
-        maxLength={MAX_COMMENT}
-        onChange={(e) => setComment(e.target.value)}
-        placeholder="Optional note about this answer"
-        aria-label="Optional note about this answer"
-        rows={2}
-        disabled={pending !== null}
-      />
       {error && (
         <div className="genie-feedback__error" role="alert">
           {error}

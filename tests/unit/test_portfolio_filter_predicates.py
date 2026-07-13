@@ -44,6 +44,15 @@ def _install_test_coverage() -> None:
     _reset_state_footprint_resolver_for_tests(resolver)
 
 
+def test_decimal_equity_floor_is_not_truncated() -> None:
+    where, params = _where_for(
+        _any_contactability(min_equity_pct=35.9),
+    )
+
+    assert "equity_pct >= :equity_floor" in where
+    assert params["equity_floor"] == 35.9
+
+
 @pytest.mark.parametrize(
     ("relationship", "expected_clause"),
     [

@@ -54,6 +54,9 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     roi_assumptions JSONB,
     household_dedup JSONB NOT NULL DEFAULT '{"enabled": false, "dedupe_unit": "borrower", "primary_contact_strategy": "highest_opportunity_eligible"}'::jsonb,
     household_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    idempotency_key TEXT,
+    request_payload_hash TEXT,
+    creation_response JSONB,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -74,11 +77,20 @@ ALTER TABLE mip_app.campaigns
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS household_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
 ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS idempotency_key TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS request_payload_hash TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS creation_response JSONB;
+ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 CREATE INDEX IF NOT EXISTS idx_campaigns_owner
     ON mip_app.campaigns (owner_email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_campaigns_status
     ON mip_app.campaigns (status, updated_at DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_campaigns_owner_idempotency
+    ON mip_app.campaigns (owner_email, idempotency_key)
+    WHERE idempotency_key IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
     campaign_id  UUID NOT NULL REFERENCES mip_app.campaigns(campaign_id) ON DELETE CASCADE,

@@ -381,6 +381,16 @@ class SalesConversionResponse(BaseModel):
     rows: list[dict[str, object]]
 
 
+class CampaignPerformanceFunnelResponse(BaseModel):
+    from_date: str
+    to_date: str
+    unique_contacts_reached: int
+    unique_application_starts: int
+    unique_applications_submitted: int
+    unique_closed_funded: int
+    methodology: Literal["same_borrower_nested_funnel"] = "same_borrower_nested_funnel"
+
+
 class SalesOutcomeSummaryResponse(BaseModel):
     from_date: str
     to_date: str

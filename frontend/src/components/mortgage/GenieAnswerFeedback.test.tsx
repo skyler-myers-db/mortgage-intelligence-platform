@@ -1,11 +1,9 @@
 /**
  * @vitest-environment happy-dom
  *
- * GenieAnswerFeedback — thumbs vote + optional comment posting to
- * /api/genie/feedback. Covers: correct request body, disable-after-success,
- * 422 detail surfaced WITHOUT echoing the rejected comment, generic error on
- * 415/5xx, the async double-submit latch, and the no-render guard when the
- * payload lacks a conversation/message id.
+ * GenieAnswerFeedback — replay-safe thumbs-only feedback. Covers the request
+ * contract, retry idempotency, disable-after-success, generic error handling,
+ * the async double-submit latch, and missing conversation/message guards.
  */
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
@@ -25,16 +23,6 @@ function upBtn(container: HTMLElement) {
 }
 function downBtn(container: HTMLElement) {
   return container.querySelector<HTMLButtonElement>('[data-testid="genie-feedback-down"]');
-}
-
-// React tracks the controlled value via a native setter; a plain `.value =`
-// in happy-dom bypasses it, so route through the prototype setter before
-// firing the input event (same pattern as CommandPalette.test / ask-genie).
-function typeInComment(container: HTMLElement, value: string) {
-  const textarea = container.querySelector<HTMLTextAreaElement>('.genie-feedback__comment')!;
-  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')!.set!;
-  setter.call(textarea, value);
-  textarea.dispatchEvent(new Event('input', { bubbles: true }));
 }
 
 describe('GenieAnswerFeedback', () => {
@@ -60,14 +48,12 @@ describe('GenieAnswerFeedback', () => {
     expect(upBtn(container)).toBeNull();
   });
 
-  it('uses thumb icons and a concise optional-note placeholder', () => {
+  it('uses thumb icons and does not collect free text', () => {
     act(() => root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />));
 
     expect(upBtn(container)?.querySelector('path[d="M7 10v12"]')).not.toBeNull();
     expect(downBtn(container)?.querySelector('path[d="M17 14V2"]')).not.toBeNull();
-    const comment = container.querySelector<HTMLTextAreaElement>('.genie-feedback__comment');
-    expect(comment?.placeholder).toBe('Optional note about this answer');
-    expect(comment?.placeholder).not.toContain('personal details');
+    expect(container.querySelector('textarea')).toBeNull();
   });
 
   it('posts the correct body and locks to the recorded state after success', async () => {
@@ -76,29 +62,26 @@ describe('GenieAnswerFeedback', () => {
       root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
     });
 
-    // Type a comment, then vote up.
-    await act(async () => {
-      typeInComment(container, 'clear and fast');
-    });
     await act(async () => {
       upBtn(container)!.click();
       await Promise.resolve();
     });
 
     expect(genieFeedback).toHaveBeenCalledTimes(1);
-    expect(genieFeedback).toHaveBeenCalledWith({
+    expect(genieFeedback).toHaveBeenCalledWith(expect.objectContaining({
       conversation_id: 'c1',
       message_id: 'm1',
       helpful: true,
-      comment: 'clear and fast',
-    });
+      request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    }));
+    expect(genieFeedback.mock.calls[0][0]).not.toHaveProperty('comment');
     // Recorded state: vote buttons gone, subtle confirmation shown.
     expect(upBtn(container)).toBeNull();
     expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
     expect(container.textContent).toContain('Feedback recorded');
   });
 
-  it('omits the comment field entirely when the user did not type one', async () => {
+  it('always omits the comment field', async () => {
     genieFeedback.mockResolvedValue({ accepted: true });
     await act(async () => {
       root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
@@ -107,38 +90,38 @@ describe('GenieAnswerFeedback', () => {
       downBtn(container)!.click();
       await Promise.resolve();
     });
-    expect(genieFeedback).toHaveBeenCalledWith({
+    expect(genieFeedback).toHaveBeenCalledWith(expect.objectContaining({
       conversation_id: 'c1',
       message_id: 'm1',
       helpful: false,
-    });
+      request_id: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    }));
+    expect(genieFeedback.mock.calls[0][0]).not.toHaveProperty('comment');
   });
 
-  it('shows the 422 detail inline and never echoes the rejected comment text', async () => {
-    genieFeedback.mockRejectedValue(
-      new ApiError('Comment appears to contain personal data.', {
-        path: '/api/genie/feedback',
-        status: 422,
-      }),
-    );
+  it('reuses the same request id when a failed vote is retried', async () => {
+    genieFeedback
+      .mockRejectedValueOnce(new ApiError('Invalid feedback request.', {
+        path: '/api/genie/feedback', status: 422,
+      }))
+      .mockResolvedValueOnce({ accepted: true, audit_event_id: 'evt-1' });
     await act(async () => {
       root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
-    });
-    await act(async () => {
-      typeInComment(container, 'call jane@example.com');
     });
     await act(async () => {
       upBtn(container)!.click();
       await Promise.resolve();
     });
-
-    const err = container.querySelector('.genie-feedback__error');
-    expect(err).not.toBeNull();
-    expect(err!.textContent).toContain('Comment appears to contain personal data.');
-    // The rejected comment must NOT be reflected anywhere in the error UI.
-    expect(err!.textContent).not.toContain('jane@example.com');
-    // Not recorded — the vote buttons stay so the user can revise + retry.
-    expect(upBtn(container)).not.toBeNull();
+    const firstRequestId = genieFeedback.mock.calls[0][0].request_id;
+    expect(container.querySelector('.genie-feedback__error')?.textContent).toContain(
+      'Invalid feedback request.',
+    );
+    await act(async () => {
+      upBtn(container)!.click();
+      await Promise.resolve();
+    });
+    expect(genieFeedback.mock.calls[1][0].request_id).toBe(firstRequestId);
+    expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
   });
 
   it('shows a generic error on a 415 wrong-content-type response', async () => {

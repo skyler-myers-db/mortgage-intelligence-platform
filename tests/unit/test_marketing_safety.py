@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
 from backend.main import app
+from backend.schemas.growth_agent import GrowthAgentRunRequest
 from backend.schemas.lead import LeadSummary
 from backend.schemas.offer import (
     OutreachApproveRequest,
@@ -58,7 +59,14 @@ class _OtherOwnerCampaignRepo:
     def preview(self, request: Any) -> Any:
         raise AssertionError("not used")
 
-    def create(self, payload: Any, *, actor: str | None = None) -> Any:
+    def create(
+        self,
+        payload: Any,
+        *,
+        actor: str | None = None,
+        idempotency_key: str,
+    ) -> Any:
+        _ = idempotency_key
         raise AssertionError("not used")
 
     def list_campaigns(
@@ -289,6 +297,17 @@ def test_outreach_campaign_metadata_ids_are_public_safe() -> None:
             rationale_code="low_intent",
             variant_name="Jane Smith",
         )
+
+    for unsafe_label in ("john smith watch", "JOHN SMITH WATCH"):
+        with pytest.raises(ValidationError, match="human-name-shaped"):
+            OutreachDraftRequest(
+                borrower_id="B-48291",
+                variant_name=unsafe_label,
+            )
+        with pytest.raises(ValidationError, match="public-safe workflow label"):
+            GrowthAgentRunRequest(monitor_name=unsafe_label)
+
+    assert GrowthAgentRunRequest(monitor_name="West HELOC Watch").monitor_name == "West HELOC Watch"
 
 
 def test_audit_store_rejects_pii_like_campaign_and_variant_metadata() -> None:
@@ -553,6 +572,23 @@ def test_campaign_roi_null_budget_means_omitted_not_rejected() -> None:
             name="Q3 recapture",
             roi_assumptions={"budget_usd": "a lot"},
         )
+
+
+def test_campaign_roi_null_channel_costs_mean_omitted_not_rejected() -> None:
+    payload = PortfolioCreateRequest(
+        name="Q3 recapture",
+        roi_assumptions={
+            "cost_per_contact_usd": {
+                "email": None,
+                "sms": 0.08,
+                "direct_mail": None,
+            },
+        },
+    )
+
+    assert payload.roi_assumptions == {
+        "cost_per_contact_usd": {"sms": 0.08},
+    }
 
 
 def test_campaign_create_accepts_configured_lender_phrase(

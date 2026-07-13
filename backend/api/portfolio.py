@@ -3,7 +3,7 @@
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
@@ -90,28 +90,18 @@ def campaign_recommendation(
         visible_los = sales_state.visible_lo_emails(actor=actor)
         end_date = datetime.now(UTC).date()
         start_date = end_date - timedelta(days=89)
-        conversion = sales_state.conversion(
-            from_date=start_date.isoformat(),
-            to_date=end_date.isoformat(),
-            group_by="cohort",
-            visible_lo_emails=visible_los,
-        )
-        outcomes = sales_state.outcome_summary(
+        observed_funnel = sales_state.campaign_performance_funnel(
             from_date=start_date.isoformat(),
             to_date=end_date.isoformat(),
             visible_lo_emails=visible_los,
         )
         performance = CampaignPerformanceContext(
-            unique_contacts_reached=sum(
-                int(row.get("unique_contacts_reached") or 0) for row in conversion
-            ),
-            unique_application_starts=sum(
-                int(row.get("unique_application_starts") or 0) for row in conversion
-            ),
+            unique_contacts_reached=observed_funnel["unique_contacts_reached"],
+            unique_application_starts=observed_funnel["unique_application_starts"],
             unique_applications_submitted=int(
-                outcomes.get("unique_applications_submitted") or 0
+                observed_funnel["unique_applications_submitted"]
             ),
-            unique_closed_funded=int(outcomes.get("unique_closed_funded") or 0),
+            unique_closed_funded=int(observed_funnel["unique_closed_funded"]),
         )
     except (KeyError, PermissionError, LakebaseError):
         # Campaign recommendations remain available from exact UC cohort facts
@@ -125,10 +115,18 @@ def create_portfolio(
     request: Request,
     payload: PortfolioCreateRequest,
     repo: RepoDep,
+    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> PortfolioCreateResponse:
     try:
-        return repo.create(payload, actor=resolve_actor(request))
+        safe_idempotency_key = validate_public_opaque_id(idempotency_key)
+        return repo.create(
+            payload,
+            actor=resolve_actor(request),
+            idempotency_key=safe_idempotency_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503,

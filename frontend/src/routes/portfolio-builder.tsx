@@ -9,8 +9,7 @@ import type {
   CampaignRecommendationResponse,
   CampaignSummary,
   PortfolioPreview,
-  SalesConversionResponse,
-  SalesOutcomeSummaryResponse,
+  CampaignPerformanceFunnelResponse,
 } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { CampaignPrefillBanner } from '../components/mortgage/CampaignPrefillBanner';
@@ -187,14 +186,9 @@ export default function PortfolioBuilder() {
   // exactly 90 calendar days.
   const observedFrom = useMemo(() => isoDateDaysAgo(89), []);
   const observedTo = useMemo(() => isoDateDaysAgo(0), []);
-  const conversionQuery = useQuery<SalesConversionResponse>({
-    queryKey: ['portfolio-observed-conversion', observedFrom, observedTo],
-    queryFn: ({ signal }) => api.salesConversion(observedFrom, observedTo, 'cohort', signal),
-    retry: false,
-  });
-  const outcomeQuery = useQuery<SalesOutcomeSummaryResponse>({
-    queryKey: ['portfolio-observed-outcomes', observedFrom, observedTo],
-    queryFn: ({ signal }) => api.salesOutcomeSummary(observedFrom, observedTo, signal),
+  const performanceQuery = useQuery<CampaignPerformanceFunnelResponse>({
+    queryKey: ['portfolio-campaign-performance', observedFrom, observedTo],
+    queryFn: ({ signal }) => api.salesCampaignPerformance(observedFrom, observedTo, signal),
     retry: false,
   });
   const recommendationQuery = useQuery<CampaignRecommendationResponse>({
@@ -297,8 +291,10 @@ export default function PortfolioBuilder() {
     }
   }, [buildDirty]);
 
+  const saveRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const onOpenSavePanel = useCallback(() => {
     if (buildDirty || buildInFlight) return;
+    saveRequestRef.current = null;
     setSaveName(`Portfolio build ${new Date().toLocaleString()}`);
     setSavePanelOpen(true);
   }, [buildDirty, buildInFlight]);
@@ -314,12 +310,22 @@ export default function PortfolioBuilder() {
     // the operator can retry without re-typing.
     setSaving(true);
     try {
+      const criteria = buildPreviewCriteria(committedFilters, committedStateCodes);
+      const campaignConfig = buildCampaignConfig(campaignSetup);
+      const fingerprint = JSON.stringify({ name, criteria, campaignConfig });
+      if (saveRequestRef.current?.fingerprint !== fingerprint) {
+        saveRequestRef.current = {
+          fingerprint,
+          requestId: crypto.randomUUID(),
+        };
+      }
       await api.portfolioCreate(
         name,
-        buildPreviewCriteria(committedFilters, committedStateCodes),
-        buildCampaignConfig(campaignSetup),
+        criteria,
+        { ...campaignConfig, request_id: saveRequestRef.current.requestId },
       );
       await refetchCampaigns();
+      saveRequestRef.current = null;
       setSavePanelOpen(false);
       setSaveHint('saved');
     } catch {
@@ -644,12 +650,11 @@ export default function PortfolioBuilder() {
       {!isDayZero(preview) && (preview?.high_intent_leads ?? 0) > 0 && (
         <RoiProjector
           preview={preview!}
-          conversion={conversionQuery.data}
-          outcomes={outcomeQuery.data}
+          performance={performanceQuery.data}
           performanceStatus={
-            conversionQuery.isPending || outcomeQuery.isPending
+            performanceQuery.isPending
               ? 'loading'
-              : conversionQuery.isError || outcomeQuery.isError
+              : performanceQuery.isError
                 ? 'unavailable'
                 : 'available'
           }

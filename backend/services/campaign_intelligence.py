@@ -150,7 +150,7 @@ def _evidence(
     if performance is not None and performance.is_qualified:
         rows.append(
             CampaignRecommendationEvidence(
-                label="Team 90-day reached to application start",
+                label="Team 90-day same-borrower reached to application start",
                 value=(
                     f"{performance.unique_application_starts:,} / "
                     f"{performance.unique_contacts_reached:,} unique reached"
@@ -160,7 +160,7 @@ def _evidence(
         )
         rows.append(
             CampaignRecommendationEvidence(
-                label="Team 90-day application to submitted",
+                label="Team 90-day same-borrower application to submitted",
                 value=(
                     f"{performance.unique_applications_submitted:,} / "
                     f"{performance.unique_application_starts:,} application starts"
@@ -170,7 +170,7 @@ def _evidence(
         )
         rows.append(
             CampaignRecommendationEvidence(
-                label="Team 90-day submitted to funded",
+                label="Team 90-day same-borrower submitted to funded",
                 value=(
                     f"{performance.unique_closed_funded:,} / "
                     f"{performance.unique_applications_submitted:,} submitted"

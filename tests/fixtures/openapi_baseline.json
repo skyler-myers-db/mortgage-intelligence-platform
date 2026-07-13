@@ -3173,6 +3173,50 @@
         "title": "CampaignListResponse",
         "type": "object"
       },
+      "CampaignPerformanceFunnelResponse": {
+        "properties": {
+          "from_date": {
+            "title": "From Date",
+            "type": "string"
+          },
+          "methodology": {
+            "const": "same_borrower_nested_funnel",
+            "default": "same_borrower_nested_funnel",
+            "title": "Methodology",
+            "type": "string"
+          },
+          "to_date": {
+            "title": "To Date",
+            "type": "string"
+          },
+          "unique_application_starts": {
+            "title": "Unique Application Starts",
+            "type": "integer"
+          },
+          "unique_applications_submitted": {
+            "title": "Unique Applications Submitted",
+            "type": "integer"
+          },
+          "unique_closed_funded": {
+            "title": "Unique Closed Funded",
+            "type": "integer"
+          },
+          "unique_contacts_reached": {
+            "title": "Unique Contacts Reached",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "from_date",
+          "to_date",
+          "unique_contacts_reached",
+          "unique_application_starts",
+          "unique_applications_submitted",
+          "unique_closed_funded"
+        ],
+        "title": "CampaignPerformanceFunnelResponse",
+        "type": "object"
+      },
       "CampaignRecommendationEvidence": {
         "additionalProperties": false,
         "properties": {
@@ -15247,7 +15291,7 @@
     "/api/genie/feedback": {
       "post": {
         "deprecated": true,
-        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Optional comments are public-safe, never stored,\nand posted separately only after rating durability.",
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Free-text feedback is rejected so names or other\nborrower details cannot be forwarded to the native Genie comment system.",
         "operationId": "post_api_genie_feedback_genie_feedback",
         "requestBody": {
           "content": {
@@ -18499,6 +18543,17 @@
       "post": {
         "deprecated": true,
         "operationId": "post_api_portfolio_create_create_portfolio",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -18757,6 +18812,61 @@
           }
         },
         "summary": "Sales Aging",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/sales/campaign-performance": {
+      "get": {
+        "deprecated": true,
+        "description": "Return a manager-visible, same-borrower nested campaign funnel.",
+        "operationId": "get_api_sales_campaign_performance_sales_campaign_performance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPerformanceFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Campaign Performance",
         "tags": [
           "sales"
         ]
@@ -22006,7 +22116,7 @@
     },
     "/api/v1/genie/feedback": {
       "post": {
-        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Optional comments are public-safe, never stored,\nand posted separately only after rating durability.",
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Free-text feedback is rejected so names or other\nborrower details cannot be forwarded to the native Genie comment system.",
         "operationId": "post_api_v1_genie_feedback_genie_feedback",
         "requestBody": {
           "content": {
@@ -25221,6 +25331,17 @@
     "/api/v1/portfolio/create": {
       "post": {
         "operationId": "post_api_v1_portfolio_create_create_portfolio",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "Idempotency-Key",
+            "required": true,
+            "schema": {
+              "title": "Idempotency-Key",
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "content": {
             "application/json": {
@@ -25475,6 +25596,60 @@
           }
         },
         "summary": "Sales Aging",
+        "tags": [
+          "sales"
+        ]
+      }
+    },
+    "/api/v1/sales/campaign-performance": {
+      "get": {
+        "description": "Return a manager-visible, same-borrower nested campaign funnel.",
+        "operationId": "get_api_v1_sales_campaign_performance_sales_campaign_performance",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "From",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "required": true,
+            "schema": {
+              "format": "date",
+              "title": "To",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignPerformanceFunnelResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Sales Campaign Performance",
         "tags": [
           "sales"
         ]

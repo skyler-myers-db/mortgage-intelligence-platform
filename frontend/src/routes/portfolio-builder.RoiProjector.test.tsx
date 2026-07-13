@@ -2,7 +2,7 @@
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { PortfolioPreview, SalesConversionResponse, SalesOutcomeSummaryResponse } from '../types';
+import type { CampaignPerformanceFunnelResponse, PortfolioPreview } from '../types';
 import { RoiProjector } from './portfolio-builder.components';
 
 const PREVIEW = {
@@ -22,39 +22,15 @@ const PREVIEW = {
   in_outreach_count: 0,
 } satisfies PortfolioPreview;
 
-const CONVERSION = {
+const PERFORMANCE = {
   from_date: '2026-04-14',
   to_date: '2026-07-13',
-  group_by: 'cohort',
-  rows: [{
-    group_key: 'all',
-    calls_attempted: 100,
-    contacts_reached: 30,
-    callbacks_scheduled: 15,
-    applications_started: 20,
-    unique_leads_contacted: 80,
-    unique_contacts_reached: 80,
-    unique_application_starts: 20,
-    application_start_rate: 0.25,
-  }],
-} satisfies SalesConversionResponse;
-
-const OUTCOMES = {
-  from_date: '2026-04-14',
-  to_date: '2026-07-13',
-  total_outcomes: 15,
-  applications_submitted: 10,
-  closed_funded: 5,
+  unique_contacts_reached: 80,
+  unique_application_starts: 20,
   unique_applications_submitted: 10,
   unique_closed_funded: 5,
-  lost_to_competitor: 3,
-  withdrawn: 1,
-  not_qualified: 1,
-  by_source_system: [],
-  source_statuses: [],
-  by_lo: [],
-  top_competitors: [],
-} satisfies SalesOutcomeSummaryResponse;
+  methodology: 'same_borrower_nested_funnel',
+} satisfies CampaignPerformanceFunnelResponse;
 
 describe('RoiProjector', () => {
   let container: HTMLDivElement;
@@ -72,15 +48,13 @@ describe('RoiProjector', () => {
   });
 
   function mount(
-    conversion: SalesConversionResponse | undefined = CONVERSION,
-    outcomes: SalesOutcomeSummaryResponse | undefined = OUTCOMES,
+    performance: CampaignPerformanceFunnelResponse | undefined = PERFORMANCE,
     status: 'loading' | 'available' | 'unavailable' = 'available',
   ) {
     act(() => root.render(
       <RoiProjector
         preview={PREVIEW}
-        conversion={conversion}
-        outcomes={outcomes}
+        performance={performance}
         performanceStatus={status}
       />,
     ));
@@ -129,8 +103,14 @@ describe('RoiProjector', () => {
   });
 
   it('rejects a non-monotonic funnel instead of manufacturing a rate', () => {
-    mount(CONVERSION, { ...OUTCOMES, unique_applications_submitted: 25 });
+    mount({ ...PERFORMANCE, unique_applications_submitted: 25 });
     expect(container.querySelector('[data-testid="roi-gross"]')?.textContent).toBe('—');
     expect(container.textContent).toContain('monotonic stage counts');
+  });
+
+  it('discloses that the observed rate chain is a same-borrower benchmark', () => {
+    mount();
+    expect(container.textContent).toContain('same-borrower 90-day funnel benchmark');
+    expect(container.textContent).toContain('Each downstream stage is a subset of the previous stage');
   });
 });

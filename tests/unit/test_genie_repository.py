@@ -3655,6 +3655,31 @@ def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> N
     assert result.metric_value == "147,742"
 
 
+def test_live_reasoning_redacts_title_lowercase_and_uppercase_identity_shapes() -> None:
+    live = GenieResponse(
+        answer_text="The governed aggregate is ready.",
+        sql_query="SELECT COUNT(*) AS borrowers FROM mip.gold.borrower_360",
+        sql_result_rows=[{"borrowers": 3}],
+        conversation_id="conv-reasoning-redaction",
+        message_id="msg-reasoning-redaction",
+        thoughts=[
+            {"kind": "planning", "content": "Contact John Smith after the aggregate."},
+            {"kind": "planning", "content": "contact john smith after the aggregate."},
+            {"kind": "planning", "content": "CONTACT JOHN SMITH after the aggregate."},
+        ],
+    )
+    result = _adapt_genie_response(
+        "How many borrowers are there?",
+        live,
+        sql_client=_StubSqlClient([{"borrowers": 3}]),  # type: ignore[arg-type]
+    )
+
+    rendered = " ".join(step.content for step in result.reasoning_trace)
+    assert "John Smith" not in rendered
+    assert "john smith" not in rendered.lower()
+    assert rendered.count("[IDENTITY-REDACTED]") == 3
+
+
 def test_recognized_shape_verification_note_appends_not_replaces() -> None:
     live = GenieResponse(
         answer_text="There are about 147,742 borrowers in the money.",

@@ -13,7 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
-from backend.schemas.common import validate_public_free_comment, validate_public_opaque_id
+from backend.schemas.common import validate_public_opaque_id
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.genie_client import ResilientGenieClient, get_genie_client
@@ -51,17 +51,16 @@ class GenieFeedbackResponse(BaseModel):
 
 
 def _validated_feedback_comment(comment: str | None) -> str | None:
-    """Return a public-safe comment or raise 422 without echoing the input."""
+    """Reject free text so borrower identity data cannot cross into Genie."""
     if comment is None:
         return None
     stripped = comment.strip()
     if not stripped:
         return None
-    try:
-        return validate_public_free_comment(stripped, max_len=280)
-    except ValueError as exc:
-        # Do NOT include the offending text: reflecting it would echo PII.
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    raise HTTPException(
+        status_code=422,
+        detail="Free-text feedback is disabled; use the helpful or not-helpful vote.",
+    )
 
 
 def _validated_request_id(request_id: str | None) -> str | None:
@@ -91,8 +90,8 @@ def genie_feedback(
     The exact actor/conversation/message ownership is checked before a durable
     idempotency intent is claimed. The native rating is sent only after that
     transaction commits; final state and the ``GENIE_FEEDBACK`` audit row are
-    then committed together. Optional comments are public-safe, never stored,
-    and posted separately only after rating durability.
+    then committed together. Free-text feedback is rejected so names or other
+    borrower details cannot be forwarded to the native Genie comment system.
     """
     actor = resolve_actor(request)
     safe_comment = _validated_feedback_comment(payload.comment)

@@ -283,16 +283,33 @@ class DatabricksPortfolioRepository:
       INSERT INTO mip_app.campaigns (
         name, owner_email, status, criteria, suppression_policy,
         message_variants, channel_cascade, send_window, holdout,
-        roi_assumptions, household_dedup, household_summary, updated_at
+        roi_assumptions, household_dedup, household_summary,
+        idempotency_key, request_payload_hash, creation_response, updated_at
       )
       VALUES (
         %(name)s, %(owner_email)s, 'draft', %(criteria)s::jsonb,
         %(suppression_policy)s::jsonb, %(message_variants)s::jsonb,
         %(channel_cascade)s::jsonb, %(send_window)s::jsonb,
         %(holdout)s::jsonb, %(roi_assumptions)s::jsonb,
-        %(household_dedup)s::jsonb, %(household_summary)s::jsonb, now()
+        %(household_dedup)s::jsonb, %(household_summary)s::jsonb,
+        %(idempotency_key)s, %(request_payload_hash)s,
+        %(creation_response)s::jsonb, now()
       )
-      RETURNING campaign_id
+      ON CONFLICT (owner_email, idempotency_key)
+        WHERE idempotency_key IS NOT NULL
+      DO NOTHING
+      RETURNING campaign_id, request_payload_hash, creation_response
+    ),
+    selected_campaign AS (
+      SELECT campaign_id, request_payload_hash, creation_response, TRUE AS created
+      FROM inserted_campaign
+      UNION ALL
+      SELECT c.campaign_id, c.request_payload_hash, c.creation_response, FALSE AS created
+      FROM mip_app.campaigns c
+      WHERE c.owner_email = %(owner_email)s
+        AND c.idempotency_key = %(idempotency_key)s
+        AND NOT EXISTS (SELECT 1 FROM inserted_campaign)
+      LIMIT 1
     ),
     inserted_audit AS (
       INSERT INTO mip_app.action_audit (
@@ -338,11 +355,45 @@ class DatabricksPortfolioRepository:
       RETURNING campaign_id
     )
     SELECT
-      inserted_campaign.campaign_id,
-      inserted_audit.audit_id,
+      selected_campaign.campaign_id,
+      COALESCE(
+        inserted_audit.audit_id,
+        (
+          SELECT audit_id
+          FROM mip_app.action_audit
+          WHERE entity_type = 'campaign'
+            AND entity_id = selected_campaign.campaign_id::text
+            AND event_type = 'PORTFOLIO_CREATE'
+          ORDER BY occurred_at ASC
+          LIMIT 1
+        )
+      ) AS audit_id,
+      selected_campaign.request_payload_hash,
+      selected_campaign.creation_response,
+      selected_campaign.created,
       (SELECT COUNT(*) FROM inserted_variants) AS variant_count
-    FROM inserted_campaign
+    FROM selected_campaign
     LEFT JOIN inserted_audit ON TRUE
+    """
+
+    _CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL = """
+    SELECT
+      c.campaign_id,
+      c.request_payload_hash,
+      c.creation_response,
+      (
+        SELECT a.audit_id
+        FROM mip_app.action_audit a
+        WHERE a.entity_type = 'campaign'
+          AND a.entity_id = c.campaign_id::text
+          AND a.event_type = 'PORTFOLIO_CREATE'
+        ORDER BY a.occurred_at ASC
+        LIMIT 1
+      ) AS audit_id
+    FROM mip_app.campaigns c
+    WHERE c.owner_email = %(owner_email)s
+      AND c.idempotency_key = %(idempotency_key)s
+    LIMIT 1
     """
 
     # Re-audit #4 (2026-06-12): 'archived' is the "hide from the product"
@@ -721,7 +772,23 @@ class DatabricksPortfolioRepository:
         payload: PortfolioCreateRequest,
         *,
         actor: str | None = None,
+        idempotency_key: str,
     ) -> PortfolioCreateResponse:
+        owner_email = actor or "unknown"
+        request_payload = payload.model_dump(mode="json", exclude_none=False)
+        request_payload_hash = hashlib.sha256(
+            json.dumps(request_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        lakebase = _get_lakebase_client()
+        existing = lakebase.fetchone(
+            self._CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL,
+            {"owner_email": owner_email, "idempotency_key": idempotency_key},
+        )
+        if existing is not None:
+            return self._campaign_create_response_from_idempotency_row(
+                existing,
+                expected_payload_hash=request_payload_hash,
+            )
         preview = self.preview(PortfolioPreviewRequest(criteria=payload.criteria))
         household_summary = self._load_household_dedup_summary(payload)
         household_summary_dict = household_summary.model_dump()
@@ -741,11 +808,44 @@ class DatabricksPortfolioRepository:
             for variant in payload.message_variants
             if str(variant.get("body") or "").strip()
         ]
-        row = _get_lakebase_client().fetchone(
+        generation_modes = {
+            str(variant.get("generation_mode") or "operator") for variant in variant_rows
+        }
+        generator_labels = {
+            str(variant.get("generator_label") or "Operator edited") for variant in variant_rows
+        }
+        campaign_generation_mode = (
+            next(iter(generation_modes))
+            if len(generation_modes) == 1
+            else "mixed"
+            if generation_modes
+            else "operator"
+        )
+        campaign_generator_label = (
+            next(iter(generator_labels))
+            if len(generator_labels) == 1
+            else "Multiple generators"
+            if generator_labels
+            else "Operator edited"
+        )
+        variant_provenance = [
+            {
+                "variant_name": variant["variant_name"],
+                "generation_mode": variant["generation_mode"],
+                "generator_label": variant["generator_label"],
+            }
+            for variant in variant_rows
+        ]
+        creation_response = {
+            "name": payload.name,
+            "marketable_population": preview.marketable_population,
+            "household_summary": household_summary_dict,
+        }
+        row = lakebase.fetchone(
             self._CAMPAIGN_INSERT_SQL,
             {
                 "name": payload.name,
-                "owner_email": actor or "unknown",
+                "owner_email": owner_email,
                 "criteria": json.dumps(payload.criteria.model_dump(exclude_none=True)),
                 "suppression_policy": json.dumps(payload.suppression_policy, sort_keys=True),
                 "message_variants": json.dumps(payload.message_variants, sort_keys=True),
@@ -760,7 +860,10 @@ class DatabricksPortfolioRepository:
                 "household_dedup": json.dumps(household_dedup_dict, sort_keys=True),
                 "household_summary": json.dumps(household_summary_dict, sort_keys=True),
                 "variant_rows": json.dumps(variant_rows, sort_keys=True),
-                "request_id": f"portfolio-create-{uuid.uuid4()}",
+                "idempotency_key": idempotency_key,
+                "request_payload_hash": request_payload_hash,
+                "creation_response": json.dumps(creation_response, sort_keys=True),
+                "request_id": idempotency_key,
                 "correlation_id": get_correlation_id(),
                 "metadata": json.dumps(
                     build_safe_audit_metadata(
@@ -796,16 +899,9 @@ class DatabricksPortfolioRepository:
                                 household_summary.singleton_household_count
                             ),
                             "source_assets": household_summary.source_assets,
-                            "campaign_generation_mode": (
-                                str(variant_rows[0].get("generation_mode") or "operator")
-                                if variant_rows
-                                else "operator"
-                            ),
-                            "generator_label": (
-                                str(variant_rows[0].get("generator_label") or "Operator edited")
-                                if variant_rows
-                                else "Operator edited"
-                            ),
+                            "campaign_generation_mode": campaign_generation_mode,
+                            "generator_label": campaign_generator_label,
+                            "variant_provenance": variant_provenance,
                         },
                         action="portfolio.create",
                     ),
@@ -815,13 +911,35 @@ class DatabricksPortfolioRepository:
         )
         if row is None or not row.get("campaign_id"):
             raise LakebaseError("campaign insert returned no row")
-        campaign_id = str(row["campaign_id"])
+        return self._campaign_create_response_from_idempotency_row(
+            row,
+            expected_payload_hash=request_payload_hash,
+        )
+
+    def _campaign_create_response_from_idempotency_row(
+        self,
+        row: dict[str, Any],
+        *,
+        expected_payload_hash: str,
+    ) -> PortfolioCreateResponse:
+        stored_hash = str(row.get("request_payload_hash") or "")
+        if stored_hash != expected_payload_hash:
+            raise ValueError("Idempotency-Key already belongs to a different campaign payload")
+        response_data = self._json_value(row.get("creation_response"), {})
+        if not isinstance(response_data, dict):
+            raise LakebaseError("campaign idempotency record is missing its creation response")
+        campaign_id = str(row.get("campaign_id") or "")
+        if not campaign_id:
+            raise LakebaseError("campaign idempotency record is missing its campaign id")
+        household = HouseholdDedupSummary.model_validate(
+            response_data.get("household_summary") or {}
+        )
         return PortfolioCreateResponse(
             portfolio_id=campaign_id,
             campaign_id=campaign_id,
-            name=payload.name,
-            marketable_population=preview.marketable_population,
-            household_summary=household_summary,
+            name=str(response_data.get("name") or "Portfolio build"),
+            marketable_population=int(response_data.get("marketable_population") or 0),
+            household_summary=household,
             audit_event_id=str(row["audit_id"]) if row.get("audit_id") else None,
         )
 
@@ -1019,9 +1137,9 @@ def build_preview_predicates(
             clauses.append("origination_channel = :origination_channel")
             params["origination_channel"] = origination_channel.lower().replace(" ", "_")
 
-    equity_floor: int | None = None
+    equity_floor: float | int | None = None
     if criteria.min_equity_pct is not None:
-        equity_floor = int(criteria.min_equity_pct)
+        equity_floor = criteria.min_equity_pct
     elif criteria.min_equity_pct_label:
         equity_floor = equity_thresholds.get(criteria.min_equity_pct_label)
     if equity_floor is not None and equity_floor > 0:

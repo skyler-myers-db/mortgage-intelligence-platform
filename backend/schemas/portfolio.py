@@ -780,6 +780,8 @@ class PortfolioCreateRequest(BaseModel):
                 channel_key = str(channel).strip()
                 if channel_key not in _OUTREACH_CHANNELS:
                     raise ValueError("roi_assumptions.cost_per_contact_usd uses unknown channel")
+                if amount is None:
+                    continue
                 try:
                     numeric = float(amount)
                 except (TypeError, ValueError) as exc:

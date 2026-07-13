@@ -58,9 +58,15 @@ def test_recommendation_adds_only_sample_qualified_observed_performance() -> Non
 
     assert result.performance_status == "qualified"
     evidence = {row.label: row.value for row in result.evidence}
-    assert evidence["Team 90-day reached to application start"] == "20 / 80 unique reached"
-    assert evidence["Team 90-day application to submitted"] == "12 / 20 application starts"
-    assert evidence["Team 90-day submitted to funded"] == "3 / 12 submitted"
+    assert (
+        evidence["Team 90-day same-borrower reached to application start"]
+        == "20 / 80 unique reached"
+    )
+    assert (
+        evidence["Team 90-day same-borrower application to submitted"]
+        == "12 / 20 application starts"
+    )
+    assert evidence["Team 90-day same-borrower submitted to funded"] == "3 / 12 submitted"
 
     insufficient = recommend_campaign(
         _preview(),

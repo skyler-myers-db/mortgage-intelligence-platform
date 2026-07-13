@@ -93,3 +93,38 @@ def test_notification_intelligence_rejects_model_controlled_counts_routes_and_pr
     assert result.generation_mode == "governed_fallback"
     assert "999" not in result.slack_context
     assert "/lead-queue" not in result.slack_context
+
+
+class _UnsafeIdentityApiClient(_ApiClient):
+    def do(self, method: str, path: str, *, body: dict[str, object]):
+        response = super().do(method, path, body=body)
+        response["output"][0]["content"][0]["text"] = """{
+          "slack_context": "Contact john smith for the operating review",
+          "teams_summary": "Senior citizens are the priority audience for this review",
+          "operator_action": "Review the queue and assign the next owner",
+          "strategy_summary": "Prioritize source of income for the operating review"
+        }"""
+        return response
+
+
+def test_notification_intelligence_fails_closed_on_names_and_protected_targeting() -> None:
+    client = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_UnsafeIdentityApiClient(),
+    )
+    result = recommend_notification_intelligence(
+        monitor_name="Daily Refi Watch",
+        workflow_id="daily_refi_brief",
+        settings=Settings(
+            mip_agent_orchestrator=True,
+            mip_agent_serving_endpoint="mip-supervisor",
+            mip_agent_supervisor_id="supervisor-id",
+        ),
+        serving_client=client,
+    )
+
+    assert result.generation_mode == "governed_fallback"
+    rendered = " ".join((result.slack_context, result.teams_summary, result.strategy_summary)).lower()
+    assert "john smith" not in rendered
+    assert "senior citizen" not in rendered
+    assert "source of income" not in rendered

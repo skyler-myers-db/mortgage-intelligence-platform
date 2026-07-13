@@ -141,7 +141,7 @@ describe('portfolio campaign config', () => {
     expect(config.holdout).toMatchObject({ method: 'hash_modulo', size_pct: 10 });
     expect(config.roi_assumptions).toMatchObject({
       budget_usd: null,
-      cost_per_contact_usd: { email: null, sms: null, direct_mail: null },
+      cost_per_contact_usd: {},
       source: 'operator_configured',
     });
     expect(config.household_dedup).toEqual({
@@ -161,6 +161,19 @@ describe('portfolio campaign config', () => {
         generator_label: 'Operator edited',
       }),
     ]);
+  });
+
+  it('persists only channel costs that the operator actually configured', () => {
+    const config = buildCampaignConfig({
+      ...DEFAULT_CAMPAIGN_SETUP,
+      emailCost: '1.25',
+      smsCost: '',
+      mailCost: '0.86',
+    });
+
+    expect(config.roi_assumptions).toMatchObject({
+      cost_per_contact_usd: { email: 1.25, direct_mail: 0.86 },
+    });
   });
 
   it('persists the applied campaign-intelligence provenance on every variant', () => {

@@ -102,7 +102,13 @@ class PortfolioRepository(Protocol):
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         ...
 
-    def create(self, payload: PortfolioCreateRequest, *, actor: str | None = None) -> PortfolioCreateResponse:
+    def create(
+        self,
+        payload: PortfolioCreateRequest,
+        *,
+        actor: str | None = None,
+        idempotency_key: str,
+    ) -> PortfolioCreateResponse:
         ...
 
     def get(self, portfolio_id: str) -> dict[str, object]:

@@ -85,12 +85,43 @@ class _StubLakebase:
     def __init__(self) -> None:
         self.rows: list[dict[str, object]] = []
 
-    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         self.rows.append({"sql": sql, "params": params or {}})
+        if "WITH inserted_campaign AS" not in sql and "FROM mip_app.campaigns c" in sql:
+            return None
         return {
             "campaign_id": "11111111-1111-1111-1111-111111111111",
             "audit_id": "22222222-2222-2222-2222-222222222222",
+            "request_payload_hash": (params or {}).get("request_payload_hash"),
+            "creation_response": json.loads(str((params or {}).get("creation_response") or "{}")),
         }
+
+
+class _IdempotentCampaignLakebase:
+    """Stateful campaign store that models the production unique key."""
+
+    def __init__(self) -> None:
+        self.stored: dict[str, Any] | None = None
+        self.insert_calls = 0
+        self.lookup_calls = 0
+
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
+        values = params or {}
+        if "WITH inserted_campaign AS" in sql:
+            self.insert_calls += 1
+            assert self.stored is None
+            self.stored = {
+                "campaign_id": "11111111-1111-4111-8111-111111111111",
+                "audit_id": "22222222-2222-4222-8222-222222222222",
+                "request_payload_hash": values["request_payload_hash"],
+                "creation_response": json.loads(str(values["creation_response"])),
+                "created": True,
+            }
+            return dict(self.stored)
+        if "FROM mip_app.campaigns c" in sql:
+            self.lookup_calls += 1
+            return dict(self.stored) if self.stored is not None else None
+        raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
 
 
 class _CampaignListLakebase:
@@ -526,7 +557,8 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
         PortfolioCreateRequest(
             name="Owner occupied",
             criteria=PortfolioCriteria(occupancy="Owner-occupied", min_equity_pct_label="≥ 25%"),
-        )
+        ),
+        idempotency_key="11111111-1111-4111-8111-111111111113",
     )
 
     preview_index = next(
@@ -539,12 +571,13 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     assert "marketing_eligible = TRUE" in preview_sql
     assert preview_params == {"equity_floor": 25}
     assert lakebase.rows
-    assert "mip_app.action_audit" in lakebase.rows[0]["sql"]
-    assert lakebase.rows[0]["params"]["criteria"] == (
+    write = next(row for row in lakebase.rows if "INSERT INTO mip_app.campaigns" in str(row["sql"]))
+    assert "mip_app.action_audit" in write["sql"]
+    assert write["params"]["criteria"] == (
         '{"occupancy": "Owner-occupied", "marketing_eligibility": "Eligible only", '
         '"min_equity_pct_label": "\\u2265 25%"}'
     )
-    metadata = json.loads(str(lakebase.rows[0]["params"]["metadata"]))
+    metadata = json.loads(str(write["params"]["metadata"]))
     assert metadata["source"] == "portfolio_builder"
     assert metadata["portfolio_criteria"] == {
         "occupancy": "Owner-occupied",
@@ -594,11 +627,12 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
                     "generator_label": "Supervisor-generated recommendation",
                 },
             ],
-        )
+        ),
+        idempotency_key="11111111-1111-4111-8111-111111111114",
     )
 
-    assert len(lakebase.rows) == 1
-    write = lakebase.rows[0]
+    assert len(lakebase.rows) == 2
+    write = next(row for row in lakebase.rows if "INSERT INTO mip_app.campaigns" in str(row["sql"]))
     sql = str(write["sql"])
     assert "WITH inserted_campaign AS" in sql
     assert "inserted_audit AS" in sql
@@ -615,6 +649,104 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     metadata = json.loads(str(params["metadata"]))
     assert metadata["campaign_generation_mode"] == "supervisor"
     assert metadata["generator_label"] == "Supervisor-generated recommendation"
+
+
+def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _StubLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    repo.create(
+        PortfolioCreateRequest(
+            name="Reviewed mixed campaign",
+            message_variants=[
+                {
+                    "variant_name": "A",
+                    "channel": "email",
+                    "body": "Compare your current mortgage options with a loan officer.",
+                    "generation_mode": "supervisor",
+                    "generator_label": "Supervisor-generated recommendation",
+                },
+                {
+                    "variant_name": "B",
+                    "channel": "email",
+                    "body": "Schedule a review of the mortgage options available to you.",
+                    "generation_mode": "operator",
+                    "generator_label": "Operator edited",
+                },
+            ],
+        ),
+        idempotency_key="11111111-1111-4111-8111-111111111117",
+    )
+
+    write = next(row for row in lakebase.rows if "INSERT INTO mip_app.campaigns" in str(row["sql"]))
+    metadata = json.loads(str(write["params"]["metadata"]))
+    assert metadata["campaign_generation_mode"] == "mixed"
+    assert metadata["generator_label"] == "Multiple generators"
+    assert metadata["variant_provenance"] == [
+        {
+            "generation_mode": "supervisor",
+            "generator_label": "Supervisor-generated recommendation",
+            "variant_name": "A",
+        },
+        {
+            "generation_mode": "operator",
+            "generator_label": "Operator edited",
+            "variant_name": "B",
+        },
+    ]
+
+
+def test_create_replays_same_request_without_second_campaign_or_audit(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _IdempotentCampaignLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    payload = PortfolioCreateRequest(name="Illinois refinance review")
+    key = "11111111-1111-4111-8111-111111111115"
+
+    first = repo.create(payload, actor="manager@example.com", idempotency_key=key)
+    preview_calls_after_first = client.preview_calls
+    second = repo.create(payload, actor="manager@example.com", idempotency_key=key)
+
+    assert second == first
+    assert lakebase.insert_calls == 1
+    assert lakebase.lookup_calls == 2
+    assert client.preview_calls == preview_calls_after_first
+
+
+def test_create_rejects_same_request_for_different_campaign_without_write(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _IdempotentCampaignLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    key = "11111111-1111-4111-8111-111111111116"
+    repo.create(
+        PortfolioCreateRequest(name="Illinois refinance review"),
+        actor="manager@example.com",
+        idempotency_key=key,
+    )
+    preview_calls_after_first = client.preview_calls
+
+    with pytest.raises(ValueError, match="different campaign payload"):
+        repo.create(
+            PortfolioCreateRequest(name="Texas refinance review"),
+            actor="manager@example.com",
+            idempotency_key=key,
+        )
+
+    assert lakebase.insert_calls == 1
+    assert client.preview_calls == preview_calls_after_first
 
 
 @pytest.mark.parametrize(

@@ -69,6 +69,7 @@ _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Equity",
         "Former",
         "Home",
+        "HELOC",
         "Investor",
         "Loan",
         "Mortgage",
@@ -88,6 +89,7 @@ _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST: frozenset[str] = frozenset(
         "Weekly",
     }
 )
+_PUBLIC_LABEL_SUFFIXES = frozenset({"brief", "campaign", "monitor", "watch"})
 
 
 def validate_public_borrower_id(value: str) -> str:
@@ -172,6 +174,11 @@ def validate_public_campaign_label(value: str, *, field_name: str = "variant_nam
         if words and all(word in _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST for word in words):
             continue
         raise ValueError(f"{field_name} must not contain human-name-shaped text")
+    words = re.findall(r"[A-Za-z]{2,30}", name_scan)
+    if len(words) == 3 and words[-1].casefold() in _PUBLIC_LABEL_SUFFIXES:
+        allowed_words = {word.casefold() for word in _PUBLIC_CAMPAIGN_LABEL_WORD_ALLOWLIST}
+        if all(word.casefold() not in allowed_words for word in words[:2]):
+            raise ValueError(f"{field_name} must not contain human-name-shaped text")
     return label
 
 

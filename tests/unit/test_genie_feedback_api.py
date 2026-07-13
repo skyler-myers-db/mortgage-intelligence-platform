@@ -259,7 +259,7 @@ def test_feedback_maps_false_to_native_negative() -> None:
     assert genie.ratings[0][2] == "NEGATIVE"
 
 
-def test_optional_comment_is_not_stored_and_posts_only_after_rating_durability() -> None:
+def test_free_text_feedback_is_rejected_without_echo_or_side_effect() -> None:
     lakebase = _FakeLakebase()
     genie = _FakeGenie(lakebase)
     _install(lakebase, genie)
@@ -271,22 +271,22 @@ def test_optional_comment_is_not_stored_and_posts_only_after_rating_durability()
         headers=_feedback_headers(),
     )
 
-    assert response.status_code == 200, response.text
-    assert len(genie.comments) == 1
-    assert genie.comments[0][2] == f"MIP feedback: helpful - {note}"
-    assert lakebase.order.index("succeeded") < lakebase.order.index("comment")
+    assert response.status_code == 422, response.text
+    assert note not in response.text
+    assert genie.ratings == []
+    assert genie.comments == []
     serialized_state = json.dumps(list(lakebase.intents.values()), default=str)
     serialized_audit = json.dumps(lakebase.audit_events, default=str)
     assert note not in serialized_state
     assert note not in serialized_audit
-    assert _single_intent(lakebase)["comment_present"] is True
+    assert lakebase.intents == {}
 
 
 def test_same_request_id_retry_returns_prior_result_without_second_side_effect() -> None:
     lakebase = _FakeLakebase()
     genie = _FakeGenie(lakebase)
     _install(lakebase, genie)
-    payload = _body(comment="useful grouping")
+    payload = _body()
 
     first = client.post("/api/genie/feedback", json=payload, headers=_feedback_headers())
     second = client.post("/api/genie/feedback", json=payload, headers=_feedback_headers())
@@ -294,7 +294,7 @@ def test_same_request_id_retry_returns_prior_result_without_second_side_effect()
     assert first.status_code == second.status_code == 200
     assert first.json()["audit_event_id"] == second.json()["audit_event_id"]
     assert len(genie.ratings) == 1
-    assert len(genie.comments) == 1
+    assert genie.comments == []
     assert len(lakebase.audit_events) == 2
 
 
@@ -444,7 +444,7 @@ def test_feedback_requires_json_content_type() -> None:
     assert lakebase.intents == {}
 
 
-def test_comment_failure_does_not_undo_durable_native_rating() -> None:
+def test_free_text_rejection_precedes_native_comment_client() -> None:
     lakebase = _FakeLakebase()
     genie = _FakeGenie(lakebase, comment_raises=True)
     _install(lakebase, genie)
@@ -455,6 +455,7 @@ def test_comment_failure_does_not_undo_durable_native_rating() -> None:
         headers=_feedback_headers(),
     )
 
-    assert response.status_code == 200, response.text
-    assert len(genie.ratings) == 1
-    assert _single_intent(lakebase)["status"] == "SUCCEEDED"
+    assert response.status_code == 422, response.text
+    assert genie.ratings == []
+    assert genie.comments == []
+    assert lakebase.intents == {}

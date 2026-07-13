@@ -32,6 +32,10 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
+from backend.schemas.portfolio_campaign import (
+    assert_borrower_campaign_copy,
+    assert_public_campaign_text,
+)
 from backend.services.audit_decision_inputs import decision_inputs_from_borrower
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.audit_store import (
@@ -515,6 +519,16 @@ def _assert_disclosure_backed_draft_body(
         )
     try:
         assert_no_protected_class_marketing_text(body, field_name="approved draft_body")
+        borrower_copy = body.replace(disclosure_body, " ").strip()
+        assert_public_campaign_text(
+            borrower_copy,
+            field_name="approved draft_body",
+            max_length=5000,
+        )
+        assert_borrower_campaign_copy(
+            borrower_copy,
+            field_name="approved draft text",
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     if channel == "sms" and len(body) > 160:

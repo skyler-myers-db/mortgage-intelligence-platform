@@ -2721,6 +2721,9 @@ a.lineage-node__chip:focus-visible {
 .growth-agent-card__copy {
   margin: 0;
 }
+.growth-agent-card__copy--structured {
+  white-space: pre-wrap;
+}
 .growth-agent-card__proof {
   display: flex;
   flex-direction: column;
@@ -4750,9 +4753,9 @@ a.lineage-node__chip:focus-visible {
   line-height: var(--lh-body);
 }
 
-/* Answer feedback — thumbs up/down + optional short comment. Subtle, muted.
+/* Answer feedback — thumbs up/down only. Subtle, muted.
    The vote buttons reuse the .btn / .btn--ghost / .btn--sm primitive; only
-   the layout + comment box + confirmation tone are new here. */
+   the layout and confirmation tone are new here. */
 .genie-feedback,
 .genie-feedback--done {
   margin-top: var(--sp-3); padding-top: var(--sp-3);
@@ -4766,15 +4769,6 @@ a.lineage-node__chip:focus-visible {
 .genie-feedback__done-label,
 .genie-feedback__error { font-size: var(--fs-11); color: var(--text-3); }
 .genie-feedback__error { color: var(--signal-danger); }
-.genie-feedback__comment {
-  width: 100%; resize: vertical; padding: var(--sp-2);
-  font-family: var(--font-sans); font-size: var(--fs-12);
-  color: var(--text-1); background: var(--bg-0);
-  border: 1px solid var(--line-1); border-radius: var(--r-md);
-  line-height: var(--lh-snug);
-}
-.genie-feedback__comment:focus { outline: none; border-color: var(--accent); }
-
 /* Top-level Genie reasoning (Public Preview) in the proof drawer. Collapsed
    by default (native <details>); rows reuse .genie-proof__trace-* styling, so
    only the summary affordance + the extra-muted content tone are new here. */

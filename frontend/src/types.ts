@@ -894,3 +894,4 @@ export type * from './types/loanOfficer';
 export type * from './types/lineage';
 export type * from './types/economicsScatter';
 export type * from './types/approvalFunnel';
+export type * from './types/campaignPerformance';

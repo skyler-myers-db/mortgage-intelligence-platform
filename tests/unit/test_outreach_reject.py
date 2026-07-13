@@ -682,6 +682,46 @@ def test_approve_rejects_protected_class_language_before_write(
     assert audit.list(limit=5) == []
 
 
+@pytest.mark.parametrize(
+    "unsafe_copy",
+    [
+        "You are pre-approved. Review your options today.",
+        "Ask about our best rate. Schedule a review.",
+        "Act now before this limited-time opportunity expires. Call today.",
+        "Senior citizens should contact us for a review.",
+        "We prioritize borrowers by source of income. Schedule a review.",
+        "Contact John Smith to discuss your options.",
+        "contact john smith to discuss your options.",
+        "CONTACT JOHN SMITH to discuss your options.",
+    ],
+)
+def test_approve_rejects_unsupported_or_identity_shaped_borrower_copy_before_write(
+    unsafe_copy: str,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    response = TestClient(app).post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "draft_body": f"{unsafe_copy} {DISCLOSURE_BODY}",
+        },
+    )
+
+    assert response.status_code == 422, response.text
+    assert audit.list(limit=5) == []
+
+
 # ---------------------------------------------------------------------------
 # R5-01 idempotency contract
 # ---------------------------------------------------------------------------
