@@ -243,6 +243,18 @@ describe('Equity versus rate spread score-band legend', () => {
         key: 'End', bubbles: true,
       })));
       expect(document.activeElement).toBe(markers[1]);
+      act(() => markers[1].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowLeft', bubbles: true,
+      })));
+      expect(document.activeElement).toBe(markers[0]);
+      act(() => markers[0].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowUp', bubbles: true,
+      })));
+      expect(document.activeElement).toBe(markers[1]);
+      act(() => markers[1].dispatchEvent(new KeyboardEvent('keydown', {
+        key: 'ArrowDown', bubbles: true,
+      })));
+      expect(document.activeElement).toBe(markers[0]);
     } finally {
       act(() => root.unmount());
       container.remove();
