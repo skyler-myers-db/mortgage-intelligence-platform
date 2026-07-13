@@ -142,23 +142,49 @@ ORDER BY actor_email ASC, updated_at ASC
 LIMIT %(limit)s
 """
 
-NOTIFICATION_DRAFT_UPSERT_SQL = """
+NOTIFICATION_DRAFT_INSERT_SQL = """
 INSERT INTO mip_app.growth_agent_notification_drafts (
   actor_email, monitor_id, run_id, channel, title, body, generation_mode,
-  generator_label, strategy_summary, request_id, updated_at
+  generator_label, strategy_summary, request_id, intent_payload, intent_hash, updated_at
 ) VALUES (
   %(actor_email)s, %(monitor_id)s, %(run_id)s, %(channel)s, %(title)s, %(body)s,
-  %(generation_mode)s, %(generator_label)s, %(strategy_summary)s, %(request_id)s, now()
+  %(generation_mode)s, %(generator_label)s, %(strategy_summary)s, %(request_id)s,
+  %(intent_payload)s, %(intent_hash)s, now()
 )
-ON CONFLICT (actor_email, monitor_id, run_id, channel) WHERE status = 'draft'
-DO UPDATE SET
-  title = EXCLUDED.title,
-  body = EXCLUDED.body,
-  generation_mode = EXCLUDED.generation_mode,
-  generator_label = EXCLUDED.generator_label,
-  strategy_summary = EXCLUDED.strategy_summary,
-  request_id = COALESCE(EXCLUDED.request_id, mip_app.growth_agent_notification_drafts.request_id),
-  updated_at = now()
+ON CONFLICT DO NOTHING
 RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body,
-          generation_mode, generator_label, strategy_summary, status, created_at, updated_at
+          generation_mode, generator_label, strategy_summary, status, request_id,
+          intent_payload, intent_hash, audit_event_id, created_at, updated_at
+"""
+
+NOTIFICATION_DRAFT_SELECT_BY_REQUEST_ID_SQL = """
+SELECT draft_id, actor_email, monitor_id, run_id, channel, title, body,
+       generation_mode, generator_label, strategy_summary, status, request_id,
+       intent_payload, intent_hash, audit_event_id, created_at, updated_at
+FROM mip_app.growth_agent_notification_drafts
+WHERE request_id = %(request_id)s
+LIMIT 1
+"""
+
+NOTIFICATION_DRAFT_SELECT_ACTIVE_SQL = """
+SELECT draft_id, actor_email, monitor_id, run_id, channel, title, body,
+       generation_mode, generator_label, strategy_summary, status, request_id,
+       intent_payload, intent_hash, audit_event_id, created_at, updated_at
+FROM mip_app.growth_agent_notification_drafts
+WHERE actor_email = %(actor_email)s
+  AND monitor_id = %(monitor_id)s
+  AND run_id = %(run_id)s
+  AND channel = %(channel)s
+  AND status = 'draft'
+LIMIT 1
+"""
+
+NOTIFICATION_DRAFT_ATTACH_AUDIT_SQL = """
+UPDATE mip_app.growth_agent_notification_drafts
+SET audit_event_id = %(audit_event_id)s
+WHERE draft_id = %(draft_id)s
+  AND audit_event_id IS NULL
+RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body,
+          generation_mode, generator_label, strategy_summary, status, request_id,
+          intent_payload, intent_hash, audit_event_id, created_at, updated_at
 """

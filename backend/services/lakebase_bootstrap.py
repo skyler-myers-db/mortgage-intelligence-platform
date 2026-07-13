@@ -63,6 +63,10 @@ log = logging.getLogger(__name__)
 # the migration without re-running the whole schema.sql.
 _APPROVAL_REQUEST_ID_DDL: tuple[str, ...] = (
     "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS request_id TEXT",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS decision_intent TEXT",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS decision_payload_hash TEXT",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS decision_response JSONB",
+    "ALTER TABLE mip_app.approvals ADD COLUMN IF NOT EXISTS audit_event_id UUID",
     (
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id "
         "ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL"
@@ -77,6 +81,34 @@ SELECT
       AND table_name = 'approvals'
       AND column_name = 'request_id'
   ) AS has_request_id_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'decision_intent'
+  ) AS has_decision_intent_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'decision_payload_hash'
+  ) AS has_decision_payload_hash_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'decision_response'
+  ) AS has_decision_response_column,
+  EXISTS (
+    SELECT 1
+    FROM information_schema.columns
+    WHERE table_schema = 'mip_app'
+      AND table_name = 'approvals'
+      AND column_name = 'audit_event_id'
+  ) AS has_audit_event_id_column,
   EXISTS (
     SELECT 1
     FROM pg_indexes
@@ -682,8 +714,13 @@ def _approval_request_id_already_applied(client: LakebaseClient) -> bool:
     row = fetchone(_APPROVAL_REQUEST_ID_PREFLIGHT_SQL)
     if not row:
         return False
-    return bool(row.get("has_request_id_column")) and bool(
-        row.get("has_request_id_index")
+    return (
+        bool(row.get("has_request_id_column"))
+        and bool(row.get("has_decision_intent_column"))
+        and bool(row.get("has_decision_payload_hash_column"))
+        and bool(row.get("has_decision_response_column"))
+        and bool(row.get("has_audit_event_id_column"))
+        and bool(row.get("has_request_id_index"))
     )
 
 

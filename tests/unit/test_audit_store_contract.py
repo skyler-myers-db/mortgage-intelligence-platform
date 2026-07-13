@@ -154,7 +154,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     "patch_portfolio": ("repo.patch_status(",),
     "patch_campaign": ("repo.patch_status(",),
     "recommend_offer": ("audit.write(",),
-    "draft_outreach": ("_safe_audit_write",),
+    "draft_outreach": ("_persist_generated_outreach_draft(",),
     "approve_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
     "reject_outreach": ("_commit_outreach_decision_atomic(", "audit.write("),
     "assign_lead": ("store.assign_lead(",),

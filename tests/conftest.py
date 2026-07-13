@@ -206,6 +206,7 @@ class _FakeLakebaseClient:
             },
         ]
         self.approvals: list[dict[str, Any]] = []
+        self.generated_outreach_drafts: list[dict[str, Any]] = []
         self.audit_events: list[dict[str, Any]] = []
         # S6 assignment outcomes reuse the feedback table pattern.
         self.feedback: list[dict[str, Any]] = []
@@ -241,8 +242,19 @@ class _FakeLakebaseClient:
                     "request_id": params.get("request_id"),
                     "assigned_to_email": params.get("assigned_to_email"),
                     "follow_up_at": params.get("follow_up_at"),
+                    "decision_intent": params.get("decision_intent"),
+                    "decision_payload_hash": params.get("decision_payload_hash"),
+                    "decision_response": None,
+                    "audit_event_id": None,
                 }
             )
+        if "UPDATE mip_app.approvals" in sql and params:
+            for row in self.approvals:
+                if str(row["approval_id"]) == str(params.get("approval_id")):
+                    row["decision_response"] = json.loads(
+                        str(params.get("decision_response") or "{}")
+                    )
+                    row["audit_event_id"] = params.get("audit_event_id")
         if "UPDATE mip_app.call_dispositions" in sql and params:
             for row in self.dispositions:
                 if str(row["disposition_id"]) == str(params.get("disposition_id")):
@@ -256,6 +268,24 @@ class _FakeLakebaseClient:
         self, sql: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         self.fetchones.append((sql, params or {}))
+        if "INSERT INTO mip_app.generated_outreach_drafts" in sql:
+            values = params or {}
+            response_json = json.loads(str(values.get("response_json") or "{}"))
+            row = {
+                "generation_id": values["generation_id"],
+                "audit_event_id": values["audit_id"],
+                "response_hash": values["response_hash"],
+                "response_json": response_json,
+            }
+            self.generated_outreach_drafts.append({**values, **row})
+            self.audit_events.append(
+                {
+                    "audit_id": values["audit_id"],
+                    "event_at": datetime.now(UTC),
+                    **values,
+                }
+            )
+            return row
         if "FROM mip_app.sales_team" in sql:
             email = str((params or {}).get("email") or "").lower()
             for row in self.sales_team:

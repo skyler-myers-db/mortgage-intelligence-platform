@@ -4,7 +4,8 @@
 -- failure, and the frontend's ``_fetchWithRetry`` retries on 503. If the
 -- INSERT succeeded server-side but the HTTP response was lost, the
 -- retry wrote a second decision row (silent duplicate). This migration
--- adds a nullable ``request_id`` column + a partial unique index so a
+-- adds a nullable ``request_id`` column, canonical decision binding,
+-- exact first response, and a partial unique index so a
 -- re-POSTed approve/reject with the same caller-supplied request_id
 -- collides on the index and the router returns the existing decision
 -- instead of inserting a duplicate.
@@ -25,6 +26,18 @@
 
 ALTER TABLE mip_app.approvals
     ADD COLUMN IF NOT EXISTS request_id TEXT;
+
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_intent TEXT;
+
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_payload_hash TEXT;
+
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_response JSONB;
+
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS audit_event_id UUID;
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id
     ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL;

@@ -13,6 +13,8 @@ require any live network.
 """
 from __future__ import annotations
 
+import json
+
 from fastapi.testclient import TestClient
 
 from backend.main import app
@@ -95,7 +97,10 @@ def test_recommend_offer_emits_recommend_offer_audit_row() -> None:
 
 
 def test_draft_outreach_emits_draft_outreach_audit_row() -> None:
-    store = _clear_store()
+    _clear_store()
+    lakebase = _installed_lakebase()
+    lakebase.audit_events.clear()
+    lakebase.generated_outreach_drafts.clear()
 
     r = client.post(
         "/api/outreach/draft",
@@ -103,12 +108,14 @@ def test_draft_outreach_emits_draft_outreach_audit_row() -> None:
     )
     assert r.status_code == 200
 
-    events = store.list(limit=10)
-    drafts = [e for e in events if e.event_type == "DRAFT_OUTREACH"]
+    drafts = [e for e in lakebase.audit_events if e["event_type"] == "DRAFT_OUTREACH"]
     assert len(drafts) == 1
     e = drafts[0]
-    assert e.entity_type == "outreach_draft"
-    assert e.payload_json.get("channel") == "email"
+    assert e["entity_type"] == "outreach_draft"
+    assert json.loads(e["metadata"])["channel"] == "email"
+    assert len(lakebase.generated_outreach_drafts) == 1
+    assert lakebase.generated_outreach_drafts[0]["audit_event_id"] == e["audit_id"]
+    assert lakebase.generated_outreach_drafts[0]["response_json"] == r.json()
 
 
 def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:

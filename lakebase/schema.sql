@@ -252,6 +252,10 @@ CREATE TABLE IF NOT EXISTS mip_app.approvals (
     actor_email   TEXT NOT NULL,
     rationale     TEXT,
     request_id    TEXT,
+    decision_intent TEXT,
+    decision_payload_hash TEXT,
+    decision_response JSONB,
+    audit_event_id UUID,
     decided_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 -- R5-01 idempotency key: when the backend retries an approve/reject after
@@ -262,6 +266,14 @@ CREATE TABLE IF NOT EXISTS mip_app.approvals (
 -- the retry-safe guarantee).
 ALTER TABLE mip_app.approvals
     ADD COLUMN IF NOT EXISTS request_id TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_intent TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_payload_hash TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS decision_response JSONB;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS audit_event_id UUID;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id
     ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL;
 -- Feature C (loan-officer assignment + follow-up reminder): persist the
@@ -637,6 +649,49 @@ CREATE TRIGGER trg_action_audit_append_only
     FOR EACH STATEMENT
     EXECUTE FUNCTION mip_app.prevent_action_audit_mutation();
 
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'approvals_audit_event_id_fkey'
+          AND conrelid = 'mip_app.approvals'::regclass
+    ) THEN
+        ALTER TABLE mip_app.approvals
+            ADD CONSTRAINT approvals_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id);
+    END IF;
+END $$;
+
+-- Generated outreach proof ----------------------------------------------
+-- Each /outreach/draft response is committed with its exact approved-safe
+-- response JSON and audit id before it is returned. This remains separate
+-- from mutable workspace drafts so generation never overwrites operator work.
+CREATE TABLE IF NOT EXISTS mip_app.generated_outreach_drafts (
+    generation_id UUID PRIMARY KEY,
+    audit_event_id UUID NOT NULL UNIQUE REFERENCES mip_app.action_audit(audit_id),
+    actor_email    TEXT NOT NULL,
+    borrower_id    TEXT NOT NULL,
+    campaign_id    TEXT,
+    variant_name   TEXT,
+    channel        TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
+    offer_code     TEXT NOT NULL,
+    generation_mode TEXT NOT NULL CHECK (generation_mode IN ('supervisor','governed_fallback')),
+    response_hash  TEXT NOT NULL CHECK (response_hash ~ '^[0-9a-f]{64}$'),
+    response_json  JSONB NOT NULL,
+    created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_generated_outreach_drafts_actor_created
+    ON mip_app.generated_outreach_drafts (actor_email, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_generated_outreach_drafts_borrower_created
+    ON mip_app.generated_outreach_drafts (borrower_id, created_at DESC);
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_13_generated_outreach_draft_proof',
+    'Persist exact generated outreach responses and audit linkage before returning copy'
+)
+ON CONFLICT (version) DO NOTHING;
+
 -- Genie sessions ------------------------------------------------------
 -- Durable state for Databricks Genie conversations. These tables store
 -- conversation/message identifiers and proof metadata only; they do NOT
@@ -888,6 +943,9 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_notification_drafts (
     body           TEXT NOT NULL CHECK (length(body) BETWEEN 20 AND 2000),
     status         TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft','reviewed','cancelled')),
     request_id     TEXT,
+    intent_payload TEXT,
+    intent_hash    TEXT,
+    audit_event_id UUID REFERENCES mip_app.action_audit(audit_id),
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -898,6 +956,24 @@ ALTER TABLE mip_app.growth_agent_notification_drafts
     ADD COLUMN IF NOT EXISTS generator_label TEXT NOT NULL DEFAULT 'Governed notification framework';
 ALTER TABLE mip_app.growth_agent_notification_drafts
     ADD COLUMN IF NOT EXISTS strategy_summary TEXT NOT NULL DEFAULT 'Reviewed internal notification framing.';
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS intent_payload TEXT;
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS intent_hash TEXT;
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS audit_event_id UUID;
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'growth_agent_notification_drafts_audit_event_id_fkey'
+          AND conrelid = 'mip_app.growth_agent_notification_drafts'::regclass
+    ) THEN
+        ALTER TABLE mip_app.growth_agent_notification_drafts
+            ADD CONSTRAINT growth_agent_notification_drafts_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id);
+    END IF;
+END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_growth_agent_notification_drafts_request
     ON mip_app.growth_agent_notification_drafts (request_id)
     WHERE request_id IS NOT NULL;

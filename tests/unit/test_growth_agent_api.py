@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from threading import RLock
 from typing import Any
 from uuid import uuid4
 
@@ -18,10 +20,12 @@ import backend.services.rbac as rbac_module
 from backend.config.settings import Settings
 from backend.main import app
 from backend.schemas.agent_plan import ComposedPlan, PlanStep
+from backend.schemas.growth_agent import GrowthAgentMonitor
 from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_client import get_genie_client
 from backend.services.growth_agent_composer import ComposeOutcome
+from backend.services.growth_agent_drafts import create_notification_drafts
 from backend.services.growth_agent_workflows import custom_workflow
 from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
@@ -139,6 +143,7 @@ class _FakeLakebaseClient:
         self.monitors: list[dict[str, Any]] = []
         self.notification_drafts: list[dict[str, Any]] = []
         self.miss_next_run_select = False
+        self.transaction_lock = RLock()
 
     def fetchall(
         self,
@@ -167,11 +172,28 @@ class _FakeLakebaseClient:
 
     @contextmanager
     def transaction(self) -> Any:
-        yield _FakeConn(self)
+        with self.transaction_lock:
+            yield _FakeConn(self)
 
     def handle_execute(self, sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
         self.executes.append((sql, params))
         now = datetime.now(UTC)
+        if "FROM mip_app.growth_agent_notification_drafts" in sql:
+            if "WHERE request_id" in sql:
+                for row in self.notification_drafts:
+                    if row.get("request_id") == params.get("request_id"):
+                        return dict(row)
+                return None
+            for row in self.notification_drafts:
+                if (
+                    row["actor_email"] == params["actor_email"]
+                    and str(row["monitor_id"]) == str(params["monitor_id"])
+                    and str(row["run_id"]) == str(params["run_id"])
+                    and row["channel"] == params["channel"]
+                    and row.get("status") == "draft"
+                ):
+                    return dict(row)
+            return None
         if "FROM mip_app.growth_agent_runs" in sql and "WHERE actor_email" in sql:
             if self.miss_next_run_select:
                 self.miss_next_run_select = False
@@ -270,6 +292,15 @@ class _FakeLakebaseClient:
                         "created_at": row["created_at"],
                     }
             return None
+        if "UPDATE mip_app.growth_agent_notification_drafts" in sql:
+            for row in self.notification_drafts:
+                if str(row["draft_id"]) == str(params["draft_id"]) and not row.get(
+                    "audit_event_id"
+                ):
+                    row["audit_event_id"] = params["audit_event_id"]
+                    row["updated_at"] = now
+                    return dict(row)
+            return None
         if "UPDATE mip_app.growth_agent_monitors" in sql:
             for existing in self.monitors:
                 if (
@@ -335,15 +366,8 @@ class _FakeLakebaseClient:
                 if (
                     params.get("request_id") is not None
                     and existing.get("request_id") == params.get("request_id")
-                    and not (
-                        existing["actor_email"] == params["actor_email"]
-                        and str(existing["monitor_id"]) == str(params["monitor_id"])
-                        and str(existing["run_id"]) == str(params["run_id"])
-                        and existing["channel"] == params["channel"]
-                        and existing.get("status") == "draft"
-                    )
                 ):
-                    raise psycopg.errors.UniqueViolation("duplicate notification draft request_id")
+                    return None
             for existing in self.notification_drafts:
                 if (
                     existing["actor_email"] == params["actor_email"]
@@ -352,18 +376,7 @@ class _FakeLakebaseClient:
                     and existing["channel"] == params["channel"]
                     and existing.get("status") == "draft"
                 ):
-                    existing.update(
-                        {
-                            "title": params["title"],
-                            "body": params["body"],
-                            "generation_mode": params["generation_mode"],
-                            "generator_label": params["generator_label"],
-                            "strategy_summary": params["strategy_summary"],
-                            "request_id": params.get("request_id") or existing.get("request_id"),
-                            "updated_at": now,
-                        }
-                    )
-                    return dict(existing)
+                    return None
             row = {
                 "draft_id": uuid4(),
                 "actor_email": params["actor_email"],
@@ -377,6 +390,9 @@ class _FakeLakebaseClient:
                 "strategy_summary": params["strategy_summary"],
                 "status": "draft",
                 "request_id": params.get("request_id"),
+                "intent_payload": params["intent_payload"],
+                "intent_hash": params["intent_hash"],
+                "audit_event_id": None,
                 "created_at": now,
                 "updated_at": now,
             }
@@ -1332,6 +1348,106 @@ def test_growth_agent_monitor_notification_drafts_are_draft_only() -> None:
     assert metadata["actionable_total"] == 4349
     assert "body" not in metadata
     assert sql.calls == []
+
+
+def _notification_test_monitor() -> GrowthAgentMonitor:
+    return GrowthAgentMonitor(
+        monitor_id=str(uuid4()),
+        workflow_id="listing_watch",
+        name="Listed-for-Sale Purchase Watch",
+        cadence="weekly",
+        status="active",
+        criteria={"workflow_id": "listing_watch"},
+        route="/lead-queue?segment=listed&marketing_eligibility=Eligible+only",
+        actionable_total=4349,
+        source_assets=["mip.gold.borrower_360", "mip.gold.evidence_events"],
+        last_run_id=str(uuid4()),
+    )
+
+
+@pytest.mark.parametrize("status", ["draft", "reviewed", "cancelled"])
+def test_notification_request_replay_is_immutable_and_audit_idempotent(status: str) -> None:
+    lakebase = _FakeLakebaseClient()
+    monitor = _notification_test_monitor()
+    request_id = "55555555-5555-4555-8555-555555555555"
+    kwargs = {
+        "actor": "operator@example.com",
+        "monitor": monitor,
+        "run_id": str(monitor.last_run_id),
+        "route": monitor.route,
+        "actionable_total": monitor.actionable_total,
+        "channels": ["slack"],
+        "request_id": request_id,
+    }
+
+    first = create_notification_drafts(lakebase, **kwargs)
+    lakebase.notification_drafts[0]["status"] = status
+    replay = create_notification_drafts(lakebase, **kwargs)
+
+    assert len(first) == len(replay) == 1
+    assert replay[0].draft_id == first[0].draft_id
+    assert replay[0].title == first[0].title
+    assert replay[0].body == first[0].body
+    assert replay[0].strategy_summary == first[0].strategy_summary
+    assert replay[0].status == status
+    assert len(lakebase.notification_drafts) == 1
+    assert len(lakebase.audit_events) == 1
+
+
+def test_notification_request_id_mismatch_is_409_without_new_audit() -> None:
+    lakebase = _FakeLakebaseClient()
+    monitor = _notification_test_monitor()
+    request_id = "66666666-6666-4666-8666-666666666666"
+    create_notification_drafts(
+        lakebase,
+        actor="operator@example.com",
+        monitor=monitor,
+        run_id=str(monitor.last_run_id),
+        route=monitor.route,
+        actionable_total=monitor.actionable_total,
+        channels=["teams"],
+        request_id=request_id,
+    )
+    lakebase.notification_drafts[0]["status"] = "reviewed"
+
+    with pytest.raises(HTTPException) as exc_info:
+        create_notification_drafts(
+            lakebase,
+            actor="operator@example.com",
+            monitor=monitor,
+            run_id=str(monitor.last_run_id),
+            route=monitor.route,
+            actionable_total=monitor.actionable_total + 1,
+            channels=["teams"],
+            request_id=request_id,
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "different notification draft intent" in str(exc_info.value.detail)
+    assert len(lakebase.notification_drafts) == 1
+    assert len(lakebase.audit_events) == 1
+
+
+def test_concurrent_notification_replay_has_one_draft_and_one_audit() -> None:
+    lakebase = _FakeLakebaseClient()
+    monitor = _notification_test_monitor()
+    kwargs = {
+        "actor": "operator@example.com",
+        "monitor": monitor,
+        "run_id": str(monitor.last_run_id),
+        "route": monitor.route,
+        "actionable_total": monitor.actionable_total,
+        "channels": ["slack"],
+        "request_id": "77777777-7777-4777-8777-777777777777",
+    }
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: create_notification_drafts(lakebase, **kwargs), range(8)))
+
+    assert len({result[0].draft_id for result in results}) == 1
+    assert len({result[0].body for result in results}) == 1
+    assert len(lakebase.notification_drafts) == 1
+    assert len(lakebase.audit_events) == 1
 
 
 def test_growth_agent_monitor_rerun_falls_back_from_unsafe_legacy_name() -> None:

@@ -92,6 +92,36 @@ def _build_insert_params(
     return payload, params
 
 
+def build_audit_insert_params(
+    *,
+    actor: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    payload_json: dict[str, Any] | None = None,
+    evidence_ids: list[str] | None = None,
+    event_type: str | None = None,
+    subject_clip: str | None = None,
+    subject_segment: str | None = None,
+    request_id: str | None = None,
+) -> dict[str, Any]:
+    """Return validated Lakebase audit INSERT parameters for atomic CTE writes."""
+
+    _, params = _build_insert_params(
+        actor=actor,
+        action=action,
+        entity_type=entity_type,
+        entity_id=entity_id,
+        payload_json=payload_json,
+        evidence_ids=evidence_ids,
+        event_type=event_type,
+        subject_clip=subject_clip,
+        subject_segment=subject_segment,
+        request_id=request_id,
+    )
+    return params
+
+
 def _audit_event_from_row(
     row: dict[str, Any],
     *,
