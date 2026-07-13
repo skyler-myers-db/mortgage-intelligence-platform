@@ -217,10 +217,10 @@ describe('Equity versus rate spread score-band legend', () => {
   });
 
   it('keeps scatter loading height stable while reducing the chart height on narrow containers', () => {
-    const css = readFileSync(
+    const css = [
       join(process.cwd(), 'src', 'design-system', 'components.css'),
-      'utf8',
-    );
+      join(process.cwd(), 'src', 'routes', 'analytics.scatter.css'),
+    ].map((path) => readFileSync(path, 'utf8')).join('\n');
 
     expect(css).toMatch(/\.analytics-chart-panel--scatter\s*\{[^}]*min-height:/s);
     expect(css).toMatch(
