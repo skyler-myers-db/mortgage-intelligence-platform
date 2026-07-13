@@ -282,8 +282,6 @@ def _block_unsafe_genie_output(
     payload: GenieMessageRequest,
     response: GenieMessageResponse,
 ) -> GenieMessageResponse:
-    """Replace unsafe rendered output and record one non-PII policy event."""
-
     blocked = _policy_blocked_genie_output_response(payload, response)
     _required_audit_write(
         audit,
@@ -718,7 +716,6 @@ def genie_message(
                 response=sales_ops_response,
             )
             return _finalize_genie_response(lakebase, actor=actor, response=blocked)
-        _ = background
         _required_audit_write(
             audit,
             actor=actor,
@@ -863,7 +860,6 @@ def genie_message(
             response=result,  # type: ignore[arg-type]
         )
         return _finalize_genie_response(lakebase, actor=actor, response=blocked)
-    _ = background
     _required_audit_write(
         audit,
         actor=actor,
