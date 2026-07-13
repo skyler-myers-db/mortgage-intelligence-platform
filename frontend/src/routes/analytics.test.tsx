@@ -230,7 +230,7 @@ describe('analytics chart readability', () => {
       </MemoryRouter>,
     );
     expect(html).toContain(`the plotted points are the top ${(MAX_SCATTER_POINTS / 1000).toFixed(1)}K by opportunity score`);
-    expect(html).toContain(`${MAX_SCATTER_POINTS} borrowers at 42% equity and 88 bps spread`);
+    expect(html).toContain(`${many.length} borrowers at 42% equity and 88 bps spread`);
     expect(html).not.toContain('/borrower-360/B-0000000001249');
   });
 

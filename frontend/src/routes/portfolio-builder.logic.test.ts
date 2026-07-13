@@ -4,6 +4,7 @@ import {
   DEFAULT_CAMPAIGN_SETUP,
   buildDefaultCampaignSetup,
   buildCampaignConfig,
+  normalizeCampaignNumericValue,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
   buildSegmentIntelligenceUrlFromFilters,
@@ -114,6 +115,14 @@ describe('portfolio builder URL helpers', () => {
 });
 
 describe('portfolio campaign config', () => {
+  it('normalizes visible numeric controls to the same bounds used by saved config', () => {
+    expect(normalizeCampaignNumericValue('holdoutPct', '95')).toBe('50');
+    expect(normalizeCampaignNumericValue('holdoutPct', '-3')).toBe('0');
+    expect(normalizeCampaignNumericValue('holdoutPct', 'not-a-number')).toBe('10');
+    expect(normalizeCampaignNumericValue('budget', '')).toBe('');
+    expect(normalizeCampaignNumericValue('emailCost', '1001')).toBe('1000');
+  });
+
   it('does not seed generic copy or invented channel costs before intelligence loads', () => {
     const setup = buildDefaultCampaignSetup('Acme Mortgage');
 

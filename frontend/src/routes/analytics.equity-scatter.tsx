@@ -300,13 +300,16 @@ export function EquitySpreadBinsView({
 export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPointsResponse }) {
   const [openClusterKey, setOpenClusterKey] = useState<string | null>(null);
   const layout = zoomScatterLayout(payload.viewport);
-  // The server orders by opportunity score DESC and caps at point_cap; keep
-  // the plot responsive by selecting at most MAX_SCATTER_POINTS top-ranked
-  // borrowers. Exact-coordinate groups are progressively disclosed when
-  // opened so a dense cluster does not add thousands of hidden links to the
-  // initial DOM.
+  // The server orders by opportunity score DESC and caps at point_cap. Limit
+  // the number of displayed coordinates to those represented by the first
+  // MAX_SCATTER_POINTS rows, but aggregate every returned borrower sharing a
+  // displayed coordinate. This keeps the marker DOM bounded without showing
+  // an exact-looking cluster count that is only a client-side floor.
   const plotted = payload.points.slice(0, MAX_SCATTER_POINTS);
-  const coordinateGroups = groupExactCoordinatePoints(plotted);
+  const plottedCoordinates = new Set(plotted.map(pointCoordinateKey));
+  const coordinateGroups = groupExactCoordinatePoints(payload.points).filter(
+    (group) => plottedCoordinates.has(group.key),
+  );
   const meta = (
     <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
       Plotting {fmt(plotted.length)} of {fmt(payload.showing)} returned borrowers
@@ -315,7 +318,7 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
       {plotted.length < payload.points.length
         ? `; the plotted points are the top ${fmt(plotted.length)} by opportunity score across ${fmt(coordinateGroups.length)} coordinate markers`
         : ''}
-      . Single points open Borrower 360; numbered clusters reveal every plotted borrower at that coordinate.
+      . Single points open Borrower 360; numbered clusters reveal every returned borrower at each displayed coordinate.
     </p>
   );
   if (payload.points.length === 0) {

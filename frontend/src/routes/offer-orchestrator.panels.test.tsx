@@ -10,7 +10,11 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ setDrawer: vi.fn(), showEvidence: true }),
 }));
 
-import { OfferReviewGrid } from './offer-orchestrator.panels';
+import {
+  OfferOrchestratorEmptyState,
+  OfferReviewGrid,
+  RejectRationalePanel,
+} from './offer-orchestrator.panels';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -95,5 +99,148 @@ describe('OfferReviewGrid message intelligence', () => {
     );
     act(() => replace?.click());
     expect(regenerate).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders the no-borrower explanation without implying an offer already exists', () => {
+    act(() => root.render(
+      <MemoryRouter><OfferOrchestratorEmptyState /></MemoryRouter>,
+    ));
+
+    expect(container.textContent).toContain("What you'll see");
+    expect(container.textContent).toContain('keeps outreach in human review');
+    expect(container.textContent).not.toContain('recommended for this borrower');
+  });
+
+  it('requires text for Other rejection and preserves cancel and submit actions', () => {
+    const cancel = vi.fn();
+    const submit = vi.fn();
+    const renderPanel = (rationale: string) => act(() => root.render(
+      <MemoryRouter>
+        <RejectRationalePanel
+          reasonCode="other_with_text"
+          rationale={rationale}
+          onReasonChange={vi.fn()}
+          onRationaleChange={vi.fn()}
+          onCancel={cancel}
+          onSubmit={submit}
+        />
+      </MemoryRouter>,
+    ));
+
+    renderPanel('');
+    const confirm = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Confirm reject',
+    );
+    expect(confirm?.disabled).toBe(true);
+    const cancelButton = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Cancel',
+    );
+    act(() => cancelButton?.click());
+    expect(cancel).toHaveBeenCalledTimes(1);
+
+    renderPanel('Signal was not appropriate for this borrower.');
+    const enabledConfirm = [...container.querySelectorAll('button')].find(
+      (button) => button.textContent?.trim() === 'Confirm reject',
+    );
+    expect(enabledConfirm?.disabled).toBe(false);
+    act(() => enabledConfirm?.click());
+    expect(submit).toHaveBeenCalledTimes(1);
+  });
+
+  it('shows real warming progress and keeps the draft editor disabled', () => {
+    act(() => root.render(
+      <MemoryRouter>
+        <OfferReviewGrid
+          borrower={null}
+          borrowerId="B-WARMING"
+          recommendation={null}
+          productLabel="Loading offer"
+          leadIsSaved={false}
+          saveCurrentLead={vi.fn()}
+          draftWarming={{
+            dependency: 'warehouse',
+            label: 'Warehouse warming up',
+            attempt: 2,
+            maxAttempts: 6,
+            correlationId: 'corr-warming',
+          }}
+          draftLoaded={false}
+          draftError={null}
+          draftSubject=""
+          onDraftSubjectChange={vi.fn()}
+          draftText=""
+          onDraftChange={vi.fn()}
+          draftChannel="email"
+          onDraftChannelChange={vi.fn()}
+          approving={false}
+          draftDisclosureVersion={null}
+          draftDisclosureState={null}
+          draftGeneratorLabel={null}
+          draftGenerationMode={null}
+          draftStrategy={null}
+          draftEvidence={[]}
+          draftEvidenceAssets={[]}
+          regenerateDraft={vi.fn()}
+          draftIsSaved={false}
+          saveCurrentDraft={vi.fn()}
+          savedDraftExists={false}
+          resetCurrentDraft={vi.fn()}
+          draftReady={false}
+        />
+      </MemoryRouter>,
+    ));
+
+    expect(container.textContent).toContain('Warehouse warming up');
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled)
+      .toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Save outreach draft for B-WARMING"]')?.disabled)
+      .toBe(true);
+  });
+
+  it('surfaces a draft failure and prevents editing or saving stale copy', () => {
+    act(() => root.render(
+      <MemoryRouter>
+        <OfferReviewGrid
+          borrower={{ borrower_id: 'B-ERROR', opportunity_score: 80 } as never}
+          borrowerId="B-ERROR"
+          recommendation={null}
+          productLabel="Offer unavailable"
+          leadIsSaved={false}
+          saveCurrentLead={vi.fn()}
+          draftWarming={null}
+          draftLoaded={false}
+          draftError="The audited draft could not be loaded."
+          draftSubject="Do not edit"
+          onDraftSubjectChange={vi.fn()}
+          draftText="Do not send"
+          onDraftChange={vi.fn()}
+          draftChannel="email"
+          onDraftChannelChange={vi.fn()}
+          approving={false}
+          draftDisclosureVersion={null}
+          draftDisclosureState={null}
+          draftGeneratorLabel={null}
+          draftGenerationMode={null}
+          draftStrategy={null}
+          draftEvidence={[]}
+          draftEvidenceAssets={[]}
+          regenerateDraft={vi.fn()}
+          draftIsSaved={false}
+          saveCurrentDraft={vi.fn()}
+          savedDraftExists={false}
+          resetCurrentDraft={vi.fn()}
+          draftReady={false}
+        />
+      </MemoryRouter>,
+    ));
+
+    expect(container.querySelector('[data-testid="draft-unavailable-note"]')?.textContent)
+      .toContain('audited draft could not be loaded');
+    expect(container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.disabled)
+      .toBe(true);
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled)
+      .toBe(true);
+    expect(container.querySelector<HTMLButtonElement>('[aria-label="Save outreach draft for B-ERROR"]')?.disabled)
+      .toBe(true);
   });
 });

@@ -647,6 +647,10 @@ export default function PortfolioBuilder() {
         recommendationFetching={recommendationQuery.isFetching}
         canRecommend={Boolean(preview && preview.marketable_population > 0)}
         onFieldChange={setCampaignField}
+        onNumericFieldCommit={(key, value) => setCampaignSetup((current) => ({
+          ...current,
+          [key]: value,
+        }))}
         onToggleHouseholdDedup={toggleHouseholdDedup}
         onRegenerate={() => void recommendationQuery.refetch()}
         onApply={applyRecommendation}

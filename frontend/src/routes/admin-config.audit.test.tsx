@@ -174,6 +174,8 @@ describe('AdminConfig audit explorer', () => {
   it('expands a row into accessible forensic details from the audit event contract', async () => {
     await renderAdmin();
 
+    expect(document.getElementById('audit')).not.toBeNull();
+
     const expand = buttonByLabel(/^Expand audit event evt-8ecf7294$/);
     const detailId = expand.getAttribute('aria-controls');
     expect(expand.getAttribute('aria-expanded')).toBe('false');

@@ -88,6 +88,34 @@ export type CampaignSetupState = {
   generatorLabel: string;
 };
 
+export type CampaignNumericField = 'holdoutPct' | 'budget' | 'emailCost' | 'smsCost' | 'mailCost';
+
+export const CAMPAIGN_NUMERIC_BOUNDS: Record<CampaignNumericField, {
+  min: number;
+  max: number;
+  fallback: number | null;
+  step: number;
+}> = {
+  holdoutPct: { min: 0, max: 50, fallback: 10, step: 0.1 },
+  budget: { min: 0, max: 10_000_000, fallback: null, step: 1 },
+  emailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
+  smsCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
+  mailCost: { min: 0, max: 1_000, fallback: null, step: 0.01 },
+};
+
+export function normalizeCampaignNumericValue(
+  field: CampaignNumericField,
+  raw: string,
+): string {
+  const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
+  if (raw.trim() === '' && bounds.fallback === null) return '';
+  const parsed = Number(raw);
+  const value = Number.isFinite(parsed) ? parsed : bounds.fallback;
+  if (value === null) return '';
+  const bounded = Math.min(bounds.max, Math.max(bounds.min, value));
+  return String(Number(bounded.toFixed(2)));
+}
+
 export function buildDefaultCampaignSetup(
   _lenderName: string = DEFAULT_CAMPAIGN_LENDER_NAME,
 ): CampaignSetupState {
@@ -315,17 +343,17 @@ function boundedNumber(raw: string, fallback: number, min: number, max: number):
   return Math.min(max, Math.max(min, parsed));
 }
 
-function nullableMoney(raw: string): number | null {
+function nullableMoney(raw: string, max: number): number | null {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Number(parsed.toFixed(2));
+  return Number(Math.min(max, parsed).toFixed(2));
 }
 
 function configuredChannelCosts(setup: CampaignSetupState): Record<string, number> {
   const costs = {
-    email: nullableMoney(setup.emailCost),
-    sms: nullableMoney(setup.smsCost),
-    direct_mail: nullableMoney(setup.mailCost),
+    email: nullableMoney(setup.emailCost, CAMPAIGN_NUMERIC_BOUNDS.emailCost.max),
+    sms: nullableMoney(setup.smsCost, CAMPAIGN_NUMERIC_BOUNDS.smsCost.max),
+    direct_mail: nullableMoney(setup.mailCost, CAMPAIGN_NUMERIC_BOUNDS.mailCost.max),
   };
   return Object.fromEntries(
     Object.entries(costs).filter((entry): entry is [string, number] => entry[1] !== null),
@@ -377,7 +405,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
     },
     holdout: { method: 'hash_modulo', size_pct: holdoutPct },
     roi_assumptions: {
-      budget_usd: nullableMoney(setup.budget),
+      budget_usd: nullableMoney(setup.budget, CAMPAIGN_NUMERIC_BOUNDS.budget.max),
       cost_per_contact_usd: configuredChannelCosts(setup),
       source: 'operator_configured',
     },

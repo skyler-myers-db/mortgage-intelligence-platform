@@ -122,7 +122,7 @@ export function AdminAuditExplorer() {
   };
 
   return (
-    <div className="surface mt-grid">
+    <div className="surface mt-grid" id="audit">
       <div className="surface__hdr surface__hdr--split">
         <div>
           <div className="h-4">Audit explorer</div>

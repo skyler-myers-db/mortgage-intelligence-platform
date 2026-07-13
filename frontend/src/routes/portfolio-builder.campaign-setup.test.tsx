@@ -40,6 +40,7 @@ describe('CampaignSetupPanel', () => {
             recommendationFetching={false}
             canRecommend={false}
             onFieldChange={() => vi.fn()}
+            onNumericFieldCommit={vi.fn()}
             onToggleHouseholdDedup={vi.fn()}
             onRegenerate={vi.fn()}
             onApply={vi.fn()}
@@ -103,6 +104,7 @@ describe('CampaignSetupPanel', () => {
             recommendationFetching={false}
             canRecommend
             onFieldChange={() => vi.fn()}
+            onNumericFieldCommit={vi.fn()}
             onToggleHouseholdDedup={vi.fn()}
             onRegenerate={vi.fn()}
             onApply={apply}
@@ -154,6 +156,7 @@ describe('CampaignSetupPanel', () => {
             recommendationFetching={false}
             canRecommend
             onFieldChange={() => vi.fn()}
+            onNumericFieldCommit={vi.fn()}
             onToggleHouseholdDedup={vi.fn()}
             onRegenerate={vi.fn()}
             onApply={apply}
@@ -173,5 +176,33 @@ describe('CampaignSetupPanel', () => {
     ));
     act(() => replace?.click());
     expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits bounded numeric values on blur instead of silently saving another value', () => {
+    const commit = vi.fn();
+    const setup = { ...DEFAULT_CAMPAIGN_SETUP, holdoutPct: '95' };
+    act(() => {
+      root.render(
+        <MemoryRouter>
+          <CampaignSetupPanel
+            setup={setup}
+            recommendationPending={false}
+            recommendationError={false}
+            recommendationFetching={false}
+            canRecommend={false}
+            onFieldChange={() => vi.fn()}
+            onNumericFieldCommit={commit}
+            onToggleHouseholdDedup={vi.fn()}
+            onRegenerate={vi.fn()}
+            onApply={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+    });
+
+    const holdout = document.querySelector<HTMLInputElement>('input[aria-label="Holdout % (0-50)"]');
+    expect(holdout?.max).toBe('50');
+    act(() => holdout?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+    expect(commit).toHaveBeenCalledWith('holdoutPct', '50');
   });
 });

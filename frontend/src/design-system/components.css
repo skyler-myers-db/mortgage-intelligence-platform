@@ -3926,6 +3926,25 @@ a.lineage-node__chip:focus-visible {
   transition: filter var(--dur-base) var(--ease);
   filter: saturate(0.9);
 }
+.stable-refresh-status {
+  position: absolute;
+  inset-block-start: var(--sp-3);
+  inset-inline-end: var(--sp-4);
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  min-block-size: var(--sp-6);
+  padding: var(--sp-1) var(--sp-2);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-pill);
+  background: var(--bg-3);
+  color: var(--text-2);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  font-weight: 500;
+  box-shadow: var(--shadow-1);
+  pointer-events: none;
+}
 .stable-refresh-region--table.is-updating::before {
   content: attr(data-status);
   position: absolute;

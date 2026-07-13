@@ -4,7 +4,12 @@ import { Icon } from '../components/Icon';
 import { Button, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
-import type { CampaignSetupState } from './portfolio-builder.logic';
+import {
+  CAMPAIGN_NUMERIC_BOUNDS,
+  normalizeCampaignNumericValue,
+  type CampaignNumericField,
+  type CampaignSetupState,
+} from './portfolio-builder.logic';
 
 type CampaignField = Exclude<
   keyof CampaignSetupState,
@@ -19,6 +24,7 @@ export function CampaignSetupPanel({
   recommendationFetching,
   canRecommend,
   onFieldChange,
+  onNumericFieldCommit,
   onToggleHouseholdDedup,
   onRegenerate,
   onApply,
@@ -32,6 +38,7 @@ export function CampaignSetupPanel({
   onFieldChange: (
     key: CampaignField,
   ) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
+  onNumericFieldCommit: (key: CampaignNumericField, value: string) => void;
   onToggleHouseholdDedup: () => void;
   onRegenerate: () => void;
   onApply: () => void;
@@ -181,13 +188,13 @@ export function CampaignSetupPanel({
           <CampaignTextField label="Guidance-led subject" value={setup.subjectB} onChange={onFieldChange('subjectB')} maxLength={120} />
           <CampaignTextField label="Benefit-led message" value={setup.bodyA} onChange={onFieldChange('bodyA')} maxLength={700} multiline />
           <CampaignTextField label="Guidance-led message" value={setup.bodyB} onChange={onFieldChange('bodyB')} maxLength={700} multiline />
-          <CampaignTextField label="Holdout %" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} inputMode="decimal" />
+          <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} />
           <CampaignTextField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} type="time" />
           <CampaignTextField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} type="time" />
-          <CampaignTextField label="Budget" value={setup.budget} onChange={onFieldChange('budget')} inputMode="decimal" placeholder="optional" />
-          <CampaignTextField label="Email cost" value={setup.emailCost} onChange={onFieldChange('emailCost')} inputMode="decimal" />
-          <CampaignTextField label="SMS cost" value={setup.smsCost} onChange={onFieldChange('smsCost')} inputMode="decimal" />
-          <CampaignTextField label="Mail cost" value={setup.mailCost} onChange={onFieldChange('mailCost')} inputMode="decimal" />
+          <CampaignNumericFieldEditor label="Budget" field="budget" value={setup.budget} onChange={onFieldChange('budget')} onCommit={onNumericFieldCommit} placeholder="optional" />
+          <CampaignNumericFieldEditor label="Email cost" field="emailCost" value={setup.emailCost} onChange={onFieldChange('emailCost')} onCommit={onNumericFieldCommit} />
+          <CampaignNumericFieldEditor label="SMS cost" field="smsCost" value={setup.smsCost} onChange={onFieldChange('smsCost')} onCommit={onNumericFieldCommit} />
+          <CampaignNumericFieldEditor label="Mail cost" field="mailCost" value={setup.mailCost} onChange={onFieldChange('mailCost')} onCommit={onNumericFieldCommit} />
           <div className="campaign-setup__field campaign-setup__field--wide">
             <div className="campaign-setup__toggle">
               <div className="campaign-setup__toggle-copy">
@@ -217,6 +224,38 @@ export function CampaignSetupPanel({
   );
 }
 
+function CampaignNumericFieldEditor({
+  label,
+  field,
+  value,
+  onChange,
+  onCommit,
+  placeholder,
+}: {
+  label: string;
+  field: CampaignNumericField;
+  value: string;
+  onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
+  onCommit: (field: CampaignNumericField, value: string) => void;
+  placeholder?: string;
+}) {
+  const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
+  return (
+    <CampaignTextField
+      label={label}
+      value={value}
+      onChange={onChange}
+      onCommit={(raw) => onCommit(field, normalizeCampaignNumericValue(field, raw))}
+      type="number"
+      inputMode="decimal"
+      min={bounds.min}
+      max={bounds.max}
+      step={bounds.step}
+      placeholder={placeholder}
+    />
+  );
+}
+
 function CampaignTextField({
   label,
   value,
@@ -226,6 +265,10 @@ function CampaignTextField({
   type,
   inputMode,
   placeholder,
+  onCommit,
+  min,
+  max,
+  step,
 }: {
   label: string;
   value: string;
@@ -235,6 +278,10 @@ function CampaignTextField({
   type?: string;
   inputMode?: 'decimal';
   placeholder?: string;
+  onCommit?: (value: string) => void;
+  min?: number;
+  max?: number;
+  step?: number;
 }) {
   const className = `campaign-setup__field${multiline ? ' campaign-setup__field--wide' : ''}`;
   return (
@@ -243,6 +290,7 @@ function CampaignTextField({
       {multiline ? (
         <textarea
           className="form-input campaign-setup__textarea"
+          aria-label={label}
           value={value}
           onChange={onChange}
           maxLength={maxLength}
@@ -250,12 +298,17 @@ function CampaignTextField({
       ) : (
         <input
           className="form-input"
+          aria-label={label}
           value={value}
           onChange={onChange}
           maxLength={maxLength}
           type={type}
           inputMode={inputMode}
           placeholder={placeholder}
+          min={min}
+          max={max}
+          step={step}
+          onBlur={(event) => onCommit?.(event.currentTarget.value)}
         />
       )}
     </label>

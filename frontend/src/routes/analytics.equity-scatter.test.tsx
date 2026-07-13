@@ -202,7 +202,27 @@ describe('Equity versus rate spread score-band legend', () => {
     expect(html).toContain('Plotting 1.2K of 3K returned borrowers');
     expect(html).toContain('(3K total matching this window)');
     expect(html).not.toContain('Showing 3K of 3K');
-    expect(html).toContain('every plotted borrower at that coordinate');
+    expect(html).toContain('every returned borrower at each displayed coordinate');
+  });
+
+  it('does not understate a cluster that crosses the client marker cutoff', () => {
+    const points = Array.from({ length: 1_250 }, (_, index) => ({
+      ...drilldown.points[0],
+      borrower_id: `B-${String(index).padStart(13, '0')}`,
+    }));
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <EquitySpreadPointsView payload={{
+          ...drilldown,
+          points,
+          showing: points.length,
+          total_matching: points.length,
+        }} />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain('1250 borrowers at 42% equity and 88 bps spread');
+    expect(html).not.toContain('1200 borrowers at 42% equity and 88 bps spread');
   });
 
   it('opens a cluster from its native button and Escape closes it back to the marker', () => {
