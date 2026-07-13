@@ -34,12 +34,16 @@ declare const process: { cwd(): string };
 const portfolioPreview = vi.fn();
 const portfolioCreate = vi.fn();
 const campaigns = vi.fn();
+const salesCampaignPerformance = vi.fn();
+const campaignRecommendation = vi.fn();
 
 vi.mock('../lib/api', () => ({
   api: {
     portfolioPreview: (...args: unknown[]) => portfolioPreview(...args),
     portfolioCreate: (...args: unknown[]) => portfolioCreate(...args),
     campaigns: (...args: unknown[]) => campaigns(...args),
+    salesCampaignPerformance: (...args: unknown[]) => salesCampaignPerformance(...args),
+    campaignRecommendation: (...args: unknown[]) => campaignRecommendation(...args),
   },
   ApiError: class extends Error {},
   isAbortError: () => false,
@@ -100,7 +104,48 @@ describe('PortfolioBuilder save-build flow', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    portfolioPreview.mockReset();
+    portfolioCreate.mockReset();
+    campaigns.mockReset();
+    salesCampaignPerformance.mockReset();
+    campaignRecommendation.mockReset();
     campaigns.mockResolvedValue({ campaigns: [] });
+    salesCampaignPerformance.mockResolvedValue({
+      from_date: '2026-04-01',
+      to_date: '2026-06-30',
+      unique_leads_attempted: 100,
+      unique_contacts_reached: 40,
+      unique_application_starts: 10,
+      unique_applications_submitted: 8,
+      unique_closed_funded: 3,
+      methodology: 'same_borrower_nested_funnel',
+    });
+    campaignRecommendation.mockResolvedValue({
+      generation_mode: 'supervisor',
+      generator_label: 'Mortgage Growth Supervisor',
+      performance_status: 'qualified',
+      audience_summary: 'Selected cohort.',
+      strategy: 'Use reviewed copy.',
+      variants: [
+        {
+          variant_name: 'A',
+          subject: 'A',
+          body: 'A body',
+          hypothesis: 'A hypothesis',
+          provenance_token: null,
+        },
+        {
+          variant_name: 'B',
+          subject: 'B',
+          body: 'B body',
+          hypothesis: 'B hypothesis',
+          provenance_token: null,
+        },
+      ],
+      holdout_pct: 10,
+      evidence: [],
+      warnings: [],
+    });
     promptSpy = vi.fn();
     // If ANY code path reaches for the native blocking dialog again, fail
     // loudly instead of freezing a renderer at the booth.
@@ -213,6 +258,74 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(
       container.querySelector('[data-testid="portfolio-save-name"]'),
     ).toBeNull();
+    expect(saveButton().textContent).toContain('Build saved');
+  });
+
+  it('keeps Save unavailable while a changed build replaces stale preview data', async () => {
+    const nextBuild = deferred<PortfolioPreview>();
+    portfolioPreview.mockResolvedValueOnce(PREVIEW).mockReturnValue(nextBuild.promise);
+    mount();
+    await waitUntil(() => !saveButton().disabled);
+
+    const occupancy = container.querySelector<HTMLButtonElement>(
+      'button[aria-label^="OCCUPANCY:"]',
+    )!;
+    act(() => occupancy.click());
+    const nonOwner = [...container.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (option) => option.textContent?.includes('Non-owner-occupied'),
+    )!;
+    act(() => nonOwner.click());
+    expect(saveButton().disabled).toBe(true);
+    expect(saveButton().textContent).toContain('Run before saving');
+
+    const runBuild = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.includes('Run build'),
+    )!;
+    act(() => runBuild.click());
+    await waitUntil(() => portfolioPreview.mock.calls.length >= 2);
+    expect(saveButton().disabled).toBe(true);
+    expect(saveButton().textContent).toContain('Build running…');
+    act(() => saveButton().click());
+    expect(container.querySelector('[data-testid="portfolio-save-name"]')).toBeNull();
+
+    nextBuild.resolve(PREVIEW);
+    await waitUntil(() => !saveButton().disabled);
+    expect(saveButton().textContent).toContain('Save build');
+  });
+
+  it('preserves the typed name and idempotency key across a failed save retry', async () => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    portfolioCreate
+      .mockRejectedValueOnce(new Error('Lakebase unavailable'))
+      .mockResolvedValueOnce({ campaign_id: 'c-retry' });
+    mount();
+    await waitUntil(() => !saveButton().disabled);
+
+    act(() => saveButton().click());
+    const nameInput = container.querySelector<HTMLInputElement>(
+      '[data-testid="portfolio-save-name"]',
+    )!;
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(nameInput, 'Distinct Illinois refinance cohort');
+      nameInput.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    const confirm = container.querySelector<HTMLButtonElement>(
+      '[data-testid="portfolio-save-confirm"]',
+    )!;
+    act(() => confirm.click());
+    await waitUntil(() => container.querySelector('[role="alert"]') !== null);
+
+    expect(nameInput.value).toBe('Distinct Illinois refinance cohort');
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Save failed — your name is kept; try again.',
+    );
+    const firstRequestId = portfolioCreate.mock.calls[0][2].request_id;
+
+    act(() => confirm.click());
+    await waitUntil(() => portfolioCreate.mock.calls.length === 2);
+    await waitUntil(() => container.querySelector('[data-testid="portfolio-save-name"]') === null);
+    expect(portfolioCreate.mock.calls[1][2].request_id).toBe(firstRequestId);
     expect(saveButton().textContent).toContain('Build saved');
   });
 

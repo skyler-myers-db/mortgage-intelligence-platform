@@ -11,7 +11,11 @@ vi.mock('../components/AppContext', () => ({
   useApp: () => ({ setDrawer: vi.fn(), showEvidence: true }),
 }));
 
-import { DEFAULT_CAMPAIGN_SETUP } from './portfolio-builder.logic';
+import {
+  CAMPAIGN_NUMERIC_BOUNDS,
+  DEFAULT_CAMPAIGN_SETUP,
+  type CampaignNumericField,
+} from './portfolio-builder.logic';
 import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -76,12 +80,14 @@ describe('CampaignSetupPanel', () => {
                   subject: 'Review your current mortgage options',
                   body: 'A loan officer can review your current mortgage options with you.',
                   hypothesis: 'Concrete benefit framing improves qualified responses.',
+                  provenance_token: null,
                 },
                 {
                   variant_name: 'Guidance-led',
                   subject: 'A mortgage review for your next step',
                   body: 'Schedule a no-pressure review with a loan officer.',
                   hypothesis: 'Guidance framing improves trust and response quality.',
+                  provenance_token: null,
                 },
               ],
               holdout_pct: 10,
@@ -117,6 +123,20 @@ describe('CampaignSetupPanel', () => {
     expect(document.body.textContent).toContain('Qualified team performance');
     expect(document.body.textContent).toContain('2,119 eligible refinance-economics borrowers');
     expect(document.body.textContent).toContain('Test immediate payment-value clarity');
+    const hypotheses = [...document.querySelectorAll<HTMLElement>('[role="group"]')]
+      .filter((node) => node.getAttribute('aria-label')?.endsWith(' hypothesis'));
+    expect(hypotheses.map((node) => node.getAttribute('aria-label'))).toEqual([
+      'Benefit-led hypothesis',
+      'Guidance-led hypothesis',
+    ]);
+    expect(hypotheses[0].textContent).toContain(
+      'Concrete benefit framing improves qualified responses.',
+    );
+    expect(hypotheses[1].textContent).toContain(
+      'Guidance framing improves trust and response quality.',
+    );
+    expect(document.querySelector('[aria-labelledby="campaign-variant-hypotheses-title"]'))
+      .not.toBeNull();
     expect(document.querySelectorAll('.evidence-chip')).toHaveLength(2);
     const applyButton = [...document.querySelectorAll('button')].find((button) => (
       button.textContent?.includes('Apply variants')
@@ -144,8 +164,8 @@ describe('CampaignSetupPanel', () => {
               audience_summary: 'Selected cohort.',
               strategy: 'Use a reviewed benefit-led test.',
               variants: [
-                { variant_name: 'Benefit-led', subject: 'A', body: 'B', hypothesis: 'C' },
-                { variant_name: 'Guidance-led', subject: 'D', body: 'E', hypothesis: 'F' },
+                { variant_name: 'Benefit-led', subject: 'A', body: 'B', hypothesis: 'C', provenance_token: null },
+                { variant_name: 'Guidance-led', subject: 'D', body: 'E', hypothesis: 'F', provenance_token: null },
               ],
               holdout_pct: 10,
               evidence: [],
@@ -178,31 +198,47 @@ describe('CampaignSetupPanel', () => {
     expect(apply).toHaveBeenCalledTimes(1);
   });
 
-  it('commits bounded numeric values on blur instead of silently saving another value', () => {
+  it('exposes and commits every numeric field boundary on blur', () => {
     const commit = vi.fn();
-    const setup = { ...DEFAULT_CAMPAIGN_SETUP, holdoutPct: '95' };
-    act(() => {
-      root.render(
-        <MemoryRouter>
-          <CampaignSetupPanel
-            setup={setup}
-            recommendationPending={false}
-            recommendationError={false}
-            recommendationFetching={false}
-            canRecommend={false}
-            onFieldChange={() => vi.fn()}
-            onNumericFieldCommit={commit}
-            onToggleHouseholdDedup={vi.fn()}
-            onRegenerate={vi.fn()}
-            onApply={vi.fn()}
-          />
-        </MemoryRouter>,
-      );
-    });
+    const cases: Array<{ field: CampaignNumericField; label: string }> = [
+      { field: 'holdoutPct', label: 'Holdout % (0-50)' },
+      { field: 'budget', label: 'Budget' },
+      { field: 'emailCost', label: 'Email cost' },
+      { field: 'smsCost', label: 'SMS cost' },
+      { field: 'mailCost', label: 'Mail cost' },
+    ];
 
-    const holdout = document.querySelector<HTMLInputElement>('input[aria-label="Holdout % (0-50)"]');
-    expect(holdout?.max).toBe('50');
-    act(() => holdout?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
-    expect(commit).toHaveBeenCalledWith('holdoutPct', '50');
+    for (const { field, label } of cases) {
+      const bounds = CAMPAIGN_NUMERIC_BOUNDS[field];
+      for (const [raw, expected] of [
+        [String(bounds.min - 1), String(bounds.min)],
+        [String(bounds.max + 1), String(bounds.max)],
+      ]) {
+        act(() => {
+          root.render(
+            <MemoryRouter>
+              <CampaignSetupPanel
+                setup={{ ...DEFAULT_CAMPAIGN_SETUP, [field]: raw }}
+                recommendationPending={false}
+                recommendationError={false}
+                recommendationFetching={false}
+                canRecommend={false}
+                onFieldChange={() => vi.fn()}
+                onNumericFieldCommit={commit}
+                onToggleHouseholdDedup={vi.fn()}
+                onRegenerate={vi.fn()}
+                onApply={vi.fn()}
+              />
+            </MemoryRouter>,
+          );
+        });
+        const input = document.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`);
+        expect(input?.min, field).toBe(String(bounds.min));
+        expect(input?.max, field).toBe(String(bounds.max));
+        expect(input?.step, field).toBe(String(bounds.step));
+        act(() => input?.dispatchEvent(new FocusEvent('focusout', { bubbles: true })));
+        expect(commit).toHaveBeenLastCalledWith(field, expected);
+      }
+    }
   });
 });

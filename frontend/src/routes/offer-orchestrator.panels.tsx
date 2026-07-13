@@ -138,6 +138,7 @@ interface OfferReviewGridProps {
   leadIsSaved: boolean;
   saveCurrentLead: () => void;
   draftWarming: WarmingUpState | null;
+  draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
   draftSubject: string;
@@ -145,6 +146,7 @@ interface OfferReviewGridProps {
   draftText: string;
   onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
+  draftDirty?: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
   approving: boolean;
   draftDisclosureVersion: string | null;
@@ -170,6 +172,7 @@ export function OfferReviewGrid({
   leadIsSaved,
   saveCurrentLead,
   draftWarming,
+  draftPending = false,
   draftLoaded,
   draftError,
   draftSubject,
@@ -177,6 +180,7 @@ export function OfferReviewGrid({
   draftText,
   onDraftChange,
   draftChannel,
+  draftDirty = false,
   onDraftChannelChange,
   approving,
   draftDisclosureVersion,
@@ -207,6 +211,7 @@ export function OfferReviewGrid({
         borrower={borrower}
         borrowerId={borrowerId}
         draftWarming={draftWarming}
+        draftPending={draftPending}
         draftLoaded={draftLoaded}
         draftError={draftError}
         draftSubject={draftSubject}
@@ -214,6 +219,7 @@ export function OfferReviewGrid({
         draftText={draftText}
         onDraftChange={onDraftChange}
         draftChannel={draftChannel}
+        draftDirty={draftDirty}
         onDraftChannelChange={onDraftChannelChange}
         approving={approving}
         draftDisclosureVersion={draftDisclosureVersion}
@@ -326,6 +332,7 @@ interface DraftOutreachPanelProps {
   borrower: Borrower360Type | null;
   borrowerId: string | null;
   draftWarming: WarmingUpState | null;
+  draftPending?: boolean;
   draftLoaded: boolean;
   draftError: string | null;
   draftSubject: string;
@@ -333,6 +340,7 @@ interface DraftOutreachPanelProps {
   draftText: string;
   onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
+  draftDirty?: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
   approving: boolean;
   draftDisclosureVersion: string | null;
@@ -354,6 +362,7 @@ function DraftOutreachPanel({
   borrower,
   borrowerId,
   draftWarming,
+  draftPending = false,
   draftLoaded,
   draftError,
   draftSubject,
@@ -361,6 +370,7 @@ function DraftOutreachPanel({
   draftText,
   onDraftChange,
   draftChannel,
+  draftDirty = false,
   onDraftChannelChange,
   approving,
   draftDisclosureVersion,
@@ -378,6 +388,7 @@ function DraftOutreachPanel({
   draftReady,
 }: DraftOutreachPanelProps) {
   const [regenerateReviewOpen, setRegenerateReviewOpen] = useState(false);
+  const [pendingChannel, setPendingChannel] = useState<OutreachChannel | null>(null);
   return (
     <div className="surface">
       <div className="surface__hdr">
@@ -394,13 +405,31 @@ function DraftOutreachPanel({
             />
           </div>
         )}
-        {!draftLoaded && !draftWarming && borrower && (
+        {draftPending && !draftLoaded && !draftWarming && borrower && (
+          <div className="muted fs-12 mb-3" role="status" data-testid="draft-loading-note">
+            Loading audited outreach draft…
+          </div>
+        )}
+        {!draftLoaded && !draftWarming && !draftPending && borrower && (
           <div
             data-testid="draft-unavailable-note"
             className="status-callout status-callout--warning mb-3"
             role="alert"
           >
-            {draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}
+            <span>{draftError ?? 'Offer draft unavailable. Approval is disabled until the audited draft loads.'}</span>
+            {draftError && (
+              <div className="chip-row mt-2">
+                <Button
+                  variant="default"
+                  size="sm"
+                  icon="play"
+                  onClick={regenerateDraft}
+                  disabled={approving || !borrowerId}
+                >
+                  Retry draft
+                </Button>
+              </div>
+            )}
           </div>
         )}
         {draftChannel !== 'sms' && (
@@ -504,6 +533,11 @@ function DraftOutreachPanel({
               variant={draftChannel === channel ? 'primary' : 'ghost'}
               size="sm"
               onClick={() => {
+                if (channel === draftChannel) return;
+                if (draftDirty) {
+                  setPendingChannel(channel);
+                  return;
+                }
                 onDraftChannelChange(channel);
               }}
               disabled={approving}
@@ -546,6 +580,34 @@ function DraftOutreachPanel({
             </Button>
           )}
         </div>
+        {pendingChannel && (
+          <div className="status-callout status-callout--warning mt-3" role="alert">
+            <span>
+              Switching to {pendingChannel === 'direct_mail' ? 'direct mail' : pendingChannel.toUpperCase()}
+              {' '}replaces the unsaved subject and message currently in the editor.
+            </span>
+            <div className="chip-row mt-2">
+              <Button
+                variant="default"
+                size="sm"
+                onClick={() => {
+                  const channel = pendingChannel;
+                  setPendingChannel(null);
+                  onDraftChannelChange(channel);
+                }}
+              >
+                Switch channel
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setPendingChannel(null)}
+              >
+                Keep current edits
+              </Button>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

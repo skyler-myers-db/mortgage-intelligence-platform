@@ -122,10 +122,15 @@ export function AdminAuditExplorer() {
   };
 
   return (
-    <div className="surface mt-grid" id="audit">
+    <div
+      className="surface mt-grid"
+      id="audit"
+      tabIndex={-1}
+      aria-labelledby="audit-explorer-title"
+    >
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Audit explorer</div>
+          <div className="h-4" id="audit-explorer-title">Audit explorer</div>
           <div className="muted fs-12">
             Filter the Lakebase ledger by borrower/approval id, action, or event type.
           </div>

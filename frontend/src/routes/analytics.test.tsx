@@ -45,6 +45,7 @@ function pointFixture(overrides: Partial<EquitySpreadPoint> = {}): EquitySpreadP
     equity_pct: 42,
     rate_spread_bps: 88,
     opportunity_score: 90,
+    coordinate_total: 1,
     score_band: 'high',
     in_the_money: true,
     ...overrides,
@@ -176,7 +177,7 @@ describe('analytics chart readability', () => {
     expect(html).not.toContain('B-0000000000025');
   });
 
-  it('renders zoomed real points with honest showing-N-of-M copy and Borrower 360 links', () => {
+  it('renders zoomed real points with honest returned-versus-matching copy and Borrower 360 links', () => {
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <EquitySpreadPointsView
@@ -221,7 +222,10 @@ describe('analytics chart readability', () => {
 
   it('says when the DOM plot is a top slice of the honest server page', () => {
     const many = Array.from({ length: MAX_SCATTER_POINTS + 50 }, (_, idx) =>
-      pointFixture({ borrower_id: `B-${String(idx).padStart(13, '0')}` }));
+      pointFixture({
+        borrower_id: `B-${String(idx).padStart(13, '0')}`,
+        coordinate_total: MAX_SCATTER_POINTS + 50,
+      }));
     const html = renderToStaticMarkup(
       <MemoryRouter>
         <EquitySpreadPointsView

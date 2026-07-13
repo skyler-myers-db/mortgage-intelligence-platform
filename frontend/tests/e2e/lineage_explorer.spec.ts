@@ -77,6 +77,13 @@ function resolvedManifestResponse() {
 }
 
 async function mockHomeShell(page: Page) {
+  await page.route(apiPattern('session$'), async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ can_access_admin: false }),
+    });
+  });
   await page.route(apiPattern('health$'), async (route) => {
     await route.fulfill({
       status: 200,
@@ -184,7 +191,7 @@ test.describe('Lineage explorer — KPI to Catalog Explorer deep link', () => {
     page,
   }) => {
     await mockHomeShell(page);
-    await page.goto('/');
+    await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
     // Absorb the dev server's cold-start transform before asserting KPIs
     // (same guard as module0.spec.ts).
     await expect(
@@ -224,18 +231,29 @@ test.describe('Lineage explorer — KPI to Catalog Explorer deep link', () => {
     await expect(drawer).toContainText('backend/resources/lineage_manifest.json');
   });
 
-  test('an unmapped source shows the honest not-mapped state, never invented nodes', async ({
+  test('manifest drift shows the honest not-mapped state, never invented nodes', async ({
     page,
   }) => {
     await mockHomeShell(page);
-    await page.goto('/');
+    await page.route(apiPattern('lineage/manifest$'), async (route) => {
+      const manifest = resolvedManifestResponse();
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          ...manifest,
+          families: manifest.families.filter((family) => family.id !== 'marketable_population'),
+        }),
+      });
+    });
+    await page.goto('/', { waitUntil: 'domcontentloaded', timeout: 60_000 });
     await expect(
       page.getByRole('heading', { name: 'Who should we contact, why now, and with what offer?' }),
     ).toBeVisible({ timeout: 45_000 });
 
-    // The lock-in cohort console tile / other unmapped chips are route-
-    // dependent; assert the state through the drawer contract instead by
-    // opening a mapped KPI drawer and checking the tab semantics exist.
+    // Simulate a deployed frontend whose governed family is absent from the
+    // manifest response. The drawer must surface drift instead of borrowing
+    // nodes from a different KPI family.
     const kpiCard = page
       .locator('.kpi', { has: page.getByText('Marketable population', { exact: true }) })
       .first();
@@ -244,14 +262,9 @@ test.describe('Lineage explorer — KPI to Catalog Explorer deep link', () => {
 
     const drawer = page.locator('.drawer.is-open');
     await expect(drawer).toBeVisible();
-    await expect(drawer.getByRole('tab', { name: 'Overview' })).toHaveAttribute(
-      'aria-selected',
-      'true',
-    );
     await drawer.getByRole('tab', { name: 'Lineage' }).click();
-    // Marketable population IS mapped — chips render; the not-mapped copy
-    // must not appear alongside real nodes.
-    await expect(drawer.locator('.lineage-node__chip').first()).toBeVisible();
-    await expect(drawer.getByText('Lineage not mapped')).toHaveCount(0);
+    await expect(drawer).toContainText('Lineage not mapped');
+    await expect(drawer).toContainText('marketable_population');
+    await expect(drawer.locator('.lineage-node__chip')).toHaveCount(0);
   });
 });

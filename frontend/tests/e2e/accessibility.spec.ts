@@ -34,6 +34,7 @@ test.skip(!LIVE, 'Set E2E_LIVE=1 to run accessibility smoke against the live app
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER
   ? { Authorization: `Bearer ${BEARER}` }
   : {};
@@ -66,7 +67,6 @@ const ROUTES: Array<{ path: string; readySelector?: RegExp | string }> = [
   { path: '/lead-queue',             readySelector: /Lead queue|Ranked borrower queue/i },
   { path: '/ask-genie',              readySelector: /Ask a question|Ask Genie/i },
   { path: '/offer-orchestrator',     readySelector: /Offer Orchestrator|Choose a borrower/i },
-  { path: '/admin-config',           readySelector: /Lender|Admin|Config/i },
 ];
 
 type Theme = 'dark' | 'light';
@@ -186,6 +186,28 @@ test.describe('Module 0 — accessibility (nightly)', () => {
         await expect(page.getByText(/Draft outreach|Recommended offer/i).first()).toBeVisible({ timeout: 30_000 });
         await runAxeAndAssertClean(page, `/offer-orchestrator/:id [${theme}]`);
       });
+
+      test(`admin-config uses the admin session and has zero serious/critical violations (${theme})`, async ({ page }) => {
+        test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin accessibility coverage.');
+        await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+        await page.addInitScript((t) => {
+          window.localStorage.setItem('mip.theme', t as string);
+        }, theme);
+        await page.goto('/admin-config');
+        await setTheme(page, theme);
+        await expect(
+          page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
+        ).toBeVisible({ timeout: 30_000 });
+        await runAxeAndAssertClean(page, `/admin-config [${theme}]`);
+      });
     });
   }
+
+  test('the regular bearer remains non-admin', async ({ page }) => {
+    await page.goto('/admin-config');
+    await expect(page).toHaveURL(/\/$/, { timeout: 20_000 });
+    await expect(
+      page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
+    ).toHaveCount(0);
+  });
 });

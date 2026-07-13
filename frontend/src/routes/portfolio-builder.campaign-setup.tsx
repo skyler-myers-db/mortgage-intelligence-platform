@@ -13,7 +13,11 @@ import {
 
 type CampaignField = Exclude<
   keyof CampaignSetupState,
-  'marketHouseholdTogether' | 'generationMode' | 'generatorLabel'
+  | 'marketHouseholdTogether'
+  | 'generationMode'
+  | 'generatorLabel'
+  | 'provenanceTokenA'
+  | 'provenanceTokenB'
 >;
 
 export function CampaignSetupPanel({
@@ -159,6 +163,35 @@ export function CampaignSetupPanel({
             <>
               <p className="campaign-recommendation__audience">{recommendation.audience_summary}</p>
               <p className="campaign-recommendation__strategy">{recommendation.strategy}</p>
+              <section
+                className="campaign-recommendation__hypotheses"
+                aria-labelledby="campaign-variant-hypotheses-title"
+              >
+                <div
+                  id="campaign-variant-hypotheses-title"
+                  className="h-5"
+                  role="heading"
+                  aria-level={4}
+                >
+                  Message hypotheses
+                </div>
+                <dl className="campaign-recommendation__hypothesis-list">
+                  {recommendation.variants.map((variant) => (
+                    <div
+                      className="campaign-recommendation__hypothesis"
+                      role="group"
+                      aria-label={`${variant.variant_name} hypothesis`}
+                      key={variant.variant_name}
+                    >
+                      <dt>
+                        <strong>{variant.variant_name}</strong>
+                        <span className="chip chip--neutral">Hypothesis</span>
+                      </dt>
+                      <dd>{variant.hypothesis}</dd>
+                    </div>
+                  ))}
+                </dl>
+              </section>
               <div className="campaign-recommendation__evidence" aria-label="Recommendation evidence">
                 {recommendation.evidence.map((row) => (
                   <EvidenceChip

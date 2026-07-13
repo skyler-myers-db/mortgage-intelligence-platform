@@ -160,6 +160,14 @@ export default function AdminConfig() {
     }
   }, [location.hash]);
 
+  useEffect(() => {
+    if (location.hash !== '#audit') return;
+    const target = document.getElementById('audit');
+    if (!target) return;
+    target.scrollIntoView({ block: 'start' });
+    target.focus({ preventScroll: true });
+  }, [location.hash]);
+
   const {
     data: sources,
     warmingUp: sourcesWarming,

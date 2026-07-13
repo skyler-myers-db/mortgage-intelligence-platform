@@ -6,6 +6,7 @@ test.skip(!ENABLED, 'Set E2E_LIVE=1 and E2E_BROWSER_MATRIX=1 to run cross-browse
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer ${BEARER}` } : {};
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
@@ -65,12 +66,6 @@ const ROUTES: RouteProbe[] = [
     ready: /Ask Genie|Ready for governed analysis/i,
     deviceCanary: true,
   },
-  {
-    label: 'Admin',
-    path: '/admin-config',
-    ready: /Offer rules|Audit explorer|Admin/i,
-    deviceCanary: true,
-  },
 ];
 
 const NAV_SEQUENCE = [
@@ -79,7 +74,6 @@ const NAV_SEQUENCE = [
   { name: /^Segments$/i, ready: /borrower segments/i },
   { name: /^Leads$/i, ready: /Ranked borrowers|Lead queue/i },
   { name: /^Ask Genie$/i, ready: /Ask Genie|Ready for governed analysis/i },
-  { name: /^Admin$/i, ready: /Offer rules|Audit explorer|Admin/i },
 ] as const;
 
 function liveBorrowerPath(prefix: string): (request: APIRequestContext) => Promise<string> {
@@ -159,6 +153,29 @@ test.describe('cross-browser/device shell matrix', () => {
       await expectMainReady(page, item.ready);
       await assertShellHealthy(page, `${testInfo.project.name} nav ${item.name}`);
     }
+    await expect(page.getByRole('link', { name: /^Admin$/i })).toHaveCount(0);
+  });
+
+  test('Admin renders the operator page under the admin bearer @desktop', async ({ page }, testInfo) => {
+    test.skip(isDeviceProject(testInfo.project.name), 'Desktop Admin matrix runs on browser engines.');
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin browser coverage.');
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+    await page.goto('/admin-config');
+    await expect(
+      page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
+    ).toBeVisible({ timeout: 30_000 });
+    await assertShellHealthy(page, `${testInfo.project.name} Admin`);
+  });
+
+  test('Admin keeps the operator page usable on phone/tablet @device', async ({ page }, testInfo) => {
+    test.skip(!isDeviceProject(testInfo.project.name), 'Admin device canary runs only on phone/tablet projects.');
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin device coverage.');
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+    await page.goto('/admin-config');
+    await expect(
+      page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
+    ).toBeVisible({ timeout: 35_000 });
+    await assertShellHealthy(page, `${testInfo.project.name} Admin`);
   });
 
   test('theme and density controls update the shared shell state @desktop', async ({ page }, testInfo) => {

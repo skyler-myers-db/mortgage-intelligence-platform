@@ -12,8 +12,8 @@
  *      in the overview DOM — plus the source-evidence chip.
  *   2. Applying a state filter re-queries the bins (URL-addressable filter,
  *      same governed predicate as the points endpoint).
- *   3. Zooming a cell loads REAL borrowers with an honest
- *      "Showing N of M" line; a dot deep-links to Borrower 360.
+ *   3. Zooming a cell loads REAL borrowers with honest plotting/total
+ *      copy; either a dot or a numbered cluster deep-links to Borrower 360.
  *   4. From Borrower 360, "Build outreach draft" opens the offer
  *      orchestrator: a draft composer with an approval gate and NO
  *      send/dispatch affordance anywhere on the surface — the terminal
@@ -75,7 +75,7 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
       }
     }
 
-    // ---- 3. Zoom the densest cell → honest N of M + real dots -------------
+    // ---- 3. Zoom the densest cell → honest totals + real markers -----------
     // Cells expose their density in the aria-label; click the first one with
     // a visible count (labels are deterministic strings).
     await cells.first().waitFor({ state: 'visible' });
@@ -97,22 +97,39 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
     await densest.click();
 
     const meta = page.getByTestId('scatter-meta');
-    await expect(meta).toContainText(/Showing [\d.,KM]+ of [\d.,KM]+ borrowers/i, { timeout: 60_000 });
+    await expect(meta).toContainText(/Plotting [\d.,KM]+ of [\d.,KM]+ returned borrowers/i, { timeout: 60_000 });
 
     const dots = page.locator('a.analytics-scatter__dot');
-    await expect.poll(async () => dots.count(), { timeout: 60_000 }).toBeGreaterThan(0);
-
-    // Dots carry the canonical S1 band classes.
-    expect(
-      await page.locator('a.analytics-scatter__dot.score--high, a.analytics-scatter__dot.score--med, a.analytics-scatter__dot.score--low').count(),
+    const clusters = page.locator('button.analytics-scatter__cluster-marker');
+    await expect.poll(
+      async () => (await dots.count()) + (await clusters.count()),
+      { timeout: 60_000 },
     ).toBeGreaterThan(0);
 
-    // ---- 4. Dot → Borrower 360 --------------------------------------------
-    const firstDot = dots.first();
-    const dotHref = (await firstDot.getAttribute('href')) ?? '';
-    expect(dotHref).toMatch(/\/borrower-360\/B-[0-9A-Z]{13}$/);
-    const borrowerId = dotHref.split('/').pop()!;
-    await firstDot.click();
+    // Every marker carries a canonical S1 band class.
+    expect(
+      await page.locator([
+        'a.analytics-scatter__dot.score--high',
+        'a.analytics-scatter__dot.score--med',
+        'a.analytics-scatter__dot.score--low',
+        'button.analytics-scatter__cluster-marker.score--high',
+        'button.analytics-scatter__cluster-marker.score--med',
+        'button.analytics-scatter__cluster-marker.score--low',
+      ].join(', ')).count(),
+    ).toBeGreaterThan(0);
+
+    // ---- 4. Marker → Borrower 360 -----------------------------------------
+    const borrowerLink = await dots.count() > 0
+      ? dots.first()
+      : page.locator('.analytics-scatter__cluster-panel:not([hidden]) a').first();
+    if (await dots.count() === 0) {
+      await clusters.first().click();
+      await expect(borrowerLink).toBeVisible();
+    }
+    const borrowerHref = (await borrowerLink.getAttribute('href')) ?? '';
+    expect(borrowerHref).toMatch(/\/borrower-360\/B-[0-9A-Z]{13}$/);
+    const borrowerId = borrowerHref.split('/').pop()!;
+    await borrowerLink.click();
 
     await expect(page).toHaveURL(new RegExp(`/borrower-360/${borrowerId}$`));
     // Real dossier renders (masked id + primary offer CTA).
@@ -134,5 +151,67 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
     const sendAffordances = page.getByRole('button', { name: /\bsend\b|\bdispatch\b|send email|send sms/i });
     expect(await sendAffordances.count()).toBe(0);
     await expect(page.locator('main')).not.toContainText(/send now|sending to borrower/i);
+  });
+
+  test('numbered cluster reports exact population and paginates every returned member', async ({ page }) => {
+    const returnedIds = Array.from(
+      { length: 75 },
+      (_, index) => `B-${String(index).padStart(13, '0')}`,
+    );
+    await page.route(/\/api\/(?:v1\/)?analytics\/economics\/points(?:\?|$)/, async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          points: returnedIds.map((borrowerId, index) => ({
+            borrower_id: borrowerId,
+            display_name: `Owner ${index}`,
+            segment: 'Prime Refi Candidates',
+            state: 'IL',
+            equity_pct: 42,
+            rate_spread_bps: 88,
+            opportunity_score: 100 - (index % 60),
+            coordinate_total: 120,
+            score_band: index < 40 ? 'high' : 'med',
+          })),
+          total_matching: 120,
+          showing: 75,
+          point_cap: 75,
+          truncated: true,
+          viewport: { equity_min: 40, equity_max: 44, spread_min: 75, spread_max: 99 },
+          source_table: 'mip.gold.equity_spread_points',
+        }),
+      });
+    });
+
+    await gotoApp(page, '/analytics?view=economics');
+    const scatter = page.getByTestId('equity-spread-scatter');
+    const cells = scatter.locator('.analytics-scatter__bin');
+    await expect.poll(async () => cells.count(), { timeout: 60_000 }).toBeGreaterThan(0);
+    await cells.first().click();
+
+    await expect(scatter.getByTestId('scatter-meta')).toContainText(
+      'Plotting 75 of 75 returned borrowers (120 total matching this window) (server cap 75)',
+    );
+    const cluster = scatter.getByRole('button', {
+      name: /120 borrowers; showing 75 ranked links returned under server cap/i,
+    });
+    await expect(cluster).toHaveText('120');
+    await cluster.click();
+
+    const panel = scatter.locator('.analytics-scatter__cluster-panel:not([hidden])');
+    await expect(panel).toContainText(
+      '120 borrowers; showing 75 ranked links returned under server cap',
+    );
+    const links = panel.locator('a.analytics-scatter__cluster-link');
+    await expect(links).toHaveCount(50);
+    await panel.getByRole('button', { name: 'Show 25 more' }).click();
+    await expect(links).toHaveCount(75);
+
+    const hrefIds = await links.evaluateAll((nodes) => nodes.map((node) => (
+      node.getAttribute('href')?.split('/').pop() ?? ''
+    )));
+    expect(hrefIds).toEqual(returnedIds);
+    expect(new Set(hrefIds).size).toBe(returnedIds.length);
   });
 });

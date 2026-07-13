@@ -86,6 +86,8 @@ export type CampaignSetupState = {
   marketHouseholdTogether: boolean;
   generationMode: 'supervisor' | 'reviewed_fallback' | 'operator';
   generatorLabel: string;
+  provenanceTokenA: string | null;
+  provenanceTokenB: string | null;
 };
 
 export type CampaignNumericField = 'holdoutPct' | 'budget' | 'emailCost' | 'smsCost' | 'mailCost';
@@ -134,6 +136,8 @@ export function buildDefaultCampaignSetup(
     marketHouseholdTogether: false,
     generationMode: 'operator',
     generatorLabel: 'Operator edited',
+    provenanceTokenA: null,
+    provenanceTokenB: null,
   };
 }
 
@@ -293,16 +297,15 @@ export function campaignCriteriaSummary(campaign: CampaignSummary): string {
 export interface SavedCampaignRow {
   /** Representative campaign (most recent) — wins the row's key/links. */
   campaign: CampaignSummary;
-  /** Number of same-name drafts collapsed into this row; 1 = not collapsed. */
+  /** Number of semantically identical drafts collapsed into this row; 1 = not collapsed. */
   draftCount: number;
   latestAt: string | null;
 }
 
 /**
- * Collapse repeated same-name DRAFT campaigns into one representative row so a
- * long list of identical "Genie strategy draft" rows reads as one item with a
- * count. Non-draft or uniquely-named campaigns pass through 1:1. The most-recent
- * campaign (by updated_at/created_at) represents the group.
+ * Collapse only semantically identical DRAFT campaigns. Name alone is not an
+ * identity: operators routinely reuse a name for different criteria, holdouts,
+ * or message variants, and those records must remain separately inspectable.
  */
 export function groupSavedCampaigns(campaigns: CampaignSummary[]): SavedCampaignRow[] {
   const timeOf = (campaign: CampaignSummary): number => {
@@ -313,8 +316,9 @@ export function groupSavedCampaigns(campaigns: CampaignSummary[]): SavedCampaign
   const groups = new Map<string, CampaignSummary[]>();
   const order: string[] = [];
   for (const campaign of campaigns) {
-    // Only DRAFT rows sharing a name collapse; everything else stays unique.
-    const key = campaign.status === 'draft' ? `draft:${campaign.name}` : `one:${campaign.campaign_id}`;
+    const key = campaign.status === 'draft'
+      ? `draft:${canonicalDraftFingerprint(campaign)}`
+      : `one:${campaign.campaign_id}`;
     const bucket = groups.get(key);
     if (bucket) {
       bucket.push(campaign);
@@ -337,6 +341,27 @@ export function groupSavedCampaigns(campaigns: CampaignSummary[]): SavedCampaign
   });
 }
 
+function canonicalDraftFingerprint(campaign: CampaignSummary): string {
+  const {
+    campaign_id: _campaignId,
+    created_at: _createdAt,
+    updated_at: _updatedAt,
+    ...semanticRecord
+  } = campaign;
+  const canonicalize = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonicalize);
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, child]) => [key, canonicalize(child)]),
+      );
+    }
+    return value;
+  };
+  return JSON.stringify(canonicalize(semanticRecord));
+}
+
 function boundedNumber(raw: string, fallback: number, min: number, max: number): number {
   const parsed = Number(raw);
   if (!Number.isFinite(parsed)) return fallback;
@@ -344,9 +369,10 @@ function boundedNumber(raw: string, fallback: number, min: number, max: number):
 }
 
 function nullableMoney(raw: string, max: number): number | null {
+  if (raw.trim() === '') return null;
   const parsed = Number(raw);
-  if (!Number.isFinite(parsed) || parsed <= 0) return null;
-  return Number(Math.min(max, parsed).toFixed(2));
+  if (!Number.isFinite(parsed)) return null;
+  return Number(Math.min(max, Math.max(0, parsed)).toFixed(2));
 }
 
 function configuredChannelCosts(setup: CampaignSetupState): Record<string, number> {
@@ -381,6 +407,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
         weight_pct: Math.max(0, Math.round((100 - holdoutPct) / 2)),
         generation_mode: setup.generationMode,
         generator_label: setup.generatorLabel,
+        provenance_token: setup.provenanceTokenA,
       },
       {
         variant_name: 'B',
@@ -390,6 +417,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
         weight_pct: Math.max(0, Math.floor((100 - holdoutPct) / 2)),
         generation_mode: setup.generationMode,
         generator_label: setup.generatorLabel,
+        provenance_token: setup.provenanceTokenB,
       },
     ],
     channel_cascade: [

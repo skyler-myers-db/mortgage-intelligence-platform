@@ -50,6 +50,7 @@ const API_URL =
 // against a localhost uvicorn don't need it (FastAPI accepts the unauth
 // request).
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER
   ? { Authorization: `Bearer ${BEARER}` }
   : {};
@@ -1060,8 +1061,11 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText(/staged cadence only/i)).toBeVisible();
     const dataOperationsLink = page.getByRole('link', { name: /Admin Data Operations/i });
     await expect(dataOperationsLink).toBeVisible();
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for the Admin Data Operations handoff.');
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
     await dataOperationsLink.click();
     await expect(page).toHaveURL(/\/admin-config#data-operations$/);
+    await expect(page.getByRole('heading', { name: 'Rules, data sources, and audit' })).toBeVisible();
     await expect(page.locator('#data-operations')).toBeVisible({ timeout: 10_000 });
     await expect(page.getByLabel('Data freshness snapshot')).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText('Latest refresh')).toBeVisible();
@@ -1622,9 +1626,12 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('admin-config: presentation controls flip theme + density', async ({ page }) => {
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin browser coverage.');
+    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
     await gotoApp(page, '/admin-config');
 
     // Unique-to-route: the source-readiness and per-user appearance surfaces.
+    await expect(page.getByRole('heading', { name: 'Rules, data sources, and audit' })).toBeVisible({ timeout: 30_000 });
     await expect(page.getByText('Data source readiness', { exact: true })).toBeVisible({ timeout: 5_000 });
     const appearanceToggle = page.getByRole('button', { name: /Workspace appearance/i });
     await expect(appearanceToggle).toBeVisible({ timeout: 5_000 });

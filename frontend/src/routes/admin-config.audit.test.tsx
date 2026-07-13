@@ -114,11 +114,11 @@ async function settle(): Promise<void> {
   });
 }
 
-async function renderAdmin(): Promise<void> {
+async function renderAdmin(entry = '/admin-config'): Promise<void> {
   await act(async () => {
     root.render(
       <QueryClientProvider client={queryClient}>
-        <MemoryRouter initialEntries={['/admin-config']}>
+        <MemoryRouter initialEntries={[entry]}>
           <AdminConfig />
         </MemoryRouter>
       </QueryClientProvider>,
@@ -205,6 +205,22 @@ describe('AdminConfig audit explorer', () => {
     act(() => expand.click());
     expect(expand.getAttribute('aria-expanded')).toBe('false');
     expect(document.getElementById(detailId as string)).toBeNull();
+  });
+
+  it('scrolls and moves focus to the audit explorer for the #audit deep link', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    await renderAdmin('/admin-config#audit');
+
+    const audit = document.getElementById('audit');
+    expect(audit?.tabIndex).toBe(-1);
+    expect(audit?.getAttribute('aria-labelledby')).toBe('audit-explorer-title');
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    expect(document.activeElement).toBe(audit);
   });
 
   it('applies borrower, action, and event filters to the audit query key', async () => {

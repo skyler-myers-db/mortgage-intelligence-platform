@@ -201,13 +201,25 @@ export default function PortfolioBuilder() {
   });
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
-  const setCampaignField = (key: Exclude<keyof CampaignSetupState, 'marketHouseholdTogether' | 'generationMode' | 'generatorLabel'>) => (
+  const setCampaignField = (key: Exclude<
+    keyof CampaignSetupState,
+    | 'marketHouseholdTogether'
+    | 'generationMode'
+    | 'generatorLabel'
+    | 'provenanceTokenA'
+    | 'provenanceTokenB'
+  >) => (
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => setCampaignSetup((current) => ({
     ...current,
     [key]: event.target.value,
     ...(['subjectA', 'subjectB', 'bodyA', 'bodyB'].includes(key)
-      ? { generationMode: 'operator' as const, generatorLabel: 'Operator edited' }
+      ? {
+          generationMode: 'operator' as const,
+          generatorLabel: 'Operator edited',
+          provenanceTokenA: null,
+          provenanceTokenB: null,
+        }
       : {}),
   }));
   const toggleHouseholdDedup = useCallback(() => {
@@ -229,6 +241,8 @@ export default function PortfolioBuilder() {
       holdoutPct: String(recommendation.holdout_pct),
       generationMode: recommendation.generation_mode,
       generatorLabel: recommendation.generator_label,
+      provenanceTokenA: variantA.provenance_token,
+      provenanceTokenB: variantB.provenance_token,
     }));
   }, [recommendationQuery.data]);
   const buildDirty = useMemo(

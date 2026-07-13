@@ -76,7 +76,10 @@ export default function OfferOrchestrator() {
   const [draftSubject, setDraftSubject] = useState<string>('');
   const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
   const [draftLoaded, setDraftLoaded] = useState<boolean>(false);
+  const [draftPending, setDraftPending] = useState<boolean>(true);
   const [draftError, setDraftError] = useState<string | null>(null);
+  const [draftBaselineBody, setDraftBaselineBody] = useState('');
+  const [draftBaselineSubject, setDraftBaselineSubject] = useState('');
   const [draftDisclosureVersion, setDraftDisclosureVersion] = useState<string | null>(null);
   const [draftDisclosureState, setDraftDisclosureState] = useState<string | null>(null);
   const [draftGeneratorLabel, setDraftGeneratorLabel] = useState<string | null>(null);
@@ -186,12 +189,18 @@ export default function OfferOrchestrator() {
         setDraftBody(cachedDraftBody);
         setDraftSubject(cachedDraftSubject ?? '');
         setDraftLoaded(true);
+        setDraftPending(false);
+        setDraftBaselineBody(cachedDraftBody);
+        setDraftBaselineSubject(cachedDraftSubject ?? '');
       } else {
-          setDraftBody('');
-          setDraftSubject('');
-          setDraftLoaded(false);
-          setDraftDisclosureVersion(null);
-          setDraftDisclosureState(null);
+        setDraftBody('');
+        setDraftSubject('');
+        setDraftLoaded(false);
+        setDraftPending(true);
+        setDraftBaselineBody('');
+        setDraftBaselineSubject('');
+        setDraftDisclosureVersion(null);
+        setDraftDisclosureState(null);
       }
     } else {
       setB(null);
@@ -205,6 +214,9 @@ export default function OfferOrchestrator() {
       setDraftBody('');
       setDraftSubject('');
       setDraftLoaded(false);
+      setDraftPending(true);
+      setDraftBaselineBody('');
+      setDraftBaselineSubject('');
     }
 
     const runAttempt = async (attempt: number): Promise<void> => {
@@ -291,6 +303,9 @@ export default function OfferOrchestrator() {
           setDraftBody(body);
           setDraftSubject(subject);
           setDraftLoaded(true);
+          setDraftPending(false);
+          setDraftBaselineBody(body);
+          setDraftBaselineSubject(subject);
           setDraftDisclosureVersion(draft.disclosure_version);
           setDraftDisclosureState(draft.disclosure_state);
           setDraftGeneratorLabel(draft.generator_label);
@@ -310,6 +325,7 @@ export default function OfferOrchestrator() {
           }
         } else {
           setDraftLoaded(false);
+          setDraftPending(false);
           setDraftSubject('');
           setDraftDisclosureVersion(null);
           setDraftDisclosureState(null);
@@ -337,6 +353,7 @@ export default function OfferOrchestrator() {
         }
         setDraftWarming(null);
         setDraftLoaded(false);
+        setDraftPending(false);
         setDraftDisclosureVersion(null);
         setDraftDisclosureState(null);
         setDraftGeneratorLabel(null);
@@ -395,6 +412,10 @@ export default function OfferOrchestrator() {
   const draftText = draftLoaded ? draftBody : '';
   const subjectReady = draftChannel === 'sms' || draftSubject.trim().length > 0;
   const draftReady = draftLoaded && subjectReady && draftText.trim().length > 0;
+  const draftDirty = draftLoaded && (
+    draftBody !== draftBaselineBody
+    || (draftChannel !== 'sms' && draftSubject !== draftBaselineSubject)
+  );
   const savedDraft = savedDraftKey ? savedDrafts[savedDraftKey] : undefined;
   const draftIsSaved = Boolean(
     savedDraft
@@ -423,6 +444,8 @@ export default function OfferOrchestrator() {
       subject: draftChannel === 'sms' ? null : draftSubject,
       body: draftText,
     });
+    setDraftBaselineBody(draftText);
+    setDraftBaselineSubject(draftChannel === 'sms' ? '' : draftSubject);
   };
   const resetCurrentDraft = () => {
     if (!id) return;
@@ -434,6 +457,9 @@ export default function OfferOrchestrator() {
     setDraftBody('');
     setDraftSubject('');
     setDraftLoaded(false);
+    setDraftPending(true);
+    setDraftBaselineBody('');
+    setDraftBaselineSubject('');
     setDraftDisclosureVersion(null);
     setDraftDisclosureState(null);
     setDraftGeneratorLabel(null);
@@ -449,8 +475,11 @@ export default function OfferOrchestrator() {
     const cached = BORROWER_CACHE.get(id);
     if (cached) BORROWER_CACHE.set(id, { ...cached, draftSubject: null, draftBody: null, fetched: 0 });
     setDraftLoaded(false);
+    setDraftPending(true);
     setDraftBody('');
     setDraftSubject('');
+    setDraftBaselineBody('');
+    setDraftBaselineSubject('');
     setDraftError(null);
     setDraftGeneratorLabel(null);
     setDraftGenerationMode(null);
@@ -672,6 +701,7 @@ export default function OfferOrchestrator() {
         leadIsSaved={leadIsSaved}
         saveCurrentLead={saveCurrentLead}
         draftWarming={draftWarming}
+        draftPending={draftPending}
         draftLoaded={draftLoaded}
         draftError={draftError}
         draftSubject={draftSubject}
@@ -679,11 +709,15 @@ export default function OfferOrchestrator() {
         draftText={draftText}
         onDraftChange={setDraftBody}
         draftChannel={draftChannel}
+        draftDirty={draftDirty}
         onDraftChannelChange={(channel) => {
           setDraftChannel(channel);
           setDraftLoaded(false);
+          setDraftPending(true);
           setDraftBody('');
           setDraftSubject('');
+          setDraftBaselineBody('');
+          setDraftBaselineSubject('');
           setDraftDisclosureVersion(null);
           setDraftDisclosureState(null);
           setDraftGeneratorLabel(null);

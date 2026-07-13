@@ -119,8 +119,13 @@ describe('portfolio campaign config', () => {
     expect(normalizeCampaignNumericValue('holdoutPct', '95')).toBe('50');
     expect(normalizeCampaignNumericValue('holdoutPct', '-3')).toBe('0');
     expect(normalizeCampaignNumericValue('holdoutPct', 'not-a-number')).toBe('10');
-    expect(normalizeCampaignNumericValue('budget', '')).toBe('');
-    expect(normalizeCampaignNumericValue('emailCost', '1001')).toBe('1000');
+    for (const field of ['budget', 'emailCost', 'smsCost', 'mailCost'] as const) {
+      const max = field === 'budget' ? 10_000_000 : 1_000;
+      expect(normalizeCampaignNumericValue(field, '')).toBe('');
+      expect(normalizeCampaignNumericValue(field, '-1')).toBe('0');
+      expect(normalizeCampaignNumericValue(field, String(max + 1))).toBe(String(max));
+      expect(normalizeCampaignNumericValue(field, 'not-a-number')).toBe('');
+    }
   });
 
   it('does not seed generic copy or invented channel costs before intelligence loads', () => {
@@ -185,6 +190,23 @@ describe('portfolio campaign config', () => {
     });
   });
 
+  it('clamps direct campaign config inputs to every numeric boundary', () => {
+    const config = buildCampaignConfig({
+      ...DEFAULT_CAMPAIGN_SETUP,
+      holdoutPct: '500',
+      budget: '10000001',
+      emailCost: '-1',
+      smsCost: '1001',
+      mailCost: '0',
+    });
+
+    expect(config.holdout).toMatchObject({ size_pct: 50 });
+    expect(config.roi_assumptions).toMatchObject({
+      budget_usd: 10_000_000,
+      cost_per_contact_usd: { email: 0, sms: 1_000, direct_mail: 0 },
+    });
+  });
+
   it('persists the applied campaign-intelligence provenance on every variant', () => {
     const config = buildCampaignConfig({
       ...DEFAULT_CAMPAIGN_SETUP,
@@ -194,6 +216,8 @@ describe('portfolio campaign config', () => {
       bodyB: 'Compare the available choices and tradeoffs with a loan officer.',
       generationMode: 'supervisor',
       generatorLabel: 'Supervisor-generated recommendation',
+      provenanceTokenA: 'signed-benefit-provenance-token-0000000000001',
+      provenanceTokenB: 'signed-guidance-provenance-token-000000000001',
     });
 
     expect(config.message_variants).toHaveLength(2);
@@ -201,10 +225,12 @@ describe('portfolio campaign config', () => {
       expect.objectContaining({
         generation_mode: 'supervisor',
         generator_label: 'Supervisor-generated recommendation',
+        provenance_token: 'signed-benefit-provenance-token-0000000000001',
       }),
       expect.objectContaining({
         generation_mode: 'supervisor',
         generator_label: 'Supervisor-generated recommendation',
+        provenance_token: 'signed-guidance-provenance-token-000000000001',
       }),
     ]);
   });
@@ -269,7 +295,7 @@ describe('groupSavedCampaigns', () => {
     updated_at,
   });
 
-  it('collapses same-name drafts into one row with a count and the latest as representative', () => {
+  it('collapses semantically identical drafts and uses the latest representative', () => {
     const rows = groupSavedCampaigns([
       draft('Genie strategy draft', 'c1', '2026-07-08T10:00:00Z'),
       draft('Genie strategy draft', 'c3', '2026-07-10T10:00:00Z'),
@@ -279,6 +305,20 @@ describe('groupSavedCampaigns', () => {
     expect(rows[0].draftCount).toBe(3);
     expect(rows[0].campaign.campaign_id).toBe('c3');
     expect(rows[0].latestAt).toBe('2026-07-10T10:00:00Z');
+  });
+
+  it('keeps same-name drafts with distinct criteria as separately inspectable rows', () => {
+    const rows = groupSavedCampaigns([
+      { ...draft('Genie strategy draft', 'c1', '2026-07-08T10:00:00Z'), criteria: { states: ['IL'] } },
+      { ...draft('Genie strategy draft', 'c2', '2026-07-09T10:00:00Z'), criteria: { states: ['TX'] } },
+      { ...draft('Genie strategy draft', 'c3', '2026-07-10T10:00:00Z'), criteria: { states: ['IL'] } },
+    ] as never);
+
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => campaignCriteriaSummary(row.campaign))).toEqual(['IL', 'TX']);
+    expect(rows[0].draftCount).toBe(2);
+    expect(rows[0].campaign.campaign_id).toBe('c3');
+    expect(rows[1].draftCount).toBe(1);
   });
 
   it('keeps non-draft and uniquely-named campaigns as their own rows', () => {

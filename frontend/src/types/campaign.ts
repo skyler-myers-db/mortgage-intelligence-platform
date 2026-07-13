@@ -9,6 +9,7 @@ export interface CampaignRecommendationResponse {
     subject: string;
     body: string;
     hypothesis: string;
+    provenance_token: string | null;
   }>;
   holdout_pct: number;
   evidence: Array<{

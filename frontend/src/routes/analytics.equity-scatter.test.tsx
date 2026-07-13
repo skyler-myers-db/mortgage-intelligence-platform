@@ -55,6 +55,7 @@ const drilldown: EquitySpreadPointsResponse = {
       equity_pct: 42,
       rate_spread_bps: 88,
       opportunity_score: SCORE_BAND_MED_MIN,
+      coordinate_total: 1,
       score_band: 'med',
     },
   ],
@@ -74,6 +75,7 @@ const collisionDrilldown: EquitySpreadPointsResponse = {
       borrower_id: 'B-0000000000002',
       display_name: 'Owner 2',
       opportunity_score: SCORE_BAND_HIGH_MIN,
+      coordinate_total: 2,
       score_band: 'high',
     },
     {
@@ -81,6 +83,7 @@ const collisionDrilldown: EquitySpreadPointsResponse = {
       borrower_id: 'B-0000000000001',
       display_name: 'Owner 1',
       opportunity_score: SCORE_BAND_MED_MIN,
+      coordinate_total: 2,
       score_band: 'med',
     },
     {
@@ -89,6 +92,7 @@ const collisionDrilldown: EquitySpreadPointsResponse = {
       display_name: 'Owner 3',
       equity_pct: 43,
       rate_spread_bps: 90,
+      coordinate_total: 1,
     },
   ],
   total_matching: 3,
@@ -153,6 +157,7 @@ describe('Equity versus rate spread score-band legend', () => {
       points: Array.from({ length: 75 }, (_, index) => ({
         ...drilldown.points[0],
         borrower_id: `B-${String(index).padStart(13, '0')}`,
+        coordinate_total: 75,
       })),
       showing: 75,
       total_matching: 75,
@@ -184,14 +189,14 @@ describe('Equity versus rate spread score-band legend', () => {
   it('distinguishes plotted, returned, and total-matching populations at the client cap', () => {
     const capped = {
       ...drilldown,
-      points: Array.from({ length: 1_201 }, (_, index) => ({
+      points: Array.from({ length: 5_000 }, (_, index) => ({
         ...drilldown.points[0],
         borrower_id: `B-${String(index).padStart(13, '0')}`,
-        equity_pct: 40 + (index % 5),
-        rate_spread_bps: 75 + (index % 20),
+        coordinate_total: 7_000,
       })),
-      showing: 3_000,
-      total_matching: 3_000,
+      showing: 5_000,
+      total_matching: 7_000,
+      truncated: true,
     };
     const html = renderToStaticMarkup(
       <MemoryRouter>
@@ -199,16 +204,17 @@ describe('Equity versus rate spread score-band legend', () => {
       </MemoryRouter>,
     );
 
-    expect(html).toContain('Plotting 1.2K of 3K returned borrowers');
-    expect(html).toContain('(3K total matching this window)');
-    expect(html).not.toContain('Showing 3K of 3K');
-    expect(html).toContain('every returned borrower at each displayed coordinate');
+    expect(html).toContain('Plotting 1.2K of 5K returned borrowers');
+    expect(html).toContain('(7K total matching this window) (server cap 5K)');
+    expect(html).not.toContain('Showing 7K of 7K');
+    expect(html).toContain('exact coordinate population');
   });
 
   it('does not understate a cluster that crosses the client marker cutoff', () => {
     const points = Array.from({ length: 1_250 }, (_, index) => ({
       ...drilldown.points[0],
       borrower_id: `B-${String(index).padStart(13, '0')}`,
+      coordinate_total: 1_700,
     }));
     const html = renderToStaticMarkup(
       <MemoryRouter>
@@ -216,13 +222,14 @@ describe('Equity versus rate spread score-band legend', () => {
           ...drilldown,
           points,
           showing: points.length,
-          total_matching: points.length,
+          total_matching: 1_700,
+          truncated: true,
         }} />
       </MemoryRouter>,
     );
 
-    expect(html).toContain('1250 borrowers at 42% equity and 88 bps spread');
-    expect(html).not.toContain('1200 borrowers at 42% equity and 88 bps spread');
+    expect(html).toContain('1700 borrowers; showing 1250 ranked links returned under server cap');
+    expect(html).not.toContain('1250 borrowers at 42% equity and 88 bps spread');
   });
 
   it('opens a cluster from its native button and Escape closes it back to the marker', () => {

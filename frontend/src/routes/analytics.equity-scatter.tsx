@@ -53,7 +53,7 @@ import {
  * mip.gold.equity_spread_points — no raw borrower rows cross the wire until
  * the user zooms. Selecting a cell loads the REAL borrowers inside that
  * window from /analytics/economics/points, capped server-side, with an
- * honest "showing N of M" line. Dots are colored by the canonical S1 score
+ * honest returned-versus-matching counts. Dots are colored by the canonical S1 score
  * bands (scoreBand → .score--high/med/low) and deep-link to Borrower 360,
  * where the draft-only outreach composer is the terminal action.
  */
@@ -233,7 +233,7 @@ export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
       <p className="analytics-scatter-legend__scope muted fs-12 flush">
         {scope === 'overview'
           ? 'Color metric: mean opportunity score per overview cell.'
-          : 'Colors show individual opportunity scores. A numbered marker uses the highest score in its cluster; its number is the borrower count. Open it for every borrower link.'}
+          : 'Colors show individual opportunity scores. A numbered marker uses the highest returned score in its cluster; its number is the exact coordinate population. Open it for ranked links returned under the server cap.'}
       </p>
     </div>
   );
@@ -318,7 +318,7 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
       {plotted.length < payload.points.length
         ? `; the plotted points are the top ${fmt(plotted.length)} by opportunity score across ${fmt(coordinateGroups.length)} coordinate markers`
         : ''}
-      . Single points open Borrower 360; numbered clusters reveal every returned borrower at each displayed coordinate.
+      . Single points open Borrower 360; numbered clusters show the exact coordinate population and the ranked borrower links returned under the server cap.
     </p>
   );
   if (payload.points.length === 0) {
@@ -341,7 +341,7 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
           onKeyDown={handleScatterMarkerNavigation}
         >
           {coordinateGroups.map((group) => (
-            group.points.length === 1 ? (
+            group.coordinate_total === 1 ? (
               <ScatterPointLink key={group.key} point={group.points[0]} layout={layout} />
             ) : (
               <ScatterPointCluster
@@ -392,11 +392,13 @@ export function groupExactCoordinatePoints(
     const existing = groups.get(key);
     if (existing) {
       existing.points.push(point);
+      existing.coordinate_total = Math.max(existing.coordinate_total, point.coordinate_total);
     } else {
       groups.set(key, {
         key,
         equity_pct: point.equity_pct,
         rate_spread_bps: point.rate_spread_bps,
+        coordinate_total: point.coordinate_total,
         points: [point],
       });
     }
@@ -443,6 +445,11 @@ function ScatterPointCluster({
   const markerRef = useRef<HTMLButtonElement>(null);
   const position = scatterPosition(group.equity_pct, group.rate_spread_bps, layout);
   const highestScore = Math.max(...group.points.map((point) => point.opportunity_score));
+  const returnedCount = group.points.length;
+  const cappedMembership = group.coordinate_total > returnedCount;
+  const membershipLabel = cappedMembership
+    ? `${group.coordinate_total} borrowers; showing ${returnedCount} ranked links returned under server cap`
+    : `${group.coordinate_total} borrowers`;
   const band = scoreBand(highestScore);
   const alignment = position.xPct < 24
     ? 'analytics-scatter__cluster--align-start'
@@ -470,22 +477,22 @@ function ScatterPointCluster({
         className={`analytics-scatter__cluster-marker score--${band}`}
         aria-expanded={open}
         aria-controls={panelId}
-        aria-label={`${group.points.length} borrowers at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread. Open exact-coordinate cluster.`}
-        title={`${group.points.length} borrowers at the same coordinate`}
+        aria-label={`${membershipLabel} at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread. Open exact-coordinate cluster.`}
+        title={`${membershipLabel} at the same coordinate`}
         onClick={() => onOpenChange(!open)}
         data-scatter-marker
       >
-        {group.points.length}
+        {group.coordinate_total}
       </button>
       <div
         id={panelId}
         className="analytics-scatter__cluster-panel"
         role="group"
-        aria-label={`${group.points.length} borrowers at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread`}
+        aria-label={`${membershipLabel} at ${group.equity_pct}% equity and ${group.rate_spread_bps} bps spread`}
         hidden={!open}
       >
         <div className="analytics-scatter__cluster-title">
-          {group.points.length} borrowers · {group.equity_pct}% equity · {group.rate_spread_bps} bps
+          {membershipLabel} · {group.equity_pct}% equity · {group.rate_spread_bps} bps
         </div>
         {open && <ul className="analytics-scatter__cluster-list">
           {group.points.slice(0, visibleCount).map((point) => {
