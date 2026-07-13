@@ -48,6 +48,7 @@ from backend.api import (
     portfolio,
     sales,
     segments,
+    session,
     telemetry,
     workspace,
 )
@@ -595,6 +596,7 @@ API_ROUTERS = [
     sales.router,
     loan_officers.router,
     geo.router,
+    session.router,
     growth_agent.router,
     growth_agent_compose_routes.router,
     genie.router,

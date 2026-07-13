@@ -139,7 +139,6 @@ export default function PortfolioBuilder() {
   const [savePanelOpen, setSavePanelOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
-  const autoAppliedRecommendationKeyRef = useRef<string | null>(null);
   const {
     data: campaignsData,
     isPending: campaignsLoading,
@@ -232,27 +231,6 @@ export default function PortfolioBuilder() {
       generatorLabel: recommendation.generator_label,
     }));
   }, [recommendationQuery.data]);
-
-  useEffect(() => {
-    const recommendation = recommendationQuery.data;
-    if (
-      !recommendation
-      || recommendation.variants.length !== 2
-      || autoAppliedRecommendationKeyRef.current === committedKey
-    ) return;
-    const [variantA, variantB] = recommendation.variants;
-    setCampaignSetup((current) => ({
-      ...current,
-      subjectA: variantA.subject,
-      subjectB: variantB.subject,
-      bodyA: variantA.body,
-      bodyB: variantB.body,
-      holdoutPct: String(recommendation.holdout_pct),
-      generationMode: recommendation.generation_mode,
-      generatorLabel: recommendation.generator_label,
-    }));
-    autoAppliedRecommendationKeyRef.current = committedKey;
-  }, [committedKey, recommendationQuery.data]);
   const buildDirty = useMemo(
     () =>
       JSON.stringify({ filters, stateCodes }) !==

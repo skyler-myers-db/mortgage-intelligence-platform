@@ -71,6 +71,29 @@ def _parse_admin_emails(raw: str | None) -> set[str]:
     return {tok.strip().lower() for tok in raw.split(",") if tok.strip()}
 
 
+def _admin_access(request: Request) -> tuple[bool, str, set[str]]:
+    """Resolve the single admin-access decision used by UI and enforcement."""
+    actor = resolve_actor(request)
+    if settings.trust_forwarded_headers:
+        groups = _parse_groups(request.headers.get("X-Forwarded-Groups"))
+        allowed_groups = {settings.admin_group_name.lower(), _FALLBACK_ADMIN_GROUP}
+        if groups & allowed_groups:
+            return True, actor, groups
+    else:
+        # Trust disabled: pretend the header doesn't exist for log
+        # forensics below.
+        groups = set()
+
+    admin_emails = _parse_admin_emails(getattr(settings, "admin_emails", None))
+    return bool(actor and actor.lower() in admin_emails), actor, groups
+
+
+def can_access_admin(request: Request) -> bool:
+    """Return the same fail-closed decision enforced by ``require_admin``."""
+    allowed, _actor, _groups = _admin_access(request)
+    return allowed
+
+
 def require_admin(request: Request) -> str:
     """FastAPI dependency: admit admins, reject everyone else.
 
@@ -104,20 +127,8 @@ def require_admin(request: Request) -> str:
     with trust disabled is fail-closed: nobody admitted via header,
     only explicit server-side configuration paths work.
     """
-    if settings.trust_forwarded_headers:
-        groups = _parse_groups(request.headers.get("X-Forwarded-Groups"))
-        allowed_groups = {settings.admin_group_name.lower(), _FALLBACK_ADMIN_GROUP}
-        if groups & allowed_groups:
-            return resolve_actor(request)
-    else:
-        # Trust disabled: pretend the header doesn't exist for log
-        # forensics below.
-        groups = set()
-
-    # Path 2: email allowlist.
-    actor = resolve_actor(request)
-    admin_emails = _parse_admin_emails(getattr(settings, "admin_emails", None))
-    if actor and actor.lower() in admin_emails:
+    allowed, actor, groups = _admin_access(request)
+    if allowed:
         return actor
 
     # Deny: log at INFO for forensic traceability; never log the raw

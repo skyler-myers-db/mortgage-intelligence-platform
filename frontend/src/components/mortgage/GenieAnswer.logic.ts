@@ -103,12 +103,22 @@ export function formatIdentifier(column: string, value: unknown): string {
   return raw;
 }
 
-function formatSegmentValue(value: unknown): string {
-  if (Array.isArray(value)) {
-    const labels = value
-      .map((item) => safeSegmentName(item))
-      .filter((label): label is string => Boolean(label));
-    return labels.length > 0 ? labels.join(', ') : 'Unknown segment';
+function formatSegmentArray(value: unknown): string {
+  if (!Array.isArray(value) || value.length === 0) return 'Unknown segment';
+  const labels = value.map((item) => safeSegmentName(item));
+  if (labels.some((label) => label === null)) return 'Unknown segment';
+  return labels.join(', ');
+}
+
+function formatSegmentValue(value: unknown, multiple: boolean): string {
+  if (multiple) {
+    if (Array.isArray(value)) return formatSegmentArray(value);
+    if (typeof value !== 'string' || !value.trim()) return value == null ? '—' : 'Unknown segment';
+    try {
+      return formatSegmentArray(JSON.parse(value));
+    } catch {
+      return 'Unknown segment';
+    }
   }
   const raw = String(value ?? '').trim();
   if (!raw) return '—';
@@ -252,7 +262,8 @@ export function humanizeKey(k: string): string {
 
 export function formatCell(column: string, v: unknown): string {
   if (v === null || v === undefined) return '—';
-  if (/^(segment|segment_code|top_segment|segment_codes)$/i.test(column)) return formatSegmentValue(v);
+  if (/^segment_codes$/i.test(column)) return formatSegmentValue(v, true);
+  if (/^(segment|segment_code|top_segment)$/i.test(column)) return formatSegmentValue(v, false);
   if (isIdentifierColumn(column)) return formatIdentifier(column, v);
   if (typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : v.toFixed(2);
   return String(v);

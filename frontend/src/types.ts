@@ -307,6 +307,10 @@ export interface WorkspaceState {
   saved_drafts: SavedDraft[];
 }
 
+export interface SessionResponse {
+  can_access_admin: boolean;
+}
+
 export interface WorkspaceMutationResult {
   ok: boolean;
   borrower_id: string;

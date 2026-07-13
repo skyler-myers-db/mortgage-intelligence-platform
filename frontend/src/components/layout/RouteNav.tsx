@@ -30,7 +30,7 @@ const BASE_ITEMS: NavItem[] = [
 ];
 
 export function RouteNav() {
-  const { lastBorrowerId } = useApp();
+  const { canAccessAdmin, lastBorrowerId } = useApp();
   const detailItems: NavItem[] = [
     {
       to: lastBorrowerId ? `/borrower-360/${lastBorrowerId}` : '/borrower-360',
@@ -43,10 +43,13 @@ export function RouteNav() {
       icon: 'bolt',
     },
   ];
+  const baseItems = canAccessAdmin
+    ? BASE_ITEMS
+    : BASE_ITEMS.filter((item) => item.to !== '/admin-config');
   const items = [
-    ...BASE_ITEMS.slice(0, 5),
+    ...baseItems.slice(0, 5),
     ...detailItems,
-    ...BASE_ITEMS.slice(5),
+    ...baseItems.slice(5),
   ];
   return (
     <nav aria-label="Main navigation" className="route-nav">

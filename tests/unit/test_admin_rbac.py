@@ -61,6 +61,41 @@ def test_admin_rejects_non_admin_group(client: TestClient) -> None:
     assert response.json() == {"detail": "forbidden"}
 
 
+def test_session_returns_only_admin_capability_from_same_group_rule(
+    client: TestClient,
+) -> None:
+    admitted = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Groups": settings.admin_group_name},
+    )
+    denied = client.get(
+        "/api/v1/session",
+        headers={"X-Forwarded-Groups": "analysts,loan-officers"},
+    )
+
+    assert admitted.status_code == 200
+    assert admitted.json() == {"can_access_admin": True}
+    assert denied.status_code == 200
+    assert denied.json() == {"can_access_admin": False}
+
+
+def test_session_and_admin_gate_share_email_allowlist_rule(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "admin_emails", "operator@example.com")
+    headers = {
+        "X-Forwarded-Email": "operator@example.com",
+        "X-Forwarded-Groups": "",
+    }
+
+    session = client.get("/api/v1/session", headers=headers)
+    admin = client.get("/api/admin/rules", headers=headers)
+
+    assert session.json() == {"can_access_admin": True}
+    assert admin.status_code == 200, admin.text
+
+
 def test_force_degraded_rejects_non_admin_group(client: TestClient) -> None:
     """The drill switch is admin-only because it affects every live user."""
 
@@ -113,6 +148,10 @@ def test_admin_respects_trust_forwarded_headers_flag(
     )
     assert denied.status_code == 403
     assert denied.json() == {"detail": "forbidden"}
+    session_denied = client.get(
+        "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
+    )
+    assert session_denied.json() == {"can_access_admin": False}
 
     # Trust re-enabled -- same header admits again.
     monkeypatch.setattr(settings, "trust_forwarded_headers", True)
@@ -120,6 +159,10 @@ def test_admin_respects_trust_forwarded_headers_flag(
         "/api/admin/rules", headers={"X-Forwarded-Groups": "mip-admin"}
     )
     assert admitted.status_code == 200, admitted.text
+    session_admitted = client.get(
+        "/api/v1/session", headers={"X-Forwarded-Groups": "mip-admin"}
+    )
+    assert session_admitted.json() == {"can_access_admin": True}
 
 
 def test_admin_fallback_group_always_admitted(client: TestClient) -> None:

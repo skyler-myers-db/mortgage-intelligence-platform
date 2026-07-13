@@ -44,6 +44,7 @@ import type {
   SalesOutcomeSummaryResponse,
   SalesStandupResponse,
   SegmentAnalyticsResponse,
+  SessionResponse,
   StateRollupResponse,
   SignalAnalyticsResponse,
   SavedDraft,
@@ -1705,6 +1706,9 @@ export const api = {
 
   workspace: (signal?: AbortSignal) =>
     getJson<WorkspaceState>('/api/workspace', signal),
+
+  session: (signal?: AbortSignal) =>
+    getJson<SessionResponse>('/api/session', signal),
 
   saveWorkspaceLead: (lead: SavedLeadInput, signal?: AbortSignal) =>
     putJson<SavedLead, SavedLeadInput>(

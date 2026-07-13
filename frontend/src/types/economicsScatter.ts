@@ -10,6 +10,13 @@ export interface EquitySpreadPoint {
   in_the_money?: boolean | null;
 }
 
+export interface EquitySpreadCoordinateGroup {
+  key: string;
+  equity_pct: number;
+  rate_spread_bps: number;
+  points: EquitySpreadPoint[];
+}
+
 export interface EquitySpreadViewport {
   equity_min: number;
   equity_max: number;

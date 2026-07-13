@@ -1,12 +1,29 @@
+/** @vitest-environment happy-dom */
+
+import { act } from 'react';
+import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router-dom';
 import { describe, expect, it } from 'vitest';
+// @ts-expect-error Frontend app types intentionally exclude Node globals; this
+// unit test reads the design-system CSS text under Vitest only.
+import { readFileSync } from 'node:fs';
+// @ts-expect-error see node:fs note above.
+import { join } from 'node:path';
 import {
   SCORE_BAND_HIGH_MIN,
   SCORE_BAND_MED_MIN,
 } from '../lib/opportunityScore';
 import type { EquitySpreadOverview, EquitySpreadPointsResponse } from '../types';
-import { EquitySpreadBinsView, EquitySpreadPointsView } from './analytics.equity-scatter';
+import {
+  EquitySpreadBinsView,
+  EquitySpreadPointsView,
+  groupExactCoordinatePoints,
+} from './analytics.equity-scatter';
+
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
+declare const process: { cwd(): string };
 
 const overview: EquitySpreadOverview = {
   bins: [
@@ -49,6 +66,35 @@ const drilldown: EquitySpreadPointsResponse = {
   source_table: 'mip.gold.equity_spread_points',
 };
 
+const collisionDrilldown: EquitySpreadPointsResponse = {
+  ...drilldown,
+  points: [
+    {
+      ...drilldown.points[0],
+      borrower_id: 'B-0000000000002',
+      display_name: 'Owner 2',
+      opportunity_score: SCORE_BAND_HIGH_MIN,
+      score_band: 'high',
+    },
+    {
+      ...drilldown.points[0],
+      borrower_id: 'B-0000000000001',
+      display_name: 'Owner 1',
+      opportunity_score: SCORE_BAND_MED_MIN,
+      score_band: 'med',
+    },
+    {
+      ...drilldown.points[0],
+      borrower_id: 'B-0000000000003',
+      display_name: 'Owner 3',
+      equity_pct: 43,
+      rate_spread_bps: 90,
+    },
+  ],
+  total_matching: 3,
+  showing: 3,
+};
+
 describe('Equity versus rate spread score-band legend', () => {
   it('labels canonical score ranges and identifies overview colors as cell means', () => {
     const html = renderToStaticMarkup(
@@ -76,7 +122,80 @@ describe('Equity versus rate spread score-band legend', () => {
     expect(html).toContain(
       'aria-label="Opportunity score color legend for borrower drilldown points"',
     );
-    expect(html).toContain('Color metric: individual borrower opportunity score.');
+    expect(html).toContain('Colors show individual opportunity scores.');
+    expect(html).toContain('Exact-coordinate cluster count');
     expect(html).toContain('analytics-scatter__dot--band score--med');
+  });
+
+  it('groups exact collisions and orders every masked borrower link deterministically', () => {
+    const groups = groupExactCoordinatePoints(collisionDrilldown.points);
+    expect(groups).toHaveLength(2);
+    expect(groups[0].points.map((point) => point.borrower_id)).toEqual([
+      'B-0000000000001',
+      'B-0000000000002',
+    ]);
+
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <EquitySpreadPointsView payload={collisionDrilldown} />
+      </MemoryRouter>,
+    );
+    expect(html).toContain('analytics-scatter__cluster-marker score--high');
+    expect(html).toContain('aria-expanded="false"');
+    expect(html).toContain('2 borrowers at 42% equity and 88 bps spread');
+    expect(html.indexOf('/borrower-360/B-0000000000001')).toBeLessThan(
+      html.indexOf('/borrower-360/B-0000000000002'),
+    );
+    expect(html).toContain('/borrower-360/B-0000000000003');
+  });
+
+  it('opens a cluster from its native button and Escape closes it back to the marker', () => {
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const root = createRoot(container);
+    try {
+      act(() => {
+        root.render(
+          <MemoryRouter>
+            <EquitySpreadPointsView payload={collisionDrilldown} />
+          </MemoryRouter>,
+        );
+      });
+      const marker = container.querySelector<HTMLButtonElement>('.analytics-scatter__cluster-marker');
+      const panel = container.querySelector<HTMLElement>('.analytics-scatter__cluster-panel');
+      expect(marker).not.toBeNull();
+      expect(panel).not.toBeNull();
+      expect(panel!.hidden).toBe(true);
+
+      act(() => marker!.click());
+      expect(marker!.getAttribute('aria-expanded')).toBe('true');
+      expect(panel!.hidden).toBe(false);
+      expect(panel!.querySelectorAll('a')).toHaveLength(2);
+
+      act(() => {
+        panel!.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      });
+      expect(marker!.getAttribute('aria-expanded')).toBe('false');
+      expect(panel!.hidden).toBe(true);
+      expect(document.activeElement).toBe(marker);
+    } finally {
+      act(() => root.unmount());
+      container.remove();
+    }
+  });
+
+  it('keeps scatter loading height stable while reducing the chart height on narrow containers', () => {
+    const css = readFileSync(
+      join(process.cwd(), 'src', 'design-system', 'components.css'),
+      'utf8',
+    );
+
+    expect(css).toMatch(/\.analytics-chart-panel--scatter\s*\{[^}]*min-height:/s);
+    expect(css).toMatch(
+      /@container main \(max-width: 640px\)[\s\S]*?\.analytics-chart-panel--scatter\s*\{[^}]*min-height:\s*calc\(\(var\(--sp-16\) \* 5\) \+ var\(--sp-16\)\)/,
+    );
+    expect(css).toMatch(
+      /@container main \(max-width: 640px\)[\s\S]*?\.analytics-scatter-wrap\s*\{[^}]*--analytics-chart-h:\s*calc\(var\(--sp-16\) \* 5\)/,
+    );
   });
 });

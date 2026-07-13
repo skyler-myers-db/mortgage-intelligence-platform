@@ -13,7 +13,14 @@ import { useQuery } from '@tanstack/react-query';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { queryKeys } from '../lib/queryKeys';
-import type { ConfigOptions, SavedDraft, SavedDraftInput, SavedLead, SavedLeadInput } from '../types';
+import type {
+  ConfigOptions,
+  SavedDraft,
+  SavedDraftInput,
+  SavedLead,
+  SavedLeadInput,
+  SessionResponse,
+} from '../types';
 
 /**
  * AppContext — theme, accent, density, configured tenant, drawer, Genie, approvals,
@@ -54,6 +61,7 @@ interface AppCtxValue {
   density: Density;
   setDensity: (d: Density) => void;
   lender: string;
+  canAccessAdmin: boolean;
   showEvidence: boolean;
   setShowEvidence: (v: boolean) => void;
   showConfidence: boolean;
@@ -177,6 +185,14 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [workspaceStatus, setWorkspaceStatus] = useState<'loading' | 'ready' | 'error'>('loading');
   const [workspaceError, setWorkspaceError] = useState<string | null>(null);
   const [workspaceReloadToken, setWorkspaceReloadToken] = useState(0);
+  const sessionQuery = useQuery<SessionResponse>({
+    queryKey: ['session', 'access'],
+    queryFn: ({ signal }) => api.session(signal),
+    retry: false,
+  });
+  const canAccessAdmin = sessionQuery.isSuccess
+    && !sessionQuery.isFetching
+    && sessionQuery.data.can_access_admin === true;
   const workspaceQuery = useQuery({
     queryKey: [...queryKeys.workspace(), workspaceReloadToken],
     queryFn: ({ signal }) => api.workspace(signal),
@@ -410,6 +426,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       accent, setAccent,
       density, setDensity,
       lender,
+      canAccessAdmin,
       showEvidence, setShowEvidence,
       showConfidence, setShowConfidence,
       consoleOpen, setConsoleOpen,
@@ -432,7 +449,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     }),
     [
       theme, setTheme, accent, setAccent, density, setDensity,
-      lender, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
+      lender, canAccessAdmin, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
       drawer, genieOpen, approvals, setApproval,
       lastBorrowerIdState, setLastBorrowerId, clearActorScopedState,
       savedLeads, saveLead, removeSavedLead, isLeadSaved,
