@@ -248,10 +248,10 @@ class Settings(BaseSettings):
     # MIP_GENIE_ACTION_SECRET remains accepted as the current key so older
     # deploys can move to the rotation contract without a flag day.
     #
-    # When no configured key exists, the app generates a process-local key
-    # at boot, which keeps tokens unforgeable but invalidates outstanding
-    # confirmations after a restart. Shared/customer deploys should set a
-    # stable current key.
+    # Local development and tests may use a process-local key. Deployed
+    # sandbox/customer runtimes must receive a stable current key from the
+    # deployment payload so outstanding confirmations survive process and
+    # replica changes.
     mip_genie_action_secret: SecretStr | None = Field(default=None, repr=False)
     mip_genie_action_secret_current: SecretStr | None = Field(default=None, repr=False)
     mip_genie_action_secret_previous: SecretStr | None = Field(default=None, repr=False)

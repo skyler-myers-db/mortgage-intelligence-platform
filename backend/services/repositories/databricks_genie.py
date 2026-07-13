@@ -624,12 +624,28 @@ def _restore_live_voice(
     proof = canonical.proof
     narrative = (result.answer_text or "").strip()
     updates: dict[str, Any] = {}
+    contradicted, conflicting_claim = _narrative_contradicts_metric(
+        narrative,
+        canonical.metric_value,
+    )
     unsupported_claims = _unsupported_answer_numeric_claims(
         narrative,
         canonical.table_rows,
         canonical.question,
     )
-    if narrative and unsupported_claims:
+    if narrative and contradicted:
+        updates["answer"] = canonical.answer
+        if proof is not None:
+            claim_note = f" ({conflicting_claim})" if conflicting_claim else ""
+            gap = (
+                "Genie's draft narrative was superseded because its numeric claim"
+                f"{claim_note} contradicted the governed recomputation."
+            )
+            if gap not in proof.known_data_gaps:
+                proof = proof.model_copy(
+                    update={"known_data_gaps": [*proof.known_data_gaps, gap]}
+                )
+    elif narrative and unsupported_claims:
         # Recognized shapes must obey the same all-claims rule as generic
         # Genie turns. One matching count cannot launder another unsupported
         # rate, balance, percentage, or count in the same narrative.

@@ -61,7 +61,7 @@ def test_reviewed_fallback_is_labelled_and_uses_governed_cohort_metrics() -> Non
     assert all("guarantee" not in variant.body.lower() for variant in result.variants)
 
 
-@pytest.mark.parametrize("app_env", ["staging", "production", "customer"])
+@pytest.mark.parametrize("app_env", ["sandbox", "staging", "production", "customer"])
 def test_non_dev_campaign_provenance_refuses_process_local_key(app_env: str) -> None:
     with pytest.raises(RuntimeError, match="requires a configured HMAC secret"):
         recommend_campaign(
@@ -74,22 +74,6 @@ def test_non_dev_campaign_provenance_refuses_process_local_key(app_env: str) -> 
                 mip_genie_action_secret_previous=None,
             ),
         )
-
-
-def test_sandbox_campaign_provenance_allows_process_local_key() -> None:
-    result = recommend_campaign(
-        _preview(),
-        settings=Settings(
-            app_env="sandbox",
-            mip_agent_orchestrator=False,
-            mip_genie_action_secret=None,
-            mip_genie_action_secret_current=None,
-            mip_genie_action_secret_previous=None,
-        ),
-    )
-
-    assert all(variant.provenance_token for variant in result.variants)
-
 
 def test_non_dev_campaign_provenance_uses_configured_key() -> None:
     result = recommend_campaign(

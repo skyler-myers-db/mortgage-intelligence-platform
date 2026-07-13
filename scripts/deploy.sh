@@ -307,6 +307,44 @@ if [[ -z "$APP_RUNTIME_ENV" ]]; then
 fi
 APP_GIT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
 
+# Campaign/Genie confirmation tokens must remain verifiable across app
+# restarts and replicas. Customer targets require an operator-owned secret.
+# The shared dev sandbox bootstraps a deployment-scoped secret under the
+# gitignored .databricks directory and reuses it on every subsequent deploy.
+_GENIE_ACTION_SECRET_RESOLVED="${MIP_GENIE_ACTION_SECRET_CURRENT:-${MIP_GENIE_ACTION_SECRET:-}}"
+if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
+  _GENIE_ACTION_SECRET_RESOLVED="$(dotenv_value MIP_GENIE_ACTION_SECRET_CURRENT)"
+fi
+if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
+  _GENIE_ACTION_SECRET_RESOLVED="$(dotenv_value MIP_GENIE_ACTION_SECRET)"
+fi
+_GENIE_ACTION_SECRET_FILE=".databricks/mip-genie-action-secret"
+if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" && -f "$_GENIE_ACTION_SECRET_FILE" ]]; then
+  _GENIE_ACTION_SECRET_RESOLVED="$(< "$_GENIE_ACTION_SECRET_FILE")"
+fi
+if [[ -z "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
+  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "dev" && "$APP_RUNTIME_ENV" != "sandbox" ]]; then
+    echo "${RED}[deploy] ERROR: MIP_GENIE_ACTION_SECRET_CURRENT is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
+    echo "${RED}  Deployed confirmation and campaign-provenance tokens require a stable, deployment-scoped HMAC key.${RST}" >&2
+    exit 1
+  fi
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    mkdir -p .databricks
+    umask 077
+    _GENIE_ACTION_SECRET_RESOLVED="$($PYTHON -c 'import secrets; print(secrets.token_urlsafe(48))')"
+    printf '%s\n' "$_GENIE_ACTION_SECRET_RESOLVED" > "$_GENIE_ACTION_SECRET_FILE"
+    chmod 600 "$_GENIE_ACTION_SECRET_FILE"
+    echo "  genie/campaign HMAC: bootstrapped deployment-scoped sandbox key"
+  else
+    echo "  genie/campaign HMAC: sandbox key will be bootstrapped during deploy"
+  fi
+else
+  echo "  genie/campaign HMAC: configured"
+fi
+if [[ -n "$_GENIE_ACTION_SECRET_RESOLVED" ]]; then
+  export MIP_GENIE_ACTION_SECRET_CURRENT="$_GENIE_ACTION_SECRET_RESOLVED"
+fi
+
 # Cotality ID-mask HMAC visibility check (audit P3, 2026-06-11). When
 # MIP_COTALITY_ID_MASK_SECRET is unset, backend/services/pii_redaction.py
 # falls back to a source-committed constant — masked IDs are still stable,

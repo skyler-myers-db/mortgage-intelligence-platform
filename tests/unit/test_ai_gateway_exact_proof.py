@@ -150,7 +150,11 @@ class _Workspace:
         self.api_client = type(
             "ApiClient",
             (),
-            {"do": lambda _self, *_args, **_kwargs: {"id": "resp-ai-gateway-proof"}},
+            {
+                "do": lambda _self, *_args, **_kwargs: {
+                    "choices": [{"message": {"content": "Gateway logging acknowledged."}}]
+                }
+            },
         )()
         self.serving_endpoints = type(
             "ServingEndpoints",

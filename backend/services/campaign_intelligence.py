@@ -59,7 +59,7 @@ _OFFER_AUDIENCE: dict[str, str] = {
 _CAMPAIGN_PROVENANCE_VERSION = 1
 _CAMPAIGN_PROVENANCE_TTL_S = 60 * 60
 _PROCESS_CAMPAIGN_PROVENANCE_SECRET = secrets.token_bytes(32)
-_PROCESS_PROVENANCE_APP_ENVS = frozenset({"local", "dev", "development", "test", "sandbox"})
+_PROCESS_PROVENANCE_APP_ENVS = frozenset({"local", "dev", "development", "test"})
 _GENERATOR_LABELS: dict[str, str] = {
     "supervisor": "Agent endpoint-generated recommendation",
     "reviewed_fallback": "Reviewed campaign framework",
@@ -237,7 +237,7 @@ def _campaign_provenance_keys(
     app_env = (settings.app_env or "").strip().lower()
     if app_env not in _PROCESS_PROVENANCE_APP_ENVS:
         raise RuntimeError(
-            "campaign provenance requires a configured HMAC secret outside local/dev/sandbox"
+            "campaign provenance requires a configured HMAC secret outside local/dev/test"
         )
     return [_PROCESS_CAMPAIGN_PROVENANCE_SECRET]
 

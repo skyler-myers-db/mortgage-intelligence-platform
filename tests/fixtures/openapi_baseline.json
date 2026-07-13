@@ -3365,6 +3365,19 @@
             "title": "Hypothesis",
             "type": "string"
           },
+          "provenance_token": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "minLength": 32,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Provenance Token"
+          },
           "subject": {
             "maxLength": 120,
             "minLength": 1,
@@ -4589,6 +4602,12 @@
           "borrower_id": {
             "title": "Borrower Id",
             "type": "string"
+          },
+          "coordinate_total": {
+            "default": 1,
+            "minimum": 1.0,
+            "title": "Coordinate Total",
+            "type": "integer"
           },
           "display_name": {
             "title": "Display Name",
@@ -18543,7 +18562,7 @@
     "/api/portfolio/campaign-recommendation": {
       "post": {
         "deprecated": true,
-        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe Supervisor receives aggregate facts only. Metrics, citations, holdout\nbounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
+        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe configured Agent Responses endpoint receives aggregate facts only.\nMetrics, citations, holdout bounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
         "operationId": "post_api_portfolio_campaign_recommendation_campaign_recommendation",
         "requestBody": {
           "content": {
@@ -25354,7 +25373,7 @@
     },
     "/api/v1/portfolio/campaign-recommendation": {
       "post": {
-        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe Supervisor receives aggregate facts only. Metrics, citations, holdout\nbounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
+        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe configured Agent Responses endpoint receives aggregate facts only.\nMetrics, citations, holdout bounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
         "operationId": "post_api_v1_portfolio_campaign_recommendation_campaign_recommendation",
         "requestBody": {
           "content": {

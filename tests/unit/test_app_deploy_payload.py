@@ -145,6 +145,25 @@ def test_payload_includes_cotality_mask_secret(monkeypatch) -> None:
     assert env["MIP_COTALITY_ID_MASK_SECRET"]["value"] == "customer-mask-secret"
 
 
+def test_payload_includes_rotation_aware_genie_action_secrets(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "current-action-secret")
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS", "previous-action-secret")
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_KID", "v3")
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID", "v2")
+
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="prod",
+        app_env="prod",
+    )
+    env = _env_map(payload)
+
+    assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value"] == "current-action-secret"
+    assert env["MIP_GENIE_ACTION_SECRET_PREVIOUS"]["value"] == "previous-action-secret"
+    assert env["MIP_GENIE_ACTION_SECRET_KID"]["value"] == "v3"
+    assert env["MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"]["value"] == "v2"
+
+
 def test_payload_omits_placeholder_cotality_mask_secret(monkeypatch) -> None:
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")
 

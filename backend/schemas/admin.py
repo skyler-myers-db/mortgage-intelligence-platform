@@ -114,12 +114,12 @@ class AdminOperationRunRequest(BaseModel):
         "source_update",
         "support_triage",
     ] | None = None
-    request_id: str = Field(min_length=1, max_length=64)
+    request_id: str | None = Field(default=None, max_length=120)
 
     @field_validator("request_id")
     @classmethod
-    def _request_id_is_public_safe(cls, value: str) -> str:
-        return validate_public_opaque_id(value)
+    def _request_id_is_public_safe(cls, value: str | None) -> str | None:
+        return None if value is None else validate_public_opaque_id(value)
 
 
 class AdminOperationRunResponse(BaseModel):

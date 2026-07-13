@@ -26,6 +26,7 @@ from datetime import UTC, datetime, timedelta
 from functools import wraps
 from threading import Lock
 from typing import Annotated, Any, Literal
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -207,6 +208,8 @@ def _serialize_operation_launch(function: Any) -> Any:
 
     @wraps(function)
     def wrapped(payload: AdminOperationRunRequest, *args: Any, **kwargs: Any) -> Any:
+        if payload.request_id is None:
+            payload.request_id = str(uuid4())
         with _OPERATION_LOCKS[payload.job_key]:
             return function(payload, *args, **kwargs)
 
@@ -409,6 +412,8 @@ def post_operation_run(
 
     if not payload.confirm:
         raise HTTPException(status_code=400, detail="confirmation required")
+    if payload.request_id is None:  # pragma: no cover - decorator always assigns it
+        raise HTTPException(status_code=500, detail="admin operation request id missing")
 
     try:
         accepted_replay = _operation_audit_event(
