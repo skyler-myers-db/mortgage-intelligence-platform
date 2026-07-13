@@ -181,6 +181,30 @@ describe('Equity versus rate spread score-band legend', () => {
     }
   });
 
+  it('distinguishes plotted, returned, and total-matching populations at the client cap', () => {
+    const capped = {
+      ...drilldown,
+      points: Array.from({ length: 1_201 }, (_, index) => ({
+        ...drilldown.points[0],
+        borrower_id: `B-${String(index).padStart(13, '0')}`,
+        equity_pct: 40 + (index % 5),
+        rate_spread_bps: 75 + (index % 20),
+      })),
+      showing: 3_000,
+      total_matching: 3_000,
+    };
+    const html = renderToStaticMarkup(
+      <MemoryRouter>
+        <EquitySpreadPointsView payload={capped} />
+      </MemoryRouter>,
+    );
+
+    expect(html).toContain('Plotting 1.2K of 3K returned borrowers');
+    expect(html).toContain('(3K total matching this window)');
+    expect(html).not.toContain('Showing 3K of 3K');
+    expect(html).toContain('every plotted borrower at that coordinate');
+  });
+
   it('opens a cluster from its native button and Escape closes it back to the marker', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);

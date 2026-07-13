@@ -25,6 +25,8 @@ def _response(**overrides: object) -> GenieMessageResponse:
         ("answer", "Contact **Marcus Chen** about the result."),
         ("follow_up_questions", ["Email borrower@example.com about this cohort."]),
         ("follow_up_questions", ["Target Muslim homeowners in Illinois."]),
+        ("table_rows", [{"borrower_name": "Marcus Chen"}]),
+        ("table_rows", [{"loan_officer": "person@example.com"}]),
     ],
 )
 def test_response_policy_rejects_unsafe_visible_text_shapes(
@@ -40,3 +42,12 @@ def test_response_policy_keeps_safe_mortgage_language() -> None:
         follow_up_questions=["How does loan age vary across New York?"],
     )
     assert genie_response_has_unsafe_visible_text(response) is False
+
+
+def test_response_policy_allows_only_explicit_governed_staff_labels() -> None:
+    response = _response(table_rows=[{"loan_officer": "John Smith"}])
+    assert genie_response_has_unsafe_visible_text(
+        response,
+        allowed_literals=["John Smith"],
+    ) is False
+    assert genie_response_has_unsafe_visible_text(response) is True

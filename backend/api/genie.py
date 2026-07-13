@@ -66,6 +66,7 @@ from backend.services.repositories.factory import (
     get_genie_answer_repository,
 )
 from backend.services.resilience import DependencyDownError
+from backend.services.sales_state import SalesStateStore
 from backend.services.workspace_store import WorkspaceStore, get_workspace_store
 
 router = APIRouter(prefix="/genie", tags=["genie"])
@@ -272,6 +273,40 @@ def _policy_blocked_genie_output_response(
         ),
         table_rows=[],
     )
+
+
+def _block_unsafe_genie_output(
+    audit: AuditStore,
+    *,
+    actor: str,
+    payload: GenieMessageRequest,
+    response: GenieMessageResponse,
+) -> GenieMessageResponse:
+    """Replace unsafe rendered output and record one non-PII policy event."""
+
+    blocked = _policy_blocked_genie_output_response(payload, response)
+    _required_audit_write(
+        audit,
+        actor=actor,
+        action="genie.response_blocked",
+        entity_type="genie_message",
+        entity_id=_safe_genie_audit_entity_id(
+            payload,
+            question_hash=blocked.question_hash or "genie",
+            message_id=blocked.message_id,
+        ),
+        payload_json={
+            "conversation_id": blocked.conversation_id,
+            "message_id": blocked.message_id,
+            "question_hash": blocked.question_hash,
+            "row_count": 0,
+            "source_assets": [],
+            "visualization_kind": None,
+            "action_type": "response_blocked",
+        },
+        event_type="RUN_GENIE",
+    )
+    return blocked
 
 
 def _refused_genie_response(
@@ -665,9 +700,24 @@ def genie_message(
             question=payload.question,
             conversation_id=payload.conversation_id,
         )
+        sales_ops_staff_labels = [
+            member.display_label
+            for member in SalesStateStore(lakebase).list_team(actor=actor)
+        ] if sales_ops_response is not None else []
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     if sales_ops_response is not None:
+        if _genie_response_has_unsafe_visible_text(
+            sales_ops_response,
+            allowed_literals=sales_ops_staff_labels,
+        ):
+            blocked = _block_unsafe_genie_output(
+                audit,
+                actor=actor,
+                payload=payload,
+                response=sales_ops_response,
+            )
+            return _finalize_genie_response(lakebase, actor=actor, response=blocked)
         _ = background
         _required_audit_write(
             audit,
@@ -806,27 +856,11 @@ def genie_message(
             kind=DependencyDownError.KIND_RETRIES_EXHAUSTED,
         ) from exc
     if _genie_response_has_unsafe_visible_text(result):  # type: ignore[arg-type]
-        blocked = _policy_blocked_genie_output_response(payload, result)  # type: ignore[arg-type]
-        _required_audit_write(
+        blocked = _block_unsafe_genie_output(
             audit,
             actor=actor,
-            action="genie.response_blocked",
-            entity_type="genie_message",
-            entity_id=_safe_genie_audit_entity_id(
-                payload,
-                question_hash=blocked.question_hash or "genie",
-                message_id=blocked.message_id,
-            ),
-            payload_json={
-                "conversation_id": blocked.conversation_id,
-                "message_id": blocked.message_id,
-                "question_hash": blocked.question_hash,
-                "row_count": 0,
-                "source_assets": [],
-                "visualization_kind": None,
-                "action_type": "response_blocked",
-            },
-            event_type="RUN_GENIE",
+            payload=payload,
+            response=result,  # type: ignore[arg-type]
         )
         return _finalize_genie_response(lakebase, actor=actor, response=blocked)
     _ = background

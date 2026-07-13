@@ -309,12 +309,13 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
   const coordinateGroups = groupExactCoordinatePoints(plotted);
   const meta = (
     <p className="analytics-scatter-meta muted fs-12" data-testid="scatter-meta">
-      Showing {fmt(payload.showing)} of {fmt(payload.total_matching)} borrowers in this window
+      Plotting {fmt(plotted.length)} of {fmt(payload.showing)} returned borrowers
+      {' '}({fmt(payload.total_matching)} total matching this window)
       {payload.truncated ? ` (server cap ${fmt(payload.point_cap)})` : ''}
       {plotted.length < payload.points.length
-        ? `; plotting the top ${fmt(plotted.length)} by opportunity score across ${fmt(coordinateGroups.length)} coordinate markers`
+        ? `; the plotted points are the top ${fmt(plotted.length)} by opportunity score across ${fmt(coordinateGroups.length)} coordinate markers`
         : ''}
-      . Single points open Borrower 360; numbered clusters reveal every borrower at that coordinate.
+      . Single points open Borrower 360; numbered clusters reveal every plotted borrower at that coordinate.
     </p>
   );
   if (payload.points.length === 0) {

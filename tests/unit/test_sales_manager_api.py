@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.main import app
 from backend.services.audit_store import AuditMetadataValueViolation, get_audit_store
+from backend.services.genie_answers import GenieMessageResponse
 from backend.services.genie_sales_ops import sales_ops_genie_response
 from backend.services.lakebase import get_lakebase_client
 from backend.services.repositories import get_borrower_repository
@@ -1306,7 +1307,53 @@ def test_genie_routes_sales_manager_lo_conversion_to_sales_ops_adapter() -> None
     assert body["source"] == "sales_ops"
     assert body["proof"]["trusted"] is False
     assert "mip_app.call_dispositions" in body["trusted_assets"]
-    assert any(row["lo_email"] == "lo02@summit.example" for row in body["table_rows"])
+    assert any(row["loan_officer"] == "Summit LO 02" for row in body["table_rows"])
+    assert "lo02@summit.example" not in response.text
+
+
+def test_genie_sales_ops_response_policy_blocks_unapproved_table_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    unsafe_email = "external.person@example.com"
+
+    def _unsafe_sales_ops_response(*_args: object, **kwargs: object) -> GenieMessageResponse:
+        return GenieMessageResponse(
+            conversation_id=str(kwargs.get("conversation_id") or "conv-sales-unsafe"),
+            message_id="msg-sales-unsafe",
+            question=str(kwargs["question"]),
+            question_hash="hash-sales-unsafe",
+            answer="The conversion rollup is ready.",
+            source="sales_ops",
+            trusted_assets=["mip_app.call_dispositions"],
+            row_count=1,
+            table_rows=[{"loan_officer": unsafe_email, "applications_started": 1}],
+        )
+
+    audit = InMemoryAuditStore()
+    previous_audit = app.dependency_overrides.get(get_audit_store)
+    app.dependency_overrides[get_audit_store] = lambda: audit
+    monkeypatch.setattr(
+        "backend.api.genie.sales_ops_genie_response",
+        _unsafe_sales_ops_response,
+    )
+    try:
+        response = client.post(
+            "/api/genie/message",
+            json={"question": "Which LO had the highest application-start rate this week?"},
+        )
+    finally:
+        if previous_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = previous_audit
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["source"] == "policy_blocked"
+    assert body["question"] == ""
+    assert body["table_rows"] == []
+    assert unsafe_email not in response.text
+    assert len(audit.list(action="genie.response_blocked")) == 1
 
 
 def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:

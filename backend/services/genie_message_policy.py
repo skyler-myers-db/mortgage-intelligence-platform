@@ -1,6 +1,7 @@
 """Input and model-output safety policy for the Genie message route."""
 
 import re
+from collections.abc import Mapping, Sequence
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -96,7 +97,41 @@ def identity_prompt_match(question: str) -> bool:
     return contains_human_name_shape(_mask_safe_phrases(question))
 
 
-def genie_response_has_unsafe_visible_text(response: GenieMessageResponse) -> bool:
+def _visible_text_values(value: object) -> list[str]:
+    """Flatten rendered response values, including dynamic table keys and cells."""
+
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, Mapping):
+        values: list[str] = []
+        for key, item in value.items():
+            values.extend(_visible_text_values(key))
+            values.extend(_visible_text_values(item))
+        return values
+    if isinstance(value, Sequence) and not isinstance(value, bytes | bytearray):
+        values = []
+        for item in value:
+            values.extend(_visible_text_values(item))
+        return values
+    return []
+
+
+def _without_allowed_literals(value: str, allowed_literals: Sequence[str]) -> str:
+    scrubbed = value
+    for literal in sorted(
+        {item.strip() for item in allowed_literals if item.strip()},
+        key=len,
+        reverse=True,
+    ):
+        scrubbed = re.sub(re.escape(literal), " governed_staff_label ", scrubbed)
+    return scrubbed
+
+
+def genie_response_has_unsafe_visible_text(
+    response: GenieMessageResponse,
+    *,
+    allowed_literals: Sequence[str] = (),
+) -> bool:
     """Check every model-authored text field rendered by the Genie UI."""
 
     values = [response.answer, *response.follow_up_questions]
@@ -119,4 +154,8 @@ def genie_response_has_unsafe_visible_text(response: GenieMessageResponse) -> bo
             )
             if value
         )
-    return any(contains_unsafe_ai_text(value) for value in values)
+    values.extend(_visible_text_values(response.table_rows or []))
+    return any(
+        contains_unsafe_ai_text(_without_allowed_literals(value, allowed_literals))
+        for value in values
+    )
