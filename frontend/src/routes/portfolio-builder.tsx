@@ -4,7 +4,14 @@ import { Link, useSearchParams } from 'react-router-dom';
 import { api } from '../lib/api';
 import { useConfigOptionsQuery } from '../lib/configOptionsQuery';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
-import type { CampaignListResponse, CampaignSummary, PortfolioPreview } from '../types';
+import type {
+  CampaignListResponse,
+  CampaignRecommendationResponse,
+  CampaignSummary,
+  PortfolioPreview,
+  SalesConversionResponse,
+  SalesOutcomeSummaryResponse,
+} from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { CampaignPrefillBanner } from '../components/mortgage/CampaignPrefillBanner';
 import { KpiCard } from '../components/mortgage/KpiCard';
@@ -19,13 +26,13 @@ import { parseBackendTimestamp } from '../lib/time';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
+import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
 import {
   BASE_DEFAULT_FILTERS,
   DEFAULT_CAMPAIGN_SETUP,
   NON_GEO_FILTER_GROUPS,
   URL_FILTER_KEYS,
   buildCampaignConfig,
-  buildDefaultCampaignSetup,
   buildGeoOptions,
   buildLeadQueueUrlFromFilters,
   buildPreviewCriteria,
@@ -56,6 +63,12 @@ function formatSavedCampaignDate(iso: string | null): string | null {
   return parsed ? parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
 }
 
+function isoDateDaysAgo(days: number): string {
+  const date = new Date();
+  date.setUTCDate(date.getUTCDate() - days);
+  return date.toISOString().slice(0, 10);
+}
+
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
   const { setDrawer } = useApp();
@@ -73,7 +86,6 @@ export default function PortfolioBuilder() {
   const targetLenderStatus = configOptionsQuery.isError
     ? 'unavailable'
     : configOptionsQuery.data?.target_lender_refs_status ?? 'loading';
-  const lenderName = configOptionsQuery.data?.lender_name?.trim() || 'configured lender';
   // Build the GEO dropdown from the tenant footprint. Memoised so the
   // FilterSelect doesn't get a fresh options array on every render (it
   // would be identity-stable for same-footprint re-renders).
@@ -128,11 +140,7 @@ export default function PortfolioBuilder() {
   const [savePanelOpen, setSavePanelOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
-  const campaignSetupDefaultRef = useRef<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
-  const currentDefaultCampaignSetup = useMemo(
-    () => buildDefaultCampaignSetup(lenderName),
-    [lenderName],
-  );
+  const autoAppliedRecommendationKeyRef = useRef<string | null>(null);
   const {
     data: campaignsData,
     isPending: campaignsLoading,
@@ -175,17 +183,82 @@ export default function PortfolioBuilder() {
       ? `Couldn't load portfolio preview: ${error.message}`
       : "Couldn't load portfolio preview."
     : null;
+  // Both SQL endpoints include start and end, so 89 days back plus today is
+  // exactly 90 calendar days.
+  const observedFrom = useMemo(() => isoDateDaysAgo(89), []);
+  const observedTo = useMemo(() => isoDateDaysAgo(0), []);
+  const conversionQuery = useQuery<SalesConversionResponse>({
+    queryKey: ['portfolio-observed-conversion', observedFrom, observedTo],
+    queryFn: ({ signal }) => api.salesConversion(observedFrom, observedTo, 'cohort', signal),
+    retry: false,
+  });
+  const outcomeQuery = useQuery<SalesOutcomeSummaryResponse>({
+    queryKey: ['portfolio-observed-outcomes', observedFrom, observedTo],
+    queryFn: ({ signal }) => api.salesOutcomeSummary(observedFrom, observedTo, signal),
+    retry: false,
+  });
+  const recommendationQuery = useQuery<CampaignRecommendationResponse>({
+    queryKey: ['portfolio-campaign-recommendation', committedKey],
+    queryFn: ({ signal }) => api.campaignRecommendation(
+      buildPreviewCriteria(committedFilters, committedStateCodes),
+      signal,
+    ),
+    enabled: Boolean(preview && preview.marketable_population > 0),
+    retry: false,
+  });
 
   const setFilter = (key: string) => (next: string) => setFilters((f) => ({ ...f, [key]: next }));
-  const setCampaignField = (key: Exclude<keyof CampaignSetupState, 'marketHouseholdTogether'>) => (
+  const setCampaignField = (key: Exclude<keyof CampaignSetupState, 'marketHouseholdTogether' | 'generationMode' | 'generatorLabel'>) => (
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
-  ) => setCampaignSetup((current) => ({ ...current, [key]: event.target.value }));
+  ) => setCampaignSetup((current) => ({
+    ...current,
+    [key]: event.target.value,
+    ...(['subjectA', 'subjectB', 'bodyA', 'bodyB'].includes(key)
+      ? { generationMode: 'operator' as const, generatorLabel: 'Operator edited' }
+      : {}),
+  }));
   const toggleHouseholdDedup = useCallback(() => {
     setCampaignSetup((current) => ({
       ...current,
       marketHouseholdTogether: !current.marketHouseholdTogether,
     }));
   }, []);
+  const applyRecommendation = useCallback(() => {
+    const recommendation = recommendationQuery.data;
+    if (!recommendation || recommendation.variants.length !== 2) return;
+    const [variantA, variantB] = recommendation.variants;
+    setCampaignSetup((current) => ({
+      ...current,
+      subjectA: variantA.subject,
+      subjectB: variantB.subject,
+      bodyA: variantA.body,
+      bodyB: variantB.body,
+      holdoutPct: String(recommendation.holdout_pct),
+      generationMode: recommendation.generation_mode,
+      generatorLabel: recommendation.generator_label,
+    }));
+  }, [recommendationQuery.data]);
+
+  useEffect(() => {
+    const recommendation = recommendationQuery.data;
+    if (
+      !recommendation
+      || recommendation.variants.length !== 2
+      || autoAppliedRecommendationKeyRef.current === committedKey
+    ) return;
+    const [variantA, variantB] = recommendation.variants;
+    setCampaignSetup((current) => ({
+      ...current,
+      subjectA: variantA.subject,
+      subjectB: variantB.subject,
+      bodyA: variantA.body,
+      bodyB: variantB.body,
+      holdoutPct: String(recommendation.holdout_pct),
+      generationMode: recommendation.generation_mode,
+      generatorLabel: recommendation.generator_label,
+    }));
+    autoAppliedRecommendationKeyRef.current = committedKey;
+  }, [committedKey, recommendationQuery.data]);
   const buildDirty = useMemo(
     () =>
       JSON.stringify({ filters, stateCodes }) !==
@@ -267,16 +340,6 @@ export default function PortfolioBuilder() {
     const t = window.setTimeout(() => setSaveHint('idle'), 2200);
     return () => window.clearTimeout(t);
   }, [saveHint]);
-
-  useEffect(() => {
-    const previousDefault = campaignSetupDefaultRef.current;
-    campaignSetupDefaultRef.current = currentDefaultCampaignSetup;
-    setCampaignSetup((current) => (
-      JSON.stringify(current) === JSON.stringify(previousDefault)
-        ? currentDefaultCampaignSetup
-        : current
-    ));
-  }, [currentDefaultCampaignSetup]);
 
   // When the URL changes (browser back/forward), reconcile local state
   // and refetch so the KPI grid reflects the navigation. We only
@@ -579,153 +642,32 @@ export default function PortfolioBuilder() {
           build with refinance-economics leads exists — never on day-zero or an
           empty cohort, where a dollar headline would be misleading. */}
       {!isDayZero(preview) && (preview?.high_intent_leads ?? 0) > 0 && (
-        <RoiProjector leads={preview!.high_intent_leads} />
+        <RoiProjector
+          preview={preview!}
+          conversion={conversionQuery.data}
+          outcomes={outcomeQuery.data}
+          performanceStatus={
+            conversionQuery.isPending || outcomeQuery.isPending
+              ? 'loading'
+              : conversionQuery.isError || outcomeQuery.isError
+                ? 'unavailable'
+                : 'available'
+          }
+        />
       )}
 
-      <div className="surface mt-4">
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="surface__icon">
-              <Icon name="send" size={14} />
-            </div>
-            <div>
-              <div className="h-4">Campaign setup</div>
-              <div className="muted fs-12">
-                Eligible-only suppression, channel sequence, holdout, send window, and ROI inputs.
-              </div>
-            </div>
-          </div>
-          <span className="chip chip--success">eligible only · 30d cap</span>
-        </div>
-        <div className="surface__body">
-          <div className="campaign-setup">
-            <label className="campaign-setup__field">
-              <span>Subject A</span>
-              <input
-                className="form-input"
-                value={campaignSetup.subjectA}
-                onChange={setCampaignField('subjectA')}
-                maxLength={120}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Subject B</span>
-              <input
-                className="form-input"
-                value={campaignSetup.subjectB}
-                onChange={setCampaignField('subjectB')}
-                maxLength={120}
-              />
-            </label>
-            <label className="campaign-setup__field campaign-setup__field--wide">
-              <span>Body angle A</span>
-              <textarea
-                className="form-input campaign-setup__textarea"
-                value={campaignSetup.bodyA}
-                onChange={setCampaignField('bodyA')}
-                maxLength={700}
-              />
-            </label>
-            <label className="campaign-setup__field campaign-setup__field--wide">
-              <span>Body angle B</span>
-              <textarea
-                className="form-input campaign-setup__textarea"
-                value={campaignSetup.bodyB}
-                onChange={setCampaignField('bodyB')}
-                maxLength={700}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Holdout %</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.holdoutPct}
-                onChange={setCampaignField('holdoutPct')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Send start</span>
-              <input
-                className="form-input"
-                type="time"
-                value={campaignSetup.startLocal}
-                onChange={setCampaignField('startLocal')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Send end</span>
-              <input
-                className="form-input"
-                type="time"
-                value={campaignSetup.endLocal}
-                onChange={setCampaignField('endLocal')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Budget</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.budget}
-                onChange={setCampaignField('budget')}
-                placeholder="optional"
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Email cost</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.emailCost}
-                onChange={setCampaignField('emailCost')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>SMS cost</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.smsCost}
-                onChange={setCampaignField('smsCost')}
-              />
-            </label>
-            <label className="campaign-setup__field">
-              <span>Mail cost</span>
-              <input
-                className="form-input"
-                inputMode="decimal"
-                value={campaignSetup.mailCost}
-                onChange={setCampaignField('mailCost')}
-              />
-            </label>
-            <div className="campaign-setup__field campaign-setup__field--wide">
-              <div className="campaign-setup__toggle">
-                <div className="campaign-setup__toggle-copy">
-                  <span>market the household together</span>
-                  <p>
-                    One eligible primary contact per household enters the campaign;
-                    suppressed co-owners are counted in the summary.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  className={`switch ${campaignSetup.marketHouseholdTogether ? 'on' : ''}`}
-                  onClick={toggleHouseholdDedup}
-                  aria-pressed={campaignSetup.marketHouseholdTogether}
-                  aria-label="market the household together"
-                />
-              </div>
-            </div>
-          </div>
-          <div className="campaign-setup__meta">
-            <span>Email → SMS after 3 days → direct mail after 10 days</span>
-            <span>Staged cadence only; customer-system delivery requires a connected activation destination.</span>
-            <span><Link to="/admin-config#data-operations">Admin Data Operations</Link> shows refresh status.</span>
-            <span>Tue-Thu · borrower local time</span>
-          </div>
-        </div>
-      </div>
+      <CampaignSetupPanel
+        setup={campaignSetup}
+        recommendation={recommendationQuery.data}
+        recommendationPending={recommendationQuery.isPending}
+        recommendationError={recommendationQuery.isError}
+        recommendationFetching={recommendationQuery.isFetching}
+        canRecommend={Boolean(preview && preview.marketable_population > 0)}
+        onFieldChange={setCampaignField}
+        onToggleHouseholdDedup={toggleHouseholdDedup}
+        onRegenerate={() => void recommendationQuery.refetch()}
+        onApply={applyRecommendation}
+      />
 
       <div className="surface mt-4">
         <div className="surface__hdr surface__hdr--split">

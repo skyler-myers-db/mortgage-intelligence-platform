@@ -443,8 +443,8 @@ export default function AskGenie() {
     <PageShell
       eyebrow="Mortgage Growth Agent"
       title="Mortgage growth co-pilot"
-      lede="Turn a growth objective into a reviewed workflow, preview the eligible borrowers, and ask follow-up questions about your book."
-      heroRight={<Chip variant="neutral" icon="sparkle">Databricks Genie + SQL</Chip>}
+      lede="Use the Genie Conversation API for portfolio analysis, then compose and run reviewed growth workflows with human approval at the action boundary. Supervisor automation is identified only when the configured capability is ready."
+      heroRight={<Chip variant="neutral" icon="sparkle">Genie analytics + reviewed automation</Chip>}
     >
       <div className="surface growth-agent" aria-busy={agentBusy}>
         <div className="surface__hdr">

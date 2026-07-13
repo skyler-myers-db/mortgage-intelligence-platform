@@ -90,6 +90,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/outreach/draft"): "tests/unit/test_api_routes.py",
     ("POST", "/api/outreach/reject"): "tests/unit/test_outreach_reject.py",
     ("GET", "/api/portfolio"): "tests/unit/test_portfolio_repo_timezone.py",
+    ("POST", "/api/portfolio/campaign-recommendation"): "tests/unit/test_campaign_intelligence.py",
     ("POST", "/api/portfolio/create"): "tests/unit/test_api_routes.py",
     ("POST", "/api/portfolio/preview"): "tests/unit/test_api_routes.py",
     ("GET", "/api/portfolio/{portfolio_id}"): "tests/unit/test_api_routes.py",

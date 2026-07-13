@@ -3,7 +3,6 @@ import { drawerForAsset } from '../../lib/drawerSources';
 import { formatTimestamp } from '../../lib/time';
 import type { DrawerSource } from '../AppContext';
 import { Chip, EvidenceChip } from '../Primitives';
-import { humanizeKey } from './GenieAnswer.logic';
 
 export function GenieProofPanel({
   payload,
@@ -77,50 +76,11 @@ export function GenieProofPanel({
           {proof.known_data_gaps.map((gap) => <div key={gap} className="genie-proof__gap">{gap}</div>)}
         </div>
       )}
-      {proof.trusted && proof.reasoning_trace && proof.reasoning_trace.length > 0 && (
-        <div className="genie-proof__section">
-          <div className="eyebrow">Genie query trace</div>
-          <div className="genie-proof__trace">
-            {proof.reasoning_trace.slice(0, 4).map((step, i) => (
-              <div key={`${step.kind}-${i}`} className="genie-proof__trace-step">
-                <div className="genie-proof__trace-kind">
-                  {humanizeKey(step.kind.replace(/^THOUGHT_TYPE_/, '').toLowerCase())}
-                </div>
-                <div className="genie-proof__trace-content">{step.content}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
       {proof.sql_query && (
         <div className="genie-proof__section">
           <div className="eyebrow">Generated SQL</div>
           <pre className="genie-proof__sql">{proof.sql_query}</pre>
         </div>
-      )}
-      {/* Top-level Genie reasoning (Public Preview). Distinct from the
-          trusted "Genie query trace" above (proof.reasoning_trace). Collapsed
-          by default via <details>; rows are muted, escaped plain text only —
-          React escapes {content} so no markup or PII is interpreted. */}
-      {payload.reasoning_trace && payload.reasoning_trace.length > 0 && (
-        <details className="genie-proof__section genie-proof__reasoning">
-          <summary className="genie-proof__reasoning-summary">
-            <span className="eyebrow">Genie reasoning · Public Preview</span>
-          </summary>
-          <div className="genie-proof__trace genie-proof__reasoning-body">
-            {payload.reasoning_trace.map((step, i) => (
-              <div
-                key={`${step.kind}-${i}`}
-                className="genie-proof__trace-step genie-proof__reasoning-row"
-              >
-                <div className="genie-proof__trace-kind">{step.kind}</div>
-                <div className="genie-proof__trace-content genie-proof__reasoning-content">
-                  {step.content}
-                </div>
-              </div>
-            ))}
-          </div>
-        </details>
       )}
     </div>
   );

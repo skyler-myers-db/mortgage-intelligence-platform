@@ -12,6 +12,10 @@ from backend.schemas.growth_agent import GrowthAgentMonitor, GrowthAgentNotifica
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.growth_agent_ledger_sql import NOTIFICATION_DRAFT_UPSERT_SQL
+from backend.services.growth_agent_notification_intelligence import (
+    NotificationIntelligence,
+    recommend_notification_intelligence,
+)
 from backend.services.lakebase import LakebaseClient, LakebaseError
 
 
@@ -27,6 +31,10 @@ def create_notification_drafts(
     request_id: str | None = None,
 ) -> list[GrowthAgentNotificationDraft]:
     drafts: list[GrowthAgentNotificationDraft] = []
+    intelligence = recommend_notification_intelligence(
+        monitor_name=monitor.name,
+        workflow_id=monitor.workflow_id,
+    )
     try:
         with lakebase.transaction() as conn:
             for channel in channels:
@@ -38,13 +46,21 @@ def create_notification_drafts(
                         "monitor_id": monitor.monitor_id,
                         "run_id": run_id,
                         "channel": channel,
-                        "title": _notification_draft_title(monitor, actionable_total),
+                        "title": _notification_draft_title(
+                            monitor,
+                            channel=channel,
+                            actionable_total=actionable_total,
+                        ),
                         "body": _notification_draft_body(
                             monitor,
                             channel=channel,
                             route=route,
                             actionable_total=actionable_total,
+                            intelligence=intelligence,
                         ),
+                        "generation_mode": intelligence.generation_mode,
+                        "generator_label": intelligence.generator_label,
+                        "strategy_summary": intelligence.strategy_summary,
                         "request_id": _draft_request_id(
                             request_id,
                             monitor_id=monitor.monitor_id,
@@ -65,6 +81,7 @@ def create_notification_drafts(
                         "workflow_id": monitor.workflow_id,
                         "run_id": run_id,
                         "channel": channel,
+                        "generation_mode": intelligence.generation_mode,
                         "actionable_total": actionable_total,
                         "route": route,
                         "source_assets": monitor.source_assets,
@@ -79,8 +96,15 @@ def create_notification_drafts(
     return drafts
 
 
-def _notification_draft_title(monitor: GrowthAgentMonitor, actionable_total: int) -> str:
-    return f"{monitor.name} - {actionable_total:,} eligible"
+def _notification_draft_title(
+    monitor: GrowthAgentMonitor,
+    *,
+    channel: str,
+    actionable_total: int,
+) -> str:
+    if channel == "slack":
+        return f"{monitor.name}: {actionable_total:,} eligible"
+    return f"Operations brief: {monitor.name}"
 
 
 def _notification_draft_body(
@@ -89,12 +113,22 @@ def _notification_draft_body(
     channel: str,
     route: str,
     actionable_total: int,
+    intelligence: NotificationIntelligence,
 ) -> str:
-    destination = "Slack" if channel == "slack" else "Microsoft Teams"
+    borrower_label = "borrower" if actionable_total == 1 else "borrowers"
+    if channel == "slack":
+        return (
+            f"{actionable_total:,} eligible {borrower_label} in {monitor.name}. "
+            f"{intelligence.slack_context}. "
+            f"Review: {route}"
+        )
     return (
-        f"Draft for {destination}: {monitor.name} refreshed with "
-        f"{actionable_total:,} eligible borrowers. Review the current watchlist in MIP: {route}. "
-        "No borrower identities, contact data, or outbound messages are included."
+        "Operations brief\n"
+        f"Watchlist: {monitor.name}\n"
+        f"Summary: {intelligence.teams_summary}.\n"
+        f"Eligible population: {actionable_total:,} {borrower_label}\n"
+        f"Operator action: {intelligence.operator_action}.\n"
+        f"MIP route: {route}"
     )
 
 
@@ -118,6 +152,9 @@ def _notification_draft_from_row(row: dict[str, Any]) -> GrowthAgentNotification
         channel=row["channel"],
         title=str(row["title"]),
         body=str(row["body"]),
+        generation_mode=row.get("generation_mode") or "governed_fallback",
+        generator_label=row.get("generator_label") or "Governed notification framework",
+        strategy_summary=row.get("strategy_summary") or "Reviewed internal notification framing.",
         status=row.get("status") or "draft",
         created_at=row.get("created_at"),
         updated_at=row.get("updated_at"),

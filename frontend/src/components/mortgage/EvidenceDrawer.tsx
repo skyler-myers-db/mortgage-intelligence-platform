@@ -1,17 +1,23 @@
-import { Fragment, useEffect, useRef, useState } from 'react';
+import { Fragment, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { api } from '../../lib/api';
-import { assetDetailHref, assetHrefForSource } from '../../lib/drawerSources';
+import {
+  assetDetailHref,
+  assetKeyForSource,
+  evidenceDestinationFor,
+} from '../../lib/drawerSources';
 import { useFocusTrap } from '../../hooks/useFocusTrap';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import type {
   AssetFreshness,
+  AssetLineageNode,
   AssetMetadataResponse,
   LineageLayer,
+  LineageManifestResponse,
   LineageManifestNode,
 } from '../../types';
 
@@ -59,6 +65,72 @@ function LineageManifestChip({ node }: { node: LineageManifestNode }) {
       {node.fqn}
     </span>
   );
+}
+
+function ObservedLineageAsset({ node }: { node: AssetLineageNode }) {
+  const content = (
+    <>
+      <div className="lineage-node__label">Observed {node.direction}</div>
+      <div className="lineage-node__name">{node.asset_path}</div>
+      <div className="lineage-node__meta">{node.label}</div>
+      {node.event_time && (
+        <div className="lineage-node__meta">
+          {formatTimestamp(node.event_time, { withYear: false })}
+        </div>
+      )}
+      {node.event_count !== null && node.event_count !== undefined && (
+        <div className="lineage-node__meta">
+          {node.event_count.toLocaleString()} observed event(s)
+        </div>
+      )}
+    </>
+  );
+  if (node.catalog_explorer_url) {
+    return (
+      <a
+        className="lineage-node lineage-node--link observed-lineage__asset"
+        href={node.catalog_explorer_url}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={`Observed ${node.direction} asset ${node.asset_path} - open in Catalog Explorer`}
+      >
+        {content}
+      </a>
+    );
+  }
+  return (
+    <div
+      className="lineage-node observed-lineage__asset"
+      title="Catalog Explorer link unavailable - no workspace host configured"
+    >
+      {content}
+    </div>
+  );
+}
+
+function catalogNodeForSource(
+  rawSource: string,
+  manifest?: LineageManifestResponse,
+): LineageManifestNode | null {
+  const directKey = assetKeyForSource(rawSource);
+  const parts = rawSource.trim().replace(/`/g, '').split('.');
+  const assetKey =
+    directKey ??
+    (parts.length >= 4
+      ? assetKeyForSource(parts.slice(0, 3).join('.'))
+      : parts.length === 2
+        ? assetKeyForSource(parts[0])
+        : null);
+  if (!assetKey || !manifest) return null;
+  for (const family of manifest.families) {
+    const node = family.nodes.find((candidate) => assetKeyForSource(candidate.fqn) === assetKey);
+    if (node) return node;
+  }
+  return null;
+}
+
+function compactFamilyNodes(nodes: LineageManifestNode[]): LineageManifestNode[] {
+  return [...new Map(nodes.map((node) => [node.fqn.toLowerCase(), node])).values()];
 }
 
 function formatNumber(value: number | null | undefined): string {
@@ -118,6 +190,8 @@ export function EvidenceDrawer() {
   const d = drawer;
   const closeBtnRef = useRef<HTMLButtonElement | null>(null);
   const drawerRef = useRef<HTMLElement | null>(null);
+  const overviewTabRef = useRef<HTMLButtonElement | null>(null);
+  const lineageTabRef = useRef<HTMLButtonElement | null>(null);
   const [tab, setTab] = useState<DrawerTab>('overview');
   // Every drawer open starts on Overview — a lineage deep-dive on one
   // source must not leak into the next source's drawer.
@@ -130,14 +204,12 @@ export function EvidenceDrawer() {
     enabled: open && !!d?.assetKey,
     retry: false,
   });
-  // The manifest is repo-committed product truth resolved at deploy time;
-  // it cannot change under a session, so cache it for the app's lifetime
-  // and only fetch once the Lineage tab is shown for a mapped source —
-  // unmapped sources render their honest empty state with no request.
+  // Both tabs use the same governed manifest. Overview presents its compact
+  // asset list; Lineage presents the full annotated chain.
   const lineageQuery = useQuery({
     queryKey: queryKeys.lineageManifest(),
     queryFn: ({ signal }) => api.lineageManifest(signal),
-    enabled: open && tab === 'lineage' && !!d?.lineageFamily,
+    enabled: open && !!d?.lineageFamily,
     staleTime: Infinity,
     retry: false,
   });
@@ -145,6 +217,8 @@ export function EvidenceDrawer() {
     ? lineageQuery.data?.families.find((family) => family.id === d.lineageFamily) ?? null
     : null;
   const metadata = metadataQuery.data;
+  const destination = evidenceDestinationFor(d);
+  const compactNodes = lineageFamily ? compactFamilyNodes(lineageFamily.nodes) : [];
   // View-state for the freshness chip: only mapped assets ever issue the
   // governed metadata read, so loading/error states are scoped to them.
   const freshnessView: FreshnessView = d?.assetKey
@@ -155,6 +229,22 @@ export function EvidenceDrawer() {
         : metadata?.freshness
     : metadata?.freshness;
   const assetHref = d?.assetKey ? assetDetailHref(d.assetKey) : null;
+  const selectTabFromKeyboard = (event: KeyboardEvent<HTMLButtonElement>) => {
+    let next: DrawerTab | null = null;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      next = tab === 'overview' ? 'lineage' : 'overview';
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      next = tab === 'overview' ? 'lineage' : 'overview';
+    } else if (event.key === 'Home') {
+      next = 'overview';
+    } else if (event.key === 'End') {
+      next = 'lineage';
+    }
+    if (!next) return;
+    event.preventDefault();
+    setTab(next);
+    (next === 'overview' ? overviewTabRef : lineageTabRef).current?.focus();
+  };
   useFocusTrap({
     open,
     containerRef: drawerRef,
@@ -190,25 +280,36 @@ export function EvidenceDrawer() {
           </button>
         </div>
         {d && (
-          <div className="drawer__tabs" role="tablist" aria-label="Evidence detail views">
+          <div
+            className="drawer__tabs"
+            role="tablist"
+            aria-label="Evidence detail views"
+            aria-orientation="horizontal"
+          >
             <button
+              ref={overviewTabRef}
               role="tab"
               id="drawer-tab-overview"
               aria-selected={tab === 'overview'}
               aria-controls="drawer-panel-overview"
+              tabIndex={tab === 'overview' ? 0 : -1}
               className={`drawer__tab ${tab === 'overview' ? 'is-active' : ''}`}
               onClick={() => setTab('overview')}
+              onKeyDown={selectTabFromKeyboard}
               type="button"
             >
               Overview
             </button>
             <button
+              ref={lineageTabRef}
               role="tab"
               id="drawer-tab-lineage"
               aria-selected={tab === 'lineage'}
               aria-controls="drawer-panel-lineage"
+              tabIndex={tab === 'lineage' ? 0 : -1}
               className={`drawer__tab ${tab === 'lineage' ? 'is-active' : ''}`}
               onClick={() => setTab('lineage')}
+              onKeyDown={selectTabFromKeyboard}
               type="button"
             >
               Lineage
@@ -218,11 +319,26 @@ export function EvidenceDrawer() {
         <div className="drawer__body">
           {d && tab === 'lineage' && (
             <div role="tabpanel" id="drawer-panel-lineage" aria-labelledby="drawer-tab-lineage">
-              {!d.lineageFamily ? (
+              {!d.lineageFamily && destination.kind === 'lakebase' ? (
                 <div className="source-card" role="status">
-                  Lineage not mapped — this source has no entry in the governed
-                  lineage manifest yet. Nothing is shown in its place; the
-                  Overview tab keeps the human explanation.
+                  <div className="eyebrow mb-2">{destination.label}</div>
+                  <p className="body flush">{destination.description}</p>
+                  <div className="chip-row mt-3" aria-label="Lakebase operational records">
+                    {destination.objectPaths.map((path) => (
+                      <span key={path} className="chip chip--neutral">{path}</span>
+                    ))}
+                  </div>
+                  <div className="drawer__actions">
+                    <Link className="btn btn--primary btn--sm" to={destination.href} onClick={() => setDrawer(null)}>
+                      <Icon name="search" size={12} />
+                      {destination.actionLabel}
+                    </Link>
+                  </div>
+                </div>
+              ) : !d.lineageFamily ? (
+                <div className="source-card" role="status">
+                  Lineage not mapped - this source has no governed manifest entry.
+                  No chain is substituted.
                 </div>
               ) : lineageQuery.isPending ? (
                 <div className="source-card" role="status" aria-live="polite">
@@ -230,20 +346,23 @@ export function EvidenceDrawer() {
                 </div>
               ) : lineageQuery.isError ? (
                 <div className="source-card source-card--warning">
-                  The lineage manifest could not be loaded from the API. This is
-                  a dependency issue, not missing lineage — retry once the
+                  The governed lineage manifest could not be loaded. Retry when the
                   backend is reachable.
                 </div>
               ) : !lineageFamily ? (
                 <div className="source-card source-card--warning">
-                  Lineage not mapped — family &lsquo;{d.lineageFamily}&rsquo; has
-                  no entry in the governed lineage manifest. Nothing is invented
-                  in its place.
+                  Lineage not mapped - family &lsquo;{d.lineageFamily}&rsquo; is absent
+                  from the governed manifest. No chain is substituted.
                 </div>
               ) : (
                 <>
                   <div className="source-summary">
                     <p className="body flush">{lineageFamily.description}</p>
+                    <p className="muted fs-12">
+                      Ordered semantics: arrows follow the family&apos;s documented
+                      derivation narrative. Adjacent nodes may be parallel co-inputs,
+                      not a claim that each object directly writes the next.
+                    </p>
                   </div>
                   <div className="eyebrow mt-4 mb-2">{lineageFamily.title} — governed chain</div>
                   {lineageFamily.nodes.map((node, i) => (
@@ -261,8 +380,64 @@ export function EvidenceDrawer() {
                   {lineageQuery.data && (
                     <div className="drawer__updated">
                       Source of truth: {lineageQuery.data.manifest_path} (schema v
-                      {lineageQuery.data.schema_version}), verified against live
-                      Unity Catalog by the integration suite.
+                      {lineageQuery.data.schema_version}). Live relationships observed
+                      during the last 90 days are shown separately below when available.
+                    </div>
+                  )}
+                </>
+              )}
+
+              {d.lineageFamily && destination.kind === 'lakebase' && (
+                <div className="source-card">
+                  <div className="eyebrow mb-2">{destination.label}</div>
+                  <p className="body flush">{destination.description}</p>
+                  <div className="chip-row mt-3" aria-label="Lakebase operational records">
+                    {destination.objectPaths.map((path) => (
+                      <span key={path} className="chip chip--neutral">{path}</span>
+                    ))}
+                  </div>
+                  <div className="drawer__actions">
+                    <Link className="btn btn--primary btn--sm" to={destination.href} onClick={() => setDrawer(null)}>
+                      <Icon name="search" size={12} />
+                      {destination.actionLabel}
+                    </Link>
+                  </div>
+                </div>
+              )}
+
+              {d.assetKey && metadataQuery.isPending && (
+                <div className="source-card" role="status" aria-live="polite">
+                  Loading observed Unity Catalog relationships…
+                </div>
+              )}
+              {d.assetKey && metadataQuery.isError && (
+                <div className="source-card source-card--warning">
+                  Observed relationships unavailable. The governed manifest remains primary.
+                </div>
+              )}
+              {metadata && (
+                <>
+                  <div className="eyebrow mt-5 mb-2">
+                    Observed Unity Catalog relationships - supplemental
+                  </div>
+                  <p className="muted fs-12">
+                    Observed in Unity Catalog during the last 90 days. Supplemental to the
+                    governed manifest.
+                  </p>
+                  {metadata.lineage.length > 0 ? (
+                    metadata.lineage.map((node) => (
+                      <ObservedLineageAsset
+                        key={`${node.direction}-${node.asset_path}`}
+                        node={node}
+                      />
+                    ))
+                  ) : (
+                    <div className="source-card source-card--subtle" role="status">
+                      {metadata.known_data_gaps?.some((gap) =>
+                        gap.startsWith('Observed lineage unavailable'),
+                      )
+                        ? 'Observed relationships are unavailable for this asset.'
+                        : 'No relationships were observed for this asset in the last 90 days.'}
                     </div>
                   )}
                 </>
@@ -278,14 +453,31 @@ export function EvidenceDrawer() {
                       --unavailable style, visually conflating "checking" /
                       "fetch failed" with "no timestamp" (re-audit 2026-06-11
                       cosmetic finding). */}
-                  <span className={`source-freshness source-freshness--${freshnessView ?? 'unavailable'}`}>
-                    {freshnessLabel(freshnessView)}
-                  </span>
+                  {(destination.kind === 'unity_catalog' || destination.kind === 'readiness') && (
+                    <span className={`source-freshness source-freshness--${freshnessView ?? 'unavailable'}`}>
+                      {freshnessLabel(freshnessView)}
+                    </span>
+                  )}
+                  <span className="chip chip--neutral">{destination.label}</span>
                   {metadata?.status && <span className="chip chip--neutral">{metadata.status}</span>}
                 </div>
                 <p className="body flush">{d.description}</p>
-                <p className="muted fs-12 flush">{freshnessHelp(freshnessView)}</p>
+                {(destination.kind === 'unity_catalog' || destination.kind === 'readiness') && (
+                  <p className="muted fs-12 flush">{freshnessHelp(freshnessView)}</p>
+                )}
               </div>
+
+              {(destination.kind === 'lakebase' || destination.kind === 'readiness') && (
+                <div className="source-card">
+                  <div className="eyebrow mb-2">{destination.label}</div>
+                  <p className="body flush">{destination.description}</p>
+                  <div className="chip-row mt-3" aria-label={`${destination.label} records`}>
+                    {destination.objectPaths.map((path) => (
+                      <span key={path} className="chip chip--neutral">{path}</span>
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {metadataQuery.isFetching && (
                 <div className="source-card" role="status" aria-live="polite">
@@ -321,75 +513,79 @@ export function EvidenceDrawer() {
                 </>
               )}
 
-              {d.lineage && d.lineage.length > 0 && (
-                <>
-                  <div className="eyebrow mt-4 mb-2">Lineage</div>
-                  {d.lineage.map((n, i) => (
-                    <Fragment key={`${n.name}-${i}`}>
-                      <div className="lineage-node">
-                        <div className="lineage-node__label">{n.layer}</div>
-                        <div className="lineage-node__name">{n.name}</div>
-                        {n.meta && <div className="lineage-node__meta">{n.meta}</div>}
-                      </div>
-                      {d.lineage && i < d.lineage.length - 1 && <div className="lineage-arrow">↓</div>}
-                    </Fragment>
+              <div className="eyebrow mt-4 mb-2">Governed assets</div>
+              <p className="muted fs-12">
+                Compact semantics: Overview de-duplicates this governed family&apos;s Unity Catalog objects. Lineage uses the same family in documented derivation order, with notes and supplemental 90-day observations.
+              </p>
+              {!d.lineageFamily && destination.kind === 'lakebase' ? (
+                <div className="source-card source-card--subtle" role="status">
+                  Operational Lakebase records are queried through the linked app surface;
+                  they are not Catalog Explorer assets.
+                </div>
+              ) : !d.lineageFamily ? (
+                <div className="source-card source-card--subtle" role="status">
+                  Governed assets not mapped. No local lineage is substituted.
+                </div>
+              ) : lineageQuery.isPending ? (
+                <div className="source-card" role="status" aria-live="polite">
+                  Loading governed assets…
+                </div>
+              ) : lineageQuery.isError ? (
+                <div className="source-card source-card--warning">
+                  Governed assets unavailable; manifest not loaded.
+                </div>
+              ) : !lineageFamily ? (
+                <div className="source-card source-card--warning">
+                  Governed assets not mapped - family &lsquo;{d.lineageFamily}&rsquo; is
+                  absent from the manifest. No local lineage is substituted.
+                </div>
+              ) : (
+                <div
+                  className="chip-row governed-assets__list"
+                  aria-label={`${lineageFamily.title} governed assets`}
+                >
+                  {compactNodes.map((node) => (
+                    <LineageManifestChip key={node.id} node={node} />
                   ))}
-                </>
-              )}
-
-              {metadata?.lineage && metadata.lineage.length > 0 && (
-                <>
-                  <div className="eyebrow mt-5 mb-2">Observed UC lineage</div>
-                  {metadata.lineage.map((n) => {
-                    const lineageHref = assetHrefForSource(n.asset_path);
-                    if (!lineageHref) {
-                      return (
-                        <div key={`${n.direction}-${n.asset_path}`} className="lineage-node">
-                          <div className="lineage-node__label">{n.direction}</div>
-                          <div className="lineage-node__name">{n.label}</div>
-                          {n.event_time && <div className="lineage-node__meta">{formatTimestamp(n.event_time, { withYear: false })}</div>}
-                        </div>
-                      );
-                    }
-                    return (
-                      <Link
-                        key={`${n.direction}-${n.asset_path}`}
-                        to={lineageHref}
-                        className="lineage-node lineage-node--link"
-                        onClick={() => setDrawer(null)}
-                      >
-                        <div className="lineage-node__label">{n.direction}</div>
-                        <div className="lineage-node__name">{n.label}</div>
-                        {n.event_time && <div className="lineage-node__meta">{formatTimestamp(n.event_time, { withYear: false })}</div>}
-                      </Link>
-                    );
-                  })}
-                </>
+                </div>
               )}
 
               {d.signals && d.signals.length > 0 && (
                 <>
                   <div className="eyebrow mt-5 mb-2">Sanitized signals</div>
-                  {d.signals.map((s, i) => (
-                    <div key={`${s.label}-${i}`} className="lineage-node lineage-node--signal">
-                      <div>
-                        <div className="lineage-node__label">{s.label}</div>
-                        <div className="lineage-node__name">{s.source}</div>
+                  {d.signals.map((s, i) => {
+                    const catalogNode = catalogNodeForSource(s.source, lineageQuery.data);
+                    return (
+                      <div key={`${s.label}-${i}`} className="lineage-node lineage-node--signal">
+                        <div>
+                          <div className="lineage-node__label">{s.label}</div>
+                          {catalogNode ? (
+                            <LineageManifestChip node={catalogNode} />
+                          ) : (
+                            <div className="lineage-node__name">{s.source}</div>
+                          )}
+                        </div>
+                        <div className="mono num lineage-node__value">{s.value}</div>
                       </div>
-                      <div className="mono num lineage-node__value">{s.value}</div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </>
               )}
 
               <div className="drawer__actions">
-                {assetHref && (
+                {assetHref && destination.kind === 'unity_catalog' && (
                   <Link className="btn btn--primary btn--sm" to={assetHref} onClick={() => setDrawer(null)}>
                     <Icon name="db" size={12} />
                     View asset details
                   </Link>
                 )}
-                {metadata?.catalog_explorer_url && (
+                {(destination.kind === 'lakebase' || destination.kind === 'readiness') && (
+                  <Link className="btn btn--primary btn--sm" to={destination.href} onClick={() => setDrawer(null)}>
+                    <Icon name={destination.kind === 'readiness' ? 'db' : 'search'} size={12} />
+                    {destination.actionLabel}
+                  </Link>
+                )}
+                {metadata?.catalog_explorer_url && destination.kind !== 'lakebase' && (
                   <a
                     className="btn btn--ghost btn--sm"
                     href={metadata.catalog_explorer_url}

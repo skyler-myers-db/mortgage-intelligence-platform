@@ -33,7 +33,7 @@ def _response_for(case_id: str) -> dict:
         "tool_result_hash": "a" * 64,
         "policy_checks": [
             {"label": "Broad vs actionable reconciliation", "status": "passed"},
-            {"label": "No outbound activation", "status": "passed"},
+            {"label": "Approval gate required", "status": "passed"},
         ],
     }
     if case_id == "custom_all_mode_preserves_intersection_semantics":

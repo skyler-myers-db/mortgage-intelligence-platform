@@ -239,14 +239,14 @@ def policy_checks(
         )
     checks = [
         GrowthAgentPolicyCheck(
-            label="No raw PII exposed",
+            label="Masked borrower references",
             status="passed",
-            detail="The workflow returns counts, public route filters, and governed source assets only.",
+            detail="The workflow returns counts, app-scoped route filters, and governed source assets.",
         ),
         GrowthAgentPolicyCheck(
-            label="No outbound activation",
+            label="Approval gate required",
             status="passed",
-            detail="The agent opens a reviewed Lead Queue subset; email, SMS, and CRM activation still require approval.",
+            detail="The agent opens a reviewed Lead Queue subset; activation requires an operator decision.",
         ),
         GrowthAgentPolicyCheck(
             label="Broad vs actionable reconciliation",
@@ -363,9 +363,9 @@ def governance_chips(
         )
     chips: list[GrowthAgentGovernanceChip] = [
         GrowthAgentGovernanceChip(
-            label="PII-safe output",
+            label="Masked references only",
             status="passed",
-            detail="The run returns counts, source assets, hashes, and route filters only.",
+            detail="The run returns counts, source assets, governed hashes, and app-scoped route filters.",
             evidence_ref=trace_id,
         ),
         GrowthAgentGovernanceChip(

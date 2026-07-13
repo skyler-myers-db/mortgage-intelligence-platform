@@ -78,6 +78,11 @@ export default function OfferOrchestrator() {
   const [draftError, setDraftError] = useState<string | null>(null);
   const [draftDisclosureVersion, setDraftDisclosureVersion] = useState<string | null>(null);
   const [draftDisclosureState, setDraftDisclosureState] = useState<string | null>(null);
+  const [draftGeneratorLabel, setDraftGeneratorLabel] = useState<string | null>(null);
+  const [draftGenerationMode, setDraftGenerationMode] = useState<'supervisor' | 'governed_fallback' | null>(null);
+  const [draftStrategy, setDraftStrategy] = useState<string | null>(null);
+  const [draftEvidence, setDraftEvidence] = useState<string[]>([]);
+  const [draftEvidenceAssets, setDraftEvidenceAssets] = useState<string[]>([]);
   // Cold-start warming-up state for the draftOutreach fetch. Non-null =
   // the draft endpoint is in a 503 retry loop (mirrors the borrower +
   // recommend loop). When present, the Draft outreach tile shows the
@@ -271,6 +276,11 @@ export default function OfferOrchestrator() {
           setDraftLoaded(true);
           setDraftDisclosureVersion(draft.disclosure_version);
           setDraftDisclosureState(draft.disclosure_state);
+          setDraftGeneratorLabel(draft.generator_label);
+          setDraftGenerationMode(draft.generation_mode);
+          setDraftStrategy(draft.strategy_summary);
+          setDraftEvidence(draft.evidence_summary);
+          setDraftEvidenceAssets(draft.evidence_assets);
           const prev = BORROWER_CACHE.get(id);
           if (prev) {
             BORROWER_CACHE.set(id, {
@@ -284,6 +294,11 @@ export default function OfferOrchestrator() {
           setDraftLoaded(false);
           setDraftDisclosureVersion(null);
           setDraftDisclosureState(null);
+          setDraftGeneratorLabel(null);
+          setDraftGenerationMode(null);
+          setDraftStrategy(null);
+          setDraftEvidence([]);
+          setDraftEvidenceAssets([]);
           setDraftError('Offer draft endpoint returned an empty draft. Approval is disabled until an audited draft loads.');
         }
       } catch (err: unknown) {
@@ -305,6 +320,11 @@ export default function OfferOrchestrator() {
         setDraftLoaded(false);
         setDraftDisclosureVersion(null);
         setDraftDisclosureState(null);
+        setDraftGeneratorLabel(null);
+        setDraftGenerationMode(null);
+        setDraftStrategy(null);
+        setDraftEvidence([]);
+        setDraftEvidenceAssets([]);
         setDraftError(
           err instanceof Error
             ? `Offer draft unavailable: ${err.message}`
@@ -390,6 +410,26 @@ export default function OfferOrchestrator() {
     setDraftLoaded(false);
     setDraftDisclosureVersion(null);
     setDraftDisclosureState(null);
+    setDraftGeneratorLabel(null);
+    setDraftGenerationMode(null);
+    setDraftStrategy(null);
+    setDraftEvidence([]);
+    setDraftEvidenceAssets([]);
+    setReloadToken((n) => n + 1);
+  };
+
+  const regenerateDraft = () => {
+    if (!id || approving) return;
+    const cached = BORROWER_CACHE.get(id);
+    if (cached) BORROWER_CACHE.set(id, { ...cached, draftBody: null, fetched: 0 });
+    setDraftLoaded(false);
+    setDraftBody('');
+    setDraftError(null);
+    setDraftGeneratorLabel(null);
+    setDraftGenerationMode(null);
+    setDraftStrategy(null);
+    setDraftEvidence([]);
+    setDraftEvidenceAssets([]);
     setReloadToken((n) => n + 1);
   };
 
@@ -614,10 +654,21 @@ export default function OfferOrchestrator() {
           setDraftBody('');
           setDraftDisclosureVersion(null);
           setDraftDisclosureState(null);
+          setDraftGeneratorLabel(null);
+          setDraftGenerationMode(null);
+          setDraftStrategy(null);
+          setDraftEvidence([]);
+          setDraftEvidenceAssets([]);
         }}
         approving={approving}
         draftDisclosureVersion={draftDisclosureVersion}
         draftDisclosureState={draftDisclosureState}
+        draftGeneratorLabel={draftGeneratorLabel}
+        draftGenerationMode={draftGenerationMode}
+        draftStrategy={draftStrategy}
+        draftEvidence={draftEvidence}
+        draftEvidenceAssets={draftEvidenceAssets}
+        regenerateDraft={regenerateDraft}
         draftIsSaved={draftIsSaved}
         saveCurrentDraft={saveCurrentDraft}
         savedDraftExists={Boolean(savedDraft)}

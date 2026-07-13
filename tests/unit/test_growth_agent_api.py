@@ -356,6 +356,9 @@ class _FakeLakebaseClient:
                         {
                             "title": params["title"],
                             "body": params["body"],
+                            "generation_mode": params["generation_mode"],
+                            "generator_label": params["generator_label"],
+                            "strategy_summary": params["strategy_summary"],
                             "request_id": params.get("request_id") or existing.get("request_id"),
                             "updated_at": now,
                         }
@@ -369,6 +372,9 @@ class _FakeLakebaseClient:
                 "channel": params["channel"],
                 "title": params["title"],
                 "body": params["body"],
+                "generation_mode": params["generation_mode"],
+                "generator_label": params["generator_label"],
+                "strategy_summary": params["strategy_summary"],
                 "status": "draft",
                 "request_id": params.get("request_id"),
                 "created_at": now,
@@ -1006,8 +1012,24 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
     assert len(body["drafts"]) == 2
     assert {draft["channel"] for draft in body["drafts"]} == {"slack", "teams"}
     assert {draft["status"] for draft in body["drafts"]} == {"draft"}
-    assert all("No borrower identities" in draft["body"] for draft in body["drafts"])
-    assert all("outbound messages are included" in draft["body"] for draft in body["drafts"])
+    drafts_by_channel = {draft["channel"]: draft for draft in body["drafts"]}
+    assert drafts_by_channel["slack"]["title"] == "IL Refi Watch: 5,394 eligible"
+    assert drafts_by_channel["slack"]["body"] == (
+        "5,394 eligible borrowers in IL Refi Watch. "
+        "The saved watchlist has refreshed and is ready for review. Review: "
+        "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    )
+    assert drafts_by_channel["teams"]["title"] == "Operations brief: IL Refi Watch"
+    assert drafts_by_channel["teams"]["body"].splitlines() == [
+        "Operations brief",
+        "Watchlist: IL Refi Watch",
+        "Summary: The saved watchlist refresh completed with a new eligible population.",
+        "Eligible population: 5,394 borrowers",
+        "Operator action: Review the ranked queue and confirm the next operating step.",
+        "MIP route: /lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL",
+    ]
+    assert drafts_by_channel["slack"]["body"] != drafts_by_channel["teams"]["body"]
+    assert all("No borrower identities" not in draft["body"] for draft in body["drafts"])
     assert len({draft["request_id"] for draft in lakebase.notification_drafts}) == 2
     assert all(
         str(draft["request_id"]).startswith("11111111-1111-4111-8111-111111111111-")
@@ -1157,7 +1179,8 @@ def test_growth_agent_due_monitor_all_actor_runner_preserves_owner_attribution(
         "owner-a@example.com",
         "owner-b@example.com",
     }
-    assert all("No borrower identities" in draft["body"] for draft in body["drafts"])
+    assert all("No borrower identities" not in draft["body"] for draft in body["drafts"])
+    assert all("Draft for" not in draft["body"] for draft in body["drafts"])
     assert all("send" not in draft["body"].lower() for draft in body["drafts"])
     assert all(call[1].get("actor_email") != "admin@example.com" for call in lakebase.executes)
 
@@ -1284,10 +1307,16 @@ def test_growth_agent_monitor_notification_drafts_are_draft_only() -> None:
     assert draft["channel"] == "slack"
     assert draft["status"] == "draft"
     assert draft["run_id"] == str(run_id)
-    assert "Listed-for-Sale Purchase Watch" in draft["title"]
-    assert "4,349 eligible borrowers" in draft["body"]
-    assert "Review the current watchlist in MIP" in draft["body"]
-    assert "No borrower identities" in draft["body"]
+    assert draft["title"] == "Listed-for-Sale Purchase Watch: 4,349 eligible"
+    assert draft["body"] == (
+        "4,349 eligible borrowers in Listed-for-Sale Purchase Watch. "
+        "The saved watchlist has refreshed and is ready for review. Review: "
+        "/lead-queue?segment=listed&marketing_eligibility=Eligible+only"
+    )
+    assert draft["generation_mode"] == "governed_fallback"
+    assert draft["generator_label"] == "Governed notification framework"
+    assert "No borrower identities" not in draft["body"]
+    assert "Draft" not in draft["body"]
     assert "send" not in draft["body"].lower()
     assert lakebase.notification_drafts[0]["request_id"] == (
         f"22222222-2222-4222-8222-222222222222-{monitor_id}-{run_id}-slack"
@@ -1818,7 +1847,7 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert metadata["trace_id"].startswith("agent-trace-")
     assert metadata["tool_result_hash"] == body["tool_result_hash"]
     assert metadata["specialist_agent"] == "structured_data_agent"
-    assert metadata["governance_chips"][0]["label"] == "PII-safe output"
+    assert metadata["governance_chips"][0]["label"] == "Masked references only"
     assert "Multi-agent framework" in json.dumps(metadata["governance_chips"])
     assert metadata["result_filters"]["segment_codes"] == ["itm"]
     assert (

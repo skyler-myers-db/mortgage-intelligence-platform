@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import type { CallDisposition, LeadSummary } from '../../types';
 import { Icon } from '../Icon';
-import { Chip, Button } from '../Primitives';
+import { Button } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api, ApiError, isAbortError } from '../../lib/api';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
@@ -796,7 +796,6 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           </div>
         </div>
         <div className="lead-table__header-actions">
-          <Chip variant="neutral" icon="shield">PII suppressed</Chip>
           <Button
             size="sm"
             icon="export"

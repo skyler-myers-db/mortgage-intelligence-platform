@@ -36,9 +36,11 @@ class AssetLineageNode(BaseModel):
     direction: AssetLineageDirection
     asset_path: str
     label: str
-    object_type: str | None = None
+    object_type: AssetObjectType | None = None
     event_time: str | None = None
+    event_count: int | None = None
     source: str = "system.access.table_lineage"
+    catalog_explorer_url: str | None = None
 
 
 class AssetMetadataResponse(BaseModel):

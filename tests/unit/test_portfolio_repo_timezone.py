@@ -556,6 +556,67 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     assert metadata["marketable_population"] == 1000
 
 
+def test_create_commits_message_variants_and_generation_provenance_atomically(monkeypatch):
+    client = _StubClient(_preview_row(), [])
+    lakebase = _StubLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    repo.create(
+        PortfolioCreateRequest(
+            name="Illinois refinance review",
+            message_variants=[
+                {
+                    "variant_name": "A",
+                    "channel": "email",
+                    "subject": "Review your current mortgage options",
+                    "body": (
+                        "A loan officer can explain the available options and tradeoffs. "
+                        "Would you like to schedule a review?"
+                    ),
+                    "weight_pct": 45,
+                    "generation_mode": "supervisor",
+                    "generator_label": "Supervisor-generated recommendation",
+                },
+                {
+                    "variant_name": "B",
+                    "channel": "email",
+                    "subject": "A clearer mortgage review",
+                    "body": (
+                        "Compare your current mortgage with other available options. "
+                        "Would a review with a loan officer be useful?"
+                    ),
+                    "weight_pct": 45,
+                    "generation_mode": "supervisor",
+                    "generator_label": "Supervisor-generated recommendation",
+                },
+            ],
+        )
+    )
+
+    assert len(lakebase.rows) == 1
+    write = lakebase.rows[0]
+    sql = str(write["sql"])
+    assert "WITH inserted_campaign AS" in sql
+    assert "inserted_audit AS" in sql
+    assert "inserted_variants AS" in sql
+    assert "jsonb_to_recordset(%(variant_rows)s::jsonb)" in sql
+    params = write["params"]
+    assert isinstance(params, dict)
+    variants = json.loads(str(params["variant_rows"]))
+    assert [variant["variant_name"] for variant in variants] == ["A", "B"]
+    assert {variant["generation_mode"] for variant in variants} == {"supervisor"}
+    assert {variant["generator_label"] for variant in variants} == {
+        "Supervisor-generated recommendation"
+    }
+    metadata = json.loads(str(params["metadata"]))
+    assert metadata["campaign_generation_mode"] == "supervisor"
+    assert metadata["generator_label"] == "Supervisor-generated recommendation"
+
+
 @pytest.mark.parametrize(
     "suppression_policy",
     [

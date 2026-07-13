@@ -84,25 +84,28 @@ export type CampaignSetupState = {
   smsCost: string;
   mailCost: string;
   marketHouseholdTogether: boolean;
+  generationMode: 'supervisor' | 'reviewed_fallback' | 'operator';
+  generatorLabel: string;
 };
 
 export function buildDefaultCampaignSetup(
-  lenderName: string = DEFAULT_CAMPAIGN_LENDER_NAME,
+  _lenderName: string = DEFAULT_CAMPAIGN_LENDER_NAME,
 ): CampaignSetupState {
-  const label = lenderName.trim() || DEFAULT_CAMPAIGN_LENDER_NAME;
   return {
-    subjectA: `${label} review for your current loan options`,
-    subjectB: 'A refinance review may improve your mortgage fit',
-    bodyA: `Review your current mortgage fit with ${label} — rate, equity, and next options.`,
-    bodyB: `See whether a refinance could improve your rate and use your equity, reviewed by a ${label} loan officer.`,
+    subjectA: '',
+    subjectB: '',
+    bodyA: '',
+    bodyB: '',
     holdoutPct: '10',
     startLocal: '09:00',
     endLocal: '16:00',
     budget: '',
-    emailCost: '1.20',
-    smsCost: '0.08',
-    mailCost: '0.86',
+    emailCost: '',
+    smsCost: '',
+    mailCost: '',
     marketHouseholdTogether: false,
+    generationMode: 'operator',
+    generatorLabel: 'Operator edited',
   };
 }
 
@@ -337,6 +340,8 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
         subject: setup.subjectA.trim(),
         body: setup.bodyA.trim(),
         weight_pct: Math.max(0, Math.round((100 - holdoutPct) / 2)),
+        generation_mode: setup.generationMode,
+        generator_label: setup.generatorLabel,
       },
       {
         variant_name: 'B',
@@ -344,6 +349,8 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
         subject: setup.subjectB.trim(),
         body: setup.bodyB.trim(),
         weight_pct: Math.max(0, Math.floor((100 - holdoutPct) / 2)),
+        generation_mode: setup.generationMode,
+        generator_label: setup.generatorLabel,
       },
     ],
     channel_cascade: [
@@ -437,95 +444,6 @@ export function isDayZero(preview: PortfolioPreview | null): boolean {
  * defaults. Pure and deterministic so the demo never surprises and the
  * math is unit-pinnable.
  */
-export interface RoiAssumptionInputs {
-  /** Addressable borrowers passing the refinance-economics screen in the current build. */
-  leads: number;
-  /** Expected response/funding rate, as a percent (e.g. 4.0). */
-  responseRatePct: string;
-  /** Average origination balance per funded loan, in dollars. */
-  avgBalanceUsd: string;
-  /** Lender revenue per origination (gain-on-sale + fees), as a percent. */
-  revenueRatePct: string;
-  /** Blended per-lead outreach cost across the channel cascade, in dollars. */
-  costPerLeadUsd: string;
-}
-
-export interface RoiProjection {
-  fundings: number;
-  originationVolumeUsd: number;
-  grossRevenueUsd: number;
-  outreachCostUsd: number;
-  netRevenueUsd: number;
-  /** True when every assumption parsed to a usable, in-range number. */
-  valid: boolean;
-}
-
-export const DEFAULT_ROI_ASSUMPTIONS: Omit<RoiAssumptionInputs, 'leads'> = {
-  // Conservative top-of-funnel response for governed, eligibility-suppressed
-  // mortgage outreach; tunable on screen.
-  responseRatePct: '4.0',
-  // ~U.S. average first-lien origination balance, rounded.
-  avgBalanceUsd: '340000',
-  // Blended gain-on-sale + origination fee revenue, as a share of balance.
-  revenueRatePct: '1.50',
-  // Blended per-lead cost across the email → SMS → mail cascade.
-  costPerLeadUsd: '1.40',
-};
-
-function clampPct(raw: string): number | null {
-  const n = Number.parseFloat(raw);
-  if (!Number.isFinite(n) || n < 0 || n > 100) return null;
-  return n;
-}
-
-// Sane upper ceilings so a fat-fingered assumption can't produce a nonsense
-// headline ("$1000000.0B"). Generous — far above any real mortgage input —
-// and consistent with clampPct, which likewise REJECTS out-of-range (→ "—")
-// rather than silently clamping.
-const MAX_AVG_BALANCE_USD = 100_000_000; // $100M per funded loan (well past jumbo)
-const MAX_COST_PER_LEAD_USD = 100_000; // $100K blended per-lead cost
-
-function nonNegMoney(raw: string, max = Number.POSITIVE_INFINITY): number | null {
-  const n = Number.parseFloat(raw);
-  if (!Number.isFinite(n) || n < 0 || n > max) return null;
-  return n;
-}
-
-export function projectRoi(inputs: RoiAssumptionInputs): RoiProjection {
-  const leads = Number.isFinite(inputs.leads) && inputs.leads > 0 ? inputs.leads : 0;
-  const responseRate = clampPct(inputs.responseRatePct);
-  const avgBalance = nonNegMoney(inputs.avgBalanceUsd, MAX_AVG_BALANCE_USD);
-  const revenueRate = clampPct(inputs.revenueRatePct);
-  const costPerLead = nonNegMoney(inputs.costPerLeadUsd, MAX_COST_PER_LEAD_USD);
-  const valid =
-    responseRate !== null &&
-    avgBalance !== null &&
-    revenueRate !== null &&
-    costPerLead !== null;
-  if (!valid) {
-    return {
-      fundings: 0,
-      originationVolumeUsd: 0,
-      grossRevenueUsd: 0,
-      outreachCostUsd: 0,
-      netRevenueUsd: 0,
-      valid: false,
-    };
-  }
-  const fundings = leads * (responseRate / 100);
-  const originationVolumeUsd = fundings * avgBalance;
-  const grossRevenueUsd = originationVolumeUsd * (revenueRate / 100);
-  const outreachCostUsd = leads * costPerLead;
-  return {
-    fundings,
-    originationVolumeUsd,
-    grossRevenueUsd,
-    outreachCostUsd,
-    netRevenueUsd: grossRevenueUsd - outreachCostUsd,
-    valid: true,
-  };
-}
-
 /** Compact USD formatter for the projector headline ($2.3M, $940K, $1.2B, $1.5T). */
 export function formatUsdCompact(n: number): string {
   if (!Number.isFinite(n)) return '—';

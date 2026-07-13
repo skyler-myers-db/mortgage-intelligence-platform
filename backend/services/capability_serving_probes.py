@@ -15,6 +15,7 @@ def query_serving_endpoint(
     prompt: str,
     client_request_id: str | None = None,
     task: str | None = None,
+    max_tokens: int = 64,
 ) -> Any:
     if str(task or "").lower().startswith("agent/v1/responses"):
         input_messages = [{"role": "user", "content": prompt}]
@@ -22,6 +23,7 @@ def query_serving_endpoint(
             "model": endpoint,
             "input": input_messages,
             "stream": False,
+            "max_output_tokens": max_tokens,
         }
         if client_request_id:
             body["client_request_id"] = client_request_id
@@ -51,7 +53,7 @@ def query_serving_endpoint(
     # model default is fine for every endpoint family.
     kwargs: dict[str, Any] = {
         "messages": messages,
-        "max_tokens": 64,
+        "max_tokens": max_tokens,
     }
     if client_request_id:
         kwargs["client_request_id"] = client_request_id
@@ -67,7 +69,7 @@ def query_serving_endpoint(
         # client_request_id: the inference-table binding stays intact.
         fallback_body: dict[str, Any] = {
             "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": 64,
+            "max_tokens": max_tokens,
         }
         if client_request_id:
             fallback_body["client_request_id"] = client_request_id

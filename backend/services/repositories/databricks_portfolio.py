@@ -20,6 +20,7 @@ from backend.schemas.portfolio import (
     PortfolioCreateRequest,
     PortfolioCreateResponse,
     PortfolioCriteria,
+    PortfolioOfferMixRow,
     PortfolioPreview,
     PortfolioPreviewRequest,
 )
@@ -99,7 +100,21 @@ class DatabricksPortfolioRepository:
         "  SUM(CASE WHEN is_high_opportunity THEN 1 ELSE 0 END)        AS top_tier_opportunities, "
         "  SUM(CASE WHEN offer_recommended THEN 1 ELSE 0 END)          AS offers_recommended, "
         "  SUM(CASE WHEN offer_available THEN 1 ELSE 0 END)            AS offers_available, "
-        "  CAST(ROUND(AVG(opportunity_score)) AS INT)                  AS avg_score "
+        "  CAST(ROUND(AVG(opportunity_score)) AS INT)                  AS avg_score, "
+        "  CAST(ROUND(AVG(current_lien_balance)) AS BIGINT)            AS avg_current_lien_balance_usd, "
+        "  CAST(ROUND(AVG(CASE WHEN in_the_money THEN current_lien_balance END)) AS BIGINT) "
+        "    AS avg_high_intent_lien_balance_usd, "
+        "  CAST(ROUND(SUM(current_lien_balance)) AS BIGINT)            AS total_current_lien_balance_usd, "
+        "  ROUND(AVG(equity_pct), 1)                                   AS avg_equity_pct, "
+        "  ROUND(AVG(rate_spread_bps), 1)                              AS avg_rate_spread_bps, "
+        "  SUM(CASE WHEN recommended_offer_code = 'purchase' THEN 1 ELSE 0 END) AS offer_purchase, "
+        "  SUM(CASE WHEN recommended_offer_code = 'refi_plus_heloc' THEN 1 ELSE 0 END) AS offer_refi_plus_heloc, "
+        "  SUM(CASE WHEN recommended_offer_code = 'heloc' THEN 1 ELSE 0 END) AS offer_heloc, "
+        "  SUM(CASE WHEN recommended_offer_code = 'refi' THEN 1 ELSE 0 END) AS offer_refi, "
+        "  SUM(CASE WHEN recommended_offer_code = 'cash_out' THEN 1 ELSE 0 END) AS offer_cash_out, "
+        "  SUM(CASE WHEN recommended_offer_code = 'investor' THEN 1 ELSE 0 END) AS offer_investor, "
+        "  SUM(CASE WHEN recommended_offer_code = 'retention' THEN 1 ELSE 0 END) AS offer_retention, "
+        "  SUM(CASE WHEN recommended_offer_code = 'nurture' THEN 1 ELSE 0 END) AS offer_nurture "
         f"FROM {qualify('semantics', 'portfolio_headline_metric_view')} "
         "{where}"
     )
@@ -295,25 +310,39 @@ class DatabricksPortfolioRepository:
         %(metadata)s::jsonb
       FROM inserted_campaign
       RETURNING audit_id
+    ),
+    inserted_variants AS (
+      INSERT INTO mip_app.campaign_message_variants (
+        campaign_id, variant_name, channel, subject, body, weight_pct,
+        generation_mode, generator_label
+      )
+      SELECT
+        inserted_campaign.campaign_id,
+        variant.variant_name,
+        variant.channel,
+        variant.subject,
+        variant.body,
+        variant.weight_pct,
+        variant.generation_mode,
+        variant.generator_label
+      FROM inserted_campaign
+      CROSS JOIN jsonb_to_recordset(%(variant_rows)s::jsonb) AS variant(
+        variant_name TEXT,
+        channel TEXT,
+        subject TEXT,
+        body TEXT,
+        weight_pct NUMERIC,
+        generation_mode TEXT,
+        generator_label TEXT
+      )
+      RETURNING campaign_id
     )
     SELECT
       inserted_campaign.campaign_id,
-      inserted_audit.audit_id
+      inserted_audit.audit_id,
+      (SELECT COUNT(*) FROM inserted_variants) AS variant_count
     FROM inserted_campaign
     LEFT JOIN inserted_audit ON TRUE
-    """
-
-    _CAMPAIGN_VARIANT_UPSERT_SQL = """
-    INSERT INTO mip_app.campaign_message_variants (
-      campaign_id, variant_name, channel, subject, body, weight_pct
-    ) VALUES (
-      %(campaign_id)s, %(variant_name)s, %(channel)s, %(subject)s, %(body)s, %(weight_pct)s
-    )
-    ON CONFLICT (campaign_id, variant_name, channel)
-    DO UPDATE SET
-      subject = EXCLUDED.subject,
-      body = EXCLUDED.body,
-      weight_pct = EXCLUDED.weight_pct
     """
 
     # Re-audit #4 (2026-06-12): 'archived' is the "hide from the product"
@@ -573,6 +602,24 @@ class DatabricksPortfolioRepository:
                 include_trends=not bool(where_clause),
             )
             workflow_counts = self._load_live_workflow_counts() if not where_clause else {}
+            offer_mix = [
+                PortfolioOfferMixRow.model_validate(
+                    {
+                        "offer_code": code,
+                        "borrower_count": int(row.get(f"offer_{code}") or 0),
+                    }
+                )
+                for code in (
+                    "purchase",
+                    "refi_plus_heloc",
+                    "heloc",
+                    "refi",
+                    "cash_out",
+                    "investor",
+                    "retention",
+                    "nurture",
+                )
+            ]
             return PortfolioPreview(
                 marketable_population=int(row.get("marketable_population") or 0),
                 high_intent_leads=int(row.get("high_intent_leads") or 0),
@@ -592,6 +639,32 @@ class DatabricksPortfolioRepository:
                     else None
                 ),
                 avg_score=(int(row["avg_score"]) if row.get("avg_score") is not None else None),
+                avg_current_lien_balance_usd=(
+                    int(row["avg_current_lien_balance_usd"])
+                    if row.get("avg_current_lien_balance_usd") is not None
+                    else None
+                ),
+                avg_high_intent_lien_balance_usd=(
+                    int(row["avg_high_intent_lien_balance_usd"])
+                    if row.get("avg_high_intent_lien_balance_usd") is not None
+                    else None
+                ),
+                total_current_lien_balance_usd=(
+                    int(row["total_current_lien_balance_usd"])
+                    if row.get("total_current_lien_balance_usd") is not None
+                    else None
+                ),
+                avg_equity_pct=(
+                    float(row["avg_equity_pct"])
+                    if row.get("avg_equity_pct") is not None
+                    else None
+                ),
+                avg_rate_spread_bps=(
+                    float(row["avg_rate_spread_bps"])
+                    if row.get("avg_rate_spread_bps") is not None
+                    else None
+                ),
+                offer_mix=offer_mix,
                 approved_count=(
                     workflow_counts.get("approved_count", int(latest["approved_count"]))
                     if not where_clause and latest.get("approved_count") is not None
@@ -653,6 +726,21 @@ class DatabricksPortfolioRepository:
         household_summary = self._load_household_dedup_summary(payload)
         household_summary_dict = household_summary.model_dump()
         household_dedup_dict = payload.household_dedup.model_dump()
+        variant_rows = [
+            {
+                "variant_name": str(
+                    variant.get("variant_name") or variant.get("name") or "default"
+                )[:64],
+                "channel": str(variant.get("channel") or "email"),
+                "subject": variant.get("subject"),
+                "body": str(variant.get("body") or ""),
+                "weight_pct": variant.get("weight_pct"),
+                "generation_mode": variant.get("generation_mode") or "operator",
+                "generator_label": variant.get("generator_label") or "Operator edited",
+            }
+            for variant in payload.message_variants
+            if str(variant.get("body") or "").strip()
+        ]
         row = _get_lakebase_client().fetchone(
             self._CAMPAIGN_INSERT_SQL,
             {
@@ -671,6 +759,7 @@ class DatabricksPortfolioRepository:
                 else "null",
                 "household_dedup": json.dumps(household_dedup_dict, sort_keys=True),
                 "household_summary": json.dumps(household_summary_dict, sort_keys=True),
+                "variant_rows": json.dumps(variant_rows, sort_keys=True),
                 "request_id": f"portfolio-create-{uuid.uuid4()}",
                 "correlation_id": get_correlation_id(),
                 "metadata": json.dumps(
@@ -707,6 +796,16 @@ class DatabricksPortfolioRepository:
                                 household_summary.singleton_household_count
                             ),
                             "source_assets": household_summary.source_assets,
+                            "campaign_generation_mode": (
+                                str(variant_rows[0].get("generation_mode") or "operator")
+                                if variant_rows
+                                else "operator"
+                            ),
+                            "generator_label": (
+                                str(variant_rows[0].get("generator_label") or "Operator edited")
+                                if variant_rows
+                                else "Operator edited"
+                            ),
                         },
                         action="portfolio.create",
                     ),
@@ -717,22 +816,6 @@ class DatabricksPortfolioRepository:
         if row is None or not row.get("campaign_id"):
             raise LakebaseError("campaign insert returned no row")
         campaign_id = str(row["campaign_id"])
-        variant_rows = [
-            {
-                "campaign_id": campaign_id,
-                "variant_name": str(
-                    variant.get("variant_name") or variant.get("name") or "default"
-                )[:64],
-                "channel": str(variant.get("channel") or "email"),
-                "subject": variant.get("subject"),
-                "body": str(variant.get("body") or ""),
-                "weight_pct": variant.get("weight_pct"),
-            }
-            for variant in payload.message_variants
-            if str(variant.get("body") or "").strip()
-        ]
-        if variant_rows:
-            _get_lakebase_client().executemany(self._CAMPAIGN_VARIANT_UPSERT_SQL, variant_rows)
         return PortfolioCreateResponse(
             portfolio_id=campaign_id,
             campaign_id=campaign_id,

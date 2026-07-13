@@ -34,9 +34,6 @@ vi.mock('../components/mortgage/USChoroplethMap', () => ({
 vi.mock('../components/mortgage/PinnedInsights', () => ({
   PinnedInsights: () => <div data-testid="pinned-insights" />,
 }));
-vi.mock('../components/mortgage/AgentActivityLog', () => ({
-  AgentActivityLog: () => <div data-testid="agent-activity-log" />,
-}));
 
 vi.mock('../lib/api', () => ({
   api: { portfolioPreview: vi.fn() },
@@ -71,5 +68,21 @@ describe('Home data estate relocation', () => {
     expect(document.body.textContent).not.toContain('Data estate under the hood');
     // Sanity: Home still renders its own operator content.
     expect(document.body.textContent).toContain('Approval queue');
+  });
+
+  it('keeps geography full width and removes the admin-only activity log', () => {
+    act(() => {
+      root.render(
+        <MemoryRouter initialEntries={['/']}>
+          <Home />
+        </MemoryRouter>,
+      );
+    });
+
+    const map = document.querySelector('[data-testid="us-choropleth-map"]');
+    expect(map).toBeTruthy();
+    expect(map?.closest('.layoutA-grid')).toBeNull();
+    expect(document.querySelector('[data-testid="agent-activity-log"]')).toBeNull();
+    expect(document.body.textContent).not.toContain('Agent action audit log');
   });
 });

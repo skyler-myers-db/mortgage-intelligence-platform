@@ -544,7 +544,7 @@ class _FakeLakebaseClient:
             and "applications_started" in sql
             and "GROUP BY lo_email" in sql
         ):
-            by_lo: dict[str, dict[str, int]] = {}
+            by_lo: dict[str, dict[str, Any]] = {}
             for row in self.dispositions:
                 lo_email = str(row["lo_email"])
                 outcome = str(row["outcome"])
@@ -555,17 +555,29 @@ class _FakeLakebaseClient:
                         "contacts_reached": 0,
                         "callbacks_scheduled": 0,
                         "applications_started": 0,
+                        "unique_lead_ids": set(),
+                        "unique_contact_ids": set(),
+                        "unique_application_ids": set(),
                     },
                 )
                 bucket["calls_attempted"] += 1
+                bucket["unique_lead_ids"].add(str(row["borrower_id"]))
                 if outcome in {"connected", "callback_scheduled", "application_started"}:
                     bucket["contacts_reached"] += 1
+                    bucket["unique_contact_ids"].add(str(row["borrower_id"]))
                 if outcome == "callback_scheduled":
                     bucket["callbacks_scheduled"] += 1
                 if outcome == "application_started":
                     bucket["applications_started"] += 1
+                    bucket["unique_application_ids"].add(str(row["borrower_id"]))
             return [
-                {"group_key": lo_email, **counts}
+                {
+                    "group_key": lo_email,
+                    **{key: value for key, value in counts.items() if not key.endswith("_ids")},
+                    "unique_leads_contacted": len(counts["unique_lead_ids"]),
+                    "unique_contacts_reached": len(counts["unique_contact_ids"]),
+                    "unique_application_starts": len(counts["unique_application_ids"]),
+                }
                 for lo_email, counts in sorted(by_lo.items())
             ][:limit]
         if "FROM mip_app.call_dispositions" in sql and "GROUP BY lo_email, outcome" in sql:
@@ -578,30 +590,62 @@ class _FakeLakebaseClient:
                 for (lo_email, outcome), n in sorted(counts.items())
             ][:limit]
         if "FROM mip_app.call_dispositions" in sql and "GROUP BY 1" in sql:
-            by_lo: dict[str, dict[str, int]] = {}
+            by_group: dict[str, dict[str, Any]] = {}
+            aggregate_all = "'all_cohorts' AS group_key" in sql
             for row in self.dispositions:
-                lo_email = str(row["lo_email"])
+                group_key = "all_cohorts" if aggregate_all else str(row["lo_email"])
                 outcome = str(row["outcome"])
-                bucket = by_lo.setdefault(
-                    lo_email,
+                bucket = by_group.setdefault(
+                    group_key,
                     {
                         "calls_attempted": 0,
                         "contacts_reached": 0,
                         "callbacks_scheduled": 0,
                         "applications_started": 0,
+                        "unique_lead_ids": set(),
+                        "unique_contact_ids": set(),
+                        "unique_application_ids": set(),
                     },
                 )
                 bucket["calls_attempted"] += 1
+                bucket["unique_lead_ids"].add(str(row["borrower_id"]))
                 if outcome in {"connected", "callback_scheduled", "application_started"}:
                     bucket["contacts_reached"] += 1
+                    bucket["unique_contact_ids"].add(str(row["borrower_id"]))
                 if outcome == "callback_scheduled":
                     bucket["callbacks_scheduled"] += 1
                 if outcome == "application_started":
                     bucket["applications_started"] += 1
+                    bucket["unique_application_ids"].add(str(row["borrower_id"]))
             return [
-                {"group_key": lo_email, **counts}
-                for lo_email, counts in sorted(by_lo.items())
+                {
+                    "group_key": group_key,
+                    **{key: value for key, value in counts.items() if not key.endswith("_ids")},
+                    "unique_leads_contacted": len(counts["unique_lead_ids"]),
+                    "unique_contacts_reached": len(counts["unique_contact_ids"]),
+                    "unique_application_starts": len(counts["unique_application_ids"]),
+                }
+                for group_key, counts in sorted(by_group.items())
             ][:limit]
+        if (
+            "FROM mip_app.lead_outcomes" in sql
+            and "unique_applications_submitted" in sql
+            and "GROUP BY" not in sql
+        ):
+            submitted = {
+                str(row["borrower_id"])
+                for row in self.outcomes
+                if row.get("outcome_type") == "application_submitted"
+            }
+            funded = {
+                str(row["borrower_id"])
+                for row in self.outcomes
+                if row.get("outcome_type") == "closed_funded"
+            }
+            return [{
+                "unique_applications_submitted": len(submitted),
+                "unique_closed_funded": len(funded),
+            }]
         if "FROM mip_app.lead_outcomes" in sql and "GROUP BY outcome_type" in sql:
             counts: dict[tuple[str, str, str | None, str], int] = {}
             for row in self.outcomes:

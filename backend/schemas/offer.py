@@ -99,6 +99,11 @@ class OutreachDraft(BaseModel):
     disclosure_version: str
     disclosure_state: str
     marketing_eligible: bool
+    generation_mode: Literal["supervisor", "governed_fallback"]
+    generator_label: str = Field(min_length=1, max_length=80)
+    strategy_summary: str = Field(min_length=1, max_length=500)
+    evidence_summary: list[str] = Field(min_length=1, max_length=5)
+    evidence_assets: list[str] = Field(min_length=1, max_length=5)
 
 
 class OutreachDraftRequest(BaseModel):

@@ -1,5 +1,7 @@
 import type { AssignmentLifecycleStatus, LeadAssignment } from './types/loanOfficer';
 
+export type { CampaignRecommendationResponse } from './types/campaign';
+
 export type SegmentCode =
   | 'itm'
   | 'listed'
@@ -234,6 +236,9 @@ export interface SalesConversionResponse {
     contacts_reached: number;
     callbacks_scheduled: number;
     applications_started: number;
+    unique_leads_contacted?: number;
+    unique_contacts_reached?: number;
+    unique_application_starts?: number;
     application_start_rate: number;
   }>;
 }
@@ -244,6 +249,8 @@ export interface SalesOutcomeSummaryResponse {
   total_outcomes: number;
   applications_submitted: number;
   closed_funded: number;
+  unique_applications_submitted?: number;
+  unique_closed_funded?: number;
   lost_to_competitor: number;
   withdrawn: number;
   not_qualified: number;
@@ -478,6 +485,15 @@ export interface PortfolioPreview {
   top_tier_opportunities: number | null;
   offers_recommended: number | null;
   avg_score: number | null;
+  avg_current_lien_balance_usd?: number | null;
+  avg_high_intent_lien_balance_usd?: number | null;
+  total_current_lien_balance_usd?: number | null;
+  avg_equity_pct?: number | null;
+  avg_rate_spread_bps?: number | null;
+  offer_mix?: Array<{
+    offer_code: 'purchase' | 'refi_plus_heloc' | 'heloc' | 'refi' | 'cash_out' | 'investor' | 'retention' | 'nurture';
+    borrower_count: number;
+  }>;
   data_refreshed_at: string | null; // ISO timestamp
   trends?: Record<string, KpiTrend>;
   trend_status?: 'live' | 'not_applicable' | 'unavailable' | 'empty' | string;
@@ -666,7 +682,9 @@ export interface AssetLineageNode {
   label: string;
   object_type?: string | null;
   event_time?: string | null;
+  event_count?: number | null;
   source: string;
+  catalog_explorer_url?: string | null;
 }
 
 export interface AssetMetadataResponse {

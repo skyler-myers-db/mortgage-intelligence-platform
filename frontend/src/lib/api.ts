@@ -4,6 +4,7 @@ import type {
   BorrowerLifecycle,
   CallDisposition,
   CampaignListResponse,
+  CampaignRecommendationResponse,
   CampaignSummary,
   ConfigOptions,
   CountyRollupResponse,
@@ -138,6 +139,11 @@ export interface OutreachDraftResult {
   disclosure_version: string;
   disclosure_state: string;
   marketing_eligible: boolean;
+  generation_mode: 'supervisor' | 'governed_fallback';
+  generator_label: string;
+  strategy_summary: string;
+  evidence_summary: string[];
+  evidence_assets: string[];
 }
 
 export interface GenieResult {
@@ -676,7 +682,12 @@ async function getJsonWithHeaders<T>(path: string, signal?: AbortSignal): Promis
   return { data: (await res.json()) as T, headers: res.headers };
 }
 
-async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Promise<T> {
+async function postJson<T, B>(
+  path: string,
+  body: B,
+  signal?: AbortSignal,
+  extraHeaders?: Record<string, string>,
+): Promise<T> {
   const requestPath = apiPath(path);
   let res: Response;
   try {
@@ -684,7 +695,7 @@ async function postJson<T, B>(path: string, body: B, signal?: AbortSignal): Prom
       requestPath,
       {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...extraHeaders },
         body: JSON.stringify(body ?? {}),
       },
       3,
@@ -820,6 +831,16 @@ export const api = {
   ) =>
     postJson<PortfolioPreview, { criteria: Record<string, unknown> }>(
       '/api/portfolio/preview',
+      { criteria },
+      signal,
+    ),
+
+  campaignRecommendation: (
+    criteria: Record<string, unknown> = {},
+    signal?: AbortSignal,
+  ) =>
+    postJson<CampaignRecommendationResponse, { criteria: Record<string, unknown> }>(
+      '/api/portfolio/campaign-recommendation',
       { criteria },
       signal,
     ),
@@ -1508,7 +1529,12 @@ export const api = {
         helpful: boolean;
         comment?: string;
       }
-    >('/api/genie/feedback', payload, signal),
+    >(
+      '/api/genie/feedback',
+      payload,
+      signal,
+      { 'Idempotency-Key': crypto.randomUUID() },
+    ),
 
   growthAgent: (signal?: AbortSignal) =>
     getJson<GrowthAgentHomeResponse>('/api/growth-agent', signal),

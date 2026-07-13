@@ -2332,6 +2332,19 @@ kbd {
   overflow-wrap: anywhere;
   text-decoration: none;
 }
+.governed-assets__list {
+  display: grid;
+  grid-template-columns: 1fr;
+  align-items: stretch;
+}
+.governed-assets__list .lineage-node__chip {
+  inline-size: 100%;
+  justify-content: space-between;
+}
+.observed-lineage__asset {
+  min-inline-size: 0;
+  overflow-wrap: anywhere;
+}
 a.lineage-node__chip:hover,
 a.lineage-node__chip:focus-visible {
   border-color: var(--accent);
@@ -4350,6 +4363,30 @@ a.lineage-node__chip:focus-visible {
   box-shadow: 0 0 0 1px var(--text-1);
   z-index: 2;
 }
+.analytics-scatter-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--sp-2) var(--sp-4);
+  margin-block: var(--sp-3);
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-2);
+}
+.analytics-scatter-legend__items,
+.analytics-scatter-legend__band {
+  align-items: center;
+}
+.analytics-scatter-legend__band {
+  display: inline-flex;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+}
+.analytics-scatter-legend__scope {
+  max-inline-size: 36rem;
+}
 .analytics-scatter-meta {
   margin: var(--sp-2) 0 0;
 }
@@ -4663,6 +4700,55 @@ a.lineage-node__chip:focus-visible {
    native chart attachment but in-app native rendering waits on the Beta
    download API; this chip is a marker only, no chart is rendered from it. */
 .genie-answer__native-viz { margin: var(--sp-2) 0; }
+
+.genie-answer__api-source {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+  color: var(--accent-ink);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+}
+.genie-answer__reasoning {
+  margin-top: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-md);
+  background: var(--bg-1);
+}
+.genie-answer__reasoning-summary {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+  padding: var(--sp-3);
+  color: var(--text-2);
+  cursor: pointer;
+  list-style: none;
+}
+.genie-answer__reasoning-summary::-webkit-details-marker { display: none; }
+.genie-answer__reasoning-body {
+  display: grid;
+  gap: var(--sp-2);
+  padding: 0 var(--sp-3) var(--sp-3);
+}
+.genie-answer__reasoning-step {
+  display: grid;
+  gap: var(--sp-1);
+  padding: var(--sp-2) var(--sp-3);
+  border-inline-start: var(--sp-1) solid var(--line-2);
+}
+.genie-answer__reasoning-kind {
+  color: var(--text-3);
+  font-family: var(--font-mono);
+  font-size: var(--fs-11);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+}
+.genie-answer__reasoning-content {
+  color: var(--text-2);
+  font-size: var(--fs-12);
+  line-height: var(--lh-body);
+}
 
 /* Answer feedback — thumbs up/down + optional short comment. Subtle, muted.
    The vote buttons reuse the .btn / .btn--ghost / .btn--sm primitive; only
@@ -5447,6 +5533,7 @@ a.lineage-node__chip:focus-visible {
 .admin-audit-list {
   display: grid;
   gap: var(--sp-2);
+  overflow-x: auto;
 }
 .admin-audit-row {
   display: grid;
@@ -5537,6 +5624,73 @@ a.lineage-node__chip:focus-visible {
   outline: none;
 }
 .form-input:focus { border-color: var(--accent); }
+.campaign-recommendation {
+  display: grid;
+  gap: var(--sp-3);
+  margin-bottom: var(--sp-5);
+  padding: var(--sp-4);
+  border: 1px solid var(--line-2);
+  border-radius: var(--r-md);
+  background: color-mix(in oklab, var(--accent) 5%, var(--bg-2));
+}
+.campaign-recommendation__header,
+.campaign-recommendation__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-3);
+}
+.campaign-recommendation__header {
+  justify-content: space-between;
+  flex-wrap: wrap;
+}
+.campaign-recommendation__actions {
+  flex-wrap: wrap;
+}
+.campaign-recommendation__audience,
+.campaign-recommendation__strategy {
+  margin: 0;
+  line-height: var(--lh-body);
+}
+.campaign-recommendation__audience {
+  color: var(--text-1);
+  font-weight: 600;
+}
+.campaign-recommendation__strategy {
+  color: var(--text-2);
+}
+.campaign-recommendation__evidence {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr));
+  gap: var(--sp-2);
+}
+.campaign-evidence {
+  display: grid;
+  gap: var(--sp-1);
+  min-inline-size: 0;
+  padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.campaign-evidence strong {
+  color: var(--text-1);
+  font-size: var(--fs-16);
+}
+.campaign-evidence code {
+  overflow-wrap: anywhere;
+  color: var(--text-3);
+  font-size: var(--fs-11);
+}
+.offer-message-intelligence {
+  display: grid;
+  gap: var(--sp-3);
+  padding: var(--sp-3);
+  border: 1px solid var(--line-1);
+  border-radius: var(--r-sm);
+  background: var(--bg-1);
+}
 .campaign-setup {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(calc(var(--sp-16) * 3), 1fr));

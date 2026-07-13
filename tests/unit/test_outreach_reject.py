@@ -378,6 +378,10 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
     )
     assert current.status_code == 200, current.text
     current_body = current.json()["body"]
+    assert current.json()["generation_mode"] in {"supervisor", "governed_fallback"}
+    assert current.json()["generator_label"]
+    assert current.json()["strategy_summary"]
+    assert current.json()["evidence_summary"]
     assert "Summit Mortgage customer" in current_body
     assert "public-record" not in current_body
     assert "may qualify" not in current_body
@@ -650,6 +654,32 @@ def test_approve_forwards_draft_body_into_audit_metadata(
     events = audit.list(limit=5)
     assert len(events) == 1
     assert events[0].payload_json.get("draft_body") == draft
+
+
+def test_approve_rejects_protected_class_language_before_write(
+    override_deps, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    monkeypatch.setattr(
+        outreach_mod,
+        "enqueue_lifecycle_trigger",
+        lambda background, *, reason="approval": None,
+    )
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    response = TestClient(app).post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "draft_body": f"Women homeowners should call for a review. {DISCLOSURE_BODY}",
+        },
+    )
+
+    assert response.status_code == 422
+    assert "protected-class" in response.json()["detail"]
+    assert audit.list(limit=5) == []
 
 
 # ---------------------------------------------------------------------------

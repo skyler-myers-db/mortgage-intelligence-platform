@@ -492,6 +492,11 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
         json={"lo_email": "lo02@summit.example", "outcome": "application_started"},
     )
     assert logged.status_code == 200
+    repeat_contact = client.post(
+        f"/api/leads/{borrower_id}/disposition",
+        json={"lo_email": "lo02@summit.example", "outcome": "connected"},
+    )
+    assert repeat_contact.status_code == 200
 
     today = datetime.now(UTC).date().isoformat()
     standup = client.get(f"/api/sales/standup?date={today}")
@@ -501,7 +506,11 @@ def test_sales_standup_aging_and_conversion_surfaces() -> None:
     conversion = client.get(f"/api/sales/conversion?from={today}&to={today}&groupBy=lo")
     assert conversion.status_code == 200
     rows = conversion.json()["rows"]
-    assert any(row["group_key"] == "lo02@summit.example" for row in rows)
+    lo_row = next(row for row in rows if row["group_key"] == "lo02@summit.example")
+    assert lo_row["calls_attempted"] == 2
+    assert lo_row["unique_leads_contacted"] == 1
+    assert lo_row["unique_application_starts"] == 1
+    assert lo_row["application_start_rate"] == 1.0
 
     invalid = client.get(f"/api/sales/conversion?from={today}&to=2020-01-01&groupBy=lo")
     assert invalid.status_code == 422

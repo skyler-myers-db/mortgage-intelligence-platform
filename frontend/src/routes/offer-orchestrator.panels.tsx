@@ -8,7 +8,7 @@ import { Icon } from '../components/Icon';
 import { Skeleton } from '../components/ui/Skeleton';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { Reveal } from '../components/fx/Reveal';
-import { descriptorFor } from '../lib/drawerSources';
+import { descriptorFor, drawerForAsset } from '../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../lib/offerLanguage';
 import {
   OUTREACH_CHANNELS,
@@ -146,6 +146,12 @@ interface OfferReviewGridProps {
   approving: boolean;
   draftDisclosureVersion: string | null;
   draftDisclosureState: string | null;
+  draftGeneratorLabel: string | null;
+  draftGenerationMode: 'supervisor' | 'governed_fallback' | null;
+  draftStrategy: string | null;
+  draftEvidence: string[];
+  draftEvidenceAssets: string[];
+  regenerateDraft: () => void;
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
   savedDraftExists: boolean;
@@ -170,6 +176,12 @@ export function OfferReviewGrid({
   approving,
   draftDisclosureVersion,
   draftDisclosureState,
+  draftGeneratorLabel,
+  draftGenerationMode,
+  draftStrategy,
+  draftEvidence,
+  draftEvidenceAssets,
+  regenerateDraft,
   draftIsSaved,
   saveCurrentDraft,
   savedDraftExists,
@@ -199,6 +211,12 @@ export function OfferReviewGrid({
         approving={approving}
         draftDisclosureVersion={draftDisclosureVersion}
         draftDisclosureState={draftDisclosureState}
+        draftGeneratorLabel={draftGeneratorLabel}
+        draftGenerationMode={draftGenerationMode}
+        draftStrategy={draftStrategy}
+        draftEvidence={draftEvidence}
+        draftEvidenceAssets={draftEvidenceAssets}
+        regenerateDraft={regenerateDraft}
         draftIsSaved={draftIsSaved}
         saveCurrentDraft={saveCurrentDraft}
         savedDraftExists={savedDraftExists}
@@ -310,6 +328,12 @@ interface DraftOutreachPanelProps {
   approving: boolean;
   draftDisclosureVersion: string | null;
   draftDisclosureState: string | null;
+  draftGeneratorLabel: string | null;
+  draftGenerationMode: 'supervisor' | 'governed_fallback' | null;
+  draftStrategy: string | null;
+  draftEvidence: string[];
+  draftEvidenceAssets: string[];
+  regenerateDraft: () => void;
   draftIsSaved: boolean;
   saveCurrentDraft: () => void;
   savedDraftExists: boolean;
@@ -330,6 +354,12 @@ function DraftOutreachPanel({
   approving,
   draftDisclosureVersion,
   draftDisclosureState,
+  draftGeneratorLabel,
+  draftGenerationMode,
+  draftStrategy,
+  draftEvidence,
+  draftEvidenceAssets,
+  regenerateDraft,
   draftIsSaved,
   saveCurrentDraft,
   savedDraftExists,
@@ -373,9 +403,45 @@ function DraftOutreachPanel({
           data-testid="outreach-draft"
           className="route-textarea route-textarea--outreach"
         />
-        <div className="muted fs-11 mt-2">
-          Draft text is relationship-aware, disclosure-backed, and must be reviewed by a licensed officer before any external send.
-        </div>
+        {draftGeneratorLabel && (
+          <div className="offer-message-intelligence mt-3" data-testid="offer-message-intelligence">
+            <div className="split-row">
+              <Chip
+                variant={draftGenerationMode === 'supervisor' ? 'success' : 'neutral'}
+                icon={draftGenerationMode === 'supervisor' ? 'sparkle' : 'doc'}
+              >
+                {draftGeneratorLabel}
+              </Chip>
+              <Button
+                variant="ghost"
+                size="sm"
+                icon="sparkle"
+                onClick={regenerateDraft}
+                disabled={approving || !borrowerId}
+              >
+                Regenerate
+              </Button>
+            </div>
+            {draftStrategy && <p className="body flush">{draftStrategy}</p>}
+            {draftEvidence.length > 0 && (
+              <div className="chip-row" aria-label="Message evidence">
+                {draftEvidence.map((item) => (
+                  <Chip key={item} variant="neutral">{item}</Chip>
+                ))}
+              </div>
+            )}
+            {draftEvidenceAssets.length > 0 && (
+              <div className="chip-row" aria-label="Message source assets">
+                {draftEvidenceAssets.map((asset) => {
+                  const source = drawerForAsset(asset);
+                  return source ? (
+                    <EvidenceChip key={asset} source={source}>{asset}</EvidenceChip>
+                  ) : null;
+                })}
+              </div>
+            )}
+          </div>
+        )}
         <div className="chip-row mt-3">
           {OUTREACH_CHANNELS.map((channel) => (
             <Button

@@ -63,36 +63,18 @@ describe('GenieProofPanel', () => {
     expect(container.textContent).not.toContain('Source UC assets');
   });
 
-  it('renders the top-level reasoning section collapsed with kind+content rows', () => {
+  it('leaves top-level API reasoning summaries to the answer surface', () => {
     const withReasoning = payload(12);
     withReasoning.reasoning_trace = [
       { kind: 'FILTERING_CONTEXT', content: 'Scoping to trusted borrower_360.' },
-      { kind: 'ASKING_AI', content: 'Composing the ranked answer.' },
     ];
 
     act(() => {
       root.render(<GenieProofPanel payload={withReasoning} onOpenSource={() => {}} />);
     });
 
-    const details = container.querySelector<HTMLDetailsElement>('.genie-proof__reasoning');
-    expect(details).not.toBeNull();
-    // Collapsed by default.
-    expect(details!.open).toBe(false);
-    expect(container.textContent).toContain('Genie reasoning · Public Preview');
-    const rows = container.querySelectorAll('.genie-proof__reasoning-row');
-    expect(rows.length).toBe(2);
-    expect(container.textContent).toContain('FILTERING_CONTEXT');
-    expect(container.textContent).toContain('Scoping to trusted borrower_360.');
-  });
-
-  it('omits the reasoning section when the top-level trace is empty', () => {
-    const noReasoning = payload(12);
-    noReasoning.reasoning_trace = [];
-    act(() => {
-      root.render(<GenieProofPanel payload={noReasoning} onOpenSource={() => {}} />);
-    });
     expect(container.querySelector('.genie-proof__reasoning')).toBeNull();
-    expect(container.textContent).not.toContain('Genie reasoning · Public Preview');
+    expect(container.textContent).not.toContain('Scoping to trusted borrower_360.');
   });
 
   it('does not render query trace content on untrusted proofs', () => {

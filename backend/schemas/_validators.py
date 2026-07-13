@@ -11,6 +11,14 @@ _StateFootprintProvider = Callable[[], tuple[Sequence[tuple[str, str]], bool]]
 _public_lender_name_provider: _PublicLenderNameProvider | None = None
 _state_footprint_provider: _StateFootprintProvider | None = None
 
+_PROTECTED_CLASS_MARKETING_RE = re.compile(
+    r"\b(?:age|aged|asian|black|disab(?:ility|led)|ethnic(?:ity)?|familial status|"
+    r"female|gender|hispanic|latino|male|marital status|national origin|native american|"
+    r"pacific islander|pregnan(?:cy|t)|race|racial|religion|religious|sex|sexual orientation|"
+    r"veteran|white|woman|women)\b",
+    re.IGNORECASE,
+)
+
 
 def set_public_lender_name_provider(provider: _PublicLenderNameProvider | None) -> None:
     """Register the configured tenant lender without importing runtime settings."""
@@ -96,3 +104,16 @@ def normalize_public_lender_ref(
     if is_public_lender_ref(stripped, allow_all=allow_all):
         return stripped
     raise ValueError("target_lender_ref must be a public-safe lender alias")
+
+
+def assert_no_protected_class_marketing_text(value: str, *, field_name: str) -> str:
+    """Reject protected-class language from targeting or outreach copy.
+
+    This is intentionally narrower than a general prose validator. It is used
+    only at campaign/outreach decision boundaries, where protected-class
+    language must fail closed instead of being silently scrubbed or persisted.
+    """
+
+    if _PROTECTED_CLASS_MARKETING_RE.search(value):
+        raise ValueError(f"{field_name} cannot contain protected-class targeting language")
+    return value

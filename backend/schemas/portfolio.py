@@ -7,10 +7,20 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from backend.schemas._validators import (
-    configured_public_lender_name,
     normalize_public_lender_ref,
     reviewed_geography_labels,
     reviewed_state_codes,
+)
+from backend.schemas.portfolio_campaign import (
+    CampaignRecommendationEvidence,  # noqa: F401 - compatibility re-export
+    CampaignRecommendationRequest,  # noqa: F401 - compatibility re-export
+    CampaignRecommendationResponse,  # noqa: F401 - compatibility re-export
+    CampaignRecommendationVariant,  # noqa: F401 - compatibility re-export
+    PortfolioOfferMixRow,
+    assert_borrower_campaign_copy,
+    assert_public_campaign_text,
+    bind_portfolio_criteria,
+    remove_allowed_public_titlecase_phrases,
 )
 
 _OCCUPANCY_LABELS: frozenset[str] = frozenset(
@@ -117,34 +127,6 @@ _SEND_WINDOW_DAY_ALIASES: dict[str, str] = {
     "sun": "Sunday",
     "sunday": "Sunday",
 }
-_PUBLIC_TEXT_DENYLIST: tuple[str, ...] = (
-    r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}",
-    r"\b(?:\+?1[-.\s]?)?(?:\(?\d{3}\)?[-.\s]?)\d{3}[-.\s]?\d{4}\b",
-    r"\b\d{3}-\d{2}-\d{4}\b",
-    r"\b\d{9,}\b",
-    r"\b\d{1,6}\s+[A-Za-z0-9.'-]+\s+(?:st|street|ave|avenue|rd|road|dr|drive|ln|lane|blvd|boulevard|ct|court|way)\b",
-    r"\b(?:raw[_\s-]?clip|owner[_\s-]?name|borrower[_\s-]?name|customer[_\s-]?name|prospect[_\s-]?name|street[_\s-]?address|mailing[_\s-]?address)\b",
-    r"\[(?:first|last|full)[_\s-]?name\]",
-    r"\{(?:first|last|full)[_\s-]?name\}",
-    r"\binsert governed\b",
-)
-_HUMAN_NAME_SHAPE_RE = re.compile(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b")
-_PUBLIC_TITLECASE_PHRASE_ALLOWLIST: tuple[str, ...] = (
-    "Summit Mortgage",
-    "Equal Housing",
-    "New York",
-    "New Jersey",
-    "New Mexico",
-    "North Carolina",
-    "North Dakota",
-    "South Carolina",
-    "South Dakota",
-    "Rhode Island",
-    "West Virginia",
-    "United States",
-)
-
-
 def _validate_optional_label(
     value: str | None,
     *,
@@ -181,22 +163,6 @@ def _normalise_reviewed_alias(
     raise ValueError(f"{field_name} must be one of the reviewed options")
 
 
-def _assert_public_campaign_text(value: object, *, field_name: str, max_length: int) -> str:
-    if value is None:
-        return ""
-    text = re.sub(r"\s+", " ", str(value).strip())
-    if len(text) > max_length:
-        raise ValueError(f"{field_name} must be {max_length} characters or fewer")
-    if any(re.search(pattern, text, re.IGNORECASE) for pattern in _PUBLIC_TEXT_DENYLIST):
-        raise ValueError(f"{field_name} cannot contain PII, raw identifiers, or unresolved placeholders")
-    name_scan_text = text
-    for allowed in (*_PUBLIC_TITLECASE_PHRASE_ALLOWLIST, configured_public_lender_name()):
-        name_scan_text = name_scan_text.replace(allowed, "")
-    if _HUMAN_NAME_SHAPE_RE.search(name_scan_text):
-        raise ValueError(f"{field_name} cannot contain human-name-shaped text")
-    return text
-
-
 def _assert_json_public(value: object, *, field_name: str) -> None:
     if isinstance(value, dict):
         for key, item in value.items():
@@ -206,7 +172,7 @@ def _assert_json_public(value: object, *, field_name: str) -> None:
         for item in value:
             _assert_json_public(item, field_name=field_name)
     elif isinstance(value, str):
-        _assert_public_campaign_text(value, field_name=field_name, max_length=1000)
+        assert_public_campaign_text(value, field_name=field_name, max_length=1000)
 
 
 class KpiTrend(BaseModel):
@@ -241,6 +207,17 @@ class PortfolioPreview(BaseModel):
     # decision ("offers available" headline measure).
     offers_available: int | None = None
     avg_score: int | None = Field(default=None, ge=0, le=100)
+    # Cohort economics are measured over the exact filtered population in the
+    # same semantic query as the headline KPIs. These replace client-side
+    # placeholder assumptions; missing source values remain null.
+    avg_current_lien_balance_usd: int | None = Field(default=None, ge=0)
+    # Same filtered query, restricted to the in-the-money population used by
+    # the economics scenario. Never substitute the all-borrower average.
+    avg_high_intent_lien_balance_usd: int | None = Field(default=None, ge=0)
+    total_current_lien_balance_usd: int | None = Field(default=None, ge=0)
+    avg_equity_pct: float | None = Field(default=None, ge=0, le=100)
+    avg_rate_spread_bps: float | None = None
+    offer_mix: list["PortfolioOfferMixRow"] = Field(default_factory=list)
     # Optional trend histories keyed by KPI field name. When absent, the UI
     # renders the KPI without a sparkline.
     trends: dict[str, KpiTrend] = Field(default_factory=dict)
@@ -520,6 +497,9 @@ class PortfolioPreviewRequest(BaseModel):
     criteria: PortfolioCriteria = Field(default_factory=PortfolioCriteria)
 
 
+bind_portfolio_criteria(PortfolioCriteria)
+
+
 HouseholdDedupeUnit = Literal["borrower", "household"]
 HouseholdPrimaryStrategy = Literal["highest_opportunity_eligible"]
 
@@ -612,9 +592,7 @@ class PortfolioCreateRequest(BaseModel):
         )
         if any(re.search(pattern, cleaned, re.IGNORECASE) for pattern in pii_patterns):
             raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
-        name_scan = cleaned
-        for allowed in (*_PUBLIC_TITLECASE_PHRASE_ALLOWLIST, configured_public_lender_name()):
-            name_scan = name_scan.replace(allowed, "")
+        name_scan = remove_allowed_public_titlecase_phrases(cleaned)
         if re.search(r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b", name_scan):
             raise ValueError("name cannot contain PII, raw identifiers, or street addresses")
         return cleaned
@@ -629,7 +607,7 @@ class PortfolioCreateRequest(BaseModel):
             raise ValueError("message_variants supports at most 12 variants per campaign")
         normalized: list[dict[str, object]] = []
         for raw in value:
-            name = _assert_public_campaign_text(
+            name = assert_public_campaign_text(
                 raw.get("variant_name") or raw.get("name") or "default",
                 field_name="variant_name",
                 max_length=64,
@@ -637,15 +615,27 @@ class PortfolioCreateRequest(BaseModel):
             channel = str(raw.get("channel") or "email").strip()
             if channel not in _OUTREACH_CHANNELS:
                 raise ValueError("message variant channel must be email, sms, or direct_mail")
-            subject = _assert_public_campaign_text(
+            subject = assert_public_campaign_text(
                 raw.get("subject") or "",
                 field_name="variant subject",
                 max_length=120,
             )
-            body = _assert_public_campaign_text(
+            body = assert_public_campaign_text(
                 raw.get("body") or "",
                 field_name="variant body",
                 max_length=1000,
+            )
+            assert_borrower_campaign_copy(subject, field_name="variant subject")
+            assert_borrower_campaign_copy(body, field_name="variant body")
+            generation_mode = str(raw.get("generation_mode") or "operator").strip()
+            if generation_mode not in {"supervisor", "reviewed_fallback", "operator"}:
+                raise ValueError(
+                    "variant generation_mode must be supervisor, reviewed_fallback, or operator"
+                )
+            generator_label = assert_public_campaign_text(
+                raw.get("generator_label") or "Operator edited",
+                field_name="variant generator_label",
+                max_length=80,
             )
             weight_raw = raw.get("weight_pct", 100)
             try:
@@ -661,6 +651,8 @@ class PortfolioCreateRequest(BaseModel):
                     "subject": subject,
                     "body": body,
                     "weight_pct": weight,
+                    "generation_mode": generation_mode,
+                    "generator_label": generator_label,
                 }
             )
         return normalized
@@ -715,7 +707,7 @@ class PortfolioCreateRequest(BaseModel):
         if start >= end:
             raise ValueError("send_window start_local must be before end_local")
         timezone = str(value.get("timezone") or "borrower_local").strip()
-        _assert_public_campaign_text(timezone, field_name="send_window timezone", max_length=64)
+        assert_public_campaign_text(timezone, field_name="send_window timezone", max_length=64)
         return {
             "days": days,
             "timezone": timezone,
@@ -848,7 +840,7 @@ class CampaignStatusPatchRequest(BaseModel):
     def _validate_rationale(cls, value: str | None) -> str | None:
         if value is None:
             return None
-        cleaned = _assert_public_campaign_text(
+        cleaned = assert_public_campaign_text(
             value,
             field_name="campaign status rationale",
             max_length=500,

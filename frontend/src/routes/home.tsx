@@ -6,7 +6,6 @@ import { USChoroplethMap } from '../components/mortgage/USChoroplethMap';
 import { PinnedInsights } from '../components/mortgage/PinnedInsights';
 import { PortfolioSummaryCard } from '../components/mortgage/PortfolioSummaryCard';
 import { LastLoginSummary } from '../components/mortgage/LastLoginSummary';
-import { AgentActivityLog } from '../components/mortgage/AgentActivityLog';
 import { Button, Chip } from '../components/Primitives';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
 import { Icon } from '../components/Icon';
@@ -298,15 +297,10 @@ export default function Home() {
           <div className="h-2">State → county → ZIP → borrower</div>
         </div>
       </div>
-      <div className="layoutA-grid">
-        {/* Home map drills in-place through state/county/ZIP and then opens
-            the filtered Lead Queue. Lead Queue remains the source-of-truth
-            index for borrower selection. */}
-        <USChoroplethMap drillBehavior="filter" />
-        <Reveal>
-          <AgentActivityLog />
-        </Reveal>
-      </div>
+      {/* Home map drills in-place through state/county/ZIP and then opens
+          the filtered Lead Queue. Lead Queue remains the source-of-truth
+          index for borrower selection. Audit exploration is admin-only. */}
+      <USChoroplethMap drillBehavior="filter" />
 
       <Reveal>
         <div className="section-hdr">

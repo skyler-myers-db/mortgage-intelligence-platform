@@ -1392,9 +1392,14 @@ class SalesStateStore:
             f"""
             SELECT {group_expr} AS group_key,
                    COUNT(*) AS calls_attempted,
+                   COUNT(DISTINCT borrower_id) AS unique_leads_contacted,
+                   COUNT(DISTINCT borrower_id) FILTER (
+                     WHERE outcome IN ('connected','callback_scheduled','application_started')
+                   ) AS unique_contacts_reached,
                    COUNT(*) FILTER (WHERE outcome IN ('connected','callback_scheduled','application_started')) AS contacts_reached,
                    COUNT(*) FILTER (WHERE outcome = 'callback_scheduled') AS callbacks_scheduled,
-                   COUNT(*) FILTER (WHERE outcome = 'application_started') AS applications_started
+                   COUNT(*) FILTER (WHERE outcome = 'application_started') AS applications_started,
+                   COUNT(DISTINCT borrower_id) FILTER (WHERE outcome = 'application_started') AS unique_application_starts
             FROM mip_app.call_dispositions
             WHERE occurred_at >= %(from_date)s::date
               AND occurred_at < (%(to_date)s::date + interval '1 day')
@@ -1410,6 +1415,9 @@ class SalesStateStore:
         for row in rows:
             calls = int(row.get("calls_attempted") or 0)
             apps = int(row.get("applications_started") or 0)
+            unique_leads = int(row.get("unique_leads_contacted") or 0)
+            unique_contacts = int(row.get("unique_contacts_reached") or 0)
+            unique_apps = int(row.get("unique_application_starts") or 0)
             out.append(
                 {
                     "group_key": row.get("group_key"),
@@ -1417,7 +1425,12 @@ class SalesStateStore:
                     "contacts_reached": int(row.get("contacts_reached") or 0),
                     "callbacks_scheduled": int(row.get("callbacks_scheduled") or 0),
                     "applications_started": apps,
-                    "application_start_rate": round(apps / calls, 4) if calls else 0.0,
+                    "unique_leads_contacted": unique_leads,
+                    "unique_contacts_reached": unique_contacts,
+                    "unique_application_starts": unique_apps,
+                    "application_start_rate": (
+                        round(unique_apps / unique_contacts, 4) if unique_contacts else 0.0
+                    ),
                 }
             )
         return out
@@ -1430,6 +1443,11 @@ class SalesStateStore:
         visible_lo_emails: set[str] | None = None,
     ) -> dict[str, Any]:
         lo_filter = "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        params = {
+            "from_date": from_date,
+            "to_date": to_date,
+            "lo_emails": sorted(visible_lo_emails or []),
+        }
         rows = self._client.fetchall(
             f"""
             SELECT outcome_type, source_system, assigned_to_email,
@@ -1443,9 +1461,27 @@ class SalesStateStore:
             ORDER BY n DESC
             LIMIT 1000
             """,
-            {"from_date": from_date, "to_date": to_date, "lo_emails": sorted(visible_lo_emails or [])},
+            params,
             limit=1000,
         )
+        unique_rows = self._client.fetchall(
+            f"""
+            SELECT
+              COUNT(DISTINCT borrower_id) FILTER (
+                WHERE outcome_type = 'application_submitted'
+              ) AS unique_applications_submitted,
+              COUNT(DISTINCT borrower_id) FILTER (
+                WHERE outcome_type = 'closed_funded'
+              ) AS unique_closed_funded
+            FROM mip_app.lead_outcomes
+            WHERE occurred_at >= %(from_date)s::date
+              AND occurred_at < (%(to_date)s::date + interval '1 day')
+              {lo_filter}
+            """,
+            params,
+            limit=1,
+        )
+        unique_row = unique_rows[0] if unique_rows else {}
         totals: Counter[str] = Counter()
         by_source: dict[str, Counter[str]] = {}
         by_lo: dict[str, Counter[str]] = {}
@@ -1468,6 +1504,10 @@ class SalesStateStore:
             "total_outcomes": sum(totals.values()),
             "applications_submitted": totals["application_submitted"],
             "closed_funded": totals["closed_funded"],
+            "unique_applications_submitted": int(
+                unique_row.get("unique_applications_submitted") or 0
+            ),
+            "unique_closed_funded": int(unique_row.get("unique_closed_funded") or 0),
             "lost_to_competitor": totals["lost_to_competitor"],
             "withdrawn": totals["withdrawn"],
             "not_qualified": totals["not_qualified"],

@@ -144,16 +144,21 @@ LIMIT %(limit)s
 
 NOTIFICATION_DRAFT_UPSERT_SQL = """
 INSERT INTO mip_app.growth_agent_notification_drafts (
-  actor_email, monitor_id, run_id, channel, title, body, request_id, updated_at
+  actor_email, monitor_id, run_id, channel, title, body, generation_mode,
+  generator_label, strategy_summary, request_id, updated_at
 ) VALUES (
   %(actor_email)s, %(monitor_id)s, %(run_id)s, %(channel)s, %(title)s, %(body)s,
-  %(request_id)s, now()
+  %(generation_mode)s, %(generator_label)s, %(strategy_summary)s, %(request_id)s, now()
 )
 ON CONFLICT (actor_email, monitor_id, run_id, channel) WHERE status = 'draft'
 DO UPDATE SET
   title = EXCLUDED.title,
   body = EXCLUDED.body,
+  generation_mode = EXCLUDED.generation_mode,
+  generator_label = EXCLUDED.generator_label,
+  strategy_summary = EXCLUDED.strategy_summary,
   request_id = COALESCE(EXCLUDED.request_id, mip_app.growth_agent_notification_drafts.request_id),
   updated_at = now()
-RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body, status, created_at, updated_at
+RETURNING draft_id, actor_email, monitor_id, run_id, channel, title, body,
+          generation_mode, generator_label, strategy_summary, status, created_at, updated_at
 """

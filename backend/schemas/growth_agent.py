@@ -371,6 +371,9 @@ class GrowthAgentNotificationDraft(BaseModel):
     channel: GrowthAgentNotificationChannel
     title: str
     body: str
+    generation_mode: Literal["supervisor", "governed_fallback"] = "governed_fallback"
+    generator_label: str = "Governed notification framework"
+    strategy_summary: str = "Reviewed internal notification framing."
     status: Literal["draft", "reviewed", "cancelled"] = "draft"
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None

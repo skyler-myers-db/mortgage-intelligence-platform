@@ -387,6 +387,8 @@ class SalesOutcomeSummaryResponse(BaseModel):
     total_outcomes: int
     applications_submitted: int
     closed_funded: int
+    unique_applications_submitted: int = 0
+    unique_closed_funded: int = 0
     lost_to_competitor: int
     withdrawn: int
     not_qualified: int

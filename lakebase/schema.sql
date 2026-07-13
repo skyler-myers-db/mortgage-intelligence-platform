@@ -87,9 +87,29 @@ CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
     subject      TEXT,
     body         TEXT NOT NULL CHECK (length(body) <= 5000),
     weight_pct   NUMERIC,
+    generation_mode TEXT NOT NULL DEFAULT 'operator'
+                    CHECK (generation_mode IN ('supervisor','reviewed_fallback','operator')),
+    generator_label TEXT NOT NULL DEFAULT 'Operator edited',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (campaign_id, variant_name, channel)
 );
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'operator';
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS generator_label TEXT NOT NULL DEFAULT 'Operator edited';
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'campaign_message_variants_generation_mode_chk'
+          AND conrelid = 'mip_app.campaign_message_variants'::regclass
+    ) THEN
+        ALTER TABLE mip_app.campaign_message_variants
+            ADD CONSTRAINT campaign_message_variants_generation_mode_chk
+            CHECK (generation_mode IN ('supervisor','reviewed_fallback','operator'));
+    END IF;
+END $$;
 
 CREATE TABLE IF NOT EXISTS mip_app.tenant_disclosures (
     -- Per-deployment disclosure namespace. Summit dev seeds use "summit";
@@ -844,6 +864,13 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_notification_drafts (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'governed_fallback'
+    CHECK (generation_mode IN ('supervisor','governed_fallback'));
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS generator_label TEXT NOT NULL DEFAULT 'Governed notification framework';
+ALTER TABLE mip_app.growth_agent_notification_drafts
+    ADD COLUMN IF NOT EXISTS strategy_summary TEXT NOT NULL DEFAULT 'Reviewed internal notification framing.';
 CREATE UNIQUE INDEX IF NOT EXISTS idx_growth_agent_notification_drafts_request
     ON mip_app.growth_agent_notification_drafts (request_id)
     WHERE request_id IS NOT NULL;
@@ -1218,5 +1245,54 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_10_s3_kpi_snapshots_user_visits',
     'S3: daily headline-KPI snapshot table (per-day upsert target for mip_kpi_snapshot job) and throttled user_visits ledger for last-login deltas'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- Native Genie feedback delivery --------------------------------------
+-- Durable intent precedes the upstream rating side effect. Client request
+-- ids make retries collapse onto one row; a short IN_FLIGHT lease permits
+-- recovery after a process dies with an uncertain upstream result. Replays
+-- only set the same native rating. Optional comment text is never persisted.
+CREATE TABLE IF NOT EXISTS mip_app.genie_feedback_requests (
+    feedback_request_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    actor_email           TEXT NOT NULL,
+    request_id            TEXT NOT NULL,
+    conversation_id       TEXT NOT NULL,
+    message_id            TEXT NOT NULL,
+    rating                TEXT NOT NULL CHECK (rating IN ('POSITIVE', 'NEGATIVE')),
+    comment_present       BOOLEAN NOT NULL DEFAULT false,
+    status                TEXT NOT NULL DEFAULT 'PENDING'
+                          CHECK (status IN (
+                              'PENDING', 'IN_FLIGHT', 'SUCCEEDED', 'RETRYABLE_FAILED'
+                          )),
+    attempt_count         INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    intent_audit_event_id UUID REFERENCES mip_app.action_audit(audit_id),
+    audit_event_id        UUID REFERENCES mip_app.action_audit(audit_id),
+    last_error_code       TEXT CHECK (
+                              last_error_code IS NULL
+                              OR last_error_code ~ '^[a-z0-9_]{1,64}$'
+                          ),
+    last_attempt_at       TIMESTAMPTZ,
+    succeeded_at          TIMESTAMPTZ,
+    created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+    CONSTRAINT uq_genie_feedback_actor_request UNIQUE (actor_email, request_id),
+    CONSTRAINT fk_genie_feedback_message FOREIGN KEY (conversation_id, message_id)
+        REFERENCES mip_app.genie_messages(conversation_id, message_id)
+);
+CREATE INDEX IF NOT EXISTS idx_genie_feedback_message
+    ON mip_app.genie_feedback_requests (
+        actor_email, conversation_id, message_id, created_at DESC
+    );
+CREATE INDEX IF NOT EXISTS idx_genie_feedback_retryable
+    ON mip_app.genie_feedback_requests (status, updated_at)
+    WHERE status IN ('PENDING', 'IN_FLIGHT', 'RETRYABLE_FAILED');
+COMMENT ON TABLE mip_app.genie_feedback_requests IS
+    'PII-minimized native Genie feedback intent and delivery state; optional comment text is never stored.';
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_13_native_genie_feedback',
+    'Durable actor/message-owned native Genie feedback intents with replay-safe request ids and audited delivery state'
 )
 ON CONFLICT (version) DO NOTHING;

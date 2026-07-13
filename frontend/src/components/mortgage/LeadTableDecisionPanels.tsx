@@ -163,7 +163,7 @@ export function LeadDispositionPanel({
           value={notes}
           onChange={(e) => onNotesChange(e.target.value)}
           maxLength={500}
-          placeholder="Optional operational note; no borrower PII."
+          placeholder="Optional operational note."
         />
       </label>
       <div className="decision-panel__actions">
@@ -189,4 +189,3 @@ export function LeadDispositionPanel({
     </form>
   );
 }
-

@@ -5,6 +5,8 @@
  *   - follow-up chips submit the question through onFollowUp
  *   - native-visualization Beta badge renders only when the field is present,
  *     and is a NEUTRAL marker (never chip--success)
+ *   - genuine Genie answers identify the Conversation API and expose
+ *     API-provided reasoning summaries in a collapsed disclosure
  *   - feedback control appears on a trusted answer and is suppressed on a
  *     governed refusal
  */
@@ -24,6 +26,8 @@ vi.mock('../../lib/api', async () => {
 
 import { GenieAnswer } from './GenieAnswer';
 
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
   return {
     answer: 'The average loan age is 5.25 years.',
@@ -31,6 +35,7 @@ function payload(overrides: Partial<GenieAnswerShape> = {}): GenieAnswerShape {
     trusted_assets: ['mip.gold.borrower_360'],
     conversation_id: 'conv-1',
     message_id: 'msg-1',
+    genie_status: 'COMPLETED',
     question_hash: 'h1',
     metric_value: '5.25 years',
     table_rows: null,
@@ -94,6 +99,61 @@ describe('GenieAnswer render surfaces', () => {
     expect(chip.classList.contains('chip--success')).toBe(false);
     // No chart element is rendered from the native descriptor.
     expect(container.querySelector('.genie-answer__native-viz svg.recharts-surface')).toBeNull();
+  });
+
+  it('labels genuine Genie answers and renders API reasoning summaries collapsed', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            reasoning_trace: [
+              { kind: 'FILTERING_CONTEXT', content: 'Scoped the request to trusted assets.' },
+              { kind: 'THOUGHT_TYPE_TEXT', content: 'Summarized the verified result.' },
+            ],
+          })}
+          question="Q"
+          onFollowUp={() => {}}
+        />,
+      ),
+    );
+
+    const source = container.querySelector('.genie-answer__api-source');
+    expect(source?.textContent).toContain('Databricks Genie Conversation API');
+    expect(source?.getAttribute('aria-label')).toBe(
+      'Answer source: Databricks Genie Conversation API',
+    );
+    const reasoning = container.querySelector<HTMLDetailsElement>('.genie-answer__reasoning');
+    expect(reasoning).not.toBeNull();
+    expect(reasoning?.open).toBe(false);
+    expect(reasoning?.textContent).toContain('API reasoning summary');
+    expect(reasoning?.textContent).toContain('Filtering Context');
+    expect(reasoning?.textContent).toContain('Scoped the request to trusted assets.');
+    expect(reasoning?.textContent).toContain('Text');
+    expect(reasoning?.textContent).toContain('Summarized the verified result.');
+    expect(reasoning?.textContent).not.toContain('chain-of-thought');
+  });
+
+  it('surfaces API reasoning when a real Genie turn is verified by trusted SQL', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            source: 'trusted_sql',
+            reasoning_trace: [
+              { kind: 'THOUGHT_TYPE_TEXT', content: 'Verified the returned aggregate.' },
+            ],
+          })}
+          question="Q"
+          onFollowUp={() => {}}
+        />,
+      ),
+    );
+
+    expect(container.querySelector('.genie-answer__api-source')?.textContent).toContain(
+      'Databricks Genie Conversation API · verified SQL',
+    );
+    expect(container.querySelector('.genie-answer__reasoning')).not.toBeNull();
+    expect(container.textContent).toContain('Verified the returned aggregate.');
   });
 
   it('shows the feedback control on a trusted answer and hides it on a refusal', () => {

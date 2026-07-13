@@ -34,6 +34,9 @@ describe('genieFeedback API client', () => {
     expect((calls[0].init?.headers as Record<string, string>)['Content-Type']).toBe(
       'application/json',
     );
+    expect((calls[0].init?.headers as Record<string, string>)['Idempotency-Key']).toMatch(
+      /^[0-9a-f-]{36}$/,
+    );
     expect(JSON.parse(String(calls[0].init?.body))).toEqual({
       conversation_id: 'conv-1',
       message_id: 'msg-1',

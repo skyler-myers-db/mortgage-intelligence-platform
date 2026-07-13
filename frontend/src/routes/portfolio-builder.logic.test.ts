@@ -13,8 +13,6 @@ import {
   defaultGeographyForOptions,
   parseFiltersFromUrl,
   parseStateCodesFromUrl,
-  DEFAULT_ROI_ASSUMPTIONS,
-  projectRoi,
   formatUsdCompact,
 } from './portfolio-builder.logic';
 import { isPublicLenderRef } from '../lib/lenderFilters';
@@ -116,12 +114,16 @@ describe('portfolio builder URL helpers', () => {
 });
 
 describe('portfolio campaign config', () => {
-  it('derives default campaign copy from the configured lender label', () => {
+  it('does not seed generic copy or invented channel costs before intelligence loads', () => {
     const setup = buildDefaultCampaignSetup('Acme Mortgage');
 
-    expect(setup.subjectA).toContain('Acme Mortgage');
-    expect(setup.bodyA).toContain('Acme Mortgage');
-    expect(setup.subjectA).not.toContain('Summit Mortgage');
+    expect(setup.subjectA).toBe('');
+    expect(setup.subjectB).toBe('');
+    expect(setup.bodyA).toBe('');
+    expect(setup.bodyB).toBe('');
+    expect(setup.emailCost).toBe('');
+    expect(setup.smsCost).toBe('');
+    expect(setup.mailCost).toBe('');
   });
 
   it('preserves suppression, holdout, cascade, and ROI defaults', () => {
@@ -139,6 +141,7 @@ describe('portfolio campaign config', () => {
     expect(config.holdout).toMatchObject({ method: 'hash_modulo', size_pct: 10 });
     expect(config.roi_assumptions).toMatchObject({
       budget_usd: null,
+      cost_per_contact_usd: { email: null, sms: null, direct_mail: null },
       source: 'operator_configured',
     });
     expect(config.household_dedup).toEqual({
@@ -146,6 +149,42 @@ describe('portfolio campaign config', () => {
       dedupe_unit: 'borrower',
       primary_contact_strategy: 'highest_opportunity_eligible',
     });
+    expect(config.message_variants).toEqual([
+      expect.objectContaining({
+        variant_name: 'A',
+        generation_mode: 'operator',
+        generator_label: 'Operator edited',
+      }),
+      expect.objectContaining({
+        variant_name: 'B',
+        generation_mode: 'operator',
+        generator_label: 'Operator edited',
+      }),
+    ]);
+  });
+
+  it('persists the applied campaign-intelligence provenance on every variant', () => {
+    const config = buildCampaignConfig({
+      ...DEFAULT_CAMPAIGN_SETUP,
+      subjectA: 'Review your mortgage options',
+      subjectB: 'A clearer mortgage review',
+      bodyA: 'A loan officer can explain the available options. Would a review be useful?',
+      bodyB: 'Compare the available choices and tradeoffs with a loan officer.',
+      generationMode: 'supervisor',
+      generatorLabel: 'Supervisor-generated recommendation',
+    });
+
+    expect(config.message_variants).toHaveLength(2);
+    expect(config.message_variants).toEqual([
+      expect.objectContaining({
+        generation_mode: 'supervisor',
+        generator_label: 'Supervisor-generated recommendation',
+      }),
+      expect.objectContaining({
+        generation_mode: 'supervisor',
+        generator_label: 'Supervisor-generated recommendation',
+      }),
+    ]);
   });
 
   it('makes household dedup opt-in at campaign time only', () => {
@@ -231,42 +270,7 @@ describe('groupSavedCampaigns', () => {
   });
 });
 
-describe('campaign ROI projector (Buyer-Wow #7)', () => {
-  it('computes the funnel arithmetic deterministically from visible assumptions', () => {
-    // 1,200 leads × 4% → 48 fundings; × $340k → $16.32M volume;
-    // × 1.5% → $244,800 gross; − 1,200 × $1.40 outreach ($1,680) → net.
-    const p = projectRoi({ leads: 1200, ...DEFAULT_ROI_ASSUMPTIONS });
-    expect(p.valid).toBe(true);
-    expect(p.fundings).toBeCloseTo(48, 6);
-    expect(p.originationVolumeUsd).toBeCloseTo(16_320_000, 2);
-    expect(p.grossRevenueUsd).toBeCloseTo(244_800, 2);
-    expect(p.outreachCostUsd).toBeCloseTo(1_680, 2);
-    expect(p.netRevenueUsd).toBeCloseTo(243_120, 2);
-  });
-
-  it('treats non-numeric or out-of-range assumptions as invalid (no NaN headline)', () => {
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: '' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: '120' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '-5' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, responseRatePct: 'abc' }).grossRevenueUsd).toBe(0);
-  });
-
-  it('zeroes out a no-lead build instead of projecting phantom revenue', () => {
-    const p = projectRoi({ leads: 0, ...DEFAULT_ROI_ASSUMPTIONS });
-    expect(p.valid).toBe(true);
-    expect(p.grossRevenueUsd).toBe(0);
-    expect(p.fundings).toBe(0);
-  });
-
-  it('rejects fat-fingered money inputs above a sane ceiling (no "$1000000.0B")', () => {
-    // Consistent with clampPct: implausible inputs are INVALID (→ "—"), not
-    // silently clamped, so the headline can never render a nonsense magnitude.
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '100000000001' }).valid).toBe(false);
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, costPerLeadUsd: '100001' }).valid).toBe(false);
-    // A generous-but-real jumbo balance still computes.
-    expect(projectRoi({ leads: 1000, ...DEFAULT_ROI_ASSUMPTIONS, avgBalanceUsd: '5000000' }).valid).toBe(true);
-  });
-
+describe('projected economics formatting', () => {
   it('formats compact USD across magnitudes (incl. trillions)', () => {
     expect(formatUsdCompact(244_800)).toBe('$245K');
     expect(formatUsdCompact(16_320_000)).toBe('$16.3M');

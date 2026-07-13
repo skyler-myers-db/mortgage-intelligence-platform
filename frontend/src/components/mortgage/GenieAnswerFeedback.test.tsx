@@ -60,6 +60,16 @@ describe('GenieAnswerFeedback', () => {
     expect(upBtn(container)).toBeNull();
   });
 
+  it('uses thumb icons and a concise optional-note placeholder', () => {
+    act(() => root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />));
+
+    expect(upBtn(container)?.querySelector('path[d="M7 10v12"]')).not.toBeNull();
+    expect(downBtn(container)?.querySelector('path[d="M17 14V2"]')).not.toBeNull();
+    const comment = container.querySelector<HTMLTextAreaElement>('.genie-feedback__comment');
+    expect(comment?.placeholder).toBe('Optional note about this answer');
+    expect(comment?.placeholder).not.toContain('personal details');
+  });
+
   it('posts the correct body and locks to the recorded state after success', async () => {
     genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-1' });
     await act(async () => {

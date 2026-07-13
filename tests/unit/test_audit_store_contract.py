@@ -144,6 +144,7 @@ _MUTATION_AUDIT_EXPECTATIONS: dict[str, tuple[str, ...]] = {
     # Explicit non-mutating POST/PUT surfaces.
     "put_rules": ("status_code=410", "Offer rules are governed"),
     "preview_portfolio": ("repo.preview",),
+    "campaign_recommendation": ("AUDIT EXEMPT: read-only aggregate recommendation",),
     "genie_start": ("_latest_genie_conversation",),
     "record_rum": ("mip_rum_enabled",),
     "post_force_degraded": ("audit.write(", "FORCE_DEGRADED"),
@@ -393,11 +394,11 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
                 },
             ],
             "policy_checks": [
-                {"label": "No outbound activation", "status": "passed", "detail": "Human review remains required."},
+                {"label": "Approval gate required", "status": "passed", "detail": "Human review remains required."},
             ],
             "governance_chips": [
                 {
-                    "label": "PII-safe output",
+                    "label": "Masked references only",
                     "status": "passed",
                     "detail": "Counts and route filters only.",
                     "evidence_ref": "agent-trace-11111111-1111-4111-8111-111111111111",
@@ -412,7 +413,7 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
     assert metadata["trace_id"].startswith("agent-trace-")
     assert metadata["tool_result_hash"] == "a" * 64
     assert metadata["specialist_agent"] == "structured_data_agent"
-    assert metadata["governance_chips"][0]["label"] == "PII-safe output"
+    assert metadata["governance_chips"][0]["label"] == "Masked references only"
     assert metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
 
 
@@ -505,6 +506,14 @@ def test_growth_agent_audit_metadata_rejects_unreviewed_funnel_stage() -> None:
                 "result_filters": {"source": "trusted_sql", "funnel_stage": "raw_sql"},
             },
             action="growth_agent.run",
+        )
+
+
+def test_outreach_audit_metadata_rejects_unreviewed_generation_mode() -> None:
+    with pytest.raises(AuditMetadataValueViolation):
+        build_safe_audit_metadata(
+            {"generation_mode": "unverified_model"},
+            action="outreach.draft",
         )
 
 

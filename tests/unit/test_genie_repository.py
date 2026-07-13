@@ -2749,7 +2749,7 @@ def test_listed_days_on_market_by_state_uses_direct_canonical_sql() -> None:
                 },
             ],
             "e.signal_type",
-            "The refinance lane is driven by governed evidence",
+            "The refinance lane is calculated from governed borrower economics",
         ),
         (
             "How should I think about in-the-money versus top-tier opportunity?",

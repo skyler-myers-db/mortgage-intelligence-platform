@@ -290,6 +290,27 @@ class GenieClient:
             return False
         return True
 
+    def send_message_feedback(
+        self,
+        conversation_id: str,
+        message_id: str,
+        rating: Literal["POSITIVE", "NEGATIVE"],
+    ) -> None:
+        """Set the native Genie rating for one conversation message.
+
+        Databricks models this endpoint as a rating setter. The caller may
+        therefore replay the same rating after an uncertain network outcome.
+        Optional comments are deliberately posted through the separate comment
+        endpoint only after the rating and local success state are durable.
+        """
+        if rating not in {"POSITIVE", "NEGATIVE"}:
+            raise ValueError("rating must be POSITIVE or NEGATIVE")
+        url = (
+            f"{self._host}/api/2.0/genie/spaces/{self._space_id}"
+            f"/conversations/{conversation_id}/messages/{message_id}/feedback"
+        )
+        self._post(url, {"rating": rating})
+
     def download_native_visualization(
         self,
         conversation_id: str,
@@ -662,6 +683,17 @@ class ResilientGenieClient:
         # Bypasses the breaker so posting feedback never trips or is blocked
         # by the answer-path breaker state.
         return self._client.post_message_comment(conversation_id, message_id, content)
+
+    def send_message_feedback(
+        self,
+        conversation_id: str,
+        message_id: str,
+        rating: Literal["POSITIVE", "NEGATIVE"],
+    ) -> None:
+        # The service durably records and claims an idempotency key before this
+        # call. Keep it breaker-free so answer-path health does not discard a
+        # user's explicit quality signal.
+        self._client.send_message_feedback(conversation_id, message_id, rating)
 
     def download_native_visualization(
         self,

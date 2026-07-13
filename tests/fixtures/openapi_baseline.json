@@ -1266,6 +1266,17 @@
             "title": "Asset Path",
             "type": "string"
           },
+          "catalog_explorer_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Catalog Explorer Url"
+          },
           "direction": {
             "enum": [
               "upstream",
@@ -1274,6 +1285,17 @@
             ],
             "title": "Direction",
             "type": "string"
+          },
+          "event_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Event Count"
           },
           "event_time": {
             "anyOf": [
@@ -1293,6 +1315,11 @@
           "object_type": {
             "anyOf": [
               {
+                "enum": [
+                  "table",
+                  "view",
+                  "function"
+                ],
                 "type": "string"
               },
               {
@@ -3144,6 +3171,173 @@
           "campaigns"
         ],
         "title": "CampaignListResponse",
+        "type": "object"
+      },
+      "CampaignRecommendationEvidence": {
+        "additionalProperties": false,
+        "properties": {
+          "label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Label",
+            "type": "string"
+          },
+          "source_asset": {
+            "enum": [
+              "mip.semantics.portfolio_headline_metric_view",
+              "mip.gold.borrower_360",
+              "mip_app.call_dispositions",
+              "mip_app.lead_outcomes"
+            ],
+            "title": "Source Asset",
+            "type": "string"
+          },
+          "value": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "label",
+          "value",
+          "source_asset"
+        ],
+        "title": "CampaignRecommendationEvidence",
+        "type": "object"
+      },
+      "CampaignRecommendationRequest": {
+        "additionalProperties": false,
+        "properties": {
+          "criteria": {
+            "$ref": "#/components/schemas/PortfolioCriteria"
+          }
+        },
+        "title": "CampaignRecommendationRequest",
+        "type": "object"
+      },
+      "CampaignRecommendationResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "audience_summary": {
+            "maxLength": 280,
+            "minLength": 1,
+            "title": "Audience Summary",
+            "type": "string"
+          },
+          "evidence": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignRecommendationEvidence"
+            },
+            "maxItems": 8,
+            "minItems": 1,
+            "title": "Evidence",
+            "type": "array"
+          },
+          "generation_mode": {
+            "enum": [
+              "supervisor",
+              "reviewed_fallback"
+            ],
+            "title": "Generation Mode",
+            "type": "string"
+          },
+          "generator_label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Generator Label",
+            "type": "string"
+          },
+          "holdout_pct": {
+            "maximum": 30.0,
+            "minimum": 5.0,
+            "title": "Holdout Pct",
+            "type": "number"
+          },
+          "performance_status": {
+            "enum": [
+              "qualified",
+              "insufficient_sample",
+              "unavailable"
+            ],
+            "title": "Performance Status",
+            "type": "string"
+          },
+          "strategy": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Strategy",
+            "type": "string"
+          },
+          "variants": {
+            "items": {
+              "$ref": "#/components/schemas/CampaignRecommendationVariant"
+            },
+            "maxItems": 2,
+            "minItems": 2,
+            "title": "Variants",
+            "type": "array"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 4,
+            "title": "Warnings",
+            "type": "array"
+          }
+        },
+        "required": [
+          "generation_mode",
+          "generator_label",
+          "performance_status",
+          "audience_summary",
+          "strategy",
+          "variants",
+          "holdout_pct",
+          "evidence"
+        ],
+        "title": "CampaignRecommendationResponse",
+        "type": "object"
+      },
+      "CampaignRecommendationVariant": {
+        "additionalProperties": false,
+        "properties": {
+          "body": {
+            "maxLength": 1000,
+            "minLength": 1,
+            "title": "Body",
+            "type": "string"
+          },
+          "hypothesis": {
+            "maxLength": 280,
+            "minLength": 1,
+            "title": "Hypothesis",
+            "type": "string"
+          },
+          "subject": {
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Subject",
+            "type": "string"
+          },
+          "variant_name": {
+            "enum": [
+              "Benefit-led",
+              "Guidance-led"
+            ],
+            "title": "Variant Name",
+            "type": "string"
+          }
+        },
+        "required": [
+          "variant_name",
+          "subject",
+          "body",
+          "hypothesis"
+        ],
+        "title": "CampaignRecommendationVariant",
         "type": "object"
       },
       "CampaignStatusPatchRequest": {
@@ -6346,6 +6540,20 @@
             "title": "Draft Id",
             "type": "string"
           },
+          "generation_mode": {
+            "default": "governed_fallback",
+            "enum": [
+              "supervisor",
+              "governed_fallback"
+            ],
+            "title": "Generation Mode",
+            "type": "string"
+          },
+          "generator_label": {
+            "default": "Governed notification framework",
+            "title": "Generator Label",
+            "type": "string"
+          },
           "monitor_id": {
             "title": "Monitor Id",
             "type": "string"
@@ -6362,6 +6570,11 @@
               "cancelled"
             ],
             "title": "Status",
+            "type": "string"
+          },
+          "strategy_summary": {
+            "default": "Reviewed internal notification framing.",
+            "title": "Strategy Summary",
             "type": "string"
           },
           "title": {
@@ -9178,6 +9391,38 @@
             "title": "Disclosure Version",
             "type": "string"
           },
+          "evidence_assets": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Evidence Assets",
+            "type": "array"
+          },
+          "evidence_summary": {
+            "items": {
+              "type": "string"
+            },
+            "maxItems": 5,
+            "minItems": 1,
+            "title": "Evidence Summary",
+            "type": "array"
+          },
+          "generation_mode": {
+            "enum": [
+              "supervisor",
+              "governed_fallback"
+            ],
+            "title": "Generation Mode",
+            "type": "string"
+          },
+          "generator_label": {
+            "maxLength": 80,
+            "minLength": 1,
+            "title": "Generator Label",
+            "type": "string"
+          },
           "marketing_eligible": {
             "title": "Marketing Eligible",
             "type": "boolean"
@@ -9190,6 +9435,12 @@
             "const": "draft",
             "default": "draft",
             "title": "Status",
+            "type": "string"
+          },
+          "strategy_summary": {
+            "maxLength": 500,
+            "minLength": 1,
+            "title": "Strategy Summary",
             "type": "string"
           },
           "subject": {
@@ -9211,7 +9462,12 @@
           "body",
           "disclosure_version",
           "disclosure_state",
-          "marketing_eligible"
+          "marketing_eligible",
+          "generation_mode",
+          "generator_label",
+          "strategy_summary",
+          "evidence_summary",
+          "evidence_assets"
         ],
         "title": "OutreachDraft",
         "type": "object"
@@ -9834,6 +10090,36 @@
         "title": "PortfolioCriteria",
         "type": "object"
       },
+      "PortfolioOfferMixRow": {
+        "additionalProperties": false,
+        "properties": {
+          "borrower_count": {
+            "minimum": 0.0,
+            "title": "Borrower Count",
+            "type": "integer"
+          },
+          "offer_code": {
+            "enum": [
+              "purchase",
+              "refi_plus_heloc",
+              "heloc",
+              "refi",
+              "cash_out",
+              "investor",
+              "retention",
+              "nurture"
+            ],
+            "title": "Offer Code",
+            "type": "string"
+          }
+        },
+        "required": [
+          "offer_code",
+          "borrower_count"
+        ],
+        "title": "PortfolioOfferMixRow",
+        "type": "object"
+      },
       "PortfolioPreview": {
         "properties": {
           "approved_count": {
@@ -9846,6 +10132,54 @@
               }
             ],
             "title": "Approved Count"
+          },
+          "avg_current_lien_balance_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Current Lien Balance Usd"
+          },
+          "avg_equity_pct": {
+            "anyOf": [
+              {
+                "maximum": 100.0,
+                "minimum": 0.0,
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Equity Pct"
+          },
+          "avg_high_intent_lien_balance_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg High Intent Lien Balance Usd"
+          },
+          "avg_rate_spread_bps": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Avg Rate Spread Bps"
           },
           "avg_score": {
             "anyOf": [
@@ -9896,6 +10230,13 @@
             "title": "Marketable Population",
             "type": "integer"
           },
+          "offer_mix": {
+            "items": {
+              "$ref": "#/components/schemas/PortfolioOfferMixRow"
+            },
+            "title": "Offer Mix",
+            "type": "array"
+          },
           "offers_available": {
             "anyOf": [
               {
@@ -9928,6 +10269,18 @@
               }
             ],
             "title": "Top Tier Opportunities"
+          },
+          "total_current_lien_balance_usd": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Total Current Lien Balance Usd"
           },
           "trend_note": {
             "anyOf": [
@@ -10733,6 +11086,16 @@
           },
           "total_outcomes": {
             "title": "Total Outcomes",
+            "type": "integer"
+          },
+          "unique_applications_submitted": {
+            "default": 0,
+            "title": "Unique Applications Submitted",
+            "type": "integer"
+          },
+          "unique_closed_funded": {
+            "default": 0,
+            "title": "Unique Closed Funded",
             "type": "integer"
           },
           "withdrawn": {
@@ -14884,7 +15247,7 @@
     "/api/genie/feedback": {
       "post": {
         "deprecated": true,
-        "description": "Record thumbs up/down feedback for a Genie answer.\n\nGuards: JSON content type, the genie rate-limit lane (applied by the\nbackpressure middleware for ``/api/genie/*``), and a conversation\nownership check. Side effects: a best-effort Genie message comment (a\nfailure here does not fail the request) and a required ``GENIE_FEEDBACK``\naudit row written in a Lakebase transaction. The caller comment is\nvalidated public-safe (422 on PII) and never stored verbatim.",
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Optional comments are public-safe, never stored,\nand posted separately only after rating durability.",
         "operationId": "post_api_genie_feedback_genie_feedback",
         "requestBody": {
           "content": {
@@ -18074,6 +18437,59 @@
           }
         },
         "summary": "List Portfolios",
+        "tags": [
+          "portfolio"
+        ]
+      }
+    },
+    "/api/portfolio/campaign-recommendation": {
+      "post": {
+        "deprecated": true,
+        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe Supervisor receives aggregate facts only. Metrics, citations, holdout\nbounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
+        "operationId": "post_api_portfolio_campaign_recommendation_campaign_recommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignRecommendationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRecommendationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Campaign Recommendation",
         "tags": [
           "portfolio"
         ]
@@ -21590,7 +22006,7 @@
     },
     "/api/v1/genie/feedback": {
       "post": {
-        "description": "Record thumbs up/down feedback for a Genie answer.\n\nGuards: JSON content type, the genie rate-limit lane (applied by the\nbackpressure middleware for ``/api/genie/*``), and a conversation\nownership check. Side effects: a best-effort Genie message comment (a\nfailure here does not fail the request) and a required ``GENIE_FEEDBACK``\naudit row written in a Lakebase transaction. The caller comment is\nvalidated public-safe (422 on PII) and never stored verbatim.",
+        "description": "Record thumbs up/down feedback for a Genie answer.\n\nThe exact actor/conversation/message ownership is checked before a durable\nidempotency intent is claimed. The native rating is sent only after that\ntransaction commits; final state and the ``GENIE_FEEDBACK`` audit row are\nthen committed together. Optional comments are public-safe, never stored,\nand posted separately only after rating durability.",
         "operationId": "post_api_v1_genie_feedback_genie_feedback",
         "requestBody": {
           "content": {
@@ -24745,6 +25161,58 @@
           }
         },
         "summary": "List Portfolios",
+        "tags": [
+          "portfolio"
+        ]
+      }
+    },
+    "/api/v1/portfolio/campaign-recommendation": {
+      "post": {
+        "description": "Generate a validated strategy over the exact governed cohort.\n\nThe Supervisor receives aggregate facts only. Metrics, citations, holdout\nbounds, and the approval boundary are enforced by the server response\ncontract; an unavailable or invalid model response is labelled as a\nreviewed fallback rather than masquerading as AI output.",
+        "operationId": "post_api_v1_portfolio_campaign_recommendation_campaign_recommendation",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CampaignRecommendationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CampaignRecommendationResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Campaign Recommendation",
         "tags": [
           "portfolio"
         ]

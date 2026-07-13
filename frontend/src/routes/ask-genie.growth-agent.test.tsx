@@ -183,7 +183,7 @@ const RUN: GrowthAgentRunResponse = {
   ],
   governance_chips: [
     {
-      label: 'PII-safe output',
+      label: 'Masked references only',
       status: 'passed',
       detail: 'The run returns counts and route filters only.',
       evidence_ref: 'agent-trace-11111111-1111-4111-8111-111111111111',
@@ -242,8 +242,8 @@ describe('AskGenie Growth Agent route panel', () => {
         monitor_id: '22222222-2222-4222-8222-222222222222',
         run_id: RUN.run_id,
         channel: 'slack',
-        title: 'Mortgage Growth Agent - IL - 5,394 eligible',
-        body: 'Draft for Slack: Mortgage Growth Agent - IL refreshed with 5,394 eligible borrowers. Review the current watchlist in MIP: /lead-queue?segment=itm. No borrower identities, contact data, or outbound messages are included.',
+        title: 'Mortgage Growth Agent - IL: 5,394 eligible',
+        body: '5,394 eligible borrowers in Mortgage Growth Agent - IL. Review: /lead-queue?segment=itm',
         status: 'draft',
       },
       {
@@ -251,8 +251,14 @@ describe('AskGenie Growth Agent route panel', () => {
         monitor_id: '22222222-2222-4222-8222-222222222222',
         run_id: RUN.run_id,
         channel: 'teams',
-        title: 'Mortgage Growth Agent - IL - 5,394 eligible',
-        body: 'Draft for Microsoft Teams: Mortgage Growth Agent - IL refreshed with 5,394 eligible borrowers. Review the current watchlist in MIP: /lead-queue?segment=itm. No borrower identities, contact data, or outbound messages are included.',
+        title: 'Operations brief: Mortgage Growth Agent - IL',
+        body: [
+          'Operations brief',
+          'Watchlist: Mortgage Growth Agent - IL',
+          'Eligible population: 5,394 borrowers',
+          'Operator action: Review the current watchlist and confirm the Lead Queue handoff.',
+          'MIP route: /lead-queue?segment=itm',
+        ].join('\n'),
         status: 'draft',
       },
     ]);
@@ -395,7 +401,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(container.textContent).toContain('Run correlation 111111111111');
     expect(container.textContent).toContain('Hash aaaaaaaaaaaa');
     expect(container.textContent).toContain('Audit audit-1111');
-    expect(container.textContent).toContain('PII-safe output');
+    expect(container.textContent).toContain('Masked references only');
     expect(container.textContent).toContain('fn_build_cohort');
     expect(container.textContent).not.toContain('MLflow trace');
   });
@@ -501,7 +507,7 @@ describe('AskGenie Growth Agent route panel', () => {
     expect(navigate).toHaveBeenCalledWith(RUN.route);
   });
 
-  it('creates Slack and Teams drafts from saved watchlists without sending them', async () => {
+  it('renders distinct Slack alerts and Teams operations briefs from saved watchlists', async () => {
     const savedMonitor = {
       monitor_id: '22222222-2222-4222-8222-222222222222',
       workflow_id: 'daily_refi_brief' as const,
@@ -525,12 +531,16 @@ describe('AskGenie Growth Agent route panel', () => {
       '22222222-2222-4222-8222-222222222222',
       { channels: ['slack', 'teams'] },
     ]);
-    await waitUntil(() => container.textContent?.includes('Slack draft') ?? false);
-    expect(container.textContent).toContain('Slack draft');
-    expect(container.textContent).toContain('Teams draft');
-    expect(container.textContent).toContain('Not sent');
-    expect(container.textContent).toContain('No borrower identities');
-    expect(container.textContent).not.toContain('Sent');
+    await waitUntil(() => container.textContent?.includes('Slack alert') ?? false);
+    expect(container.textContent).toContain('Watchlist notifications');
+    expect(container.textContent).toContain('Governed notification framework');
+    expect(container.textContent).toContain('Slack alert');
+    expect(container.textContent).toContain('5,394 eligible borrowers in Mortgage Growth Agent - IL.');
+    expect(container.textContent).toContain('Teams operations brief');
+    expect(container.textContent).toContain('Operator action: Review the current watchlist');
+    expect(container.textContent).toContain('Status: draft');
+    expect(container.textContent).not.toContain('No borrower identities');
+    expect(container.textContent).not.toContain('Not sent');
   });
 
   it('shows inactive saved watchlists but blocks reruns', async () => {

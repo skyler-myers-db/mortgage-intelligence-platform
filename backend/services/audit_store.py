@@ -130,6 +130,8 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #     rationale, bulk_id, bulk_rationale, decision_inputs
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code
+#   backend/api/outreach.py::draft_outreach
+#     generation_mode
 #   backend/api/leads.py::list_leads_ranked
 #     rendered_borrower_ids, portfolio_id, segment, segment_mode, limit
 #   backend/api/offers.py::recommend_offer
@@ -173,6 +175,9 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "bulk_rationale",
         "reason",
         "variant_name",
+        "generation_mode",
+        "campaign_generation_mode",
+        "generator_label",
         # Marketing-contactability and disclosure proof
         "marketing_eligible",
         "consent_status",
@@ -424,6 +429,7 @@ _PUBLIC_COMPETITOR_LABEL_PATTERN = re.compile(r"^Competitor ([A-Z]|Other)$")
 _GENIE_REFUSAL_REASONS: frozenset[str] = frozenset({"protected_class", "instruction_override", "pii_request", "scope_bypass", "out_of_scope"})
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
+_OUTREACH_GENERATION_MODES: frozenset[str] = frozenset({"supervisor", "governed_fallback"})
 
 _BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset({"borrower_ids", "rendered_borrower_ids"})
 
@@ -698,6 +704,22 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(
                 field,
                 "must be a governed offer code",
+            )
+    for field, generation_mode in _metadata_values_for(metadata, {"generation_mode"}):
+        if generation_mode is not None and str(generation_mode) not in _OUTREACH_GENERATION_MODES:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a reviewed outreach generation mode",
+            )
+    for field, generation_mode in _metadata_values_for(metadata, {"campaign_generation_mode"}):
+        if generation_mode is not None and str(generation_mode) not in {
+            "supervisor",
+            "reviewed_fallback",
+            "operator",
+        }:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a reviewed campaign generation mode",
             )
     for field, value in _metadata_values_for(metadata, _OPAQUE_ID_METADATA_KEYS):
         if value is None:

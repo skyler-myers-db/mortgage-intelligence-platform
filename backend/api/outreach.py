@@ -23,6 +23,7 @@ from uuid import uuid4
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
 
 from backend.config.settings import settings
+from backend.schemas._validators import assert_no_protected_class_marketing_text
 from backend.schemas.offer import (
     OutreachApproveRequest,
     OutreachApproveResponse,
@@ -62,7 +63,8 @@ from backend.services.lakebase_bootstrap import (
     ensure_approval_idempotency_column,
 )
 from backend.services.observability import emit
-from backend.services.outreach_copy import _compose_outreach_body, _safe_offer_code
+from backend.services.outreach_copy import _safe_offer_code
+from backend.services.outreach_intelligence import compose_intelligent_outreach
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import require_approver
 from backend.services.repositories import OutreachRepository, get_outreach_repository
@@ -511,6 +513,10 @@ def _assert_disclosure_backed_draft_body(
             status_code=422,
             detail="approved draft_body contains PII-like text and cannot be audited",
         )
+    try:
+        assert_no_protected_class_marketing_text(body, field_name="approved draft_body")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     if channel == "sms" and len(body) > 160:
         raise HTTPException(
             status_code=422,
@@ -540,7 +546,7 @@ def draft_outreach(
     )
     disclosure = _resolve_disclosure_or_http(lakebase, borrower=b, channel=payload.channel)
     offer_code = _safe_offer_code(getattr(b, "recommended_offer_code", None))
-    subject, body = _compose_outreach_body(
+    draft = compose_intelligent_outreach(
         borrower=b,
         channel=payload.channel,
         disclosure=disclosure,
@@ -557,6 +563,7 @@ def draft_outreach(
             "offer_code": offer_code,
             "campaign_id": payload.campaign_id,
             "variant_name": payload.variant_name,
+            "generation_mode": draft.generation_mode,
             **_marketing_audit_payload(b),
             **disclosure_audit_payload(disclosure),
         },
@@ -567,11 +574,16 @@ def draft_outreach(
         borrower_id=b.borrower_id,
         offer_code=offer_code,
         channel=payload.channel,
-        subject=subject if payload.channel in {"email", "direct_mail"} else None,
-        body=body,
+        subject=draft.subject if payload.channel in {"email", "direct_mail"} else None,
+        body=draft.body,
         disclosure_version=disclosure.disclosure_version,
         disclosure_state=disclosure.state,
         marketing_eligible=True,
+        generation_mode=draft.generation_mode,
+        generator_label=draft.generator_label,
+        strategy_summary=draft.strategy_summary,
+        evidence_summary=draft.evidence_summary,
+        evidence_assets=draft.evidence_assets,
     )
 
 

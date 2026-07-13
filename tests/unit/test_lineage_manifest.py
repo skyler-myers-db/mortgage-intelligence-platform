@@ -57,11 +57,17 @@ class TestCommittedManifest:
 
     def test_every_family_traces_raw_share_to_gold_or_metric_view(self) -> None:
         manifest = load_manifest_file()
+        readiness_only = {"source_readiness", "permit_readiness"}
         for family in manifest.families:
             layers = [node.layer for node in family.nodes]
-            assert layers[0] == "raw_share", (
-                f"family {family.id!r} must start at the raw Cotality share"
-            )
+            if family.id in readiness_only:
+                assert layers[0] == "gold", (
+                    f"readiness family {family.id!r} must start at a real gold status asset"
+                )
+            else:
+                assert layers[0] == "raw_share", (
+                    f"family {family.id!r} must start at the raw Cotality share"
+                )
             assert layers[-1] in {"gold", "metric_view"}, (
                 f"family {family.id!r} must end at a gold table or metric view"
             )

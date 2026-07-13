@@ -11,10 +11,10 @@ import { Icon } from '../Icon';
  *   - Requires both conversation_id and message_id (the audit key). When
  *     either is missing the whole control renders nothing — feedback that
  *     can't be attributed to a message is dropped rather than shown.
- *   - The comment is capped at 280 chars and the placeholder warns against
- *     names / PII. The backend rejects PII with 422; we surface that
- *     `detail` inline but NEVER echo the rejected comment back as a quoted
- *     string (that would re-surface the PII the backend just refused).
+ *   - The comment is capped at 280 chars. The backend rejects PII with 422;
+ *     we surface that `detail` inline but NEVER echo the rejected comment
+ *     back as a quoted string (that would re-surface the PII the backend just
+ *     refused).
  *   - 415 (wrong content-type) / 5xx surface a generic inline error.
  *   - The submit handler is async-latched via a ref so a double-click or a
  *     second vote while a request is in flight cannot fire two POSTs.
@@ -98,7 +98,7 @@ export function GenieAnswerFeedback({
           aria-label="Mark this answer helpful"
           data-testid="genie-feedback-up"
         >
-          <Icon name="up" size={12} />
+          <Icon name="thumbup" size={14} />
         </button>
         <button
           type="button"
@@ -108,7 +108,7 @@ export function GenieAnswerFeedback({
           aria-label="Mark this answer not helpful"
           data-testid="genie-feedback-down"
         >
-          <Icon name="down" size={12} />
+          <Icon name="thumbdown" size={14} />
         </button>
       </div>
       <textarea
@@ -116,8 +116,8 @@ export function GenieAnswerFeedback({
         value={comment}
         maxLength={MAX_COMMENT}
         onChange={(e) => setComment(e.target.value)}
-        placeholder="Optional — what worked or what was off? Do not include names or personal details."
-        aria-label="Optional feedback comment (do not include names or personal details)"
+        placeholder="Optional note about this answer"
+        aria-label="Optional note about this answer"
         rows={2}
         disabled={pending !== null}
       />

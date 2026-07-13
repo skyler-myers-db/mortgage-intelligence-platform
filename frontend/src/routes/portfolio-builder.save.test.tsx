@@ -222,10 +222,15 @@ describe('PortfolioBuilder save-build flow', () => {
     // behavioral mocks above might mask if the call became conditional).
     // happy-dom rewrites import.meta.url to an http:// URL, so resolve
     // from the vitest cwd (the frontend package root) instead.
-    const source = readFileSync(
+    const routeSource = readFileSync(
       join(process.cwd(), 'src', 'routes', 'portfolio-builder.tsx'),
       'utf-8',
     );
+    const campaignPanelSource = readFileSync(
+      join(process.cwd(), 'src', 'routes', 'portfolio-builder.campaign-setup.tsx'),
+      'utf-8',
+    );
+    const source = `${routeSource}\n${campaignPanelSource}`;
     expect(source).not.toContain('window.prompt');
     expect(source).toContain('market the household together');
   });

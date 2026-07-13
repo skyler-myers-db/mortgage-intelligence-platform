@@ -8,20 +8,48 @@ sanitized, non-PII metadata only.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from typing import Any
-from urllib.parse import quote
 
-from backend.config.settings import settings
+from backend.config.settings import settings as settings
 from backend.schemas.assets import (
     AssetColumn,
-    AssetFreshness,
     AssetLineageNode,
     AssetMetadataResponse,
     AssetProperty,
     AssetTag,
 )
+from backend.services.asset_metadata_utils import (
+    catalog_explorer_url as _catalog_explorer_url,
+)
+from backend.services.asset_metadata_utils import (
+    clipped_metadata_error as _clip_error,
+)
+from backend.services.asset_metadata_utils import (
+    escape_sql_comment as _escape_sql_comment,
+)
+from backend.services.asset_metadata_utils import (
+    format_bytes as _format_bytes,
+)
+from backend.services.asset_metadata_utils import (
+    freshness_bucket as _freshness_bucket,
+)
+from backend.services.asset_metadata_utils import (
+    is_sensitive as _is_sensitive,
+)
+from backend.services.asset_metadata_utils import (
+    opt_int as _opt_int,
+)
+from backend.services.asset_metadata_utils import (
+    opt_str as _opt_str,
+)
+from backend.services.asset_metadata_utils import (
+    safe_data_type as _safe_data_type,
+)
+from backend.services.asset_metadata_utils import (
+    safe_text as _safe_text,
+)
+from backend.services.asset_registry import ASSET_DESCRIPTORS, AssetDescriptor
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.resilience import TTLCache
 
@@ -30,238 +58,8 @@ class AssetNotFoundError(KeyError):
     """Raised when a caller asks for a non-registered asset key."""
 
 
-@dataclass(frozen=True)
-class AssetDescriptor:
-    key: str
-    title: str
-    description: str
-    schema_name: str
-    object_name: str
-    object_type: str = "table"
-    readiness_source_name: str | None = None
-    aliases: tuple[str, ...] = ()
+_DESCRIPTORS = ASSET_DESCRIPTORS
 
-    @property
-    def fqn(self) -> str:
-        return qualify(self.schema_name, self.object_name)
-
-    @property
-    def logical_fqn(self) -> str:
-        return f"mip.{self.schema_name}.{self.object_name}"
-
-
-def _descriptor(
-    schema_name: str,
-    object_name: str,
-    *,
-    title: str,
-    description: str,
-    object_type: str = "table",
-    readiness_source_name: str | None = None,
-    aliases: tuple[str, ...] = (),
-) -> AssetDescriptor:
-    return AssetDescriptor(
-        key=object_name,
-        title=title,
-        description=description,
-        schema_name=schema_name,
-        object_name=object_name,
-        object_type=object_type,
-        readiness_source_name=readiness_source_name,
-        aliases=aliases,
-    )
-
-
-_DESCRIPTORS: tuple[AssetDescriptor, ...] = (
-    _descriptor(
-        "gold",
-        "lead_population",
-        title="Gold Lead Queue Population",
-        description=(
-            "Ranked, quality-filtered borrowers eligible for the lead queue. "
-            "This asset carries borrower-safe display fields, segment codes, "
-            "evidence references, ranking, and approval state."
-        ),
-        readiness_source_name="UC Gold Lead Population",
-    ),
-    _descriptor(
-        "gold",
-        "borrower_360",
-        title="Gold Borrower 360",
-        description=(
-            "Borrower-level dossier table used by Borrower 360, offers, and "
-            "analytics. It joins governed Cotality-derived signals with Module 0 "
-            "scoring outputs."
-        ),
-        readiness_source_name="UC Gold Borrower 360",
-    ),
-    _descriptor(
-        "gold",
-        "lead_scores",
-        title="Gold Lead Scores",
-        description=(
-            "Deterministic score table with the five scoring sub-scores, "
-            "opportunity score, refinance-economics flag, and primary offer code."
-        ),
-        readiness_source_name="UC Gold Lead Scores",
-    ),
-    _descriptor(
-        "gold",
-        "segment_population",
-        title="Gold Segment Population",
-        description="Segment rollup table that powers Segment Intelligence and analytics.",
-        readiness_source_name="UC Gold Segment Population",
-    ),
-    _descriptor(
-        "gold",
-        "borrower_dossier",
-        title="Gold Borrower Dossier",
-        description="Pre-joined borrower dossier used by proof, offer, and 360 read paths.",
-        readiness_source_name="UC Gold Borrower Dossier",
-    ),
-    _descriptor(
-        "gold",
-        "evidence_events",
-        title="Gold Evidence Events",
-        description=(
-            "Append-only evidence stream. Evidence rows explain which governed "
-            "source signal supported a score, offer, or queue decision."
-        ),
-    ),
-    _descriptor(
-        "gold",
-        "source_readiness",
-        title="Gold Source Readiness",
-        description=(
-            "Non-PII source status summary used by data estate and admin surfaces "
-            "to prove what data is live, pending, or synthetic."
-        ),
-    ),
-    _descriptor(
-        "silver",
-        "listing_activity",
-        title="Silver MLS Listing Activity",
-        description=(
-            "CLIP-keyed Cotality MLS listing lift. Excludes raw street address, "
-            "public remarks, agent/contact, and lockbox fields; active/current "
-            "rows drive listed-for-sale triggers."
-        ),
-        readiness_source_name="MLS Listings",
-        aliases=("mls_listing", "listings"),
-    ),
-    _descriptor(
-        "silver",
-        "heloc_propensity",
-        title="Silver HELOC Propensity",
-        description=(
-            "CLIP-keyed Cotality HELOC propensity model scores. This is a "
-            "model propensity feed, not a filed building-permit source."
-        ),
-        readiness_source_name="Cotality HELOC Propensity",
-        aliases=("heloc_intent",),
-    ),
-    _descriptor(
-        "silver",
-        "refi_propensity",
-        title="Silver Refi Propensity",
-        description="CLIP-keyed Cotality refinance propensity model scores.",
-        readiness_source_name="Cotality Refi Propensity",
-        aliases=("refinance_propensity",),
-    ),
-    _descriptor(
-        "gold",
-        "lockin_cohort",
-        title="Gold Lock-in Cohort",
-        description="Borrower cohort table used to identify retention and lock-in opportunities.",
-    ),
-    _descriptor(
-        "gold",
-        "funnel_snapshot_daily",
-        title="Gold Funnel Snapshot Daily",
-        description="Daily aggregate funnel counts used by executive analytics.",
-    ),
-    _descriptor(
-        "gold",
-        "county_rollup",
-        title="Gold County Rollup",
-        description="County-level rollup for geographic analytics and drilldowns.",
-    ),
-    _descriptor(
-        "gold",
-        "zip_rollup",
-        title="Gold ZIP Rollup",
-        description="ZIP-level rollup for geographic analytics and drilldowns.",
-        aliases=("zip_code_rollup",),
-    ),
-    _descriptor(
-        "gold",
-        "equity_spread_points",
-        title="Gold Equity Spread Points",
-        description=(
-            "Precomputed economics scatter surface: per-borrower equity x "
-            "rate-spread points with fn_score_band bands and density-bin "
-            "coordinates for the Analytics economics overview and zoom."
-        ),
-    ),
-    _descriptor(
-        "semantics",
-        "portfolio_headline_metric_view",
-        title="Portfolio Headline Metric View",
-        description=(
-            "Borrower-grain semantic view defining every demoed headline KPI: "
-            "marketable population, refi economics screen, high opportunity "
-            "(canonical fn_high_opportunity threshold), offers available "
-            "(non-null fn_next_best_offer), primary offer paths, and average "
-            "opportunity score."
-        ),
-        object_type="view",
-        aliases=("headline_metric_view",),
-    ),
-    _descriptor(
-        "semantics",
-        "lead_generation_metric_view",
-        title="Lead Generation Metric View",
-        description="Business-friendly KPI view used by the home page and Genie answers.",
-        object_type="view",
-    ),
-    _descriptor(
-        "semantics",
-        "segment_performance_metric_view",
-        title="Segment Performance Metric View",
-        description="Semantic segment rollup used by analytics segment pages.",
-        object_type="view",
-    ),
-    _descriptor(
-        "semantics",
-        "borrower_opportunity_metric_view",
-        title="Borrower Opportunity Metric View",
-        description=(
-            "Business-friendly semantic view for borrower economics, geography, "
-            "segments, and opportunity score analysis."
-        ),
-        object_type="view",
-    ),
-    _descriptor(
-        "ref",
-        "offer_rules_config",
-        title="Offer Rules Configuration",
-        description="Governed threshold table for refinance-economics and primary offer rules.",
-        aliases=("offer_rules",),
-    ),
-    _descriptor(
-        "ref",
-        "lender_dictionary",
-        title="Lender Dictionary",
-        description="Public lender alias dictionary used for non-PII target-lender labeling.",
-    ),
-)
-
-_SENSITIVE_RE = re.compile(
-    r"(owner.*name|owner_link_id|address|street|mailing|situs|email|phone|ssn|"
-    r"raw[_-]|source_table|current_servicer|location|path|token|secret|password|"
-    r"credential|principal|grant|clip_ref|(^|_)clip($|_))",
-    re.IGNORECASE,
-)
 _SAFE_PROPERTY_RE = re.compile(
     r"^(delta\.(minReaderVersion|minWriterVersion|feature\..+)|"
     r"quality|data_classification|refresh_cadence|source_system|table_type)$",
@@ -325,7 +123,7 @@ class AssetMetadataService:
             asset_path=descriptor.fqn,
             title=descriptor.title,
             description=descriptor.description,
-            object_type=descriptor.object_type,  # type: ignore[arg-type]
+            object_type=descriptor.object_type,
             status=(_opt_str(readiness.get("status")) if readiness else None) or "unknown",
             freshness=_freshness_bucket(freshness_anchor),
             catalog=catalog,
@@ -340,7 +138,12 @@ class AssetMetadataService:
             num_files=_opt_int(detail.get("numFiles")) if detail else None,
             size_in_bytes=size_in_bytes,
             size_label=_format_bytes(size_in_bytes),
-            catalog_explorer_url=_catalog_explorer_url(catalog, schema_name, object_name),
+            catalog_explorer_url=_catalog_explorer_url(
+                catalog,
+                schema_name,
+                object_name,
+                object_type=descriptor.object_type,
+            ),
             source_note=(
                 _safe_text(readiness.get("note"))
                 or _safe_text(table_info.get("comment"))
@@ -358,6 +161,8 @@ class AssetMetadataService:
         return payload
 
     def _load_table_info(self, descriptor: AssetDescriptor, gaps: list[str]) -> dict[str, Any]:
+        if descriptor.object_type == "function":
+            return {}
         catalog, schema_name, object_name = _split_fqn(descriptor.fqn)
         try:
             rows = self._sql.execute(
@@ -378,6 +183,8 @@ class AssetMetadataService:
         return rows[0] if rows else {}
 
     def _load_detail(self, descriptor: AssetDescriptor, gaps: list[str]) -> dict[str, Any]:
+        if descriptor.object_type != "table":
+            return {}
         try:
             rows = self._sql.execute(f"DESCRIBE DETAIL {_quoted_fqn(descriptor)}")
         except Exception as exc:  # noqa: BLE001
@@ -386,6 +193,8 @@ class AssetMetadataService:
         return rows[0] if rows else {}
 
     def _load_count(self, descriptor: AssetDescriptor, gaps: list[str]) -> int | None:
+        if descriptor.object_type == "function" or not descriptor.allow_count_fallback:
+            return None
         try:
             rows = self._sql.execute(
                 f"SELECT COUNT(*) AS row_count FROM {_quoted_fqn(descriptor)}"
@@ -416,6 +225,8 @@ class AssetMetadataService:
         return rows[0] if rows else {}
 
     def _load_columns(self, descriptor: AssetDescriptor, gaps: list[str]) -> list[AssetColumn]:
+        if descriptor.object_type == "function":
+            return []
         catalog, schema_name, object_name = _split_fqn(descriptor.fqn)
         try:
             rows = self._sql.execute(
@@ -468,6 +279,8 @@ class AssetMetadataService:
         return columns
 
     def _load_tags(self, descriptor: AssetDescriptor, gaps: list[str]) -> list[AssetTag]:
+        if descriptor.object_type == "function":
+            return []
         catalog, schema_name, object_name = _split_fqn(descriptor.fqn)
         try:
             rows = self._sql.execute(
@@ -496,6 +309,8 @@ class AssetMetadataService:
         return tags[:20]
 
     def _load_properties(self, descriptor: AssetDescriptor, gaps: list[str]) -> list[AssetProperty]:
+        if descriptor.object_type != "table":
+            return []
         try:
             rows = self._sql.execute(f"SHOW TBLPROPERTIES {_quoted_fqn(descriptor)}")
         except Exception as exc:  # noqa: BLE001
@@ -511,6 +326,8 @@ class AssetMetadataService:
         return properties[:20]
 
     def _load_lineage(self, descriptor: AssetDescriptor, gaps: list[str]) -> list[AssetLineageNode]:
+        if descriptor.object_type == "function":
+            return []
         try:
             rows = self._sql.execute(
                 "SELECT source_table_full_name, target_table_full_name, "
@@ -543,16 +360,22 @@ class AssetMetadataService:
                 related_descriptor = _DESCRIPTOR_MAP.get(related_key)
                 if related_descriptor is None:
                     continue
+                related_catalog, related_schema, related_object = _split_fqn(
+                    related_descriptor.fqn
+                )
                 nodes.append(
                     AssetLineageNode(
                         direction=direction,  # type: ignore[arg-type]
                         asset_path=related_descriptor.fqn,
                         label=related_descriptor.title,
                         object_type=related_descriptor.object_type,
-                        event_time=(
-                            f"{event_time} · {event_count} observed event(s)"
-                            if event_time and event_count is not None
-                            else event_time
+                        event_time=event_time,
+                        event_count=event_count,
+                        catalog_explorer_url=_catalog_explorer_url(
+                            related_catalog,
+                            related_schema,
+                            related_object,
+                            object_type=related_descriptor.object_type,
                         ),
                     )
                 )
@@ -585,8 +408,6 @@ def _normalize_key(value: str) -> str:
     if cleaned.startswith("system.") or cleaned.startswith("information_schema."):
         raise AssetNotFoundError(value)
     if cleaned.startswith("hive_metastore.") or cleaned.startswith("mip_app."):
-        raise AssetNotFoundError(value)
-    if cleaned.startswith(("mip.silver.", "mip.first_party.")):
         raise AssetNotFoundError(value)
     parts = cleaned.split(".")
     if len(parts) == 3:
@@ -630,86 +451,6 @@ def _quote_ident(value: str) -> str:
     return f"`{value}`"
 
 
-def _freshness_bucket(value: str | None) -> AssetFreshness:
-    if not value:
-        return "unavailable"
-    parsed = _parse_timestamp(value)
-    if parsed is None:
-        return "unavailable"
-    age = datetime.now(UTC) - parsed
-    if age <= timedelta(days=7):
-        return "fresh"
-    if age <= timedelta(days=30):
-        return "aging"
-    return "stale"
-
-
-def _parse_timestamp(value: str) -> datetime | None:
-    text = value.strip().replace(" UTC", "+00:00").replace("Z", "+00:00")
-    for candidate in (text, text.replace(" ", "T", 1)):
-        try:
-            parsed = datetime.fromisoformat(candidate)
-            if parsed.tzinfo is None:
-                return parsed.replace(tzinfo=UTC)
-            return parsed.astimezone(UTC)
-        except ValueError:
-            continue
-    return None
-
-
-def _format_bytes(value: int | None) -> str | None:
-    if value is None:
-        return None
-    size = float(value)
-    units = ("B", "KB", "MB", "GB", "TB")
-    for unit in units:
-        if abs(size) < 1024.0 or unit == units[-1]:
-            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.2f} {unit}"
-        size /= 1024.0
-    return f"{value} B"
-
-
-def _catalog_explorer_url(catalog: str, schema_name: str, object_name: str) -> str | None:
-    host = (settings.databricks_host or "").strip()
-    if not host:
-        return None
-    if not host.startswith("http"):
-        host = f"https://{host}"
-    return (
-        f"{host.rstrip('/')}/explore/data/"
-        f"{quote(catalog)}/{quote(schema_name)}/{quote(object_name)}"
-    )
-
-
-def _is_sensitive(value: Any) -> bool:
-    if value is None:
-        return False
-    return bool(_SENSITIVE_RE.search(str(value)))
-
-
-def _safe_text(value: Any) -> str | None:
-    text = _opt_str(value)
-    if text is None or _is_sensitive(text):
-        return None
-    return text[:500]
-
-
-def _safe_data_type(value: Any) -> tuple[str | None, bool]:
-    data_type = _opt_str(value)
-    if data_type is None:
-        return None, False
-    if not _is_sensitive(data_type):
-        return data_type, False
-    lowered = data_type.lower()
-    if lowered.startswith("array<"):
-        return "ARRAY<STRUCT<redacted_fields: STRING>>", True
-    if lowered.startswith("struct<"):
-        return "STRUCT<redacted_fields: STRING>", True
-    if lowered.startswith("map<"):
-        return "MAP<STRING, STRING>", True
-    return "STRING", True
-
-
 def _reconstruct_sanitized_ddl(
     descriptor: AssetDescriptor,
     columns: list[AssetColumn],
@@ -736,40 +477,6 @@ def _reconstruct_sanitized_ddl(
     )
     lines.append(");")
     return "\n".join(lines), redacted
-
-
-def _escape_sql_comment(value: str | None) -> str:
-    if value is None:
-        return ""
-    return value.replace("'", "''")[:200]
-
-
-def _clip_error(exc: Exception) -> str:
-    """Return a non-sensitive error summary for API-facing metadata gaps.
-
-    Databricks dependency errors can include statement ids, storage paths,
-    principals, relation names, or credentials-related context. The asset
-    proof surface needs to tell operators which metadata section degraded
-    without echoing raw warehouse exception text.
-    """
-
-    return "warehouse metadata unavailable"
-
-
-def _opt_str(v: Any) -> str | None:
-    if v is None:
-        return None
-    s = str(v)
-    return s if s else None
-
-
-def _opt_int(v: Any) -> int | None:
-    if v is None:
-        return None
-    try:
-        return int(v)
-    except (TypeError, ValueError):
-        return None
 
 
 _SERVICE: AssetMetadataService | None = None

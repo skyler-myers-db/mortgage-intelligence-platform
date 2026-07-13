@@ -7,7 +7,12 @@ import { Link } from 'react-router-dom';
 import { EvidenceChip } from '../components/Primitives';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
-import { scoreBand } from '../lib/opportunityScore';
+import {
+  SCORE_BAND_HIGH_MIN,
+  SCORE_BAND_MED_MIN,
+  scoreBand,
+  type ScoreBand,
+} from '../lib/opportunityScore';
 import { queryKeys } from '../lib/queryKeys';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {
@@ -105,69 +110,113 @@ function ScatterFrame({
   yTicks,
   overlay,
   meta,
+  scoreScope,
 }: {
   layout: ScatterLayout;
   xTicks: number[];
   yTicks: number[];
   overlay: ReactNode;
   meta: ReactNode;
+  scoreScope: 'overview' | 'borrower';
 }) {
   return (
-    <div className="analytics-scatter-wrap">
-      <div className="analytics-chart__plot">
-        <div className="analytics-chart__y-ticks" aria-hidden="true">
-          {[...yTicks].reverse().map((tick) => (
-            <span
-              key={tick}
-              className="analytics-chart__tick analytics-chart__tick--y"
-              style={{ '--tick-pos': `${100 - pct(tick - layout.yMin, layout.yRange)}%` } as CSSProperties}
-            >
-              {formatAxisTick(tick)}
-            </span>
-          ))}
-        </div>
-        <div className="analytics-chart__canvas">
-          <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-scatter" role="img" aria-label="Equity versus rate spread grid">
-            {yTicks.map((tick) => (
-              <line
-                key={`y-${tick}`}
-                x1="0"
-                x2="100"
-                y1={100 - pct(tick - layout.yMin, layout.yRange)}
-                y2={100 - pct(tick - layout.yMin, layout.yRange)}
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-            {xTicks.map((tick) => (
-              <line
-                key={`x-${tick}`}
-                x1={pct(tick - layout.xMin, layout.xRange)}
-                x2={pct(tick - layout.xMin, layout.xRange)}
-                y1="0"
-                y2="100"
-                className="analytics-chart__grid"
-                vectorEffect="non-scaling-stroke"
-              />
-            ))}
-          </svg>
-          {overlay}
-          <div className="analytics-chart__x-ticks" aria-hidden="true">
-            {xTicks.map((tick) => (
+    <>
+      <ScoreBandLegend scope={scoreScope} />
+      <div className="analytics-scatter-wrap">
+        <div className="analytics-chart__plot">
+          <div className="analytics-chart__y-ticks" aria-hidden="true">
+            {[...yTicks].reverse().map((tick) => (
               <span
                 key={tick}
-                className="analytics-chart__tick analytics-chart__tick--x"
-                style={{ '--tick-pos': `${pct(tick - layout.xMin, layout.xRange)}%` } as CSSProperties}
+                className="analytics-chart__tick analytics-chart__tick--y"
+                style={{ '--tick-pos': `${100 - pct(tick - layout.yMin, layout.yRange)}%` } as CSSProperties}
               >
                 {formatAxisTick(tick)}
               </span>
             ))}
           </div>
+          <div className="analytics-chart__canvas">
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none" className="analytics-scatter" role="img" aria-label="Equity versus rate spread grid">
+              {yTicks.map((tick) => (
+                <line
+                  key={`y-${tick}`}
+                  x1="0"
+                  x2="100"
+                  y1={100 - pct(tick - layout.yMin, layout.yRange)}
+                  y2={100 - pct(tick - layout.yMin, layout.yRange)}
+                  className="analytics-chart__grid"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+              {xTicks.map((tick) => (
+                <line
+                  key={`x-${tick}`}
+                  x1={pct(tick - layout.xMin, layout.xRange)}
+                  x2={pct(tick - layout.xMin, layout.xRange)}
+                  y1="0"
+                  y2="100"
+                  className="analytics-chart__grid"
+                  vectorEffect="non-scaling-stroke"
+                />
+              ))}
+            </svg>
+            {overlay}
+            <div className="analytics-chart__x-ticks" aria-hidden="true">
+              {xTicks.map((tick) => (
+                <span
+                  key={tick}
+                  className="analytics-chart__tick analytics-chart__tick--x"
+                  style={{ '--tick-pos': `${pct(tick - layout.xMin, layout.xRange)}%` } as CSSProperties}
+                >
+                  {formatAxisTick(tick)}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
+        <div className="analytics-chart__axis analytics-chart__axis--x">Equity percent</div>
+        <div className="analytics-chart__axis analytics-chart__axis--y">Rate spread bps</div>
+        {meta}
       </div>
-      <div className="analytics-chart__axis analytics-chart__axis--x">Equity percent</div>
-      <div className="analytics-chart__axis analytics-chart__axis--y">Rate spread bps</div>
-      {meta}
+    </>
+  );
+}
+
+const SCORE_BAND_LEGEND: ReadonlyArray<{
+  band: ScoreBand;
+  label: string;
+  range: string;
+}> = [
+  { band: 'high', label: 'High', range: `${SCORE_BAND_HIGH_MIN}-100` },
+  {
+    band: 'med',
+    label: 'Medium',
+    range: `${SCORE_BAND_MED_MIN}-${SCORE_BAND_HIGH_MIN - 1}`,
+  },
+  { band: 'low', label: 'Low', range: `0-${SCORE_BAND_MED_MIN - 1}` },
+];
+
+export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
+  const scopeLabel = scope === 'overview' ? 'overview cell means' : 'borrower drilldown points';
+  return (
+    <div
+      className="analytics-scatter-legend"
+      role="group"
+      aria-label={`Opportunity score color legend for ${scopeLabel}`}
+    >
+      <div className="analytics-scatter-legend__items chip-row">
+        {SCORE_BAND_LEGEND.map(({ band, label, range }) => (
+          <span key={band} className={`score score--${band} analytics-scatter-legend__band`}>
+            <span className="score__dot" aria-hidden="true" />
+            {label} {range}
+          </span>
+        ))}
+      </div>
+      <p className="analytics-scatter-legend__scope muted fs-12 flush">
+        {scope === 'overview'
+          ? 'Color metric: mean opportunity score per overview cell.'
+          : 'Color metric: individual borrower opportunity score.'}
+      </p>
     </div>
   );
 }
@@ -189,6 +238,7 @@ export function EquitySpreadBinsView({
       layout={layout}
       xTicks={makeTicks(overview.equity_domain_min, overview.equity_domain_max)}
       yTicks={makeTicks(overview.spread_domain_min, overview.spread_domain_max)}
+      scoreScope="overview"
       overlay={
         <div className="analytics-scatter__points" aria-label="Borrower density cells">
           {overview.bins.map((bin) => {
@@ -252,6 +302,7 @@ export function EquitySpreadPointsView({ payload }: { payload: EquitySpreadPoint
       layout={layout}
       xTicks={makeTicks(payload.viewport.equity_min, payload.viewport.equity_max)}
       yTicks={makeTicks(payload.viewport.spread_min, payload.viewport.spread_max)}
+      scoreScope="borrower"
       overlay={
         <div className="analytics-scatter__points" aria-label="Borrower drilldown points">
           {plotted.map((point) => {
