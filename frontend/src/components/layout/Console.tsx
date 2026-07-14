@@ -46,6 +46,7 @@ export function Console() {
       role="complementary"
       aria-label="Workspace console"
       aria-hidden={!consoleOpen}
+      tabIndex={-1}
     >
       <div className="tweaks__hdr">
         <Icon name="tweak" size={14} className="tweaks__hdr-icon" />

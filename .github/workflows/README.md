@@ -51,6 +51,7 @@ var.
 | `MIP_AI_GATEWAY_INFERENCE_TABLE` | Three-part Unity Catalog prefix for the AI Gateway inference log table. | Usually `mip.audit.mip_agent_gateway_llama`; live validation uses it to verify the exact proof ledger for the checked-out SHA. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
 | `DATABRICKS_CLIENT_SECRET` | Secret for the non-admin OAuth client. Live validation fails if this is absent; it must not fall back to the admin PAT. | Rotate with the same cadence as the workspace token. |
+| `MIP_ADMIN_BEARER_TOKEN` | App-admin bearer used by degraded-state, campaign-audit, and Growth Agent audit proofs. | Must belong to an app-admin principal; live validation fails closed when absent. |
 
 ## Required repo or environment variables (dev deploy)
 
@@ -69,7 +70,6 @@ app-admin access to the Databricks PAT owner.
 | Secret | What it enables | Notes |
 |---|---|---|
 | `MIP_APP_URL` | Explicit deployed Databricks App URL for live Playwright and real-infra drill jobs. | If unset for Playwright, the workflow resolves `mip-app` through the Databricks Apps API. The opt-in real-infra drill still requires this secret. |
-| `MIP_ADMIN_BEARER_TOKEN` | Enables the bounded `/api/admin/force-degraded` Playwright proof in GitHub Actions. | Must belong to an app-admin principal. Live validation fails closed when unset unless the operator explicitly runs `skip_admin_degraded_proof=true` and records that release caveat. |
 | `LAKEBASE_DATABASE` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_state`; the app and live tests use workspace-identity Lakebase credentials, not static Lakebase password secrets. |
 
 ## No-secret jobs (run on every PR)

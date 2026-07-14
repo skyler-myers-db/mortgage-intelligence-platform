@@ -127,7 +127,9 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #     channel, offer_code
 #   backend/api/outreach.py::approve_outreach
 #     approval_id, offer_code, borrower_id, request_id, draft_subject, draft_body,
-#     rationale, bulk_id, bulk_rationale, decision_inputs
+#     draft_generation_id, draft_response_hash, draft_source_refreshed_at,
+#     draft_edited, draft_attribution, rationale, bulk_id, bulk_rationale,
+#     decision_inputs
 #   backend/api/outreach.py::reject_outreach
 #     approval_id, offer_code, borrower_id, request_id, rationale, rationale_code
 #   backend/api/outreach.py::draft_outreach
@@ -171,6 +173,11 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "request_id",
         "draft_subject",
         "draft_body",
+        "draft_generation_id",
+        "draft_response_hash",
+        "draft_source_refreshed_at",
+        "draft_edited",
+        "draft_attribution",
         "has_subject",
         "rationale",
         "rationale_code",
@@ -405,6 +412,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "lead_outcome_id",
         "activation_id",
         "loan_officer_id",
+        "draft_generation_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset({"variant_name", "recommended_offer", "workspace_offer_code"})
@@ -434,6 +442,10 @@ _GENIE_REFUSAL_REASONS: frozenset[str] = frozenset({"protected_class", "instruct
 
 _ALLOWED_OFFER_CODES: frozenset[str] = frozenset(NBO_PRODUCT_LABELS) | {"recapture"}
 _OUTREACH_GENERATION_MODES: frozenset[str] = frozenset({"supervisor", "governed_fallback"})
+_OUTREACH_DRAFT_ATTRIBUTIONS: frozenset[str] = frozenset(
+    _OUTREACH_GENERATION_MODES
+    | {f"human_edited_from_{mode}" for mode in _OUTREACH_GENERATION_MODES}
+)
 
 _BORROWER_ID_LIST_METADATA_KEYS: frozenset[str] = frozenset({"borrower_ids", "rendered_borrower_ids"})
 
@@ -714,6 +726,33 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
             raise AuditMetadataValueViolation(
                 field,
                 "must be a reviewed outreach generation mode",
+            )
+    for field, attribution in _metadata_values_for(metadata, {"draft_attribution"}):
+        if attribution is not None and str(attribution) not in _OUTREACH_DRAFT_ATTRIBUTIONS:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be a reviewed generated-draft attribution",
+            )
+    for field, edited in _metadata_values_for(metadata, {"draft_edited"}):
+        if not isinstance(edited, bool):
+            raise AuditMetadataValueViolation(field, "must be boolean")
+    for field, value in _metadata_values_for(metadata, {"draft_response_hash"}):
+        if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value)) is None:
+            raise AuditMetadataValueViolation(field, "must be a SHA-256 hex digest")
+    for field, value in _metadata_values_for(metadata, {"draft_source_refreshed_at"}):
+        if value is None:
+            continue
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field,
+                "must be an ISO-8601 timestamp",
+            ) from exc
+        if parsed.tzinfo is None:
+            raise AuditMetadataValueViolation(
+                field,
+                "must include a timezone",
             )
     for field, generation_mode in _metadata_values_for(metadata, {"campaign_generation_mode"}):
         if generation_mode is not None and str(generation_mode) not in {

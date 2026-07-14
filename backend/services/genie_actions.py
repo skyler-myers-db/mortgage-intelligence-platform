@@ -14,6 +14,11 @@ from uuid import uuid4
 
 from fastapi import HTTPException
 
+from backend.config.runtime_secret_policy import (
+    require_distinct_rotation_secrets,
+    require_strong_runtime_secret,
+    runtime_secret_text,
+)
 from backend.config.settings import settings
 from backend.schemas._validators import normalize_public_lender_ref
 from backend.schemas.common import validate_public_borrower_id
@@ -320,16 +325,25 @@ def _validated_source_assets(criteria: dict[str, Any]) -> list[str]:
     return assets[:10]
 
 
-def _configured_secret_bytes(configured: Any) -> bytes | None:
-    if configured is not None:
-        value = configured.get_secret_value().strip()
-        normalized = value.lower()
-        is_placeholder = normalized in _PLACEHOLDER_ACTION_SECRETS or (
-            normalized.startswith("<") and normalized.endswith(">")
+def _configured_secret_bytes(
+    configured: Any,
+    *,
+    name: str,
+    require_strong: bool,
+) -> bytes | None:
+    value = runtime_secret_text(
+        configured,
+        extra_placeholders=_PLACEHOLDER_ACTION_SECRETS,
+    )
+    if value is None:
+        return None
+    if require_strong:
+        value = require_strong_runtime_secret(
+            value,
+            name=name,
+            extra_placeholders=_PLACEHOLDER_ACTION_SECRETS,
         )
-        if value and not is_placeholder:
-            return value.encode("utf-8")
-    return None
+    return value.encode("utf-8")
 
 
 def _action_token_key_id() -> str:
@@ -338,26 +352,56 @@ def _action_token_key_id() -> str:
 
 
 def _current_action_token_key() -> tuple[str, bytes]:
-    secret = _configured_secret_bytes(settings.mip_genie_action_secret_current)
+    app_env = (settings.app_env or "").strip().lower()
+    require_strong = app_env not in _LOCAL_TEST_APP_ENVS
+    try:
+        secret = _configured_secret_bytes(
+            settings.mip_genie_action_secret_current,
+            name="MIP_GENIE_ACTION_SECRET_CURRENT",
+            require_strong=require_strong,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     if secret is not None:
         return _action_token_key_id(), secret
 
-    app_env = (settings.app_env or "").strip().lower()
     if app_env not in _LOCAL_TEST_APP_ENVS:
         raise RuntimeError(
             "MIP_GENIE_ACTION_SECRET_CURRENT is required outside local/test app environments"
         )
 
-    legacy_secret = _configured_secret_bytes(settings.mip_genie_action_secret)
+    legacy_secret = _configured_secret_bytes(
+        settings.mip_genie_action_secret,
+        name="MIP_GENIE_ACTION_SECRET",
+        require_strong=False,
+    )
     if legacy_secret is not None:
         return _action_token_key_id(), legacy_secret
     return "process", _PROCESS_ACTION_SECRET.encode("utf-8")
 
 
 def _previous_action_token_key() -> tuple[str, bytes] | None:
-    secret = _configured_secret_bytes(settings.mip_genie_action_secret_previous)
+    app_env = (settings.app_env or "").strip().lower()
+    try:
+        secret = _configured_secret_bytes(
+            settings.mip_genie_action_secret_previous,
+            name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
+            require_strong=app_env not in _LOCAL_TEST_APP_ENVS,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     if secret is None:
         return None
+    current = _current_action_token_key()[1].decode("utf-8")
+    try:
+        require_distinct_rotation_secrets(
+            current,
+            secret.decode("utf-8"),
+            current_name="MIP_GENIE_ACTION_SECRET_CURRENT",
+            previous_name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     key_id = (settings.mip_genie_action_secret_previous_kid or "").strip() or "previous"
     return key_id, secret
 

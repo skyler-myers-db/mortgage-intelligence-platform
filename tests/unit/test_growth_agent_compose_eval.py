@@ -22,14 +22,13 @@ def test_all_compose_golden_cases_pass() -> None:
     assert summary["passed"] == summary["total"], failures
 
 
-def test_injection_case_scrubs_rationale_and_keeps_allowlist() -> None:
+def test_injection_case_is_rejected_without_exposing_a_plan() -> None:
     case = next(
-        c for c in load_compose_cases() if c["id"] == "compose_injection_rationale_is_scrubbed"
+        c for c in load_compose_cases() if c["id"] == "compose_injection_rationale_is_rejected"
     )
     result = score_compose_case(case)
-    assert result["status"] == "composed"
-    assert result["checks"]["all_tools_registered"] is True
-    assert result["checks"]["no_forbidden_terms"] is True
+    assert result["status"] == "invalid"
+    assert result["checks"]["no_plan_on_reject"] is True
 
 
 def test_unregistered_tool_case_is_rejected() -> None:

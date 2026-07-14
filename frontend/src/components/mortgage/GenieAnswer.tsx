@@ -98,10 +98,13 @@ export function GenieAnswer({
   // them; never synthesize an identifier client-side.
   const liveConversationId = payload.conversation_id ?? payload.proof?.conversation_id;
   const liveMessageId = payload.message_id ?? payload.proof?.message_id;
-  const hasApiReasoning = Boolean(
+  const hasLiveGenieTurn = Boolean(
     liveConversationId
     && liveMessageId
-    && payload.genie_status === 'COMPLETED'
+    && payload.genie_status === 'COMPLETED',
+  );
+  const hasApiReasoning = Boolean(
+    hasLiveGenieTurn
     && Array.isArray(payload.reasoning_trace)
     && payload.reasoning_trace.length > 0,
   );
@@ -177,7 +180,7 @@ export function GenieAnswer({
 
   return (
     <div>
-      {(isGenieApiAnswer || hasApiReasoning) && (
+      {(isGenieApiAnswer || hasLiveGenieTurn) && (
         <div
           className="genie-answer__api-source"
           aria-label="Answer source: Databricks Genie Conversation API"

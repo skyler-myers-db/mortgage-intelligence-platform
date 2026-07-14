@@ -9349,6 +9349,42 @@
             ],
             "title": "Draft Body"
           },
+          "draft_generation_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Generation Id"
+          },
+          "draft_response_hash": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Response Hash"
+          },
+          "draft_source_refreshed_at": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Source Refreshed At"
+          },
           "draft_subject": {
             "anyOf": [
               {
@@ -9471,6 +9507,28 @@
             "title": "Audit Event Id",
             "type": "string"
           },
+          "draft_edited": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Edited"
+          },
+          "draft_generation_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Draft Generation Id"
+          },
           "follow_up_at": {
             "anyOf": [
               {
@@ -9537,6 +9595,12 @@
             "title": "Evidence Summary",
             "type": "array"
           },
+          "generation_id": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Generation Id",
+            "type": "string"
+          },
           "generation_mode": {
             "enum": [
               "supervisor",
@@ -9557,6 +9621,17 @@
           },
           "offer_code": {
             "title": "Offer Code",
+            "type": "string"
+          },
+          "response_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Response Hash",
+            "type": "string"
+          },
+          "source_refreshed_at": {
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Source Refreshed At",
             "type": "string"
           },
           "status": {
@@ -9584,6 +9659,9 @@
           }
         },
         "required": [
+          "generation_id",
+          "response_hash",
+          "source_refreshed_at",
           "borrower_id",
           "offer_code",
           "channel",

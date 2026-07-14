@@ -709,7 +709,9 @@ class InProcessMockBorrowerRepository:
     def get(self, borrower_id: str) -> Borrower360 | None:
         for b in mock_data.BORROWERS:
             if b.borrower_id == borrower_id:
-                return b
+                return b.model_copy(
+                    update={"source_refreshed_at": "2026-04-20T06:12:00Z"}
+                )
         return None
 
     def get_fresh(self, borrower_id: str) -> Borrower360 | None:
@@ -793,7 +795,9 @@ class InProcessMockOutreachRepository:
     def find_borrower(self, borrower_id: str) -> Borrower360 | None:
         for b in mock_data.BORROWERS:
             if b.borrower_id == borrower_id:
-                return b
+                return b.model_copy(
+                    update={"source_refreshed_at": "2026-04-20T06:12:00Z"}
+                )
         return None
 
 

@@ -287,6 +287,29 @@ class _FakeLakebaseClient:
                 }
             )
             return row
+        if "FROM mip_app.generated_outreach_drafts" in sql:
+            values = params or {}
+            for row in self.generated_outreach_drafts:
+                if (
+                    str(row.get("generation_id") or "")
+                    == str(values.get("generation_id") or "")
+                    and str(row.get("actor_email") or "")
+                    == str(values.get("actor_email") or "")
+                    and str(row.get("borrower_id") or "")
+                    == str(values.get("borrower_id") or "")
+                ):
+                    return {
+                        "generation_id": row.get("generation_id"),
+                        "audit_event_id": row.get("audit_event_id"),
+                        "actor_email": row.get("actor_email"),
+                        "borrower_id": row.get("borrower_id"),
+                        "channel": row.get("channel"),
+                        "offer_code": row.get("offer_code"),
+                        "generation_mode": row.get("generation_mode"),
+                        "response_hash": row.get("response_hash"),
+                        "response_json": row.get("response_json"),
+                    }
+            return None
         if "FROM mip_app.sales_team" in sql:
             email = str((params or {}).get("email") or "").lower()
             for row in self.sales_team:

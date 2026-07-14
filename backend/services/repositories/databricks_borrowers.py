@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from threading import Lock
 from typing import Any
 
 from backend.config.settings import settings
@@ -155,6 +156,8 @@ class DatabricksBorrowerRepository:
         self._client = client
         self._cache = cache if cache is not None else TTLCache()
         self._cache_ttl_s = settings.mip_cache_ttl_s if cache_ttl_s is None else cache_ttl_s
+        self._cache_guard = Lock()
+        self._cache_generation = 0
 
     _GET_SQL = (
         f"SELECT {_BORROWER_DOSSIER_COLUMNS} "
@@ -252,10 +255,11 @@ class DatabricksBorrowerRepository:
 
     def get(self, borrower_id: str) -> Borrower360 | None:
         cache_key = f"borrower_dossier:{borrower_id}"
-        if self._cache_ttl_s > 0:
-            cached = self._cache.get(cache_key)
-            if isinstance(cached, Borrower360):
-                return cached.model_copy(deep=True)
+        with self._cache_guard:
+            generation = self._cache_generation
+            cached = self._cache.get(cache_key) if self._cache_ttl_s > 0 else None
+        if self._cache_ttl_s > 0 and isinstance(cached, Borrower360):
+            return cached.model_copy(deep=True)
 
         # Single-statement indexed lookup on the dossier cluster key
         # (borrower_id). Evidence + trigger timeline are both pre-joined
@@ -369,13 +373,18 @@ class DatabricksBorrowerRepository:
                 min_equity_pct=why.min_equity_pct,
             )
         if self._cache_ttl_s > 0:
-            self._cache.set(cache_key, borrower, self._cache_ttl_s)
+            with self._cache_guard:
+                if self._cache_generation == generation:
+                    self._cache.set(cache_key, borrower, self._cache_ttl_s)
         return borrower.model_copy(deep=True)
 
     def get_fresh(self, borrower_id: str) -> Borrower360 | None:
         """Bypass a cached dossier generation during a coordinated refresh."""
 
-        self._cache.invalidate(f"borrower_dossier:{borrower_id}")
+        cache_key = f"borrower_dossier:{borrower_id}"
+        with self._cache_guard:
+            self._cache_generation += 1
+            self._cache.invalidate(cache_key)
         return self.get(borrower_id)
 
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:

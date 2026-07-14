@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { resolveOfferApprovalStatus } from './offer-orchestrator';
+import { resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 
 describe('resolveOfferApprovalStatus', () => {
   it('uses durable approved lifecycle state after a page reload', () => {

@@ -1,3 +1,4 @@
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
@@ -8,10 +9,63 @@ from backend.services.audit_decision_inputs import (
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError
 from backend.services.repositories import get_offer_repository
+from backend.services.repositories.databricks_offers import DatabricksOfferRepository
 from tests.fixtures import mock_population
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 client = TestClient(app)
+
+
+def _valid_databricks_offer_row() -> dict[str, object]:
+    return {
+        "clip": "clip-1",
+        "borrower_id": "B-48291",
+        "confidence": 80,
+        "evidence_ids": ["E-1"],
+        "refreshed_at": "2026-04-20T06:12:00Z",
+        "rate_spread_bps": 100,
+        "equity_pct": 40,
+        "has_permit": False,
+        "has_heloc_propensity_trigger": True,
+        "heloc_propensity_score": 700,
+        "has_refi_propensity_trigger": True,
+        "refi_propensity_score": 700,
+        "listed_for_sale": False,
+        "is_investor": False,
+        "is_current_customer": False,
+        "is_competitor_lien": True,
+        "recommended_offer_code": "refi_plus_heloc",
+        "min_spread_bps_applied": 75,
+        "min_equity_pct_applied": 15,
+        "heloc_equity_min_applied": 35,
+        "cashout_equity_min_applied": 25,
+        "retention_min_spread_applied": 50,
+    }
+
+
+class _OneRowClient:
+    def __init__(self, row: dict[str, object]) -> None:
+        self.row = row
+
+    def execute_one(self, statement: str, params: dict[str, object]) -> dict[str, object]:
+        del statement, params
+        return self.row
+
+
+def test_databricks_offer_repository_rejects_unknown_offer_code() -> None:
+    row = {**_valid_databricks_offer_row(), "recommended_offer_code": "mystery"}
+    repo = DatabricksOfferRepository(_OneRowClient(row))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="recommended_offer_code"):
+        repo.get_offer_inputs("B-48291")
+
+
+def test_databricks_offer_repository_rejects_missing_applied_threshold() -> None:
+    row = {**_valid_databricks_offer_row(), "min_spread_bps_applied": None}
+    repo = DatabricksOfferRepository(_OneRowClient(row))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="min_spread_bps_applied"):
+        repo.get_offer_inputs("B-48291")
 
 
 def test_offer_recommendation_fails_closed_when_audit_is_unavailable() -> None:
@@ -48,6 +102,29 @@ def test_offers_router_recommends_governed_offer() -> None:
 def test_offers_router_returns_404_for_unknown_borrower() -> None:
     response = client.post("/api/offers/recommend", json={"borrower_id": "B-0000000000000"})
     assert response.status_code == 404
+
+
+def test_offers_router_sanitizes_invalid_governed_inputs() -> None:
+    class InvalidOfferRepository:
+        def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
+            del borrower_id
+            raise ValueError("raw bad value from mip.gold.borrower_dossier")
+
+    previous = app.dependency_overrides.get(get_offer_repository)
+    app.dependency_overrides[get_offer_repository] = InvalidOfferRepository
+    try:
+        response = client.post("/api/offers/recommend", json={"borrower_id": "B-48291"})
+    finally:
+        if previous is None:
+            app.dependency_overrides.pop(get_offer_repository, None)
+        else:
+            app.dependency_overrides[get_offer_repository] = previous
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Offer inputs are incomplete or invalid; refresh the governed data before retrying."
+    )
+    assert "borrower_dossier" not in response.text
 
 
 def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> None:

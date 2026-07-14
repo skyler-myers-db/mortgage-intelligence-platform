@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ApiError, api } from '../../lib/api';
 import { Icon, ThumbsDown, ThumbsUp } from '../Icon';
 
@@ -36,6 +36,17 @@ export function GenieAnswerFeedback({
   // disabled state. Mirrors the approval handler latch pattern.
   const inFlightRef = useRef(false);
   const requestIdsRef = useRef<Partial<Record<Vote, string>>>({});
+  const identity = `${conversationId ?? ''}:${messageId ?? ''}`;
+  const identityRef = useRef(identity);
+
+  useEffect(() => {
+    identityRef.current = identity;
+    inFlightRef.current = false;
+    requestIdsRef.current = {};
+    setPending(null);
+    setRecorded(false);
+    setError(null);
+  }, [identity]);
 
   // Feedback needs a message to attach to. Without the audit key there is
   // nothing to record, so render nothing rather than a dead control.
@@ -47,6 +58,7 @@ export function GenieAnswerFeedback({
     setPending(helpful ? 'up' : 'down');
     setError(null);
     const vote: Vote = helpful ? 'up' : 'down';
+    const submittedIdentity = identity;
     const requestId = requestIdsRef.current[vote] ?? crypto.randomUUID();
     requestIdsRef.current[vote] = requestId;
     try {
@@ -56,8 +68,9 @@ export function GenieAnswerFeedback({
         helpful,
         request_id: requestId,
       });
-      setRecorded(true);
+      if (identityRef.current === submittedIdentity) setRecorded(true);
     } catch (err) {
+      if (identityRef.current !== submittedIdentity) return;
       // A policy rejection can still return 422 for a stale client payload.
       // Surface only the fixed backend detail.
       if (err instanceof ApiError && err.status === 422) {
@@ -69,8 +82,10 @@ export function GenieAnswerFeedback({
         setError('Feedback could not be recorded. Please try again.');
       }
     } finally {
-      inFlightRef.current = false;
-      setPending(null);
+      if (identityRef.current === submittedIdentity) {
+        inFlightRef.current = false;
+        setPending(null);
+      }
     }
   };
 

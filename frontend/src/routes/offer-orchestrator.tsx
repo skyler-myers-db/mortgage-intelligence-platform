@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Link, Navigate, useParams } from 'react-router-dom';
 import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
-import type { ApprovalStatus, Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation, SalesTeamMember } from '../types';
+import type { Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
@@ -18,6 +18,7 @@ import { invalidateOperationalQueries } from '../lib/queryKeys';
 import { offerDisplayLabel } from '../lib/offerLanguage';
 import { BORROWER_CACHE, clearBorrowerCache, readBorrowerCache } from './offer-orchestrator.cache';
 import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } from './offer-orchestrator.constants';
+import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import {
   OfferDetailsRows,
   OfferOrchestratorEmptyHero,
@@ -25,20 +26,8 @@ import {
   OfferReviewGrid,
   RejectRationalePanel,
 } from './offer-orchestrator.panels';
-import { offerSnapshotMatches } from './offer-orchestrator.snapshot';
+import { offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
-
-export function resolveOfferApprovalStatus(
-  local: ApprovalStatus | undefined,
-  lifecycleStatus: ApprovalStatus | undefined,
-  borrowerStatus: ApprovalStatus | undefined,
-): ApprovalStatus | undefined {
-  const durable = lifecycleStatus ?? borrowerStatus;
-  if (durable === 'approved' || durable === 'rejected' || durable === 'hold') {
-    return local ?? durable;
-  }
-  return local;
-}
 
 export default function OfferOrchestrator() {
   const { id } = useParams();
@@ -85,6 +74,11 @@ export default function OfferOrchestrator() {
   const [draftStrategy, setDraftStrategy] = useState<string | null>(null);
   const [draftEvidence, setDraftEvidence] = useState<string[]>([]);
   const [draftEvidenceAssets, setDraftEvidenceAssets] = useState<string[]>([]);
+  const [draftProof, setDraftProof] = useState<{
+    generationId: string;
+    responseHash: string;
+    sourceRefreshedAt: string;
+  } | null>(null);
   // Cold-start warming-up state for the draftOutreach fetch. Non-null =
   // the draft endpoint is in a 503 retry loop (mirrors the borrower +
   // recommend loop). When present, the Draft outreach tile shows the
@@ -95,34 +89,13 @@ export default function OfferOrchestrator() {
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
   // Feature C: optional loan-officer assignment + follow-up reminder captured
   // at approval time and persisted on the approval row.
-  const [salesTeam, setSalesTeam] = useState<SalesTeamMember[]>([]);
+  const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
   const [routingConfirm, setRoutingConfirm] = useState<{ email: string | null; followUpAt: string | null } | null>(null);
   // Auto-offer Module 1 (prototype): preview the borrower-facing offer experience.
   const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
 
-  // Load the loan-officer roster for the assignment picker (active LOs +
-  // managers). Best-effort — the control degrades to "Unassigned" only if the
-  // roster can't load; approval itself never depends on it. Top-level hook
-  // (before any early return) so hook order is stable.
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .salesTeam()
-      .then((members) => {
-        if (cancelled) return;
-        setSalesTeam(
-          members.filter((m) => m.active && (m.role === 'loan_officer' || m.role === 'sales_manager')),
-        );
-      })
-      .catch(() => {
-        /* roster unavailable → picker stays "Unassigned"; non-fatal */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
   const [rejectRationale, setRejectRationale] = useState('');
   const {
     setApproval,
@@ -191,10 +164,11 @@ export default function OfferOrchestrator() {
       if (cachedDraftBody && cachedDraftBody.trim().length > 0) {
         setDraftBody(cachedDraftBody);
         setDraftSubject(cachedDraftSubject ?? '');
-        setDraftLoaded(true);
-        setDraftPending(false);
-        setDraftBaselineBody(cachedDraftBody);
-        setDraftBaselineSubject(cachedDraftSubject ?? '');
+        setDraftLoaded(false);
+        setDraftPending(true);
+        setDraftBaselineBody('');
+        setDraftBaselineSubject('');
+        setDraftProof(null);
       } else {
         setDraftBody('');
         setDraftSubject('');
@@ -204,6 +178,7 @@ export default function OfferOrchestrator() {
         setDraftBaselineSubject('');
         setDraftDisclosureVersion(null);
         setDraftDisclosureState(null);
+        setDraftProof(null);
       }
     } else {
       setB(null);
@@ -220,6 +195,7 @@ export default function OfferOrchestrator() {
       setDraftPending(true);
       setDraftBaselineBody('');
       setDraftBaselineSubject('');
+      setDraftProof(null);
     }
 
     const runAttempt = async (attempt: number): Promise<void> => {
@@ -321,8 +297,13 @@ export default function OfferOrchestrator() {
           setDraftSubject(subject);
           setDraftLoaded(true);
           setDraftPending(false);
-          setDraftBaselineBody(body);
-          setDraftBaselineSubject(subject);
+          setDraftBaselineBody(draft.body);
+          setDraftBaselineSubject(draft.subject ?? '');
+          setDraftProof({
+            generationId: draft.generation_id,
+            responseHash: draft.response_hash,
+            sourceRefreshedAt: draft.source_refreshed_at,
+          });
           setDraftDisclosureVersion(draft.disclosure_version);
           setDraftDisclosureState(draft.disclosure_state);
           setDraftGeneratorLabel(draft.generator_label);
@@ -351,6 +332,7 @@ export default function OfferOrchestrator() {
           setDraftStrategy(null);
           setDraftEvidence([]);
           setDraftEvidenceAssets([]);
+          setDraftProof(null);
           setDraftError('Offer draft endpoint returned an empty draft. Approval is disabled until an audited draft loads.');
         }
       } catch (err: unknown) {
@@ -378,6 +360,7 @@ export default function OfferOrchestrator() {
         setDraftStrategy(null);
         setDraftEvidence([]);
         setDraftEvidenceAssets([]);
+        setDraftProof(null);
         setDraftError(
           err instanceof Error
             ? `Offer draft unavailable: ${err.message}`
@@ -428,7 +411,16 @@ export default function OfferOrchestrator() {
   );
   const draftText = draftLoaded ? draftBody : '';
   const subjectReady = draftChannel === 'sms' || draftSubject.trim().length > 0;
-  const draftReady = draftLoaded && subjectReady && draftText.trim().length > 0;
+  const draftReady = Boolean(
+    draftLoaded
+      && draftProof
+      && subjectReady
+      && draftText.trim().length > 0
+      && b?.source_refreshed_at
+      && rec?.source_refreshed_at
+      && b.source_refreshed_at === draftProof.sourceRefreshedAt
+      && rec.source_refreshed_at === draftProof.sourceRefreshedAt,
+  );
   const draftDirty = draftLoaded && (
     draftBody !== draftBaselineBody
     || (draftChannel !== 'sms' && draftSubject !== draftBaselineSubject)
@@ -464,8 +456,6 @@ export default function OfferOrchestrator() {
         subject: draftChannel === 'sms' ? null : draftSubject,
         body: draftText,
       });
-      setDraftBaselineBody(draftText);
-      setDraftBaselineSubject(draftChannel === 'sms' ? '' : draftSubject);
     } catch (err) {
       setDraftSaveError(
         err instanceof Error ? `Couldn't save draft: ${err.message}` : "Couldn't save draft.",
@@ -495,6 +485,7 @@ export default function OfferOrchestrator() {
     setDraftStrategy(null);
     setDraftEvidence([]);
     setDraftEvidenceAssets([]);
+    setDraftProof(null);
     setReloadToken((n) => n + 1);
   };
 
@@ -514,6 +505,7 @@ export default function OfferOrchestrator() {
     setDraftStrategy(null);
     setDraftEvidence([]);
     setDraftEvidenceAssets([]);
+    setDraftProof(null);
     setReloadToken((n) => n + 1);
   };
 
@@ -539,6 +531,9 @@ export default function OfferOrchestrator() {
         evidence_ids,
         draft_subject,
         draft_body,
+        draft_generation_id: draftProof?.generationId ?? null,
+        draft_response_hash: draftProof?.responseHash ?? null,
+        draft_source_refreshed_at: draftProof?.sourceRefreshedAt ?? null,
         channel: draftChannel,
         assigned_to_email: assignedTo || null,
         follow_up_in_days: followUpDays > 0 ? followUpDays : null,
@@ -767,11 +762,16 @@ export default function OfferOrchestrator() {
           setDraftStrategy(null);
           setDraftEvidence([]);
           setDraftEvidenceAssets([]);
+          setDraftProof(null);
         }}
         approving={approving}
         draftDisclosureVersion={draftDisclosureVersion}
         draftDisclosureState={draftDisclosureState}
-        draftGeneratorLabel={draftGeneratorLabel}
+        draftGeneratorLabel={
+          draftDirty && draftGeneratorLabel
+            ? `Human edited from ${draftGeneratorLabel}`
+            : draftGeneratorLabel
+        }
         draftGenerationMode={draftGenerationMode}
         draftStrategy={draftStrategy}
         draftEvidence={draftEvidence}

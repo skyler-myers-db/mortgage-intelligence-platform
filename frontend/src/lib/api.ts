@@ -123,6 +123,8 @@ export interface ApproveResult {
   assigned_to_email?: string | null;
   /** Follow-up reminder timestamp (ISO), computed from follow_up_in_days. */
   follow_up_at?: string | null;
+  draft_generation_id?: string | null;
+  draft_edited?: boolean | null;
 }
 
 export interface RejectResult {
@@ -132,6 +134,9 @@ export interface RejectResult {
 }
 
 export interface OutreachDraftResult {
+  generation_id: string;
+  response_hash: string;
+  source_refreshed_at: string;
   borrower_id: string;
   offer_code: string;
   channel: 'email' | 'sms' | 'direct_mail';
@@ -1088,6 +1093,9 @@ export const api = {
       evidence_ids?: string[];
       draft_subject?: string | null;
       draft_body?: string | null;
+      draft_generation_id?: string | null;
+      draft_response_hash?: string | null;
+      draft_source_refreshed_at?: string | null;
       rationale?: string | null;
       bulk_id?: string | null;
       bulk_rationale?: string | null;
@@ -1111,6 +1119,9 @@ export const api = {
         evidence_ids?: string[];
         draft_subject?: string | null;
         draft_body?: string | null;
+        draft_generation_id?: string | null;
+        draft_response_hash?: string | null;
+        draft_source_refreshed_at?: string | null;
         rationale?: string | null;
         bulk_id?: string | null;
         bulk_rationale?: string | null;
@@ -1130,6 +1141,9 @@ export const api = {
         evidence_ids: opts.evidence_ids ?? [],
         draft_subject: opts.draft_subject ?? null,
         draft_body: opts.draft_body ?? null,
+        draft_generation_id: opts.draft_generation_id ?? null,
+        draft_response_hash: opts.draft_response_hash ?? null,
+        draft_source_refreshed_at: opts.draft_source_refreshed_at ?? null,
         rationale: opts.rationale ?? null,
         bulk_id: opts.bulk_id ?? null,
         bulk_rationale: opts.bulk_rationale ?? null,

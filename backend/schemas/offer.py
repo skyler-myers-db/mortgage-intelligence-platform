@@ -91,6 +91,9 @@ OutreachChannel = Literal["email", "sms", "direct_mail"]
 
 
 class OutreachDraft(BaseModel):
+    generation_id: str = Field(min_length=1, max_length=64)
+    response_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+    source_refreshed_at: str = Field(min_length=1, max_length=64)
     borrower_id: str
     offer_code: str
     channel: OutreachChannel
@@ -154,6 +157,12 @@ class OutreachApproveRequest(BaseModel):
     # SMS is intentionally subjectless and is rejected when a caller sends
     # non-empty subject text.
     draft_subject: str | None = Field(default=None, max_length=120)
+    draft_generation_id: str | None = Field(default=None, max_length=64)
+    draft_response_hash: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
+    draft_source_refreshed_at: str | None = Field(default=None, max_length=64)
     # R5-01 idempotency key. When present, the router short-circuits a
     # retry that arrived after a successful INSERT whose response was
     # lost: the partial unique index on ``mip_app.approvals.request_id``
@@ -192,7 +201,7 @@ class OutreachApproveRequest(BaseModel):
             return value
         return validate_internal_staff_email(value)
 
-    @field_validator("bulk_id", "request_id")
+    @field_validator("bulk_id", "request_id", "draft_generation_id")
     @classmethod
     def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
@@ -213,6 +222,22 @@ class OutreachApproveRequest(BaseModel):
             return value
         return validate_public_campaign_label(value)
 
+    @model_validator(mode="after")
+    def _draft_proof_is_complete(self) -> "OutreachApproveRequest":
+        proof = (
+            self.draft_generation_id,
+            self.draft_response_hash,
+            self.draft_source_refreshed_at,
+        )
+        if any(value is not None for value in proof) and not all(
+            isinstance(value, str) and value.strip() for value in proof
+        ):
+            raise ValueError(
+                "draft_generation_id, draft_response_hash, and "
+                "draft_source_refreshed_at must be supplied together"
+            )
+        return self
+
 
 class OutreachApproveResponse(BaseModel):
     approved: bool
@@ -223,6 +248,8 @@ class OutreachApproveResponse(BaseModel):
     # when the approver did not request an assignment / reminder.
     assigned_to_email: str | None = None
     follow_up_at: datetime | None = None
+    draft_generation_id: str | None = None
+    draft_edited: bool | None = None
 
 
 class OutreachRejectRequest(BaseModel):

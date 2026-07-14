@@ -209,12 +209,25 @@ def _record_genie_session(
         response.question_hash or hashlib.sha256(response.question.encode("utf-8")).hexdigest()[:16]
     )
     message_id = response.message_id or f"{response.source}-{question_hash}"
+    # A governed canonical overlay can preserve the native Conversation API
+    # identity while presenting its re-verified answer as ``trusted_sql``.
+    # Ownership for feedback belongs to that native message, not to the
+    # presentation label. Deterministic fallbacks have no completed native
+    # identity and retain their own source, so they cannot acquire feedback
+    # rights accidentally.
+    ownership_source = (
+        "genie"
+        if response.message_id
+        and response.conversation_id
+        and response.genie_status == "COMPLETED"
+        else response.source
+    )
     params = {
         "actor_email": actor,
         "conversation_id": conversation_id,
         "last_message_id": message_id,
         "last_question_hash": question_hash,
-        "source": response.source,
+        "source": ownership_source,
         "trusted_assets": response.trusted_assets,
         "question_hash": question_hash,
         "message_id": message_id,

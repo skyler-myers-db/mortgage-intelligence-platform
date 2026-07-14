@@ -37,6 +37,7 @@ import re
 from threading import Lock
 from typing import Any
 
+from backend.config.runtime_secret_policy import require_strong_runtime_secret
 from backend.schemas._validators import is_public_lender_ref, normalize_public_lender_ref
 from backend.services.observability import emit
 
@@ -384,12 +385,21 @@ def _id_mask_secret() -> str:
         normalized in _ID_MASK_PLACEHOLDER_SECRETS
         or (normalized.startswith("<") and normalized.endswith(">"))
     )
-    if configured and not is_placeholder:
-        return configured
-
     from backend.config.settings import settings
 
     app_env = (settings.app_env or "local").strip().lower()
+    if configured and not is_placeholder:
+        if app_env not in _ID_MASK_FALLBACK_APP_ENVS:
+            try:
+                return require_strong_runtime_secret(
+                    configured,
+                    name="MIP_COTALITY_ID_MASK_SECRET",
+                    extra_placeholders=_ID_MASK_PLACEHOLDER_SECRETS,
+                )
+            except ValueError as exc:
+                raise RuntimeError(str(exc)) from exc
+        return configured
+
     if app_env in _ID_MASK_FALLBACK_APP_ENVS:
         return _ID_MASK_NAMESPACE
 

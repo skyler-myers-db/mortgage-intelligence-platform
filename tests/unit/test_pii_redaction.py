@@ -254,10 +254,23 @@ def test_mask_cotality_id_rejects_placeholder_secret_outside_local_test(
 
 
 def test_mask_cotality_id_accepts_customer_mask_secret(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "customer-mask-secret")
+    monkeypatch.setenv(
+        "MIP_COTALITY_ID_MASK_SECRET",
+        "customer-mask-secret-material-at-least-32-bytes",
+    )
     monkeypatch.setattr(settings, "app_env", "customer")
 
     assert re.fullmatch(r"clip_ref_[0-9a-f]{12}", mask_cotality_id("clip", "1234567890"))
+
+
+def test_mask_cotality_id_rejects_weak_customer_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "x")
+    monkeypatch.setattr(settings, "app_env", "customer")
+
+    with pytest.raises(RuntimeError, match="at least 32"):
+        mask_cotality_id("clip", "1234567890")
 
 
 def test_redact_borrower_row_synthesizes_display_name() -> None:

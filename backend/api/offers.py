@@ -255,14 +255,23 @@ def recommend_offer(
     # One dossier-row statement supplies the recommendation, evidence,
     # confidence, and audit subject. Reading BorrowerRepository separately can
     # combine a cached dossier generation with newer offer inputs.
-    inputs = offer_repo.get_offer_inputs(payload.borrower_id)
+    try:
+        inputs = offer_repo.get_offer_inputs(payload.borrower_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=500,
+            detail="Offer inputs are incomplete or invalid; refresh the governed data before retrying.",
+        ) from exc
     if inputs is None:
         # Defense in depth: every borrower in the population has offer inputs.
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
     code = cast(str, inputs["offer_code"])
     if code not in _VALID_OFFER_TYPES:
         # Defense in depth: scoring contract violation would surface here.
-        raise HTTPException(status_code=500, detail=f"Invalid primary offer code '{code}'")
+        raise HTTPException(
+            status_code=500,
+            detail="Offer inputs are incomplete or invalid; refresh the governed data before retrying.",
+        )
 
     thresholds_applied = {
         "min_spread_bps": cast(int, inputs["min_spread_bps"]),

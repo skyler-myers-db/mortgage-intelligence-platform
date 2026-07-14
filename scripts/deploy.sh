@@ -379,9 +379,11 @@ fi
 # Provision runtime HMAC values directly into Databricks Secrets before the
 # bundle validates its app resource bindings. The later Apps deploy payload
 # carries only value_from resource names, never raw secret values.
+RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
+export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"
 step "provision Databricks App runtime secret bindings"
 run "$PYTHON" tools/databricks/provision_runtime_secrets.py \
-  --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
+  --scope "$RUNTIME_SECRET_SCOPE"
 
 # -----------------------------------------------------------------------------
 # Step 0a: ensure the bundle has a real Genie space id before app resource apply

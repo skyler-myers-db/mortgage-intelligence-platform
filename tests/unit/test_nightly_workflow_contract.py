@@ -66,13 +66,13 @@ def test_live_validation_renders_dev_demo_feeds_for_bundle_validation() -> None:
     assert 'python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"' in block
 
 
-def test_live_validation_admin_degraded_proof_fails_closed_without_explicit_skip() -> None:
+def test_live_validation_requires_admin_token_for_every_admin_proof() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
-    assert "skip_admin_degraded_proof:" in text
+    assert "skip_admin_degraded_proof:" not in text
     assert "ADMIN_BEARER: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}" in text
-    assert "SKIP_ADMIN_DEGRADED_PROOF: ${{ inputs.skip_admin_degraded_proof }}" in text
     assert "MIP_ADMIN_BEARER_TOKEN=$ADMIN_BEARER" in text
     assert "Missing MIP_ADMIN_BEARER_TOKEN" in text
-    assert "skip_admin_degraded_proof=true" in text
+    assert "campaign-audit" in text
+    assert "Growth Agent audit" in text
     assert "exit 1" in text

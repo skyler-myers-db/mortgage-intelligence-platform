@@ -160,6 +160,18 @@ SELECT generation_id, audit_event_id, response_hash, response_json
 FROM persisted
 """
 
+_GENERATED_OUTREACH_DRAFT_LOOKUP = """
+SELECT generation_id, audit_event_id, actor_email, borrower_id, channel,
+       offer_code, generation_mode, response_hash, response_json
+FROM mip_app.generated_outreach_drafts
+WHERE generation_id = %(generation_id)s
+  AND actor_email = %(actor_email)s
+  AND borrower_id = %(borrower_id)s
+LIMIT 1
+"""
+
+_LOCAL_TEST_APP_ENVS = frozenset({"local", "test"})
+
 
 def _canonical_intent(payload: dict[str, Any]) -> str:
     return json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
@@ -167,6 +179,110 @@ def _canonical_intent(payload: dict[str, Any]) -> str:
 
 def _intent_hash(intent: str) -> str:
     return hashlib.sha256(intent.encode("utf-8")).hexdigest()
+
+
+def _outreach_draft_response_hash(response: OutreachDraft) -> str:
+    payload = response.model_dump(mode="json", exclude={"response_hash"})
+    return _intent_hash(_canonical_intent(payload))
+
+
+def _refresh_timestamp(value: Any) -> datetime | None:
+    parsed = _coerce_datetime(value)
+    return parsed.astimezone(UTC) if parsed is not None else None
+
+
+def _verified_generated_draft(
+    lakebase: LakebaseClient,
+    *,
+    payload: OutreachApproveRequest,
+    actor: str,
+    borrower: Any,
+    offer_code: str,
+) -> tuple[OutreachDraft | None, bool]:
+    """Load and verify the audited draft that the operator is approving.
+
+    Production approvals must reference the exact generated artifact returned
+    by ``/outreach/draft``. The final copy may be edited by the human reviewer,
+    but the immutable origin, source snapshot, offer, and channel remain bound
+    to the decision and are revalidated from Lakebase rather than trusted from
+    request fields.
+    """
+
+    generation_id = (payload.draft_generation_id or "").strip()
+    if not generation_id:
+        if settings.app_env.strip().lower() in _LOCAL_TEST_APP_ENVS:
+            return None, False
+        raise HTTPException(
+            status_code=422,
+            detail="Approval requires the audited generated draft proof.",
+        )
+
+    row = lakebase.fetchone(
+        _GENERATED_OUTREACH_DRAFT_LOOKUP,
+        {
+            "generation_id": generation_id,
+            "actor_email": actor,
+            "borrower_id": payload.borrower_id,
+        },
+    )
+    if row is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Generated draft proof was not found; regenerate the draft before approval.",
+        )
+
+    stored_json = row.get("response_json")
+    if isinstance(stored_json, str):
+        try:
+            stored_json = json.loads(stored_json)
+        except json.JSONDecodeError as exc:
+            raise HTTPException(
+                status_code=409,
+                detail="Generated draft proof is invalid; regenerate the draft before approval.",
+            ) from exc
+    if not isinstance(stored_json, dict):
+        raise HTTPException(
+            status_code=409,
+            detail="Generated draft proof is invalid; regenerate the draft before approval.",
+        )
+    try:
+        generated = OutreachDraft.model_validate(stored_json)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Generated draft proof is invalid; regenerate the draft before approval.",
+        ) from exc
+
+    stored_hash = str(row.get("response_hash") or "")
+    expected_hash = _outreach_draft_response_hash(generated)
+    proof_matches = (
+        str(row.get("generation_id") or "") == generated.generation_id == generation_id
+        and str(row.get("actor_email") or "") == actor
+        and str(row.get("borrower_id") or "") == payload.borrower_id == generated.borrower_id
+        and str(row.get("channel") or "") == payload.channel == generated.channel
+        and str(row.get("offer_code") or "") == offer_code == generated.offer_code
+        and stored_hash == generated.response_hash == payload.draft_response_hash == expected_hash
+        and generated.source_refreshed_at == payload.draft_source_refreshed_at
+    )
+    if not proof_matches:
+        raise HTTPException(
+            status_code=409,
+            detail="Generated draft proof does not match this approval; regenerate the draft.",
+        )
+
+    current_refresh = _refresh_timestamp(getattr(borrower, "source_refreshed_at", None))
+    draft_refresh = _refresh_timestamp(generated.source_refreshed_at)
+    if current_refresh is None or draft_refresh is None or current_refresh != draft_refresh:
+        raise HTTPException(
+            status_code=409,
+            detail="Borrower data changed after the draft was generated; regenerate before approval.",
+        )
+
+    final_subject = (payload.draft_subject or "").strip() or None
+    generated_subject = (generated.subject or "").strip() or None
+    final_body = (payload.draft_body or "").strip()
+    draft_edited = final_body != generated.body.strip() or final_subject != generated_subject
+    return generated, draft_edited
 
 
 def _derive_fallback_request_id(
@@ -667,10 +783,12 @@ def _persist_generated_outreach_draft(
     payload: OutreachDraftRequest,
     response: OutreachDraft,
 ) -> OutreachDraft:
-    generation_id = str(uuid4())
+    generation_id = response.generation_id
     audit_id = str(uuid4())
     response_json = _canonical_intent(response.model_dump(mode="json"))
-    response_hash = _intent_hash(response_json)
+    response_hash = _outreach_draft_response_hash(response)
+    if response.response_hash != response_hash:
+        raise LakebaseError("generated outreach draft hash is invalid")
     audit_params = build_audit_insert_params(
         actor=actor,
         action="draft_outreach",
@@ -720,6 +838,8 @@ def _persist_generated_outreach_draft(
         str(row.get("generation_id") or "") != generation_id
         or str(row.get("audit_event_id") or "") != audit_id
         or str(row.get("response_hash") or "") != response_hash
+        or reconstructed.response_hash != response_hash
+        or _outreach_draft_response_hash(reconstructed) != response_hash
         or _canonical_intent(reconstructed.model_dump(mode="json")) != response_json
     ):
         raise LakebaseError("generated outreach draft proof does not match its response")
@@ -747,12 +867,21 @@ def draft_outreach(
     )
     disclosure = _resolve_disclosure_or_http(lakebase, borrower=b, channel=payload.channel)
     offer_code = _safe_offer_code(getattr(b, "recommended_offer_code", None))
+    source_refreshed_at = str(getattr(b, "source_refreshed_at", "") or "").strip()
+    if _refresh_timestamp(source_refreshed_at) is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Borrower source freshness is unavailable; refresh before generating outreach.",
+        )
     draft = compose_intelligent_outreach(
         borrower=b,
         channel=payload.channel,
         disclosure=disclosure,
     )
     response = OutreachDraft(
+        generation_id=str(uuid4()),
+        response_hash="0" * 64,
+        source_refreshed_at=source_refreshed_at,
         borrower_id=b.borrower_id,
         offer_code=offer_code,
         channel=payload.channel,
@@ -766,6 +895,9 @@ def draft_outreach(
         strategy_summary=draft.strategy_summary,
         evidence_summary=draft.evidence_summary,
         evidence_assets=draft.evidence_assets,
+    )
+    response = response.model_copy(
+        update={"response_hash": _outreach_draft_response_hash(response)}
     )
     try:
         return _persist_generated_outreach_draft(
@@ -843,6 +975,9 @@ def approve_outreach(
             "bulk_rationale": safe_bulk_rationale,
             "draft_body": normalized_draft_body,
             "draft_subject": normalized_draft_subject,
+            "draft_generation_id": payload.draft_generation_id,
+            "draft_response_hash": payload.draft_response_hash,
+            "draft_source_refreshed_at": payload.draft_source_refreshed_at,
             "assigned_to_email": assigned_to_email,
             "follow_up_in_days": payload.follow_up_in_days,
         }
@@ -870,6 +1005,19 @@ def approve_outreach(
         request_id=effective_request_id,
     )
     disclosure = _resolve_disclosure_or_http(lakebase, borrower=borrower, channel=payload.channel)
+    try:
+        generated_draft, draft_edited = _verified_generated_draft(
+            lakebase,
+            payload=payload,
+            actor=actor,
+            borrower=borrower,
+            offer_code=offer_code,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail=safe_dependency_detail("lakebase"),
+        ) from exc
     approved_draft_body = _assert_disclosure_backed_draft_body(
         draft_body=payload.draft_body,
         disclosure=disclosure,
@@ -907,6 +1055,16 @@ def approve_outreach(
     audit_payload["request_id"] = effective_request_id
     audit_payload["draft_body"] = approved_draft_body
     audit_payload["draft_subject"] = approved_draft_subject
+    if generated_draft is not None:
+        audit_payload["draft_generation_id"] = generated_draft.generation_id
+        audit_payload["draft_response_hash"] = generated_draft.response_hash
+        audit_payload["draft_source_refreshed_at"] = generated_draft.source_refreshed_at
+        audit_payload["draft_edited"] = draft_edited
+        audit_payload["draft_attribution"] = (
+            f"human_edited_from_{generated_draft.generation_mode}"
+            if draft_edited
+            else generated_draft.generation_mode
+        )
     audit_payload["rationale"] = approval_rationale
     if payload.bulk_id:
         audit_payload["bulk_id"] = payload.bulk_id
@@ -926,6 +1084,10 @@ def approve_outreach(
         "audit_event_id": "",
         "assigned_to_email": assigned_to_email,
         "follow_up_at": follow_up_at.isoformat() if follow_up_at else None,
+        "draft_generation_id": (
+            generated_draft.generation_id if generated_draft is not None else None
+        ),
+        "draft_edited": draft_edited if generated_draft is not None else None,
     }
     try:
         if _supports_atomic_outreach_write(lakebase):

@@ -197,6 +197,7 @@ function AppShellInner({ children }: PropsWithChildren) {
             role="complementary"
             aria-label="Workspace console"
             aria-hidden="true"
+            tabIndex={-1}
           />
         )}
       </Suspense>

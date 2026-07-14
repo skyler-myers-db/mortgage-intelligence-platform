@@ -91,6 +91,9 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
     assert text.index("provision_runtime_secrets.py") < text.index(
         "bundle_env.py validate"
     )
+    assert 'RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"' in text
+    assert 'export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"' in text
+    assert '--scope "$RUNTIME_SECRET_SCOPE"' in text
     assert "Apps deploy payload\n# carries only value_from resource names" in text
 
     repo = tmp_path / "repo"

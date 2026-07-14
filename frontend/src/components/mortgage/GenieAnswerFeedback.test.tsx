@@ -186,4 +186,64 @@ describe('GenieAnswerFeedback', () => {
     });
     expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
   });
+
+  it('resets recorded state and request ids when the answer identity changes', async () => {
+    genieFeedback.mockResolvedValue({ accepted: true, audit_event_id: 'evt-1' });
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
+    });
+    await act(async () => {
+      upBtn(container)!.click();
+      await Promise.resolve();
+    });
+    const firstRequestId = genieFeedback.mock.calls[0][0].request_id;
+    expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
+
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c2" messageId="m2" />);
+      await Promise.resolve();
+    });
+    expect(container.querySelector('.genie-feedback--done')).toBeNull();
+    expect(upBtn(container)).not.toBeNull();
+
+    await act(async () => {
+      downBtn(container)!.click();
+      await Promise.resolve();
+    });
+    expect(genieFeedback).toHaveBeenCalledTimes(2);
+    expect(genieFeedback.mock.calls[1][0]).toEqual(expect.objectContaining({
+      conversation_id: 'c2',
+      message_id: 'm2',
+      helpful: false,
+    }));
+    expect(genieFeedback.mock.calls[1][0].request_id).not.toBe(firstRequestId);
+  });
+
+  it('ignores completion from a vote submitted for an earlier answer', async () => {
+    let resolveFirst: ((value: unknown) => void) | null = null;
+    genieFeedback.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        resolveFirst = resolve;
+      }),
+    );
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c1" messageId="m1" />);
+    });
+    await act(async () => {
+      upBtn(container)!.click();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      root.render(<GenieAnswerFeedback conversationId="c2" messageId="m2" />);
+      await Promise.resolve();
+    });
+    await act(async () => {
+      resolveFirst?.({ accepted: true });
+      await Promise.resolve();
+    });
+
+    expect(container.querySelector('.genie-feedback--done')).toBeNull();
+    expect(upBtn(container)).not.toBeNull();
+  });
 });

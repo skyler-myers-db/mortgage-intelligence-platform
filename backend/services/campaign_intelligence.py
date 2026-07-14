@@ -29,6 +29,11 @@ from backend.agents.mortgage_growth_copilot import (
     prompt_hash,
     workspace_client,
 )
+from backend.config.runtime_secret_policy import (
+    require_distinct_rotation_secrets,
+    require_strong_runtime_secret,
+    runtime_secret_text,
+)
 from backend.config.settings import Settings, get_settings
 from backend.schemas.portfolio import (
     CampaignRecommendationEvidence,
@@ -234,18 +239,24 @@ def campaign_criteria_fingerprint(criteria: object) -> str:
     ).hexdigest()
 
 
-def _configured_secret(value: object) -> bytes | None:
-    getter = getattr(value, "get_secret_value", None)
-    raw = getter() if callable(getter) else value
-    if not isinstance(raw, str):
-        return None
-    configured = raw.strip()
-    normalized = configured.lower()
-    is_placeholder = normalized in _PLACEHOLDER_PROVENANCE_SECRETS or (
-        normalized.startswith("<") and normalized.endswith(">")
+def _configured_secret(
+    value: object,
+    *,
+    name: str,
+    require_strong: bool,
+) -> bytes | None:
+    configured = runtime_secret_text(
+        value,
+        extra_placeholders=_PLACEHOLDER_PROVENANCE_SECRETS,
     )
-    if not configured or is_placeholder:
+    if configured is None:
         return None
+    if require_strong:
+        configured = require_strong_runtime_secret(
+            configured,
+            name=name,
+            extra_placeholders=_PLACEHOLDER_PROVENANCE_SECRETS,
+        )
     return configured.encode("utf-8")
 
 
@@ -254,8 +265,16 @@ def _campaign_provenance_keys(
     *,
     for_issuance: bool = False,
 ) -> list[bytes]:
-    current = _configured_secret(settings.mip_genie_action_secret_current)
     app_env = (settings.app_env or "").strip().lower()
+    require_strong = app_env not in _LOCAL_TEST_PROVENANCE_APP_ENVS
+    try:
+        current = _configured_secret(
+            settings.mip_genie_action_secret_current,
+            name="MIP_GENIE_ACTION_SECRET_CURRENT",
+            require_strong=require_strong,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     if current is None:
         if app_env not in _LOCAL_TEST_PROVENANCE_APP_ENVS:
             raise RuntimeError(
@@ -263,14 +282,31 @@ def _campaign_provenance_keys(
                 "MIP_GENIE_ACTION_SECRET_CURRENT outside local/test"
             )
         current = (
-            _configured_secret(settings.mip_genie_action_secret)
+            _configured_secret(
+                settings.mip_genie_action_secret,
+                name="MIP_GENIE_ACTION_SECRET",
+                require_strong=False,
+            )
             or _LOCAL_TEST_PROVENANCE_SECRET
         )
 
     keys = [current]
     if not for_issuance:
-        previous = _configured_secret(settings.mip_genie_action_secret_previous)
-        if previous is not None and previous != current:
+        try:
+            previous = _configured_secret(
+                settings.mip_genie_action_secret_previous,
+                name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
+                require_strong=require_strong,
+            )
+            require_distinct_rotation_secrets(
+                current.decode("utf-8"),
+                previous.decode("utf-8") if previous is not None else None,
+                current_name="MIP_GENIE_ACTION_SECRET_CURRENT",
+                previous_name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
+            )
+        except ValueError as exc:
+            raise RuntimeError(str(exc)) from exc
+        if previous is not None:
             keys.append(previous)
     return keys
 

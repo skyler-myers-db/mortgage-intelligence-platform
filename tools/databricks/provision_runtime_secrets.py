@@ -15,6 +15,11 @@ from typing import Any
 
 from dotenv import dotenv_values
 
+from backend.config.runtime_secret_policy import (
+    require_distinct_rotation_secrets,
+    require_strong_runtime_secret,
+    runtime_secret_text,
+)
 from databricks.sdk import WorkspaceClient
 
 REPO = Path(__file__).resolve().parents[2]
@@ -47,11 +52,11 @@ def _configured_values() -> dict[str, str]:
     }
     values: dict[str, str] = {}
     for env_name in ENV_TO_KEY:
-        value = (os.environ.get(env_name) or dotenv.get(env_name) or "").strip()
-        normalized = value.lower()
-        if normalized in PLACEHOLDERS or (normalized.startswith("<") and normalized.endswith(">")):
-            value = ""
-        values[env_name] = value
+        raw = os.environ.get(env_name) or dotenv.get(env_name) or ""
+        values[env_name] = runtime_secret_text(
+            raw,
+            extra_placeholders=PLACEHOLDERS,
+        ) or ""
     return values
 
 
@@ -70,6 +75,20 @@ def provision_runtime_secrets(
     missing = sorted(name for name in REQUIRED if not values[name])
     if missing:
         raise ValueError(f"{', '.join(missing)} required before provisioning runtime secrets")
+
+    for env_name, value in values.items():
+        if value:
+            values[env_name] = require_strong_runtime_secret(
+                value,
+                name=env_name,
+                extra_placeholders=PLACEHOLDERS,
+            )
+    require_distinct_rotation_secrets(
+        values["MIP_GENIE_ACTION_SECRET_CURRENT"],
+        values["MIP_GENIE_ACTION_SECRET_PREVIOUS"] or None,
+        current_name="MIP_GENIE_ACTION_SECRET_CURRENT",
+        previous_name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
+    )
 
     workspace = client or WorkspaceClient()
     scopes = {_item_name(item, "name") for item in workspace.secrets.list_scopes()}

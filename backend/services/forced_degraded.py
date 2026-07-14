@@ -18,6 +18,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
+from backend.config.runtime_secret_policy import (
+    require_distinct_rotation_secrets,
+    require_strong_runtime_secret,
+    runtime_secret_text,
+)
 from backend.config.settings import settings
 
 _ALLOWED_DEPENDENCIES = {"warehouse", "lakebase", "genie", "all"}
@@ -27,6 +32,7 @@ FORCED_DEGRADED_SOURCE = "admin_drill_cookie"
 _DEFAULT_TTL_S = 60
 _MAX_TTL_S = 300
 _PROCESS_FORCED_DEGRADED_SECRET = secrets.token_urlsafe(32).encode("utf-8")
+_LOCAL_TEST_APP_ENVS = frozenset({"local", "test"})
 
 
 @dataclass(frozen=True)
@@ -62,28 +68,64 @@ def _b64_decode(value: str) -> dict[str, Any]:
     return payload
 
 
-def _configured_secret_bytes(configured: Any) -> bytes | None:
-    if configured is None:
+def _configured_secret_bytes(
+    configured: Any,
+    *,
+    name: str,
+    require_strong: bool,
+) -> bytes | None:
+    value = runtime_secret_text(configured)
+    if value is None:
         return None
-    value = configured.get_secret_value().strip()
-    if not value:
-        return None
+    if require_strong:
+        value = require_strong_runtime_secret(value, name=name)
     return value.encode("utf-8")
 
 
 def _current_cookie_key() -> tuple[str, bytes]:
+    app_env = (settings.app_env or "").strip().lower()
+    require_strong = app_env not in _LOCAL_TEST_APP_ENVS
     configured = settings.mip_genie_action_secret_current or settings.mip_genie_action_secret
-    secret = _configured_secret_bytes(configured)
+    try:
+        secret = _configured_secret_bytes(
+            configured,
+            name="MIP_GENIE_ACTION_SECRET_CURRENT",
+            require_strong=require_strong,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     key_id = (settings.mip_genie_action_secret_kid or "").strip() or "v1"
     if secret is not None:
         return key_id, secret
+    if require_strong:
+        raise RuntimeError(
+            "MIP_GENIE_ACTION_SECRET_CURRENT is required outside local/test app environments"
+        )
     return "process", _PROCESS_FORCED_DEGRADED_SECRET
 
 
 def _previous_cookie_key() -> tuple[str, bytes] | None:
-    secret = _configured_secret_bytes(settings.mip_genie_action_secret_previous)
+    app_env = (settings.app_env or "").strip().lower()
+    try:
+        secret = _configured_secret_bytes(
+            settings.mip_genie_action_secret_previous,
+            name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
+            require_strong=app_env not in _LOCAL_TEST_APP_ENVS,
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     if secret is None:
         return None
+    current = _current_cookie_key()[1].decode("utf-8")
+    try:
+        require_distinct_rotation_secrets(
+            current,
+            secret.decode("utf-8"),
+            current_name="MIP_GENIE_ACTION_SECRET_CURRENT",
+            previous_name="MIP_GENIE_ACTION_SECRET_PREVIOUS",
+        )
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
     key_id = (settings.mip_genie_action_secret_previous_kid or "").strip() or "previous"
     return key_id, secret
 

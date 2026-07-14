@@ -74,6 +74,12 @@ describe('AppShell skip-link + landmarks', () => {
     expect(html).toMatch(/href="#main-content"[^>]*class="sr-skip-link"/);
   });
 
+  it('keeps the lazy workspace-console target programmatically focusable', () => {
+    const html = renderShell();
+    expect(html).toMatch(/<aside[^>]*id="workspace-console"/);
+    expect(html).toMatch(/<aside[^>]*id="workspace-console"[^>]*tabindex="-1"/);
+  });
+
   it('emits <main id="main-content" tabindex="-1"> so the skip-link can shift focus', () => {
     const html = renderShell();
     // Both attributes present on the main landmark. Without tabIndex

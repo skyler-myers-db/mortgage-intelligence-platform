@@ -150,6 +150,9 @@ const LIFECYCLE: BorrowerLifecycle = {
 };
 
 const DRAFT = {
+  generation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  response_hash: 'a'.repeat(64),
+  source_refreshed_at: '2026-07-13T12:00:00Z',
   borrower_id: BORROWER_ID,
   offer_code: 'rate_term_refi',
   channel: 'email' as const,
@@ -304,6 +307,9 @@ describe('OfferOrchestrator route behavior', () => {
       evidence_ids: ['ev-1', 'ev-2'],
       draft_subject: 'Operator reviewed subject',
       draft_body: 'Operator reviewed governed body.',
+      draft_generation_id: DRAFT.generation_id,
+      draft_response_hash: DRAFT.response_hash,
+      draft_source_refreshed_at: DRAFT.source_refreshed_at,
       channel: 'email',
     });
     await waitUntil(() => container.textContent?.includes('Approved') === true);

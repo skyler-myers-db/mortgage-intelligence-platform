@@ -3,7 +3,11 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
+from threading import Event, Lock, Thread
 
+import pytest
+
+import backend.services.repositories.databricks_borrowers as borrower_repo_module
 from backend.config.settings import settings
 from backend.schemas.lead import Borrower360
 from backend.schemas.why import WhyPanel
@@ -256,6 +260,85 @@ def test_borrower_fresh_read_invalidates_cached_dossier() -> None:
     repo.get = lambda borrower_id: cache.get(f"borrower_dossier:{borrower_id}")  # type: ignore[method-assign,return-value]
 
     assert repo.get_fresh("B-CACHED") is None
+
+
+def test_borrower_fresh_read_prevents_stale_inflight_cache_repopulation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    started = Event()
+    release_stale = Event()
+
+    class _Client:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.guard = Lock()
+
+        def execute_one(self, *_args: object, **_kwargs: object) -> dict[str, object]:
+            with self.guard:
+                self.calls += 1
+                call_number = self.calls
+            if call_number == 1:
+                started.set()
+                assert release_stale.wait(timeout=2)
+            return {
+                "version": "stale" if call_number == 1 else "fresh",
+                "in_the_money": True,
+                "rate_spread_bps": 150,
+                "equity_pct": 40,
+                "market_rate_fraction": 0.061,
+                "min_spread_bps_applied": 75,
+                "min_equity_pct_applied": 15,
+                "evidence_events": [],
+                "trigger_timeline": [],
+            }
+
+    def _redacted(row: dict[str, object]) -> dict[str, object]:
+        return {
+            "borrower_id": "B-RACE",
+            "display_name": f"Borrower {row['version']}",
+            "city": "Chicago",
+            "state": "IL",
+            "zip": "60617",
+            "segment_codes": ["itm"],
+            "equity_estimate": 100000,
+            "rate_spread_bps": 150,
+            "opportunity_score": 80,
+            "confidence": 80,
+            "recommended_offer": "Refinance + HELOC",
+            "why_now": "test",
+            "evidence_ids": [],
+            "approval_status": "pending",
+            "clip_id": "clip_demo_race",
+            "owner_link_id": "ol_demo_race",
+            "subject_property": "Chicago, IL 60617",
+            "avm_value": 250000,
+            "current_lien_balance": 150000,
+            "current_rate": 0.071,
+            "ltv": 60,
+            "related_property_count": 1,
+        }
+
+    monkeypatch.setattr(borrower_repo_module, "redact_borrower_row", _redacted)
+    client = _Client()
+    repo = DatabricksBorrowerRepository(client, cache=TTLCache(), cache_ttl_s=60)  # type: ignore[arg-type]
+    stale_result: list[Borrower360 | None] = []
+    stale_thread = Thread(target=lambda: stale_result.append(repo.get("B-RACE")))
+
+    stale_thread.start()
+    assert started.wait(timeout=2)
+    fresh = repo.get_fresh("B-RACE")
+    assert fresh is not None
+    assert fresh.display_name == "Borrower fresh"
+    release_stale.set()
+    stale_thread.join(timeout=2)
+    assert not stale_thread.is_alive()
+    assert stale_result[0] is not None
+    assert stale_result[0].display_name == "Borrower stale"
+
+    cached = repo.get("B-RACE")
+    assert cached is not None
+    assert cached.display_name == "Borrower fresh"
+    assert client.calls == 2
 
 
 def test_operator_docs_explain_write_load_and_process_local_cache() -> None:

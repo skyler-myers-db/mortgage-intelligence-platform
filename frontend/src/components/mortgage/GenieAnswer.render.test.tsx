@@ -156,6 +156,26 @@ describe('GenieAnswer render surfaces', () => {
     expect(container.textContent).toContain('Verified the returned aggregate.');
   });
 
+  it('discloses a verified live Genie turn even when no reasoning rows are returned', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            source: 'trusted_sql',
+            reasoning_trace: [],
+          })}
+          question="Q"
+          onFollowUp={() => {}}
+        />,
+      ),
+    );
+
+    expect(container.querySelector('.genie-answer__api-source')?.textContent).toContain(
+      'Databricks Genie Conversation API · verified SQL',
+    );
+    expect(container.querySelector('.genie-answer__reasoning')).toBeNull();
+  });
+
   it('shows the feedback control on a trusted answer and hides it on a refusal', () => {
     act(() => root.render(<GenieAnswer payload={payload()} question="Q" onFollowUp={() => {}} />));
     expect(container.querySelector('[data-testid="genie-feedback-up"]')).not.toBeNull();
