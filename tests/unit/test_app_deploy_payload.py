@@ -22,7 +22,7 @@ def _hermetic_operator_config(monkeypatch, tmp_path):
     )
     for name in app_deploy_payload.NON_SECRET_OPERATOR_VARS:
         monkeypatch.delenv(name, raising=False)
-    for name in app_deploy_payload.SECRET_OPERATOR_VARS:
+    for name in app_deploy_payload.SECRET_RESOURCE_BINDINGS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-mask-secret")
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "test-action-secret")
@@ -133,7 +133,7 @@ def test_payload_allows_operator_to_enable_lead_rewarm(monkeypatch) -> None:
     assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "120"
 
 
-def test_payload_includes_cotality_mask_secret(monkeypatch) -> None:
+def test_payload_binds_cotality_mask_secret_without_serializing_value(monkeypatch) -> None:
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "customer-mask-secret")
 
     payload = build_payload(
@@ -144,7 +144,11 @@ def test_payload_includes_cotality_mask_secret(monkeypatch) -> None:
     env = _env_map(payload)
 
     assert env["APP_ENV"]["value"] == "prod"
-    assert env["MIP_COTALITY_ID_MASK_SECRET"]["value"] == "customer-mask-secret"
+    assert env["MIP_COTALITY_ID_MASK_SECRET"] == {
+        "name": "MIP_COTALITY_ID_MASK_SECRET",
+        "value_from": "cotality_id_mask_secret",
+    }
+    assert "customer-mask-secret" not in str(payload)
 
 
 def test_payload_includes_rotation_aware_genie_action_secrets(monkeypatch) -> None:
@@ -160,32 +164,35 @@ def test_payload_includes_rotation_aware_genie_action_secrets(monkeypatch) -> No
     )
     env = _env_map(payload)
 
-    assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value"] == "current-action-secret"
-    assert env["MIP_GENIE_ACTION_SECRET_PREVIOUS"]["value"] == "previous-action-secret"
+    assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == "genie_action_current_secret"
+    assert env["MIP_GENIE_ACTION_SECRET_PREVIOUS"]["value_from"] == "genie_action_previous_secret"
     assert env["MIP_GENIE_ACTION_SECRET_KID"]["value"] == "v3"
     assert env["MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"]["value"] == "v2"
+    assert "current-action-secret" not in str(payload)
+    assert "previous-action-secret" not in str(payload)
 
 
-def test_payload_omits_placeholder_cotality_mask_secret(monkeypatch) -> None:
+def test_payload_uses_secret_resource_when_operator_value_is_placeholder(monkeypatch) -> None:
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")
 
-    with pytest.raises(ValueError, match="MIP_COTALITY_ID_MASK_SECRET required"):
-        build_payload(
-            source_code_path="/Workspace/app/files",
-            target="prod",
-            app_env="prod",
-        )
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="prod",
+        app_env="prod",
+    )
+    assert _env_map(payload)["MIP_COTALITY_ID_MASK_SECRET"]["value_from"] == "cotality_id_mask_secret"
+    assert "REDACTED" not in str(payload)
 
 
-def test_payload_requires_current_action_secret_for_deployed_runtime(monkeypatch) -> None:
+def test_payload_never_serializes_absent_current_action_secret(monkeypatch) -> None:
     monkeypatch.delenv("MIP_GENIE_ACTION_SECRET_CURRENT")
 
-    with pytest.raises(ValueError, match="MIP_GENIE_ACTION_SECRET_CURRENT required"):
-        build_payload(
-            source_code_path="/Workspace/app/files",
-            target="dev",
-            app_env="sandbox",
-        )
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="dev",
+        app_env="sandbox",
+    )
+    assert _env_map(payload)["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == "genie_action_current_secret"
 
 
 def test_payload_local_runtime_can_omit_durable_secrets(monkeypatch) -> None:
@@ -199,5 +206,5 @@ def test_payload_local_runtime_can_omit_durable_secrets(monkeypatch) -> None:
     )
 
     env = _env_map(payload)
-    assert "MIP_COTALITY_ID_MASK_SECRET" not in env
-    assert "MIP_GENIE_ACTION_SECRET_CURRENT" not in env
+    assert env["MIP_COTALITY_ID_MASK_SECRET"]["value_from"] == "cotality_id_mask_secret"
+    assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == "genie_action_current_secret"

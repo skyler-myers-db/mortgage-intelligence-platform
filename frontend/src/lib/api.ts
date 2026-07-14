@@ -1055,8 +1055,11 @@ export const api = {
     opts: LeadQueryOptions = {},
   ) => api.leadsPage(segment, signal, geo, opts).then((page) => page.leads),
 
-  borrower: (id: string, signal?: AbortSignal) =>
-    getJson<Borrower360>(`/api/borrowers/${id}`, signal),
+  borrower: (id: string, signal?: AbortSignal, fresh = false) =>
+    getJson<Borrower360>(
+      `/api/borrowers/${id}${fresh ? '?fresh=true' : ''}`,
+      signal,
+    ),
 
   borrowerProof: (id: string, signal?: AbortSignal) =>
     getJson<BorrowerProof>(`/api/borrowers/${id}/proof`, signal),

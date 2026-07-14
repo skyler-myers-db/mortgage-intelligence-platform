@@ -47,15 +47,14 @@ const preloadDrawerSources = createIdlePreloader(() => import('../../lib/drawerS
  * The DegradedBanner renders nothing while /api/health is ok (no layout
  * shift in the happy path) and auto-retries while any dependency is down.
  *
- * HealthProvider wraps the whole shell so Topbar, AgentActivityLog, and
- * DegradedBanner share a single `/api/health` poll instead of each
- * running its own setInterval. Round-2 hole-finder #21, 2026-04-23.
+ * HealthProvider wraps the whole shell so Topbar and DegradedBanner share a
+ * single `/api/health` poll instead of running independent timers.
  *
  * Accessibility:
  *   - First focusable: "Skip to main content" → `#main-content` (WCAG
- *     2.2 SC 2.4.1). Second: "Skip to workspace console" (unchanged).
- *     The skip targets both have `tabIndex={-1}` so the anchor jump
- *     actually moves focus instead of just scrolling.
+ *     2.2 SC 2.4.1). The workspace-console shortcut is emitted only while
+ *     that complementary landmark is visible. Both visible skip targets use
+ *     `tabIndex={-1}` so the anchor jump moves focus instead of only scrolling.
  *   - Rail is `<nav aria-label="Primary navigation">`; Topbar is a
  *     `<header>` landmark (implicit `banner` role + explicit for AT
  *     parity). `<main id="main-content">` is the primary content
@@ -155,19 +154,20 @@ function AppShellInner({ children }: PropsWithChildren) {
   return (
     <div className="app-shell">
       {/*
-        Skip-links. Keyboard users tab once to get "Skip to main content",
-        a second time for "Skip to workspace console". Visually hidden
-        until focused, per the standard a11y pattern in
-        frontend/src/design-system/components.css. Both targets carry
-        `tabIndex={-1}` so the anchor-jump actually shifts focus rather
-        than just scrolling the viewport.
+        Skip-links. Keyboard users first get "Skip to main content". The
+        workspace-console shortcut exists only while its destination is open.
+        Links are visually hidden until focused, per the standard pattern in
+        frontend/src/design-system/components.css; targets use tabIndex=-1 so
+        the anchor jump shifts focus rather than only scrolling.
       */}
       <a href="#main-content" className="sr-skip-link">
         Skip to main content
       </a>
-      <a href="#workspace-console" className="sr-skip-link">
-        Skip to workspace console
-      </a>
+      {consoleOpen && (
+        <a href="#workspace-console" className="sr-skip-link">
+          Skip to workspace console
+        </a>
+      )}
       <Rail />
       <Topbar />
       <CommandPalette />
@@ -184,6 +184,7 @@ function AppShellInner({ children }: PropsWithChildren) {
             role="complementary"
             aria-label="Workspace console"
             aria-hidden={!consoleOpen}
+            tabIndex={consoleOpen ? -1 : undefined}
           />
         )}
       >

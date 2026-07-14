@@ -145,9 +145,13 @@ def get_borrower(
     repo: RepoDep,
     audit: StoreDep,
     sales_state: SalesStateDep,
+    fresh: Annotated[
+        bool,
+        Query(description="Bypass the process cache while reconciling a gold refresh."),
+    ] = False,
 ) -> Borrower360:
     borrower_id = _path_borrower_id(borrower_id)
-    borrower = repo.get(borrower_id)
+    borrower = repo.get_fresh(borrower_id) if fresh else repo.get(borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
     actor = resolve_actor(request)

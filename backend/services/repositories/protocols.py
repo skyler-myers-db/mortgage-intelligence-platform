@@ -246,6 +246,10 @@ class BorrowerRepository(Protocol):
     def get(self, borrower_id: str) -> Borrower360 | None:
         ...
 
+    def get_fresh(self, borrower_id: str) -> Borrower360 | None:
+        """Read through the process cache for snapshot reconciliation."""
+        ...
+
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         ...
 
@@ -262,7 +266,8 @@ class BorrowerRepository(Protocol):
 class OfferRepository(Protocol):
     """Inputs for the offer-orchestrator recommendation.
 
-    Returns the boolean + numeric columns from ``gold.borrower_360``
+    Returns one atomic row from ``gold.borrower_dossier`` containing the
+    audit subject, evidence/confidence, and the boolean + numeric columns
     that feed ``fn_next_best_offer`` (rate_spread_bps, equity_pct,
     has_permit, listed_for_sale, is_investor, is_current_customer,
     is_competitor_lien) plus the precomputed ``offer_code`` and the five

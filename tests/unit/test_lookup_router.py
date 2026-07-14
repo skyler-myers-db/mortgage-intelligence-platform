@@ -10,6 +10,7 @@ dependency graph is left exactly as found.
 """
 from __future__ import annotations
 
+import json
 from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import Any
@@ -121,7 +122,7 @@ def test_property_loan_lookup_miss() -> None:
 
 
 def test_response_never_echoes_address_line() -> None:
-    """The submitted street string appears ZERO times in the response body."""
+    """The submitted street string never appears in user-facing response data."""
     sql = _FakeSqlClient(
         [("address_lookup", _address_row()), ("borrower_360", _borrower_row())]
     )
@@ -132,7 +133,25 @@ def test_response_never_echoes_address_line() -> None:
             json={"address_line": _RAW_ADDRESS, "zip5": _ZIP},
             headers={"X-Forwarded-Email": "skyler@entrada.ai"},
         )
-    raw_body = response.text
+    body = response.json()
+    assert "address_line" not in body
+    assert "zip5" not in body
+    # Opaque identifiers may coincidentally contain the same short digit run as
+    # a house number. Exclude those non-display tokens while keeping every loan
+    # fact and response label under the no-echo assertion.
+    display_body = {
+        key: value
+        for key, value in body.items()
+        if key
+        not in {
+            "audit_event_id",
+            "borrower_id",
+            "clip_ref",
+            "dossier_path",
+            "owner_link_ref",
+        }
+    }
+    raw_body = json.dumps(display_body, sort_keys=True)
     assert _RAW_ADDRESS not in raw_body
     assert "Evergreen" not in raw_body
     assert "742" not in raw_body

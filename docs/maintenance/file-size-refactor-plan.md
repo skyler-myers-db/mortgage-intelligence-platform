@@ -32,3 +32,20 @@ Before 2026-07-31:
 4. Keep the new Genie evaluation fixtures close to the split modules so every extracted path retains direct unit coverage.
 
 No file should receive another expiry extension without either a smaller-file split or a new dated schedule decision in this document.
+
+## 2026-07-13 capability and bootstrap addendum
+
+Two infrastructure modules crossed the 900-line boundary while the agentic
+capability proof ledger and idempotent Lakebase migration chain were being
+hardened: `backend/services/capabilities.py` and
+`backend/services/lakebase_bootstrap.py`. They are covered only through the
+existing 2026-07-31 deadline; this addendum does not extend that date.
+
+Before 2026-07-31:
+
+1. Split capability discovery, live workspace probes, and proof-ledger status
+   shaping into separate modules while retaining one public snapshot API.
+2. Split Lakebase migration SQL, migration-state predicates, and bootstrap
+   orchestration so advisory-lock and idempotency behavior remain independently
+   testable.
+3. Remove both allowlist entries when the extracted modules land.

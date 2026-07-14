@@ -21,6 +21,17 @@ _TEST_GATEWAY_SHA = "75ea6680b7f04bbaa6d0bbf38d7676218ae6c1cc"
 class _ReadyWorkspace:
     def __init__(self, *, ready: bool = True, task: str = "agent/v1/responses") -> None:
         self.serving_endpoints = _ReadyServingEndpoints(ready=ready, task=task)
+        self.api_client = _SupervisorMetadataApi()
+
+
+class _SupervisorMetadataApi:
+    def do(self, method: str, path: str) -> dict[str, str]:
+        assert method == "GET"
+        assert path == "/api/2.1/supervisor-agents/supervisor-1"
+        return {
+            "supervisor_agent_id": "supervisor-1",
+            "endpoint_name": "mip-supervisor-endpoint",
+        }
 
 
 class _ReadyServingEndpoints:

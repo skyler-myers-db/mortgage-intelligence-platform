@@ -56,6 +56,11 @@ def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> No
             if borrower_id != "B-48291":
                 return None
             return {
+                "clip_id": "CLIP-48291",
+                "borrower_id": "B-48291",
+                "confidence": 82,
+                "evidence_ids": ["E-48291-1"],
+                "source_refreshed_at": "2026-04-20T06:12:00Z",
                 "rate_spread_bps": 88,
                 "equity_pct": 39,
                 "has_permit": False,

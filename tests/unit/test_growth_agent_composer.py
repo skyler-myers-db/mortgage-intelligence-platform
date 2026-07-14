@@ -54,6 +54,12 @@ class _ApiClient:
         self._raise = raise_on_query
 
     def do(self, _method: str, _path: str, body: dict[str, Any] | None = None) -> Any:
+        if _method == "GET":
+            assert _path == "/api/2.1/supervisor-agents/supervisor-123"
+            return {
+                "supervisor_agent_id": "supervisor-123",
+                "endpoint_name": "mas-supervisor-endpoint",
+            }
         if self._raise:
             raise RuntimeError("serving endpoint unreachable")
         return self._body
@@ -216,7 +222,7 @@ def test_compose_degrades_when_endpoint_not_ready() -> None:
     client = _FakeServingClient(ready="NOT_READY", body=_responses_body("{}"))
     outcome = compose_growth_agent_plan(_request(), settings=_compose_settings(), serving_client=client)
     assert outcome.status == "degraded"
-    assert outcome.degraded_reason == "orchestrator_not_ready"
+    assert outcome.degraded_reason == "supervisor_endpoint_not_ready:NOT_READY"
 
 
 def test_compose_degrades_when_orchestrator_disabled() -> None:
@@ -300,6 +306,12 @@ class _SequentialApiClient:
         self.prompts: list[str] = []
 
     def do(self, _method: str, _path: str, body: dict[str, Any] | None = None) -> Any:
+        if _method == "GET":
+            assert _path == "/api/2.1/supervisor-agents/supervisor-123"
+            return {
+                "supervisor_agent_id": "supervisor-123",
+                "endpoint_name": "mas-supervisor-endpoint",
+            }
         messages = (body or {}).get("input") or []
         self.prompts.append(str((messages[0] if messages else {}).get("content", "")))
         return self._bodies.pop(0)

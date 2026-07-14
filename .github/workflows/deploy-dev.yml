@@ -81,11 +81,6 @@ jobs:
             echo "MIP_DEFAULT_CATALOG=mip"
             echo "MIP_DEFAULT_SCHEMA=gold"
             echo "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1"
-            echo "MIP_COTALITY_ID_MASK_SECRET=${MIP_COTALITY_ID_MASK_SECRET}"
-            echo "MIP_GENIE_ACTION_SECRET_CURRENT=${MIP_GENIE_ACTION_SECRET_CURRENT}"
-            if [ -n "${MIP_GENIE_ACTION_SECRET_PREVIOUS:-}" ]; then
-              echo "MIP_GENIE_ACTION_SECRET_PREVIOUS=${MIP_GENIE_ACTION_SECRET_PREVIOUS}"
-            fi
             if [ -n "${MIP_GENIE_ACTION_SECRET_KID:-}" ]; then
               echo "MIP_GENIE_ACTION_SECRET_KID=${MIP_GENIE_ACTION_SECRET_KID}"
             fi
@@ -132,6 +127,9 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           MIP_ADMIN_BEARER_TOKEN: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}
+          MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
+          MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}
+          MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}
         run: |
           set -euo pipefail
           args=(-t dev --no-confirm)

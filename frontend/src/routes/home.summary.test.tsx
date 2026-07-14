@@ -108,9 +108,6 @@ vi.mock('../components/mortgage/USChoroplethMap', () => ({
 vi.mock('../components/mortgage/PinnedInsights', () => ({
   PinnedInsights: () => <div data-testid="pinned-insights" />,
 }));
-vi.mock('../components/mortgage/AgentActivityLog', () => ({
-  AgentActivityLog: () => <div data-testid="agent-activity-log" />,
-}));
 vi.mock('../components/mortgage/PortfolioSummaryCard', () => ({
   PortfolioSummaryCard: () => <div data-testid="portfolio-summary-card" />,
 }));

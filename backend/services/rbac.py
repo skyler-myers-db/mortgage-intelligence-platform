@@ -151,16 +151,12 @@ AdminDep = Annotated[str, Depends(require_admin)]
 
 
 def require_approver(request: Request) -> str:
-    """Optional approver gate for human-decision endpoints (audit P2-5).
+    """Fail-closed approver gate for human-decision endpoints.
 
-    Module 0's demo contract: any authenticated workspace user may
-    approve / reject — attribution is always recorded via
-    ``resolve_actor`` and the booth flow must not depend on a
-    pre-provisioned approver roster. That permissive default is a
-    DOCUMENTED product decision, not an oversight.
-
-    Customers opt INTO enforcement by setting ``MIP_APPROVER_EMAILS``
-    (comma-separated). Once non-empty:
+    Local development keeps the low-friction authenticated-user posture when
+    no roster is configured. Every deployed environment fails closed: an empty
+    approver roster falls back to the admin gate instead of admitting every
+    authenticated workspace user. Once ``MIP_APPROVER_EMAILS`` is non-empty:
 
     * listed emails are admitted;
     * admins (``require_admin``: group or admin-email path) are admitted
@@ -173,7 +169,9 @@ def require_approver(request: Request) -> str:
     approver_emails = _parse_admin_emails(getattr(settings, "approver_emails", None))
     actor = resolve_actor(request)
     if not approver_emails:
-        return actor
+        if settings.app_env.strip().lower() in {"local", "test"}:
+            return actor
+        return require_admin(request)
     if actor and actor.lower() in approver_emails:
         return actor
     try:

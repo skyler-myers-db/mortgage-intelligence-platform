@@ -54,6 +54,12 @@ class AssetMetadataResponse(BaseModel):
     schema_name: str
     object_name: str
     uc_object: str
+    observed_in_unity_catalog: bool | None = None
+    observation_source: Literal[
+        "system.information_schema.tables",
+        "system.information_schema.routines",
+        "unavailable",
+    ] = "unavailable"
     generated_at: datetime
     last_updated: str | None = None
     delta_last_modified: str | None = None

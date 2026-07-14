@@ -56,6 +56,7 @@ class SourceLabel(BaseModel):
 
 class OfferRecommendation(BaseModel):
     borrower_id: str
+    source_refreshed_at: str | None = None
     offer_code: str
     offer_type: OfferType
     product_label: str

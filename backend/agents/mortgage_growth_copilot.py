@@ -27,6 +27,7 @@ from backend.services.growth_agent_workflows import (
     GrowthAgentWorkflowDef,
     planned_workflow,
 )
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 ExecutionMode = Literal["deterministic", "genie_conversation", "agent_framework"]
 TraceKind = Literal["local_hash", "genie_conversation", "agent_framework", "mlflow_trace"]
@@ -134,15 +135,13 @@ def _agent_framework_plan(
         return None
     if deterministic_workflow.id == CUSTOM_WORKFLOW_ID:
         return None
-    endpoint = (settings.mip_agent_serving_endpoint or "").strip()
-    supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
-    if not endpoint or not supervisor_id:
-        return None
     try:
         workspace_client = _workspace_client()
-        task = _agent_task_if_ready(workspace_client, endpoint)
-        if task is None:
+        runtime, _ = verify_supervisor_runtime(workspace_client, settings)
+        if runtime is None:
             return None
+        endpoint = runtime.endpoint
+        task = runtime.task
         gateway_client_request_id = _gateway_client_request_id(payload, settings=settings, endpoint=endpoint)
         response = query_serving_endpoint(
             workspace_client,

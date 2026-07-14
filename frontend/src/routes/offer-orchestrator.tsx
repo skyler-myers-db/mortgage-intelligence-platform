@@ -25,13 +25,8 @@ import {
   OfferReviewGrid,
   RejectRationalePanel,
 } from './offer-orchestrator.panels';
-
-/**
- * Offer Orchestrator — convert the borrower intelligence into a drafted
- * message (never auto-sent) that a human approves before Lakeflow posts to
- * marketing. Approval state flows into AppContext so the Lead Queue chip and
- * audit log stay in sync.
- */
+import { offerSnapshotMatches } from './offer-orchestrator.snapshot';
+import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 
 export function resolveOfferApprovalStatus(
   local: ApprovalStatus | undefined,
@@ -57,6 +52,7 @@ export default function OfferOrchestrator() {
   // 503 retry loop and the UI should show "Warehouse warming up
   // (attempt N of 6)…" instead of the red error banner.
   const [warmingUp, setWarmingUp] = useState<WarmingUpState | null>(null);
+  const [snapshotReconciling, setSnapshotReconciling] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
   const [approvalId, setApprovalId] = useState<string | null>(null);
@@ -167,7 +163,11 @@ export default function OfferOrchestrator() {
     // from it immediately so navigating back to a borrower is instant.
     // We still refetch in the background so the data stays live.
     const cached = readBorrowerCache(id);
-    if (cached && reloadToken === 0) {
+    if (
+      cached
+      && reloadToken === 0
+      && offerSnapshotMatches(cached.borrower, cached.recommendation)
+    ) {
       const cachedDraftBody =
         savedDraftBody && savedDraftBody.trim().length > 0
           ? savedDraftBody
@@ -226,13 +226,26 @@ export default function OfferOrchestrator() {
       if (cancelled) return;
       try {
         const [borrower, recommendation, loadedLifecycle] = await Promise.all([
-          api.borrower(id, ctrl.signal),
+          api.borrower(id, ctrl.signal, attempt > 1),
           api.recommendOffer(id, ctrl.signal),
           api.borrowerLifecycle(id, ctrl.signal).catch(() => null),
         ]);
         if (cancelled) return;
+        if (!offerSnapshotMatches(borrower, recommendation)) {
+          if (attempt < MAX_ATTEMPTS) {
+            setSnapshotReconciling(true);
+            timeoutId = setTimeout(() => {
+              void runAttempt(attempt + 1);
+            }, 750);
+            return;
+          }
+          throw new Error(
+            'The borrower and offer snapshots changed while loading. Retry after the data refresh completes.',
+          );
+        }
         setB(borrower);
         setRec(recommendation);
+        setSnapshotReconciling(false);
         setLifecycle(loadedLifecycle);
         if (loadedLifecycle?.approval_id) {
           setApprovalId(loadedLifecycle.approval_id);
@@ -251,6 +264,7 @@ export default function OfferOrchestrator() {
         });
       } catch (err: unknown) {
         if (cancelled || isAbortError(err)) return;
+        setSnapshotReconciling(false);
         if (isWarmingUpError(err) && attempt < MAX_ATTEMPTS) {
           setWarmingUp({
             dependency: err.dependency,
@@ -504,7 +518,7 @@ export default function OfferOrchestrator() {
   };
 
   const onApprove = async () => {
-    if (approving) return;
+    if (approving || snapshotReconciling) return;
     setApproveError(null);
     if (!draftReady) {
       setApproveError('Approval is disabled until the audited outreach draft loads from the backend.');
@@ -554,7 +568,7 @@ export default function OfferOrchestrator() {
   };
 
   const onReject = async () => {
-    if (approving) return;
+    if (approving || snapshotReconciling) return;
     if (!rejectReviewOpen) {
       setRejectReviewOpen(true);
       return;
@@ -648,6 +662,10 @@ export default function OfferOrchestrator() {
     );
   }
 
+  if (snapshotReconciling && !b) {
+    return <OfferSnapshotReconciliation borrowerId={id} />;
+  }
+
   return (
     <PageShell
       eyebrow="Offer & Outreach"
@@ -666,7 +684,7 @@ export default function OfferOrchestrator() {
               size="sm"
               icon="check"
               onClick={() => void onApprove()}
-              disabled={!rec || !draftReady || effectiveApproval === 'approved'}
+              disabled={snapshotReconciling || !rec || !draftReady || effectiveApproval === 'approved'}
               aria-label={
                 effectiveApproval === 'approved'
                   ? `Borrower ${b.borrower_id} already approved`
@@ -691,6 +709,9 @@ export default function OfferOrchestrator() {
         )
       }
     >
+      {snapshotReconciling && (
+        <OfferSnapshotReconciliation borrowerId={id} inline />
+      )}
       {borrowerPreviewOpen && b && (
         <BorrowerOfferPreviewMock borrower={b} onClose={() => setBorrowerPreviewOpen(false)} />
       )}
@@ -815,8 +836,8 @@ export default function OfferOrchestrator() {
               text={`${b ? `Borrower ${b.borrower_id}` : 'Borrower'} pending review. Approve writes an audit event and places the decision in the governed internal queue.`}
               onApprove={() => void onApprove()}
               onReject={() => void onReject()}
-              approveDisabled={!draftReady}
-              isSubmitting={approving}
+              approveDisabled={snapshotReconciling || !draftReady}
+              isSubmitting={approving || snapshotReconciling}
             />
           </div>
         </>

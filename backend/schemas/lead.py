@@ -210,6 +210,7 @@ class LeadSummary(BaseModel):
 
 
 class Borrower360(LeadSummary):
+    source_refreshed_at: str | None = None
     clip_id: str
     owner_link_id: str
     subject_property: str

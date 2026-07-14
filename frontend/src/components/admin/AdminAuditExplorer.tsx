@@ -321,7 +321,7 @@ function auditEventDetailId(eventId: string): string {
 
 function auditRecordQuery(eventId: string): string {
   const escaped = eventId.replace(/'/g, "''");
-  return `SELECT * FROM ${AUDIT_TABLE_CONTEXT} WHERE event_id = '${escaped}';`;
+  return `SELECT * FROM ${AUDIT_TABLE_CONTEXT} WHERE audit_id = '${escaped}';`;
 }
 
 function formatAuditMetadataValue(value: unknown): string {

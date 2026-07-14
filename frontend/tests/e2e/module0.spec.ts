@@ -115,7 +115,7 @@ test.describe('Module 0 — golden path', () => {
     });
   });
 
-  test('home: hero + four KPIs + map + agent log', async ({ page }) => {
+  test('home: hero + four KPIs + full-width geography without admin audit data', async ({ page }) => {
     await page.goto('/');
 
     await expect(page).toHaveTitle(/Mortgage Intelligence Platform/);
@@ -132,7 +132,7 @@ test.describe('Module 0 — golden path', () => {
     // drill (Chicago/Cook County). State topology ships aria-labels for every
     // state; picking IL aligns the test with the product narrative.
     await expect(page.locator('[aria-label="Illinois"]').first()).toBeVisible({ timeout: 5_000 });
-    await expect(page.locator('.surface', { hasText: /agent|activity/i }).first()).toBeVisible();
+    await expect(page.getByText('Agent action audit log', { exact: true })).toHaveCount(0);
 
     expect(consoleErrors, `unexpected console errors: ${consoleErrors.join(' | ')}`).toEqual([]);
   });

@@ -168,7 +168,11 @@ def run_due_growth_agent_monitors(
     try:
         rows = lakebase.fetchall(
             _DUE_MONITOR_LIST_SQL,
-            {"actor_email": actor, "limit": payload.limit},
+            {
+                "actor_email": actor,
+                "limit": payload.limit,
+                "channels": list(payload.channels),
+            },
             limit=payload.limit,
         )
     except LakebaseError as exc:
@@ -214,7 +218,7 @@ def run_due_growth_agent_monitors_all_actors(
     try:
         rows = lakebase.fetchall(
             _DUE_MONITOR_LIST_ALL_SQL,
-            {"limit": payload.limit},
+            {"limit": payload.limit, "channels": list(payload.channels)},
             limit=payload.limit,
         )
     except LakebaseError as exc:

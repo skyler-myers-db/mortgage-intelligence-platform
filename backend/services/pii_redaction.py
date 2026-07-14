@@ -640,6 +640,7 @@ def redact_borrower_row(row: dict[str, Any]) -> dict[str, Any]:
         ),
         "eligibility_source": _eligibility_source(row.get("eligibility_source")),
         "current_lender_ref": _public_lender_ref(row.get("current_lender_ref")),
+        "source_refreshed_at": _optional_str(row.get("refreshed_at")),
     }
     _enforce_no_forbidden_keys(output)
     return output

@@ -24,7 +24,6 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from backend.agents.mortgage_growth_copilot import (
-    agent_task_if_ready,
     extract_response_text,
     parse_json_object,
     prompt_hash,
@@ -51,6 +50,7 @@ from backend.services.capability_serving_probes import (
     serving_response_has_payload,
 )
 from backend.services.pii_redaction import scrub_free_text
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 ComposeStatus = Literal["composed", "degraded", "invalid"]
 
@@ -95,20 +95,18 @@ def compose_growth_agent_plan(
     """Compose and validate a plan, or degrade/invalidate honestly."""
 
     settings = settings or get_settings()
-    endpoint, reason = composition_endpoint(settings)
-    if endpoint is None:
-        return _degraded(reason or "orchestrator_unavailable")
-
     client = serving_client
-    task: str | None = None
     try:
         if client is None:
             client = make_workspace_client()
-        task = agent_task_if_ready(client, endpoint)
     except Exception:  # noqa: BLE001 - host flakiness must degrade, not crash
-        return _degraded("orchestrator_probe_failed", endpoint=endpoint)
-    if task is None:
-        return _degraded("orchestrator_not_ready", endpoint=endpoint)
+        return _degraded("orchestrator_client_failed")
+    runtime, reason = verify_supervisor_runtime(client, settings)
+    if runtime is None:
+        endpoint = (settings.mip_agent_serving_endpoint or "").strip() or None
+        return _degraded(reason or "orchestrator_unavailable", endpoint=endpoint)
+    endpoint = runtime.endpoint
+    task = runtime.task
 
     # One bounded repair turn, mirroring the Genie SQL-repair precedent: a
     # first invalid plan (hallucinated params, unknown tool, bad shape) is fed

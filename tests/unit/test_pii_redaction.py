@@ -420,13 +420,17 @@ def test_redact_evidence_row_passthrough_for_non_lender_signals() -> None:
 
 @pytest.fixture(autouse=True)
 def _isolate_resolver_singleton() -> None:
-    """Ensure each test starts with no process-wide resolver cached.
+    """Give every unit test an isolated, no-network process resolver.
 
     `generalize_lender` lazily constructs a singleton; tests that stub a
     new resolver must be able to install it without leaking state between
-    cases.
+    cases. Installing an explicit fallback resolver also prevents this unit
+    module from discovering local Databricks credentials and opening a real
+    warehouse connection while exercising otherwise-pure redaction helpers.
     """
-    _reset_lender_resolver_for_tests(None)
+    resolver = LenderRefResolver(ttl_s=60.0)
+    resolver._load_from_uc = lambda: None  # type: ignore[method-assign]
+    _reset_lender_resolver_for_tests(resolver)
     yield
     _reset_lender_resolver_for_tests(None)
 

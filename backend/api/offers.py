@@ -19,16 +19,13 @@ from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.repositories import (
-    BorrowerRepository,
     OfferRepository,
-    get_borrower_repository,
     get_offer_repository,
 )
 from backend.services.scoring import NBO_PRODUCT_LABELS, offer_display_label, source_display_label
 
 router = APIRouter(prefix="/offers", tags=["offers"])
 
-BorrowerRepoDep = Annotated[BorrowerRepository, Depends(get_borrower_repository)]
 OfferRepoDep = Annotated[OfferRepository, Depends(get_offer_repository)]
 AuditStoreDep = Annotated[AuditStore, Depends(get_audit_store)]
 
@@ -251,16 +248,14 @@ def _alternatives_for(
 def recommend_offer(
     payload: OfferRecommendRequest,
     request: Request,
-    borrower_repo: BorrowerRepoDep,
     offer_repo: OfferRepoDep,
     audit: AuditStoreDep,
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> OfferRecommendation:
-    borrower = borrower_repo.get(payload.borrower_id)
-    if borrower is None:
-        raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
-
-    inputs = offer_repo.get_offer_inputs(borrower.borrower_id)
+    # One dossier-row statement supplies the recommendation, evidence,
+    # confidence, and audit subject. Reading BorrowerRepository separately can
+    # combine a cached dossier generation with newer offer inputs.
+    inputs = offer_repo.get_offer_inputs(payload.borrower_id)
     if inputs is None:
         # Defense in depth: every borrower in the population has offer inputs.
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -283,16 +278,17 @@ def recommend_offer(
             actor=resolve_actor(request),
             action="recommend_offer",
             entity_type="borrower",
-            entity_id=borrower.borrower_id,
+            entity_id=payload.borrower_id,
             payload_json={
                 "offer_code": code,
-                "confidence": borrower.confidence,
+                "confidence": cast(int, inputs["confidence"]),
                 "thresholds_applied": thresholds_applied,
                 "decision_inputs": decision_inputs,
+                "source_refreshed_at": inputs.get("source_refreshed_at"),
             },
-            evidence_ids=list(borrower.evidence_ids),
+            evidence_ids=list(cast(list[str], inputs["evidence_ids"])),
             event_type="RECOMMEND_OFFER",
-            subject_clip=borrower.clip_id,
+            subject_clip=cast(str, inputs["clip_id"]),
         )
     except LakebaseError as exc:
         raise HTTPException(
@@ -307,11 +303,12 @@ def recommend_offer(
     ]
 
     return OfferRecommendation(
-        borrower_id=borrower.borrower_id,
+        borrower_id=payload.borrower_id,
+        source_refreshed_at=cast(str | None, inputs.get("source_refreshed_at")),
         offer_code=code,
         offer_type=cast(OfferType, code),
         product_label=offer_display_label(code, NBO_PRODUCT_LABELS[code]),
-        confidence=borrower.confidence,
+        confidence=cast(int, inputs["confidence"]),
         rationale=_rationale_for(
             code,
             spread=cast(int, inputs["rate_spread_bps"]),
@@ -330,7 +327,7 @@ def recommend_offer(
             cashout_min=thresholds_applied["cashout_equity_min_pct"],
             retention_min=thresholds_applied["retention_min_spread_bps"],
         ),
-        evidence_ids=borrower.evidence_ids,
+        evidence_ids=cast(list[str], inputs["evidence_ids"]),
         sources=sources,
         source_labels=source_labels,
         alternatives=_alternatives_for(

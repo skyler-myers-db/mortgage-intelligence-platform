@@ -159,6 +159,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         # Borrower 360 view
         "opportunity_score",
         "confidence",
+        "source_refreshed_at",
         "segment_codes",
         "recommended_offer",
         "workspace_offer_code",

@@ -156,6 +156,7 @@ class _FakeLakebaseClient:
             now = datetime.now(UTC)
             due: list[dict[str, Any]] = []
             actor_filter = (params or {}).get("actor_email")
+            requested_channels = tuple((params or {}).get("channels") or ())
             for row in self.monitors:
                 updated_at = row.get("updated_at")
                 if (
@@ -165,7 +166,18 @@ class _FakeLakebaseClient:
                 ):
                     continue
                 cadence_days = 7 if row.get("cadence") == "weekly" else 1
-                if updated_at <= now - timedelta(days=cadence_days):
+                cadence_due = updated_at <= now - timedelta(days=cadence_days)
+                last_run_id = row.get("last_run_id")
+                missing_requested_draft = bool(last_run_id) and any(
+                    not any(
+                        str(draft.get("monitor_id")) == str(row.get("monitor_id"))
+                        and str(draft.get("run_id")) == str(last_run_id)
+                        and draft.get("channel") == channel
+                        for draft in self.notification_drafts
+                    )
+                    for channel in requested_channels
+                )
+                if cadence_due or missing_requested_draft:
                     due.append(dict(row))
             return due[:limit]
         return [dict(row) for row in self.monitors[:limit]]
@@ -1032,16 +1044,16 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
     assert drafts_by_channel["slack"]["title"] == "IL Refi Watch: 5,394 eligible"
     assert drafts_by_channel["slack"]["body"] == (
         "5,394 eligible borrowers in IL Refi Watch. "
-        "The saved watchlist has refreshed and is ready for review. Review: "
+        "The refinance-economics queue refreshed for loan-officer triage. Review: "
         "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
     )
     assert drafts_by_channel["teams"]["title"] == "Operations brief: IL Refi Watch"
     assert drafts_by_channel["teams"]["body"].splitlines() == [
         "Operations brief",
         "Watchlist: IL Refi Watch",
-        "Summary: The saved watchlist refresh completed with a new eligible population.",
+        "Summary: The refinance watchlist is ready for rate-spread prioritization and ownership review.",
         "Eligible population: 5,394 borrowers",
-        "Operator action: Review the ranked queue and confirm the next operating step.",
+        "Operator action: Review the strongest refinance economics and assign the next owner.",
         "MIP route: /lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL",
     ]
     assert drafts_by_channel["slack"]["body"] != drafts_by_channel["teams"]["body"]
@@ -1063,6 +1075,72 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
     ]
     assert len(draft_audits) == 2
     assert all("body" not in json.loads(event["metadata"]) for event in draft_audits)
+
+
+def test_growth_agent_fresh_monitor_is_due_only_for_missing_requested_channel() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    monitor_id = uuid4()
+    last_run_id = uuid4()
+    lakebase.monitors.append(
+        {
+            "monitor_id": monitor_id,
+            "actor_email": "operator@example.com",
+            "workflow_id": "daily_refi_brief",
+            "name": "IL Refi Watch",
+            "cadence": "daily",
+            "status": "active",
+            "criteria": {
+                "states": ["IL"],
+                "lead_queue_filters": {
+                    "segment_codes": ["itm"],
+                    "segment_mode": "any",
+                    "states": ["IL"],
+                    "portfolio_criteria": {
+                        "marketing_eligibility": "Eligible only",
+                        "states": ["IL"],
+                    },
+                },
+                "marketing_eligibility": "Eligible only",
+                "workflow_id": "daily_refi_brief",
+            },
+            "route": "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL",
+            "actionable_total": 1,
+            "source_assets": ["mip.gold.borrower_360"],
+            "last_run_id": last_run_id,
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
+        }
+    )
+    client = _client(sql, lakebase)
+    headers = {"X-Forwarded-Email": "operator@example.com"}
+    try:
+        first = client.post(
+            "/api/growth-agent/monitors/run-due",
+            json={"channels": ["slack"]},
+            headers=headers,
+        )
+        second = client.post(
+            "/api/growth-agent/monitors/run-due",
+            json={"channels": ["slack"]},
+            headers=headers,
+        )
+        third = client.post(
+            "/api/growth-agent/monitors/run-due",
+            json={"channels": ["teams"]},
+            headers=headers,
+        )
+    finally:
+        _clear_overrides()
+
+    assert first.status_code == 200, first.text
+    assert first.json()["due_count"] == 1
+    assert {draft["channel"] for draft in first.json()["drafts"]} == {"slack"}
+    assert second.status_code == 200, second.text
+    assert second.json()["due_count"] == 0
+    assert third.status_code == 200, third.text
+    assert third.json()["due_count"] == 1
+    assert {draft["channel"] for draft in third.json()["drafts"]} == {"teams"}
 
 
 def test_growth_agent_due_monitor_all_actor_runner_requires_admin(
@@ -1329,7 +1407,7 @@ def test_growth_agent_monitor_notification_drafts_are_draft_only() -> None:
     assert draft["title"] == "Listed-for-Sale Purchase Watch: 4,349 eligible"
     assert draft["body"] == (
         "4,349 eligible borrowers in Listed-for-Sale Purchase Watch. "
-        "The saved watchlist has refreshed and is ready for review. Review: "
+        "The listed-property purchase watch refreshed for loan-officer review. Review: "
         "/lead-queue?segment=listed&marketing_eligibility=Eligible+only"
     )
     assert draft["generation_mode"] == "governed_fallback"

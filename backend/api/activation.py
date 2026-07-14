@@ -18,7 +18,7 @@ from backend.services.activation_state import (
     ActivationStateStore,
     get_activation_state_store,
 )
-from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
+from backend.services.audit_store import AuditStore, get_audit_store
 from backend.services.eligibility import (
     get_eligibility_service,
     safe_write_suppression_audit,
@@ -27,6 +27,7 @@ from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.observability import emit
+from backend.services.rbac import ApproverDep
 from backend.services.repositories import (
     BorrowerRepository,
     get_borrower_repository,
@@ -60,7 +61,9 @@ def _assert_activation_eligible(
     suppression before rejecting the stage request.
     """
     if lifecycle.get("approval_status") != "approved":
-        raise HTTPException(status_code=409, detail="lead must be approved before activation staging")
+        raise HTTPException(
+            status_code=409, detail="lead must be approved before activation staging"
+        )
     decision = get_eligibility_service().evaluate(borrower)
     if decision.eligible:
         return
@@ -143,6 +146,7 @@ def stage_activation(
     repo: BorrowerRepoDep,
     sales_state: SalesStateDep,
     audit: AuditDep,
+    actor: ApproverDep,
 ) -> ActivationStageResponse:
     """Stage an approved borrower for a governed customer destination.
 
@@ -151,7 +155,6 @@ def stage_activation(
     MIP after customer connector setup.
     """
 
-    actor = resolve_actor(request)
     borrower = repo.get(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -173,13 +176,18 @@ def stage_activation(
         )
         lifecycle_approval_id = str(lifecycle.get("approval_id") or "")
         if lifecycle_approval_id != payload.approval_id:
-            raise HTTPException(status_code=409, detail="approval_id is not the current approved decision for this borrower")
+            raise HTTPException(
+                status_code=409,
+                detail="approval_id is not the current approved decision for this borrower",
+            )
         approved_decision = store.approved_decision_for(
             approval_id=payload.approval_id,
             borrower_id=payload.borrower_id,
         )
         if approved_decision is None:
-            raise HTTPException(status_code=409, detail="approval_id is not an approved decision for this borrower")
+            raise HTTPException(
+                status_code=409, detail="approval_id is not an approved decision for this borrower"
+            )
         result = store.stage_borrower(
             borrower=borrower,
             destination=destination,

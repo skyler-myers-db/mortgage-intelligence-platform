@@ -156,6 +156,24 @@ targets:
               job:
                 id: ${resources.jobs.mip_refresh_scores.id}
                 permission: CAN_MANAGE_RUN
+            - name: cotality_id_mask_secret
+              description: "Deployment-scoped Cotality identifier-mask HMAC key."
+              secret:
+                scope: ${var.runtime_secret_scope}
+                key: cotality-id-mask-v1
+                permission: READ
+            - name: genie_action_current_secret
+              description: "Current HMAC key for governed Genie and campaign actions."
+              secret:
+                scope: ${var.runtime_secret_scope}
+                key: genie-action-current
+                permission: READ
+            - name: genie_action_previous_secret
+              description: "Previous HMAC key retained for bounded token rotation."
+              secret:
+                scope: ${var.runtime_secret_scope}
+                key: genie-action-previous
+                permission: READ
             - name: otel_headers
               description: "Customer-owned OTLP collector header secret for durable log export."
               secret:
@@ -257,6 +275,24 @@ resources:
           job:
             id: ${resources.jobs.mip_refresh_scores.id}
             permission: CAN_MANAGE_RUN
+        - name: cotality_id_mask_secret
+          description: "Deployment-scoped Cotality identifier-mask HMAC key."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: cotality-id-mask-v1
+            permission: READ
+        - name: genie_action_current_secret
+          description: "Current HMAC key for governed Genie and campaign actions."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: genie-action-current
+            permission: READ
+        - name: genie_action_previous_secret
+          description: "Previous HMAC key retained for bounded token rotation."
+          secret:
+            scope: ${var.runtime_secret_scope}
+            key: genie-action-previous
+            permission: READ
 
   sql_warehouses:
     mip_serverless_sql:
@@ -1149,6 +1185,12 @@ variables:
   lakebase_database_name:
     description: Lakebase Postgres database name backing Module 0 app state
     default: mip_app_state
+  runtime_secret_scope:
+    description: >-
+      Databricks Secret scope containing deployment-scoped masking and
+      governed-action HMAC keys. scripts/deploy.sh provisions these keys
+      before bundle validation; app payloads contain only resource refs.
+    default: mip-runtime
   otel_headers_secret_scope:
     description: >-
       Databricks Secret scope containing MIP_OTEL_HEADERS for the prod_otlp

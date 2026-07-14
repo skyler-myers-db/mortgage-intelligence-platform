@@ -78,28 +78,11 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_LAKEBASE_SYNC_TABLES",
 )
 
-SECRET_OPERATOR_VARS = (
-    "MIP_COTALITY_ID_MASK_SECRET",
-    "MIP_GENIE_ACTION_SECRET_CURRENT",
-    "MIP_GENIE_ACTION_SECRET_PREVIOUS",
-)
-
-PLACEHOLDER_SECRET_VALUES = {
-    "redacted",
-    "changeme",
-    "change-me",
-    "change_me",
-    "placeholder",
-    "example",
-    "your-secret",
-    "your_secret",
-    "mip-cotality-id-mask-v1",
+SECRET_RESOURCE_BINDINGS = {
+    "MIP_COTALITY_ID_MASK_SECRET": "cotality_id_mask_secret",
+    "MIP_GENIE_ACTION_SECRET_CURRENT": "genie_action_current_secret",
+    "MIP_GENIE_ACTION_SECRET_PREVIOUS": "genie_action_previous_secret",
 }
-LOCAL_TEST_APP_ENVS = frozenset({"local", "test"})
-REQUIRED_DURABLE_SECRETS = (
-    "MIP_COTALITY_ID_MASK_SECRET",
-    "MIP_GENIE_ACTION_SECRET_CURRENT",
-)
 
 
 def _dotenv_overlay() -> dict[str, str]:
@@ -120,16 +103,6 @@ def _append_value(env_vars: list[dict[str, str]], name: str, value: str) -> None
         env_vars.append({"name": name, "value": value})
 
 
-def _secret_value(key: str, dotenv: dict[str, str]) -> str:
-    value = _env_value(key, dotenv)
-    normalized = value.lower()
-    if normalized in PLACEHOLDER_SECRET_VALUES:
-        return ""
-    if normalized.startswith("<") and normalized.endswith(">"):
-        return ""
-    return value
-
-
 def build_payload(
     *,
     source_code_path: str,
@@ -141,14 +114,6 @@ def build_payload(
     mode: str = "SNAPSHOT",
 ) -> dict[str, object]:
     dotenv = _dotenv_overlay()
-    secret_values = {name: _secret_value(name, dotenv) for name in SECRET_OPERATOR_VARS}
-    if app_env.strip().lower() not in LOCAL_TEST_APP_ENVS:
-        missing = [name for name in REQUIRED_DURABLE_SECRETS if not secret_values[name]]
-        if missing:
-            raise ValueError(
-                f"{', '.join(missing)} required for APP_ENV={app_env}; "
-                "deployed runtimes must use durable operator-supplied secrets"
-            )
     env_vars: list[dict[str, str]] = [
         {"name": "APP_ENV", "value": app_env},
         {"name": "DATABRICKS_WAREHOUSE_ID", "value_from": "sql_warehouse"},
@@ -159,6 +124,10 @@ def build_payload(
         {"name": "MIP_FRED_RATES_JOB_ID", "value_from": "fred_rates_job"},
         {"name": "MIP_SILVER_REFRESH_JOB_ID", "value_from": "silver_refresh_job"},
         {"name": "MIP_GOLD_REFRESH_JOB_ID", "value_from": "gold_refresh_job"},
+        *(
+            {"name": name, "value_from": resource}
+            for name, resource in SECRET_RESOURCE_BINDINGS.items()
+        ),
         {"name": "MIP_DEFAULT_CATALOG", "value": catalog},
         {"name": "MIP_DEFAULT_SCHEMA", "value": schema},
     ]
@@ -169,9 +138,6 @@ def build_payload(
             name,
             _env_value(name, dotenv) or SAFE_RUNTIME_DEFAULTS.get(name, ""),
         )
-    for name in SECRET_OPERATOR_VARS:
-        _append_value(env_vars, name, secret_values[name])
-
     return {
         "source_code_path": source_code_path,
         "mode": mode,

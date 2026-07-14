@@ -16,7 +16,6 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from backend.agents.mortgage_growth_copilot import (
-    agent_task_if_ready,
     extract_response_text,
     parse_json_object,
     prompt_hash,
@@ -28,7 +27,6 @@ from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
 )
-from backend.services.growth_agent_composer import composition_endpoint
 from backend.services.outreach_copy import (
     _TRIGGER_TERM_RE,
     _borrower_offer_phrase,
@@ -36,6 +34,7 @@ from backend.services.outreach_copy import (
     _personalization_hook,
     _safe_offer_code,
 )
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 OutreachGenerationMode = Literal["supervisor", "governed_fallback"]
 
@@ -180,18 +179,8 @@ def compose_intelligent_outreach(
             warning="SMS uses the reviewed 160-character framework.",
         )
 
-    endpoint, reason = composition_endpoint(settings)
-    if endpoint is None:
-        return _fallback(
-            borrower=borrower,
-            channel=channel,
-            disclosure=disclosure,
-            warning=f"Supervisor unavailable ({reason or 'not configured'}).",
-        )
-
     try:
         client = serving_client or workspace_client()
-        task = agent_task_if_ready(client, endpoint)
     except Exception:  # noqa: BLE001 - model failure must not break review
         return _fallback(
             borrower=borrower,
@@ -199,13 +188,16 @@ def compose_intelligent_outreach(
             disclosure=disclosure,
             warning="Supervisor readiness check failed.",
         )
-    if task is None:
+    runtime, reason = verify_supervisor_runtime(client, settings)
+    if runtime is None:
         return _fallback(
             borrower=borrower,
             channel=channel,
             disclosure=disclosure,
-            warning="Supervisor is not ready.",
+            warning=f"Supervisor unavailable ({reason or 'not configured'}).",
         )
+    endpoint = runtime.endpoint
+    task = runtime.task
 
     repair_note: str | None = None
     lender_name = (settings.mip_lender_name or "configured lender").strip() or "configured lender"

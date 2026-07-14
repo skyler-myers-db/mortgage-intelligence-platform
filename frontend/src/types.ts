@@ -356,6 +356,7 @@ export interface WhyPanel {
 }
 
 export interface Borrower360 extends LeadSummary {
+  source_refreshed_at?: string | null;
   clip_id: string;
   owner_link_id: string;
   subject_property: string;
@@ -539,6 +540,7 @@ export interface OfferAlternative {
 
 export interface OfferRecommendation {
   borrower_id: string;
+  source_refreshed_at?: string | null;
   offer_code: string;
   offer_type: string;
   product_label: string;
@@ -672,6 +674,11 @@ export interface AssetMetadataResponse {
   schema_name: string;
   object_name: string;
   uc_object: string;
+  observed_in_unity_catalog?: boolean | null;
+  observation_source?:
+    | 'system.information_schema.tables'
+    | 'system.information_schema.routines'
+    | 'unavailable';
   generated_at: string;
   last_updated?: string | null;
   delta_last_modified?: string | null;

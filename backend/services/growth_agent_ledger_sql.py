@@ -114,14 +114,26 @@ LIMIT 1
 DUE_MONITOR_LIST_SQL = """
 SELECT monitor_id, workflow_id, name, cadence, status, criteria, route,
        actionable_total, source_assets, last_run_id, created_at, updated_at
-FROM mip_app.growth_agent_monitors
-WHERE actor_email = %(actor_email)s
+FROM mip_app.growth_agent_monitors AS m
+WHERE m.actor_email = %(actor_email)s
   AND status = 'active'
   AND (
     updated_at <= now() - CASE
       WHEN cadence = 'weekly' THEN INTERVAL '7 days'
       ELSE INTERVAL '1 day'
     END
+    OR EXISTS (
+      SELECT 1
+      FROM unnest(%(channels)s::text[]) AS requested(channel)
+      WHERE m.last_run_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM mip_app.growth_agent_notification_drafts AS d
+          WHERE d.monitor_id = m.monitor_id
+            AND d.run_id = m.last_run_id
+            AND d.channel = requested.channel
+        )
+    )
   )
 ORDER BY updated_at ASC
 LIMIT %(limit)s
@@ -130,13 +142,25 @@ LIMIT %(limit)s
 DUE_MONITOR_LIST_ALL_SQL = """
 SELECT actor_email, monitor_id, workflow_id, name, cadence, status, criteria, route,
        actionable_total, source_assets, last_run_id, created_at, updated_at
-FROM mip_app.growth_agent_monitors
-WHERE status = 'active'
+FROM mip_app.growth_agent_monitors AS m
+WHERE m.status = 'active'
   AND (
     updated_at <= now() - CASE
       WHEN cadence = 'weekly' THEN INTERVAL '7 days'
       ELSE INTERVAL '1 day'
     END
+    OR EXISTS (
+      SELECT 1
+      FROM unnest(%(channels)s::text[]) AS requested(channel)
+      WHERE m.last_run_id IS NOT NULL
+        AND NOT EXISTS (
+          SELECT 1
+          FROM mip_app.growth_agent_notification_drafts AS d
+          WHERE d.monitor_id = m.monitor_id
+            AND d.run_id = m.last_run_id
+            AND d.channel = requested.channel
+        )
+    )
   )
 ORDER BY actor_email ASC, updated_at ASC
 LIMIT %(limit)s

@@ -91,6 +91,7 @@ const BORROWER_ID = 'B-0000000000001';
 
 const BORROWER = {
   borrower_id: BORROWER_ID,
+  source_refreshed_at: '2026-07-13T12:00:00Z',
   display_name: 'Owner 1',
   city: 'Chicago',
   state: 'IL',
@@ -130,6 +131,7 @@ const BORROWER = {
 
 const RECOMMENDATION: OfferRecommendation = {
   borrower_id: BORROWER_ID,
+  source_refreshed_at: '2026-07-13T12:00:00Z',
   offer_code: 'rate_term_refi',
   offer_type: 'refi',
   product_label: 'Rate and term refinance review',
@@ -450,6 +452,21 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => container.textContent?.includes('Review and approve outreach') === true);
     expect(apiMocks.borrower).toHaveBeenCalledTimes(2);
   });
+
+  it('refuses to combine borrower and offer data from different refresh snapshots', async () => {
+    apiMocks.recommendOffer.mockResolvedValue({
+      ...RECOMMENDATION,
+      source_refreshed_at: '2026-07-13T12:05:00Z',
+    });
+    mount();
+
+    await waitUntil(() => apiMocks.recommendOffer.mock.calls.length === 6, 10_000);
+    await waitUntil(() => container.textContent?.includes(
+      'The borrower and offer snapshots changed while loading',
+    ) === true);
+    expect(apiMocks.borrower.mock.calls.slice(1).every((call) => call[2] === true)).toBe(true);
+    expect(container.textContent).not.toContain('Review and approve outreach');
+  }, 12_000);
 
   it('retries a terminal draft failure without losing the route', async () => {
     apiMocks.draftOutreach

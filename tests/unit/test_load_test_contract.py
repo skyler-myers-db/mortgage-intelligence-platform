@@ -242,6 +242,22 @@ def test_borrower_dossier_repository_serves_cached_copies_without_warehouse_call
     assert second.segment_codes == ["itm"]
 
 
+def test_borrower_fresh_read_invalidates_cached_dossier() -> None:
+    class _Client:
+        pass
+
+    cache = TTLCache()
+    cache.set("borrower_dossier:B-CACHED", object(), ttl_s=60)
+    repo = DatabricksBorrowerRepository(
+        _Client(),  # type: ignore[arg-type]
+        cache=cache,
+        cache_ttl_s=60,
+    )
+    repo.get = lambda borrower_id: cache.get(f"borrower_dossier:{borrower_id}")  # type: ignore[method-assign,return-value]
+
+    assert repo.get_fresh("B-CACHED") is None
+
+
 def test_operator_docs_explain_write_load_and_process_local_cache() -> None:
     runbook = (ROOT / "docs" / "runbook.md").read_text(encoding="utf-8")
     readme = (ROOT / "tools" / "load_test" / "README.md").read_text(encoding="utf-8")

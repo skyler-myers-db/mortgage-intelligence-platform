@@ -117,7 +117,7 @@ async function expectAuditRowMatchesGrowthRun(
   run: GrowthAgentRunResponse,
 ): Promise<void> {
   const resp = await request.get(`${API_URL}/api/audit/events?limit=100&event_type=GROWTH_AGENT_RUN`, {
-    headers: AUTH_HEADERS,
+    headers: ADMIN_AUTH_HEADERS,
   });
   expect(resp.status(), 'GET /api/audit/events for Growth Agent returned non-200').toBe(200);
   const rows = (await resp.json()) as AuditRow[];
@@ -289,6 +289,27 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
   await expect(page.getByText(new RegExp(`Hash ${run.tool_result_hash.slice(0, 12)}`))).toBeVisible();
   await expect(page.getByLabel('Saved Growth Agent watchlists')).toContainText(
     'Daily Refi Opportunity Brief',
+  );
+
+  const savedMonitor = page.locator('.growth-agent-monitor').filter({
+    hasText: 'Daily Refi Opportunity Brief',
+  }).first();
+  const draftsResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'POST'
+    && /\/api(?:\/v1)?\/growth-agent\/monitors\/.+\/notification-drafts/.test(response.url()),
+  );
+  await savedMonitor.getByRole('button', { name: 'Draft Slack/Teams' }).click();
+  const draftsResponse = await draftsResponsePromise;
+  expect(draftsResponse.status(), 'watchlist notification drafting returned non-200').toBe(200);
+  const draftPanel = page.getByLabel('Watchlist notifications');
+  await expect(draftPanel).toBeVisible();
+  await expect(draftPanel.getByText('Slack alert', { exact: true })).toBeVisible();
+  await expect(draftPanel.getByText('Teams operations brief', { exact: true })).toBeVisible();
+  const draftCopies = await draftPanel.locator('.growth-agent-card__copy').allTextContents();
+  expect(draftCopies).toHaveLength(2);
+  expect(draftCopies[0].trim()).not.toBe(draftCopies[1].trim());
+  expect(draftCopies.join(' ')).not.toMatch(
+    /No borrower identities, contact data, or outbound messages are included/i,
   );
 
   await expectLeadQueueHandoffMatchesActionableTotal(request, run);

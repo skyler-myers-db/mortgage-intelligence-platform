@@ -238,6 +238,7 @@ export function RoiProjector({
               className={scenarioMode === 'baseline' ? 'is-active' : ''}
               onClick={() => setScenarioMode('baseline')}
               data-testid="roi-mode-baseline"
+              aria-pressed={scenarioMode === 'baseline'}
             >
               Team benchmark
             </button>
@@ -246,6 +247,7 @@ export function RoiProjector({
               className={scenarioMode === 'manual' ? 'is-active' : ''}
               onClick={() => setScenarioMode('manual')}
               data-testid="roi-mode-manual"
+              aria-pressed={scenarioMode === 'manual'}
             >
               Manual scenario
             </button>

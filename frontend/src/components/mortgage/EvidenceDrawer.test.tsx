@@ -71,6 +71,9 @@ describe('EvidenceDrawer accessibility', () => {
       delta_last_modified: '2026-05-20T10:00:00Z',
       freshness: 'fresh',
       status: 'ready',
+      object_type: 'table',
+      observed_in_unity_catalog: true,
+      observation_source: 'system.information_schema.tables',
       lineage: [],
       last_updated: '2026-05-20',
       catalog_explorer_url: null,
@@ -113,6 +116,10 @@ describe('EvidenceDrawer accessibility', () => {
     );
     expect(document.activeElement).toBe(close);
     expect(assetLink).toBeTruthy();
+    expect(document.body.textContent).toContain('Observed as a table in this workspace.');
+    expect(document.body.textContent).toContain(
+      'Verified through system.information_schema.tables.',
+    );
 
     assetLink?.focus();
     await act(async () => {

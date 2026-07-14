@@ -262,6 +262,7 @@ def _operation_response_from_audit(
         ),
         "run_page_url": None,
         "audit_event_id": event.event_id,
+        "request_id": str(payload.request_id),
     }
 
 
@@ -638,6 +639,7 @@ def post_operation_run(
         "run_id": launch.run_id,
         "run_page_url": launch.run_page_url,
         "audit_event_id": accepted_event.event_id,
+        "request_id": str(payload.request_id),
     }
 
 

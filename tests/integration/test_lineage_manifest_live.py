@@ -86,7 +86,10 @@ def _execute(host: str, token: str, warehouse_id: str, statement: str) -> dict[s
         with urllib.request.urlopen(req, timeout=35) as resp:
             return json.loads(resp.read().decode("utf-8"))
     except urllib.error.URLError as exc:  # pragma: no cover -- network
-        pytest.skip(f"warehouse unreachable: {exc}")
+        pytest.fail(
+            "warehouse unreachable after live credentials were supplied: "
+            f"{exc}"
+        )
 
 
 def _default_catalog() -> str:

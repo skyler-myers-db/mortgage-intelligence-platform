@@ -29,7 +29,7 @@ from backend.schemas.portfolio import (
 from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.campaign_intelligence import (
     campaign_criteria_fingerprint,
-    verify_campaign_variant_provenance,
+    inspect_campaign_variant_provenance,
 )
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
@@ -115,6 +115,7 @@ class DatabricksPortfolioRepository:
         "  CAST(ROUND(SUM(current_lien_balance)) AS BIGINT)            AS total_current_lien_balance_usd, "
         "  ROUND(AVG(equity_pct), 1)                                   AS avg_equity_pct, "
         "  ROUND(AVG(rate_spread_bps), 1)                              AS avg_rate_spread_bps, "
+        "  MAX(refreshed_at)                                            AS data_refreshed_at, "
         "  SUM(CASE WHEN recommended_offer_code = 'purchase' THEN 1 ELSE 0 END) AS offer_purchase, "
         "  SUM(CASE WHEN recommended_offer_code = 'refi_plus_heloc' THEN 1 ELSE 0 END) AS offer_refi_plus_heloc, "
         "  SUM(CASE WHEN recommended_offer_code = 'heloc' THEN 1 ELSE 0 END) AS offer_heloc, "
@@ -328,7 +329,9 @@ class DatabricksPortfolioRepository:
     inserted_variants AS (
       INSERT INTO mip_app.campaign_message_variants (
         campaign_id, variant_name, channel, subject, body, weight_pct,
-        generation_mode, generator_label
+        generation_mode, generator_label, provenance_key_id,
+        provenance_issued_at, provenance_expires_at, provenance_copy_hash,
+        provenance_criteria_fingerprint, provenance_token_digest
       )
       SELECT
         inserted_campaign.campaign_id,
@@ -338,7 +341,13 @@ class DatabricksPortfolioRepository:
         variant.body,
         variant.weight_pct,
         variant.generation_mode,
-        variant.generator_label
+        variant.generator_label,
+        variant.provenance_key_id,
+        variant.provenance_issued_at,
+        variant.provenance_expires_at,
+        variant.provenance_copy_hash,
+        variant.provenance_criteria_fingerprint,
+        variant.provenance_token_digest
       FROM inserted_campaign
       CROSS JOIN jsonb_to_recordset(%(variant_rows)s::jsonb) AS variant(
         variant_name TEXT,
@@ -347,7 +356,13 @@ class DatabricksPortfolioRepository:
         body TEXT,
         weight_pct NUMERIC,
         generation_mode TEXT,
-        generator_label TEXT
+        generator_label TEXT,
+        provenance_key_id TEXT,
+        provenance_issued_at TIMESTAMPTZ,
+        provenance_expires_at TIMESTAMPTZ,
+        provenance_copy_hash TEXT,
+        provenance_criteria_fingerprint TEXT,
+        provenance_token_digest TEXT
       )
       RETURNING campaign_id
     )
@@ -713,7 +728,10 @@ class DatabricksPortfolioRepository:
                     if not where_clause and latest.get("in_outreach_count") is not None
                     else None
                 ),
-                data_refreshed_at=self._coerce_datetime(latest.get("snapshot_at")),
+                # This timestamp comes from the same borrower-grain statement
+                # as the economics above. Funnel snapshots are a separate
+                # historical surface and must not date the current economics.
+                data_refreshed_at=self._coerce_datetime(row.get("data_refreshed_at")),
                 trends=trends,
                 trend_status=trend_status,
                 trend_note=trend_note,
@@ -790,16 +808,18 @@ class DatabricksPortfolioRepository:
             if requested_mode == "operator":
                 generation_mode = "operator"
                 generator_label = "Operator edited"
+                provenance_proof = None
             else:
-                verified = verify_campaign_variant_provenance(
+                provenance_proof = inspect_campaign_variant_provenance(
                     variant,
                     criteria_fingerprint=criteria_fingerprint,
                 )
-                if verified is None:
+                if provenance_proof is None:
                     raise ValueError(
                         "model-generated campaign provenance is missing, expired, or invalid"
                     )
-                generation_mode, generator_label = verified
+                generation_mode = provenance_proof.generation_mode
+                generator_label = provenance_proof.generator_label
                 if requested_mode != generation_mode or requested_label != generator_label:
                     raise ValueError(
                         "model-generated campaign provenance does not match the server proof"
@@ -815,6 +835,28 @@ class DatabricksPortfolioRepository:
                     "weight_pct": variant.get("weight_pct"),
                     "generation_mode": generation_mode,
                     "generator_label": generator_label,
+                    "provenance_key_id": (
+                        provenance_proof.key_id if provenance_proof else None
+                    ),
+                    "provenance_issued_at": (
+                        datetime.fromtimestamp(provenance_proof.issued_at, UTC).isoformat()
+                        if provenance_proof
+                        else None
+                    ),
+                    "provenance_expires_at": (
+                        datetime.fromtimestamp(provenance_proof.expires_at, UTC).isoformat()
+                        if provenance_proof
+                        else None
+                    ),
+                    "provenance_copy_hash": (
+                        provenance_proof.copy_hash if provenance_proof else None
+                    ),
+                    "provenance_criteria_fingerprint": (
+                        provenance_proof.criteria_fingerprint if provenance_proof else None
+                    ),
+                    "provenance_token_digest": (
+                        provenance_proof.token_digest if provenance_proof else None
+                    ),
                 }
             )
         generation_modes = {
@@ -837,14 +879,26 @@ class DatabricksPortfolioRepository:
             if generator_labels
             else "Operator edited"
         )
-        variant_provenance = [
-            {
+        variant_provenance: list[dict[str, object]] = []
+        for variant in variant_rows:
+            proof_row: dict[str, object] = {
                 "variant_name": variant["variant_name"],
                 "generation_mode": variant["generation_mode"],
                 "generator_label": variant["generator_label"],
             }
-            for variant in variant_rows
-        ]
+            if variant["provenance_key_id"] is not None:
+                proof_row.update(
+                    {
+                        "provenance_key_id": variant["provenance_key_id"],
+                        "provenance_issued_at": variant["provenance_issued_at"],
+                        "provenance_expires_at": variant["provenance_expires_at"],
+                        "provenance_copy_hash": variant["provenance_copy_hash"],
+                        "provenance_criteria_fingerprint": variant[
+                            "provenance_criteria_fingerprint"
+                        ],
+                    }
+                )
+            variant_provenance.append(proof_row)
         creation_response = {
             "name": payload.name,
             "marketable_population": preview.marketable_population,

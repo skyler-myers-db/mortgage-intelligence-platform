@@ -372,6 +372,16 @@ if [[ -z "$_ID_MASK_RESOLVED" ]]; then
 else
   echo "  cotality id-mask secret: configured"
 fi
+if [[ -n "$_ID_MASK_RESOLVED" ]]; then
+  export MIP_COTALITY_ID_MASK_SECRET="$_ID_MASK_RESOLVED"
+fi
+
+# Provision runtime HMAC values directly into Databricks Secrets before the
+# bundle validates its app resource bindings. The later Apps deploy payload
+# carries only value_from resource names, never raw secret values.
+step "provision Databricks App runtime secret bindings"
+run "$PYTHON" tools/databricks/provision_runtime_secrets.py \
+  --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
 
 # -----------------------------------------------------------------------------
 # Step 0a: ensure the bundle has a real Genie space id before app resource apply

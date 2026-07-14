@@ -264,7 +264,7 @@ describe('AdminConfig audit explorer', () => {
 
     await act(async () => buttonByLabel(/^Copy Lakebase query for audit event evt-8ecf7294$/).click());
     expect(writeText).toHaveBeenLastCalledWith(
-      "SELECT * FROM mip_app.action_audit WHERE event_id = 'evt-8ecf7294';",
+      "SELECT * FROM mip_app.action_audit WHERE audit_id = 'evt-8ecf7294';",
     );
     expect(document.body.textContent).toContain('Lakebase record query copied');
     expect(document.querySelector('a[href*="lakebase" i]')).toBeNull();

@@ -89,23 +89,33 @@ def _assert_lakebase_breaker_closed() -> None:
 def test_live_campaign_replay_and_admin_audit_filters_agree() -> None:
     _assert_dev_mutation_target()
     idempotency_key = f"live-campaign-{uuid4()}"
+    status, recommendation = _request(
+        "POST",
+        "/api/portfolio/campaign-recommendation",
+        {"criteria": {}},
+    )
+    assert status == 200
+    assert isinstance(recommendation, dict)
+    recommended_variants = recommendation.get("variants")
+    assert isinstance(recommended_variants, list) and len(recommended_variants) == 2
+    generation_mode = recommendation.get("generation_mode")
+    generator_label = recommendation.get("generator_label")
     payload: dict[str, object] = {
         "name": "Live campaign audit contract",
         "criteria": {},
         "suppression_policy": {"marketing_eligibility": "Eligible only"},
         "message_variants": [
             {
-                "variant_name": "Benefit-led review",
+                "variant_name": str(variant["variant_name"]),
                 "channel": "email",
-                "subject": "Review your mortgage options",
-                "body": (
-                    "A licensed loan officer can review your current mortgage, "
-                    "available equity, and next-step options."
-                ),
-                "weight_pct": 100,
-                "generation_mode": "reviewed_fallback",
-                "generator_label": "Reviewed campaign framework",
+                "subject": variant["subject"],
+                "body": variant["body"],
+                "weight_pct": 50,
+                "generation_mode": generation_mode,
+                "generator_label": generator_label,
+                "provenance_token": variant["provenance_token"],
             }
+            for variant in recommended_variants
         ],
     }
 
@@ -169,5 +179,11 @@ def test_live_campaign_replay_and_admin_audit_filters_agree() -> None:
     assert event.get("action") == "portfolio.create"
     assert event.get("event_type") == "PORTFOLIO_CREATE"
     assert event.get("request_id") == idempotency_key
-    assert "variant_provenance" in (event.get("payload_json") or {})
-
+    event_payload = event.get("payload_json") or {}
+    assert "variant_provenance" in event_payload
+    variant_provenance = event_payload["variant_provenance"]
+    assert isinstance(variant_provenance, list) and len(variant_provenance) == 2
+    for proof in variant_provenance:
+        assert proof["provenance_key_id"]
+        assert len(proof["provenance_copy_hash"]) == 64
+        assert len(proof["provenance_criteria_fingerprint"]) == 64

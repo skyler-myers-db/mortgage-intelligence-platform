@@ -842,9 +842,14 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const canonicalPayload = await canonicalResponse.json() as {
       conversation_id?: string | null;
       message_id?: string | null;
+      reasoning_trace?: Array<{ kind?: string; content?: string }>;
     };
     expect(canonicalPayload.conversation_id, 'canonical answer must retain its live conversation id').toBeTruthy();
     expect(canonicalPayload.message_id, 'canonical answer must retain its live message id').toBeTruthy();
+    expect(
+      canonicalPayload.reasoning_trace?.length ?? 0,
+      'the live Genie Conversation API turn should expose at least one bounded reasoning summary',
+    ).toBeGreaterThan(0);
 
     // Cold Genie space = 10-15s; allow 40s (a cold warehouse + Genie
     // compilation can push past 20s on the first question of a session).
@@ -860,6 +865,19 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       .toBeGreaterThan(20);
     await expect(aiMessage.getByTestId('genie-feedback-up')).toBeVisible();
     await expect(aiMessage.getByTestId('genie-feedback-down')).toBeVisible();
+    const reasoning = aiMessage.locator('.genie-answer__reasoning');
+    await expect(reasoning).toBeVisible();
+    await expect(reasoning).not.toHaveAttribute('open', '');
+    await reasoning.locator('summary').click();
+    await expect(reasoning.locator('.genie-answer__reasoning-step').first()).toBeVisible();
+    const feedbackResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && /\/api\/(?:v1\/)?genie\/feedback$/.test(response.url())
+    ));
+    await aiMessage.getByTestId('genie-feedback-up').click();
+    const feedbackResponse = await feedbackResponsePromise;
+    expect(feedbackResponse.status(), 'Genie thumbs-up feedback should persist').toBe(200);
+    await expect(aiMessage.getByText('Feedback recorded')).toBeVisible();
 
     const sourceChip = aiMessage.locator('.sources .evidence-chip').first();
     await expect(sourceChip).toBeVisible({ timeout: 10_000 });
@@ -869,6 +887,32 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(drawer.locator('.drawer__subtitle')).toHaveText(
       /Marketable population|Ranked lead population|Lead score model|Borrower 360 feature set|Lead-generation metric view|Borrower opportunity metric view/,
     );
+    await expect(drawer.getByText(/Compact semantics: Overview de-duplicates/i)).toBeVisible();
+    const overviewAssets = drawer.locator('.governed-assets__list .lineage-node__chip');
+    await expect(overviewAssets.first()).toBeVisible({ timeout: 10_000 });
+    const overviewLinkState = await overviewAssets.evaluateAll((nodes) => nodes.map((node) => ({
+      tag: node.tagName,
+      href: node instanceof HTMLAnchorElement ? node.href : '',
+    })));
+    expect(overviewLinkState.length).toBeGreaterThan(0);
+    expect(
+      overviewLinkState.every(({ tag, href }) => tag === 'A' && /explore\/data/.test(href)),
+      'Every governed Overview asset must deep-link to Catalog Explorer.',
+    ).toBe(true);
+
+    await drawer.getByRole('tab', { name: 'Lineage' }).click();
+    await expect(drawer.getByText(/Ordered semantics: arrows follow/i)).toBeVisible();
+    const lineageAssets = drawer.locator('#drawer-panel-lineage .lineage-node > .lineage-node__chip');
+    await expect(lineageAssets.first()).toBeVisible({ timeout: 10_000 });
+    const lineageLinkState = await lineageAssets.evaluateAll((nodes) => nodes.map((node) => ({
+      tag: node.tagName,
+      href: node instanceof HTMLAnchorElement ? node.href : '',
+    })));
+    expect(lineageLinkState.length).toBeGreaterThanOrEqual(overviewLinkState.length);
+    expect(
+      lineageLinkState.every(({ tag, href }) => tag === 'A' && /explore\/data/.test(href)),
+      'Every governed Lineage asset must deep-link to Catalog Explorer.',
+    ).toBe(true);
     await drawer.getByRole('button', { name: /Close drawer/i }).click();
   });
 
@@ -912,13 +956,11 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('approve outreach writes a new audit row visible in /api/audit within 5s', async ({ page, request }) => {
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN to verify the persisted approval audit row.');
     const target = (await fetchActionablePendingLead(request)).borrower_id;
 
-    const before = await fetchAuditEvents(request, 100);
-    if (before === null) {
-      test.skip(true, 'Admin-only audit event read unavailable for this bearer.');
-      return;
-    }
+    const before = await fetchAuditEvents(request, 100, ADMIN_BEARER);
+    if (before === null) throw new Error('Admin bearer could not read the audit ledger.');
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
     await gotoApp(page, `/offer-orchestrator/${target}`);
@@ -944,8 +986,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect
       .poll(
         async () => {
-          const rows = await fetchAuditEvents(request, 100);
-          if (rows === null) return undefined;
+          const rows = await fetchAuditEvents(request, 100, ADMIN_BEARER);
+          if (rows === null) throw new Error('Admin bearer lost audit-ledger access.');
           return rows.find(
             (r) =>
               (r.action === 'outreach.approve' ||
@@ -1110,6 +1152,31 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
         { timeout: 30_000 },
       )
       .toBeGreaterThan(0);
+
+    const economics = page.getByTestId('roi-projector');
+    await expect(economics).toBeVisible({ timeout: 45_000 });
+    await expect(economics).toContainText(/selected cohort/i);
+    await expect(economics).toContainText(/team benchmark/i);
+    await expect(economics).not.toContainText(/illustrative|operator-set/i);
+
+    const campaign = page.locator('.surface', { hasText: 'Campaign setup' }).first();
+    await expect(campaign.getByText('Message hypotheses', { exact: true })).toBeVisible({
+      timeout: 90_000,
+    });
+    await expect(campaign.locator('[aria-label$=" hypothesis"]')).toHaveCount(2);
+    await expect(campaign.locator('[aria-label="Recommendation evidence"] .evidence-chip').first())
+      .toBeVisible();
+    await expect(campaign).toContainText(
+      /Agent endpoint-generated recommendation|Reviewed campaign framework/,
+    );
+    await expect(campaign).not.toContainText(
+      /No borrower identities, contact data, or outbound messages are included/i,
+    );
+    await campaign.getByRole('button', { name: 'Apply variants' }).click();
+    await expect(page.getByLabel('Benefit-led subject')).not.toHaveValue('');
+    await expect(page.getByLabel('Guidance-led subject')).not.toHaveValue('');
+    await expect(page.getByLabel('Benefit-led message')).not.toHaveValue('');
+    await expect(page.getByLabel('Guidance-led message')).not.toHaveValue('');
 
     const leadQueue = page.getByRole('link', { name: /Open lead queue/i });
     await expect(leadQueue).toBeVisible({ timeout: 30_000 });
@@ -1331,11 +1398,9 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('lead-queue: inline approval writes selected evidence ids to audit', async ({ page, request }) => {
-    const before = await fetchAuditEvents(request, 100);
-    if (before === null) {
-      test.skip(true, 'Admin-only audit event read unavailable for this bearer.');
-      return;
-    }
+    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN to verify the persisted inline-approval audit row.');
+    const before = await fetchAuditEvents(request, 100, ADMIN_BEARER);
+    if (before === null) throw new Error('Admin bearer could not read the audit ledger.');
     const beforeIds = new Set(before.map((e) => e.event_id).filter(Boolean));
 
     const target = await fetchActionablePendingLead(request);
@@ -1355,8 +1420,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect
       .poll(
         async () => {
-          const rows = await fetchAuditEvents(request, 100);
-          if (rows === null) return 0;
+          const rows = await fetchAuditEvents(request, 100, ADMIN_BEARER);
+          if (rows === null) throw new Error('Admin bearer lost audit-ledger access.');
           return rows.find(
             (r) =>
               (r.action === 'outreach.approve' || r.action === 'outreach_approve') &&
@@ -1432,6 +1497,15 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect
       .poll(async () => ((await draft.inputValue()) ?? '').trim().length, { timeout: 30_000 })
       .toBeGreaterThan(40);
+    await expect(draft).not.toHaveValue(/public-record signals|the right offer/i);
+    const intelligence = page.getByTestId('offer-message-intelligence');
+    await expect(intelligence).toBeVisible({ timeout: 30_000 });
+    await expect(intelligence).toContainText(
+      /Supervisor-optimized message|Governed message framework/,
+    );
+    await expect(intelligence.locator('[aria-label="Message evidence"]')).toBeVisible();
+    await expect(intelligence.locator('[aria-label="Message source assets"] .evidence-chip').first())
+      .toBeVisible();
 
     // Primary CTA is the Approve button, already covered by the
     // `approve outreach writes a new audit row…` test above. Here we
@@ -1650,6 +1724,20 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const appearanceToggle = page.getByRole('button', { name: /Workspace appearance/i });
     await expect(appearanceToggle).toBeVisible({ timeout: 5_000 });
     await expect(page.getByText(/grant needed|read error/i)).toHaveCount(0);
+
+    const auditExplorer = page.locator('#audit');
+    await expect(auditExplorer.getByText('Audit explorer', { exact: true })).toBeVisible({
+      timeout: 30_000,
+    });
+    const auditTable = auditExplorer.getByRole('table', { name: 'Audit events' });
+    await expect(auditTable).toBeVisible({ timeout: 30_000 });
+    const expandFirstAudit = auditTable.getByRole('button', { name: /Expand audit event/i }).first();
+    await expect(expandFirstAudit).toBeVisible();
+    await expandFirstAudit.click();
+    await expect(auditExplorer.getByText('Event details', { exact: true })).toBeVisible();
+    await expect(auditExplorer.getByRole('button', { name: /Copy Lakebase query for audit event/i }))
+      .toBeVisible();
+    await expect(auditExplorer.getByText('REVIEWED METADATA', { exact: true })).toBeVisible();
 
     const html = page.locator('html');
 

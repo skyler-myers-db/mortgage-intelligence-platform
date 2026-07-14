@@ -167,6 +167,8 @@ def test_asset_metadata_route_returns_typed_sanitized_metadata() -> None:
     body = response.json()
     assert body["title"] == "Gold Lead Queue Population"
     assert body["uc_object"].endswith(".gold.lead_population")
+    assert body["observed_in_unity_catalog"] is True
+    assert body["observation_source"] == "system.information_schema.tables"
     assert body["row_count"] == 5156184
     assert body["row_count_source"] == "source_readiness"
     assert body["freshness"] in {"fresh", "aging", "stale", "unavailable"}
@@ -393,14 +395,33 @@ def test_function_metadata_uses_the_catalog_explorer_function_route_without_tabl
     payload = AssetMetadataService(fake).get_asset("fn_in_the_money")
 
     assert payload.object_type == "function"
+    assert payload.observed_in_unity_catalog is False
+    assert payload.observation_source == "system.information_schema.routines"
     assert payload.catalog_explorer_url == (
         "https://dbc-unit.cloud.databricks.com/explore/data/functions/"
         f"{payload.catalog}/gold/fn_in_the_money"
     )
     statements = [statement.upper() for statement, _ in fake.calls]
+    assert any("INFORMATION_SCHEMA.ROUTINES" in statement for statement in statements)
     assert not any(statement.startswith("DESCRIBE DETAIL") for statement in statements)
     assert not any("COUNT(*)" in statement for statement in statements)
     assert not any("TABLE_LINEAGE" in statement for statement in statements)
+
+
+def test_object_verification_distinguishes_missing_from_unavailable() -> None:
+    missing = AssetMetadataService(_EmptySqlClient()).get_asset("lead_population")
+    unavailable = AssetMetadataService(_SensitiveErrorSqlClient()).get_asset(
+        "lead_population"
+    )
+
+    assert missing.observed_in_unity_catalog is False
+    assert missing.observation_source == "system.information_schema.tables"
+    assert "Declared UC object was not found" in " ".join(missing.known_data_gaps)
+    assert unavailable.observed_in_unity_catalog is None
+    assert unavailable.observation_source == "unavailable"
+    assert "UC object verification unavailable" in " ".join(
+        unavailable.known_data_gaps
+    )
 
 
 def test_raw_share_metadata_never_falls_back_to_an_unbounded_count() -> None:

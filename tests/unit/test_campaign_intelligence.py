@@ -164,9 +164,13 @@ def test_campaign_recommendation_route_returns_reviewed_strategy() -> None:
 
 
 class _ApiClient:
-    def do(self, method: str, path: str, *, body: dict[str, object]):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            assert path == "/api/2.1/supervisor-agents/supervisor-id"
+            return {"supervisor_agent_id": "supervisor-id", "endpoint_name": "mip-supervisor"}
         assert method == "POST"
         assert path == "/serving-endpoints/responses"
+        assert body is not None
         assert body["max_output_tokens"] == 900
         return {
             "output": [
@@ -212,10 +216,20 @@ class _PromptCaptureApiClient(_ApiClient):
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
-    def do(self, method: str, path: str, *, body: dict[str, object]):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        assert body is not None
         prompt = str(body["input"][0]["content"])  # type: ignore[index]
         self.prompts.append(prompt)
         return super().do(method, path, body=body)
+
+
+class _RaisingApiClient(_ApiClient):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        raise TimeoutError("serving endpoint timed out")
 
 
 def test_supervisor_copy_is_validated_while_evidence_remains_server_derived() -> None:
@@ -237,6 +251,31 @@ def test_supervisor_copy_is_validated_while_evidence_remains_server_derived() ->
     assert all(variant.provenance_token for variant in result.variants)
     assert result.evidence[0].value == "2,119 borrowers"
     assert result.warnings == []
+
+
+def test_supervisor_transport_failure_uses_labelled_data_backed_fallback() -> None:
+    serving = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_RaisingApiClient(),
+    )
+    result = recommend_campaign(
+        _preview(),
+        performance=_qualified_performance(),
+        settings=Settings(
+            mip_agent_orchestrator=True,
+            mip_agent_serving_endpoint="mip-supervisor",
+            mip_agent_supervisor_id="supervisor-id",
+            mip_lender_name="Summit Mortgage",
+        ),
+        serving_client=serving,
+    )
+
+    assert result.generation_mode == "reviewed_fallback"
+    assert result.generator_label == "Reviewed campaign framework"
+    assert result.warnings == ["Agent endpoint request failed"]
+    assert result.performance_status == "qualified"
+    assert any(row.source_asset == "mip_app.lead_outcomes" for row in result.evidence)
+    assert result.evidence[0].value == "2,119 borrowers"
 
 
 def test_model_prompt_omits_unqualified_performance_and_includes_complete_proof() -> None:

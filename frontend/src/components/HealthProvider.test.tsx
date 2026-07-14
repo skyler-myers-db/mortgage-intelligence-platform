@@ -16,7 +16,7 @@ import {
  * HealthProvider — unit tests for the shared `/api/health` poll.
  *
  * The provider is the single source of truth for dependency state
- * across Topbar, AgentActivityLog, and DegradedBanner (round-2
+ * across Topbar, DegradedBanner, and other dependency-aware surfaces (round-2
  * hole-finder #21, 2026-04-23). Before this provider each of those
  * components ran its own setInterval — 3x the load on /api/health
  * and inconsistent state on the same page.

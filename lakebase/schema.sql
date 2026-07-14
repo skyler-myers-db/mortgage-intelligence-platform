@@ -102,6 +102,12 @@ CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
     generation_mode TEXT NOT NULL DEFAULT 'operator'
                     CHECK (generation_mode IN ('supervisor','reviewed_fallback','operator')),
     generator_label TEXT NOT NULL DEFAULT 'Operator edited',
+    provenance_key_id TEXT,
+    provenance_issued_at TIMESTAMPTZ,
+    provenance_expires_at TIMESTAMPTZ,
+    provenance_copy_hash TEXT,
+    provenance_criteria_fingerprint TEXT,
+    provenance_token_digest TEXT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (campaign_id, variant_name, channel)
 );
@@ -109,6 +115,18 @@ ALTER TABLE mip_app.campaign_message_variants
     ADD COLUMN IF NOT EXISTS generation_mode TEXT NOT NULL DEFAULT 'operator';
 ALTER TABLE mip_app.campaign_message_variants
     ADD COLUMN IF NOT EXISTS generator_label TEXT NOT NULL DEFAULT 'Operator edited';
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_key_id TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_issued_at TIMESTAMPTZ;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_expires_at TIMESTAMPTZ;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_copy_hash TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_criteria_fingerprint TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_token_digest TEXT;
 DO $$
 BEGIN
     IF NOT EXISTS (

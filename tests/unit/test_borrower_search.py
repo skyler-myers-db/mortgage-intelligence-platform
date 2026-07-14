@@ -105,3 +105,14 @@ def test_search_supports_state_names_and_codes() -> None:
     assert params["state_exact"] == "FL"
     assert DatabricksBorrowerRepository._state_search_code("WA") == "WA"
     assert DatabricksBorrowerRepository._state_search_code("wash") == "WA"
+
+
+def test_search_never_matches_or_binds_raw_clip() -> None:
+    repo, client = _repo()
+
+    repo.search("123456789012")
+
+    statement, params = client.calls[-1]
+    assert "b.clip =" not in statement
+    assert params is not None
+    assert "clip_exact" not in params

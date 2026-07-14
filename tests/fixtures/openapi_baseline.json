@@ -787,6 +787,10 @@
             "title": "Label",
             "type": "string"
           },
+          "request_id": {
+            "title": "Request Id",
+            "type": "string"
+          },
           "run_id": {
             "anyOf": [
               {
@@ -815,7 +819,8 @@
           "key",
           "label",
           "job_name",
-          "job_id"
+          "job_id",
+          "request_id"
         ],
         "title": "AdminOperationRunResponse",
         "type": "object"
@@ -1476,6 +1481,27 @@
             ],
             "title": "Object Type",
             "type": "string"
+          },
+          "observation_source": {
+            "default": "unavailable",
+            "enum": [
+              "system.information_schema.tables",
+              "system.information_schema.routines",
+              "unavailable"
+            ],
+            "title": "Observation Source",
+            "type": "string"
+          },
+          "observed_in_unity_catalog": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed In Unity Catalog"
           },
           "properties": {
             "items": {
@@ -2733,6 +2759,17 @@
               }
             ],
             "title": "Situs Cbsa Code"
+          },
+          "source_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Refreshed At"
           },
           "state": {
             "title": "State",
@@ -9192,6 +9229,17 @@
             "title": "Source Labels",
             "type": "array"
           },
+          "source_refreshed_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Refreshed At"
+          },
           "sources": {
             "default": [],
             "items": {
@@ -14908,6 +14956,18 @@
             "schema": {
               "title": "Borrower Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Bypass the process cache while reconciling a gold refresh.",
+            "in": "query",
+            "name": "fresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Bypass the process cache while reconciling a gold refresh.",
+              "title": "Fresh",
+              "type": "boolean"
             }
           }
         ],
@@ -21766,6 +21826,18 @@
             "schema": {
               "title": "Borrower Id",
               "type": "string"
+            }
+          },
+          {
+            "description": "Bypass the process cache while reconciling a gold refresh.",
+            "in": "query",
+            "name": "fresh",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Bypass the process cache while reconciling a gold refresh.",
+              "title": "Fresh",
+              "type": "boolean"
             }
           }
         ],

@@ -57,6 +57,7 @@ def test_campaign_provenance_previous_key_is_bounded_by_existing_ttl() -> None:
     old_settings = Settings(
         app_env="production",
         mip_genie_action_secret_current="old-current-key",
+        mip_genie_action_secret_kid="old-v1",
     )
     criteria_fingerprint = "criteria-v1"
     token = issue_campaign_variant_provenance(
@@ -72,6 +73,8 @@ def test_campaign_provenance_previous_key_is_bounded_by_existing_ttl() -> None:
         app_env="production",
         mip_genie_action_secret_current="new-current-key",
         mip_genie_action_secret_previous="old-current-key",
+        mip_genie_action_secret_kid="new-v2",
+        mip_genie_action_secret_previous_kid="old-v1",
     )
     variant = {
         "subject": "Review your mortgage options",

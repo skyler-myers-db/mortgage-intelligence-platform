@@ -31,7 +31,6 @@ from enum import Enum
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from backend.config.settings import Settings, get_settings
 from backend.services.ai_gateway_capability_probe import probe_ai_gateway
@@ -43,6 +42,7 @@ from backend.services.capability_serving_probes import (
     query_serving_endpoint_with_proof,
 )
 from backend.services.databricks_sql_helpers import _validate_identifier, qualify
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 
 class CapabilityStatus(str, Enum):
@@ -823,34 +823,23 @@ def _probe_agent_eval(workspace_client: Any, settings: Settings) -> LiveCapabili
 
 
 def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> LiveCapabilityStatus:
-    endpoint = (settings.mip_agent_serving_endpoint or "").strip()
-    supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
-    if not endpoint or not supervisor_id:
-        return LiveCapabilityStatus(False, "Agent id metadata or serving endpoint is not configured.")
     try:
-        metadata_path = f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}"
-        metadata = workspace_client.api_client.do("GET", metadata_path)
-        if not isinstance(metadata, Mapping):
-            return LiveCapabilityStatus(False, "Supervisor Agent metadata response was not an object.")
-        metadata_id = str(metadata.get("supervisor_agent_id") or "").strip()
-        metadata_endpoint = str(metadata.get("endpoint_name") or "").strip()
-        if metadata_id != supervisor_id:
-            return LiveCapabilityStatus(
-                False,
-                "Supervisor Agent metadata did not match MIP_AGENT_SUPERVISOR_ID.",
-            )
-        if metadata_endpoint != endpoint:
-            return LiveCapabilityStatus(
-                False,
-                "Configured Supervisor Agent does not map to MIP_AGENT_SERVING_ENDPOINT.",
-            )
-        details = workspace_client.serving_endpoints.get(endpoint)
-        state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
-        task = getattr(details, "task", None)
-        if state != "READY":
-            return LiveCapabilityStatus(False, f"Agent endpoint {endpoint} is not READY ({state}).")
-        if not _is_agent_responses_task(task):
-            return LiveCapabilityStatus(False, f"Endpoint {endpoint} task is {task}, not agent.")
+        runtime, reason = verify_supervisor_runtime(workspace_client, settings)
+        if runtime is None:
+            detail = {
+                "supervisor_endpoint_mismatch": "Configured Supervisor Agent does not map to MIP_AGENT_SERVING_ENDPOINT.",
+                "supervisor_identity_mismatch": "Supervisor Agent metadata did not match MIP_AGENT_SUPERVISOR_ID.",
+                "orchestrator_not_configured": "Agent id metadata or serving endpoint is not configured.",
+            }.get(reason or "")
+            if detail is None and (reason or "").startswith("supervisor_task_not_agent:"):
+                detail = f"Endpoint task is {(reason or '').partition(':')[2]}, not agent."
+            if detail is None and (reason or "").startswith("supervisor_endpoint_not_ready:"):
+                detail = f"Agent endpoint is not READY ({(reason or '').partition(':')[2]})."
+            if detail is None:
+                detail = f"Supervisor runtime verification failed ({reason})."
+            return LiveCapabilityStatus(False, detail)
+        endpoint = runtime.endpoint
+        supervisor_id = runtime.supervisor_id
         execution = query_serving_endpoint_with_proof(
             workspace_client,
             endpoint,

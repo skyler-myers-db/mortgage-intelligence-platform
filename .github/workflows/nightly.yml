@@ -409,6 +409,21 @@ jobs:
           if failed:
               raise SystemExit("; ".join(failed))
           PY
+      - name: Low-volume deployed workflow contracts
+        # Reuse this manual release workflow rather than creating another
+        # schedule. These checks mutate only the dev/sandbox app and prove the
+        # real Lakebase constraints plus the current Unity Catalog lineage.
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          LAKEBASE_INTEGRATION: '1'
+          MIP_LIVE_MUTATION_OK: '1'
+        run: |
+          pytest -q --tb=short \
+            tests/integration/test_campaign_audit_workflow_live.py \
+            tests/integration/test_lakebase_idempotency_live.py \
+            tests/integration/test_lineage_manifest_live.py
       - name: Genie semantic eval scorecard (deployed app)
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

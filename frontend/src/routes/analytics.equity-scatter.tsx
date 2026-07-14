@@ -425,11 +425,9 @@ export function groupExactCoordinatePoints(
       });
     }
   }
-  for (const group of groups.values()) {
-    group.points.sort((left, right) => (
-      left.borrower_id < right.borrower_id ? -1 : left.borrower_id > right.borrower_id ? 1 : 0
-    ));
-  }
+  // Preserve the API's opportunity_score DESC order inside every coordinate.
+  // Sorting by the masked id here would make the UI call an alphabetical list
+  // "ranked" even though the server already returned the governed ranking.
   return [...groups.values()];
 }
 

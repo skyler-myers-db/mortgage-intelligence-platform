@@ -24,7 +24,6 @@ from typing import Any, Literal
 from pydantic import ValidationError
 
 from backend.agents.mortgage_growth_copilot import (
-    agent_task_if_ready,
     extract_response_text,
     parse_json_object,
     prompt_hash,
@@ -41,8 +40,8 @@ from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
 )
-from backend.services.growth_agent_composer import composition_endpoint
 from backend.services.scoring import NBO_PRODUCT_LABELS, offer_display_label
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 _OFFER_AUDIENCE: dict[str, str] = {
     "purchase": "borrowers whose current property and listing signals support a next-home conversation",
@@ -174,6 +173,20 @@ class CampaignPerformanceContext:
         }
 
 
+@dataclass(frozen=True)
+class CampaignVariantProvenanceProof:
+    """Non-secret forensic facts recovered from a verified provenance token."""
+
+    generation_mode: Literal["supervisor", "reviewed_fallback"]
+    generator_label: str
+    key_id: str
+    issued_at: int
+    expires_at: int
+    copy_hash: str
+    criteria_fingerprint: str
+    token_digest: str
+
+
 def campaign_performance_fingerprint(
     *,
     observed_from: date,
@@ -262,6 +275,23 @@ def _campaign_provenance_keys(
     return keys
 
 
+def _campaign_provenance_keyring(
+    settings: Settings,
+    *,
+    for_issuance: bool = False,
+) -> list[tuple[str, bytes]]:
+    keys = _campaign_provenance_keys(settings, for_issuance=for_issuance)
+    current_kid = (settings.mip_genie_action_secret_kid or "").strip() or "v1"
+    keyring = [(current_kid, keys[0])]
+    if len(keys) > 1:
+        previous_kid = (
+            (settings.mip_genie_action_secret_previous_kid or "").strip()
+            or "previous"
+        )
+        keyring.append((previous_kid, keys[1]))
+    return keyring
+
+
 def _campaign_copy_hash(subject: object, body: object) -> str:
     material = json.dumps(
         {"body": str(body or "").strip(), "subject": str(subject or "").strip()},
@@ -298,6 +328,8 @@ def issue_campaign_variant_provenance(
     now: int | None = None,
 ) -> str:
     issued_at = int(time.time()) if now is None else now
+    active_settings = settings or get_settings()
+    key_id = _campaign_provenance_keyring(active_settings, for_issuance=True)[0][0]
     return _encode_provenance_claims(
         {
             "copy_hash": _campaign_copy_hash(subject, body),
@@ -306,19 +338,22 @@ def issue_campaign_variant_provenance(
             "generation_mode": generation_mode,
             "generator_label": generator_label,
             "iat": issued_at,
+            "kid": key_id,
             "v": _CAMPAIGN_PROVENANCE_VERSION,
         },
-        settings or get_settings(),
+        active_settings,
     )
 
 
-def verify_campaign_variant_provenance(
+def inspect_campaign_variant_provenance(
     variant: Mapping[str, object],
     *,
     criteria_fingerprint: str,
     settings: Settings | None = None,
     now: int | None = None,
-) -> tuple[Literal["supervisor", "reviewed_fallback"], str] | None:
+) -> CampaignVariantProvenanceProof | None:
+    """Verify a token and return durable, non-secret proof attributes."""
+
     token = str(variant.get("provenance_token") or "").strip()
     if not token:
         return None
@@ -331,13 +366,16 @@ def verify_campaign_variant_provenance(
     if not isinstance(claims, dict):
         return None
     active_settings = settings or get_settings()
-    if not any(
-        hmac.compare_digest(
-            supplied_signature,
-            hmac.new(key, body.encode("ascii"), hashlib.sha256).hexdigest(),
-        )
-        for key in _campaign_provenance_keys(active_settings)
-    ):
+    claimed_kid = str(claims.get("kid") or "").strip()
+    matched_kid: str | None = None
+    for key_id, key in _campaign_provenance_keyring(active_settings):
+        if claimed_kid and claimed_kid != key_id:
+            continue
+        expected = hmac.new(key, body.encode("ascii"), hashlib.sha256).hexdigest()
+        if hmac.compare_digest(supplied_signature, expected):
+            matched_kid = key_id
+            break
+    if matched_kid is None:
         return None
     current_time = int(time.time()) if now is None else now
     try:
@@ -347,6 +385,8 @@ def verify_campaign_variant_provenance(
         return None
     mode = str(claims.get("generation_mode") or "")
     label = str(claims.get("generator_label") or "")
+    copy_hash = str(claims.get("copy_hash") or "")
+    signed_criteria = str(claims.get("criteria_fingerprint") or "")
     if (
         claims.get("v") != _CAMPAIGN_PROVENANCE_VERSION
         or issued_at > current_time + 60
@@ -354,12 +394,39 @@ def verify_campaign_variant_provenance(
         or expires_at - issued_at != _CAMPAIGN_PROVENANCE_TTL_S
         or mode not in _GENERATOR_LABELS
         or label != _GENERATOR_LABELS[mode]
-        or claims.get("criteria_fingerprint") != criteria_fingerprint
-        or claims.get("copy_hash")
+        or signed_criteria != criteria_fingerprint
+        or copy_hash
         != _campaign_copy_hash(variant.get("subject"), variant.get("body"))
     ):
         return None
-    return mode, label  # type: ignore[return-value]
+    return CampaignVariantProvenanceProof(
+        generation_mode=mode,  # type: ignore[arg-type]
+        generator_label=label,
+        key_id=matched_kid,
+        issued_at=issued_at,
+        expires_at=expires_at,
+        copy_hash=copy_hash,
+        criteria_fingerprint=signed_criteria,
+        token_digest=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+    )
+
+
+def verify_campaign_variant_provenance(
+    variant: Mapping[str, object],
+    *,
+    criteria_fingerprint: str,
+    settings: Settings | None = None,
+    now: int | None = None,
+) -> tuple[Literal["supervisor", "reviewed_fallback"], str] | None:
+    proof = inspect_campaign_variant_provenance(
+        variant,
+        criteria_fingerprint=criteria_fingerprint,
+        settings=settings,
+        now=now,
+    )
+    if proof is None:
+        return None
+    return proof.generation_mode, proof.generator_label
 
 
 def _bind_recommendation_provenance(
@@ -603,20 +670,8 @@ def recommend_campaign(
     settings = settings or get_settings()
     criteria_fingerprint = criteria_fingerprint or campaign_criteria_fingerprint({})
     lender_name = settings.mip_lender_name
-    endpoint, reason = composition_endpoint(settings)
-    if endpoint is None:
-        return _fallback(
-            preview,
-            lender_name=lender_name,
-            performance=performance,
-            warning=reason or "Agent endpoint unavailable",
-            criteria_fingerprint=criteria_fingerprint,
-            settings=settings,
-        )
-
     try:
         client = serving_client or workspace_client()
-        task = agent_task_if_ready(client, endpoint)
     except Exception:  # noqa: BLE001 - recommendation degrades honestly
         return _fallback(
             preview,
@@ -626,15 +681,18 @@ def recommend_campaign(
             criteria_fingerprint=criteria_fingerprint,
             settings=settings,
         )
-    if task is None:
+    runtime, reason = verify_supervisor_runtime(client, settings)
+    if runtime is None:
         return _fallback(
             preview,
             lender_name=lender_name,
             performance=performance,
-            warning="Agent endpoint is not ready",
+            warning=reason or "Supervisor unavailable",
             criteria_fingerprint=criteria_fingerprint,
             settings=settings,
         )
+    endpoint = runtime.endpoint
+    task = runtime.task
 
     evidence = _evidence(preview, performance)
     repair_note: str | None = None

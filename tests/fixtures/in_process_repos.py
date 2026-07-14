@@ -712,6 +712,9 @@ class InProcessMockBorrowerRepository:
                 return b
         return None
 
+    def get_fresh(self, borrower_id: str) -> Borrower360 | None:
+        return self.get(borrower_id)
+
     def evidence(self, borrower_id: str) -> list[EvidenceEvent] | None:
         borrower = self.get(borrower_id)
         if borrower is None:
@@ -770,7 +773,18 @@ class InProcessMockOfferRepository:
     """Test fixture implementing ``OfferRepository`` from the synthetic population."""
 
     def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
-        return mock_data.BORROWER_OFFER_INPUTS.get(borrower_id)
+        inputs = mock_data.BORROWER_OFFER_INPUTS.get(borrower_id)
+        borrower = next((row for row in mock_data.BORROWERS if row.borrower_id == borrower_id), None)
+        if inputs is None or borrower is None:
+            return None
+        return {
+            **inputs,
+            "clip_id": borrower.clip_id,
+            "borrower_id": borrower.borrower_id,
+            "confidence": borrower.confidence,
+            "evidence_ids": list(borrower.evidence_ids),
+            "source_refreshed_at": "2026-04-20T06:12:00Z",
+        }
 
 
 class InProcessMockOutreachRepository:

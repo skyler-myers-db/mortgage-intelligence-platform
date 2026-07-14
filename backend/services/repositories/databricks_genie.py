@@ -624,7 +624,7 @@ def _restore_live_voice(
     proof = canonical.proof
     narrative = (result.answer_text or "").strip()
     updates: dict[str, Any] = {}
-    contradicted, conflicting_claim = _narrative_contradicts_metric(
+    contradicted, _ = _narrative_contradicts_metric(
         narrative,
         canonical.metric_value,
     )
@@ -636,10 +636,9 @@ def _restore_live_voice(
     if narrative and contradicted:
         updates["answer"] = canonical.answer
         if proof is not None:
-            claim_note = f" ({conflicting_claim})" if conflicting_claim else ""
             gap = (
-                "Genie's draft narrative was superseded because its numeric claim"
-                f"{claim_note} contradicted the governed recomputation."
+                "Genie's draft narrative was superseded because it contradicted "
+                "the governed recomputation; the unsupported prose was removed."
             )
             if gap not in proof.known_data_gaps:
                 proof = proof.model_copy(
@@ -677,7 +676,19 @@ def _restore_live_voice(
                 update={"known_data_gaps": [*proof.known_data_gaps, gap]}
             )
     if proof is not None:
-        updates["proof"] = proof.model_copy(update={"reasoning_trace": reasoning_trace})
+        updates["proof"] = proof.model_copy(
+            update={
+                "reasoning_trace": reasoning_trace,
+                "conversation_id": result.conversation_id,
+                "message_id": result.message_id,
+            }
+        )
+    # Canonical answers intentionally carry deterministic proof identifiers.
+    # Feedback, however, belongs to the live Conversation API turn, so retain
+    # its identity on the response without changing the recomputed metric.
+    updates["conversation_id"] = result.conversation_id
+    updates["message_id"] = result.message_id
+    updates["elapsed_ms"] = result.elapsed_ms
     updates["reasoning_trace"] = reasoning_trace
     updates["follow_up_questions"] = genie_follow_up_questions(result.suggested_questions)
     updates["native_visualization"] = genie_native_visualization(result.native_visualization)

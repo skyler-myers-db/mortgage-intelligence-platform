@@ -2,10 +2,9 @@
 
 ``require_approver`` guards ``/outreach/approve`` and ``/outreach/reject``:
 
-* empty ``MIP_APPROVER_EMAILS`` (default) -> permissive: any
-  authenticated workspace user decides, attribution recorded — the
-  documented Module 0 demo posture (booth flow must not require a
-  pre-provisioned roster);
+* empty ``MIP_APPROVER_EMAILS`` in local/test -> authenticated users may
+  exercise the development workflow;
+* empty roster in a deployed environment -> admin-only, never fail-open;
 * non-empty allowlist -> listed emails admitted, admins admitted
   (operator can never lock themselves out), everyone else 403 with the
   shared ``{"detail": "forbidden"}`` body.
@@ -34,12 +33,28 @@ def _request(email: str | None = None, groups: str | None = None) -> Request:
 def _clean_allowlists(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "approver_emails", "", raising=False)
     monkeypatch.setattr(settings, "admin_emails", "", raising=False)
+    monkeypatch.setattr(settings, "app_env", "local", raising=False)
     yield
 
 
-def test_empty_allowlist_admits_any_authenticated_actor() -> None:
+def test_empty_allowlist_admits_authenticated_actor_only_in_local() -> None:
     actor = require_approver(_request(email="lo01@summit.example"))
     assert actor == "lo01@summit.example"
+
+
+def test_empty_allowlist_fails_closed_to_admin_in_deployed_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(settings, "app_env", "dev")
+    with pytest.raises(HTTPException) as exc:
+        require_approver(_request(email="lo01@summit.example", groups=""))
+    assert exc.value.status_code == 403
+    assert exc.value.detail == "forbidden"
+
+    actor = require_approver(
+        _request(email="operator@summit.example", groups="mip-admin")
+    )
+    assert actor == "operator@summit.example"
 
 
 def test_listed_email_is_admitted(monkeypatch: pytest.MonkeyPatch) -> None:

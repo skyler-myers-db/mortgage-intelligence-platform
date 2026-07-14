@@ -39,6 +39,9 @@ def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
     assert "chmod 600 .env.local" in text
     assert "cat .env.local" not in text
     assert "echo \"$DATABRICKS_TOKEN\"" not in text
+    assert 'echo "MIP_COTALITY_ID_MASK_SECRET=' not in text
+    assert 'echo "MIP_GENIE_ACTION_SECRET_CURRENT=' not in text
+    assert 'echo "MIP_GENIE_ACTION_SECRET_PREVIOUS=' not in text
 
 
 def test_deploy_dev_binds_required_and_rotation_secrets() -> None:
@@ -53,7 +56,6 @@ def test_deploy_dev_binds_required_and_rotation_secrets() -> None:
     ):
         assert binding in text
     assert "MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT" in text
-    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS=${MIP_GENIE_ACTION_SECRET_PREVIOUS}" in text
     assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID=${MIP_GENIE_ACTION_SECRET_PREVIOUS_KID}" in text
 
 
@@ -86,6 +88,10 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
     assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
     assert "MIP_COTALITY_ID_MASK_SECRET is required for target" in text
     assert "source-known compatibility namespace is allowed only for local/test" in text
+    assert text.index("provision_runtime_secrets.py") < text.index(
+        "bundle_env.py validate"
+    )
+    assert "Apps deploy payload\n# carries only value_from resource names" in text
 
     repo = tmp_path / "repo"
     script_dir = repo / "scripts"

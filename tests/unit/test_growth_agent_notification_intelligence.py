@@ -18,10 +18,33 @@ def test_notification_intelligence_fallback_is_explicit() -> None:
     assert result.slack_context != result.teams_summary
 
 
+def test_notification_intelligence_fallback_is_workflow_specific() -> None:
+    refi = recommend_notification_intelligence(
+        monitor_name="Daily Refi Watch",
+        workflow_id="daily_refi_brief",
+        settings=Settings(mip_agent_orchestrator=False),
+    )
+    listing = recommend_notification_intelligence(
+        monitor_name="Listing Watch",
+        workflow_id="listing_watch",
+        settings=Settings(mip_agent_orchestrator=False),
+    )
+
+    assert refi.slack_context != listing.slack_context
+    assert refi.teams_summary != listing.teams_summary
+    assert refi.operator_action != listing.operator_action
+    assert "refinance" in refi.teams_summary.lower()
+    assert "purchase" in listing.teams_summary.lower()
+
+
 class _ApiClient:
-    def do(self, method: str, path: str, *, body: dict[str, object]):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            assert path == "/api/2.1/supervisor-agents/supervisor-id"
+            return {"supervisor_agent_id": "supervisor-id", "endpoint_name": "mip-supervisor"}
         assert method == "POST"
         assert path == "/serving-endpoints/responses"
+        assert body is not None
         assert body["max_output_tokens"] == 500
         return {
             "output": [
@@ -66,7 +89,10 @@ def test_notification_intelligence_uses_validated_supervisor_fragments() -> None
 
 
 class _UnsafeApiClient(_ApiClient):
-    def do(self, method: str, path: str, *, body: dict[str, object]):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        assert body is not None
         response = super().do(method, path, body=body)
         response["output"][0]["content"][0]["text"] = """{
           "slack_context": "Act now on 999 borrowers at /lead-queue",
@@ -96,7 +122,10 @@ def test_notification_intelligence_rejects_model_controlled_counts_routes_and_pr
 
 
 class _UnsafeIdentityApiClient(_ApiClient):
-    def do(self, method: str, path: str, *, body: dict[str, object]):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        assert body is not None
         response = super().do(method, path, body=body)
         response["output"][0]["content"][0]["text"] = """{
           "slack_context": "Contact john smith for the operating review",

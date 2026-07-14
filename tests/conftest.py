@@ -23,6 +23,7 @@ from __future__ import annotations
 # ruff: noqa: E402,I001
 
 import json
+import os
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -1478,4 +1479,53 @@ def _disable_outreach_lifecycle_sync_for_unit_routes(
         outreach_mod,
         "enqueue_lifecycle_trigger",
         lambda background, *, reason="approval": None,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _disable_live_supervisor_client_for_test_routes(
+    monkeypatch: pytest.MonkeyPatch,
+    request: pytest.FixtureRequest,
+) -> None:
+    """Prevent hermetic route tests from discovering local workspace auth.
+
+    Supervisor request/response handling has focused tests that inject a serving
+    client explicitly. Generic unit and in-process integration routes should
+    exercise the governed fallback and must never construct a real
+    ``WorkspaceClient`` just because a developer has Databricks credentials on
+    disk. Explicitly enabled live integration runs retain production wiring.
+    """
+    test_path = str(request.node.path)
+    if "tests/integration/" in test_path and os.environ.get("LAKEBASE_INTEGRATION") == "1":
+        return
+
+    from backend.services import (
+        campaign_intelligence,
+        growth_agent_composer,
+        growth_agent_notification_intelligence,
+        outreach_intelligence,
+    )
+
+    def _unit_workspace_client() -> object:
+        raise RuntimeError("live Supervisor client disabled in unit tests")
+
+    monkeypatch.setattr(
+        outreach_intelligence,
+        "workspace_client",
+        _unit_workspace_client,
+    )
+    monkeypatch.setattr(
+        campaign_intelligence,
+        "workspace_client",
+        _unit_workspace_client,
+    )
+    monkeypatch.setattr(
+        growth_agent_notification_intelligence,
+        "workspace_client",
+        _unit_workspace_client,
+    )
+    monkeypatch.setattr(
+        growth_agent_composer,
+        "make_workspace_client",
+        _unit_workspace_client,
     )

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 from backend.config.settings import settings as settings
 from backend.schemas.assets import (
@@ -95,7 +95,7 @@ class AssetMetadataService:
 
     def _load_asset(self, descriptor: AssetDescriptor) -> AssetMetadataResponse:
         gaps: list[str] = []
-        table_info = self._load_table_info(descriptor, gaps)
+        object_info, observation_source = self._load_object_info(descriptor, gaps)
         readiness = self._load_readiness(descriptor, gaps)
         detail = self._load_detail(descriptor, gaps)
         columns = self._load_columns(descriptor, gaps)
@@ -130,6 +130,10 @@ class AssetMetadataService:
             schema_name=schema_name,
             object_name=object_name,
             uc_object=descriptor.fqn,
+            observed_in_unity_catalog=(
+                None if object_info is None else bool(object_info)
+            ),
+            observation_source=observation_source,
             generated_at=datetime.now(UTC),
             last_updated=business_refresh,
             delta_last_modified=delta_last_modified,
@@ -146,7 +150,7 @@ class AssetMetadataService:
             ),
             source_note=(
                 _safe_text(readiness.get("note"))
-                or _safe_text(table_info.get("comment"))
+                or _safe_text((object_info or {}).get("comment"))
                 or descriptor.description
             ),
             checked_at=_opt_str(readiness.get("checked_at")) if readiness else None,
@@ -160,17 +164,48 @@ class AssetMetadataService:
         )
         return payload
 
-    def _load_table_info(self, descriptor: AssetDescriptor, gaps: list[str]) -> dict[str, Any]:
-        if descriptor.object_type == "function":
-            return {}
+    def _load_object_info(
+        self,
+        descriptor: AssetDescriptor,
+        gaps: list[str],
+    ) -> tuple[
+        dict[str, Any] | None,
+        Literal[
+            "system.information_schema.tables",
+            "system.information_schema.routines",
+            "unavailable",
+        ],
+    ]:
+        """Observe the allowlisted object in UC metadata without scanning data.
+
+        ``None`` means the metadata proof itself was unavailable. An empty dict
+        means the query succeeded and the declared object was not found. Keeping
+        those states distinct prevents a permissions problem from being rendered
+        as proof that an object is missing.
+        """
         catalog, schema_name, object_name = _split_fqn(descriptor.fqn)
-        try:
-            rows = self._sql.execute(
+        if descriptor.object_type == "function":
+            source = "system.information_schema.routines"
+            statement = (
+                "SELECT routine_catalog, routine_schema, routine_name, routine_type, "
+                "comment "
+                "FROM system.information_schema.routines "
+                "WHERE routine_catalog = :catalog "
+                "AND routine_schema = :schema_name "
+                "AND routine_name = :object_name"
+            )
+        else:
+            source = "system.information_schema.tables"
+            statement = (
                 "SELECT table_catalog, table_schema, table_name, table_type, comment "
                 "FROM system.information_schema.tables "
                 "WHERE table_catalog = :catalog "
                 "AND table_schema = :schema_name "
-                "AND table_name = :object_name",
+                "AND table_name = :object_name"
+            )
+        try:
+            rows = self._sql.execute(
+                statement,
                 {
                     "catalog": catalog,
                     "schema_name": schema_name,
@@ -178,9 +213,11 @@ class AssetMetadataService:
                 },
             )
         except Exception as exc:  # noqa: BLE001 - metadata proof degrades by section
-            gaps.append(f"Table metadata unavailable: {_clip_error(exc)}")
-            return {}
-        return rows[0] if rows else {}
+            gaps.append(f"UC object verification unavailable: {_clip_error(exc)}")
+            return None, "unavailable"
+        if not rows:
+            gaps.append("Declared UC object was not found in workspace metadata.")
+        return (rows[0] if rows else {}), source
 
     def _load_detail(self, descriptor: AssetDescriptor, gaps: list[str]) -> dict[str, Any]:
         if descriptor.object_type != "table":

@@ -62,13 +62,14 @@ export function Console() {
       <div className="tweaks__body">
         <div className="tweak-row">
           <label>Theme</label>
-          <div className="segmented">
+          <div className="segmented" role="group" aria-label="Theme">
             {(['dark', 'light'] as Theme[]).map((t) => (
               <button
                 key={t}
                 className={theme === t ? 'is-active' : ''}
                 onClick={() => setTheme(t)}
                 type="button"
+                aria-pressed={theme === t}
               >
                 {t === 'dark' ? 'Dark' : 'Light'}
               </button>
@@ -85,19 +86,21 @@ export function Console() {
                 onClick={() => setAccent(a)}
                 aria-label={`Accent ${a}`}
                 type="button"
+                aria-pressed={accent === a}
               />
             ))}
           </div>
         </div>
         <div className="tweak-row">
           <label>Density</label>
-          <div className="segmented">
+          <div className="segmented" role="group" aria-label="Density">
             {(['comfortable', 'compact'] as Density[]).map((d) => (
               <button
                 key={d}
                 className={density === d ? 'is-active' : ''}
                 onClick={() => setDensity(d)}
                 type="button"
+                aria-pressed={density === d}
               >
                 {d === 'comfortable' ? 'Comfortable' : 'Compact'}
               </button>

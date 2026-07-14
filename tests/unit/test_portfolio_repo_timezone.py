@@ -232,13 +232,14 @@ class _CampaignPatchLakebase:
         self.calls.append({"sql": sql, "params": params or {}})
 
 
-def _preview_row() -> dict[str, Any]:
+def _preview_row(data_refreshed_at: Any = None) -> dict[str, Any]:
     return {
         "marketable_population": 1000,
         "high_intent_leads": 300,
         "top_tier_opportunities": 120,
         "offers_recommended": 250,
         "avg_score": 72,
+        "data_refreshed_at": data_refreshed_at,
     }
 
 
@@ -285,7 +286,7 @@ def _trend_row(
 def test_naive_datetime_is_stamped_as_utc():
     """Tz-naive datetimes from the connector must come out as tz-aware UTC."""
     naive = datetime(2026, 4, 22, 18, 30, 0)
-    client = _StubClient(_preview_row(), [_trend_row(naive)])
+    client = _StubClient(_preview_row(naive), [_trend_row(naive)])
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
 
     preview = repo.preview(None)
@@ -311,7 +312,7 @@ def test_already_aware_datetime_is_converted_to_utc():
     # Fixed UTC-5 (no DST) so the assertion below is deterministic.
     minus_five = timezone(-timedelta(hours=5))
     aware = datetime(2026, 4, 22, 13, 30, 0, tzinfo=minus_five)
-    client = _StubClient(_preview_row(), [_trend_row(aware)])
+    client = _StubClient(_preview_row(aware), [_trend_row(aware)])
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
 
     preview = repo.preview(None)
@@ -326,7 +327,10 @@ def test_iso_string_is_parsed_and_stamped_utc():
     """Defensive: a future connector change could emit an ISO string. The
     repository parses it and stamps UTC rather than passing through a raw
     string that Pydantic then serialises without tz."""
-    client = _StubClient(_preview_row(), [_trend_row("2026-04-22T18:30:00")])
+    client = _StubClient(
+        _preview_row("2026-04-22T18:30:00"),
+        [_trend_row("2026-04-22T18:30:00")],
+    )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
 
     preview = repo.preview(None)
@@ -717,6 +721,12 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     assert {variant["generator_label"] for variant in variants} == {
         "Agent endpoint-generated recommendation"
     }
+    assert all(variant["provenance_key_id"] == "v1" for variant in variants)
+    assert all(len(variant["provenance_copy_hash"]) == 64 for variant in variants)
+    assert all(len(variant["provenance_criteria_fingerprint"]) == 64 for variant in variants)
+    assert all(len(variant["provenance_token_digest"]) == 64 for variant in variants)
+    assert all(variant["provenance_issued_at"] for variant in variants)
+    assert all(variant["provenance_expires_at"] for variant in variants)
     metadata = json.loads(str(params["metadata"]))
     assert metadata["campaign_generation_mode"] == "supervisor"
     assert metadata["generator_label"] == "Agent endpoint-generated recommendation"
@@ -758,18 +768,18 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
     metadata = json.loads(str(write["params"]["metadata"]))
     assert metadata["campaign_generation_mode"] == "mixed"
     assert metadata["generator_label"] == "Multiple generators"
-    assert metadata["variant_provenance"] == [
-        {
-            "generation_mode": "supervisor",
-            "generator_label": "Agent endpoint-generated recommendation",
-            "variant_name": "A",
-        },
-        {
-            "generation_mode": "operator",
-            "generator_label": "Operator edited",
-            "variant_name": "B",
-        },
-    ]
+    generated, operator = metadata["variant_provenance"]
+    assert generated["generation_mode"] == "supervisor"
+    assert generated["generator_label"] == "Agent endpoint-generated recommendation"
+    assert generated["variant_name"] == "A"
+    assert generated["provenance_key_id"] == "v1"
+    assert len(generated["provenance_copy_hash"]) == 64
+    assert len(generated["provenance_criteria_fingerprint"]) == 64
+    assert operator == {
+        "generation_mode": "operator",
+        "generator_label": "Operator edited",
+        "variant_name": "B",
+    }
 
 
 def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkeypatch):

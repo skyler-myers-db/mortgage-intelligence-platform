@@ -506,14 +506,31 @@ export function EvidenceDrawer() {
               )}
 
               {metadata && (
-                <div className="source-stat-grid" aria-label="Governed asset metadata">
-                  {metadataStatRows(metadata).map(([label, value]) => (
-                    <div key={label} className="source-stat">
-                      <span>{label}</span>
-                      <strong>{value}</strong>
-                    </div>
-                  ))}
-                </div>
+                <>
+                  <div className="source-card source-card--subtle" role="status">
+                    <div className="eyebrow mb-2">Workspace verification</div>
+                    <p className="body flush">
+                      {metadata.observed_in_unity_catalog === true
+                        ? `Observed as a ${metadata.object_type} in this workspace.`
+                        : metadata.observed_in_unity_catalog === false
+                          ? 'The declared asset was not found in current Unity Catalog metadata.'
+                          : 'Unity Catalog object verification was unavailable for this request.'}
+                    </p>
+                    {metadata.observation_source && metadata.observation_source !== 'unavailable' && (
+                      <p className="muted fs-12 flush">
+                        Verified through {metadata.observation_source}.
+                      </p>
+                    )}
+                  </div>
+                  <div className="source-stat-grid" aria-label="Governed asset metadata">
+                    {metadataStatRows(metadata).map(([label, value]) => (
+                      <div key={label} className="source-stat">
+                        <span>{label}</span>
+                        <strong>{value}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </>
               )}
 
               {d.usedIn && d.usedIn.length > 0 && (

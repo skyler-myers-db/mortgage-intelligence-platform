@@ -131,12 +131,12 @@ describe('Equity versus rate spread score-band legend', () => {
     expect(html).toContain('analytics-scatter__dot--band score--med');
   });
 
-  it('groups exact collisions and orders every masked borrower link deterministically', () => {
+  it('groups exact collisions and preserves the governed server ranking', () => {
     const groups = groupExactCoordinatePoints(collisionDrilldown.points);
     expect(groups).toHaveLength(2);
     expect(groups[0].points.map((point) => point.borrower_id)).toEqual([
-      'B-0000000000001',
       'B-0000000000002',
+      'B-0000000000001',
     ]);
 
     const html = renderToStaticMarkup(

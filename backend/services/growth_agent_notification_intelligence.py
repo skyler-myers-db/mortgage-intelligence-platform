@@ -10,7 +10,6 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 from backend.agents.mortgage_growth_copilot import (
-    agent_task_if_ready,
     extract_response_text,
     parse_json_object,
     prompt_hash,
@@ -23,7 +22,7 @@ from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
 )
-from backend.services.growth_agent_composer import composition_endpoint
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 NotificationGenerationMode = Literal["supervisor", "governed_fallback"]
 _UNSAFE_FRAGMENT_RE = re.compile(
@@ -70,11 +69,65 @@ class NotificationIntelligence:
     strategy_summary: str
 
 
-def _fallback(reason: str) -> NotificationIntelligence:
+_WORKFLOW_FALLBACKS: dict[str, tuple[str, str, str]] = {
+    "daily_refi_brief": (
+        "The refinance-economics queue refreshed for loan-officer triage",
+        "The refinance watchlist is ready for rate-spread prioritization and ownership review",
+        "Review the strongest refinance economics and assign the next owner",
+    ),
+    "borrower_dossier_review": (
+        "The top-opportunity dossier queue refreshed for evidence review",
+        "The dossier watchlist is ready for evidence, offer-fit, and ownership review",
+        "Review the leading dossier evidence and assign the next owner",
+    ),
+    "listing_watch": (
+        "The listed-property purchase watch refreshed for loan-officer review",
+        "The purchase watchlist is ready for listing-signal and next-home opportunity review",
+        "Review the listing evidence and assign the next purchase-opportunity owner",
+    ),
+    "competitor_recapture_monitor": (
+        "The competitor-lien watch refreshed for recapture review",
+        "The recapture watchlist is ready for relationship, lien, and ownership review",
+        "Review the competitor-lien evidence and assign the next recapture owner",
+    ),
+    "high_equity_heloc_watch": (
+        "The home-equity intent watch refreshed for product-fit review",
+        "The home-equity watchlist is ready for equity, propensity, and ownership review",
+        "Review the equity evidence and assign the next product-fit owner",
+    ),
+    "branch_capacity_review": (
+        "The branch-capacity watch refreshed for assignment review",
+        "The capacity watchlist is ready for queue-balance and ownership review",
+        "Review queue distribution and confirm the next assignment plan",
+    ),
+    "source_freshness_sentinel": (
+        "The data-freshness watch refreshed for operations review",
+        "The source-readiness watchlist is ready for freshness and dependency review",
+        "Review source readiness and assign any required operations follow-up",
+    ),
+    "custom_segment_watch": (
+        "The configured segment watch refreshed for queue review",
+        "The configured segment watchlist is ready for evidence and ownership review",
+        "Review the selected segment evidence and confirm the next operating step",
+    ),
+}
+
+_DEFAULT_FALLBACK = (
+    "The saved watchlist refreshed and is ready for review",
+    "The saved watchlist is ready for evidence and ownership review",
+    "Review the ranked queue and confirm the next operating step",
+)
+
+
+def _fallback(reason: str, *, workflow_id: str) -> NotificationIntelligence:
+    slack_context, teams_summary, operator_action = _WORKFLOW_FALLBACKS.get(
+        workflow_id,
+        _DEFAULT_FALLBACK,
+    )
     return NotificationIntelligence(
-        slack_context="The saved watchlist has refreshed and is ready for review",
-        teams_summary="The saved watchlist refresh completed with a new eligible population",
-        operator_action="Review the ranked queue and confirm the next operating step",
+        slack_context=slack_context,
+        teams_summary=teams_summary,
+        operator_action=operator_action,
         generation_mode="governed_fallback",
         generator_label="Governed notification framework",
         strategy_summary=reason,
@@ -107,16 +160,15 @@ def recommend_notification_intelligence(
     serving_client: Any | None = None,
 ) -> NotificationIntelligence:
     settings = settings or get_settings()
-    endpoint, reason = composition_endpoint(settings)
-    if endpoint is None:
-        return _fallback(reason or "Supervisor unavailable")
     try:
         client = serving_client or workspace_client()
-        task = agent_task_if_ready(client, endpoint)
     except Exception:  # noqa: BLE001 - internal notification degrades honestly
-        return _fallback("Supervisor readiness check failed")
-    if task is None:
-        return _fallback("Supervisor is not ready")
+        return _fallback("Supervisor readiness check failed", workflow_id=workflow_id)
+    runtime, reason = verify_supervisor_runtime(client, settings)
+    if runtime is None:
+        return _fallback(reason or "Supervisor unavailable", workflow_id=workflow_id)
+    endpoint = runtime.endpoint
+    task = runtime.task
 
     repair_note: str | None = None
     for attempt in range(2):
@@ -162,5 +214,5 @@ def recommend_notification_intelligence(
         except (ValidationError, ValueError, TypeError) as exc:
             repair_note = str(exc)[:400]
         except Exception:  # noqa: BLE001 - platform failure uses labelled fallback
-            return _fallback("Supervisor request failed")
-    return _fallback("Supervisor output failed validation")
+            return _fallback("Supervisor request failed", workflow_id=workflow_id)
+    return _fallback("Supervisor output failed validation", workflow_id=workflow_id)

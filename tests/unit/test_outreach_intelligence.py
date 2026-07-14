@@ -47,9 +47,13 @@ def test_sms_never_calls_supervisor_and_stays_within_channel_limit() -> None:
 
 
 class _ApiClient:
-    def do(self, method: str, path: str, *, body: dict[str, object]):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            assert path == "/api/2.1/supervisor-agents/supervisor-id"
+            return {"supervisor_agent_id": "supervisor-id", "endpoint_name": "mip-supervisor"}
         assert method == "POST"
         assert path == "/serving-endpoints/responses"
+        assert body is not None
         assert body["max_output_tokens"] == 700
         prompt = str(body["input"])
         assert "borrower_id" not in prompt
@@ -104,7 +108,10 @@ def test_supervisor_message_is_validated_and_server_appends_disclosure() -> None
 
 
 class _UnsafeApiClient(_ApiClient):
-    def do(self, method: str, path: str, *, body: dict[str, object]):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        assert body is not None
         response = super().do(method, path, body=body)
         response["output"][0]["content"][0]["text"] = """{
           "subject": "Act now for the lowest rate",
