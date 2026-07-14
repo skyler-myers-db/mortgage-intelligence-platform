@@ -14,8 +14,13 @@ from backend.services.genie_actions import (
     _previous_action_token_key,
 )
 
-CURRENT_SECRET = "current-secret-material-32-bytes-long"
-NEW_SECRET = "rotated-secret-material-32-bytes-long"
+
+def _test_secret(label: str) -> str:
+    return f"{label}-" + ("x" * 32)
+
+
+CURRENT_SECRET = _test_secret("current")
+NEW_SECRET = _test_secret("rotated")
 
 
 @pytest.mark.parametrize("app_env", ["dev", "sandbox", "customer", "production"])

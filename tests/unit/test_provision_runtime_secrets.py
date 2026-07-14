@@ -6,9 +6,14 @@ import pytest
 
 from tools.databricks import provision_runtime_secrets as subject
 
-MASK_SECRET = "mask-secret-material-at-least-32-bytes"
-CURRENT_SECRET = "current-secret-material-at-least-32-bytes"
-PREVIOUS_SECRET = "previous-secret-material-at-least-32-bytes"
+
+def _test_secret(label: str) -> str:
+    return f"{label}-" + ("x" * 32)
+
+
+MASK_SECRET = _test_secret("mask")
+CURRENT_SECRET = _test_secret("current")
+PREVIOUS_SECRET = _test_secret("previous")
 
 
 class _Secrets:
