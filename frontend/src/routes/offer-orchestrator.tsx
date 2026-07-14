@@ -26,7 +26,7 @@ import {
   OfferReviewGrid,
   RejectRationalePanel,
 } from './offer-orchestrator.panels';
-import { offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
+import { draftProofMatchesSnapshot, offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
 
 export default function OfferOrchestrator() {
@@ -411,15 +411,12 @@ export default function OfferOrchestrator() {
   );
   const draftText = draftLoaded ? draftBody : '';
   const subjectReady = draftChannel === 'sms' || draftSubject.trim().length > 0;
+  const draftProofFresh = draftProofMatchesSnapshot(b, rec, draftProof?.sourceRefreshedAt);
   const draftReady = Boolean(
     draftLoaded
-      && draftProof
+      && draftProofFresh
       && subjectReady
-      && draftText.trim().length > 0
-      && b?.source_refreshed_at
-      && rec?.source_refreshed_at
-      && b.source_refreshed_at === draftProof.sourceRefreshedAt
-      && rec.source_refreshed_at === draftProof.sourceRefreshedAt,
+      && draftText.trim().length > 0,
   );
   const draftDirty = draftLoaded && (
     draftBody !== draftBaselineBody
@@ -746,6 +743,7 @@ export default function OfferOrchestrator() {
         }}
         draftChannel={draftChannel}
         draftDirty={draftDirty}
+        draftProofFresh={draftProofFresh}
         onDraftChannelChange={(channel) => {
           setDraftSaveError(null);
           setDraftChannel(channel);

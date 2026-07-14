@@ -147,6 +147,7 @@ interface OfferReviewGridProps {
   onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
   draftDirty?: boolean;
+  draftProofFresh: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
   approving: boolean;
   draftDisclosureVersion: string | null;
@@ -184,6 +185,7 @@ export function OfferReviewGrid({
   onDraftChange,
   draftChannel,
   draftDirty = false,
+  draftProofFresh,
   onDraftChannelChange,
   approving,
   draftDisclosureVersion,
@@ -226,6 +228,7 @@ export function OfferReviewGrid({
         onDraftChange={onDraftChange}
         draftChannel={draftChannel}
         draftDirty={draftDirty}
+        draftProofFresh={draftProofFresh}
         onDraftChannelChange={onDraftChannelChange}
         approving={approving}
         draftDisclosureVersion={draftDisclosureVersion}
@@ -350,6 +353,7 @@ interface DraftOutreachPanelProps {
   onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
   draftDirty?: boolean;
+  draftProofFresh: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
   approving: boolean;
   draftDisclosureVersion: string | null;
@@ -383,6 +387,7 @@ function DraftOutreachPanel({
   onDraftChange,
   draftChannel,
   draftDirty = false,
+  draftProofFresh,
   onDraftChannelChange,
   approving,
   draftDisclosureVersion,
@@ -447,6 +452,26 @@ function DraftOutreachPanel({
             )}
           </div>
         )}
+        {draftLoaded && !draftProofFresh && (
+          <div
+            data-testid="draft-proof-stale-note"
+            className="status-callout status-callout--warning mb-3"
+            role="alert"
+          >
+            <span>The borrower data changed after this draft was generated. Regenerate it before approval.</span>
+            <div className="chip-row mt-2">
+              <Button
+                variant="default"
+                size="sm"
+                icon="play"
+                onClick={regenerateDraft}
+                disabled={approving || draftSavePending || !borrowerId}
+              >
+                Regenerate draft
+              </Button>
+            </div>
+          </div>
+        )}
         {draftChannel !== 'sms' && (
           <label className="field mb-3">
             <span className="field__label">Subject</span>
@@ -482,8 +507,8 @@ function DraftOutreachPanel({
           <div className="offer-message-intelligence mt-3" data-testid="offer-message-intelligence">
             <div className="split-row">
               <Chip
-                variant={draftGenerationMode === 'supervisor' ? 'success' : 'neutral'}
-                icon={draftGenerationMode === 'supervisor' ? 'sparkle' : 'doc'}
+                variant={!draftDirty && draftGenerationMode === 'supervisor' ? 'success' : 'neutral'}
+                icon={!draftDirty && draftGenerationMode === 'supervisor' ? 'sparkle' : 'doc'}
               >
                 {draftGeneratorLabel}
               </Chip>

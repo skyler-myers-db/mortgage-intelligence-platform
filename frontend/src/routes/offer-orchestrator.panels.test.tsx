@@ -52,6 +52,7 @@ describe('OfferReviewGrid message intelligence', () => {
           draftText="A useful governed draft."
           onDraftChange={vi.fn()}
           draftChannel="email"
+          draftProofFresh
           onDraftChannelChange={vi.fn()}
           approving={false}
           draftDisclosureVersion="v1"
@@ -173,6 +174,7 @@ describe('OfferReviewGrid message intelligence', () => {
           draftText=""
           onDraftChange={vi.fn()}
           draftChannel="email"
+          draftProofFresh={false}
           onDraftChannelChange={vi.fn()}
           approving={false}
           draftDisclosureVersion={null}
@@ -219,6 +221,7 @@ describe('OfferReviewGrid message intelligence', () => {
           draftText="Do not send"
           onDraftChange={vi.fn()}
           draftChannel="email"
+          draftProofFresh={false}
           onDraftChannelChange={vi.fn()}
           approving={false}
           draftDisclosureVersion={null}
@@ -246,5 +249,57 @@ describe('OfferReviewGrid message intelligence', () => {
       .toBe(true);
     expect(container.querySelector<HTMLButtonElement>('[aria-label="Save outreach draft for B-ERROR"]')?.disabled)
       .toBe(true);
+  });
+
+  it('explains stale proof and styles a human-edited supervisor draft neutrally', () => {
+    const regenerate = vi.fn();
+    act(() => root.render(
+      <MemoryRouter>
+        <OfferReviewGrid
+          borrower={{ borrower_id: 'B-STALE', opportunity_score: 80 } as never}
+          borrowerId="B-STALE"
+          recommendation={null}
+          productLabel="Refinance review"
+          leadIsSaved={false}
+          saveCurrentLead={vi.fn()}
+          draftWarming={null}
+          draftLoaded
+          draftError={null}
+          draftSubject="Edited subject"
+          onDraftSubjectChange={vi.fn()}
+          draftText="Edited message"
+          onDraftChange={vi.fn()}
+          draftChannel="email"
+          draftDirty
+          draftProofFresh={false}
+          onDraftChannelChange={vi.fn()}
+          approving={false}
+          draftDisclosureVersion="v1"
+          draftDisclosureState="IL"
+          draftGeneratorLabel="Human edited from Supervisor-optimized message"
+          draftGenerationMode="supervisor"
+          draftStrategy={null}
+          draftEvidence={[]}
+          draftEvidenceAssets={[]}
+          regenerateDraft={regenerate}
+          draftIsSaved={false}
+          saveCurrentDraft={vi.fn()}
+          savedDraftExists={false}
+          resetCurrentDraft={vi.fn()}
+          draftReady={false}
+        />
+      </MemoryRouter>,
+    ));
+
+    const staleNote = container.querySelector('[data-testid="draft-proof-stale-note"]');
+    expect(staleNote?.textContent).toContain('borrower data changed');
+    const regenerateButton = Array.from(staleNote?.querySelectorAll('button') ?? []).find(
+      (button) => button.textContent?.trim() === 'Regenerate draft',
+    );
+    act(() => regenerateButton?.click());
+    expect(regenerate).toHaveBeenCalledTimes(1);
+    const generatorChip = container.querySelector('[data-testid="offer-message-intelligence"] .chip');
+    expect(generatorChip?.classList.contains('chip--neutral')).toBe(true);
+    expect(generatorChip?.textContent).toContain('Human edited from');
   });
 });

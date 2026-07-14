@@ -27,6 +27,17 @@ import type { LeadSummary } from '../../types';
 const draftOutreach = vi.fn();
 const approve = vi.fn();
 
+const DRAFT = {
+  generation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+  response_hash: 'a'.repeat(64),
+  source_refreshed_at: '2026-07-13T12:00:00Z',
+  borrower_id: 'B-AAAAAAAAAAAA1',
+  offer_code: 'refi',
+  channel: 'email',
+  body: 'draft',
+  status: 'draft',
+};
+
 let approvalsFixture: Record<string, 'approved' | 'rejected'> = {};
 
 vi.mock('../AppContext', () => ({
@@ -82,7 +93,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     approvalsFixture = {};
-    draftOutreach.mockResolvedValue({ offer_code: 'refi', body: 'draft' });
+    draftOutreach.mockResolvedValue(DRAFT);
     approve.mockResolvedValue({ status: 'approved' });
     container = document.createElement('div');
     document.body.appendChild(container);
@@ -142,7 +153,16 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     await flush();
 
     expect(draftOutreach).toHaveBeenCalledWith('B-AAAAAAAAAAAA1', 'email', undefined);
-    expect(approve).toHaveBeenCalledTimes(1);
+    expect(approve).toHaveBeenCalledWith(
+      'B-AAAAAAAAAAAA1',
+      expect.objectContaining({
+        draft_body: DRAFT.body,
+        draft_generation_id: DRAFT.generation_id,
+        draft_response_hash: DRAFT.response_hash,
+        draft_source_refreshed_at: DRAFT.source_refreshed_at,
+      }),
+      undefined,
+    );
   });
 
   it("no-ops 'a' on an already-approved row, and the preview SAYS approved", async () => {

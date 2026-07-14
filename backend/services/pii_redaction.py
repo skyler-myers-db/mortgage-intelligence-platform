@@ -387,7 +387,7 @@ def _id_mask_secret() -> str:
     )
     from backend.config.settings import settings
 
-    app_env = (settings.app_env or "local").strip().lower()
+    app_env = (settings.app_env or "").strip().lower()
     if configured and not is_placeholder:
         if app_env not in _ID_MASK_FALLBACK_APP_ENVS:
             try:

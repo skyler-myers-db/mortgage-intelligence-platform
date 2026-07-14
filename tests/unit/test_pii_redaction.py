@@ -232,6 +232,16 @@ def test_mask_cotality_id_requires_secret_outside_local_test(
         mask_cotality_id("clip", "1234567890")
 
 
+def test_mask_cotality_id_requires_secret_when_app_env_is_absent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MIP_COTALITY_ID_MASK_SECRET", raising=False)
+    monkeypatch.setattr(settings, "app_env", "")
+
+    with pytest.raises(RuntimeError, match="MIP_COTALITY_ID_MASK_SECRET"):
+        mask_cotality_id("clip", "1234567890")
+
+
 def test_mask_cotality_id_ignores_genie_action_secret_for_masking(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
