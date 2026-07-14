@@ -601,6 +601,28 @@ def test_lakebase_grants_reference_covers_growth_agent_tables() -> None:
     ) in grants_doc
 
 
+def test_lakebase_app_role_grants_can_advance_current_and_future_sequences() -> None:
+    """Table INSERT does not imply nextval() permission on BIGSERIAL columns."""
+
+    from jobs import lakebase_migrate
+
+    templates = "\n".join(lakebase_migrate._APP_ROLE_GRANT_TEMPLATES)
+    grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
+
+    current_sequence_grant = "GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app TO {role}"
+    future_sequence_grant = (
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app GRANT USAGE ON SEQUENCES TO {role}"
+    )
+    assert current_sequence_grant in templates
+    assert future_sequence_grant in templates
+    assert current_sequence_grant.format(role='"mip-app"') in grants_doc
+    assert future_sequence_grant.format(role='"mip-app"') in grants_doc
+
+    # The runtime needs nextval(), not sequence inspection or mutation.
+    sequence_lines = [line for line in templates.splitlines() if "SEQUENCE" in line]
+    assert all("SELECT" not in line and "UPDATE" not in line for line in sequence_lines)
+
+
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:
     store = InMemoryAuditStore()
     e = store.write(

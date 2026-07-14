@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from pathlib import Path
 
 
@@ -194,6 +195,8 @@ def _repo_root() -> Path:
 _APP_ROLE_GRANT_TEMPLATES = (
     'GRANT USAGE ON SCHEMA mip_app TO {role}',
     'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA mip_app TO {role}',
+    'GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app TO {role}',
+    'ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app GRANT USAGE ON SEQUENCES TO {role}',
     'REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM {role}',
 )
 
@@ -225,34 +228,81 @@ def _candidate_app_roles() -> list[str]:
     return ordered
 
 
-def _apply_app_role_grants(conn_kwargs: dict) -> None:
+def _apply_app_role_grants(
+    conn_kwargs: dict,
+    *,
+    role_wait_timeout_s: float | None = None,
+    role_wait_interval_s: float | None = None,
+) -> None:
     import psycopg
     from psycopg import sql as psql
 
     candidates = _candidate_app_roles()
+    timeout_s = (
+        float(os.environ.get("MIP_LAKEBASE_APP_ROLE_WAIT_TIMEOUT_S", "120"))
+        if role_wait_timeout_s is None
+        else role_wait_timeout_s
+    )
+    interval_s = (
+        float(os.environ.get("MIP_LAKEBASE_APP_ROLE_WAIT_INTERVAL_S", "5"))
+        if role_wait_interval_s is None
+        else role_wait_interval_s
+    )
+    if timeout_s < 0 or interval_s <= 0:
+        raise ValueError("Lakebase app-role wait settings must be timeout >= 0 and interval > 0")
+
     conn = psycopg.connect(**conn_kwargs, autocommit=True)
     try:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
-                (candidates,),
-            )
-            present = [row[0] for row in cur.fetchall()]
-            if not present:
-                print(
-                    "[lakebase-migrate] WARNING: no app role found in pg_roles "
-                    f"(candidates: {candidates}); app-role grants skipped. "
-                    "Re-run the deploy (or apply docs/security/GRANTS.md "
-                    "§Lakebase) once the app's database binding has "
-                    "provisioned its role."
+            deadline = time.monotonic() + timeout_s
+            present: list[str] = []
+            while not present:
+                cur.execute(
+                    "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
+                    (candidates,),
                 )
-                return
+                present = [row[0] for row in cur.fetchall()]
+                if present:
+                    break
+                now = time.monotonic()
+                if now >= deadline:
+                    raise RuntimeError(
+                        "no app role found in pg_roles before the Lakebase grant timeout "
+                        f"(candidates: {candidates})"
+                    )
+                wait_s = min(interval_s, max(0.0, deadline - now))
+                print(
+                    "[lakebase-migrate] app database role not visible yet; "
+                    f"retrying in {wait_s:g}s"
+                )
+                time.sleep(wait_s)
             for role in present:
                 for template in _APP_ROLE_GRANT_TEMPLATES:
                     statement = template.format(
                         role=psql.Identifier(role).as_string(cur)
                     )
                     cur.execute(statement)
+                cur.execute(
+                    """
+                    SELECT
+                        COALESCE(bool_and(has_sequence_privilege(%s, c.oid, 'USAGE')), false),
+                        has_table_privilege(%s, 'mip_app.action_audit', 'INSERT'),
+                        has_table_privilege(%s, 'mip_app.action_audit', 'UPDATE'),
+                        has_table_privilege(%s, 'mip_app.action_audit', 'DELETE')
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE c.relkind = 'S' AND n.nspname = 'mip_app'
+                    """,
+                    (role, role, role, role),
+                )
+                sequence_usage, audit_insert, audit_update, audit_delete = cur.fetchone()
+                if not sequence_usage or not audit_insert or audit_update or audit_delete:
+                    raise RuntimeError(
+                        "Lakebase app-role grant postflight failed for "
+                        f"{role!r}: sequence_usage={sequence_usage}, "
+                        f"audit_insert={audit_insert}, audit_update={audit_update}, "
+                        f"audit_delete={audit_delete}"
+                    )
                 print(f"[lakebase-migrate] app-role grants applied to {role!r}")
     finally:
         conn.close()
@@ -275,18 +325,19 @@ def main() -> None:
         print(f"[lakebase-migrate] failed: {exc}", file=sys.stderr)
         sys.exit(2)
 
-    # Grants are applied after (and never instead of) schema + seed; a
-    # grant failure must not mask a successful migration, so it exits 0
-    # with a loud warning rather than failing the job.
+    # Grants are part of migration correctness. A successful schema with an
+    # unusable runtime role is a false-green deploy: every audited mutation
+    # fails even though SELECT 1 health remains green.
     try:
         _apply_app_role_grants(conn_kwargs)
-    except Exception as exc:  # noqa: BLE001 -- best-effort, converges next run
+    except Exception as exc:  # noqa: BLE001 -- operator-facing deployment gate
         print(
-            "[lakebase-migrate] WARNING: app-role grants failed "
-            f"({type(exc).__name__}: {exc}); schema+seed are applied. "
+            "[lakebase-migrate] app-role grants failed "
+            f"({type(exc).__name__}: {exc}); refusing a false-green deploy. "
             "See docs/security/GRANTS.md §Lakebase.",
             file=sys.stderr,
         )
+        sys.exit(2)
 
 
 if __name__ == "__main__":

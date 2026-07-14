@@ -219,22 +219,21 @@ GRANT USE SCHEMA, SELECT ON SCHEMA mip_app_state.public TO `mip-app`;
 
 **5b. Lakebase Postgres role (primary write path).** The `mip-app`
 binding declared in [`databricks.yml`](../../databricks.yml) lines
-126–131 with `permission: CAN_CONNECT_AND_CREATE` is what actually
-provisions the Postgres role. No separate `GRANT` SQL is issued against
-Lakebase — the bundle deploy plus the `mip_lakebase_migrate` job
-idempotently applies `lakebase/schema.sql` + `lakebase/seed_campaigns.sql`
-using workspace-identity short-lived credentials. If you are coming from
-a customer whose Lakebase is external (not the bundle-provisioned
-instance), grant the SP only the table permissions its runtime paths
-need. The audit ledger is append-only: `mip-app` gets `SELECT, INSERT`
-there and must not receive `UPDATE` or `DELETE`. `lakebase/schema.sql`
-also installs `trg_action_audit_append_only`, a statement-level trigger
-that rejects `UPDATE` / `DELETE` even if a bundle-provisioned identity owns
-the table or receives broader grants.
+126–131 with `permission: CAN_CONNECT_AND_CREATE` provisions the Postgres
+role. The `mip_lakebase_migrate` job then idempotently applies
+`lakebase/schema.sql` + `lakebase/seed_campaigns.sql` and the runtime grants
+below using workspace-identity short-lived credentials. Missing roles or a
+failed grant postflight fail the migration rather than leaving a read-healthy
+app whose audited writes return 503. For an externally managed Lakebase,
+apply the same matrix to its app role. The audit ledger is append-only:
+`mip-app` gets `SELECT, INSERT` there and must not receive `UPDATE` or
+`DELETE`. `lakebase/schema.sql` also installs
+`trg_action_audit_append_only`, a statement-level trigger that rejects
+`UPDATE` / `DELETE` even if an identity later receives broader grants.
 
 ```sql
--- Only for externally-managed Lakebase. The bundle-provisioned
--- instance grants the app binding automatically via CAN_CONNECT_AND_CREATE.
+-- Applied automatically by mip_lakebase_migrate for bundle-provisioned
+-- Lakebase; apply this matrix directly for an externally managed instance.
 GRANT USAGE ON SCHEMA mip_app TO "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.campaigns TO "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.approvals TO "mip-app";
@@ -245,6 +244,8 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_messages TO "mip-app
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohorts TO "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohort_members TO "mip-app";
 GRANT SELECT, INSERT ON TABLE mip_app.action_audit TO "mip-app";
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app TO "mip-app";
+ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app GRANT USAGE ON SEQUENCES TO "mip-app";
 REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.agent_sessions TO "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.feedback TO "mip-app";
@@ -252,6 +253,14 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_runs TO "mip-
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors TO "mip-app";
 GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_notification_drafts TO "mip-app";
 ```
+
+`USAGE` on sequences is required for defaults such as
+`action_audit.audit_sequence BIGSERIAL`. Table `INSERT` alone does not grant
+permission to call the backing sequence's `nextval()`. `SELECT`, `UPDATE`, and
+ownership on sequences are intentionally not granted. The default-privilege
+statement applies only to sequences created later by the migration identity;
+it prevents an additive `SERIAL`/identity column from silently breaking every
+audited write after a future deploy.
 
 **What breaks if missing.** `/api/audit/events` returns 503. Approval
 writes (POST `/api/outreach/approve`) fail with `LakebaseError`. The

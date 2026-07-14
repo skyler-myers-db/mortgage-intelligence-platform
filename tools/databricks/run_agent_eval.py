@@ -124,6 +124,83 @@ def _call_growth_agent(
     return {"error": "growth-agent request loop exited unexpectedly"}
 
 
+def _health_payload_ready(payload: object) -> bool:
+    if not isinstance(payload, dict) or payload.get("status") != "ok":
+        return False
+    dependencies = payload.get("dependencies")
+    if not isinstance(dependencies, dict):
+        return False
+    return all(dependencies.get(name) == "up" for name in ("warehouse", "lakebase", "genie"))
+
+
+def _wait_for_app_health(
+    *,
+    app_url: str,
+    token: str,
+    timeout_s: float,
+    interval_s: float,
+    request_timeout_s: float = 30.0,
+) -> None:
+    """Wait for the promoted App and its three required dependencies.
+
+    Databricks Apps can report a successful snapshot promotion before the
+    freshly-started process has re-established Lakebase and warehouse
+    connections. Starting golden cases in that window records dependency
+    errors as model-quality failures. This gate keeps those concerns separate:
+    dependency readiness must succeed before Agent Evaluation starts, while
+    each individual case retains its own bounded transient retry.
+    """
+
+    if timeout_s <= 0:
+        raise ValueError("health timeout must be positive")
+    if interval_s <= 0:
+        raise ValueError("health interval must be positive")
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+    url = f"{app_url.rstrip('/')}/api/v1/health"
+    deadline = time.monotonic() + timeout_s
+    attempt = 0
+    last_state = "no response"
+    with httpx.Client(timeout=request_timeout_s, follow_redirects=False) as client:
+        while True:
+            attempt += 1
+            try:
+                response = client.get(url, headers=headers)
+                try:
+                    payload = response.json()
+                except json.JSONDecodeError:
+                    payload = None
+                if response.status_code == 200 and _health_payload_ready(payload):
+                    print(f"[agent-eval] app dependencies ready after {attempt} health probe(s)")
+                    return
+                if response.status_code in {401, 403}:
+                    raise RuntimeError(
+                        f"Agent Eval health probe is not authorized (HTTP {response.status_code})"
+                    )
+                last_state = f"HTTP {response.status_code}"
+                if isinstance(payload, dict):
+                    status = str(payload.get("status") or "").strip()
+                    dependencies = payload.get("dependencies")
+                    if status or isinstance(dependencies, dict):
+                        last_state = f"HTTP {response.status_code}, status={status or 'unknown'}"
+            except httpx.HTTPError as exc:
+                last_state = f"{type(exc).__name__}: {exc}"
+            now = time.monotonic()
+            if now >= deadline:
+                raise RuntimeError(
+                    "App dependencies were not ready before Agent Eval health timeout "
+                    f"({last_state})"
+                )
+            wait_s = min(interval_s, max(0.0, deadline - now))
+            print(
+                f"[agent-eval] app dependencies not ready ({last_state}); "
+                f"retrying health probe in {wait_s:g}s"
+            )
+            time.sleep(wait_s)
+
+
 def _log_eval_run(
     *,
     experiment_name: str,
@@ -488,6 +565,18 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--timeout-s", type=float, default=60.0)
     parser.add_argument("--max-attempts", type=int, default=8)
     parser.add_argument("--retry-delay-s", type=float, default=10.0)
+    parser.add_argument(
+        "--health-timeout-s",
+        type=float,
+        default=float(os.environ.get("MIP_AGENT_EVAL_HEALTH_TIMEOUT_S", "900")),
+        help="Wait this long for app health and required dependencies before golden cases.",
+    )
+    parser.add_argument(
+        "--health-interval-s",
+        type=float,
+        default=float(os.environ.get("MIP_AGENT_EVAL_HEALTH_INTERVAL_S", "10")),
+        help="Seconds between pre-evaluation app health probes.",
+    )
     parser.add_argument("--out-env", type=Path)
     parser.add_argument("--out-json", type=Path)
     parser.add_argument("--mlflow-tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI", "databricks"))
@@ -533,6 +622,12 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--app-url or MIP_APP_URL is required")
     if not args.token:
         raise ValueError("--token or MIP_BEARER_TOKEN is required")
+    _wait_for_app_health(
+        app_url=args.app_url,
+        token=args.token,
+        timeout_s=args.health_timeout_s,
+        interval_s=args.health_interval_s,
+    )
     cases = load_cases(args.cases)
     if args.live_invocation_case:
         extra = live_invocation_case(cases)

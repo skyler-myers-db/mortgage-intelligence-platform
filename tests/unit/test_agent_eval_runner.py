@@ -175,6 +175,93 @@ def test_call_growth_agent_does_not_retry_validation_error(monkeypatch) -> None:
     assert attempts == 1
 
 
+def test_wait_for_app_health_retries_until_all_dependencies_are_up(monkeypatch) -> None:
+    attempts = 0
+    sleeps: list[float] = []
+
+    class _Response:
+        status_code = 200
+
+        def __init__(self, payload: dict[str, Any]) -> None:
+            self._payload = payload
+
+        def json(self) -> dict[str, Any]:
+            return self._payload
+
+    class _Client:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            assert timeout == 5
+            assert follow_redirects is False
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> _Response:
+            nonlocal attempts
+            attempts += 1
+            assert url == "https://example.test/api/v1/health"
+            assert headers["Authorization"] == "Bearer redacted"
+            dependencies = {
+                "warehouse": "up",
+                "lakebase": "up" if attempts > 1 else "down",
+                "genie": "up",
+            }
+            return _Response({"status": "ok" if attempts > 1 else "degraded", "dependencies": dependencies})
+
+    monkeypatch.setattr(run_agent_eval.httpx, "Client", _Client)
+    monkeypatch.setattr(run_agent_eval.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    run_agent_eval._wait_for_app_health(
+        app_url="https://example.test/",
+        token="redacted",
+        timeout_s=30,
+        interval_s=2,
+        request_timeout_s=5,
+    )
+
+    assert attempts == 2
+    assert sleeps == [2]
+
+
+def test_wait_for_app_health_fails_fast_on_bad_authorization(monkeypatch) -> None:
+    class _Response:
+        status_code = 403
+
+        def json(self) -> dict[str, Any]:
+            return {"detail": "forbidden"}
+
+    class _Client:
+        def __init__(self, *, timeout: float, follow_redirects: bool) -> None:
+            _ = timeout, follow_redirects
+
+        def __enter__(self) -> _Client:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def get(self, url: str, *, headers: dict[str, str]) -> _Response:
+            _ = url, headers
+            return _Response()
+
+    monkeypatch.setattr(run_agent_eval.httpx, "Client", _Client)
+
+    try:
+        run_agent_eval._wait_for_app_health(
+            app_url="https://example.test",
+            token="redacted",
+            timeout_s=30,
+            interval_s=2,
+        )
+    except RuntimeError as exc:
+        assert "not authorized" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected authorization failure to stop the health gate")
+
+
 def test_log_eval_run_uses_positional_set_tag(monkeypatch) -> None:
     no_output_calls: list[list[str]] = []
 
