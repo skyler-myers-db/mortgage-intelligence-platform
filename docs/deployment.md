@@ -88,9 +88,12 @@ fail if that exact proof has not landed yet.
 mandatory for sandbox, staging, customer, and production app payloads. Only
 `APP_ENV=local` and `APP_ENV=test` may use compatibility keys. During action-key
 rotation, deploy the new current key/KID together with both prior-key values.
-The prior secret without `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is rejected;
-when the prior secret is absent, it is neither provisioned nor injected into
-the App payload. Keep the prior key available for at least two hours so
+The prior secret without `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is rejected.
+When the prior secret is absent, it is not injected into the App payload. The
+bundle's static optional-resource declaration still requires the backing
+Databricks Secret key to exist, so the provisioner replaces it with a random
+disabled sentinel that the runtime cannot read through an environment binding.
+Keep the real prior key available for at least two hours so
 existing action confirmations and one-hour campaign provenance tokens can
 expire. The previous key is verification-only; new tokens always use the
 current key.
@@ -111,9 +114,10 @@ python tools/databricks/provision_runtime_secrets.py \
 ```
 
 Retirement is idempotent and does not require the current or Cotality secret
-values. An ordinary deploy with no configured previous key also removes a
-stale `genie-action-previous` secret before emitting a payload without the
-previous resource binding.
+values. It replaces `genie-action-previous` with a fresh disabled sentinel,
+which immediately invalidates old tokens while keeping the static Databricks
+App resource valid. An ordinary deploy with no configured previous key does
+the same before emitting a payload without the previous environment binding.
 
 The Entrada dev target also supports the plain Databricks bundle resource path:
 

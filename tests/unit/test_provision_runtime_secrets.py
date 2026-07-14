@@ -82,11 +82,16 @@ def test_provisions_required_values_without_previous_by_default(
     assert written == (
         "cotality-id-mask-v1",
         "genie-action-current",
+        "genie-action-previous",
     )
-    assert secrets_api.puts == [
-        (subject.DEFAULT_SCOPE, "cotality-id-mask-v1", MASK_SECRET),
-        (subject.DEFAULT_SCOPE, "genie-action-current", CURRENT_SECRET),
+    assert [key for _scope, key, _value in secrets_api.puts] == [
+        "cotality-id-mask-v1",
+        "genie-action-current",
+        "genie-action-previous",
     ]
+    disabled_value = secrets_api.puts[-1][2]
+    assert disabled_value.startswith(subject.DISABLED_PREVIOUS_PREFIX)
+    assert disabled_value not in {MASK_SECRET, CURRENT_SECRET}
     assert secrets_api.deletes == []
 
 
@@ -121,12 +126,18 @@ def test_retires_existing_previous_key_when_grace_is_not_configured(monkeypatch)
 
     written = subject.provision_runtime_secrets(client=SimpleNamespace(secrets=secrets_api))
 
-    assert written == ("cotality-id-mask-v1", "genie-action-current")
+    assert written == (
+        "cotality-id-mask-v1",
+        "genie-action-current",
+        "genie-action-previous",
+    )
     assert [key for _scope, key, _value in secrets_api.puts] == [
         "cotality-id-mask-v1",
         "genie-action-current",
+        "genie-action-previous",
     ]
-    assert secrets_api.deletes == [(subject.DEFAULT_SCOPE, "genie-action-previous")]
+    assert secrets_api.puts[-1][2].startswith(subject.DISABLED_PREVIOUS_PREFIX)
+    assert secrets_api.deletes == []
 
 
 def test_explicit_retire_previous_does_not_require_other_secret_values() -> None:
@@ -135,10 +146,23 @@ def test_explicit_retire_previous_does_not_require_other_secret_values() -> None
         keys=("genie-action-previous",),
     )
 
-    deleted = subject.retire_previous_secret(client=SimpleNamespace(secrets=secrets_api))
+    existed = subject.retire_previous_secret(client=SimpleNamespace(secrets=secrets_api))
 
-    assert deleted is True
-    assert secrets_api.deletes == [(subject.DEFAULT_SCOPE, "genie-action-previous")]
+    assert existed is True
+    assert secrets_api.puts[-1][1] == "genie-action-previous"
+    assert secrets_api.puts[-1][2].startswith(subject.DISABLED_PREVIOUS_PREFIX)
+    assert secrets_api.deletes == []
+
+
+def test_explicit_retire_creates_disabled_binding_when_scope_is_absent() -> None:
+    secrets_api = _Secrets()
+
+    existed = subject.retire_previous_secret(client=SimpleNamespace(secrets=secrets_api))
+
+    assert existed is False
+    assert secrets_api.scope_exists is True
+    assert secrets_api.puts[-1][1] == "genie-action-previous"
+    assert secrets_api.puts[-1][2].startswith(subject.DISABLED_PREVIOUS_PREFIX)
 
 
 def test_rejects_missing_or_placeholder_required_values(monkeypatch) -> None:

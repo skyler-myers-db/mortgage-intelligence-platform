@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import secrets
 import sys
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,7 @@ REQUIRED = frozenset({"MIP_COTALITY_ID_MASK_SECRET", "MIP_GENIE_ACTION_SECRET_CU
 PREVIOUS_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 PREVIOUS_KEY = ENV_TO_KEY[PREVIOUS_ENV]
+DISABLED_PREVIOUS_PREFIX = "disabled."
 
 
 def _dotenv_config() -> dict[str, str]:
@@ -83,17 +85,19 @@ def retire_previous_secret(
     scope: str = DEFAULT_SCOPE,
     client: WorkspaceClient | None = None,
 ) -> bool:
-    """Delete the previous verification key, returning whether it existed."""
+    """Invalidate the previous key while preserving the required App resource."""
 
     workspace = client or WorkspaceClient()
     scopes = {_item_name(item, "name") for item in workspace.secrets.list_scopes()}
     if scope not in scopes:
-        return False
+        workspace.secrets.create_scope(scope=scope)
     existing = {_item_name(item, "key") for item in workspace.secrets.list_secrets(scope=scope)}
-    if PREVIOUS_KEY not in existing:
-        return False
-    workspace.secrets.delete_secret(scope=scope, key=PREVIOUS_KEY)
-    return True
+    workspace.secrets.put_secret(
+        scope=scope,
+        key=PREVIOUS_KEY,
+        string_value=f"{DISABLED_PREVIOUS_PREFIX}{secrets.token_hex(32)}",
+    )
+    return PREVIOUS_KEY in existing
 
 
 def provision_runtime_secrets(
@@ -131,14 +135,15 @@ def provision_runtime_secrets(
     if scope not in scopes:
         workspace.secrets.create_scope(scope=scope)
 
-    existing = {_item_name(item, "key") for item in workspace.secrets.list_secrets(scope=scope)}
     written: list[str] = []
     for env_name, key in ENV_TO_KEY.items():
         value = values[env_name]
         if key == PREVIOUS_KEY and not value:
-            if key in existing:
-                workspace.secrets.delete_secret(scope=scope, key=key)
-            continue
+            # Databricks App resources are declared statically in the bundle,
+            # so the backing key must exist even when no rotation grace key is
+            # injected into the runtime. Replacing it with a random disabled
+            # value invalidates old tokens without exposing a verifier key.
+            value = f"{DISABLED_PREVIOUS_PREFIX}{secrets.token_hex(32)}"
         if not value:
             continue
         workspace.secrets.put_secret(scope=scope, key=key, string_value=value)
@@ -152,12 +157,12 @@ def main() -> int:
     parser.add_argument(
         "--retire-previous",
         action="store_true",
-        help="delete the previous Genie action HMAC key without provisioning other keys",
+        help="replace the previous Genie action HMAC key with a disabled sentinel",
     )
     args = parser.parse_args()
     if args.retire_previous:
-        deleted = retire_previous_secret(scope=args.scope)
-        state = "deleted" if deleted else "already absent"
+        existed = retire_previous_secret(scope=args.scope)
+        state = "replaced" if existed else "disabled binding created"
         print(f"previous runtime verification key: {state}")
         return 0
     written = provision_runtime_secrets(scope=args.scope)
