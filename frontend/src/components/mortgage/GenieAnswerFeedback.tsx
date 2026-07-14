@@ -4,7 +4,7 @@ import { Icon, ThumbsDown, ThumbsUp } from '../Icon';
 
 /**
  * GenieAnswerFeedback — thumbs-up / thumbs-down on a Genie answer with an
- * governed audit row. The app intentionally collects only the binary vote;
+ * a governed audit row. The app intentionally collects only the binary vote;
  * free-text comments can carry borrower details and are not accepted.
  *
  * Contract notes:

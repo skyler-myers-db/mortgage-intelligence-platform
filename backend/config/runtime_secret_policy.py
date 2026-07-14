@@ -46,7 +46,8 @@ def runtime_secret_text(
     if (
         not configured
         or normalized in placeholders
-        or (normalized.startswith("<") and normalized.endswith(">"))
+        or normalized.startswith("<")
+        or normalized.endswith(">")
     ):
         return None
     return configured
