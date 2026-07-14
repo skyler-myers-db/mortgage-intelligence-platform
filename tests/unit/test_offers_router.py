@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import ValidationError
 
 from backend.main import app
+from backend.schemas.offer import OfferRecommendation
 from backend.services.audit_decision_inputs import (
     DECISION_INPUT_KEYS,
     decision_inputs_from_offer_inputs,
@@ -21,7 +23,7 @@ def _valid_databricks_offer_row() -> dict[str, object]:
         "clip": "clip-1",
         "borrower_id": "B-48291",
         "confidence": 80,
-        "evidence_ids": ["E-1"],
+        "evidence_ids": ["ev-001"],
         "refreshed_at": "2026-04-20T06:12:00Z",
         "rate_spread_bps": 100,
         "equity_pct": 40,
@@ -66,6 +68,61 @@ def test_databricks_offer_repository_rejects_missing_applied_threshold() -> None
 
     with pytest.raises(ValueError, match="min_spread_bps_applied"):
         repo.get_offer_inputs("B-48291")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("evidence_ids", []),
+        ("evidence_ids", ["ev-001", "raw borrower evidence"]),
+        ("evidence_ids", [f"ev-{'a' * 62}"]),
+        ("refreshed_at", "not-a-timestamp"),
+        ("refreshed_at", "2026-04-20T06:12:00"),
+        ("refreshed_at", None),
+    ],
+)
+def test_databricks_offer_repository_rejects_invalid_recommendation_proof(
+    field: str,
+    value: object,
+) -> None:
+    row = {**_valid_databricks_offer_row(), field: value}
+    repo = DatabricksOfferRepository(_OneRowClient(row))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="evidence_ids|source_refreshed_at"):
+        repo.get_offer_inputs("B-48291")
+
+
+def _valid_offer_recommendation_payload() -> dict[str, object]:
+    return {
+        "borrower_id": "B-48291",
+        "source_refreshed_at": "2026-04-20T06:12:00Z",
+        "offer_code": "refi",
+        "offer_type": "refi",
+        "product_label": "Refinance",
+        "confidence": 80,
+        "rationale": "Reviewed rate and equity signals support a refinance review.",
+        "evidence_ids": ["ev-001"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("evidence_ids", []),
+        ("evidence_ids", ["ev-001", "../unbounded"]),
+        ("source_refreshed_at", "2026-04-20T06:12:00"),
+        ("source_refreshed_at", "tomorrow"),
+        ("source_refreshed_at", None),
+    ],
+)
+def test_offer_recommendation_schema_rejects_invalid_proof(
+    field: str,
+    value: object,
+) -> None:
+    payload = {**_valid_offer_recommendation_payload(), field: value}
+
+    with pytest.raises(ValidationError):
+        OfferRecommendation.model_validate(payload)
 
 
 def test_offer_recommendation_fails_closed_when_audit_is_unavailable() -> None:
@@ -127,6 +184,59 @@ def test_offers_router_sanitizes_invalid_governed_inputs() -> None:
     assert "borrower_dossier" not in response.text
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("evidence_ids", []),
+        ("evidence_ids", ["ev-001", "invalid/evidence"]),
+        ("source_refreshed_at", "2026-04-20T06:12:00"),
+        ("source_refreshed_at", "not-a-timestamp"),
+        ("source_refreshed_at", None),
+    ],
+)
+def test_offers_router_rejects_invalid_proof_before_audit(
+    field: str,
+    value: object,
+) -> None:
+    class InvalidProofOfferRepository:
+        def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
+            if borrower_id != "B-48291":
+                return None
+            return {
+                "clip_id": "CLIP-48291",
+                "borrower_id": borrower_id,
+                "confidence": 82,
+                "evidence_ids": ["ev-001"],
+                "source_refreshed_at": "2026-04-20T06:12:00Z",
+                "rate_spread_bps": 88,
+                "equity_pct": 39,
+                "has_permit": False,
+                "listed_for_sale": False,
+                "is_investor": False,
+                "is_current_customer": False,
+                "is_competitor_lien": False,
+                "offer_code": "refi",
+                "min_spread_bps": 75,
+                "min_equity_pct": 15,
+                "heloc_equity_min_pct": 35,
+                "cashout_equity_min_pct": 25,
+                "retention_min_spread_bps": 50,
+                field: value,
+            }
+
+    audit = InMemoryAuditStore()
+    app.dependency_overrides[get_offer_repository] = InvalidProofOfferRepository
+    app.dependency_overrides[get_audit_store] = lambda: audit
+
+    response = client.post("/api/offers/recommend", json={"borrower_id": "B-48291"})
+
+    assert response.status_code == 500
+    assert response.json()["detail"] == (
+        "Offer inputs are incomplete or invalid; refresh the governed data before retrying."
+    )
+    assert audit.list(limit=10, event_type="RECOMMEND_OFFER") == []
+
+
 def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> None:
     class ThresholdStubOfferRepository:
         def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
@@ -136,7 +246,7 @@ def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> No
                 "clip_id": "CLIP-48291",
                 "borrower_id": "B-48291",
                 "confidence": 82,
-                "evidence_ids": ["E-48291-1"],
+                "evidence_ids": ["ev-482911"],
                 "source_refreshed_at": "2026-04-20T06:12:00Z",
                 "rate_spread_bps": 88,
                 "equity_pct": 39,

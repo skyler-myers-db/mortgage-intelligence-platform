@@ -58,7 +58,7 @@ export { inferChartFromRows } from './GenieAnswer.logic';
 
 interface GenieAnswerProps {
   payload: GenieAnswerShape;
-  onFollowUp?: (q: string) => void;
+  onFollowUp?: (q: string, conversationId: string | null) => void;
   onAction?: (action: GenieActionSuggestion) => void | Promise<void>;
   /** The question that produced this answer (lives in the conversation, not
    *  the payload). When present on a genuine answer, enables "Pin to Home". */
@@ -348,7 +348,7 @@ export function GenieAnswer({
               key={q}
               type="button"
               className="filter filter--question"
-              onClick={() => onFollowUp(q)}
+              onClick={() => onFollowUp(q, liveConversationId ?? null)}
             >
               <span className="filter__label">Ask</span>
               <span className="filter__value filter__value--question">{q}</span>

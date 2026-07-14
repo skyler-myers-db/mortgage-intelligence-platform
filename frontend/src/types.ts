@@ -540,7 +540,7 @@ export interface OfferAlternative {
 
 export interface OfferRecommendation {
   borrower_id: string;
-  source_refreshed_at?: string | null;
+  source_refreshed_at: string;
   offer_code: string;
   offer_type: string;
   product_label: string;

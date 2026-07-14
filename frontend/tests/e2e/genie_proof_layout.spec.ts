@@ -253,7 +253,9 @@ test.describe('Genie proof drawer layout', () => {
     await expect(composer).toHaveValue(question);
 
     releaseMessage();
-    await expect(page.getByText(/There are 304 retention-list borrowers/)).toBeVisible();
+    await expect(
+      page.locator('.genie-md-p').filter({ hasText: /There are 304 retention-list borrowers/ }),
+    ).toBeVisible();
     await expect(progress).toBeHidden();
     await expect(composer).toHaveValue(question);
 

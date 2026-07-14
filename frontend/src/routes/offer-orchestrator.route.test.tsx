@@ -405,6 +405,35 @@ describe('OfferOrchestrator route behavior', () => {
 
   it.each([
     {
+      local: 'rejected' as const,
+      durable: 'approved' as const,
+      expected: 'Approved',
+      absent: 'Rejected',
+    },
+    {
+      local: 'approved' as const,
+      durable: 'rejected' as const,
+      expected: 'Rejected',
+      absent: 'Approved · governed internal queue',
+    },
+  ])(
+    'renders durable $durable state over conflicting local $local state',
+    async ({ local, durable, expected, absent }) => {
+      appMocks.approvals[BORROWER_ID] = local;
+      apiMocks.borrowerLifecycle.mockResolvedValue({
+        ...LIFECYCLE,
+        approval_status: durable,
+        approval_id: `approval-${durable}`,
+      });
+      mount();
+
+      await waitUntil(() => container.textContent?.includes(expected) === true);
+      expect(container.textContent).not.toContain(absent);
+    },
+  );
+
+  it.each([
+    {
       label: 'false response',
       arrange: () => apiMocks.reject.mockResolvedValue({ rejected: false }),
       message: 'Reject endpoint returned rejected=false.',

@@ -9,9 +9,15 @@ describe('resolveOfferApprovalStatus', () => {
     expect(resolveOfferApprovalStatus(undefined, 'approved', 'pending')).toBe('approved');
   });
 
-  it('prefers local in-session approval state when present', () => {
-    expect(resolveOfferApprovalStatus('rejected', 'approved', 'pending')).toBe('rejected');
-  });
+  it.each([
+    ['approved', 'rejected', 'approved'],
+    ['rejected', 'approved', 'rejected'],
+  ] as const)(
+    'prefers durable %s state over conflicting local %s state',
+    (durable, local, expected) => {
+      expect(resolveOfferApprovalStatus(local, durable, 'pending')).toBe(expected);
+    },
+  );
 
   it('does not promote pending borrower state into a terminal approval', () => {
     expect(resolveOfferApprovalStatus(undefined, undefined, 'pending')).toBeUndefined();

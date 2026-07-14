@@ -189,7 +189,7 @@
   border-radius: var(--r-sm);
   background: var(--scatter-score-high);
 }
-.analytics-scatter-legend__density-swatch.is-lower { opacity: 0.35; }
+.analytics-scatter-legend__density-swatch.is-lower { opacity: 0.18; }
 .analytics-scatter-legend__density-swatch.is-higher { opacity: 1; }
 .analytics-scatter-legend__cluster-count {
   display: inline-grid;

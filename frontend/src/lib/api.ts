@@ -200,6 +200,11 @@ export interface AuditEventRow {
   correlation_id?: string | null;
 }
 
+export interface AuditEventPage {
+  items: AuditEventRow[];
+  next_cursor: string | null;
+}
+
 /**
  * Segment multi-select semantics forwarded to /api/leads and geo rollups.
  * `any` = de-duplicated OR, `all` = AND intersection. Segment Intelligence
@@ -1720,6 +1725,31 @@ export const api = {
       }
     });
     return getJson<AuditEventRow[]>(`/api/audit/events?${params.toString()}`, signal);
+  },
+
+  auditEventPage: (
+    limit = 25,
+    signal?: AbortSignal,
+    filters: {
+      actor?: string | null;
+      action?: string | null;
+      entity_id?: string | null;
+      borrower_id?: string | null;
+      subject_clip?: string | null;
+      event_type?: string | null;
+      since?: string | null;
+      until?: string | null;
+      cursor?: string | null;
+    } = {},
+  ) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    Object.entries(filters).forEach(([key, value]) => {
+      if (value !== null && value !== undefined && value !== '') {
+        params.set(key, String(value));
+      }
+    });
+    return getJson<AuditEventPage>(`/api/audit/events/page?${params.toString()}`, signal);
   },
 
   auditRollups: (period: 'day' | 'week' | 'month' = 'week', signal?: AbortSignal) =>

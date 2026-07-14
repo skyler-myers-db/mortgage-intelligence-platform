@@ -120,9 +120,13 @@ def test_load_baseline_has_one_canonical_operator_doc() -> None:
 
 def test_live_smoke_script_uses_canonical_api_v1_by_default() -> None:
     source = _read(ROOT / "scripts" / "smoke_live.sh")
+    deploy_source = _read(ROOT / "scripts" / "deploy.sh")
 
     assert 'API_PREFIX="${MIP_API_PREFIX:-/api/v1}"' in source
     assert "$API_PREFIX/health" in source
+    assert 'EXPECT_GIT_SHA="${MIP_EXPECT_GIT_SHA:-}"' in source
+    assert 'DEPLOYED_GIT_SHA=$(echo "$HEALTH" | jq -r' in source
+    assert 'export MIP_EXPECT_GIT_SHA="$APP_GIT_SHA"' in deploy_source
     for deprecated in (
         '"/api/health"',
         '"/api/leads',

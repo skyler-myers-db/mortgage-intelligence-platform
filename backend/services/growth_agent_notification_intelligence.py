@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, ValidationError, field_validator, model_validator
 
 from backend.agents.mortgage_growth_copilot import (
     extract_response_text,
@@ -35,6 +36,11 @@ _UNSAFE_FRAGMENT_RE = re.compile(
 )
 
 
+def _normalized_channel_text(value: str) -> str:
+    normalized = unicodedata.normalize("NFKC", value).casefold()
+    return " ".join(re.findall(r"[^\W_]+", normalized))
+
+
 class _NotificationFragments(BaseModel):
     slack_context: str = Field(min_length=10, max_length=120)
     teams_summary: str = Field(min_length=10, max_length=220)
@@ -57,6 +63,14 @@ class _NotificationFragments(BaseModel):
         if contains_contextual_human_name(clean):
             raise ValueError("notification fragment contains identity-shaped text")
         return clean.rstrip(".")
+
+    @model_validator(mode="after")
+    def _differentiate_channels(self) -> _NotificationFragments:
+        if _normalized_channel_text(self.slack_context) == _normalized_channel_text(
+            self.teams_summary
+        ):
+            raise ValueError("Slack and Teams notification fragments must be different")
+        return self
 
 
 @dataclass(frozen=True)

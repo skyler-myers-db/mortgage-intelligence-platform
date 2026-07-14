@@ -46,8 +46,17 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
   ) => {
     const key = options?.queryKey ?? [];
     apiMocks.hookKeys.push(key);
-    const data = key.includes('explorer') || key.includes('latest')
-      ? apiMocks.auditRows
+    const data = key.includes('explorer')
+      ? {
+          items: key.includes('cursor-page-2')
+            ? apiMocks.auditRows.slice(25)
+            : apiMocks.auditRows.slice(0, 25),
+          next_cursor: apiMocks.auditRows.length > 25 && !key.includes('cursor-page-2')
+            ? 'cursor-page-2'
+            : null,
+        }
+      : key.includes('latest')
+        ? apiMocks.auditRows
       : key.includes('rollups')
         ? []
         : null;
@@ -305,8 +314,9 @@ describe('AdminConfig audit explorer', () => {
     act(() => next.click());
 
     const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
-    expect(explorerKeys[explorerKeys.length - 1]).toContain(25);
+    expect(explorerKeys[explorerKeys.length - 1]).toContain('cursor-page-2');
     expect(document.body.textContent).toContain('Page 2');
+    expect(document.body.textContent).toContain('page 2 · 1 rows');
     expect(buttonByLabel(/^Previous$/).disabled).toBe(false);
   });
 

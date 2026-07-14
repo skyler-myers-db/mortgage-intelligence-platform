@@ -1380,6 +1380,10 @@ class AuditStore(Protocol):
         limit: int = 50,
         *,
         offset: int = 0,
+        after_event_at: datetime | None = None,
+        after_audit_id: str | None = None,
+        snapshot_event_at: datetime | None = None,
+        snapshot_audit_id: str | None = None,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -1503,8 +1507,8 @@ class _AuditStoreProxy:
     def write(self, **kwargs: Any) -> AuditEvent:
         return get_audit_store().write(**kwargs)
 
-    def list(self, limit: int = 50, *, offset: int = 0) -> list[AuditEvent]:
-        return get_audit_store().list(limit=limit, offset=offset)
+    def list(self, limit: int = 50, **kwargs: Any) -> list[AuditEvent]:
+        return get_audit_store().list(limit=limit, **kwargs)
 
 
 audit_store: AuditStore = _AuditStoreProxy()

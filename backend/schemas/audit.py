@@ -41,6 +41,13 @@ class AuditEvent(BaseModel):
     correlation_id: str | None = None
 
 
+class AuditEventPage(BaseModel):
+    """One snapshot-stable page of append-only audit events."""
+
+    items: list[AuditEvent] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
 class AuditRollupResponse(BaseModel):
     bucket_start: str
     event_type: str | None = None

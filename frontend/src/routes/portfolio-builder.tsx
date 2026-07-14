@@ -37,6 +37,7 @@ import {
   buildPreviewCriteria,
   buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
+  campaignCopyValidationError,
   campaignCriteriaSummary,
   groupSavedCampaigns,
   dayZeroSafe,
@@ -138,6 +139,7 @@ export default function PortfolioBuilder() {
   // portfolio-builder.save.test.tsx keeps the blocking API out for good.
   const [savePanelOpen, setSavePanelOpen] = useState(false);
   const [saveName, setSaveName] = useState('');
+  const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
   const {
     data: campaignsData,
@@ -288,6 +290,7 @@ export default function PortfolioBuilder() {
     if (buildDirty || buildInFlight) return;
     saveRequestRef.current = null;
     setSaveName(`Portfolio build ${new Date().toLocaleString()}`);
+    setSaveValidationError(null);
     setSavePanelOpen(true);
   }, [buildDirty, buildInFlight]);
 
@@ -295,6 +298,13 @@ export default function PortfolioBuilder() {
   const onConfirmSave = useCallback(async () => {
     const name = saveName.trim();
     if (!name || saving) return;
+    const copyError = campaignCopyValidationError(campaignSetup);
+    if (copyError) {
+      setSaveValidationError(copyError);
+      setSaveHint('failed');
+      return;
+    }
+    setSaveValidationError(null);
     // Re-audit #4 (2026-06-12): the panel used to close BEFORE the await,
     // so a failed save silently discarded the operator's typed name. Keep
     // the panel (and the name) until the save actually succeeds; on failure
@@ -520,7 +530,7 @@ export default function PortfolioBuilder() {
               </Button>
               {saveHint === 'failed' && (
                 <span className="save-build-form__error" role="alert">
-                  Save failed — your name is kept; try again.
+                  {saveValidationError ?? 'Save failed — your name is kept; try again.'}
                 </span>
               )}
             </form>

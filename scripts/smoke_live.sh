@@ -34,6 +34,8 @@
 #   MIP_FRONTEND_URL Frontend URL. Default: http://127.0.0.1:5173.
 #   MIP_BEARER_TOKEN Optional Databricks Apps OAuth bearer for deployed URLs.
 #   MIP_ADMIN_BEARER_TOKEN Optional app-admin OAuth bearer for admin-only probes.
+#   MIP_EXPECT_GIT_SHA When set, require authenticated health to report this
+#      exact deployed source revision before any product probes run.
 #   MIP_EXPECT_AGENTIC_CAPABILITIES When 1, require the deployed agentic GA
 #      capability rows (Genie API, Agent Eval, Agent Orchestrator, Lakebase
 #      Sync) to be claimable. AI Gateway is claimable only with a fresh,
@@ -56,6 +58,7 @@ SKIP_GENIE=0
 SKIP_CAPABILITIES=0
 EXPECT_AGENTIC_CAPABILITIES="${MIP_EXPECT_AGENTIC_CAPABILITIES:-0}"
 REQUIRE_AI_GATEWAY_CLAIMABLE="${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}"
+EXPECT_GIT_SHA="${MIP_EXPECT_GIT_SHA:-}"
 BOOT_LOCAL=0
 BACKEND_PID=""
 FRONTEND_PID=""
@@ -184,6 +187,16 @@ if [[ "$STATUS" != "ok" ]]; then
   echo "[smoke] $API_PREFIX/health returned status=$STATUS (expected ok):" >&2
   echo "$HEALTH" | jq . >&2
   exit 1
+fi
+
+if [[ -n "$EXPECT_GIT_SHA" ]]; then
+  DEPLOYED_GIT_SHA=$(echo "$HEALTH" | jq -r '.git_sha // empty')
+  if [[ "$DEPLOYED_GIT_SHA" != "$EXPECT_GIT_SHA" ]]; then
+    echo "[smoke] deployed git_sha=$DEPLOYED_GIT_SHA (expected $EXPECT_GIT_SHA)" >&2
+    echo "$HEALTH" | jq . >&2
+    exit 1
+  fi
+  echo "[smoke] exact deployed git SHA verified · $DEPLOYED_GIT_SHA"
 fi
 
 for dep in warehouse lakebase genie; do

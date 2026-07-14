@@ -61,7 +61,10 @@ def test_admin_rejects_non_admin_group(client: TestClient) -> None:
     assert response.json() == {"detail": "forbidden"}
 
 
-@pytest.mark.parametrize("path", ["/api/audit/events", "/api/audit/rollups"])
+@pytest.mark.parametrize(
+    "path",
+    ["/api/audit/events", "/api/audit/events/page", "/api/audit/rollups"],
+)
 def test_audit_reads_reject_non_admin_group(client: TestClient, path: str) -> None:
     """The relocated audit explorer is protected at its own API boundary."""
 

@@ -10,6 +10,7 @@ import {
   buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
   campaignCriteriaSummary,
+  campaignCopyValidationError,
   groupSavedCampaigns,
   defaultGeographyForOptions,
   parseFiltersFromUrl,
@@ -163,18 +164,8 @@ describe('portfolio campaign config', () => {
       dedupe_unit: 'borrower',
       primary_contact_strategy: 'highest_opportunity_eligible',
     });
-    expect(config.message_variants).toEqual([
-      expect.objectContaining({
-        variant_name: 'A',
-        generation_mode: 'operator',
-        generator_label: 'Operator edited',
-      }),
-      expect.objectContaining({
-        variant_name: 'B',
-        generation_mode: 'operator',
-        generator_label: 'Operator edited',
-      }),
-    ]);
+    expect(config.message_variants).toEqual([]);
+    expect(campaignCopyValidationError(DEFAULT_CAMPAIGN_SETUP)).toBeNull();
   });
 
   it('persists only channel costs that the operator actually configured', () => {
@@ -232,6 +223,21 @@ describe('portfolio campaign config', () => {
         generator_label: 'Supervisor-generated recommendation',
         provenance_token: 'signed-guidance-provenance-token-000000000001',
       }),
+    ]);
+  });
+
+  it('blocks partially entered copy instead of silently dropping it or sending blanks', () => {
+    const setup = {
+      ...DEFAULT_CAMPAIGN_SETUP,
+      subjectA: 'Review your mortgage options',
+    };
+
+    expect(campaignCopyValidationError(setup)).toBe(
+      'Benefit-led copy needs both a subject and message before this build can be saved.',
+    );
+    expect(buildCampaignConfig(setup).message_variants).toEqual([
+      expect.objectContaining({ variant_name: 'A', subject: 'Review your mortgage options' }),
+      expect.objectContaining({ variant_name: 'B', subject: '', body: '' }),
     ]);
   });
 

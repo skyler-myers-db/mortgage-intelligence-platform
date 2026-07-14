@@ -4,6 +4,10 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation
 
+from backend.schemas.offer import (
+    validate_offer_evidence_ids,
+    validate_offer_source_refreshed_at,
+)
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.repositories.databricks_shared import _coerce_bool
@@ -62,8 +66,8 @@ class DatabricksOfferRepository:
             "clip_id": _required_text(row, "clip"),
             "borrower_id": _required_text(row, "borrower_id"),
             "confidence": _required_int(row, "confidence"),
-            "evidence_ids": [str(value) for value in (row.get("evidence_ids") or [])],
-            "source_refreshed_at": _required_text(row, "refreshed_at"),
+            "evidence_ids": validate_offer_evidence_ids(row.get("evidence_ids")),
+            "source_refreshed_at": validate_offer_source_refreshed_at(row.get("refreshed_at")),
             "rate_spread_bps": _required_int(row, "rate_spread_bps"),
             "equity_pct": _required_int(row, "equity_pct"),
             "has_permit": _coerce_bool(row.get("has_permit")),

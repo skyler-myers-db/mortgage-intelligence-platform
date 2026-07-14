@@ -35,7 +35,7 @@ export interface AskGenieAnswerPanelProps {
   sampleQuestions: string[];
   payload: GenieAnswerShape | null;
   submittedQuestion: string | null;
-  onFollowUp: (question: string) => void;
+  onFollowUp: (question: string, conversationId: string | null) => void;
   onAction: (action: GenieActionSuggestion) => void;
   actionStatus: string | null;
 }

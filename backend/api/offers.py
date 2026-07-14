@@ -12,6 +12,8 @@ from backend.schemas.offer import (
     OfferRecommendRequest,
     OfferType,
     SourceLabel,
+    validate_offer_evidence_ids,
+    validate_offer_source_refreshed_at,
 )
 from backend.services.audit_decision_inputs import decision_inputs_from_offer_inputs
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
@@ -265,6 +267,17 @@ def recommend_offer(
     if inputs is None:
         # Defense in depth: every borrower in the population has offer inputs.
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
+    try:
+        evidence_ids = validate_offer_evidence_ids(inputs.get("evidence_ids"))
+        source_refreshed_at = validate_offer_source_refreshed_at(inputs.get("source_refreshed_at"))
+    except ValueError as exc:
+        # Repository implementations are injectable. Revalidate proof at the
+        # API boundary so an invalid stub/cache cannot reach audit or response
+        # construction even if it bypasses the Databricks repository.
+        raise HTTPException(
+            status_code=500,
+            detail="Offer inputs are incomplete or invalid; refresh the governed data before retrying.",
+        ) from exc
     code = cast(str, inputs["offer_code"])
     if code not in _VALID_OFFER_TYPES:
         # Defense in depth: scoring contract violation would surface here.
@@ -293,9 +306,9 @@ def recommend_offer(
                 "confidence": cast(int, inputs["confidence"]),
                 "thresholds_applied": thresholds_applied,
                 "decision_inputs": decision_inputs,
-                "source_refreshed_at": inputs.get("source_refreshed_at"),
+                "source_refreshed_at": source_refreshed_at,
             },
-            evidence_ids=list(cast(list[str], inputs["evidence_ids"])),
+            evidence_ids=evidence_ids,
             event_type="RECOMMEND_OFFER",
             subject_clip=cast(str, inputs["clip_id"]),
         )
@@ -313,7 +326,7 @@ def recommend_offer(
 
     return OfferRecommendation(
         borrower_id=payload.borrower_id,
-        source_refreshed_at=cast(str | None, inputs.get("source_refreshed_at")),
+        source_refreshed_at=source_refreshed_at,
         offer_code=code,
         offer_type=cast(OfferType, code),
         product_label=offer_display_label(code, NBO_PRODUCT_LABELS[code]),
@@ -336,7 +349,7 @@ def recommend_offer(
             cashout_min=thresholds_applied["cashout_equity_min_pct"],
             retention_min=thresholds_applied["retention_min_spread_bps"],
         ),
-        evidence_ids=cast(list[str], inputs["evidence_ids"]),
+        evidence_ids=evidence_ids,
         sources=sources,
         source_labels=source_labels,
         alternatives=_alternatives_for(

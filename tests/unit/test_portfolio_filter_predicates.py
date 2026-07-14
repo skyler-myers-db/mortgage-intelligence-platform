@@ -270,6 +270,15 @@ def test_portfolio_create_strips_and_accepts_business_name() -> None:
     assert request.name == "Q3 CA Pilot - competitor recapture"
 
 
+def test_portfolio_create_accepts_a_build_without_campaign_copy() -> None:
+    request = PortfolioCreateRequest(
+        name="Illinois refinance cohort",
+        message_variants=[],
+    )
+
+    assert request.message_variants == []
+
+
 def test_portfolio_criteria_rejects_arbitrary_option_text() -> None:
     with pytest.raises(ValidationError):
         PortfolioCriteria(occupancy="Call center note")

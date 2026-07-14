@@ -14,7 +14,6 @@ import {
   readGenieConversationId,
   writeGenieConversationId,
 } from '../../lib/genieConversation';
-import { isGenieFollowUpQuestion } from '../../lib/genieSession';
 import { NON_PERSISTABLE_SOURCES } from '../../lib/pinnedInsights';
 
 // 2026-05-04 (FIX Δ2): persisted size for the floating panel. The
@@ -234,16 +233,19 @@ export function GenieChat() {
     api.genieStart(controller.signal)
       .then((result) => {
         setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
-        if (conversationId) return;
-        if (!result.conversation_id) return;
-        setConversationId(result.conversation_id);
-        writeGenieConversationId(result.conversation_id);
+        const startConversationId = result.conversation_id;
+        if (!startConversationId) return;
+        setConversationId((current) => {
+          if (current) return current;
+          writeGenieConversationId(startConversationId);
+          return startConversationId;
+        });
       })
       .catch(() => {
         // Asking a question will start a fresh Databricks Genie conversation.
       });
     return () => controller.abort();
-  }, [conversationId]);
+  }, []);
 
   useEffect(() => {
     const onActorBoundaryReset = () => {
@@ -512,11 +514,10 @@ export function GenieChat() {
     return undefined;
   }, [genieOpen, setGenieOpen]);
 
-  const ask = async (q: string) => {
+  const ask = async (q: string, followUpConversationId: string | null = null) => {
     const trimmed = q.trim();
     if (!trimmed) return;
-    const nextConversationId = isGenieFollowUpQuestion(trimmed) ? conversationId : null;
-    if (!nextConversationId) {
+    if (!followUpConversationId) {
       setConversationId(null);
       clearGenieConversationState();
     }
@@ -524,7 +525,7 @@ export function GenieChat() {
     setInput('');
     setTyping(true);
     try {
-      const res = (await api.genie(trimmed, nextConversationId)) as GenieAnswerShape;
+      const res = (await api.genie(trimmed, followUpConversationId)) as GenieAnswerShape;
       const returnedConversationId = res.conversation_id ?? null;
       if (returnedConversationId && shouldPersistConversation(res)) {
         setConversationId(returnedConversationId);

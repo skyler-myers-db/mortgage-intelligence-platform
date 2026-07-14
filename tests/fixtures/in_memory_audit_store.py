@@ -87,6 +87,10 @@ class InMemoryAuditStore:
         limit: int = 50,
         *,
         offset: int = 0,
+        after_event_at: datetime | None = None,
+        after_audit_id: str | None = None,
+        snapshot_event_at: datetime | None = None,
+        snapshot_audit_id: str | None = None,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -126,5 +130,17 @@ class InMemoryAuditStore:
                 e for e in filtered
                 if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) <= until
             ]
-        newest_first = list(reversed(filtered))
+        def position(event: AuditEvent) -> tuple[datetime, str]:
+            return (
+                datetime.fromisoformat(event.created_at.replace("Z", "+00:00")),
+                event.event_id,
+            )
+
+        newest_first = sorted(filtered, key=position, reverse=True)
+        if snapshot_event_at is not None and snapshot_audit_id is not None:
+            snapshot = (snapshot_event_at, snapshot_audit_id)
+            newest_first = [event for event in newest_first if position(event) <= snapshot]
+        if after_event_at is not None and after_audit_id is not None:
+            after = (after_event_at, after_audit_id)
+            newest_first = [event for event in newest_first if position(event) < after]
         return newest_first[offset:offset + limit]

@@ -226,24 +226,40 @@ def test_growth_agent_shared_executor_writes_audit_event() -> None:
     assert "GROWTH_AGENT_RUN" in source
 
 
-def test_list_issues_select_ordered_desc_with_limit_and_offset() -> None:
+def test_list_issues_select_with_total_order_and_cursor_boundaries() -> None:
     client = _build_client_returning_row()
     # fetchall returns rows in whatever the SELECT produces -- we assert
     # on the query shape.
     client.fetchall.return_value = []
     store = LakebaseAuditStore(client=client)
 
-    events = store.list(limit=25, offset=50)
+    now = datetime.now(UTC)
+    events = store.list(
+        limit=25,
+        after_event_at=now,
+        after_audit_id="11111111-1111-1111-1111-111111111111",
+        snapshot_event_at=now,
+        snapshot_audit_id="22222222-2222-2222-2222-222222222222",
+    )
 
     assert events == []
     assert client.fetchall.call_count == 1
     args, kwargs = client.fetchall.call_args
     sql = args[0]
     params = args[1]
-    assert "ORDER BY event_at DESC" in sql
+    assert "ORDER BY event_at DESC, audit_id DESC" in sql
     assert "LIMIT %(limit)s" in sql
     assert "OFFSET %(offset)s" in sql
-    assert params == {"limit": 25, "offset": 50}
+    assert "(event_at, audit_id) <=" in sql
+    assert "(event_at, audit_id) <" in sql
+    assert params == {
+        "limit": 25,
+        "after_event_at": now,
+        "after_audit_id": "11111111-1111-1111-1111-111111111111",
+        "snapshot_event_at": now,
+        "snapshot_audit_id": "22222222-2222-2222-2222-222222222222",
+        "offset": 0,
+    }
     # belt-and-suspenders: fetchall is called with limit=25 too
     assert kwargs.get("limit", args[2] if len(args) > 2 else None) == 25
 
@@ -594,9 +610,67 @@ def test_in_memory_store_pages_newest_first_without_duplicates() -> None:
         for index in range(5)
     ]
 
-    assert store.list(limit=2, offset=0) == [written[4], written[3]]
-    assert store.list(limit=2, offset=2) == [written[2], written[1]]
-    assert store.list(limit=2, offset=4) == [written[0]]
+    ordered = store.list(limit=5)
+    first = ordered[:2]
+    first_last = first[-1]
+    snapshot = first[0]
+    second = store.list(
+        limit=2,
+        after_event_at=datetime.fromisoformat(first_last.created_at),
+        after_audit_id=first_last.event_id,
+        snapshot_event_at=datetime.fromisoformat(snapshot.created_at),
+        snapshot_audit_id=snapshot.event_id,
+    )
+    second_last = second[-1]
+    third = store.list(
+        limit=2,
+        after_event_at=datetime.fromisoformat(second_last.created_at),
+        after_audit_id=second_last.event_id,
+        snapshot_event_at=datetime.fromisoformat(snapshot.created_at),
+        snapshot_audit_id=snapshot.event_id,
+    )
+
+    assert first + second + third == ordered
+    assert len({event.event_id for event in first + second + third}) == len(written)
+    assert store.list(limit=2, offset=0) == ordered[:2]
+    assert store.list(limit=2, offset=2) == ordered[2:4]
+    assert store.list(limit=2, offset=4) == ordered[4:]
+
+
+def test_in_memory_cursor_stably_orders_tied_timestamps_and_excludes_new_inserts() -> None:
+    store = InMemoryAuditStore()
+    tied = [
+        store.write(
+            actor="a@b",
+            action="view_borrower_360",
+            entity_type="borrower",
+            entity_id=f"B-{index}",
+        )
+        for index in range(4)
+    ]
+    tied_at = "2026-07-13T12:00:00+00:00"
+    for event in tied:
+        event.created_at = tied_at
+    ordered = sorted(tied, key=lambda event: event.event_id, reverse=True)
+    first = store.list(limit=2)
+    snapshot = first[0]
+    after = first[-1]
+    inserted = store.write(
+        actor="a@b",
+        action="view_borrower_360",
+        entity_type="borrower",
+        entity_id="B-NEW",
+    )
+    second = store.list(
+        limit=2,
+        after_event_at=datetime.fromisoformat(after.created_at),
+        after_audit_id=after.event_id,
+        snapshot_event_at=datetime.fromisoformat(snapshot.created_at),
+        snapshot_audit_id=snapshot.event_id,
+    )
+
+    assert first + second == ordered
+    assert inserted not in first + second
 
 
 def test_default_actor_emits_warning_log(

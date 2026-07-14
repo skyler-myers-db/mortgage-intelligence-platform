@@ -28,7 +28,6 @@ import {
   readGenieConversationId,
   writeGenieConversationId,
 } from '../lib/genieConversation';
-import { isGenieFollowUpQuestion } from '../lib/genieSession';
 import { queryKeys } from '../lib/queryKeys';
 import { GrowthAgentDraftPanel } from './ask-genie.growth-agent-drafts';
 import { AskGenieAnswerPanel } from './ask-genie.answer-panel';
@@ -122,11 +121,14 @@ export default function AskGenie() {
     const result = genieStartQuery.data;
     if (!result) return;
     setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
-    if (conversationId) return;
-    if (!result.conversation_id) return;
-    setConversationId(result.conversation_id);
-    writeGenieConversationId(result.conversation_id);
-  }, [conversationId, genieStartQuery.data]);
+    const startConversationId = result.conversation_id;
+    if (!startConversationId) return;
+    setConversationId((current) => {
+      if (current) return current;
+      writeGenieConversationId(startConversationId);
+      return startConversationId;
+    });
+  }, [genieStartQuery.data]);
   const trustedAssets = trustedAssetsForCatalog(genieStartQuery.data?.trusted_assets);
   const [actionStatus, setActionStatus] = useState<string | null>(null);
   // `submittedQuestion` drives the warming-up-wrapped fetch. Typing in
@@ -187,17 +189,16 @@ export default function AskGenie() {
     };
   }, []);
 
-  function ask(q: string) {
+  function ask(q: string, followUpConversationId: string | null = null) {
     const trimmed = q.trim();
-    const nextConversationId = isGenieFollowUpQuestion(trimmed) ? conversationId : null;
     setQuestion(q);
-    setConversationId(nextConversationId);
-    setSubmittedConversationId(nextConversationId);
+    setConversationId(followUpConversationId);
+    setSubmittedConversationId(followUpConversationId);
     setSubmittedQuestion(trimmed);
     setSubmitToken((n) => n + 1);
     setActiveAssetPath(null);
     setActionStatus(null);
-    if (!nextConversationId) {
+    if (!followUpConversationId) {
       clearGenieConversationState();
     }
   }

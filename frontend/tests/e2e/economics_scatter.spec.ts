@@ -62,18 +62,29 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
     expect(await scatter.locator('a[href*="/borrower-360/"]').count()).toBe(0);
 
     // ---- 2. Filter: narrow to the first covered state ---------------------
-    const stateFilter = page.getByRole('button', { name: /All states/i }).first();
-    if (await stateFilter.isVisible().catch(() => false)) {
-      await stateFilter.click();
-      const firstState = page.getByRole('option').first()
-        .or(page.locator('[role="listbox"] [role="checkbox"], [role="menu"] [role="menuitemcheckbox"]').first());
-      if (await firstState.isVisible().catch(() => false)) {
-        await firstState.click();
-        await page.keyboard.press('Escape');
-        // Bins re-render for the filtered predicate.
-        await expect.poll(async () => cells.count(), { timeout: 60_000 }).toBeGreaterThan(0);
-      }
-    }
+    const stateFilter = page.getByRole('button', { name: /^State: All states$/i });
+    await expect(stateFilter).toBeVisible();
+    await stateFilter.click();
+    const stateListbox = page.getByRole('listbox', { name: 'State' });
+    await expect(stateListbox).toBeVisible();
+    const firstCoveredState = stateListbox.getByRole('option').nth(1);
+    await expect(firstCoveredState).toBeVisible();
+    const selectedState = (await firstCoveredState.textContent())?.trim() ?? '';
+    expect(selectedState).toMatch(/^[A-Z]{2}$/);
+
+    const filteredBinsResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return response.status() === 200
+        && /\/api\/(?:v1\/)?analytics\/economics$/.test(url.pathname)
+        && (url.searchParams.get('states') ?? '').split(',').includes(selectedState);
+    });
+    await firstCoveredState.click();
+    await filteredBinsResponse;
+    await page.keyboard.press('Escape');
+    await expect(page).toHaveURL(new RegExp(`[?&]states=${selectedState}(?:&|$)`));
+    await expect(stateFilter).toHaveAccessibleName(new RegExp(`^State: ${selectedState}$`));
+    // Bins must be the response to the selected-state predicate, not stale data.
+    await expect.poll(async () => cells.count(), { timeout: 60_000 }).toBeGreaterThan(0);
 
     // ---- 3. Zoom the densest cell → honest totals + real markers -----------
     // Cells expose their density in the aria-label; click the first one with

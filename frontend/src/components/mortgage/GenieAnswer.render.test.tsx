@@ -73,22 +73,25 @@ describe('GenieAnswer render surfaces', () => {
     expect(status?.querySelector('button')).toBeNull();
   });
 
-  it('submits the follow-up question text through onFollowUp on click', () => {
-    const onFollowUp = vi.fn();
-    act(() =>
-      root.render(
-        <GenieAnswer
-          payload={payload({ follow_up_questions: ['Break this down by state'] })}
-          question="Q"
-          onFollowUp={onFollowUp}
-        />,
-      ),
-    );
-    const chip = container.querySelector<HTMLButtonElement>('.filter--question');
-    expect(chip).not.toBeNull();
-    act(() => chip!.click());
-    expect(onFollowUp).toHaveBeenCalledWith('Break this down by state');
-  });
+  it.each(['Break this down by state', 'Which ZIPs lead'])(
+    'submits native follow-up %s with its explicit conversation id',
+    (followUp) => {
+      const onFollowUp = vi.fn();
+      act(() =>
+        root.render(
+          <GenieAnswer
+            payload={payload({ follow_up_questions: [followUp] })}
+            question="Q"
+            onFollowUp={onFollowUp}
+          />,
+        ),
+      );
+      const chip = container.querySelector<HTMLButtonElement>('.filter--question');
+      expect(chip).not.toBeNull();
+      act(() => chip!.click());
+      expect(onFollowUp).toHaveBeenCalledWith(followUp, 'conv-1');
+    },
+  );
 
   it('renders the native-viz Beta badge only when native_visualization is present', () => {
     // Absent → no badge.

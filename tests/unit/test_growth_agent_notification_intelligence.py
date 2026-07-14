@@ -91,6 +91,42 @@ def test_notification_intelligence_uses_validated_supervisor_fragments() -> None
     assert result.slack_context != result.teams_summary
 
 
+class _DuplicateChannelApiClient(_ApiClient):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        response = super().do(method, path, body=body)
+        response["output"][0]["content"][0]["text"] = """{
+          "slack_context": "The focused queue is ready for team review.",
+          "teams_summary": "  THE focused queue is ready for team review!  ",
+          "operator_action": "Review priority distribution and assign the next owner",
+          "strategy_summary": "Use channel specific framing for the operating review"
+        }"""
+        return response
+
+
+def test_notification_intelligence_rejects_normalized_duplicate_channel_content() -> None:
+    client = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_DuplicateChannelApiClient(),
+    )
+    result = recommend_notification_intelligence(
+        monitor_name="Daily Refi Watch",
+        workflow_id="daily_refi_brief",
+        settings=Settings(
+            mip_agent_orchestrator=True,
+            mip_agent_serving_endpoint="mip-supervisor",
+            mip_agent_supervisor_id="supervisor-id",
+        ),
+        serving_client=client,
+    )
+
+    assert result.generation_mode == "governed_fallback"
+    assert result.generator_label == "Governed notification framework"
+    assert result.slack_context != result.teams_summary
+    assert "focused queue is ready for team review" not in result.slack_context.lower()
+
+
 class _UnsafeApiClient(_ApiClient):
     def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
         if method == "GET":

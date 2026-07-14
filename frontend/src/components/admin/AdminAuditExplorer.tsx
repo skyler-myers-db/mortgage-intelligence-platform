@@ -3,7 +3,7 @@ import type { FormEvent } from 'react';
 import { Chip } from '../Primitives';
 import { Icon } from '../Icon';
 import { WarmingUpBlock } from '../ui/WarmingUpBlock';
-import { api, type AuditEventRow } from '../../lib/api';
+import { api, type AuditEventPage, type AuditEventRow } from '../../lib/api';
 import { queryKeys } from '../../lib/queryKeys';
 import { formatTimestamp } from '../../lib/time';
 import { useWarmingUpRetry } from '../../lib/useWarmingUpRetry';
@@ -46,7 +46,7 @@ export function AdminAuditExplorer() {
   const [actionFilter, setActionFilter] = useState<string>('');
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('');
   const [entityDraftError, setEntityDraftError] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
+  const [pageCursors, setPageCursors] = useState<Array<string | null>>([null]);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<AuditCopyState | null>(null);
 
@@ -55,23 +55,23 @@ export function AdminAuditExplorer() {
   const filtersActive = Boolean(
     entityFilter.trim() || actionFilter.trim() || eventTypeFilter.trim(),
   );
-  const pageOffset = page * AUDIT_PAGE_SIZE;
+  const page = pageCursors.length - 1;
+  const pageCursor = pageCursors[page] ?? null;
 
   const {
     data: pageRows,
     warmingUp,
     error: errorObj,
     isFetching,
-    isPlaceholderData,
-  } = useWarmingUpRetry<AdminAuditEvent[]>(
-    (signal) => api.auditEvents(AUDIT_PAGE_SIZE + 1, signal, {
+  } = useWarmingUpRetry<AuditEventPage>(
+    (signal) => api.auditEventPage(AUDIT_PAGE_SIZE, signal, {
       entity_id: entityValue && !entityIsBorrower ? entityValue : null,
       borrower_id: entityValue && entityIsBorrower ? entityValue : null,
       action: actionFilter.trim() || null,
       event_type: eventTypeFilter.trim() || null,
-      offset: pageOffset,
+      cursor: pageCursor,
     }),
-    [entityValue, entityIsBorrower, actionFilter, eventTypeFilter, pageOffset],
+    [entityValue, entityIsBorrower, actionFilter, eventTypeFilter, pageCursor],
     {
       queryKey: queryKeys.auditEvents([
         'explorer',
@@ -79,18 +79,16 @@ export function AdminAuditExplorer() {
         entityIsBorrower,
         actionFilter,
         eventTypeFilter,
-        pageOffset,
+        pageCursor,
       ]),
-      keepPreviousData: true,
+      keepPreviousData: false,
     },
   );
-  const events = pageRows === null ? null : pageRows.slice(0, AUDIT_PAGE_SIZE);
-  const hasNextPage = (pageRows?.length ?? 0) > AUDIT_PAGE_SIZE;
-  const firstShownRow = events?.length ? pageOffset + 1 : 0;
-  const lastShownRow = pageOffset + (events?.length ?? 0);
-  const updating = pageRows !== null && (
-    isFetching || isPlaceholderData || Boolean(warmingUp)
-  );
+  const events = pageRows?.items ?? (pageRows === null ? null : []);
+  const hasNextPage = Boolean(pageRows?.next_cursor);
+  const firstShownRow = events?.length ? page * AUDIT_PAGE_SIZE + 1 : 0;
+  const lastShownRow = page * AUDIT_PAGE_SIZE + (events?.length ?? 0);
+  const updating = pageRows !== null && (isFetching || Boolean(warmingUp));
   const statusLabel = updating
     ? warmingUp
       ? `${warmingUp.label} (${warmingUp.attempt}/${warmingUp.maxAttempts})`
@@ -129,7 +127,7 @@ export function AdminAuditExplorer() {
     setEntityFilter(normalizedEntity.value);
     setActionFilter(actionDraft.trim());
     setEventTypeFilter(eventTypeDraft.trim());
-    setPage(0);
+    setPageCursors([null]);
     setExpandedEventId(null);
   };
   const clearFilters = () => {
@@ -140,7 +138,7 @@ export function AdminAuditExplorer() {
     setActionFilter('');
     setEventTypeFilter('');
     setEntityDraftError(null);
-    setPage(0);
+    setPageCursors([null]);
     setExpandedEventId(null);
   };
   const copyValue = async (value: string, label: string) => {
@@ -363,7 +361,7 @@ export function AdminAuditExplorer() {
                 disabled={page === 0 || updating}
                 onClick={() => {
                   setExpandedEventId(null);
-                  setPage((current) => Math.max(0, current - 1));
+                  setPageCursors((current) => current.slice(0, -1));
                 }}
               >
                 Previous
@@ -374,8 +372,9 @@ export function AdminAuditExplorer() {
                 className="btn btn--ghost btn--sm"
                 disabled={!hasNextPage || updating}
                 onClick={() => {
+                  if (!pageRows?.next_cursor) return;
                   setExpandedEventId(null);
-                  setPage((current) => current + 1);
+                  setPageCursors((current) => [...current, pageRows.next_cursor]);
                 }}
               >
                 Next

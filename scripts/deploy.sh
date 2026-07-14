@@ -830,6 +830,7 @@ else
     fi
     step "live smoke — scripts/smoke_live.sh against the deployed app"
     export MIP_EXPECT_AGENTIC_CAPABILITIES="${MIP_EXPECT_AGENTIC_CAPABILITIES:-1}"
+    export MIP_EXPECT_GIT_SHA="$APP_GIT_SHA"
     if ! run ./scripts/smoke_live.sh; then
       if [[ "${ALLOW_SMOKE_FAILURE:-0}" == "1" ]]; then
         echo "${YLW}[deploy] smoke test failed — override ALLOW_SMOKE_FAILURE=1 kept the deploy moving.${RST}" >&2

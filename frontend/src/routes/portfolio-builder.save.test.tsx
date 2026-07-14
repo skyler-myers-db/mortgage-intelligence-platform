@@ -253,12 +253,41 @@ describe('PortfolioBuilder save-build flow', () => {
 
     expect(portfolioCreate).toHaveBeenCalledTimes(1);
     expect(portfolioCreate.mock.calls[0][0]).toBe('Booth build — Summit IL refi');
+    expect(portfolioCreate.mock.calls[0][2].message_variants).toEqual([]);
     expect(promptSpy).not.toHaveBeenCalled();
     // The panel closes and the hint flips to saved.
     expect(
       container.querySelector('[data-testid="portfolio-save-name"]'),
     ).toBeNull();
     expect(saveButton().textContent).toContain('Build saved');
+  });
+
+  it('explains incomplete campaign copy and does not submit an invalid save', async () => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    mount();
+    await waitUntil(() => !saveButton().disabled);
+
+    const subject = container.querySelector<HTMLInputElement>(
+      'input[aria-label="Benefit-led subject"]',
+    );
+    expect(subject).not.toBeNull();
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
+      setter.call(subject!, 'Review your mortgage options');
+      subject!.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    act(() => saveButton().click());
+    act(() => {
+      container
+        .querySelector<HTMLButtonElement>('[data-testid="portfolio-save-confirm"]')!
+        .click();
+    });
+
+    await flush();
+    expect(portfolioCreate).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      'Benefit-led copy needs both a subject and message before this build can be saved.',
+    );
   });
 
   it('keeps Save unavailable while a changed build replaces stale preview data', async () => {

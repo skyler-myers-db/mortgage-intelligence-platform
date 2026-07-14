@@ -34,7 +34,7 @@ SELECT audit_id, event_type, actor_email, entity_type, entity_id,
        correlation_id, evidence_ids, metadata, event_at
 FROM mip_app.action_audit
 {where_clause}
-ORDER BY event_at DESC
+ORDER BY event_at DESC, audit_id DESC
 LIMIT %(limit)s
 OFFSET %(offset)s
 """
@@ -274,6 +274,10 @@ class LakebaseAuditStore:
         limit: int = 50,
         *,
         offset: int = 0,
+        after_event_at: datetime | None = None,
+        after_audit_id: str | None = None,
+        snapshot_event_at: datetime | None = None,
+        snapshot_audit_id: str | None = None,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -286,6 +290,22 @@ class LakebaseAuditStore:
     ) -> list[AuditEvent]:
         clauses: list[str] = []
         params: dict[str, Any] = {"limit": limit, "offset": offset}
+        if (after_event_at is None) != (after_audit_id is None):
+            raise ValueError("audit after boundary must include timestamp and id")
+        if (snapshot_event_at is None) != (snapshot_audit_id is None):
+            raise ValueError("audit snapshot boundary must include timestamp and id")
+        if snapshot_event_at is not None and snapshot_audit_id is not None:
+            clauses.append(
+                "(event_at, audit_id) <= (%(snapshot_event_at)s, %(snapshot_audit_id)s::uuid)"
+            )
+            params["snapshot_event_at"] = snapshot_event_at
+            params["snapshot_audit_id"] = snapshot_audit_id
+        if after_event_at is not None and after_audit_id is not None:
+            clauses.append(
+                "(event_at, audit_id) < (%(after_event_at)s, %(after_audit_id)s::uuid)"
+            )
+            params["after_event_at"] = after_event_at
+            params["after_audit_id"] = after_audit_id
         if actor:
             clauses.append("actor_email = %(actor)s")
             params["actor"] = actor

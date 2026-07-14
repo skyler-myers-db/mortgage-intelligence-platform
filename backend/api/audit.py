@@ -9,8 +9,18 @@ from typing import Annotated, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from backend.schemas.audit import AuditEvent, AuditEventCreateRequest, AuditRollupResponse
+from backend.schemas.audit import (
+    AuditEvent,
+    AuditEventCreateRequest,
+    AuditEventPage,
+    AuditRollupResponse,
+)
 from backend.schemas.common import validate_public_borrower_id
+from backend.services.audit_pagination import (
+    audit_filter_fingerprint,
+    decode_audit_cursor,
+    encode_audit_cursor,
+)
 from backend.services.audit_store import (
     AuditMetadataValueViolation,
     AuditMetadataViolation,
@@ -119,6 +129,103 @@ def list_events(
         raise HTTPException(
             status_code=503, detail=safe_dependency_detail("lakebase")
         ) from exc
+
+
+def _event_cursor_timestamp(event: AuditEvent) -> datetime:
+    timestamp = datetime.fromisoformat(event.created_at.replace("Z", "+00:00"))
+    if timestamp.tzinfo is None:
+        raise ValueError("audit event timestamp must include a timezone")
+    return timestamp
+
+
+@router.get("/events/page", response_model=AuditEventPage)
+def list_event_page(
+    store: StoreDep,
+    _actor: AdminDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_AUDIT_LIMIT)] = DEFAULT_AUDIT_LIMIT,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+    actor: Annotated[str | None, Query(max_length=256)] = None,
+    action: Annotated[str | None, Query(max_length=128)] = None,
+    entity_id: Annotated[str | None, Query(max_length=256)] = None,
+    borrower_id: Annotated[str | None, Query(max_length=64)] = None,
+    subject_clip: Annotated[str | None, Query(max_length=128)] = None,
+    event_type: Annotated[str | None, Query(max_length=128)] = None,
+    correlation_id: Annotated[str | None, Query(max_length=128)] = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+) -> AuditEventPage:
+    """Traverse a snapshot of the append-only audit ledger without page drift."""
+
+    if borrower_id is not None:
+        try:
+            validate_public_borrower_id(borrower_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid borrower_id") from exc
+    if correlation_id is not None:
+        try:
+            correlation_id = _validate_correlation_filter(correlation_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
+    filters = {
+        "actor": actor,
+        "action": action,
+        "entity_id": entity_id,
+        "borrower_id": borrower_id,
+        "subject_clip": subject_clip,
+        "event_type": event_type,
+        "correlation_id": correlation_id,
+        "since": since,
+        "until": until,
+    }
+    fingerprint = audit_filter_fingerprint(filters)
+    decoded = None
+    if cursor is not None:
+        try:
+            decoded = decode_audit_cursor(cursor, filter_fingerprint=fingerprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid audit cursor") from exc
+    try:
+        rows = store.list(
+            limit=limit + 1,
+            after_event_at=decoded.after_at if decoded else None,
+            after_audit_id=decoded.after_id if decoded else None,
+            snapshot_event_at=decoded.snapshot_at if decoded else None,
+            snapshot_audit_id=decoded.snapshot_id if decoded else None,
+            actor=actor,
+            action=action,
+            entity_id=entity_id,
+            borrower_id=borrower_id,
+            subject_clip=subject_clip,
+            event_type=event_type,
+            correlation_id=correlation_id,
+            since=since,
+            until=until,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(
+            status_code=503, detail=safe_dependency_detail("lakebase")
+        ) from exc
+    items = rows[:limit]
+    if len(rows) <= limit or not items:
+        return AuditEventPage(items=items)
+    try:
+        if decoded is None:
+            snapshot_at = _event_cursor_timestamp(items[0])
+            snapshot_id = items[0].event_id
+        else:
+            snapshot_at = decoded.snapshot_at
+            snapshot_id = decoded.snapshot_id
+        after_event = items[-1]
+        next_cursor = encode_audit_cursor(
+            after_at=_event_cursor_timestamp(after_event),
+            after_id=after_event.event_id,
+            snapshot_at=snapshot_at,
+            snapshot_id=snapshot_id,
+            filter_fingerprint=fingerprint,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=503, detail="audit pagination unavailable") from exc
+    return AuditEventPage(items=items, next_cursor=next_cursor)
 
 
 @router.get("/rollups", response_model=list[AuditRollupResponse])

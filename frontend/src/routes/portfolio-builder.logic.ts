@@ -386,6 +386,18 @@ function configuredChannelCosts(setup: CampaignSetupState): Record<string, numbe
   );
 }
 
+export function campaignCopyValidationError(setup: CampaignSetupState): string | null {
+  const variants = [
+    { label: 'Benefit-led', subject: setup.subjectA.trim(), body: setup.bodyA.trim() },
+    { label: 'Guidance-led', subject: setup.subjectB.trim(), body: setup.bodyB.trim() },
+  ];
+  if (variants.every((variant) => !variant.subject && !variant.body)) return null;
+  const incomplete = variants.find((variant) => !variant.subject || !variant.body);
+  return incomplete
+    ? `${incomplete.label} copy needs both a subject and message before this build can be saved.`
+    : null;
+}
+
 export function buildCampaignConfig(setup: CampaignSetupState): {
   suppression_policy: Record<string, unknown>;
   message_variants: Record<string, unknown>[];
@@ -396,30 +408,37 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
   household_dedup: Record<string, unknown>;
 } {
   const holdoutPct = boundedNumber(setup.holdoutPct, 10, 0, 50);
+  const hasCampaignCopy = [
+    setup.subjectA,
+    setup.subjectB,
+    setup.bodyA,
+    setup.bodyB,
+  ].some((value) => value.trim().length > 0);
+  const messageVariants = hasCampaignCopy ? [
+    {
+      variant_name: 'A',
+      channel: 'email',
+      subject: setup.subjectA.trim(),
+      body: setup.bodyA.trim(),
+      weight_pct: Math.max(0, Math.round((100 - holdoutPct) / 2)),
+      generation_mode: setup.generationMode,
+      generator_label: setup.generatorLabel,
+      provenance_token: setup.provenanceTokenA,
+    },
+    {
+      variant_name: 'B',
+      channel: 'email',
+      subject: setup.subjectB.trim(),
+      body: setup.bodyB.trim(),
+      weight_pct: Math.max(0, Math.floor((100 - holdoutPct) / 2)),
+      generation_mode: setup.generationMode,
+      generator_label: setup.generatorLabel,
+      provenance_token: setup.provenanceTokenB,
+    },
+  ] : [];
   return {
     suppression_policy: { default: 'eligible_only', frequency_cap_days: 30 },
-    message_variants: [
-      {
-        variant_name: 'A',
-        channel: 'email',
-        subject: setup.subjectA.trim(),
-        body: setup.bodyA.trim(),
-        weight_pct: Math.max(0, Math.round((100 - holdoutPct) / 2)),
-        generation_mode: setup.generationMode,
-        generator_label: setup.generatorLabel,
-        provenance_token: setup.provenanceTokenA,
-      },
-      {
-        variant_name: 'B',
-        channel: 'email',
-        subject: setup.subjectB.trim(),
-        body: setup.bodyB.trim(),
-        weight_pct: Math.max(0, Math.floor((100 - holdoutPct) / 2)),
-        generation_mode: setup.generationMode,
-        generator_label: setup.generatorLabel,
-        provenance_token: setup.provenanceTokenB,
-      },
-    ],
+    message_variants: messageVariants,
     channel_cascade: [
       { channel: 'email', step: 1 },
       { channel: 'sms', step: 2, after_days: 3 },

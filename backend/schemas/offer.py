@@ -1,9 +1,10 @@
 """Offer recommendation request and response contracts."""
 
+import re
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
 
 from backend.schemas.common import (
     validate_internal_staff_email,
@@ -25,6 +26,57 @@ OfferType = Literal[
     "investor",
     "nurture",
 ]
+
+_EVIDENCE_ID_PATTERN_TEXT = r"^ev-[0-9a-f]{3,61}$"
+_EVIDENCE_ID_PATTERN = re.compile(_EVIDENCE_ID_PATTERN_TEXT)
+_MAX_OFFER_EVIDENCE_IDS = 20
+_MAX_SOURCE_REFRESHED_AT_LENGTH = 64
+EvidenceIdentifier = Annotated[
+    str,
+    StringConstraints(
+        min_length=6,
+        max_length=64,
+        pattern=_EVIDENCE_ID_PATTERN_TEXT,
+    ),
+]
+
+
+def validate_offer_evidence_ids(value: object) -> list[str]:
+    """Validate ordered, public evidence references for an offer proof."""
+
+    if not isinstance(value, list | tuple):
+        raise ValueError("offer evidence_ids must be an ordered list")
+    if not 1 <= len(value) <= _MAX_OFFER_EVIDENCE_IDS:
+        raise ValueError(
+            f"offer evidence_ids must contain between 1 and {_MAX_OFFER_EVIDENCE_IDS} items"
+        )
+
+    evidence_ids: list[str] = []
+    for raw_value in value:
+        if not isinstance(raw_value, str):
+            raise ValueError("offer evidence_ids contains an invalid identifier")
+        evidence_id = raw_value.strip()
+        if _EVIDENCE_ID_PATTERN.fullmatch(evidence_id) is None:
+            raise ValueError("offer evidence_ids contains an invalid identifier")
+        evidence_ids.append(evidence_id)
+    return evidence_ids
+
+
+def validate_offer_source_refreshed_at(value: object) -> str:
+    """Validate the bounded, timezone-aware source version for an offer proof."""
+
+    if not isinstance(value, str):
+        raise ValueError("offer source_refreshed_at must be a timestamp")
+    timestamp = value.strip()
+    if not timestamp or len(timestamp) > _MAX_SOURCE_REFRESHED_AT_LENGTH:
+        raise ValueError("offer source_refreshed_at must be a bounded timestamp")
+    try:
+        parsed = datetime.fromisoformat(timestamp)
+    except ValueError as exc:
+        raise ValueError("offer source_refreshed_at must be a parseable timestamp") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise ValueError("offer source_refreshed_at must include a timezone")
+    return timestamp
 
 
 class OfferAlternative(BaseModel):
@@ -56,13 +108,20 @@ class SourceLabel(BaseModel):
 
 class OfferRecommendation(BaseModel):
     borrower_id: str
-    source_refreshed_at: str | None = None
+    source_refreshed_at: str = Field(
+        min_length=1,
+        max_length=64,
+        json_schema_extra={"format": "date-time"},
+    )
     offer_code: str
     offer_type: OfferType
     product_label: str
     confidence: int = Field(ge=0, le=100)
     rationale: str
-    evidence_ids: list[str]
+    evidence_ids: list[EvidenceIdentifier] = Field(
+        min_length=1,
+        max_length=_MAX_OFFER_EVIDENCE_IDS,
+    )
     # Legacy: raw UC FQN list kept for drawer lineage (the frontend's
     # sourceDescriptor() helper still substring-matches on 'fn_in_the_money'
     # etc. to route to DRAWER_SOURCES). Superseded for chip rendering by
@@ -76,6 +135,16 @@ class OfferRecommendation(BaseModel):
     source_labels: list[SourceLabel] = []
     alternatives: list[OfferAlternative] = []
     thresholds_applied: dict[str, int] = {}
+
+    @field_validator("source_refreshed_at", mode="before")
+    @classmethod
+    def _source_refreshed_at_is_valid(cls, value: object) -> str:
+        return validate_offer_source_refreshed_at(value)
+
+    @field_validator("evidence_ids", mode="before")
+    @classmethod
+    def _evidence_ids_are_valid(cls, value: object) -> list[str]:
+        return validate_offer_evidence_ids(value)
 
 
 class OfferRecommendRequest(BaseModel):

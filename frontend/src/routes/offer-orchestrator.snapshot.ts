@@ -7,7 +7,7 @@ export function resolveOfferApprovalStatus(
 ): ApprovalStatus | undefined {
   const durable = lifecycleStatus ?? borrowerStatus;
   if (durable === 'approved' || durable === 'rejected' || durable === 'hold') {
-    return local ?? durable;
+    return durable;
   }
   return local;
 }
