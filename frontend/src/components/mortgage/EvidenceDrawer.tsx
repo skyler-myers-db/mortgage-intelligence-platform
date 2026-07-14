@@ -323,8 +323,12 @@ export function EvidenceDrawer() {
           </div>
         )}
         <div className="drawer__body">
-          {catalogLinksUnavailable && (
-            <div className="source-card source-card--warning" role="alert">
+          {tab === 'lineage' && catalogLinksUnavailable && (
+            <div
+              className="source-card source-card--warning"
+              role="status"
+              aria-live="polite"
+            >
               One or more Catalog Explorer links are unavailable because the
               Databricks workspace host or asset mapping is not configured. The
               governed asset names remain visible, but click-through lineage is not

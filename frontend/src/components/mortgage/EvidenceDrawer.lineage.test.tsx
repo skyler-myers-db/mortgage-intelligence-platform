@@ -253,7 +253,7 @@ describe('EvidenceDrawer lineage tab', () => {
     expect(apiMocks.lineageManifest).toHaveBeenCalledTimes(1);
     expect(document.body.textContent).toContain('Governed assets');
     expect(document.body.textContent).toContain('Compact semantics');
-    expect(document.body.textContent).toContain(
+    expect(document.body.textContent).not.toContain(
       'One or more Catalog Explorer links are unavailable because the Databricks workspace host or asset mapping is not configured.',
     );
     expect(document.querySelectorAll('.governed-assets__list .lineage-node__chip')).toHaveLength(3);
@@ -267,6 +267,13 @@ describe('EvidenceDrawer lineage tab', () => {
 
     await openLineageTab();
     expect(apiMocks.lineageManifest).toHaveBeenCalledTimes(1);
+    const catalogStatus = Array.from(document.querySelectorAll('[role="status"]')).find((node) => (
+      node.textContent?.includes('One or more Catalog Explorer links are unavailable')
+    ));
+    expect(catalogStatus).toBeTruthy();
+    expect(Array.from(document.querySelectorAll('[role="alert"]')).some((node) => (
+      node.textContent?.includes('Catalog Explorer links are unavailable')
+    ))).toBe(false);
 
     const chips = Array.from(
       document.querySelectorAll<HTMLElement>('.lineage-node__chip'),

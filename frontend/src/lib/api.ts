@@ -1709,12 +1709,15 @@ export const api = {
       event_type?: string | null;
       since?: string | null;
       until?: string | null;
+      offset?: number | null;
     } = {},
   ) => {
     const params = new URLSearchParams();
     params.set('limit', String(limit));
     Object.entries(filters).forEach(([key, value]) => {
-      if (value) params.set(key, value);
+      if (value !== null && value !== undefined && value !== '') {
+        params.set(key, String(value));
+      }
     });
     return getJson<AuditEventRow[]>(`/api/audit/events?${params.toString()}`, signal);
   },

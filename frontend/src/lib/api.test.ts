@@ -793,6 +793,29 @@ describe('data estate API client', () => {
   });
 });
 
+describe('audit API client', () => {
+  it('forwards server-backed paging and normalized filters', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, []);
+    });
+
+    await api.auditEvents(26, undefined, {
+      borrower_id: 'B-ABC123',
+      action: 'outreach.approve',
+      offset: 25,
+    });
+
+    const url = new URL(calls[0].path, 'http://localhost');
+    expect(url.pathname).toBe('/api/v1/audit/events');
+    expect(url.searchParams.get('limit')).toBe('26');
+    expect(url.searchParams.get('offset')).toBe('25');
+    expect(url.searchParams.get('borrower_id')).toBe('B-ABC123');
+    expect(url.searchParams.get('action')).toBe('outreach.approve');
+  });
+});
+
 describe('genie API client', () => {
   it('starts or resumes a governed Genie session', async () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];

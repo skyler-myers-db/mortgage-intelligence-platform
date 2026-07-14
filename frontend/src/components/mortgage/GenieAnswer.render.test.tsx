@@ -57,6 +57,22 @@ describe('GenieAnswer render surfaces', () => {
     container.remove();
   });
 
+  it('announces the metric and narrative without wrapping interactive answer controls', () => {
+    act(() => root.render(
+      <GenieAnswer payload={payload()} question="Q" onFollowUp={() => {}} />,
+    ));
+
+    const status = container.querySelector<HTMLElement>('[role="status"]');
+    expect(status).not.toBeNull();
+    expect(status?.classList.contains('sr-only')).toBe(true);
+    expect(status?.getAttribute('aria-live')).toBe('polite');
+    expect(status?.getAttribute('aria-atomic')).toBe('true');
+    expect(status?.textContent).toContain('Genie answer ready.');
+    expect(status?.textContent).toContain('5.25 years');
+    expect(status?.textContent).toContain('The average loan age is 5.25 years.');
+    expect(status?.querySelector('button')).toBeNull();
+  });
+
   it('submits the follow-up question text through onFollowUp on click', () => {
     const onFollowUp = vi.fn();
     act(() =>

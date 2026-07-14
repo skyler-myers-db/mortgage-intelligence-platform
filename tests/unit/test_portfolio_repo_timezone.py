@@ -350,6 +350,30 @@ def test_none_stays_none():
     assert preview.data_refreshed_at is None
 
 
+def test_preview_maps_every_offer_mix_column_without_collapsing_categories() -> None:
+    row = _preview_row()
+    expected = {
+        "purchase": 11,
+        "refi_plus_heloc": 22,
+        "heloc": 33,
+        "refi": 44,
+        "cash_out": 55,
+        "investor": 66,
+        "retention": 77,
+        "nurture": 88,
+    }
+    row.update({f"offer_{code}": count for code, count in expected.items()})
+    client = _StubClient(row, [])
+    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+
+    preview = repo.preview(None)
+
+    assert {
+        offer.offer_code: offer.borrower_count
+        for offer in preview.offer_mix
+    } == expected
+
+
 @pytest.mark.parametrize("bad_value", ["not a date", object(), 12345])
 def test_unparseable_values_fall_back_to_none(bad_value: Any):
     """Defence in depth: a malformed value should coerce to ``None`` so a

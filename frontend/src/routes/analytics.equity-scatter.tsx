@@ -229,6 +229,15 @@ export function ScoreBandLegend({ scope }: { scope: 'overview' | 'borrower' }) {
             Exact-coordinate cluster count
           </span>
         )}
+        {scope === 'overview' && (
+          <span className="analytics-scatter-legend__density">
+            <span className="analytics-scatter-legend__density-scale" aria-hidden="true">
+              <span className="analytics-scatter-legend__density-swatch is-lower" />
+              <span className="analytics-scatter-legend__density-swatch is-higher" />
+            </span>
+            Opacity: lower to higher borrower density
+          </span>
+        )}
       </div>
       <p className="analytics-scatter-legend__scope muted fs-12 flush">
         {scope === 'overview'

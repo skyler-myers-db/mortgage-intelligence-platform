@@ -1,4 +1,7 @@
+import json
 from types import SimpleNamespace
+
+import pytest
 
 from backend.config.settings import Settings
 from backend.services.growth_agent_notification_intelligence import (
@@ -119,6 +122,66 @@ def test_notification_intelligence_rejects_model_controlled_counts_routes_and_pr
     assert result.generation_mode == "governed_fallback"
     assert "999" not in result.slack_context
     assert "/lead-queue" not in result.slack_context
+
+
+class _SingleUnsafeFragmentApiClient(_ApiClient):
+    def __init__(self, field: str, unsafe_value: str) -> None:
+        self.field = field
+        self.unsafe_value = unsafe_value
+
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        response = super().do(method, path, body=body)
+        fragments = {
+            "slack_context": "A focused queue is ready for an operating review",
+            "teams_summary": "The watchlist is ready for a coordinated ownership review",
+            "operator_action": "Review priority distribution and assign the next owner",
+            "strategy_summary": "Slack provides attention while Teams provides operating context",
+        }
+        fragments[self.field] = self.unsafe_value
+        response["output"][0]["content"][0]["text"] = json.dumps(fragments)
+        return response
+
+
+@pytest.mark.parametrize(
+    ("field", "unsafe_value"),
+    [
+        ("slack_context", "A guaranteed lower rate is ready for queue review"),
+        ("teams_summary", "Review this queue with urgency before team handoff"),
+        ("operator_action", "Review the queue urgently and assign the next owner"),
+        ("strategy_summary", "Use guaranteed outcomes in the operating summary"),
+    ],
+)
+def test_notification_intelligence_rejects_each_pressure_phrase_independently(
+    field: str,
+    unsafe_value: str,
+) -> None:
+    client = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_SingleUnsafeFragmentApiClient(field, unsafe_value),
+    )
+
+    result = recommend_notification_intelligence(
+        monitor_name="Daily Refi Watch",
+        workflow_id="daily_refi_brief",
+        settings=Settings(
+            mip_agent_orchestrator=True,
+            mip_agent_serving_endpoint="mip-supervisor",
+            mip_agent_supervisor_id="supervisor-id",
+        ),
+        serving_client=client,
+    )
+
+    assert result.generation_mode == "governed_fallback"
+    assert unsafe_value.lower() not in " ".join(
+        (
+            result.slack_context,
+            result.teams_summary,
+            result.operator_action,
+            result.strategy_summary,
+        )
+    ).lower()
 
 
 class _UnsafeIdentityApiClient(_ApiClient):

@@ -23,6 +23,20 @@ interface AuditCopyState {
 }
 
 const AUDIT_TABLE_CONTEXT = 'mip_app.action_audit';
+const AUDIT_PAGE_SIZE = 25;
+
+function normalizeAuditEntityDraft(value: string): { value: string; error: string | null } {
+  const trimmed = value.trim();
+  if (!/^b-/i.test(trimmed)) return { value: trimmed, error: null };
+  const normalized = trimmed.toUpperCase();
+  if (!/^B-[A-Z0-9]+$/.test(normalized)) {
+    return {
+      value: '',
+      error: 'Borrower reference must use B- followed by letters and numbers only.',
+    };
+  }
+  return { value: normalized, error: null };
+}
 
 export function AdminAuditExplorer() {
   const [entityDraft, setEntityDraft] = useState<string>('');
@@ -31,6 +45,8 @@ export function AdminAuditExplorer() {
   const [entityFilter, setEntityFilter] = useState<string>('');
   const [actionFilter, setActionFilter] = useState<string>('');
   const [eventTypeFilter, setEventTypeFilter] = useState<string>('');
+  const [entityDraftError, setEntityDraftError] = useState<string | null>(null);
+  const [page, setPage] = useState(0);
   const [expandedEventId, setExpandedEventId] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<AuditCopyState | null>(null);
 
@@ -39,21 +55,23 @@ export function AdminAuditExplorer() {
   const filtersActive = Boolean(
     entityFilter.trim() || actionFilter.trim() || eventTypeFilter.trim(),
   );
+  const pageOffset = page * AUDIT_PAGE_SIZE;
 
   const {
-    data: events,
+    data: pageRows,
     warmingUp,
     error: errorObj,
     isFetching,
     isPlaceholderData,
   } = useWarmingUpRetry<AdminAuditEvent[]>(
-    (signal) => api.auditEvents(25, signal, {
+    (signal) => api.auditEvents(AUDIT_PAGE_SIZE + 1, signal, {
       entity_id: entityValue && !entityIsBorrower ? entityValue : null,
       borrower_id: entityValue && entityIsBorrower ? entityValue : null,
       action: actionFilter.trim() || null,
       event_type: eventTypeFilter.trim() || null,
+      offset: pageOffset,
     }),
-    [entityValue, entityIsBorrower, actionFilter, eventTypeFilter],
+    [entityValue, entityIsBorrower, actionFilter, eventTypeFilter, pageOffset],
     {
       queryKey: queryKeys.auditEvents([
         'explorer',
@@ -61,11 +79,16 @@ export function AdminAuditExplorer() {
         entityIsBorrower,
         actionFilter,
         eventTypeFilter,
+        pageOffset,
       ]),
       keepPreviousData: true,
     },
   );
-  const updating = events !== null && (
+  const events = pageRows === null ? null : pageRows.slice(0, AUDIT_PAGE_SIZE);
+  const hasNextPage = (pageRows?.length ?? 0) > AUDIT_PAGE_SIZE;
+  const firstShownRow = events?.length ? pageOffset + 1 : 0;
+  const lastShownRow = pageOffset + (events?.length ?? 0);
+  const updating = pageRows !== null && (
     isFetching || isPlaceholderData || Boolean(warmingUp)
   );
   const statusLabel = updating
@@ -96,9 +119,18 @@ export function AdminAuditExplorer() {
 
   const applyFilters = (event?: FormEvent<HTMLFormElement>) => {
     event?.preventDefault();
-    setEntityFilter(entityDraft.trim());
+    const normalizedEntity = normalizeAuditEntityDraft(entityDraft);
+    if (normalizedEntity.error) {
+      setEntityDraftError(normalizedEntity.error);
+      return;
+    }
+    setEntityDraftError(null);
+    setEntityDraft(normalizedEntity.value);
+    setEntityFilter(normalizedEntity.value);
     setActionFilter(actionDraft.trim());
     setEventTypeFilter(eventTypeDraft.trim());
+    setPage(0);
+    setExpandedEventId(null);
   };
   const clearFilters = () => {
     setEntityDraft('');
@@ -107,6 +139,9 @@ export function AdminAuditExplorer() {
     setEntityFilter('');
     setActionFilter('');
     setEventTypeFilter('');
+    setEntityDraftError(null);
+    setPage(0);
+    setExpandedEventId(null);
   };
   const copyValue = async (value: string, label: string) => {
     try {
@@ -156,8 +191,8 @@ export function AdminAuditExplorer() {
                 : filtersActive
                   ? events === null
                     ? 'filtering…'
-                    : `${events.length} matching`
-                  : 'last 25'}
+                    : `page ${page + 1} · ${events.length} rows`
+                  : `page ${page + 1} · ${events?.length ?? 0} rows`}
           </Chip>
         </div>
       </div>
@@ -177,9 +212,19 @@ export function AdminAuditExplorer() {
             <input
               className="admin-filter-input"
               value={entityDraft}
-              onChange={(event) => setEntityDraft(event.target.value)}
+              onChange={(event) => {
+                setEntityDraft(event.target.value);
+                setEntityDraftError(null);
+              }}
               placeholder="B-... or approval UUID"
+              aria-invalid={Boolean(entityDraftError)}
+              aria-describedby={entityDraftError ? 'audit-entity-filter-error' : undefined}
             />
+            {entityDraftError && (
+              <span id="audit-entity-filter-error" className="text-danger fs-11" role="alert">
+                {entityDraftError}
+              </span>
+            )}
           </label>
           <label className="filter-row__group">
             <span className="field__label">ACTION</span>
@@ -230,7 +275,7 @@ export function AdminAuditExplorer() {
                 <Chip variant="neutral">event = {eventTypeFilter.trim()}</Chip>
               )}
               <span className="muted fs-12">
-                Showing the latest 25 rows that match the applied filters.
+                Showing rows {firstShownRow}-{lastShownRow} that match the applied filters.
               </span>
             </>
           )}
@@ -246,7 +291,7 @@ export function AdminAuditExplorer() {
           </div>
         )}
         <div className="admin-rollups mt-3">
-          <div className="h-5">Workflow events by week</div>
+          <div className="h-5">Recorded audit events by week</div>
           {rollupsWarming && (
             <WarmingUpBlock state={rollupsWarming} title="Audit rollups loading" compact />
           )}
@@ -273,7 +318,6 @@ export function AdminAuditExplorer() {
         {events !== null && !error && (
           <div
             className={`admin-audit-list stable-refresh-region stable-refresh-region--table mt-3 ${updating ? 'is-updating' : ''}`}
-            tabIndex={0}
             aria-label="Audit event table"
             aria-busy={updating}
             data-status={statusLabel}
@@ -282,11 +326,11 @@ export function AdminAuditExplorer() {
               <table className="tbl" aria-label="Audit events">
                 <thead>
                   <tr>
-                    <th aria-label="Event details" />
-                    <th>Action</th>
-                    <th>Entity</th>
-                    <th>Actor</th>
-                    <th>Time</th>
+                    <th scope="col" aria-label="Event details" />
+                    <th scope="col">Action</th>
+                    <th scope="col">Entity</th>
+                    <th scope="col">Actor</th>
+                    <th scope="col">Time</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -306,8 +350,37 @@ export function AdminAuditExplorer() {
               </table>
             )}
             {events.length === 0 && (
-              <div className="muted fs-12">No audit rows match these filters.</div>
+              <div className="muted fs-12">
+                {page > 0
+                  ? 'No more audit rows match these filters on this page.'
+                  : 'No audit rows match these filters.'}
+              </div>
             )}
+            <div className="section-actions admin-audit-pagination" aria-label="Audit result pages">
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={page === 0 || updating}
+                onClick={() => {
+                  setExpandedEventId(null);
+                  setPage((current) => Math.max(0, current - 1));
+                }}
+              >
+                Previous
+              </button>
+              <span className="muted mono fs-11" aria-live="polite">Page {page + 1}</span>
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                disabled={!hasNextPage || updating}
+                onClick={() => {
+                  setExpandedEventId(null);
+                  setPage((current) => current + 1);
+                }}
+              >
+                Next
+              </button>
+            </div>
           </div>
         )}
       </div>

@@ -114,6 +114,9 @@ describe('Equity versus rate spread score-band legend', () => {
     );
     expect(html).toContain(`Low 0-${SCORE_BAND_MED_MIN - 1}`);
     expect(html).toContain('Color metric: mean opportunity score per overview cell.');
+    expect(html).toContain('Opacity: lower to higher borrower density');
+    expect(html).toContain('analytics-scatter-legend__density-swatch is-lower');
+    expect(html).toContain('analytics-scatter-legend__density-swatch is-higher');
   });
 
   it('identifies drilldown colors as individual borrower scores', () => {

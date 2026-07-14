@@ -497,6 +497,7 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
             "approval_id": "94e455bb-5fed-4745-82db-0b8606194175",
             "borrower_id": "B-12345",
             "offer_code": "refi",
+            "draft_subject": "Review for jane@example.com at 555-212-3333",
             "draft_body": "Call 555-212-3333 or email jane@example.com about 123 Elm St.",
         },
     )
@@ -504,6 +505,10 @@ def test_in_memory_store_scrubs_allowed_free_text_before_persisting() -> None:
     assert "555-212-3333" not in str(event.payload_json)
     assert "jane@example.com" not in str(event.payload_json)
     assert "123 Elm St" not in str(event.payload_json)
+    assert "jane@example.com" not in event.payload_json["draft_subject"]
+    assert "555-212-3333" not in event.payload_json["draft_subject"]
+    assert "[EMAIL-REDACTED]" in event.payload_json["draft_subject"]
+    assert "[PHONE-REDACTED]" in event.payload_json["draft_subject"]
     assert "[PHONE-REDACTED]" in event.payload_json["draft_body"]
     assert "[EMAIL-REDACTED]" in event.payload_json["draft_body"]
     assert "[ADDRESS-REDACTED]" in event.payload_json["draft_body"]

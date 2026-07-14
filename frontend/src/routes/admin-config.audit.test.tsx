@@ -35,6 +35,7 @@ const fixtures = vi.hoisted(() => ({
 const apiMocks = vi.hoisted(() => ({
   dataEstate: vi.fn(),
   hookKeys: [] as ReadonlyArray<unknown>[],
+  auditRows: [] as Array<typeof fixtures.auditEvent>,
 }));
 
 vi.mock('../lib/useWarmingUpRetry', () => ({
@@ -46,7 +47,7 @@ vi.mock('../lib/useWarmingUpRetry', () => ({
     const key = options?.queryKey ?? [];
     apiMocks.hookKeys.push(key);
     const data = key.includes('explorer') || key.includes('latest')
-      ? [fixtures.auditEvent]
+      ? apiMocks.auditRows
       : key.includes('rollups')
         ? []
         : null;
@@ -79,7 +80,11 @@ vi.mock('../components/AppContext', () => ({
 }));
 
 vi.mock('../components/admin/DataOperationsPanel', () => ({
-  DataOperationsPanel: () => null,
+  DataOperationsPanel: () => (
+    <div id="data-operations" tabIndex={-1} aria-labelledby="data-operations-title">
+      <div id="data-operations-title">Data operations</div>
+    </div>
+  ),
 }));
 vi.mock('../components/admin/BuyerReadinessPanel', () => ({
   BuyerReadinessPanel: () => null,
@@ -157,6 +162,7 @@ describe('AdminConfig audit explorer', () => {
       proof_assets: [],
     });
     apiMocks.hookKeys.length = 0;
+    apiMocks.auditRows = [fixtures.auditEvent];
     writeText = vi.fn().mockResolvedValue(undefined);
     Object.defineProperty(navigator, 'clipboard', {
       configurable: true,
@@ -223,6 +229,22 @@ describe('AdminConfig audit explorer', () => {
     expect(document.activeElement).toBe(audit);
   });
 
+  it('scrolls and moves focus to data operations for its deep link', async () => {
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    await renderAdmin('/admin-config#data-operations');
+
+    const operations = document.getElementById('data-operations');
+    expect(operations?.tabIndex).toBe(-1);
+    expect(operations?.getAttribute('aria-labelledby')).toBe('data-operations-title');
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'start' });
+    expect(document.activeElement).toBe(operations);
+  });
+
   it('applies borrower, action, and event filters to the audit query key', async () => {
     await renderAdmin();
     const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
@@ -247,6 +269,45 @@ describe('AdminConfig audit explorer', () => {
     expect(document.body.textContent).toContain('entity = B-ABC123');
     expect(document.body.textContent).toContain('action = outreach.approve');
     expect(document.body.textContent).toContain('event = APPROVE');
+  });
+
+  it('normalizes borrower references and rejects malformed B-prefixed filters', async () => {
+    await renderAdmin();
+    const entity = document.querySelector<HTMLInputElement>('input[placeholder="B-... or approval UUID"]');
+    expect(entity).not.toBeNull();
+
+    act(() => setNativeValue(entity!, 'b-abc123'));
+    act(() => buttonByLabel(/^Apply filters$/).click());
+    expect(entity?.value).toBe('B-ABC123');
+    expect(document.body.textContent).toContain('entity = B-ABC123');
+
+    act(() => setNativeValue(entity!, 'B-ABC 123'));
+    act(() => buttonByLabel(/^Apply filters$/).click());
+    expect(entity?.getAttribute('aria-invalid')).toBe('true');
+    expect(document.body.textContent).toContain(
+      'Borrower reference must use B- followed by letters and numbers only.',
+    );
+    expect(document.body.textContent).toContain('entity = B-ABC123');
+  });
+
+  it('pages through older audit rows without calling a 25-row result a total', async () => {
+    apiMocks.auditRows = Array.from({ length: 26 }, (_, index) => ({
+      ...fixtures.auditEvent,
+      event_id: `evt-page-${index}`,
+      entity_id: `approval-${index}`,
+    }));
+    await renderAdmin();
+
+    expect(document.body.textContent).toContain('page 1 · 25 rows');
+    expect(document.body.textContent).not.toContain('25 matching');
+    const next = buttonByLabel(/^Next$/);
+    expect(next.disabled).toBe(false);
+    act(() => next.click());
+
+    const explorerKeys = apiMocks.hookKeys.filter((key) => key.includes('explorer'));
+    expect(explorerKeys[explorerKeys.length - 1]).toContain(25);
+    expect(document.body.textContent).toContain('Page 2');
+    expect(buttonByLabel(/^Previous$/).disabled).toBe(false);
   });
 
   it('copies the real table context and an exact record query without creating a row URL', async () => {

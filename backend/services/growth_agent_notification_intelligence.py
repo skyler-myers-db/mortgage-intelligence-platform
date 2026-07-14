@@ -27,7 +27,7 @@ from backend.services.supervisor_runtime import verify_supervisor_runtime
 NotificationGenerationMode = Literal["supervisor", "governed_fallback"]
 _UNSAFE_FRAGMENT_RE = re.compile(
     r"(?:https?://|/lead-queue|\b\d+(?:[.,]\d+)*\b|[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}|"
-    r"\b(?:guarantee|urgent|act now|send now|customer name|borrower name|"
+    r"\b(?:guarantee(?:d|s)?|urgenc(?:y|ies)|urgent(?:ly)?|act now|send now|customer name|borrower name|"
     r"increase(?:d)?|decrease(?:d)?|improve(?:d)?|decline(?:d)?|convert(?:ed)?|"
     r"funded|submitted|application|response rate|conversion|performance|"
     r"record high|record low)\b)",

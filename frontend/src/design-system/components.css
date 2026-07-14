@@ -3486,7 +3486,8 @@ a.lineage-node__chip:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .map-region.is-loading { animation: none; }
 }
-.map-status {
+.map-status,
+.sr-only {
   position: absolute;
   clip: rect(0 0 0 0);
   clip-path: inset(50%);

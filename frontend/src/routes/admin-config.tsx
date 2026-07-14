@@ -161,8 +161,13 @@ export default function AdminConfig() {
   }, [location.hash]);
 
   useEffect(() => {
-    if (location.hash !== '#audit') return;
-    const target = document.getElementById('audit');
+    const targetId = location.hash === '#audit'
+      ? 'audit'
+      : location.hash === '#data-operations'
+        ? 'data-operations'
+        : null;
+    if (!targetId) return;
+    const target = document.getElementById(targetId);
     if (!target) return;
     target.scrollIntoView({ block: 'start' });
     target.focus({ preventScroll: true });

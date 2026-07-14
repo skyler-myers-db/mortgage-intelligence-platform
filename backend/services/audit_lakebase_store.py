@@ -36,6 +36,7 @@ FROM mip_app.action_audit
 {where_clause}
 ORDER BY event_at DESC
 LIMIT %(limit)s
+OFFSET %(offset)s
 """
 
 
@@ -272,6 +273,7 @@ class LakebaseAuditStore:
         self,
         limit: int = 50,
         *,
+        offset: int = 0,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -283,7 +285,7 @@ class LakebaseAuditStore:
         until: datetime | None = None,
     ) -> list[AuditEvent]:
         clauses: list[str] = []
-        params: dict[str, Any] = {"limit": limit}
+        params: dict[str, Any] = {"limit": limit, "offset": offset}
         if actor:
             clauses.append("actor_email = %(actor)s")
             params["actor"] = actor

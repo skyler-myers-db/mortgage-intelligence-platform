@@ -746,7 +746,10 @@ export function GenieChat() {
             m.who === 'user' ? (
               <div key={i} className="genie__msg genie__msg--user">{m.text}</div>
             ) : (
-              <div key={i} className="genie__msg genie__msg--ai">
+              <div
+                key={i}
+                className="genie__msg genie__msg--ai"
+              >
                 <div className="bubble">
                   <GenieAnswer
                     payload={m.payload}

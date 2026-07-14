@@ -167,6 +167,12 @@ def test_audit_events_accepts_limit_at_cap() -> None:
     assert response.status_code == 200, response.text
 
 
+def test_audit_events_accepts_non_negative_offset_and_rejects_negative_offset() -> None:
+    response = client.get("/api/audit/events?limit=25&offset=25")
+    assert response.status_code == 200, response.text
+    assert client.get("/api/audit/events?offset=-1").status_code == 422
+
+
 def test_audit_events_filters_by_correlation_id() -> None:
     correlation_id = "audit-corr-filter-001"
     created = client.post(

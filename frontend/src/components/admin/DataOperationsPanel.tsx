@@ -245,10 +245,15 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
   };
 
   return (
-    <div id="data-operations" className="surface mt-grid">
+    <div
+      id="data-operations"
+      className="surface mt-grid"
+      tabIndex={-1}
+      aria-labelledby="data-operations-title"
+    >
       <div className="surface__hdr surface__hdr--split">
         <div>
-          <div className="h-4">Data operations</div>
+          <div className="h-4" id="data-operations-title">Data operations</div>
           <div className="muted fs-12">
             Governed refresh jobs for rates, source features, scoring snapshots, and workflow state.
           </div>

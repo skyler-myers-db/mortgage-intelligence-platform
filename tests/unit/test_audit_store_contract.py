@@ -226,14 +226,14 @@ def test_growth_agent_shared_executor_writes_audit_event() -> None:
     assert "GROWTH_AGENT_RUN" in source
 
 
-def test_list_issues_select_ordered_desc_with_limit() -> None:
+def test_list_issues_select_ordered_desc_with_limit_and_offset() -> None:
     client = _build_client_returning_row()
     # fetchall returns rows in whatever the SELECT produces -- we assert
     # on the query shape.
     client.fetchall.return_value = []
     store = LakebaseAuditStore(client=client)
 
-    events = store.list(limit=25)
+    events = store.list(limit=25, offset=50)
 
     assert events == []
     assert client.fetchall.call_count == 1
@@ -242,7 +242,8 @@ def test_list_issues_select_ordered_desc_with_limit() -> None:
     params = args[1]
     assert "ORDER BY event_at DESC" in sql
     assert "LIMIT %(limit)s" in sql
-    assert params == {"limit": 25}
+    assert "OFFSET %(offset)s" in sql
+    assert params == {"limit": 25, "offset": 50}
     # belt-and-suspenders: fetchall is called with limit=25 too
     assert kwargs.get("limit", args[2] if len(args) > 2 else None) == 25
 
@@ -579,6 +580,23 @@ def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:
     )
     out = store.list(limit=50)
     assert out == [e]
+
+
+def test_in_memory_store_pages_newest_first_without_duplicates() -> None:
+    store = InMemoryAuditStore()
+    written = [
+        store.write(
+            actor="a@b",
+            action="view_borrower_360",
+            entity_type="borrower",
+            entity_id=f"B-{index}",
+        )
+        for index in range(5)
+    ]
+
+    assert store.list(limit=2, offset=0) == [written[4], written[3]]
+    assert store.list(limit=2, offset=2) == [written[2], written[1]]
+    assert store.list(limit=2, offset=4) == [written[0]]
 
 
 def test_default_actor_emits_warning_log(

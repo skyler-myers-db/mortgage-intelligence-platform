@@ -86,6 +86,7 @@ class InMemoryAuditStore:
         self,
         limit: int = 50,
         *,
+        offset: int = 0,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -125,4 +126,5 @@ class InMemoryAuditStore:
                 e for e in filtered
                 if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) <= until
             ]
-        return list(reversed(filtered[-limit:]))
+        newest_first = list(reversed(filtered))
+        return newest_first[offset:offset + limit]

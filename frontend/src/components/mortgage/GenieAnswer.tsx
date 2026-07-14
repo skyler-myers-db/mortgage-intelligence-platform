@@ -178,8 +178,19 @@ export function GenieAnswer({
     onClose: () => setShowProof(false),
   });
 
+  const liveAnswerAnnouncement = [
+    'Genie answer ready.',
+    metric_value !== null && metric_value !== undefined && metric_value !== ''
+      ? String(metric_value)
+      : '',
+    cleanedAnswer,
+  ].filter(Boolean).join(' ');
+
   return (
     <div>
+      <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {liveAnswerAnnouncement}
+      </div>
       {(isGenieApiAnswer || hasLiveGenieTurn) && (
         <div
           className="genie-answer__api-source"

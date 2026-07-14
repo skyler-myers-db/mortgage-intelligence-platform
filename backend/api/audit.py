@@ -75,6 +75,7 @@ def list_events(
     store: StoreDep,
     _actor: AdminDep,
     limit: Annotated[int, Query(ge=1, le=MAX_AUDIT_LIMIT)] = DEFAULT_AUDIT_LIMIT,
+    offset: Annotated[int, Query(ge=0)] = 0,
     actor: Annotated[str | None, Query(max_length=256)] = None,
     action: Annotated[str | None, Query(max_length=128)] = None,
     entity_id: Annotated[str | None, Query(max_length=256)] = None,
@@ -98,6 +99,7 @@ def list_events(
     try:
         return store.list(
             limit=limit,
+            offset=offset,
             actor=actor,
             action=action,
             entity_id=entity_id,
