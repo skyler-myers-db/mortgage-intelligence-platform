@@ -17,9 +17,12 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
-from backend.config.runtime_secret_policy import runtime_secret_text
-
 REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from backend.config.runtime_secret_policy import runtime_secret_text  # noqa: E402
+
 ENV_LOCAL = REPO / ".env.local"
 
 APP_ENV_DEFAULT = "sandbox"

@@ -1,9 +1,29 @@
 from __future__ import annotations
 
+import subprocess
+import sys
+
 import pytest
 
 from tools.databricks import app_deploy_payload
 from tools.databricks.app_deploy_payload import build_payload
+
+
+def test_direct_execution_resolves_repository_imports() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(app_deploy_payload.REPO / "tools/databricks/app_deploy_payload.py"),
+            "--help",
+        ],
+        cwd="/tmp",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "--source-code-path" in completed.stdout
 
 
 @pytest.fixture(autouse=True)
