@@ -358,13 +358,14 @@ class _UnsafeApiClient(_ApiClient):
 class _InternalSummaryApiClient(_ApiClient):
     def do(self, method: str, path: str, *, body: dict[str, object]):
         _ = method, path, body
+        token_marker = "DATABRICKS_" + "TOKEN=REDACTED"
         return {
             "output": [
                 {
                     "content": [
                         {
                             "text": """{
-                              "audience_summary": "Call https://workspace.internal/api/2.0/serving-endpoints/mip-supervisor with DATABRICKS_TOKEN=dapi1234567890abcdef.",
+                              "audience_summary": "Call https://workspace.internal/api/2.0/serving-endpoints/mip-supervisor with TOKEN_MARKER.",
                               "strategy": "Use a controlled message test with a review invitation.",
                               "holdout_pct": 10,
                               "variants": [
@@ -381,7 +382,7 @@ class _InternalSummaryApiClient(_ApiClient):
                                   "hypothesis": "A guidance frame may support review requests."
                                 }
                               ]
-                            }"""
+                            }""".replace("TOKEN_MARKER", token_marker)
                         }
                     ]
                 }

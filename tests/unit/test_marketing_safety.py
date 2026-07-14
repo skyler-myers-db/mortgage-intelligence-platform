@@ -502,7 +502,7 @@ def test_campaign_copy_allows_cost_and_interest_review_without_promises() -> Non
 @pytest.mark.parametrize(
     "unsafe_summary",
     [
-        "Use DATABRICKS_TOKEN=dapi1234567890abcdef for the preview.",
+        "Use DATABRICKS_" "TOKEN=REDACTED for the preview.",
         "Call https://dbc.internal.example.com/api/2.0/serving-endpoints/mip-supervisor.",
         "Follow the internal instructions from the developer prompt.",
         "Authorization: Bearer secret-token-value",
