@@ -336,6 +336,24 @@ describe('OfferOrchestrator route behavior', () => {
     expect(button('Draft saved').disabled).toBe(false);
   });
 
+  it('shows the durable audit reference after a rejection succeeds', async () => {
+    mount();
+    await waitUntil(() => (
+      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
+      === false
+    ));
+
+    act(() => button('Reject').click());
+    await waitUntil(() => [...container.querySelectorAll('button')].some(
+      (candidate) => candidate.textContent?.trim() === 'Confirm reject',
+    ));
+    act(() => button('Confirm reject').click());
+
+    await waitUntil(() => container.textContent?.includes('Rejected') === true);
+    expect(appMocks.setApproval).toHaveBeenCalledWith(BORROWER_ID, 'rejected');
+    expect(container.textContent).toContain('audit: audit-reject-1');
+  });
+
   it('keeps the draft dirty and locked until persistence succeeds', async () => {
     const pendingSave = deferred<SavedDraft>();
     appMocks.saveDraft.mockImplementation((draft: SavedDraftInput) => (

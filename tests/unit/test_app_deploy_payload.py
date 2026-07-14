@@ -17,13 +17,12 @@ def _hermetic_operator_config(monkeypatch, tmp_path):
     governance tests failing solely because the operator had added
     MIP_ADMIN_EMAILS to .env.local, exactly as deploy docs instruct.
     """
-    monkeypatch.setattr(
-        app_deploy_payload, "ENV_LOCAL", tmp_path / ".env.local.absent"
-    )
+    monkeypatch.setattr(app_deploy_payload, "ENV_LOCAL", tmp_path / ".env.local.absent")
     for name in app_deploy_payload.NON_SECRET_OPERATOR_VARS:
         monkeypatch.delenv(name, raising=False)
     for name in app_deploy_payload.SECRET_RESOURCE_BINDINGS:
         monkeypatch.delenv(name, raising=False)
+    monkeypatch.delenv(app_deploy_payload.PREVIOUS_SECRET_KID_ENV, raising=False)
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-mask-secret")
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "test-action-secret")
 
@@ -62,6 +61,9 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_FRED_RATES_JOB_ID"]["value_from"] == "fred_rates_job"
     assert env["MIP_SILVER_REFRESH_JOB_ID"]["value_from"] == "silver_refresh_job"
     assert env["MIP_GOLD_REFRESH_JOB_ID"]["value_from"] == "gold_refresh_job"
+    assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == "genie_action_current_secret"
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS" not in env
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" not in env
     assert env["MIP_DEFAULT_CATALOG"]["value"] == "acme_mip"
     assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "0"
     assert env["MIP_LENDER_NAME"]["value"] == "Acme Mortgage"
@@ -151,7 +153,9 @@ def test_payload_binds_cotality_mask_secret_without_serializing_value(monkeypatc
     assert "customer-mask-secret" not in str(payload)
 
 
-def test_payload_includes_rotation_aware_genie_action_secrets(monkeypatch) -> None:
+def test_payload_includes_previous_action_secret_only_for_explicit_rotation_grace(
+    monkeypatch,
+) -> None:
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", "current-action-secret")
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS", "previous-action-secret")
     monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_KID", "v3")
@@ -172,6 +176,46 @@ def test_payload_includes_rotation_aware_genie_action_secrets(monkeypatch) -> No
     assert "previous-action-secret" not in str(payload)
 
 
+def test_payload_rejects_previous_action_secret_without_rotation_kid(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS", "previous-action-secret")
+
+    with pytest.raises(ValueError, match="MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"):
+        build_payload(
+            source_code_path="/Workspace/app/files",
+            target="prod",
+            app_env="prod",
+        )
+
+
+def test_payload_omits_stale_previous_kid_without_previous_secret(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID", "v2")
+
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="prod",
+        app_env="prod",
+    )
+    env = _env_map(payload)
+
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS" not in env
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" not in env
+
+
+def test_payload_omits_placeholder_previous_secret(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS", "REDACTED")
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_PREVIOUS_KID", "v2")
+
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="prod",
+        app_env="prod",
+    )
+    env = _env_map(payload)
+
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS" not in env
+    assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" not in env
+
+
 def test_payload_uses_secret_resource_when_operator_value_is_placeholder(monkeypatch) -> None:
     monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "REDACTED")
 
@@ -180,7 +224,9 @@ def test_payload_uses_secret_resource_when_operator_value_is_placeholder(monkeyp
         target="prod",
         app_env="prod",
     )
-    assert _env_map(payload)["MIP_COTALITY_ID_MASK_SECRET"]["value_from"] == "cotality_id_mask_secret"
+    assert (
+        _env_map(payload)["MIP_COTALITY_ID_MASK_SECRET"]["value_from"] == "cotality_id_mask_secret"
+    )
     assert "REDACTED" not in str(payload)
 
 
@@ -192,7 +238,10 @@ def test_payload_never_serializes_absent_current_action_secret(monkeypatch) -> N
         target="dev",
         app_env="sandbox",
     )
-    assert _env_map(payload)["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == "genie_action_current_secret"
+    assert (
+        _env_map(payload)["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"]
+        == "genie_action_current_secret"
+    )
 
 
 def test_payload_local_runtime_can_omit_durable_secrets(monkeypatch) -> None:

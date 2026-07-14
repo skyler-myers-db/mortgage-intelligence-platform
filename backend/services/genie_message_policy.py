@@ -15,8 +15,8 @@ from backend.services.genie_answers import GenieMessageResponse
 
 
 class GenieMessageRequest(BaseModel):
-    question: str = Field(min_length=1)
-    conversation_id: str | None = None
+    question: str = Field(min_length=1, max_length=4_000)
+    conversation_id: str | None = Field(default=None, max_length=256)
 
     @field_validator("question")
     @classmethod

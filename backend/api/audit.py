@@ -4,6 +4,7 @@ Slice 5 migrates this router off the in-memory store onto the
 Lakebase-backed ``AuditStore`` via ``get_audit_store``. The wire shape
 is unchanged so the frontend Activity Log keeps working.
 """
+
 from datetime import datetime
 from typing import Annotated, Literal
 
@@ -70,6 +71,8 @@ _ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
         "VIEW_LEADS",
     }
 )
+
+
 def _event_type_for_payload(payload: AuditEventCreateRequest) -> str:
     return (payload.event_type or payload.action).replace(".", "_").replace("-", "_").upper()
 
@@ -126,16 +129,7 @@ def list_events(
         # kick in once it lands.
         # R5-03: constant body string; full ``str(exc)`` stays in the
         # LakebaseError WARNING + ``from exc`` chaining for ops.
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
-
-
-def _event_cursor_timestamp(event: AuditEvent) -> datetime:
-    timestamp = datetime.fromisoformat(event.created_at.replace("Z", "+00:00"))
-    if timestamp.tzinfo is None:
-        raise ValueError("audit event timestamp must include a timezone")
-    return timestamp
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
 
 
 @router.get("/events/page", response_model=AuditEventPage)
@@ -167,6 +161,7 @@ def list_event_page(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail="invalid correlation_id") from exc
     filters = {
+        "limit": limit,
         "actor": actor,
         "action": action,
         "entity_id": entity_id,
@@ -187,10 +182,9 @@ def list_event_page(
     try:
         rows = store.list(
             limit=limit + 1,
-            after_event_at=decoded.after_at if decoded else None,
-            after_audit_id=decoded.after_id if decoded else None,
-            snapshot_event_at=decoded.snapshot_at if decoded else None,
-            snapshot_audit_id=decoded.snapshot_id if decoded else None,
+            after_sequence=decoded.after_sequence if decoded else None,
+            snapshot_sequence=decoded.snapshot_sequence if decoded else None,
+            snapshot_token=decoded.snapshot_token if decoded else None,
             actor=actor,
             action=action,
             entity_id=entity_id,
@@ -202,29 +196,21 @@ def list_event_page(
             until=until,
         )
     except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     items = rows[:limit]
     if len(rows) <= limit or not items:
         return AuditEventPage(items=items)
-    try:
-        if decoded is None:
-            snapshot_at = _event_cursor_timestamp(items[0])
-            snapshot_id = items[0].event_id
-        else:
-            snapshot_at = decoded.snapshot_at
-            snapshot_id = decoded.snapshot_id
-        after_event = items[-1]
-        next_cursor = encode_audit_cursor(
-            after_at=_event_cursor_timestamp(after_event),
-            after_id=after_event.event_id,
-            snapshot_at=snapshot_at,
-            snapshot_id=snapshot_id,
-            filter_fingerprint=fingerprint,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=503, detail="audit pagination unavailable") from exc
+    snapshot_sequence = items[0].audit_sequence if decoded is None else decoded.snapshot_sequence
+    after_sequence = items[-1].audit_sequence
+    snapshot_token = items[0].audit_snapshot if decoded is None else decoded.snapshot_token
+    if snapshot_sequence is None or after_sequence is None or snapshot_token is None:
+        raise HTTPException(status_code=503, detail="audit pagination unavailable")
+    next_cursor = encode_audit_cursor(
+        after_sequence=after_sequence,
+        snapshot_sequence=snapshot_sequence,
+        snapshot_token=snapshot_token,
+        filter_fingerprint=fingerprint,
+    )
     return AuditEventPage(items=items, next_cursor=next_cursor)
 
 
@@ -279,9 +265,7 @@ def audit_rollups(
     try:
         rows = lakebase.fetchall(sql, params, limit=104)
     except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     return [
         AuditRollupResponse(
             bucket_start=(
@@ -336,6 +320,4 @@ def log_event(
     except (AuditPIIError, AuditMetadataViolation, AuditMetadataValueViolation) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc

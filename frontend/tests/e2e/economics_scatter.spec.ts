@@ -23,7 +23,7 @@
  * spec fails, correctly); only synthetic B-* ids asserted; resilient
  * role/label selectors against the prototype BEM.
  */
-import { test, expect, type Page } from '@playwright/test';
+import { test, expect, type Locator, type Page } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 in the nightly workflow to run real-UC e2e.');
@@ -41,6 +41,14 @@ async function gotoApp(page: Page, path: string): Promise<void> {
   await expect(page.locator('main')).toBeVisible({ timeout: 30_000 });
 }
 
+async function densityCellSignature(cells: Locator): Promise<string[]> {
+  return cells.evaluateAll((nodes) => nodes.map((node) => [
+    node.getAttribute('data-scatter-key') ?? '',
+    node.getAttribute('aria-label') ?? '',
+    node.getAttribute('title') ?? '',
+  ].join('|')).sort());
+}
+
 test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft composer', () => {
   test.describe.configure({ timeout: 180_000 });
 
@@ -53,6 +61,8 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
 
     const cells = scatter.locator('.analytics-scatter__bin');
     await expect.poll(async () => cells.count(), { timeout: 60_000 }).toBeGreaterThan(0);
+    const unfilteredCellSignature = await densityCellSignature(cells);
+    expect(unfilteredCellSignature.length).toBeGreaterThan(0);
 
     // Honest overview copy + evidence lineage chip citing the gold table.
     await expect(scatter.getByTestId('scatter-meta')).toContainText(/binned server-side/i);
@@ -84,7 +94,15 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
     await expect(page).toHaveURL(new RegExp(`[?&]states=${selectedState}(?:&|$)`));
     await expect(stateFilter).toHaveAccessibleName(new RegExp(`^State: ${selectedState}$`));
     // Bins must be the response to the selected-state predicate, not stale data.
-    await expect.poll(async () => cells.count(), { timeout: 60_000 }).toBeGreaterThan(0);
+    // Count alone is insufficient because a stale overview can also have bins.
+    await expect.poll(
+      async () => {
+        if (await cells.count() === 0) return unfilteredCellSignature;
+        return densityCellSignature(cells);
+      },
+      { timeout: 60_000 },
+    ).not.toEqual(unfilteredCellSignature);
+    expect((await densityCellSignature(cells)).length).toBeGreaterThan(0);
 
     // ---- 3. Zoom the densest cell → honest totals + real markers -----------
     // Cells expose their density in the aria-label; click the first one with

@@ -7,7 +7,12 @@ from fastapi.testclient import TestClient
 from backend.config.settings import Settings
 from backend.main import app
 from backend.schemas.portfolio import PortfolioOfferMixRow, PortfolioPreview
-from backend.services.campaign_intelligence import CampaignPerformanceContext, recommend_campaign
+from backend.services.campaign_intelligence import (
+    CampaignPerformanceContext,
+    campaign_criteria_fingerprint,
+    inspect_campaign_variant_provenance,
+    recommend_campaign,
+)
 
 client = TestClient(app)
 
@@ -75,6 +80,7 @@ def test_non_dev_campaign_provenance_refuses_process_local_key(app_env: str) -> 
             ),
         )
 
+
 def test_non_dev_campaign_provenance_uses_configured_key() -> None:
     result = recommend_campaign(
         _preview(),
@@ -120,6 +126,12 @@ def test_recommendation_adds_only_sample_qualified_observed_performance() -> Non
         evidence["Same-borrower application starts, submitted, and funded"]
         == "20 starts / 12 submitted / 3 funded"
     )
+    proof = inspect_campaign_variant_provenance(
+        result.variants[0].model_dump(),
+        criteria_fingerprint=campaign_criteria_fingerprint({}),
+    )
+    assert proof is not None
+    assert proof.performance_fingerprint == "a" * 64
 
     insufficient = recommend_campaign(
         _preview(),
@@ -134,6 +146,12 @@ def test_recommendation_adds_only_sample_qualified_observed_performance() -> Non
     )
     assert insufficient.performance_status == "insufficient_sample"
     assert not any(row.source_asset.startswith("mip_app.") for row in insufficient.evidence)
+    insufficient_proof = inspect_campaign_variant_provenance(
+        insufficient.variants[0].model_dump(),
+        criteria_fingerprint=campaign_criteria_fingerprint({}),
+    )
+    assert insufficient_proof is not None
+    assert insufficient_proof.performance_fingerprint is None
 
     non_monotonic = recommend_campaign(
         _preview(),

@@ -88,7 +88,13 @@ class _Conn:
         self.executions.append((sql, params))
         if "INSERT INTO mip_app.action_audit" in sql:
             self.audit_params = dict(params)
-            return _Result({"audit_id": uuid4(), "event_at": datetime.now(UTC)})
+            return _Result(
+                {
+                    "audit_id": uuid4(),
+                    "audit_sequence": 1,
+                    "event_at": datetime.now(UTC),
+                }
+            )
         if "FROM mip_app.activation_outbox" in sql and "activation_id" in params:
             return _Result(self._activation_row())
         return _Result(None)
@@ -126,7 +132,9 @@ class _Client:
     def fetchone(self, _sql: str, _params: dict[str, object] | None = None) -> None:
         return None
 
-    def fetchall(self, _sql: str, _params: dict[str, object] | None = None, *, limit: int | None = None) -> list[dict[str, object]]:
+    def fetchall(
+        self, _sql: str, _params: dict[str, object] | None = None, *, limit: int | None = None
+    ) -> list[dict[str, object]]:
         return []
 
     def transaction(self) -> _Conn:
@@ -273,7 +281,9 @@ def test_stage_borrower_rejects_client_offer_that_differs_from_approval() -> Non
                 approval_id=approval_id,
                 request_id=str(uuid4()),
             ),
-            approved_decision=_approved_decision(approval_id, borrower.borrower_id, offer_code="heloc"),
+            approved_decision=_approved_decision(
+                approval_id, borrower.borrower_id, offer_code="heloc"
+            ),
             actor="skyler@entrada.ai",
         )
 
@@ -323,7 +333,9 @@ def test_stage_borrower_rejects_client_offer_when_approved_offer_is_null() -> No
                 approval_id=approval_id,
                 request_id=str(uuid4()),
             ),
-            approved_decision=_approved_decision(approval_id, borrower.borrower_id, offer_code=None),
+            approved_decision=_approved_decision(
+                approval_id, borrower.borrower_id, offer_code=None
+            ),
             actor="skyler@entrada.ai",
         )
 
@@ -460,6 +472,8 @@ def test_stage_borrower_rechecks_conflicting_request_id_content_after_insert_rac
                 approval_id=approval_id,
                 request_id=request_id,
             ),
-            approved_decision=_approved_decision(approval_id, borrower.borrower_id, offer_code="refi"),
+            approved_decision=_approved_decision(
+                approval_id, borrower.borrower_id, offer_code="refi"
+            ),
             actor="skyler@entrada.ai",
         )

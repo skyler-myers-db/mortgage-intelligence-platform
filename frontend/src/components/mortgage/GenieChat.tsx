@@ -5,7 +5,7 @@ import { ApiError, api } from '../../lib/api';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';
 import { Icon } from '../Icon';
 import { Button, Chip, EvidenceChip } from '../Primitives';
-import { GenieAnswer } from './GenieAnswer';
+import { GenieAnswer, GOVERNED_ACTION_SOURCE } from './GenieAnswer';
 import { GenieProgress } from './GenieProgress';
 import { drawerForAsset } from '../../lib/drawerSources';
 import {
@@ -514,10 +514,11 @@ export function GenieChat() {
     return undefined;
   }, [genieOpen, setGenieOpen]);
 
-  const ask = async (q: string, followUpConversationId: string | null = null) => {
+  const ask = async (q: string, followUpConversationId?: string | null) => {
     const trimmed = q.trim();
     if (!trimmed) return;
-    if (!followUpConversationId) {
+    const activeConversationId = followUpConversationId ?? conversationId;
+    if (!activeConversationId) {
       setConversationId(null);
       clearGenieConversationState();
     }
@@ -525,7 +526,7 @@ export function GenieChat() {
     setInput('');
     setTyping(true);
     try {
-      const res = (await api.genie(trimmed, followUpConversationId)) as GenieAnswerShape;
+      const res = (await api.genie(trimmed, activeConversationId)) as GenieAnswerShape;
       const returnedConversationId = res.conversation_id ?? null;
       if (returnedConversationId && shouldPersistConversation(res)) {
         setConversationId(returnedConversationId);
@@ -552,6 +553,14 @@ export function GenieChat() {
     } finally {
       setTyping(false);
     }
+  };
+
+  const newConversation = () => {
+    if (typing) return;
+    setConversationId(null);
+    setMsgs([]);
+    setInput('');
+    clearGenieConversationState();
   };
 
   const runAction = async (action: GenieActionSuggestion, payload: GenieAnswerShape) => {
@@ -587,7 +596,7 @@ export function GenieChat() {
             answer: result.audit_event_id
               ? `${result.message} Audit event ${result.audit_event_id}.`
               : result.message,
-            source: 'genie',
+            source: GOVERNED_ACTION_SOURCE,
             trusted_assets: [],
             conversation_id: payload.conversation_id,
           },
@@ -729,6 +738,19 @@ export function GenieChat() {
               <Icon name="db" size={14} />
             </button>
           )}
+          <button
+            type="button"
+            className="drawer__close"
+            onClick={(e) => {
+              e.stopPropagation();
+              newConversation();
+            }}
+            disabled={typing}
+            aria-label="Start a new Genie thread"
+            title="New thread"
+          >
+            <Icon name="chat" size={14} />
+          </button>
           <button
             className="drawer__close"
             onClick={(e) => {

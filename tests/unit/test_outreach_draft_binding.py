@@ -6,7 +6,7 @@ from backend.config.settings import settings
 from backend.main import app
 
 client = TestClient(app)
-BORROWER_EVIDENCE_IDS = ["ev-001"]
+BORROWER_EVIDENCE_IDS = ["ev-001", "ev-002", "ev-003"]
 
 
 def _draft() -> dict[str, object]:

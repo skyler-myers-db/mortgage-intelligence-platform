@@ -109,6 +109,20 @@ def assert_public_campaign_text(value: object, *, field_name: str, max_length: i
     return text
 
 
+def assert_public_campaign_json(value: object, *, field_name: str) -> None:
+    """Recursively enforce public-text policy across campaign JSON values."""
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            assert_public_campaign_json(key, field_name=field_name)
+            assert_public_campaign_json(item, field_name=field_name)
+    elif isinstance(value, list):
+        for item in value:
+            assert_public_campaign_json(item, field_name=field_name)
+    elif isinstance(value, str):
+        assert_public_campaign_text(value, field_name=field_name, max_length=1000)
+
+
 def assert_borrower_campaign_copy(value: str, *, field_name: str) -> str:
     """Reject unsupported or internally framed borrower-facing campaign copy."""
 

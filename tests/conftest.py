@@ -18,6 +18,7 @@ swap in a custom stub for a single route can layer their own override
 on top and clear it in teardown -- dependency_overrides is a plain
 dict.
 """
+
 from __future__ import annotations
 
 # ruff: noqa: E402,I001
@@ -265,9 +266,7 @@ class _FakeLakebaseClient:
         for p in params_list:
             self.executes.append((sql, p))
 
-    def fetchone(
-        self, sql: str, params: dict[str, Any] | None = None
-    ) -> dict[str, Any] | None:
+    def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         self.fetchones.append((sql, params or {}))
         if "INSERT INTO mip_app.generated_outreach_drafts" in sql:
             values = params or {}
@@ -291,12 +290,9 @@ class _FakeLakebaseClient:
             values = params or {}
             for row in self.generated_outreach_drafts:
                 if (
-                    str(row.get("generation_id") or "")
-                    == str(values.get("generation_id") or "")
-                    and str(row.get("actor_email") or "")
-                    == str(values.get("actor_email") or "")
-                    and str(row.get("borrower_id") or "")
-                    == str(values.get("borrower_id") or "")
+                    str(row.get("generation_id") or "") == str(values.get("generation_id") or "")
+                    and str(row.get("actor_email") or "") == str(values.get("actor_email") or "")
+                    and str(row.get("borrower_id") or "") == str(values.get("borrower_id") or "")
                 ):
                     return {
                         "generation_id": row.get("generation_id"),
@@ -338,25 +334,34 @@ class _FakeLakebaseClient:
             borrower_id = (params or {}).get("borrower_id")
             for row in reversed(self.assignments):
                 if row["borrower_id"] == borrower_id and row.get("released_at") is None:
-                    team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
+                    team = next(
+                        (t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {}
+                    )
                     return {**row, "assigned_to_label": team.get("display_label")}
             return None
         if "WITH latest_approval" in sql:
             borrower_id = (params or {}).get("borrower_id")
             approvals = [row for row in self.approvals if row.get("borrower_id") == borrower_id]
             approval = approvals[-1] if approvals else None
-            dispositions = [row for row in self.dispositions if row.get("borrower_id") == borrower_id]
+            dispositions = [
+                row for row in self.dispositions if row.get("borrower_id") == borrower_id
+            ]
             disposition = dispositions[-1] if dispositions else None
             action = approval.get("action") if approval else None
             approval_status = (
-                "approved" if action == "approve"
-                else "rejected" if action == "reject"
-                else "hold" if action == "hold"
+                "approved"
+                if action == "approve"
+                else "rejected"
+                if action == "reject"
+                else "hold"
+                if action == "hold"
                 else "pending"
             )
             return {
                 "approval_status": approval_status,
-                "outreach_status": "actioned" if disposition else ("queued" if action == "approve" else "none"),
+                "outreach_status": "actioned"
+                if disposition
+                else ("queued" if action == "approve" else "none"),
                 "approval_id": approval.get("approval_id") if action == "approve" else None,
                 "approved_at": approval.get("decided_at") if action == "approve" else None,
                 "outreach_at": disposition.get("occurred_at") if disposition else None,
@@ -421,9 +426,7 @@ class _FakeLakebaseClient:
                 in {"approved", "actioned", "outcome_recorded"}
             }
             approval_borrowers = {
-                row["borrower_id"]
-                for row in self.approvals
-                if row.get("action") == "approve"
+                row["borrower_id"] for row in self.approvals if row.get("action") == "approve"
             }
             return {"n": len(lifecycle_borrowers | approval_borrowers)}
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
@@ -503,7 +506,11 @@ class _FakeLakebaseClient:
             # S4 home summary: no recorded visits or snapshots in the fake ->
             # the delta service resolves the honest first-visit shape.
             return None
-        return {"audit_id": uuid4(), "event_at": datetime.now(UTC)}
+        return {
+            "audit_id": uuid4(),
+            "audit_sequence": len(self.audit_events) + 1,
+            "event_at": datetime.now(UTC),
+        }
 
     def fetchall(
         self,
@@ -569,10 +576,9 @@ class _FakeLakebaseClient:
                 if str(row.get("assignment_id")) not in assignment_ids:
                     continue
                 counts[event_type] = counts.get(event_type, 0) + 1
-            return [
-                {"event_type": event_type, "n": n}
-                for event_type, n in sorted(counts.items())
-            ][:limit]
+            return [{"event_type": event_type, "n": n} for event_type, n in sorted(counts.items())][
+                :limit
+            ]
         if "FROM mip_app.approvals" in sql and "ORDER BY decided_at DESC" in sql:
             rows = [
                 {
@@ -600,7 +606,9 @@ class _FakeLakebaseClient:
             for row in self.assignments:
                 if row.get("released_at") is not None:
                     continue
-                if loan_officer_id and str(row.get("loan_officer_id") or "") != str(loan_officer_id):
+                if loan_officer_id and str(row.get("loan_officer_id") or "") != str(
+                    loan_officer_id
+                ):
                     continue
                 if borrower_id and row.get("borrower_id") != borrower_id:
                     continue
@@ -614,14 +622,19 @@ class _FakeLakebaseClient:
                 out = []
                 for row in self.assignments:
                     if row.get("request_id") == request_id:
-                        team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
+                        team = next(
+                            (t for t in self.sales_team if t["email"] == row["assigned_to_email"]),
+                            {},
+                        )
                         out.append({**row, "assigned_to_label": team.get("display_label")})
                 return out[:limit]
             borrower_ids = set((params or {}).get("borrower_ids") or [])
             out = []
             for row in self.assignments:
                 if row["borrower_id"] in borrower_ids and row.get("released_at") is None:
-                    team = next((t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {})
+                    team = next(
+                        (t for t in self.sales_team if t["email"] == row["assigned_to_email"]), {}
+                    )
                     out.append({**row, "assigned_to_label": team.get("display_label")})
             return out[:limit]
         if "FROM mip_app.lead_assignments" in sql and "assigned_to_email" in sql:
@@ -735,6 +748,7 @@ class _FakeLakebaseClient:
                     funded[borrower_id] = occurred_at
             return [
                 {
+                    "snapshot_at": datetime.now(UTC),
                     "unique_leads_attempted": len(attempted),
                     "unique_contacts_reached": len(reached),
                     "unique_application_starts": len(started),
@@ -804,10 +818,12 @@ class _FakeLakebaseClient:
                 for row in self.outcomes
                 if row.get("outcome_type") == "closed_funded"
             }
-            return [{
-                "unique_applications_submitted": len(submitted),
-                "unique_closed_funded": len(funded),
-            }]
+            return [
+                {
+                    "unique_applications_submitted": len(submitted),
+                    "unique_closed_funded": len(funded),
+                }
+            ]
         if "FROM mip_app.lead_outcomes" in sql and "GROUP BY outcome_type" in sql:
             counts: dict[tuple[str, str, str | None, str], int] = {}
             for row in self.outcomes:
@@ -826,8 +842,12 @@ class _FakeLakebaseClient:
                     "competitor_lender_label": competitor_lender_label,
                     "n": n,
                 }
-                for (outcome_type, source_system, assigned_to_email, competitor_lender_label), n
-                in sorted(counts.items())
+                for (
+                    outcome_type,
+                    source_system,
+                    assigned_to_email,
+                    competitor_lender_label,
+                ), n in sorted(counts.items())
             ][:limit]
         if "FROM mip_app.activation_destinations" in sql and "destination_type IN" in sql:
             return [dict(row) for row in self.activation_destinations][:limit]
@@ -856,7 +876,8 @@ class _FakeLakebaseClient:
                     continue
                 assignment = next(
                     (
-                        a for a in self.assignments
+                        a
+                        for a in self.assignments
                         if a.get("borrower_id") == borrower_id and a.get("released_at") is None
                     ),
                     None,
@@ -870,7 +891,9 @@ class _FakeLakebaseClient:
                         "age_days": (now - decided_at).days,
                         "outreach_status": "queued",
                         "outreach_at": None,
-                        "assigned_to_email": assignment.get("assigned_to_email") if assignment else None,
+                        "assigned_to_email": assignment.get("assigned_to_email")
+                        if assignment
+                        else None,
                         "latest_disposition_outcome": None,
                         "latest_disposition_at": None,
                     }
@@ -934,7 +957,10 @@ class _FakeLakebaseClient:
                             self._last = client._loan_officer_assignment_row(row)
                 elif "UPDATE mip_app.lead_assignments" in sql:
                     for row in client.assignments:
-                        if row["borrower_id"] == params.get("borrower_id") and row.get("released_at") is None:
+                        if (
+                            row["borrower_id"] == params.get("borrower_id")
+                            and row.get("released_at") is None
+                        ):
                             row["released_at"] = now
                     self._last = None
                 elif "INSERT INTO mip_app.approvals" in sql:
@@ -999,13 +1025,21 @@ class _FakeLakebaseClient:
                     self._last = client._loan_officer_assignment_row(row)
                 elif "MAX(attempt_number)" in sql:
                     borrower_id = params.get("borrower_id")
-                    attempts = [r["attempt_number"] for r in client.dispositions if r["borrower_id"] == borrower_id]
+                    attempts = [
+                        r["attempt_number"]
+                        for r in client.dispositions
+                        if r["borrower_id"] == borrower_id
+                    ]
                     self._last = {"next_attempt": (max(attempts) if attempts else 0) + 1}
                 elif "INSERT INTO mip_app.call_dispositions" in sql:
                     request_id = params.get("request_id")
                     if request_id:
                         duplicate = next(
-                            (row for row in client.dispositions if row.get("request_id") == request_id),
+                            (
+                                row
+                                for row in client.dispositions
+                                if row.get("request_id") == request_id
+                            ),
                             None,
                         )
                         if duplicate is not None:
@@ -1107,6 +1141,7 @@ class _FakeLakebaseClient:
                 elif "INSERT INTO mip_app.action_audit" in sql:
                     row = {
                         "audit_id": uuid4(),
+                        "audit_sequence": len(client.audit_events) + 1,
                         "event_at": now,
                         **params,
                     }
@@ -1168,11 +1203,51 @@ class _FakeAdminSqlClient:
         # ``mip_demo`` locally, ``mip_prod`` in prod deploys).
         if ".REF.OFFER_RULES_CONFIG" in s:
             return [
-                {"key": "mip_min_spread_bps",           "value": 75.0,    "unit": "bps",           "label": "Min spread (bps)",            "description": "desc", "sort_order": 1, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_min_equity_pct",           "value": 15.0,    "unit": "pct",           "label": "Min equity (%)",              "description": "desc", "sort_order": 2, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_heloc_equity_min_pct",     "value": 35.0,    "unit": "pct",           "label": "HELOC equity floor (%)",      "description": "desc", "sort_order": 3, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_cashout_equity_min_pct",   "value": 25.0,    "unit": "pct",           "label": "Cash-out equity floor (%)",   "description": "desc", "sort_order": 4, "last_updated": "2026-04-22 12:00:00"},
-                {"key": "mip_retention_min_spread_bps", "value": 50.0,    "unit": "bps",           "label": "Retention min spread (bps)",  "description": "desc", "sort_order": 5, "last_updated": "2026-04-22 12:00:00"},
+                {
+                    "key": "mip_min_spread_bps",
+                    "value": 75.0,
+                    "unit": "bps",
+                    "label": "Min spread (bps)",
+                    "description": "desc",
+                    "sort_order": 1,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_min_equity_pct",
+                    "value": 15.0,
+                    "unit": "pct",
+                    "label": "Min equity (%)",
+                    "description": "desc",
+                    "sort_order": 2,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_heloc_equity_min_pct",
+                    "value": 35.0,
+                    "unit": "pct",
+                    "label": "HELOC equity floor (%)",
+                    "description": "desc",
+                    "sort_order": 3,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_cashout_equity_min_pct",
+                    "value": 25.0,
+                    "unit": "pct",
+                    "label": "Cash-out equity floor (%)",
+                    "description": "desc",
+                    "sort_order": 4,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
+                {
+                    "key": "mip_retention_min_spread_bps",
+                    "value": 50.0,
+                    "unit": "bps",
+                    "label": "Retention min spread (bps)",
+                    "description": "desc",
+                    "sort_order": 5,
+                    "last_updated": "2026-04-22 12:00:00",
+                },
             ]
         if ".GOLD.BORROWER_360" in s and "MARKET_RATE_FRACTION" in s:
             return [{"rate_fraction": 0.0637, "last_updated": "2026-05-07 12:00:00"}]

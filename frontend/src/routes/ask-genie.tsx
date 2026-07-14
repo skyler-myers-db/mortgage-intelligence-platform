@@ -189,16 +189,17 @@ export default function AskGenie() {
     };
   }, []);
 
-  function ask(q: string, followUpConversationId: string | null = null) {
+  function ask(q: string, followUpConversationId?: string | null) {
     const trimmed = q.trim();
+    const activeConversationId = followUpConversationId ?? conversationId;
     setQuestion(q);
-    setConversationId(followUpConversationId);
-    setSubmittedConversationId(followUpConversationId);
+    setConversationId(activeConversationId);
+    setSubmittedConversationId(activeConversationId);
     setSubmittedQuestion(trimmed);
     setSubmitToken((n) => n + 1);
     setActiveAssetPath(null);
     setActionStatus(null);
-    if (!followUpConversationId) {
+    if (!activeConversationId) {
       clearGenieConversationState();
     }
   }

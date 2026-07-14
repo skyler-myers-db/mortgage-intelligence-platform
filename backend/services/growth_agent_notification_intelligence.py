@@ -41,6 +41,16 @@ def _normalized_channel_text(value: str) -> str:
     return " ".join(re.findall(r"[^\W_]+", normalized))
 
 
+def _channel_similarity(left: str, right: str) -> float:
+    """Measure material overlap without depending on word order or punctuation."""
+
+    left_tokens = set(_normalized_channel_text(left).split())
+    right_tokens = set(_normalized_channel_text(right).split())
+    if not left_tokens or not right_tokens:
+        return 1.0
+    return len(left_tokens & right_tokens) / len(left_tokens | right_tokens)
+
+
 class _NotificationFragments(BaseModel):
     slack_context: str = Field(min_length=10, max_length=120)
     teams_summary: str = Field(min_length=10, max_length=220)
@@ -59,17 +69,17 @@ class _NotificationFragments(BaseModel):
                 max_length=220,
             )
         except ValueError as exc:
-            raise ValueError("notification fragment contains unsafe targeting or identity text") from exc
+            raise ValueError(
+                "notification fragment contains unsafe targeting or identity text"
+            ) from exc
         if contains_contextual_human_name(clean):
             raise ValueError("notification fragment contains identity-shaped text")
         return clean.rstrip(".")
 
     @model_validator(mode="after")
     def _differentiate_channels(self) -> _NotificationFragments:
-        if _normalized_channel_text(self.slack_context) == _normalized_channel_text(
-            self.teams_summary
-        ):
-            raise ValueError("Slack and Teams notification fragments must be different")
+        if _channel_similarity(self.slack_context, self.teams_summary) >= 0.72:
+            raise ValueError("Slack and Teams notification fragments must be materially different")
         return self
 
 

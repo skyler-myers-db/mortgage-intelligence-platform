@@ -203,14 +203,17 @@ export function DataOperationsPanel({ sources, sourcesLoading = false, sourcesEr
     + freshnessStats.staleCount
     + freshnessStats.errorCount
     + freshnessStats.missingTimestampCount;
-  const operationsChipVariant = operationsError || sourcesError || freshnessAttentionCount > 0
+  const operationsPending = operationsLoading || sourcesLoading;
+  const operationsChipVariant = operationsPending
+    ? 'neutral'
+    : operationsError || sourcesError || freshnessAttentionCount > 0
     ? 'warning'
     : activeOperationCount > 0 ? 'success' : 'neutral';
   const operationsChipLabel = operationsError
     ? 'unavailable'
     : sourcesError
       ? 'freshness unavailable'
-      : operationsLoading
+      : operationsPending
         ? 'loading...'
         : activeOperationCount > 0
           ? `${activeOperationCount} running`

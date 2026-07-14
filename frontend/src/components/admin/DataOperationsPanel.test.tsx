@@ -121,12 +121,16 @@ describe('DataOperationsPanel', () => {
     vi.clearAllMocks();
   });
 
-  async function render(options: { sourcesError?: boolean } = {}): Promise<void> {
+  async function render(options: {
+    sourcesError?: boolean;
+    sourcesLoading?: boolean;
+  } = {}): Promise<void> {
     await act(async () => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <DataOperationsPanel
             sourcesError={options.sourcesError}
+            sourcesLoading={options.sourcesLoading}
             sources={[
               {
                 name: 'Cotality Public Records',
@@ -177,6 +181,14 @@ describe('DataOperationsPanel', () => {
 
     expect(document.body.textContent).toContain('freshness unavailable');
     expect(document.body.textContent).not.toContain('ready');
+  });
+
+  it('does not mark data operations ready while source freshness is still loading', async () => {
+    await render({ sourcesLoading: true });
+
+    expect(document.body.textContent).toContain('loading...');
+    expect(document.body.textContent).not.toContain('ready');
+    expect(document.body.textContent).toContain('Usable sources...');
   });
 
   it('disables cooldown jobs and launches available jobs with a UUID request id', async () => {

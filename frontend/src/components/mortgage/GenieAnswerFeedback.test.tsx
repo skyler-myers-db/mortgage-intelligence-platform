@@ -142,7 +142,7 @@ describe('GenieAnswerFeedback', () => {
     expect(err!.textContent).not.toContain('Unsupported Media Type');
   });
 
-  it('drops a conflicting request id so the next vote can recover', async () => {
+  it('preserves the request id when a 409 may mean the vote is still in progress', async () => {
     genieFeedback
       .mockRejectedValueOnce(new ApiError('conflict', { path: '/api/genie/feedback', status: 409 }))
       .mockResolvedValueOnce({ accepted: true, audit_event_id: 'evt-2' });
@@ -154,12 +154,12 @@ describe('GenieAnswerFeedback', () => {
       await Promise.resolve();
     });
     const firstRequestId = genieFeedback.mock.calls[0][0].request_id;
-    expect(container.textContent).toContain('conflicts with an earlier vote');
+    expect(container.textContent).toContain('still being processed');
     await act(async () => {
       upBtn(container)!.click();
       await Promise.resolve();
     });
-    expect(genieFeedback.mock.calls[1][0].request_id).not.toBe(firstRequestId);
+    expect(genieFeedback.mock.calls[1][0].request_id).toBe(firstRequestId);
     expect(container.querySelector('.genie-feedback--done')).not.toBeNull();
   });
 

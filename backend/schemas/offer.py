@@ -1,10 +1,17 @@
 """Offer recommendation request and response contracts."""
 
 import re
-from datetime import datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field, StringConstraints, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
 
 from backend.schemas.common import (
     validate_internal_staff_email,
@@ -31,6 +38,7 @@ _EVIDENCE_ID_PATTERN_TEXT = r"^ev-[0-9a-f]{3,61}$"
 _EVIDENCE_ID_PATTERN = re.compile(_EVIDENCE_ID_PATTERN_TEXT)
 _MAX_OFFER_EVIDENCE_IDS = 20
 _MAX_SOURCE_REFRESHED_AT_LENGTH = 64
+_MAX_SOURCE_REFRESHED_AT_FUTURE_SKEW = timedelta(minutes=5)
 EvidenceIdentifier = Annotated[
     str,
     StringConstraints(
@@ -76,7 +84,62 @@ def validate_offer_source_refreshed_at(value: object) -> str:
         raise ValueError("offer source_refreshed_at must be a parseable timestamp") from exc
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         raise ValueError("offer source_refreshed_at must include a timezone")
+    if parsed.astimezone(UTC) > datetime.now(UTC) + _MAX_SOURCE_REFRESHED_AT_FUTURE_SKEW:
+        raise ValueError("offer source_refreshed_at cannot be materially in the future")
     return timestamp
+
+
+class GovernedOfferInputs(BaseModel):
+    """Strict atomic input row used to build and audit a recommendation."""
+
+    model_config = ConfigDict(extra="ignore", strict=True)
+
+    clip_id: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+    ]
+    borrower_id: Annotated[
+        str,
+        StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
+    ]
+    confidence: int = Field(ge=0, le=100)
+    evidence_ids: list[EvidenceIdentifier] = Field(
+        min_length=1,
+        max_length=_MAX_OFFER_EVIDENCE_IDS,
+    )
+    source_refreshed_at: str = Field(min_length=1, max_length=64)
+    rate_spread_bps: int
+    equity_pct: int = Field(ge=0, le=100)
+    has_permit: bool
+    has_heloc_propensity_trigger: bool
+    heloc_propensity_score: int | None = Field(ge=0, le=999)
+    has_refi_propensity_trigger: bool
+    refi_propensity_score: int | None = Field(ge=0, le=999)
+    listed_for_sale: bool
+    is_investor: bool
+    is_current_customer: bool
+    is_competitor_lien: bool
+    offer_code: OfferType
+    min_spread_bps: int
+    min_equity_pct: int = Field(ge=0, le=100)
+    heloc_equity_min_pct: int = Field(ge=0, le=100)
+    cashout_equity_min_pct: int = Field(ge=0, le=100)
+    retention_min_spread_bps: int
+
+    @field_validator("borrower_id")
+    @classmethod
+    def _borrower_id_is_public_safe(cls, value: str) -> str:
+        return validate_public_borrower_id(value)
+
+    @field_validator("source_refreshed_at", mode="before")
+    @classmethod
+    def _source_refreshed_at_is_valid(cls, value: object) -> str:
+        return validate_offer_source_refreshed_at(value)
+
+    @field_validator("evidence_ids", mode="before")
+    @classmethod
+    def _evidence_ids_are_valid(cls, value: object) -> list[str]:
+        return validate_offer_evidence_ids(value)
 
 
 class OfferAlternative(BaseModel):

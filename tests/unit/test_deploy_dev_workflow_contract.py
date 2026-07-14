@@ -6,9 +6,38 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 DEPLOY_SCRIPT = REPO / "scripts" / "deploy.sh"
+
+
+def _commit_deploy_fixture(repo: Path) -> None:
+    (repo / ".gitignore").write_text(
+        ".env.local\nfrontend/dist/\n.databricks/\n",
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "add", "scripts/deploy.sh", ".gitignore"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Deploy Test",
+            "-c",
+            "user.email=deploy-test@example.com",
+            "commit",
+            "-qm",
+            "deploy fixture",
+        ],
+        cwd=repo,
+        check=True,
+    )
 
 
 def test_deploy_dev_runs_real_deploy_script_manual_only() -> None:
@@ -20,6 +49,17 @@ def test_deploy_dev_runs_real_deploy_script_manual_only() -> None:
     assert "./scripts/deploy.sh" in text
     assert "--no-confirm" in text
     assert "Run databricks bundle validate/deploy here" not in text
+
+
+def test_deploy_script_shell_is_syntactically_valid() -> None:
+    result = subprocess.run(
+        ["bash", "-n", str(DEPLOY_SCRIPT)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
@@ -35,10 +75,10 @@ def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
 
     assert "$HOME/.databrickscfg" in text
     assert "auth_type = pat" in text
-    assert "chmod 600 \"$HOME/.databrickscfg\"" in text
+    assert 'chmod 600 "$HOME/.databrickscfg"' in text
     assert "chmod 600 .env.local" in text
     assert "cat .env.local" not in text
-    assert "echo \"$DATABRICKS_TOKEN\"" not in text
+    assert 'echo "$DATABRICKS_TOKEN"' not in text
     assert 'echo "MIP_COTALITY_ID_MASK_SECRET=' not in text
     assert 'echo "MIP_GENIE_ACTION_SECRET_CURRENT=' not in text
     assert 'echo "MIP_GENIE_ACTION_SECRET_PREVIOUS=' not in text
@@ -88,9 +128,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
     assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
     assert "MIP_COTALITY_ID_MASK_SECRET is required for target" in text
     assert "source-known compatibility namespace is allowed only for local/test" in text
-    assert text.index("provision_runtime_secrets.py") < text.index(
-        "bundle_env.py validate"
-    )
+    assert text.index("provision_runtime_secrets.py") < text.index("bundle_env.py validate")
     assert 'RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"' in text
     assert 'export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"' in text
     assert '--scope "$RUNTIME_SECRET_SCOPE"' in text
@@ -105,10 +143,10 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
     deploy_copy.write_text(text, encoding="utf-8")
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
-        "DATABRICKS_WAREHOUSE_ID=abc123\n",
+        "DATABRICKS_HOST=https://example.cloud.databricks.com\n" "DATABRICKS_WAREHOUSE_ID=abc123\n",
         encoding="utf-8",
     )
+    _commit_deploy_fixture(repo)
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
@@ -158,6 +196,7 @@ def test_deploy_script_rejects_placeholder_current_action_secret_for_sandbox(
         "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n",
         encoding="utf-8",
     )
+    _commit_deploy_fixture(repo)
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
@@ -200,10 +239,10 @@ def test_deploy_script_requires_cotality_mask_secret_for_customer_runtime_env(
     deploy_copy.write_text(text, encoding="utf-8")
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
-        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
-        "DATABRICKS_WAREHOUSE_ID=abc123\n",
+        "DATABRICKS_HOST=https://example.cloud.databricks.com\n" "DATABRICKS_WAREHOUSE_ID=abc123\n",
         encoding="utf-8",
     )
+    _commit_deploy_fixture(repo)
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
@@ -249,6 +288,7 @@ def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path
         "MIP_GENIE_ACTION_SECRET=legacy-does-not-count\n",
         encoding="utf-8",
     )
+    _commit_deploy_fixture(repo)
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
@@ -294,6 +334,7 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
         "MIP_COTALITY_ID_MASK_SECRET=REDACTED\n",
         encoding="utf-8",
     )
+    _commit_deploy_fixture(repo)
     fake_databricks = bin_dir / "databricks"
     fake_databricks.write_text("#!/usr/bin/env bash\necho databricks fake\n", encoding="utf-8")
     fake_databricks.chmod(0o755)
@@ -319,3 +360,71 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
     )
     assert "cotality id-mask secret: configured" not in result.stdout
     assert "step 2:" not in result.stdout
+
+
+def test_exact_source_gate_allows_standard_ignored_artifacts(tmp_path: Path) -> None:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert 'APP_GIT_SHA="$SOURCE_GIT_SHA"' in text
+    assert text.count("verify_exact_deploy_source") >= 3
+    assert text.rindex("verify_exact_deploy_source") < text.index(
+        'bundle_env.py deploy -t "$TARGET"'
+    )
+
+    repo = tmp_path / "repo"
+    script_dir = repo / "scripts"
+    script_dir.mkdir(parents=True)
+    deploy_copy = script_dir / "deploy.sh"
+    deploy_copy.write_text(text, encoding="utf-8")
+    deploy_copy.chmod(0o755)
+    _commit_deploy_fixture(repo)
+    (repo / ".env.local").write_text("local-only=true\n", encoding="utf-8")
+    (repo / "frontend" / "dist").mkdir(parents=True)
+    (repo / "frontend" / "dist" / "index.html").write_text("built", encoding="utf-8")
+    (repo / ".databricks").mkdir()
+    (repo / ".databricks" / "cache.json").write_text("{}", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(deploy_copy), "--verify-source-only"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0
+    assert "exact source:" in result.stdout
+    assert "tracked and untracked source clean" in result.stdout
+
+
+@pytest.mark.parametrize("dirty_kind", ["tracked", "untracked"])
+def test_exact_source_gate_rejects_dirty_uploaded_source(
+    tmp_path: Path,
+    dirty_kind: str,
+) -> None:
+    repo = tmp_path / "repo"
+    script_dir = repo / "scripts"
+    script_dir.mkdir(parents=True)
+    deploy_copy = script_dir / "deploy.sh"
+    deploy_copy.write_text(DEPLOY_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    deploy_copy.chmod(0o755)
+    _commit_deploy_fixture(repo)
+    expected_path = "scripts/deploy.sh" if dirty_kind == "tracked" else "unreviewed.py"
+    if dirty_kind == "tracked":
+        deploy_copy.write_text(
+            deploy_copy.read_text(encoding="utf-8") + "\n# dirty source\n",
+            encoding="utf-8",
+        )
+    else:
+        (repo / expected_path).write_text("print('not committed')\n", encoding="utf-8")
+
+    result = subprocess.run(
+        ["bash", str(deploy_copy), "--verify-source-only"],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "refusing deployment from dirty source" in result.stderr
+    assert expected_path in result.stderr

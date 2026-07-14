@@ -16,6 +16,11 @@ _SENSITIVE_RE = re.compile(
     r"credential|principal|grant|clip_ref|(^|_)clip($|_))",
     re.IGNORECASE,
 )
+_DATABRICKS_WORKSPACE_SUFFIXES = (
+    ".cloud.databricks.com",
+    ".gcp.databricks.com",
+    ".azuredatabricks.net",
+)
 
 
 def freshness_bucket(value: str | None) -> AssetFreshness:
@@ -83,13 +88,14 @@ def workspace_origin(value: str | None) -> str | None:
     candidate = raw if "://" in raw else f"https://{raw}"
     parsed = urlsplit(candidate)
     if (
-        parsed.scheme.lower() not in {"http", "https"}
+        parsed.scheme.lower() != "https"
         or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
         or parsed.query
         or parsed.fragment
         or parsed.path not in {"", "/"}
+        or not parsed.hostname.lower().endswith(_DATABRICKS_WORKSPACE_SUFFIXES)
     ):
         return None
     return f"{parsed.scheme.lower()}://{parsed.netloc.rstrip('/')}"

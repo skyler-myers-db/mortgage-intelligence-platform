@@ -1,4 +1,5 @@
 """Test-only in-memory audit store implementation."""
+
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -23,6 +24,7 @@ class InMemoryAuditStore:
 
     def __init__(self) -> None:
         self._events: list[AuditEvent] = []
+        self._next_sequence = 1
 
     def write(
         self,
@@ -71,14 +73,14 @@ class InMemoryAuditStore:
             created_at=datetime.now(UTC).isoformat(),
             event_type=safe_event_type,
             subject_clip=(
-                mask_cotality_id("clip", subject_clip)
-                if subject_clip is not None
-                else None
+                mask_cotality_id("clip", subject_clip) if subject_clip is not None else None
             ),
             subject_segment=safe_subject_segment,
             request_id=safe_request_id,
             correlation_id=get_correlation_id(),
+            audit_sequence=self._next_sequence,
         )
+        self._next_sequence += 1
         self._events.append(event)
         return event
 
@@ -87,10 +89,9 @@ class InMemoryAuditStore:
         limit: int = 50,
         *,
         offset: int = 0,
-        after_event_at: datetime | None = None,
-        after_audit_id: str | None = None,
-        snapshot_event_at: datetime | None = None,
-        snapshot_audit_id: str | None = None,
+        after_sequence: int | None = None,
+        snapshot_sequence: int | None = None,
+        snapshot_token: str | None = None,
         actor: str | None = None,
         action: str | None = None,
         entity_id: str | None = None,
@@ -110,7 +111,8 @@ class InMemoryAuditStore:
             filtered = [e for e in filtered if e.entity_id == entity_id]
         if borrower_id:
             filtered = [
-                e for e in filtered
+                e
+                for e in filtered
                 if e.entity_id == borrower_id
                 or str((e.payload_json or {}).get("borrower_id") or "") == borrower_id
             ]
@@ -122,25 +124,35 @@ class InMemoryAuditStore:
             filtered = [e for e in filtered if e.correlation_id == correlation_id]
         if since:
             filtered = [
-                e for e in filtered
+                e
+                for e in filtered
                 if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) >= since
             ]
         if until:
             filtered = [
-                e for e in filtered
+                e
+                for e in filtered
                 if datetime.fromisoformat(e.created_at.replace("Z", "+00:00")) <= until
             ]
-        def position(event: AuditEvent) -> tuple[datetime, str]:
-            return (
-                datetime.fromisoformat(event.created_at.replace("Z", "+00:00")),
-                event.event_id,
-            )
-
-        newest_first = sorted(filtered, key=position, reverse=True)
-        if snapshot_event_at is not None and snapshot_audit_id is not None:
-            snapshot = (snapshot_event_at, snapshot_audit_id)
-            newest_first = [event for event in newest_first if position(event) <= snapshot]
-        if after_event_at is not None and after_audit_id is not None:
-            after = (after_event_at, after_audit_id)
-            newest_first = [event for event in newest_first if position(event) < after]
-        return newest_first[offset:offset + limit]
+        newest_first = sorted(
+            filtered,
+            key=lambda event: event.audit_sequence or 0,
+            reverse=True,
+        )
+        if snapshot_sequence is not None:
+            newest_first = [
+                event for event in newest_first if (event.audit_sequence or 0) <= snapshot_sequence
+            ]
+        if after_sequence is not None:
+            newest_first = [
+                event for event in newest_first if (event.audit_sequence or 0) < after_sequence
+            ]
+        visible_snapshot = (
+            snapshot_token
+            or f"memory:{max(
+            (event.audit_sequence or 0 for event in newest_first), default=0
+        )}"
+        )
+        for event in newest_first:
+            event.audit_snapshot = visible_snapshot
+        return newest_first[offset : offset + limit]

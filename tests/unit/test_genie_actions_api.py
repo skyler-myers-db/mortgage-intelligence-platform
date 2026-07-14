@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import UTC, datetime
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -1573,6 +1574,8 @@ class _RecordingLakebase:
         if "INSERT INTO mip_app.action_audit" in sql:
             return {
                 "audit_id": "audit-1",
+                "audit_sequence": 1,
+                "event_at": datetime.now(UTC),
                 "entity_id": str((params or {}).get("entity_id") or ""),
                 "metadata": (params or {}).get("metadata") or "{}",
             }

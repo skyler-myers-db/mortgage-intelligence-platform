@@ -59,7 +59,7 @@ _OFFER_AUDIENCE: dict[str, str] = {
     "nurture": "borrowers who should receive education rather than a product-specific claim",
 }
 
-_CAMPAIGN_PROVENANCE_VERSION = 1
+_CAMPAIGN_PROVENANCE_VERSION = 2
 _CAMPAIGN_PROVENANCE_TTL_S = 60 * 60
 _LOCAL_TEST_PROVENANCE_SECRET = b"mip-local-test-campaign-provenance-v1"
 _LOCAL_TEST_PROVENANCE_APP_ENVS = frozenset({"local", "test"})
@@ -189,6 +189,7 @@ class CampaignVariantProvenanceProof:
     expires_at: int
     copy_hash: str
     criteria_fingerprint: str
+    performance_fingerprint: str | None
     token_digest: str
 
 
@@ -206,9 +207,7 @@ def campaign_performance_fingerprint(
         "observed_to": observed_to.isoformat(),
         "visible_scope_hash": hashlib.sha256(
             (
-                "\n".join(
-                    sorted(email.strip().lower() for email in (visible_lo_emails or ()))
-                )
+                "\n".join(sorted(email.strip().lower() for email in (visible_lo_emails or ())))
                 if visible_lo_emails is not None
                 else "all_visible_loan_officers"
             ).encode("utf-8")
@@ -320,10 +319,7 @@ def _campaign_provenance_keyring(
     current_kid = (settings.mip_genie_action_secret_kid or "").strip() or "v1"
     keyring = [(current_kid, keys[0])]
     if len(keys) > 1:
-        previous_kid = (
-            (settings.mip_genie_action_secret_previous_kid or "").strip()
-            or "previous"
-        )
+        previous_kid = (settings.mip_genie_action_secret_previous_kid or "").strip() or "previous"
         keyring.append((previous_kid, keys[1]))
     return keyring
 
@@ -360,6 +356,7 @@ def issue_campaign_variant_provenance(
     subject: str,
     body: str,
     criteria_fingerprint: str,
+    performance_fingerprint: str | None = None,
     settings: Settings | None = None,
     now: int | None = None,
 ) -> str:
@@ -375,6 +372,7 @@ def issue_campaign_variant_provenance(
             "generator_label": generator_label,
             "iat": issued_at,
             "kid": key_id,
+            "performance_fingerprint": performance_fingerprint or "none",
             "v": _CAMPAIGN_PROVENANCE_VERSION,
         },
         active_settings,
@@ -423,6 +421,7 @@ def inspect_campaign_variant_provenance(
     label = str(claims.get("generator_label") or "")
     copy_hash = str(claims.get("copy_hash") or "")
     signed_criteria = str(claims.get("criteria_fingerprint") or "")
+    signed_performance = str(claims.get("performance_fingerprint") or "")
     if (
         claims.get("v") != _CAMPAIGN_PROVENANCE_VERSION
         or issued_at > current_time + 60
@@ -431,8 +430,11 @@ def inspect_campaign_variant_provenance(
         or mode not in _GENERATOR_LABELS
         or label != _GENERATOR_LABELS[mode]
         or signed_criteria != criteria_fingerprint
-        or copy_hash
-        != _campaign_copy_hash(variant.get("subject"), variant.get("body"))
+        or (
+            signed_performance != "none"
+            and re.fullmatch(r"[0-9a-f]{64}", signed_performance) is None
+        )
+        or copy_hash != _campaign_copy_hash(variant.get("subject"), variant.get("body"))
     ):
         return None
     return CampaignVariantProvenanceProof(
@@ -443,6 +445,7 @@ def inspect_campaign_variant_provenance(
         expires_at=expires_at,
         copy_hash=copy_hash,
         criteria_fingerprint=signed_criteria,
+        performance_fingerprint=(None if signed_performance == "none" else signed_performance),
         token_digest=hashlib.sha256(token.encode("utf-8")).hexdigest(),
     )
 
@@ -469,8 +472,14 @@ def _bind_recommendation_provenance(
     response: CampaignRecommendationResponse,
     *,
     criteria_fingerprint: str,
+    performance: CampaignPerformanceContext | None,
     settings: Settings,
 ) -> CampaignRecommendationResponse:
+    performance_fingerprint = (
+        performance.observation_fingerprint
+        if performance is not None and performance.is_qualified
+        else None
+    )
     variants = [
         variant.model_copy(
             update={
@@ -480,6 +489,7 @@ def _bind_recommendation_provenance(
                     subject=variant.subject,
                     body=variant.body,
                     criteria_fingerprint=criteria_fingerprint,
+                    performance_fingerprint=performance_fingerprint,
                     settings=settings,
                 )
             }
@@ -649,6 +659,7 @@ def _fallback(
     return _bind_recommendation_provenance(
         response,
         criteria_fingerprint=criteria_fingerprint,
+        performance=performance,
         settings=settings,
     )
 
@@ -769,6 +780,7 @@ def recommend_campaign(
             return _bind_recommendation_provenance(
                 candidate,
                 criteria_fingerprint=criteria_fingerprint,
+                performance=performance,
                 settings=settings,
             )
         except (ValidationError, ValueError, TypeError) as exc:

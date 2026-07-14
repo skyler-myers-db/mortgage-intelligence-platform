@@ -7,6 +7,7 @@ use ``action`` / ``entity_type`` / ``entity_id`` continue to work --
 ``event_type`` defaults to the same string as ``action`` when omitted,
 preserving the pre-Slice-5 contract.
 """
+
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -39,6 +40,15 @@ class AuditEvent(BaseModel):
     subject_segment: str | None = None
     request_id: str | None = None
     correlation_id: str | None = None
+    # Internal monotonically increasing Lakebase watermark used for stable
+    # cursor traversal. It is intentionally excluded from the wire response;
+    # operators identify rows by ``event_id`` while pagination uses the
+    # database insertion order rather than timestamps or random UUIDs.
+    audit_sequence: int | None = Field(default=None, exclude=True, ge=1)
+    # PostgreSQL MVCC snapshot captured by the page query. Signed cursors
+    # carry it between requests so transactions that commit after page one
+    # cannot enter a later page even if they reserved an earlier sequence.
+    audit_snapshot: str | None = Field(default=None, exclude=True, max_length=256)
 
 
 class AuditEventPage(BaseModel):

@@ -107,6 +107,7 @@ CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
     provenance_expires_at TIMESTAMPTZ,
     provenance_copy_hash TEXT,
     provenance_criteria_fingerprint TEXT,
+    provenance_performance_fingerprint TEXT,
     provenance_token_digest TEXT,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (campaign_id, variant_name, channel)
@@ -125,6 +126,8 @@ ALTER TABLE mip_app.campaign_message_variants
     ADD COLUMN IF NOT EXISTS provenance_copy_hash TEXT;
 ALTER TABLE mip_app.campaign_message_variants
     ADD COLUMN IF NOT EXISTS provenance_criteria_fingerprint TEXT;
+ALTER TABLE mip_app.campaign_message_variants
+    ADD COLUMN IF NOT EXISTS provenance_performance_fingerprint TEXT;
 ALTER TABLE mip_app.campaign_message_variants
     ADD COLUMN IF NOT EXISTS provenance_token_digest TEXT;
 DO $$
@@ -590,6 +593,7 @@ CREATE INDEX IF NOT EXISTS idx_lead_outcomes_type
 -- -- NO PII (no owner names, no street addresses).
 CREATE TABLE IF NOT EXISTS mip_app.action_audit (
     audit_id        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    audit_sequence  BIGSERIAL NOT NULL,
     event_type      TEXT NOT NULL,
     actor_email     TEXT NOT NULL,
     entity_type     TEXT NOT NULL DEFAULT 'borrower',
@@ -604,6 +608,12 @@ CREATE TABLE IF NOT EXISTS mip_app.action_audit (
 );
 ALTER TABLE mip_app.action_audit
     ADD COLUMN IF NOT EXISTS correlation_id TEXT;
+ALTER TABLE mip_app.action_audit
+    ADD COLUMN IF NOT EXISTS audit_sequence BIGSERIAL;
+ALTER TABLE mip_app.action_audit
+    ALTER COLUMN audit_sequence SET NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_action_audit_sequence
+    ON mip_app.action_audit (audit_sequence);
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_at
     ON mip_app.action_audit (event_at DESC);
 CREATE INDEX IF NOT EXISTS idx_action_audit_event_type

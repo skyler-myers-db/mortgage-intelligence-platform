@@ -23,6 +23,7 @@ from backend.schemas.portfolio_campaign import (
     CampaignRecommendationVariant,  # noqa: F401 - compatibility re-export
     PortfolioOfferMixRow,
     assert_borrower_campaign_copy,
+    assert_public_campaign_json,
     assert_public_campaign_text,
     bind_portfolio_criteria,
 )
@@ -39,8 +40,7 @@ _LENDER_RELATIONSHIP_LABELS: frozenset[str] = frozenset(
 _PRODUCT_LABELS: frozenset[str] = frozenset(
     {"All products", "Refi", "HELOC", "Cash-out", "Purchase", "Retention"},
 )
-# S1.6: loan product-type dimension (gold.borrower_360.loan_product_type).
-# Distinct from `product`, which filters the RECOMMENDED OFFER product.
+# S1.6 loan product type; distinct from the recommended-offer product filter.
 _LOAN_PRODUCT_LABELS: frozenset[str] = frozenset(
     {"All loan products", "Conventional", "Jumbo", "FHA", "VA", "Other", "Unknown"},
 )
@@ -72,7 +72,9 @@ _EQUITY_LABELS: frozenset[str] = frozenset({"≥ 15%", "≥ 25%", "≥ 40%", "An
 _OWNER_LINK_LABELS: frozenset[str] = frozenset(
     {"All", "Single-property owner", "Multi-property (2-4)", "Portfolio investor (5+)"}
 )
-_PURCHASE_INTENT_LABELS: frozenset[str] = frozenset({"All", "Listed for sale", "HELOC intent", "Both"})
+_PURCHASE_INTENT_LABELS: frozenset[str] = frozenset(
+    {"All", "Listed for sale", "HELOC intent", "Both"}
+)
 _PURCHASE_INTENT_ALIASES: dict[str, str] = {
     # Legacy deep links used this label before Cotality delivered the HELOC
     # propensity feed. Normalize it so no active surface claims filed permits.
@@ -131,6 +133,8 @@ _SEND_WINDOW_DAY_ALIASES: dict[str, str] = {
     "sun": "Sunday",
     "sunday": "Sunday",
 }
+
+
 def _validate_optional_label(
     value: str | None,
     *,
@@ -165,18 +169,6 @@ def _normalise_reviewed_alias(
     if alias in allowed:
         return alias
     raise ValueError(f"{field_name} must be one of the reviewed options")
-
-
-def _assert_json_public(value: object, *, field_name: str) -> None:
-    if isinstance(value, dict):
-        for key, item in value.items():
-            _assert_json_public(key, field_name=field_name)
-            _assert_json_public(item, field_name=field_name)
-    elif isinstance(value, list):
-        for item in value:
-            _assert_json_public(item, field_name=field_name)
-    elif isinstance(value, str):
-        assert_public_campaign_text(value, field_name=field_name, max_length=1000)
 
 
 class KpiTrend(BaseModel):
@@ -457,21 +449,38 @@ class PortfolioCriteria(BaseModel):
         geography = (self.geography or "").strip().lower()
         if self.states:
             return True
-        if geography and not (geography == "all" or (geography.startswith("all ") and geography.endswith(" states"))):
+        if geography and not (
+            geography == "all" or (geography.startswith("all ") and geography.endswith(" states"))
+        ):
             return True
         if self.occupancy in {"Owner-occupied", "Non-owner-occupied"}:
             return True
         lien_status = (self.lien_status or "").strip().lower()
-        if lien_status in {"free & clear", "free and clear", "open 1st lien", "open first lien", "open heloc"}:
+        if lien_status in {
+            "free & clear",
+            "free and clear",
+            "open 1st lien",
+            "open first lien",
+            "open heloc",
+        }:
             return True
         owner_link = (self.owner_link or "").strip().lower()
-        if owner_link in {"single-property owner", "multi-property (2-4)", "portfolio investor (5+)"}:
+        if owner_link in {
+            "single-property owner",
+            "multi-property (2-4)",
+            "portfolio investor (5+)",
+        }:
             return True
         purchase_intent = (self.purchase_intent or "").strip().lower()
         if purchase_intent in {"listed for sale", "heloc intent", "both"}:
             return True
         relationship = (self.lender_relationship or "").strip().lower()
-        if relationship in {"current customer", "former customer", "competitor customer", "competitor"}:
+        if relationship in {
+            "current customer",
+            "former customer",
+            "competitor customer",
+            "competitor",
+        }:
             return True
         target_lender_ref = (self.target_lender_ref or "").strip().lower()
         if target_lender_ref and target_lender_ref != "all":
@@ -593,12 +602,20 @@ class PortfolioCreateRequest(BaseModel):
         if len(value) > 12:
             raise ValueError("message_variants supports at most 12 variants per campaign")
         normalized: list[dict[str, object]] = []
+        seen_names: set[str] = set()
         for raw in value:
+            raw_name = raw.get("variant_name", raw.get("name"))
+            if raw_name is None or not str(raw_name).strip():
+                raise ValueError("message variant_name must be nonblank")
             name = assert_public_campaign_text(
-                raw.get("variant_name") or raw.get("name") or "default",
+                raw_name,
                 field_name="variant_name",
                 max_length=64,
             )
+            name_key = name.casefold()
+            if name_key in seen_names:
+                raise ValueError("message variant_name values must be unique")
+            seen_names.add(name_key)
             channel = str(raw.get("channel") or "email").strip()
             if channel not in _OUTREACH_CHANNELS:
                 raise ValueError("message variant channel must be email, sms, or direct_mail")
@@ -612,6 +629,10 @@ class PortfolioCreateRequest(BaseModel):
                 field_name="variant body",
                 max_length=1000,
             )
+            if not body:
+                raise ValueError("variant body must be nonblank")
+            if channel == "email" and not subject:
+                raise ValueError("email message variants require a nonblank subject")
             assert_borrower_campaign_copy(subject, field_name="variant subject")
             assert_borrower_campaign_copy(body, field_name="variant body")
             generation_mode = str(raw.get("generation_mode") or "operator").strip()
@@ -649,6 +670,9 @@ class PortfolioCreateRequest(BaseModel):
                     "provenance_token": provenance_token,
                 }
             )
+        ab_names = {str(item["variant_name"]).casefold() for item in normalized}
+        if ab_names & {"a", "b"} and not {"a", "b"}.issubset(ab_names):
+            raise ValueError("A/B message variants require complete A and B variants")
         return normalized
 
     @field_validator("channel_cascade")
@@ -730,7 +754,7 @@ class PortfolioCreateRequest(BaseModel):
     def _validate_public_json(cls, value: dict[str, object] | None) -> dict[str, object] | None:
         if value is None:
             return None
-        _assert_json_public(value, field_name="campaign metadata")
+        assert_public_campaign_json(value, field_name="campaign metadata")
         return value
 
     @field_validator("roi_assumptions")
@@ -741,7 +765,7 @@ class PortfolioCreateRequest(BaseModel):
     ) -> dict[str, object] | None:
         if value is None:
             return None
-        _assert_json_public(value, field_name="campaign ROI assumptions")
+        assert_public_campaign_json(value, field_name="campaign ROI assumptions")
 
         def require_finite(number: float, *, field_name: str) -> float:
             if not math.isfinite(number):
@@ -792,7 +816,10 @@ class PortfolioCreateRequest(BaseModel):
                 raise ValueError(f"roi_assumptions.{key} must be numeric") from exc
             if numeric < 0:
                 raise ValueError(f"roi_assumptions.{key} must be non-negative")
-            if key in {"expected_conversion_rate", "expected_conversion_rate_pct"} and numeric > 100:
+            if (
+                key in {"expected_conversion_rate", "expected_conversion_rate_pct"}
+                and numeric > 100
+            ):
                 raise ValueError(f"roi_assumptions.{key} must be 100 or less")
             normalized[key] = numeric
         cost = normalized.get("cost_per_contact_usd")
@@ -808,8 +835,7 @@ class PortfolioCreateRequest(BaseModel):
                     numeric = require_finite(
                         float(amount),
                         field_name=(
-                            "roi_assumptions.cost_per_contact_usd "
-                            f"value for {channel_key}"
+                            "roi_assumptions.cost_per_contact_usd " f"value for {channel_key}"
                         ),
                     )
                 except (TypeError, ValueError) as exc:

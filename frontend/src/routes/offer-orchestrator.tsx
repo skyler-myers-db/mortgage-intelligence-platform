@@ -876,8 +876,9 @@ export default function OfferOrchestrator() {
       )}
       {effectiveApproval === 'rejected' && (
         <div className="surface mt-grid">
-          <div className="surface__body">
+          <div className="surface__body surface__body--inline">
             <Chip variant="danger" icon="cross">Rejected</Chip>
+            {auditId && <span className="mono muted fs-11">audit: {auditId}</span>}
           </div>
         </div>
       )}

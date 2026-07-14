@@ -19,6 +19,7 @@ Invariants covered:
 5. A Lakebase failure surfaces as 503 -- no silent fallback, matches
    the approve path contract.
 """
+
 from __future__ import annotations
 
 import json
@@ -167,7 +168,13 @@ class _AtomicConn:
             if self.owner.audit_fails:
                 raise LakebaseError("audit insert failed")
             self.owner.audit_params = dict(params)
-            return _TxnResult({"audit_id": "evt-atomic", "event_at": datetime.now(UTC)})
+            return _TxnResult(
+                {
+                    "audit_id": "evt-atomic",
+                    "audit_sequence": 1,
+                    "event_at": datetime.now(UTC),
+                }
+            )
         if "UPDATE mip_app.approvals" in sql:
             for row in self.owner.pending_approvals:
                 if str(row["approval_id"]) == str(params["approval_id"]):
@@ -243,6 +250,7 @@ class _ConcurrentDecisionConn:
             return _TxnResult(
                 {
                     "audit_id": str(uuid4()),
+                    "audit_sequence": self.owner.audit_count,
                     "event_at": datetime.now(UTC),
                 }
             )
@@ -375,7 +383,7 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
         json={
             "borrower_id": "B-48291",
             "offer_code": "heloc",
-            "evidence_ids": ["ev-001", "ev-002"],
+            "evidence_ids": ["ev-001", "ev-002", "ev-003"],
             "rationale_code": "opt_out",
             "rationale": "Borrower opted out",
         },
@@ -414,7 +422,7 @@ def test_reject_writes_approval_and_audit_rows(override_deps) -> None:
     assert evt.entity_type == "approval"
     assert evt.entity_id == body["approval_id"]
     assert evt.actor == "lo@example.com"
-    assert evt.evidence_ids == ["ev-001", "ev-002"]
+    assert evt.evidence_ids == ["ev-001", "ev-002", "ev-003"]
     assert evt.subject_clip is not None
     assert evt.payload_json["borrower_id"] == "B-48291"
     assert evt.payload_json["offer_code"] == "heloc"
@@ -440,7 +448,30 @@ def test_reject_rejects_evidence_ids_not_owned_by_borrower(override_deps) -> Non
     )
 
     assert response.status_code == 422, response.text
-    assert "must belong to the borrower recommendation" in response.json()["detail"]
+    assert "must exactly match the borrower recommendation" in response.json()["detail"]
+    fake_lakebase.execute.assert_not_called()
+    assert audit.list(limit=10) == []
+
+
+def test_reject_rejects_partial_recommendation_evidence(override_deps) -> None:
+    audit = InMemoryAuditStore()
+    fake_lakebase = MagicMock()
+    fake_lakebase.fetchone.side_effect = _fetchone_none_or_disclosure
+    override_deps(audit=audit, lakebase=fake_lakebase)
+
+    response = TestClient(app).post(
+        "/api/outreach/reject",
+        json={
+            "borrower_id": "B-48291",
+            "offer_code": "heloc",
+            "evidence_ids": ["ev-001"],
+            "rationale_code": "low_intent",
+        },
+        headers={"X-Forwarded-Email": "lo@example.com"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "must exactly match the borrower recommendation" in response.json()["detail"]
     fake_lakebase.execute.assert_not_called()
     assert audit.list(limit=10) == []
 
@@ -453,7 +484,14 @@ def test_approve_reject_unknown_borrower_fail_closed_before_lakebase(override_de
     client = TestClient(app)
     for path, body in (
         ("/api/outreach/approve", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc"}),
-        ("/api/outreach/reject", {"borrower_id": "B-DOES-NOT-EXIST", "offer_code": "heloc", "rationale_code": "low_intent"}),
+        (
+            "/api/outreach/reject",
+            {
+                "borrower_id": "B-DOES-NOT-EXIST",
+                "offer_code": "heloc",
+                "rationale_code": "low_intent",
+            },
+        ),
     ):
         response = client.post(path, json=body, headers={"X-Forwarded-Email": "lo@example.com"})
         assert response.status_code == 404, response.text
@@ -527,7 +565,13 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
     assert "[first name]" not in current_body
     assert "NMLS #123456" in current_body
     assert "Equal Housing" in current_body
-    assert current.json()["offer_code"] in {"retention", "nurture", "refi", "refi_plus_heloc", "cash_out"}
+    assert current.json()["offer_code"] in {
+        "retention",
+        "nurture",
+        "refi",
+        "refi_plus_heloc",
+        "cash_out",
+    }
 
     sms = client.post(
         "/api/outreach/draft",
@@ -762,7 +806,8 @@ def test_approve_audit_captures_decision_inputs(
 
 
 def test_reject_schedules_lifecycle_sync_trigger(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The reject endpoint must fire the same debounced sync trigger
     the approve path uses, so the funnel metric view reflects
@@ -817,7 +862,8 @@ def test_reject_surfaces_503_on_lakebase_failure(override_deps) -> None:
 
 
 def test_approve_forwards_final_subject_and_body_into_audit_metadata(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Audit finding 2026-04-22: the Offer Orchestrator now forwards
     the approver's edited textarea body on approve. It must land in the
@@ -855,7 +901,8 @@ def test_approve_forwards_final_subject_and_body_into_audit_metadata(
 
 
 def test_approve_rejects_protected_class_language_before_write(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
@@ -928,7 +975,8 @@ def test_approve_rejects_unsupported_or_identity_shaped_borrower_copy_before_wri
 
 
 def test_approve_idempotent_on_retry_with_same_request_id(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R5-01: a second /approve with the same ``request_id`` must NOT
     write a second row. The first call inserts; the second looks up the
@@ -985,7 +1033,8 @@ def test_approve_idempotent_on_retry_with_same_request_id(
 
     # Exactly one INSERT -- the second call short-circuited.
     approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
+        call
+        for call in fake_lakebase.execute.call_args_list
         if "INSERT INTO mip_app.approvals" in call.args[0]
     ]
     assert len(approval_inserts) == 1
@@ -997,7 +1046,8 @@ def test_approve_idempotent_on_retry_with_same_request_id(
 
 
 def test_reject_idempotent_on_retry_with_same_request_id(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Reject-path twin of the approve idempotency test above."""
     audit = InMemoryAuditStore()
@@ -1041,7 +1091,8 @@ def test_reject_idempotent_on_retry_with_same_request_id(
     assert first.json()["approval_id"] == second.json()["approval_id"]
 
     approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
+        call
+        for call in fake_lakebase.execute.call_args_list
         if "INSERT INTO mip_app.approvals" in call.args[0]
     ]
     assert len(approval_inserts) == 1
@@ -1049,7 +1100,8 @@ def test_reject_idempotent_on_retry_with_same_request_id(
 
 
 def test_request_id_conflict_for_different_decision_is_rejected(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     audit = InMemoryAuditStore()
     fake_lakebase = MagicMock()
@@ -1202,7 +1254,8 @@ def test_fallback_request_id_binds_the_full_decision_payload(
 
 
 def test_approve_without_request_id_same_minute_collapses_to_one_row(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R6-19: legacy callers that omit ``request_id`` get a server-derived
     deterministic fallback keyed on (actor, borrower, action, minute).
@@ -1257,14 +1310,16 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
     # Exactly one INSERT -- the second call short-circuited via the
     # server-derived fallback key.
     approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
+        call
+        for call in fake_lakebase.execute.call_args_list
         if "INSERT INTO mip_app.approvals" in call.args[0]
     ]
     assert len(approval_inserts) == 1
 
 
 def test_approve_without_request_id_cross_minute_produces_two_rows(
-    override_deps, monkeypatch: pytest.MonkeyPatch,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R6-19 cross-minute contract: an explicit re-submit ~60s later
     intentionally opens a new decision -- the fallback key changes
@@ -1314,7 +1369,8 @@ def test_approve_without_request_id_cross_minute_produces_two_rows(
     assert second.status_code == 200
     assert first.json()["approval_id"] != second.json()["approval_id"]
     approval_inserts = [
-        call for call in fake_lakebase.execute.call_args_list
+        call
+        for call in fake_lakebase.execute.call_args_list
         if "INSERT INTO mip_app.approvals" in call.args[0]
     ]
     assert len(approval_inserts) == 2
@@ -1326,7 +1382,9 @@ def test_approve_without_request_id_cross_minute_produces_two_rows(
 
 
 def test_approve_body_not_in_logs(
-    override_deps, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+    override_deps,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
     """R5-23: if anyone ever cranks log level to DEBUG, request bodies
     must not leak to stdout / log fixtures. We POST a draft_body
@@ -1355,6 +1413,7 @@ def test_approve_body_not_in_logs(
     client = TestClient(app)
 
     import logging as _logging
+
     caplog.set_level(_logging.DEBUG)
     resp = client.post(
         "/api/outreach/approve",
@@ -1379,9 +1438,9 @@ def test_approve_body_not_in_logs(
         # Also check the structured extras the emit() helper attaches.
         for key, value in record.__dict__.items():
             if isinstance(value, str):
-                assert sentinel not in value, (
-                    f"leaked request body into log extra {key!r}: {value!r}"
-                )
+                assert (
+                    sentinel not in value
+                ), f"leaked request body into log extra {key!r}: {value!r}"
 
 
 def test_generated_draft_fails_closed_when_durable_proof_cannot_be_written(

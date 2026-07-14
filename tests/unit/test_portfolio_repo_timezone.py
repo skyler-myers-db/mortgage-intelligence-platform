@@ -8,6 +8,7 @@ The repository now stamps UTC (``+00:00``) on the outbound value; these
 tests are the tripwire so a future refactor can't silently drop the
 offset and bring the drift back.
 """
+
 from __future__ import annotations
 
 import json
@@ -52,10 +53,14 @@ class _StubClient:
         self._preview_row = preview_row
         self._trend_rows = trend_rows
         self._day_zero_row = day_zero_row if day_zero_row is not None else {"day_zero": False}
-        self._workflow_row = workflow_row if workflow_row is not None else {
-            "approved_count": 0,
-            "in_outreach_count": 0,
-        }
+        self._workflow_row = (
+            workflow_row
+            if workflow_row is not None
+            else {
+                "approved_count": 0,
+                "in_outreach_count": 0,
+            }
+        )
         self.preview_calls: int = 0
         self.statements: list[str] = []
         self.parameters: list[dict[str, Any] | None] = []
@@ -292,9 +297,9 @@ def test_naive_datetime_is_stamped_as_utc():
     preview = repo.preview(None)
 
     assert preview.data_refreshed_at is not None
-    assert preview.data_refreshed_at.tzinfo is not None, (
-        "tz-naive datetime leaked through — browser will interpret as local time"
-    )
+    assert (
+        preview.data_refreshed_at.tzinfo is not None
+    ), "tz-naive datetime leaked through — browser will interpret as local time"
     assert preview.data_refreshed_at.utcoffset() == UTC.utcoffset(preview.data_refreshed_at)
     # Serialised form must carry a UTC marker — either 'Z' (Pydantic's
     # default for UTC-aware datetimes) or '+00:00'. A bare
@@ -368,10 +373,7 @@ def test_preview_maps_every_offer_mix_column_without_collapsing_categories() -> 
 
     preview = repo.preview(None)
 
-    assert {
-        offer.offer_code: offer.borrower_count
-        for offer in preview.offer_mix
-    } == expected
+    assert {offer.offer_code: offer.borrower_count for offer in preview.offer_mix} == expected
 
 
 @pytest.mark.parametrize("bad_value", ["not a date", object(), 12345])
@@ -435,7 +437,9 @@ def test_day_zero_probe_failure_propagates():
 
     class _FailingClient(_StubClient):
         def execute_one(
-            self, sql: str, params: dict[str, Any] | None = None,
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
         ) -> dict[str, Any]:
             if self._is_day_zero_sql(sql):
                 raise RuntimeError("warehouse probe failed")
@@ -454,12 +458,8 @@ def test_day_zero_probe_failure_propagates():
 
 def test_preview_cache_key_stable_across_param_order():
     """``{'a':1,'b':2}`` and ``{'b':2,'a':1}`` must produce the same key."""
-    k1 = DatabricksPortfolioRepository._preview_cache_key(
-        "WHERE a=:a AND b=:b", {"a": 1, "b": 2}
-    )
-    k2 = DatabricksPortfolioRepository._preview_cache_key(
-        "WHERE a=:a AND b=:b", {"b": 2, "a": 1}
-    )
+    k1 = DatabricksPortfolioRepository._preview_cache_key("WHERE a=:a AND b=:b", {"a": 1, "b": 2})
+    k2 = DatabricksPortfolioRepository._preview_cache_key("WHERE a=:a AND b=:b", {"b": 2, "a": 1})
     assert k1 == k2, f"cache key drifts with dict order: {k1!r} != {k2!r}"
 
 
@@ -484,9 +484,9 @@ def test_preview_second_call_same_order_hits_cache():
     calls_after_first = client.preview_calls
     repo.preview(req)
     calls_after_second = client.preview_calls
-    assert calls_after_first == calls_after_second == 1, (
-        f"second call should have hit cache; saw {calls_after_second} preview SELECTs"
-    )
+    assert (
+        calls_after_first == calls_after_second == 1
+    ), f"second call should have hit cache; saw {calls_after_second} preview SELECTs"
 
 
 def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
@@ -570,7 +570,10 @@ def test_trend_delta_uses_exact_snapshot_date_and_drops_bootstrap_zero():
     assert trend.series == [3081.0, 3074.0]
     assert trend.comparison_label == "vs 2026-04-23"
     assert trend.delta_pct == -0.2
-    assert trend.note == "Comparison starts on 2026-04-23 because earlier snapshots predate this metric."
+    assert (
+        trend.note
+        == "Comparison starts on 2026-04-23 because earlier snapshots predate this metric."
+    )
 
 
 def test_trend_step_change_adds_source_backed_context_note():
@@ -748,6 +751,7 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     assert all(variant["provenance_key_id"] == "v1" for variant in variants)
     assert all(len(variant["provenance_copy_hash"]) == 64 for variant in variants)
     assert all(len(variant["provenance_criteria_fingerprint"]) == 64 for variant in variants)
+    assert all(variant["provenance_performance_fingerprint"] is None for variant in variants)
     assert all(len(variant["provenance_token_digest"]) == 64 for variant in variants)
     assert all(variant["provenance_issued_at"] for variant in variants)
     assert all(variant["provenance_expires_at"] for variant in variants)
@@ -764,6 +768,7 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
         lambda: lakebase,
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    generated_subject = "Review your mortgage options"
     generated_body = "Compare your current mortgage options with a loan officer."
 
     repo.create(
@@ -773,12 +778,14 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
                 {
                     "variant_name": "A",
                     "channel": "email",
+                    "subject": generated_subject,
                     "body": generated_body,
-                    **_server_provenance("", generated_body),
+                    **_server_provenance(generated_subject, generated_body),
                 },
                 {
                     "variant_name": "B",
                     "channel": "email",
+                    "subject": "Schedule a mortgage review",
                     "body": "Schedule a review of the mortgage options available to you.",
                     "generation_mode": "operator",
                     "generator_label": "Operator edited",
@@ -799,6 +806,7 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
     assert generated["provenance_key_id"] == "v1"
     assert len(generated["provenance_copy_hash"]) == 64
     assert len(generated["provenance_criteria_fingerprint"]) == 64
+    assert generated["provenance_performance_fingerprint"] is None
     assert operator == {
         "generation_mode": "operator",
         "generator_label": "Operator edited",
@@ -814,8 +822,9 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
         lambda: lakebase,
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+    subject = "Review your mortgage options"
     original_body = "Compare your current mortgage options with a loan officer."
-    provenance = _server_provenance("", original_body)
+    provenance = _server_provenance(subject, original_body)
 
     with pytest.raises(ValueError, match="provenance is missing, expired, or invalid"):
         repo.create(
@@ -823,8 +832,9 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
                 name="Forged provenance review",
                 message_variants=[
                     {
-                        "variant_name": "A",
+                        "variant_name": "Primary",
                         "channel": "email",
+                        "subject": subject,
                         "body": "Schedule a different mortgage review with a loan officer.",
                         **provenance,
                     }
@@ -839,8 +849,9 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
                 name="Unsigned provenance review",
                 message_variants=[
                     {
-                        "variant_name": "A",
+                        "variant_name": "Primary",
                         "channel": "email",
+                        "subject": subject,
                         "body": original_body,
                         "generation_mode": "supervisor",
                         "generator_label": "Agent endpoint-generated recommendation",
@@ -857,11 +868,12 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
                 criteria=PortfolioCriteria(),
                 message_variants=[
                     {
-                        "variant_name": "A",
+                        "variant_name": "Primary",
                         "channel": "email",
+                        "subject": subject,
                         "body": original_body,
                         **_server_provenance(
-                            "",
+                            subject,
                             original_body,
                             criteria=PortfolioCriteria(states=["IL"]),
                         ),
@@ -1031,8 +1043,7 @@ def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
 
     assert summary.status == "pending_review"
     patch_calls = [
-        call for call in lakebase.calls
-        if "UPDATE mip_app.campaigns" in str(call["sql"])
+        call for call in lakebase.calls if "UPDATE mip_app.campaigns" in str(call["sql"])
     ]
     assert len(patch_calls) == 1
     patch_call = patch_calls[0]

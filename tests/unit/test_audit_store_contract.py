@@ -7,13 +7,14 @@ real Postgres connection.
 Assertions:
 
 * ``write(...)`` issues an INSERT with the right columns + named params.
-* ``list(limit=N)`` issues a SELECT with ``ORDER BY event_at DESC``
+* ``list(limit=N)`` issues a SELECT with monotonic insertion ordering
   and ``LIMIT N`` and hydrates AuditEvent rows.
 * ``resolve_actor`` reads ``X-Forwarded-Email`` and falls back to
   ``settings.default_actor`` with a WARNING on absent header.
 * ``_coerce_event_type`` upper-cases dotted actions for governance §4
   canonical-verb alignment.
 """
+
 from __future__ import annotations
 
 import inspect
@@ -55,6 +56,7 @@ def _build_client_returning_row() -> MagicMock:
     client = MagicMock()
     client.fetchone.return_value = {
         "audit_id": uuid4(),
+        "audit_sequence": 1,
         "event_at": datetime.now(UTC),
     }
     client.fetchall.return_value = []
@@ -123,6 +125,8 @@ def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
     assert "BEFORE UPDATE OR DELETE ON mip_app.action_audit" in schema_sql
     assert "FOR EACH STATEMENT" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS correlation_id TEXT" in schema_sql
+    assert "ADD COLUMN IF NOT EXISTS audit_sequence BIGSERIAL" in schema_sql
+    assert "idx_action_audit_sequence" in schema_sql
     assert "CREATE INDEX IF NOT EXISTS idx_action_audit_correlation" in schema_sql
     assert "idx_action_audit_admin_request_actor_event" in schema_sql
     assert "'ADMIN_OPERATION_REQUESTED', 'ADMIN_OPERATION_RUN'" in schema_sql
@@ -209,9 +213,7 @@ def test_every_mutation_route_has_audit_coverage_or_explicit_exemption() -> None
             "add an audit write or an explicit exemption to this manifest"
         )
         source = inspect.getsource(endpoint)
-        missing = [
-            token for token in _MUTATION_AUDIT_EXPECTATIONS[name] if token not in source
-        ]
+        missing = [token for token in _MUTATION_AUDIT_EXPECTATIONS[name] if token not in source]
         assert not missing, f"{name} missing audit/exemption evidence tokens: {missing}"
         covered.add(name)
 
@@ -233,13 +235,10 @@ def test_list_issues_select_with_total_order_and_cursor_boundaries() -> None:
     client.fetchall.return_value = []
     store = LakebaseAuditStore(client=client)
 
-    now = datetime.now(UTC)
     events = store.list(
         limit=25,
-        after_event_at=now,
-        after_audit_id="11111111-1111-1111-1111-111111111111",
-        snapshot_event_at=now,
-        snapshot_audit_id="22222222-2222-2222-2222-222222222222",
+        after_sequence=12,
+        snapshot_sequence=25,
     )
 
     assert events == []
@@ -247,17 +246,17 @@ def test_list_issues_select_with_total_order_and_cursor_boundaries() -> None:
     args, kwargs = client.fetchall.call_args
     sql = args[0]
     params = args[1]
-    assert "ORDER BY event_at DESC, audit_id DESC" in sql
+    assert "ORDER BY audit_sequence DESC" in sql
     assert "LIMIT %(limit)s" in sql
     assert "OFFSET %(offset)s" in sql
-    assert "(event_at, audit_id) <=" in sql
-    assert "(event_at, audit_id) <" in sql
+    assert "audit_sequence <= %(snapshot_sequence)s" in sql
+    assert "audit_sequence < %(after_sequence)s" in sql
+    assert "pg_current_snapshot()" in sql
+    assert "pg_visible_in_snapshot" in sql
     assert params == {
         "limit": 25,
-        "after_event_at": now,
-        "after_audit_id": "11111111-1111-1111-1111-111111111111",
-        "snapshot_event_at": now,
-        "snapshot_audit_id": "22222222-2222-2222-2222-222222222222",
+        "after_sequence": 12,
+        "snapshot_sequence": 25,
         "offset": 0,
     }
     # belt-and-suspenders: fetchall is called with limit=25 too
@@ -285,6 +284,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
     client.fetchall.return_value = [
         {
             "audit_id": aid,
+            "audit_sequence": 42,
             "event_type": "VIEW_BORROWER",
             "actor_email": "skyler@entrada.ai",
             "entity_type": "borrower",
@@ -296,6 +296,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
             "evidence_ids": ["ev-1"],
             "metadata": {"action": "view_borrower_360", "score": 92},
             "event_at": now,
+            "audit_snapshot": "10:50:12,21",
         }
     ]
     store = LakebaseAuditStore(client=client)
@@ -314,6 +315,7 @@ def test_list_hydrates_rows_into_audit_events() -> None:
     # payload_json; the score survives.
     assert e.payload_json == {"score": 92}
     assert e.created_at == now.isoformat()
+    assert e.audit_snapshot == "10:50:12,21"
 
 
 def test_list_masks_legacy_raw_subject_clip_values() -> None:
@@ -329,6 +331,7 @@ def test_list_masks_legacy_raw_subject_clip_values() -> None:
     client.fetchall.return_value = [
         {
             "audit_id": aid,
+            "audit_sequence": 43,
             "event_type": "VIEW_BORROWER",
             "actor_email": "skyler@entrada.ai",
             "entity_type": "borrower",
@@ -362,10 +365,7 @@ def test_resolve_actor_falls_back_to_default_with_warning(
     with caplog.at_level(logging.WARNING, logger="backend.services.audit_store"):
         actor = resolve_actor(req)
     assert actor == settings.default_actor
-    assert any(
-        getattr(rec, "mip_event", None) == "identity_fallback"
-        for rec in caplog.records
-    )
+    assert any(getattr(rec, "mip_event", None) == "identity_fallback" for rec in caplog.records)
 
 
 def test_resolve_actor_handles_null_request() -> None:
@@ -413,7 +413,11 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
                 },
             ],
             "policy_checks": [
-                {"label": "Approval gate required", "status": "passed", "detail": "Human review remains required."},
+                {
+                    "label": "Approval gate required",
+                    "status": "passed",
+                    "detail": "Human review remains required.",
+                },
             ],
             "governance_chips": [
                 {
@@ -433,7 +437,9 @@ def test_growth_agent_audit_metadata_is_allowlisted_and_value_checked() -> None:
     assert metadata["tool_result_hash"] == "a" * 64
     assert metadata["specialist_agent"] == "structured_data_agent"
     assert metadata["governance_chips"][0]["label"] == "Masked references only"
-    assert metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
+    assert (
+        metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"
+    )
 
 
 def test_growth_agent_audit_metadata_rejects_unknown_workflows() -> None:
@@ -465,10 +471,18 @@ def test_custom_growth_agent_audit_metadata_is_governed() -> None:
             },
             "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_population"],
             "tool_steps": [
-                {"label": "Apply custom segment screen", "status": "completed", "detail": "No identities returned."},
+                {
+                    "label": "Apply custom segment screen",
+                    "status": "completed",
+                    "detail": "No identities returned.",
+                },
             ],
             "policy_checks": [
-                {"label": "Reviewed custom workflow", "status": "passed", "detail": "Reviewed segment vocabulary only."},
+                {
+                    "label": "Reviewed custom workflow",
+                    "status": "passed",
+                    "detail": "Reviewed segment vocabulary only.",
+                },
             ],
         },
         action="growth_agent.run",
@@ -579,10 +593,11 @@ def test_lakebase_grants_reference_covers_growth_agent_tables() -> None:
     grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
 
     assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_runs" in grants_doc
-    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors" in grants_doc
     assert (
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE "
-        "mip_app.growth_agent_notification_drafts"
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors" in grants_doc
+    )
+    assert (
+        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " "mip_app.growth_agent_notification_drafts"
     ) in grants_doc
 
 
@@ -612,22 +627,18 @@ def test_in_memory_store_pages_newest_first_without_duplicates() -> None:
 
     ordered = store.list(limit=5)
     first = ordered[:2]
-    first_last = first[-1]
     snapshot = first[0]
     second = store.list(
         limit=2,
-        after_event_at=datetime.fromisoformat(first_last.created_at),
-        after_audit_id=first_last.event_id,
-        snapshot_event_at=datetime.fromisoformat(snapshot.created_at),
-        snapshot_audit_id=snapshot.event_id,
+        after_sequence=first[-1].audit_sequence,
+        snapshot_sequence=snapshot.audit_sequence,
+        snapshot_token=snapshot.audit_snapshot,
     )
-    second_last = second[-1]
     third = store.list(
         limit=2,
-        after_event_at=datetime.fromisoformat(second_last.created_at),
-        after_audit_id=second_last.event_id,
-        snapshot_event_at=datetime.fromisoformat(snapshot.created_at),
-        snapshot_audit_id=snapshot.event_id,
+        after_sequence=second[-1].audit_sequence,
+        snapshot_sequence=snapshot.audit_sequence,
+        snapshot_token=snapshot.audit_snapshot,
     )
 
     assert first + second + third == ordered
@@ -651,7 +662,7 @@ def test_in_memory_cursor_stably_orders_tied_timestamps_and_excludes_new_inserts
     tied_at = "2026-07-13T12:00:00+00:00"
     for event in tied:
         event.created_at = tied_at
-    ordered = sorted(tied, key=lambda event: event.event_id, reverse=True)
+    ordered = sorted(tied, key=lambda event: event.audit_sequence or 0, reverse=True)
     first = store.list(limit=2)
     snapshot = first[0]
     after = first[-1]
@@ -661,12 +672,12 @@ def test_in_memory_cursor_stably_orders_tied_timestamps_and_excludes_new_inserts
         entity_type="borrower",
         entity_id="B-NEW",
     )
+    inserted.created_at = "2020-01-01T00:00:00+00:00"
     second = store.list(
         limit=2,
-        after_event_at=datetime.fromisoformat(after.created_at),
-        after_audit_id=after.event_id,
-        snapshot_event_at=datetime.fromisoformat(snapshot.created_at),
-        snapshot_audit_id=snapshot.event_id,
+        after_sequence=after.audit_sequence,
+        snapshot_sequence=snapshot.audit_sequence,
+        snapshot_token=snapshot.audit_snapshot,
     )
 
     assert first + second == ordered

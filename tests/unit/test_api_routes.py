@@ -1,8 +1,34 @@
+from typing import Any
+from uuid import UUID
+
 from fastapi.testclient import TestClient
 
 from backend.main import app
+from backend.schemas.portfolio import PortfolioCreateResponse
+from backend.services.repositories import get_portfolio_repository
 
 client = TestClient(app)
+
+
+class _CapturePortfolioCreateRepository:
+    def __init__(self) -> None:
+        self.idempotency_keys: list[str] = []
+
+    def create(
+        self,
+        payload: Any,
+        *,
+        actor: str | None = None,
+        idempotency_key: str,
+    ) -> PortfolioCreateResponse:
+        del actor
+        self.idempotency_keys.append(idempotency_key)
+        return PortfolioCreateResponse(
+            portfolio_id="11111111-1111-4111-8111-111111111111",
+            campaign_id="11111111-1111-4111-8111-111111111111",
+            name=payload.name,
+            marketable_population=1,
+        )
 
 
 def test_required_routes_exist_and_respond():
@@ -24,7 +50,12 @@ def test_required_routes_exist_and_respond():
             200,
         ),
         ("get", "/api/segments?portfolio_id=11111111-1111-4111-8111-111111111111", None, 200),
-        ("get", "/api/leads?portfolio_id=11111111-1111-4111-8111-111111111111&segment=itm", None, 200),
+        (
+            "get",
+            "/api/leads?portfolio_id=11111111-1111-4111-8111-111111111111&segment=itm",
+            None,
+            200,
+        ),
         ("get", "/api/leads?segment_codes=itm,equity&segment_mode=all", None, 200),
         ("get", "/api/geo/state-rollups?segment_codes=itm,equity&segment_mode=all", None, 200),
         ("get", "/api/borrowers/B-48291", None, 200),
@@ -53,12 +84,12 @@ def test_required_routes_exist_and_respond():
         (
             "post",
             "/api/audit/event",
-                {
-                    "actor": "anonymous",
-                    "action": "view.custom",
-                    "entity_type": "lead_queue",
-                    "entity_id": "itm",
-                },
+            {
+                "actor": "anonymous",
+                "action": "view.custom",
+                "entity_type": "lead_queue",
+                "entity_id": "itm",
+            },
             200,
         ),
         ("get", "/api/admin/rules", None, 200),
@@ -75,9 +106,9 @@ def test_required_routes_exist_and_respond():
             else None
         )
         response = call(path, json=payload, headers=headers) if payload is not None else call(path)
-        assert response.status_code == expected, (
-            f"{method.upper()} {path} returned {response.status_code}: {response.text}"
-        )
+        assert (
+            response.status_code == expected
+        ), f"{method.upper()} {path} returned {response.status_code}: {response.text}"
 
 
 def test_portfolio_create_rejects_malformed_idempotency_key_as_input_error():
@@ -91,6 +122,34 @@ def test_portfolio_create_rejects_malformed_idempotency_key_as_input_error():
     assert "Idempotency-Key" not in response.text
 
 
+def test_portfolio_create_generates_optional_idempotency_key_and_preserves_provided_key():
+    repo = _CapturePortfolioCreateRepository()
+    prior = app.dependency_overrides.get(get_portfolio_repository)
+    app.dependency_overrides[get_portfolio_repository] = lambda: repo
+    provided = "11111111-1111-4111-8111-111111111112"
+    try:
+        generated_response = client.post(
+            "/api/v1/portfolio/create",
+            json={"name": "Generated idempotency"},
+        )
+        provided_response = client.post(
+            "/api/v1/portfolio/create",
+            json={"name": "Provided idempotency"},
+            headers={"Idempotency-Key": provided},
+        )
+    finally:
+        if prior is None:
+            app.dependency_overrides.pop(get_portfolio_repository, None)
+        else:
+            app.dependency_overrides[get_portfolio_repository] = prior
+
+    assert generated_response.status_code == 200, generated_response.text
+    assert provided_response.status_code == 200, provided_response.text
+    generated = UUID(repo.idempotency_keys[0])
+    assert generated.version == 4
+    assert repo.idempotency_keys[1] == provided
+
+
 def test_structured_post_routes_require_and_document_json_content_type():
     schema = app.openapi()
     missing: list[str] = []
@@ -100,10 +159,14 @@ def test_structured_post_routes_require_and_document_json_content_type():
         if "POST" not in methods or not path.startswith("/api/"):
             continue
         dependant = getattr(route, "dependant", None)
-        dependency_names = [] if dependant is None else [
-            getattr(dependency.call, "__name__", str(dependency.call))
-            for dependency in dependant.dependencies
-        ]
+        dependency_names = (
+            []
+            if dependant is None
+            else [
+                getattr(dependency.call, "__name__", str(dependency.call))
+                for dependency in dependant.dependencies
+            ]
+        )
         route_schema = schema["paths"].get(getattr(route, "path_format", path), {}).get("post", {})
         responses = route_schema.get("responses", {})
         if "require_json_content_type" not in dependency_names or "415" not in responses:

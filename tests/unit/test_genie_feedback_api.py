@@ -134,7 +134,12 @@ class _FakeLakebase:
             self.order.append("succeeded")
             return {"feedback_request_id": row["feedback_request_id"]}
         if "INSERT INTO mip_app.action_audit" in sql:
-            row = {"audit_id": uuid4(), "event_at": None, **params}
+            row = {
+                "audit_id": uuid4(),
+                "audit_sequence": len(self.audit_events) + 1,
+                "event_at": None,
+                **params,
+            }
             self.audit_events.append(row)
             return row
         raise AssertionError(f"unexpected execute SQL: {sql}")

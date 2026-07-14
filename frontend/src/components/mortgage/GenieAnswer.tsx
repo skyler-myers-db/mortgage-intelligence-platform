@@ -37,6 +37,8 @@ import { useFocusTrap } from '../../hooks/useFocusTrap';
 export { stripQuestionRestatement } from './GenieAnswer.markdown';
 export { inferChartFromRows } from './GenieAnswer.logic';
 
+export const GOVERNED_ACTION_SOURCE = 'governed_action';
+
 /**
  * GenieAnswer — renders the widened Genie payload: metric_value (big tabular
  * number), answer paragraph, table_rows (compact 3-4 col table, truncated to
@@ -92,6 +94,7 @@ export function GenieAnswer({
   const chartColumns = rows[0] ? Object.keys(rows[0]) : [];
   const cleanedAnswer = answer ? normalizeGenieAnswerLanguage(stripQuestionRestatement(answer)) : '';
   const isGenieApiAnswer = payload.source === 'genie';
+  const isGovernedActionResult = payload.source === GOVERNED_ACTION_SOURCE;
   // Live Genie identifiers are duplicated into proof so the governed audit
   // binding survives canonical answer rewrites. Prefer the top-level wire
   // fields and consume the proof copies when an older response shape omits
@@ -185,23 +188,32 @@ export function GenieAnswer({
       : '',
     cleanedAnswer,
   ].filter(Boolean).join(' ');
+  const sourceDisclosure = isGovernedActionResult
+    ? {
+        ariaLabel: 'Answer source: Governed action result',
+        label: 'Governed action result',
+      }
+    : isGenieApiAnswer || hasLiveGenieTurn
+      ? {
+          ariaLabel: 'Answer source: Databricks Genie Conversation API',
+          label: payload.source === 'trusted_sql'
+            ? 'Databricks Genie Conversation API · verified SQL'
+            : 'Databricks Genie Conversation API',
+        }
+      : null;
 
   return (
     <div>
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {liveAnswerAnnouncement}
       </div>
-      {(isGenieApiAnswer || hasLiveGenieTurn) && (
+      {sourceDisclosure && (
         <div
           className="genie-answer__api-source"
-          aria-label="Answer source: Databricks Genie Conversation API"
+          aria-label={sourceDisclosure.ariaLabel}
         >
-          <Icon name="sparkle" size={12} />
-          <span>
-            {payload.source === 'trusted_sql'
-              ? 'Databricks Genie Conversation API · verified SQL'
-              : 'Databricks Genie Conversation API'}
-          </span>
+          <Icon name={isGovernedActionResult ? 'check' : 'sparkle'} size={12} />
+          <span>{sourceDisclosure.label}</span>
         </div>
       )}
       {metric_value !== null && metric_value !== undefined && metric_value !== '' && (

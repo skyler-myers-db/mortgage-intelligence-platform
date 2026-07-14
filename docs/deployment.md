@@ -31,10 +31,10 @@ MIP_DEFAULT_CATALOG="acme_mip"
 # Required for every deployed runtime, including the dev sandbox.
 MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
 MIP_GENIE_ACTION_SECRET_CURRENT="<deployment-scoped-random-secret>"
-# Optional during rotation; retain for at least the two-hour action-token TTL.
-MIP_GENIE_ACTION_SECRET_PREVIOUS="<prior-deployment-secret>"
 MIP_GENIE_ACTION_SECRET_KID="v2"
-MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="v1"
+# Set both previous-key values only for a bounded rotation grace period.
+# MIP_GENIE_ACTION_SECRET_PREVIOUS="<prior-deployment-secret>"
+# MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="v1"
 ```
 
    See [`docs/se-onboarding.md`](se-onboarding.md) for the full
@@ -55,6 +55,20 @@ MIP_GENIE_ACTION_SECRET_PREVIOUS_KID="v1"
 ./scripts/deploy.sh -t dev
 ```
 
+The command of record deploys only an exact committed revision. Before any
+workspace mutation, and again immediately before bundle upload, it refuses
+staged or unstaged tracked changes and untracked non-ignored files. Standard
+ignored artifacts such as `.env.local`, `frontend/dist/`, `sql/_rendered/`,
+and `.databricks/` are preserved and do not block deployment. Run the gate by
+itself with:
+
+```bash
+./scripts/deploy.sh --verify-source-only
+```
+
+The SHA printed by this gate is the value advertised as `MIP_GIT_SHA` and
+verified by the live smoke test.
+
 The deploy script's live smoke now requires agentic capability proof by
 default (`MIP_EXPECT_AGENTIC_CAPABILITIES=1`). If the token minted during
 deploy is not app-admin readable, provide `MIP_ADMIN_BEARER_TOKEN` for an
@@ -73,11 +87,33 @@ fail if that exact proof has not landed yet.
 `MIP_COTALITY_ID_MASK_SECRET` and `MIP_GENIE_ACTION_SECRET_CURRENT` are
 mandatory for sandbox, staging, customer, and production app payloads. Only
 `APP_ENV=local` and `APP_ENV=test` may use compatibility keys. During action-key
-rotation, deploy the new current key/KID together with the prior key/KID, keep
-the prior key available for at least two hours so existing action confirmations
-and one-hour campaign provenance tokens can expire, then remove it in a later
-deployment. The previous key is verification-only; new tokens always use the
+rotation, deploy the new current key/KID together with both prior-key values.
+The prior secret without `MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` is rejected;
+when the prior secret is absent, it is neither provisioned nor injected into
+the App payload. Keep the prior key available for at least two hours so
+existing action confirmations and one-hour campaign provenance tokens can
+expire. The previous key is verification-only; new tokens always use the
 current key.
+
+After that bounded grace period, remove
+`MIP_GENIE_ACTION_SECRET_PREVIOUS` and
+`MIP_GENIE_ACTION_SECRET_PREVIOUS_KID` from the deployment environment and
+`.env.local`, retire the Databricks secret, and deploy the no-previous-key
+payload:
+
+```bash
+unset MIP_GENIE_ACTION_SECRET_PREVIOUS
+unset MIP_GENIE_ACTION_SECRET_PREVIOUS_KID
+python tools/databricks/provision_runtime_secrets.py \
+  --scope "${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}" \
+  --retire-previous
+./scripts/deploy.sh -t dev
+```
+
+Retirement is idempotent and does not require the current or Cotality secret
+values. An ordinary deploy with no configured previous key also removes a
+stale `genie-action-previous` secret before emitting a payload without the
+previous resource binding.
 
 The Entrada dev target also supports the plain Databricks bundle resource path:
 
@@ -204,6 +240,10 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
   `warehouse: up`, `genie: up`, `lakebase: up`, all circuits `closed`,
   and the current `log_export` posture.
 - Resilience is observable: degraded banner renders when a dependency drops; Approve writes a real row to `mip_app.action_audit`.
+- Live outreach smoke persists an email draft, then approves that exact draft
+  with its generation ID, response hash, source-freshness timestamp, subject,
+  body, and canonical borrower evidence IDs.
+- `./scripts/deploy.sh --verify-source-only` passes for the exact committed SHA.
 - `tools/databricks/bundle_env.py validate -t dev` passes.
 - `tools/databricks/bundle_env.py plan -t dev` shows the expected direct
   deployment changes.

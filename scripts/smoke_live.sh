@@ -308,6 +308,13 @@ if [[ -z "$BORROWER_ID" ]]; then
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
+SMOKE_EVIDENCE_IDS="$(jq -c '.[0].evidence_ids // []' /tmp/mip-smoke-out.json)"
+if ! jq -e 'type == "array" and length > 0 and all(.[]; type == "string" and length > 0)' \
+  <<<"$SMOKE_EVIDENCE_IDS" >/dev/null; then
+  echo "[smoke] ranked lead did not include canonical evidence_ids for approval proof" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
 probe "borrower dossier"  "$API_PREFIX/borrowers/$BORROWER_ID"
 if ! jq -e '(.clip_id // "" | test("^(clip_ref_|clip_demo_)")) and (.owner_link_id // "" | test("^(owner_link_ref_|ol_demo_|$)"))' /tmp/mip-smoke-out.json >/dev/null; then
   echo "[smoke] borrower dossier exposed an unmasked Cotality identifier" >&2
@@ -440,9 +447,27 @@ SMOKE_REQUEST_ID="$(new_request_id)"
 probe "outreach draft for approval" "$API_PREFIX/outreach/draft" POST \
   "{\"borrower_id\":\"$BORROWER_ID\",\"channel\":\"email\"}"
 SMOKE_DRAFT_BODY="$(jq -r '.body // empty' /tmp/mip-smoke-out.json)"
+SMOKE_DRAFT_SUBJECT="$(jq -r '.subject // empty' /tmp/mip-smoke-out.json)"
 SMOKE_OFFER_CODE="$(jq -r '.offer_code // empty' /tmp/mip-smoke-out.json)"
-if [[ -z "$SMOKE_DRAFT_BODY" || -z "$SMOKE_OFFER_CODE" ]]; then
-  echo "[smoke] outreach draft did not return body and offer_code for approval gate" >&2
+SMOKE_DRAFT_GENERATION_ID="$(jq -r '.generation_id // empty' /tmp/mip-smoke-out.json)"
+SMOKE_DRAFT_RESPONSE_HASH="$(jq -r '.response_hash // empty' /tmp/mip-smoke-out.json)"
+SMOKE_DRAFT_SOURCE_REFRESHED_AT="$(jq -r '.source_refreshed_at // empty' /tmp/mip-smoke-out.json)"
+if [[ -z "$SMOKE_DRAFT_BODY" || -z "$SMOKE_DRAFT_SUBJECT" || -z "$SMOKE_OFFER_CODE" \
+  || -z "$SMOKE_DRAFT_GENERATION_ID" || -z "$SMOKE_DRAFT_RESPONSE_HASH" \
+  || -z "$SMOKE_DRAFT_SOURCE_REFRESHED_AT" ]]; then
+  echo "[smoke] persisted email draft did not return complete approval proof" >&2
+  cat /tmp/mip-smoke-out.json >&2 || true
+  exit 1
+fi
+if ! jq -e '
+  .status == "draft"
+  and .channel == "email"
+  and (.generation_id | length > 0)
+  and (.response_hash | test("^[0-9a-f]{64}$"))
+  and (.source_refreshed_at | length > 0)
+  and (.subject | length > 0)
+' /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] outreach draft response failed persisted-proof contract" >&2
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi
@@ -450,12 +475,24 @@ SMOKE_APPROVE_PAYLOAD="$(jq -n \
   --arg borrower_id "$BORROWER_ID" \
   --arg offer_code "$SMOKE_OFFER_CODE" \
   --arg draft_body "$SMOKE_DRAFT_BODY" \
+  --arg draft_subject "$SMOKE_DRAFT_SUBJECT" \
+  --arg draft_generation_id "$SMOKE_DRAFT_GENERATION_ID" \
+  --arg draft_response_hash "$SMOKE_DRAFT_RESPONSE_HASH" \
+  --arg draft_source_refreshed_at "$SMOKE_DRAFT_SOURCE_REFRESHED_AT" \
   --arg request_id "$SMOKE_REQUEST_ID" \
-  '{borrower_id:$borrower_id, offer_code:$offer_code, evidence_ids:[], channel:"email", draft_body:$draft_body, request_id:$request_id}')"
+  --argjson evidence_ids "$SMOKE_EVIDENCE_IDS" \
+  '{borrower_id:$borrower_id, offer_code:$offer_code, evidence_ids:$evidence_ids,
+    channel:"email", draft_body:$draft_body, draft_subject:$draft_subject,
+    draft_generation_id:$draft_generation_id, draft_response_hash:$draft_response_hash,
+    draft_source_refreshed_at:$draft_source_refreshed_at, request_id:$request_id}')"
 probe "outreach approval audit write" "$API_PREFIX/outreach/approve" POST \
   "$SMOKE_APPROVE_PAYLOAD"
-if ! jq -e '.approved == true and (.audit_event_id // "" | length > 0)' /tmp/mip-smoke-out.json >/dev/null; then
-  echo "[smoke] outreach approval did not return an audit event id" >&2
+if ! jq -e --arg generation_id "$SMOKE_DRAFT_GENERATION_ID" \
+  '.approved == true
+    and (.audit_event_id // "" | length > 0)
+    and .draft_generation_id == $generation_id' \
+  /tmp/mip-smoke-out.json >/dev/null; then
+  echo "[smoke] outreach approval did not return audit and persisted-draft proof" >&2
   cat /tmp/mip-smoke-out.json >&2 || true
   exit 1
 fi

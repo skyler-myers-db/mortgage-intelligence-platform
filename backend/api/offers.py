@@ -2,18 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Annotated, cast
+from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from backend.schemas.offer import (
+    GovernedOfferInputs,
     OfferAlternative,
     OfferRecommendation,
     OfferRecommendRequest,
-    OfferType,
     SourceLabel,
-    validate_offer_evidence_ids,
-    validate_offer_source_refreshed_at,
 )
 from backend.services.audit_decision_inputs import decision_inputs_from_offer_inputs
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
@@ -40,7 +38,8 @@ def _rationale_for(
     code: str,
     spread: int,
     equity: int,
-    heloc_intent: bool,
+    has_permit: bool,
+    has_heloc_propensity_trigger: bool,
     listed: bool,
     investor: bool,
     customer: bool,
@@ -65,6 +64,7 @@ def _rationale_for(
     must agree when Borrower 360 and the Offer Orchestrator render the
     same borrower.
     """
+
     # Translate bps -> readable "percentage points above market" for
     # the 100+ bps cohort; below that, fall back to a qualitative phrase.
     def _spread_phrase() -> str:
@@ -96,7 +96,14 @@ def _rationale_for(
             "review the first mortgage and home-equity options together."
         )
     if code == "heloc":
-        intent_phrase = "Cotality HELOC propensity" if heloc_intent else "HELOC intent"
+        if has_heloc_propensity_trigger and has_permit:
+            intent_phrase = "Cotality HELOC propensity and filed permit activity"
+        elif has_heloc_propensity_trigger:
+            intent_phrase = "Cotality HELOC propensity"
+        elif has_permit:
+            intent_phrase = "Filed permit activity"
+        else:
+            intent_phrase = "The governed home-equity signal"
         return (
             f"{intent_phrase} paired with {_equity_phrase()} supports a "
             "home-equity line conversation; refinance economics are not strong enough for a full refinance."
@@ -127,12 +134,15 @@ def _rationale_for(
             "review whether the current loan still fits before they shop elsewhere."
         )
     return (
-        "No active trigger on this borrower right now -- keep in nurture until "
-        "a signal fires."
+        "No active trigger on this borrower right now -- keep in nurture until " "a signal fires."
     )
 
 
-def _sources_for(code: str) -> list[str]:
+def _sources_for(
+    code: str,
+    *,
+    has_heloc_propensity_trigger: bool,
+) -> list[str]:
     """Unity Catalog tables consulted for this branch. Drives the
     'Source evidence' chips the Offer Orchestrator renders."""
     from backend.services.databricks_sql_helpers import qualify
@@ -145,7 +155,7 @@ def _sources_for(code: str) -> list[str]:
         base.append(qualify("gold", "fn_in_the_money"))
     if code in {"heloc", "cash_out", "refi_plus_heloc"}:
         base.append(qualify("gold", "fn_rate_spread"))
-    if code == "heloc":
+    if code in {"heloc", "refi_plus_heloc"} and has_heloc_propensity_trigger:
         base.append(qualify("silver", "heloc_propensity"))
     # fn_lead_score is always cited — the orchestrator shows confidence
     # on every recommendation and that confidence rolls up from the
@@ -164,7 +174,8 @@ def _sources_for(code: str) -> list[str]:
 def _alternatives_for(
     code: str,
     equity: int,
-    heloc_intent: bool,
+    has_permit: bool,
+    has_heloc_propensity_trigger: bool,
     heloc_min: int,
 ) -> list[OfferAlternative]:
     """Deterministic 1–2 runners-up per branch. Rules are fixed so the
@@ -185,7 +196,7 @@ def _alternatives_for(
                 product_label=offer_display_label("heloc"),
                 reason_not_chosen=(
                     "Refinance economics also qualify, so a combined first-mortgage and equity review is more complete than HELOC alone."
-                    if not heloc_intent
+                    if not has_heloc_propensity_trigger
                     else "Refinance economics also qualify, so the borrower should review both the first mortgage and equity options."
                 ),
             ),
@@ -208,7 +219,13 @@ def _alternatives_for(
             OfferAlternative(
                 offer_code="cash_out",
                 product_label=offer_display_label("cash_out"),
-                reason_not_chosen="HELOC intent points to a home-equity line before a cash-out refinance review.",
+                reason_not_chosen=(
+                    "Cotality HELOC propensity points to a home-equity line before a cash-out refinance review."
+                    if has_heloc_propensity_trigger
+                    else "Filed permit activity points to a home-equity line before a cash-out refinance review."
+                    if has_permit
+                    else "The governed equity signal points to a home-equity line before a cash-out refinance review."
+                ),
             ),
         ]
     if code == "refi":
@@ -258,42 +275,83 @@ def recommend_offer(
     # confidence, and audit subject. Reading BorrowerRepository separately can
     # combine a cached dossier generation with newer offer inputs.
     try:
-        inputs = offer_repo.get_offer_inputs(payload.borrower_id)
+        raw_inputs = offer_repo.get_offer_inputs(payload.borrower_id)
     except ValueError as exc:
         raise HTTPException(
             status_code=500,
             detail="Offer inputs are incomplete or invalid; refresh the governed data before retrying.",
         ) from exc
-    if inputs is None:
+    if raw_inputs is None:
         # Defense in depth: every borrower in the population has offer inputs.
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
     try:
-        evidence_ids = validate_offer_evidence_ids(inputs.get("evidence_ids"))
-        source_refreshed_at = validate_offer_source_refreshed_at(inputs.get("source_refreshed_at"))
+        inputs = GovernedOfferInputs.model_validate(raw_inputs)
+        if inputs.borrower_id != payload.borrower_id:
+            raise ValueError("offer input borrower_id does not match the request")
+        code = inputs.offer_code
+        if code not in _VALID_OFFER_TYPES:
+            raise ValueError("offer input offer_code is invalid")
+
+        thresholds_applied = {
+            "min_spread_bps": inputs.min_spread_bps,
+            "min_equity_pct": inputs.min_equity_pct,
+            "heloc_equity_min_pct": inputs.heloc_equity_min_pct,
+            "cashout_equity_min_pct": inputs.cashout_equity_min_pct,
+            "retention_min_spread_bps": inputs.retention_min_spread_bps,
+        }
+        validated_inputs = inputs.model_dump()
+        decision_inputs = decision_inputs_from_offer_inputs(validated_inputs)
+        sources = _sources_for(
+            code,
+            has_heloc_propensity_trigger=inputs.has_heloc_propensity_trigger,
+        )
+        source_labels = [
+            SourceLabel(name=source, display_label=source_display_label(source))
+            for source in sources
+        ]
+        recommendation = OfferRecommendation(
+            borrower_id=payload.borrower_id,
+            source_refreshed_at=inputs.source_refreshed_at,
+            offer_code=code,
+            offer_type=code,
+            product_label=offer_display_label(code, NBO_PRODUCT_LABELS[code]),
+            confidence=inputs.confidence,
+            rationale=_rationale_for(
+                code,
+                spread=inputs.rate_spread_bps,
+                equity=inputs.equity_pct,
+                has_permit=inputs.has_permit,
+                has_heloc_propensity_trigger=inputs.has_heloc_propensity_trigger,
+                listed=inputs.listed_for_sale,
+                investor=inputs.is_investor,
+                customer=inputs.is_current_customer,
+                competitor_lien=inputs.is_competitor_lien,
+                min_sp=thresholds_applied["min_spread_bps"],
+                min_eq=thresholds_applied["min_equity_pct"],
+                heloc_min=thresholds_applied["heloc_equity_min_pct"],
+                cashout_min=thresholds_applied["cashout_equity_min_pct"],
+                retention_min=thresholds_applied["retention_min_spread_bps"],
+            ),
+            evidence_ids=inputs.evidence_ids,
+            sources=sources,
+            source_labels=source_labels,
+            alternatives=_alternatives_for(
+                code,
+                equity=inputs.equity_pct,
+                has_permit=inputs.has_permit,
+                has_heloc_propensity_trigger=inputs.has_heloc_propensity_trigger,
+                heloc_min=thresholds_applied["heloc_equity_min_pct"],
+            ),
+            thresholds_applied=thresholds_applied,
+        )
     except ValueError as exc:
         # Repository implementations are injectable. Revalidate proof at the
-        # API boundary so an invalid stub/cache cannot reach audit or response
-        # construction even if it bypasses the Databricks repository.
+        # API boundary and construct the complete response before audit so an
+        # invalid stub/cache cannot create an audit event.
         raise HTTPException(
             status_code=500,
             detail="Offer inputs are incomplete or invalid; refresh the governed data before retrying.",
         ) from exc
-    code = cast(str, inputs["offer_code"])
-    if code not in _VALID_OFFER_TYPES:
-        # Defense in depth: scoring contract violation would surface here.
-        raise HTTPException(
-            status_code=500,
-            detail="Offer inputs are incomplete or invalid; refresh the governed data before retrying.",
-        )
-
-    thresholds_applied = {
-        "min_spread_bps": cast(int, inputs["min_spread_bps"]),
-        "min_equity_pct": cast(int, inputs["min_equity_pct"]),
-        "heloc_equity_min_pct": cast(int, inputs["heloc_equity_min_pct"]),
-        "cashout_equity_min_pct": cast(int, inputs["cashout_equity_min_pct"]),
-        "retention_min_spread_bps": cast(int, inputs["retention_min_spread_bps"]),
-    }
-    decision_inputs = decision_inputs_from_offer_inputs(inputs)
 
     try:
         audit.write(
@@ -303,14 +361,14 @@ def recommend_offer(
             entity_id=payload.borrower_id,
             payload_json={
                 "offer_code": code,
-                "confidence": cast(int, inputs["confidence"]),
+                "confidence": recommendation.confidence,
                 "thresholds_applied": thresholds_applied,
                 "decision_inputs": decision_inputs,
-                "source_refreshed_at": source_refreshed_at,
+                "source_refreshed_at": recommendation.source_refreshed_at,
             },
-            evidence_ids=evidence_ids,
+            evidence_ids=recommendation.evidence_ids,
             event_type="RECOMMEND_OFFER",
-            subject_clip=cast(str, inputs["clip_id"]),
+            subject_clip=inputs.clip_id,
         )
     except LakebaseError as exc:
         raise HTTPException(
@@ -318,48 +376,4 @@ def recommend_offer(
             detail=safe_dependency_detail("lakebase"),
         ) from exc
 
-    sources = _sources_for(code)
-    source_labels = [
-        SourceLabel(name=s, display_label=source_display_label(s))
-        for s in sources
-    ]
-
-    return OfferRecommendation(
-        borrower_id=payload.borrower_id,
-        source_refreshed_at=source_refreshed_at,
-        offer_code=code,
-        offer_type=cast(OfferType, code),
-        product_label=offer_display_label(code, NBO_PRODUCT_LABELS[code]),
-        confidence=cast(int, inputs["confidence"]),
-        rationale=_rationale_for(
-            code,
-            spread=cast(int, inputs["rate_spread_bps"]),
-            equity=cast(int, inputs["equity_pct"]),
-            heloc_intent=(
-                cast(bool, inputs["has_permit"])
-                or cast(bool, inputs.get("has_heloc_propensity_trigger", False))
-            ),
-            listed=cast(bool, inputs["listed_for_sale"]),
-            investor=cast(bool, inputs["is_investor"]),
-            customer=cast(bool, inputs["is_current_customer"]),
-            competitor_lien=cast(bool, inputs["is_competitor_lien"]),
-            min_sp=thresholds_applied["min_spread_bps"],
-            min_eq=thresholds_applied["min_equity_pct"],
-            heloc_min=thresholds_applied["heloc_equity_min_pct"],
-            cashout_min=thresholds_applied["cashout_equity_min_pct"],
-            retention_min=thresholds_applied["retention_min_spread_bps"],
-        ),
-        evidence_ids=evidence_ids,
-        sources=sources,
-        source_labels=source_labels,
-        alternatives=_alternatives_for(
-            code,
-            equity=cast(int, inputs["equity_pct"]),
-            heloc_intent=(
-                cast(bool, inputs["has_permit"])
-                or cast(bool, inputs.get("has_heloc_propensity_trigger", False))
-            ),
-            heloc_min=thresholds_applied["heloc_equity_min_pct"],
-        ),
-        thresholds_applied=thresholds_applied,
-    )
+    return recommendation

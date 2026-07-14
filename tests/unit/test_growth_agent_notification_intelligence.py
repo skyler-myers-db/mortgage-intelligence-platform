@@ -127,6 +127,40 @@ def test_notification_intelligence_rejects_normalized_duplicate_channel_content(
     assert "focused queue is ready for team review" not in result.slack_context.lower()
 
 
+class _NearDuplicateChannelApiClient(_ApiClient):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        response = super().do(method, path, body=body)
+        response["output"][0]["content"][0]["text"] = """{
+          "slack_context": "The focused queue is ready for team review",
+          "teams_summary": "The focused queue is ready for team review today",
+          "operator_action": "Review priority distribution and assign the next owner",
+          "strategy_summary": "Use channel specific framing for the operating review"
+        }"""
+        return response
+
+
+def test_notification_intelligence_rejects_materially_similar_channel_content() -> None:
+    client = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_NearDuplicateChannelApiClient(),
+    )
+    result = recommend_notification_intelligence(
+        monitor_name="Daily Refi Watch",
+        workflow_id="daily_refi_brief",
+        settings=Settings(
+            mip_agent_orchestrator=True,
+            mip_agent_serving_endpoint="mip-supervisor",
+            mip_agent_supervisor_id="supervisor-id",
+        ),
+        serving_client=client,
+    )
+
+    assert result.generation_mode == "governed_fallback"
+    assert result.slack_context != result.teams_summary
+
+
 class _UnsafeApiClient(_ApiClient):
     def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
         if method == "GET":
@@ -210,14 +244,17 @@ def test_notification_intelligence_rejects_each_pressure_phrase_independently(
     )
 
     assert result.generation_mode == "governed_fallback"
-    assert unsafe_value.lower() not in " ".join(
-        (
-            result.slack_context,
-            result.teams_summary,
-            result.operator_action,
-            result.strategy_summary,
-        )
-    ).lower()
+    assert (
+        unsafe_value.lower()
+        not in " ".join(
+            (
+                result.slack_context,
+                result.teams_summary,
+                result.operator_action,
+                result.strategy_summary,
+            )
+        ).lower()
+    )
 
 
 class _UnsafeIdentityApiClient(_ApiClient):
@@ -252,7 +289,9 @@ def test_notification_intelligence_fails_closed_on_names_and_protected_targeting
     )
 
     assert result.generation_mode == "governed_fallback"
-    rendered = " ".join((result.slack_context, result.teams_summary, result.strategy_summary)).lower()
+    rendered = " ".join(
+        (result.slack_context, result.teams_summary, result.strategy_summary)
+    ).lower()
     assert "john smith" not in rendered
     assert "senior citizen" not in rendered
     assert "source of income" not in rendered

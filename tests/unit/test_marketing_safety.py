@@ -287,7 +287,7 @@ def test_outreach_approve_rejects_evidence_ids_not_owned_by_borrower() -> None:
         _restore_override(get_outreach_repository, prior)
 
     assert response.status_code == 422
-    assert "must belong to the borrower recommendation" in response.json()["detail"]
+    assert "must exactly match the borrower recommendation" in response.json()["detail"]
 
 
 def test_outreach_campaign_metadata_ids_are_public_safe() -> None:
@@ -487,7 +487,7 @@ def test_campaign_copy_allows_cost_and_interest_review_without_promises() -> Non
         name="Governed mortgage review",
         message_variants=[
             {
-                "variant_name": "A",
+                "variant_name": "Primary",
                 "channel": "email",
                 "subject": subject,
                 "body": body,
@@ -769,6 +769,111 @@ def test_campaign_create_metadata_rejects_pii_and_bad_send_windows() -> None:
 
 
 @pytest.mark.parametrize(
+    ("message_variants", "error"),
+    [
+        ([{}], "variant_name must be nonblank"),
+        (
+            [
+                {
+                    "variant_name": "Primary",
+                    "channel": "email",
+                    "subject": "Mortgage options review",
+                    "body": "   ",
+                }
+            ],
+            "variant body must be nonblank",
+        ),
+        (
+            [
+                {
+                    "variant_name": "Primary",
+                    "channel": "email",
+                    "subject": "   ",
+                    "body": "Contact a loan officer to review available mortgage options.",
+                }
+            ],
+            "email message variants require a nonblank subject",
+        ),
+        (
+            [
+                {
+                    "variant_name": "Primary",
+                    "channel": "email",
+                    "subject": "Mortgage options review",
+                    "body": "Contact a loan officer to review available mortgage options.",
+                },
+                {
+                    "variant_name": " primary ",
+                    "channel": "sms",
+                    "body": "Contact a loan officer to review available mortgage options.",
+                },
+            ],
+            "variant_name values must be unique",
+        ),
+        (
+            [
+                {
+                    "variant_name": "A",
+                    "channel": "email",
+                    "subject": "Mortgage options review",
+                    "body": "Contact a loan officer to review available mortgage options.",
+                }
+            ],
+            "A/B message variants require complete A and B variants",
+        ),
+        (
+            [
+                {
+                    "variant_name": "A",
+                    "channel": "email",
+                    "subject": "Mortgage options review",
+                    "body": "Contact a loan officer to review available mortgage options.",
+                },
+                {
+                    "variant_name": "B",
+                    "channel": "email",
+                    "subject": "Mortgage guidance review",
+                    "body": "",
+                },
+            ],
+            "variant body must be nonblank",
+        ),
+    ],
+)
+def test_campaign_create_rejects_blank_partial_or_duplicate_variants(
+    message_variants: list[dict[str, object]],
+    error: str,
+) -> None:
+    with pytest.raises(ValidationError, match=error):
+        PortfolioCreateRequest(
+            name="Governed mortgage review",
+            message_variants=message_variants,
+        )
+
+
+def test_campaign_create_accepts_complete_a_b_variants() -> None:
+    payload = PortfolioCreateRequest(
+        name="Governed mortgage review",
+        message_variants=[
+            {
+                "variant_name": "A",
+                "channel": "email",
+                "subject": "Mortgage options review",
+                "body": "Contact a loan officer to review available mortgage options.",
+            },
+            {
+                "variant_name": "B",
+                "channel": "email",
+                "subject": "Mortgage guidance review",
+                "body": "Schedule a review of available mortgage options with a loan officer.",
+            },
+        ],
+    )
+
+    assert [variant["variant_name"] for variant in payload.message_variants] == ["A", "B"]
+
+
+@pytest.mark.parametrize(
     "campaign_name",
     [
         "Women homeowners refinance review",
@@ -841,7 +946,7 @@ def test_campaign_create_accepts_marketing_controls() -> None:
         suppression_policy={"default": "eligible_only", "frequency_cap_days": 30},
         message_variants=[
             {
-                "variant_name": "A",
+                "variant_name": "Primary",
                 "channel": "email",
                 "subject": "Summit Mortgage review for your current loan options",
                 "body": "Review current mortgage fit using the governed relationship-aware template.",
@@ -866,7 +971,7 @@ def test_campaign_create_accepts_marketing_controls() -> None:
         },
     )
 
-    assert payload.message_variants[0]["variant_name"] == "A"
+    assert payload.message_variants[0]["variant_name"] == "Primary"
     assert payload.criteria.marketing_eligibility == "Eligible only"
     assert payload.criteria.consent_status == "Opt-in"
     assert payload.criteria.recency == "Untouched 30d"

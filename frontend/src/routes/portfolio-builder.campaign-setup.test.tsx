@@ -6,6 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CampaignRecommendationResponse } from '../types';
 
 vi.mock('../components/AppContext', () => ({
   useApp: () => ({ setDrawer: vi.fn(), showEvidence: true }),
@@ -21,6 +22,21 @@ import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
 let root: Root;
+
+const CACHED_RECOMMENDATION: CampaignRecommendationResponse = {
+  generation_mode: 'supervisor',
+  generator_label: 'Mortgage Growth Supervisor',
+  performance_status: 'insufficient_sample',
+  audience_summary: 'Selected cohort.',
+  strategy: 'Use a reviewed benefit-led test.',
+  variants: [
+    { variant_name: 'Benefit-led', subject: 'A', body: 'B', hypothesis: 'C', provenance_token: null },
+    { variant_name: 'Guidance-led', subject: 'D', body: 'E', hypothesis: 'F', provenance_token: null },
+  ],
+  holdout_pct: 10,
+  evidence: [],
+  warnings: [],
+};
 
 describe('CampaignSetupPanel', () => {
   beforeEach(() => {
@@ -196,6 +212,50 @@ describe('CampaignSetupPanel', () => {
     ));
     act(() => replace?.click());
     expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('makes a cached recommendation non-actionable when the portfolio becomes empty', () => {
+    const apply = vi.fn();
+    const editedSetup = {
+      ...DEFAULT_CAMPAIGN_SETUP,
+      subjectA: 'Operator-edited subject',
+    };
+    const renderPanel = (canRecommend: boolean) => {
+      root.render(
+        <MemoryRouter>
+          <CampaignSetupPanel
+            setup={editedSetup}
+            recommendation={CACHED_RECOMMENDATION}
+            recommendationPending={false}
+            recommendationError={false}
+            recommendationFetching={false}
+            canRecommend={canRecommend}
+            onFieldChange={() => vi.fn()}
+            onNumericFieldCommit={vi.fn()}
+            onToggleHouseholdDedup={vi.fn()}
+            onRegenerate={vi.fn()}
+            onApply={apply}
+          />
+        </MemoryRouter>,
+      );
+    };
+
+    act(() => renderPanel(true));
+    const applyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => (
+      button.textContent?.includes('Apply variants')
+    ));
+    act(() => applyButton?.click());
+    expect(document.body.textContent).toContain('replaces the campaign copy currently in the editor');
+
+    act(() => renderPanel(false));
+    const staleApplyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => (
+      button.textContent?.includes('Apply variants')
+    ));
+    expect(staleApplyButton?.disabled).toBe(true);
+    expect(document.body.textContent).toContain('Run a non-empty portfolio build');
+    expect(document.body.textContent).not.toContain('Replace edited copy');
+    act(() => staleApplyButton?.click());
+    expect(apply).not.toHaveBeenCalled();
   });
 
   it('exposes and commits every numeric field boundary on blur', () => {

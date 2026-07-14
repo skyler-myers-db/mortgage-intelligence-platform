@@ -17,6 +17,8 @@ from pathlib import Path
 
 from dotenv import dotenv_values
 
+from backend.config.runtime_secret_policy import runtime_secret_text
+
 REPO = Path(__file__).resolve().parents[2]
 ENV_LOCAL = REPO / ".env.local"
 
@@ -72,7 +74,6 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_AGENT_EVAL_RUN_ID",
     "MIP_LIVE_CAPABILITY_PROBE_TTL_S",
     "MIP_GENIE_ACTION_SECRET_KID",
-    "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID",
     "MIP_LAKEBASE_SYNC_CATALOG",
     "MIP_LAKEBASE_SYNC_SCHEMA",
     "MIP_LAKEBASE_SYNC_TABLES",
@@ -83,6 +84,8 @@ SECRET_RESOURCE_BINDINGS = {
     "MIP_GENIE_ACTION_SECRET_CURRENT": "genie_action_current_secret",
     "MIP_GENIE_ACTION_SECRET_PREVIOUS": "genie_action_previous_secret",
 }
+PREVIOUS_SECRET_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
+PREVIOUS_SECRET_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 
 
 def _dotenv_overlay() -> dict[str, str]:
@@ -103,6 +106,17 @@ def _append_value(env_vars: list[dict[str, str]], name: str, value: str) -> None
         env_vars.append({"name": name, "value": value})
 
 
+def _previous_secret_grace_configured(dotenv: dict[str, str]) -> tuple[bool, str]:
+    previous = runtime_secret_text(_env_value(PREVIOUS_SECRET_ENV, dotenv))
+    previous_kid = _env_value(PREVIOUS_SECRET_KID_ENV, dotenv)
+    if previous and not previous_kid:
+        raise ValueError(
+            f"{PREVIOUS_SECRET_KID_ENV} is required when {PREVIOUS_SECRET_ENV} "
+            "is retained during a rotation grace period"
+        )
+    return previous is not None, previous_kid
+
+
 def build_payload(
     *,
     source_code_path: str,
@@ -114,6 +128,7 @@ def build_payload(
     mode: str = "SNAPSHOT",
 ) -> dict[str, object]:
     dotenv = _dotenv_overlay()
+    previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
     env_vars: list[dict[str, str]] = [
         {"name": "APP_ENV", "value": app_env},
         {"name": "DATABRICKS_WAREHOUSE_ID", "value_from": "sql_warehouse"},
@@ -127,10 +142,20 @@ def build_payload(
         *(
             {"name": name, "value_from": resource}
             for name, resource in SECRET_RESOURCE_BINDINGS.items()
+            if name != PREVIOUS_SECRET_ENV
         ),
         {"name": "MIP_DEFAULT_CATALOG", "value": catalog},
         {"name": "MIP_DEFAULT_SCHEMA", "value": schema},
     ]
+
+    if previous_secret_enabled:
+        env_vars.append(
+            {
+                "name": PREVIOUS_SECRET_ENV,
+                "value_from": SECRET_RESOURCE_BINDINGS[PREVIOUS_SECRET_ENV],
+            }
+        )
+        _append_value(env_vars, PREVIOUS_SECRET_KID_ENV, previous_secret_kid)
 
     for name in NON_SECRET_OPERATOR_VARS:
         _append_value(

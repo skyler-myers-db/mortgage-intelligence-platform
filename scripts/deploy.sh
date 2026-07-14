@@ -47,6 +47,8 @@
 #                                       # emergency/manual deploy only: warn instead of fail
 #   ./scripts/deploy.sh -t dev --no-confirm
 #                                       # skip the y/N prompt before deploy
+#   ./scripts/deploy.sh --verify-source-only
+#                                       # run the exact-source gate and exit
 #
 # Environment:
 #   .env.local must set at minimum DATABRICKS_HOST, DATABRICKS_WAREHOUSE_ID.
@@ -74,6 +76,7 @@ DRY_RUN=0
 SKIP_SILVER=0
 SKIP_SMOKE=0
 NO_CONFIRM=0
+VERIFY_SOURCE_ONLY=0
 TARGET="dev"
 
 # `for arg in "$@"` iterates a pre-expanded snapshot, so an inner
@@ -88,6 +91,7 @@ while [[ $# -gt 0 ]]; do
     --skip-silver)  SKIP_SILVER=1;   shift ;;
     --skip-smoke)   SKIP_SMOKE=1;    shift ;;
     --no-confirm)   NO_CONFIRM=1;    shift ;;
+    --verify-source-only) VERIFY_SOURCE_ONLY=1; shift ;;
     -t|--target)
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "[deploy] missing value for $1 (expected target name, e.g. dev)" >&2
@@ -169,6 +173,43 @@ on_error() {
   exit "$rc"
 }
 trap on_error ERR
+
+# The deployment advertises MIP_GIT_SHA from HEAD while Databricks Bundle
+# sync uploads the working tree. A dirty tracked file or untracked source can
+# otherwise make that SHA a false provenance claim. Standard ignored outputs
+# (frontend/dist, sql/_rendered, .databricks, local env files) remain allowed.
+SOURCE_GIT_SHA=""
+verify_exact_deploy_source() {
+  local current_sha source_status
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "${RED}[deploy] exact-source gate requires a Git worktree.${RST}" >&2
+    exit 2
+  fi
+  current_sha="$(git rev-parse --verify HEAD 2>/dev/null || true)"
+  if [[ -z "$current_sha" ]]; then
+    echo "${RED}[deploy] exact-source gate requires a committed HEAD.${RST}" >&2
+    exit 2
+  fi
+  source_status="$(git status --porcelain=v1 --untracked-files=all)"
+  if [[ -n "$source_status" ]]; then
+    echo "${RED}[deploy] refusing deployment from dirty source.${RST}" >&2
+    echo "  Commit or remove every tracked change and untracked non-ignored file first:" >&2
+    printf '%s\n' "$source_status" >&2
+    exit 2
+  fi
+  if [[ -n "$SOURCE_GIT_SHA" && "$current_sha" != "$SOURCE_GIT_SHA" ]]; then
+    echo "${RED}[deploy] HEAD changed during deployment (${SOURCE_GIT_SHA} -> ${current_sha}).${RST}" >&2
+    echo "  Re-run from the new clean revision so uploaded source and MIP_GIT_SHA match." >&2
+    exit 2
+  fi
+  SOURCE_GIT_SHA="$current_sha"
+  echo "[deploy] exact source: ${SOURCE_GIT_SHA} (tracked and untracked source clean)"
+}
+
+verify_exact_deploy_source
+if [[ "$VERIFY_SOURCE_ONLY" -eq 1 ]]; then
+  exit 0
+fi
 
 # -----------------------------------------------------------------------------
 # Resolve python interpreter (same convention as the Makefile)
@@ -305,7 +346,7 @@ if [[ -z "$APP_RUNTIME_ENV" ]]; then
     APP_RUNTIME_ENV="$TARGET"
   fi
 fi
-APP_GIT_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
+APP_GIT_SHA="$SOURCE_GIT_SHA"
 
 # Campaign/Genie confirmation tokens must remain verifiable across app
 # restarts and replicas. Every deployed runtime, including the shared sandbox,
@@ -474,6 +515,7 @@ run "$PYTHON" tools/databricks/bundle_env.py plan -t "$TARGET"
 # -----------------------------------------------------------------------------
 # Step 4: deploy bundle
 # -----------------------------------------------------------------------------
+verify_exact_deploy_source
 step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
 run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 

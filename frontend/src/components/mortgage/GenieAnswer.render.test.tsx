@@ -195,6 +195,26 @@ describe('GenieAnswer render surfaces', () => {
     expect(container.querySelector('.genie-answer__reasoning')).toBeNull();
   });
 
+  it('labels governed action results without claiming a Genie Conversation API answer', () => {
+    act(() =>
+      root.render(
+        <GenieAnswer
+          payload={payload({
+            source: 'governed_action',
+            answer: 'Saved 12 borrowers to the reviewed Lead Queue handoff.',
+            message_id: null,
+            genie_status: null,
+          })}
+        />,
+      ),
+    );
+
+    const source = container.querySelector('.genie-answer__api-source');
+    expect(source?.textContent).toContain('Governed action result');
+    expect(source?.textContent).not.toContain('Databricks Genie Conversation API');
+    expect(source?.getAttribute('aria-label')).toBe('Answer source: Governed action result');
+  });
+
   it('shows the feedback control on a trusted answer and hides it on a refusal', () => {
     act(() => root.render(<GenieAnswer payload={payload()} question="Q" onFollowUp={() => {}} />));
     expect(container.querySelector('[data-testid="genie-feedback-up"]')).not.toBeNull();

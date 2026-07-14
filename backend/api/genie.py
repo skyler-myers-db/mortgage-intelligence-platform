@@ -217,9 +217,7 @@ def _record_genie_session(
     # rights accidentally.
     ownership_source = (
         "genie"
-        if response.message_id
-        and response.conversation_id
-        and response.genie_status == "COMPLETED"
+        if response.message_id and response.conversation_id and response.genie_status == "COMPLETED"
         else response.source
     )
     params = {
@@ -236,9 +234,16 @@ def _record_genie_session(
         "request_id": f"genie-{uuid4()}",
     }
     try:
-        lakebase.execute(_GENIE_SESSION_UPSERT_SQL, params)
-        lakebase.execute(_GENIE_MESSAGE_INSERT_SQL, params)
-    except LakebaseError as exc:
+        if getattr(lakebase, "_supports_atomic_transactions", False):
+            with lakebase.transaction() as conn:
+                conn.execute(_GENIE_SESSION_UPSERT_SQL, params)
+                conn.execute(_GENIE_MESSAGE_INSERT_SQL, params)
+        else:
+            # Minimal unit fakes retain the two-call surface. Every deployed
+            # Lakebase client advertises atomic transaction support.
+            lakebase.execute(_GENIE_SESSION_UPSERT_SQL, params)
+            lakebase.execute(_GENIE_MESSAGE_INSERT_SQL, params)
+    except Exception as exc:
         raise HTTPException(
             status_code=503,
             detail=safe_dependency_detail("lakebase"),
@@ -721,10 +726,11 @@ def genie_message(
             question=payload.question,
             conversation_id=payload.conversation_id,
         )
-        sales_ops_staff_labels = [
-            member.display_label
-            for member in SalesStateStore(lakebase).list_team(actor=actor)
-        ] if sales_ops_response is not None else []
+        sales_ops_staff_labels = (
+            [member.display_label for member in SalesStateStore(lakebase).list_team(actor=actor)]
+            if sales_ops_response is not None
+            else []
+        )
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     if sales_ops_response is not None:

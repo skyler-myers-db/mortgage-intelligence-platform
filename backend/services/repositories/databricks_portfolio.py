@@ -71,6 +71,8 @@ PORTFOLIO_EQUITY_THRESHOLDS: dict[str, int] = {
     "≥ 25%": 25,
     "≥ 40%": 40,
 }
+
+
 class DatabricksPortfolioRepository:
     """Portfolio preview rollup over ``gold.borrower_360``.
 
@@ -331,7 +333,8 @@ class DatabricksPortfolioRepository:
         campaign_id, variant_name, channel, subject, body, weight_pct,
         generation_mode, generator_label, provenance_key_id,
         provenance_issued_at, provenance_expires_at, provenance_copy_hash,
-        provenance_criteria_fingerprint, provenance_token_digest
+        provenance_criteria_fingerprint, provenance_performance_fingerprint,
+        provenance_token_digest
       )
       SELECT
         inserted_campaign.campaign_id,
@@ -347,6 +350,7 @@ class DatabricksPortfolioRepository:
         variant.provenance_expires_at,
         variant.provenance_copy_hash,
         variant.provenance_criteria_fingerprint,
+        variant.provenance_performance_fingerprint,
         variant.provenance_token_digest
       FROM inserted_campaign
       CROSS JOIN jsonb_to_recordset(%(variant_rows)s::jsonb) AS variant(
@@ -362,6 +366,7 @@ class DatabricksPortfolioRepository:
         provenance_expires_at TIMESTAMPTZ,
         provenance_copy_hash TEXT,
         provenance_criteria_fingerprint TEXT,
+        provenance_performance_fingerprint TEXT,
         provenance_token_digest TEXT
       )
       RETURNING campaign_id
@@ -708,9 +713,7 @@ class DatabricksPortfolioRepository:
                     else None
                 ),
                 avg_equity_pct=(
-                    float(row["avg_equity_pct"])
-                    if row.get("avg_equity_pct") is not None
-                    else None
+                    float(row["avg_equity_pct"]) if row.get("avg_equity_pct") is not None else None
                 ),
                 avg_rate_spread_bps=(
                     float(row["avg_rate_spread_bps"])
@@ -835,9 +838,7 @@ class DatabricksPortfolioRepository:
                     "weight_pct": variant.get("weight_pct"),
                     "generation_mode": generation_mode,
                     "generator_label": generator_label,
-                    "provenance_key_id": (
-                        provenance_proof.key_id if provenance_proof else None
-                    ),
+                    "provenance_key_id": (provenance_proof.key_id if provenance_proof else None),
                     "provenance_issued_at": (
                         datetime.fromtimestamp(provenance_proof.issued_at, UTC).isoformat()
                         if provenance_proof
@@ -853,6 +854,9 @@ class DatabricksPortfolioRepository:
                     ),
                     "provenance_criteria_fingerprint": (
                         provenance_proof.criteria_fingerprint if provenance_proof else None
+                    ),
+                    "provenance_performance_fingerprint": (
+                        provenance_proof.performance_fingerprint if provenance_proof else None
                     ),
                     "provenance_token_digest": (
                         provenance_proof.token_digest if provenance_proof else None
@@ -895,6 +899,9 @@ class DatabricksPortfolioRepository:
                         "provenance_copy_hash": variant["provenance_copy_hash"],
                         "provenance_criteria_fingerprint": variant[
                             "provenance_criteria_fingerprint"
+                        ],
+                        "provenance_performance_fingerprint": variant[
+                            "provenance_performance_fingerprint"
                         ],
                     }
                 )

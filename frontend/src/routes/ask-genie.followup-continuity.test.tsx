@@ -180,7 +180,7 @@ describe('Ask Genie conversation continuity', () => {
     },
   );
 
-  it('starts a new conversation for typed text that resembles a follow-up', async () => {
+  it('continues the bootstrap conversation for ordinary typed text', async () => {
     genieStart.mockResolvedValue({ ...START, conversation_id: 'conv-bootstrap' });
     genie.mockResolvedValueOnce(answer());
 
@@ -190,7 +190,33 @@ describe('Ask Genie conversation continuity', () => {
     act(() => button(/^Ask Genie$/).click());
 
     await waitUntil(() => genie.mock.calls.length === 1);
-    expect(genie).toHaveBeenCalledWith('Which ZIPs lead', null, expect.any(AbortSignal));
+    expect(genie).toHaveBeenCalledWith(
+      'Which ZIPs lead',
+      'conv-bootstrap',
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('keeps a restored conversation for an ordinary sample question', async () => {
+    const sampleQuestion = 'Show current opportunity volume';
+    window.localStorage.setItem('mip.genie.conversationId', 'conv-restored');
+    genieStart.mockResolvedValue({
+      ...START,
+      conversation_id: 'conv-bootstrap',
+      sample_questions: [sampleQuestion],
+    });
+    genie.mockResolvedValueOnce(answer());
+
+    mount();
+    await waitUntil(() => container.textContent?.includes(sampleQuestion) ?? false);
+    act(() => button(new RegExp(sampleQuestion)).click());
+
+    await waitUntil(() => genie.mock.calls.length === 1);
+    expect(genie).toHaveBeenCalledWith(
+      sampleQuestion,
+      'conv-restored',
+      expect.any(AbortSignal),
+    );
   });
 
   it('keeps New thread cleared before the next typed question', async () => {

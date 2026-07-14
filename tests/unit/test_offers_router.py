@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
@@ -45,6 +47,17 @@ def _valid_databricks_offer_row() -> dict[str, object]:
     }
 
 
+def _valid_router_offer_inputs() -> dict[str, object]:
+    return {
+        **mock_population.BORROWER_OFFER_INPUTS["B-48291"],
+        "clip_id": "CLIP-48291",
+        "borrower_id": "B-48291",
+        "confidence": 82,
+        "evidence_ids": ["ev-482911"],
+        "source_refreshed_at": "2026-04-20T06:12:00Z",
+    }
+
+
 class _OneRowClient:
     def __init__(self, row: dict[str, object]) -> None:
         self.row = row
@@ -73,12 +86,36 @@ def test_databricks_offer_repository_rejects_missing_applied_threshold() -> None
 @pytest.mark.parametrize(
     ("field", "value"),
     [
+        ("has_permit", None),
+        ("has_heloc_propensity_trigger", "false"),
+        ("has_refi_propensity_trigger", 1),
+        ("listed_for_sale", 0),
+        ("is_investor", "true"),
+        ("is_current_customer", None),
+        ("is_competitor_lien", "no"),
+    ],
+)
+def test_databricks_offer_repository_rejects_non_boolean_governed_flags(
+    field: str,
+    value: object,
+) -> None:
+    row = {**_valid_databricks_offer_row(), field: value}
+    repo = DatabricksOfferRepository(_OneRowClient(row))  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match=field):
+        repo.get_offer_inputs("B-48291")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
         ("evidence_ids", []),
         ("evidence_ids", ["ev-001", "raw borrower evidence"]),
         ("evidence_ids", [f"ev-{'a' * 62}"]),
         ("refreshed_at", "not-a-timestamp"),
         ("refreshed_at", "2026-04-20T06:12:00"),
         ("refreshed_at", None),
+        ("refreshed_at", "2999-04-20T06:12:00Z"),
     ],
 )
 def test_databricks_offer_repository_rejects_invalid_recommendation_proof(
@@ -113,6 +150,7 @@ def _valid_offer_recommendation_payload() -> dict[str, object]:
         ("source_refreshed_at", "2026-04-20T06:12:00"),
         ("source_refreshed_at", "tomorrow"),
         ("source_refreshed_at", None),
+        ("source_refreshed_at", "2999-04-20T06:12:00Z"),
     ],
 )
 def test_offer_recommendation_schema_rejects_invalid_proof(
@@ -123,6 +161,17 @@ def test_offer_recommendation_schema_rejects_invalid_proof(
 
     with pytest.raises(ValidationError):
         OfferRecommendation.model_validate(payload)
+
+
+def test_offer_recommendation_schema_allows_small_source_clock_skew() -> None:
+    payload = {
+        **_valid_offer_recommendation_payload(),
+        "source_refreshed_at": (datetime.now(UTC) + timedelta(minutes=1)).isoformat(),
+    }
+
+    recommendation = OfferRecommendation.model_validate(payload)
+
+    assert recommendation.source_refreshed_at == payload["source_refreshed_at"]
 
 
 def test_offer_recommendation_fails_closed_when_audit_is_unavailable() -> None:
@@ -192,6 +241,7 @@ def test_offers_router_sanitizes_invalid_governed_inputs() -> None:
         ("source_refreshed_at", "2026-04-20T06:12:00"),
         ("source_refreshed_at", "not-a-timestamp"),
         ("source_refreshed_at", None),
+        ("source_refreshed_at", "2999-04-20T06:12:00Z"),
     ],
 )
 def test_offers_router_rejects_invalid_proof_before_audit(
@@ -243,19 +293,10 @@ def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> No
             if borrower_id != "B-48291":
                 return None
             return {
-                "clip_id": "CLIP-48291",
-                "borrower_id": "B-48291",
-                "confidence": 82,
-                "evidence_ids": ["ev-482911"],
-                "source_refreshed_at": "2026-04-20T06:12:00Z",
+                **_valid_router_offer_inputs(),
+                "offer_code": "refi",
                 "rate_spread_bps": 88,
                 "equity_pct": 39,
-                "has_permit": False,
-                "listed_for_sale": False,
-                "is_investor": False,
-                "is_current_customer": False,
-                "is_competitor_lien": False,
-                "offer_code": "refi",
                 "min_spread_bps": 88,
                 "min_equity_pct": 11,
                 "heloc_equity_min_pct": 42,
@@ -280,6 +321,68 @@ def test_offers_router_uses_refresh_applied_thresholds_from_offer_inputs() -> No
     assert body["alternatives"][0]["reason_not_chosen"] == (
         "Equity 39% is below the HELOC threshold (42%), so the primary review stays refinance-only."
     )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("confidence", 101),
+        ("confidence", "82"),
+        ("has_permit", "false"),
+        ("has_heloc_propensity_trigger", 0),
+        ("has_refi_propensity_trigger", None),
+        ("listed_for_sale", "true"),
+        ("is_investor", 1),
+        ("is_current_customer", "no"),
+        ("is_competitor_lien", None),
+        ("borrower_id", "B-48294"),
+        ("source_refreshed_at", "2999-04-20T06:12:00Z"),
+    ],
+)
+def test_offers_router_rejects_malformed_complete_recommendation_before_audit(
+    field: str,
+    value: object,
+) -> None:
+    class MalformedOfferRepository:
+        def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
+            if borrower_id != "B-48291":
+                return None
+            return {**_valid_router_offer_inputs(), field: value}
+
+    audit = InMemoryAuditStore()
+    app.dependency_overrides[get_offer_repository] = MalformedOfferRepository
+    app.dependency_overrides[get_audit_store] = lambda: audit
+
+    response = client.post("/api/offers/recommend", json={"borrower_id": "B-48291"})
+
+    assert response.status_code == 500
+    assert audit.list(limit=10, event_type="RECOMMEND_OFFER") == []
+
+
+def test_offer_rationale_keeps_permit_separate_from_heloc_propensity() -> None:
+    class PermitOfferRepository:
+        def get_offer_inputs(self, borrower_id: str) -> dict[str, object] | None:
+            if borrower_id != "B-48291":
+                return None
+            return {
+                **_valid_router_offer_inputs(),
+                "offer_code": "heloc",
+                "has_permit": True,
+                "has_heloc_propensity_trigger": False,
+                "heloc_propensity_score": None,
+                "rate_spread_bps": 20,
+                "equity_pct": 45,
+            }
+
+    app.dependency_overrides[get_offer_repository] = PermitOfferRepository
+
+    response = client.post("/api/offers/recommend", json={"borrower_id": "B-48291"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "Filed permit activity" in body["rationale"]
+    assert "Cotality HELOC propensity" not in body["rationale"]
+    assert not any("heloc_propensity" in source for source in body["sources"])
 
 
 def test_recommend_offer_audit_captures_decision_inputs() -> None:

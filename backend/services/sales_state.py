@@ -265,9 +265,13 @@ class SalesStateStore:
         cache_key = f"sales_state:list_team:{actor or '_all'}"
         if use_cache:
             cached = _cache_get(cache_key)
-            if isinstance(cached, list) and all(isinstance(member, SalesTeamMember) for member in cached):
+            if isinstance(cached, list) and all(
+                isinstance(member, SalesTeamMember) for member in cached
+            ):
                 return [member.model_copy(deep=True) for member in cached]
-        actor_member = self.require_active_team_member(actor, use_cache=use_cache) if actor else None
+        actor_member = (
+            self.require_active_team_member(actor, use_cache=use_cache) if actor else None
+        )
         rows = self._client.fetchall(
             """
             SELECT email, display_label, role, region, manager_email, capacity_per_day, active
@@ -400,9 +404,7 @@ class SalesStateStore:
 
         assignment = self.active_assignment_for(borrower_id, use_cache=False)
         if assignment is None:
-            raise PermissionError(
-                "lead outcome requires an in-scope active assignment"
-            )
+            raise PermissionError("lead outcome requires an in-scope active assignment")
 
         try:
             active_assignee = self.require_visible_assignee(
@@ -473,7 +475,9 @@ class SalesStateStore:
             raise LakebaseError("sales audit insert returned no row")
         return str(audit_id)
 
-    def active_assignment_for(self, borrower_id: str, *, use_cache: bool = False) -> LeadAssignment | None:
+    def active_assignment_for(
+        self, borrower_id: str, *, use_cache: bool = False
+    ) -> LeadAssignment | None:
         cache_key = f"sales_state:active_assignment:{borrower_id}"
         if use_cache:
             cached = _cache_get(cache_key)
@@ -648,11 +652,17 @@ class SalesStateStore:
                 "status": "available",
                 "configured": True,
             }
-        row = self._client.fetchone(_OUTCOME_SOURCE_STATUS_BY_TYPE, {"source_system": source_system})
+        row = self._client.fetchone(
+            _OUTCOME_SOURCE_STATUS_BY_TYPE, {"source_system": source_system}
+        )
         status = str(row.get("status") if row else "not_configured")
         return {
             "source_system": source_system,
-            "display_name": str(row.get("display_name") if row else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)),
+            "display_name": str(
+                row.get("display_name")
+                if row
+                else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)
+            ),
             "status": status,
             "configured": status in _CONFIGURED_OUTCOME_SOURCE_STATUSES,
         }
@@ -677,14 +687,20 @@ class SalesStateStore:
             out.append(
                 {
                     "source_system": source_system,
-                    "display_name": str(row.get("display_name") if row else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)),
+                    "display_name": str(
+                        row.get("display_name")
+                        if row
+                        else _OUTCOME_SOURCE_LABELS.get(source_system, source_system)
+                    ),
                     "status": status,
                     "configured": status in _CONFIGURED_OUTCOME_SOURCE_STATUSES,
                 }
             )
         return out
 
-    def _require_configured_outcome_source(self, source_system: LeadOutcomeSourceSystem) -> dict[str, Any]:
+    def _require_configured_outcome_source(
+        self, source_system: LeadOutcomeSourceSystem
+    ) -> dict[str, Any]:
         status = self.outcome_source_status(source_system)
         if not status["configured"]:
             raise ValueError(f"{status['display_name']} outcome feed is not configured")
@@ -696,7 +712,9 @@ class SalesStateStore:
         normalized = sorted({str(borrower_id) for borrower_id in borrower_ids})
         cache_key = "sales_state:latest_dispositions:" + ",".join(normalized)
         cached = _cache_get(cache_key)
-        if isinstance(cached, dict) and all(isinstance(v, CallDisposition) for v in cached.values()):
+        if isinstance(cached, dict) and all(
+            isinstance(v, CallDisposition) for v in cached.values()
+        ):
             return {str(k): v.model_copy(deep=True) for k, v in cached.items()}
         rows = self._client.fetchall(
             """
@@ -847,7 +865,9 @@ class SalesStateStore:
                     "assigned_to_email": assignment.assigned_to_email,
                     "assigned_by": assignment.assigned_by,
                     "assigned_at": assignment.assigned_at.isoformat(),
-                    "expires_at": assignment.expires_at.isoformat() if assignment.expires_at else None,
+                    "expires_at": assignment.expires_at.isoformat()
+                    if assignment.expires_at
+                    else None,
                     "strategy": assignment.strategy,
                 },
                 event_type="LEAD_ASSIGN",
@@ -902,7 +922,8 @@ class SalesStateStore:
                 if (
                     str(row.get("assignment_scope") or "single") != "distribution"
                     or assignment.assigned_by != assigned_by.lower()
-                    or assignment.assigned_to_email != expected_by_borrower.get(assignment.borrower_id)
+                    or assignment.assigned_to_email
+                    != expected_by_borrower.get(assignment.borrower_id)
                     or assignment.strategy != strategy
                     or not _assignment_duration_matches(assignment, expires_in_hours)
                 ):
@@ -976,7 +997,9 @@ class SalesStateStore:
                     if existing := _matches_existing(existing_after_conflict):
                         return existing, ""
                     if existing_after_conflict:
-                        raise PermissionError("request_id already belongs to a different distribution")
+                        raise PermissionError(
+                            "request_id already belongs to a different distribution"
+                        )
                     raise LakebaseError("assignment insert returned no row")
                 assignments.append(assignment)
             counts = Counter(a.assigned_to_email for a in assignments)
@@ -1019,7 +1042,9 @@ class SalesStateStore:
         clean_notes = scrub_free_text(notes) if notes else None
 
         def _matches_existing(existing: CallDisposition) -> bool:
-            occurred_matches = True if occurred_at is None else _datetimes_equal(existing.occurred_at, occurred_at)
+            occurred_matches = (
+                True if occurred_at is None else _datetimes_equal(existing.occurred_at, occurred_at)
+            )
             return (
                 existing.borrower_id == borrower_id
                 and existing.lo_email == lo.email
@@ -1093,7 +1118,9 @@ class SalesStateStore:
                     "outcome": disposition.outcome,
                     "attempt_number": disposition.attempt_number,
                     "occurred_at": disposition.occurred_at.isoformat(),
-                    "callback_at": disposition.callback_at.isoformat() if disposition.callback_at else None,
+                    "callback_at": disposition.callback_at.isoformat()
+                    if disposition.callback_at
+                    else None,
                     "notes": disposition.notes,
                 },
                 event_type="CALL_DISPOSITION",
@@ -1209,7 +1236,9 @@ class SalesStateStore:
                 if not _matches_existing(outcome):
                     if request_id and outcome.request_id == request_id:
                         raise ValueError("request_id already belongs to a different lead outcome")
-                    raise ValueError("source_record_ref already belongs to a different lead outcome")
+                    raise ValueError(
+                        "source_record_ref already belongs to a different lead outcome"
+                    )
                 return outcome, outcome.audit_event_id or ""
             audit_event_id = self._insert_audit_event(
                 cur,
@@ -1250,8 +1279,9 @@ class SalesStateStore:
             cached = _cache_get(cache_key)
             if isinstance(cached, dict):
                 return deepcopy(cached)
-        row = self._client.fetchone(
-            """
+        row = (
+            self._client.fetchone(
+                """
             WITH latest_approval AS (
                 SELECT approval_id, action, offer_code, decided_at
                 FROM mip_app.approvals
@@ -1285,8 +1315,10 @@ class SalesStateStore:
             FROM latest_approval a
             FULL OUTER JOIN latest_disposition d ON true
             """,
-            {"borrower_id": borrower_id},
-        ) or {}
+                {"borrower_id": borrower_id},
+            )
+            or {}
+        )
         result = {
             "borrower_id": borrower_id,
             "approval_status": row.get("approval_status") or "pending",
@@ -1368,7 +1400,9 @@ class SalesStateStore:
         return {
             "date": date,
             "calls_logged": sum(totals.values()),
-            "contacts_reached": totals["connected"] + totals["callback_scheduled"] + totals["application_started"],
+            "contacts_reached": totals["connected"]
+            + totals["callback_scheduled"]
+            + totals["application_started"],
             "callbacks_scheduled": totals["callback_scheduled"],
             "applications_started": totals["application_started"],
             "dead_leads": totals["dead"],
@@ -1408,7 +1442,11 @@ class SalesStateStore:
             ORDER BY applications_started DESC, calls_attempted DESC
             LIMIT 100
             """,
-            {"from_date": from_date, "to_date": to_date, "lo_emails": sorted(visible_lo_emails or [])},
+            {
+                "from_date": from_date,
+                "to_date": to_date,
+                "lo_emails": sorted(visible_lo_emails or []),
+            },
             limit=100,
         )
         out: list[dict[str, Any]] = []
@@ -1441,7 +1479,7 @@ class SalesStateStore:
         from_date: str,
         to_date: str,
         visible_lo_emails: set[str] | None = None,
-    ) -> dict[str, int]:
+    ) -> dict[str, int | datetime]:
         """Return a same-borrower, chronological observed funnel for benchmarks.
 
         Each stage uses the borrower's earliest event at or after the preceding
@@ -1456,9 +1494,7 @@ class SalesStateStore:
             "AND d.lo_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
         )
         outcome_scope = (
-            "AND o.assigned_to_email = ANY(%(lo_emails)s)"
-            if visible_lo_emails is not None
-            else ""
+            "AND o.assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
         )
         rows = self._client.fetchall(
             f"""
@@ -1512,6 +1548,7 @@ class SalesStateStore:
               GROUP BY o.borrower_id
             )
             SELECT
+              statement_timestamp() AS snapshot_at,
               (SELECT COUNT(*) FROM attempted) AS unique_leads_attempted,
               (SELECT COUNT(*) FROM reached) AS unique_contacts_reached,
               (SELECT COUNT(*) FROM started) AS unique_application_starts,
@@ -1526,13 +1563,24 @@ class SalesStateStore:
             limit=1,
         )
         row = rows[0] if rows else {}
+        snapshot_value = row.get("snapshot_at")
+        if isinstance(snapshot_value, datetime):
+            snapshot_at = snapshot_value
+        elif snapshot_value:
+            try:
+                snapshot_at = datetime.fromisoformat(str(snapshot_value).replace("Z", "+00:00"))
+            except ValueError as exc:
+                raise LakebaseError("campaign performance snapshot timestamp is invalid") from exc
+        else:
+            raise LakebaseError("campaign performance snapshot timestamp is missing")
+        if snapshot_at.tzinfo is None or snapshot_at.utcoffset() is None:
+            raise LakebaseError("campaign performance snapshot timestamp is timezone-naive")
         return {
+            "snapshot_at": snapshot_at.astimezone(UTC),
             "unique_leads_attempted": int(row.get("unique_leads_attempted") or 0),
             "unique_contacts_reached": int(row.get("unique_contacts_reached") or 0),
             "unique_application_starts": int(row.get("unique_application_starts") or 0),
-            "unique_applications_submitted": int(
-                row.get("unique_applications_submitted") or 0
-            ),
+            "unique_applications_submitted": int(row.get("unique_applications_submitted") or 0),
             "unique_closed_funded": int(row.get("unique_closed_funded") or 0),
         }
 
@@ -1543,7 +1591,9 @@ class SalesStateStore:
         to_date: str,
         visible_lo_emails: set[str] | None = None,
     ) -> dict[str, Any]:
-        lo_filter = "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        lo_filter = (
+            "AND assigned_to_email = ANY(%(lo_emails)s)" if visible_lo_emails is not None else ""
+        )
         params = {
             "from_date": from_date,
             "to_date": to_date,
@@ -1619,7 +1669,9 @@ class SalesStateStore:
             "source_statuses": [
                 {
                     **status,
-                    "outcome_count": sum(by_source.get(str(status["source_system"]), Counter()).values()),
+                    "outcome_count": sum(
+                        by_source.get(str(status["source_system"]), Counter()).values()
+                    ),
                 }
                 for status in source_statuses
             ],

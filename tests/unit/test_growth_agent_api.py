@@ -235,6 +235,7 @@ class _FakeLakebaseClient:
         if "INSERT INTO mip_app.action_audit" in sql:
             row = {
                 "audit_id": uuid4(),
+                "audit_sequence": len(self.audit_events) + 1,
                 "event_at": now,
                 **params,
             }
@@ -375,10 +376,9 @@ class _FakeLakebaseClient:
             return row
         if "INSERT INTO mip_app.growth_agent_notification_drafts" in sql:
             for existing in self.notification_drafts:
-                if (
-                    params.get("request_id") is not None
-                    and existing.get("request_id") == params.get("request_id")
-                ):
+                if params.get("request_id") is not None and existing.get(
+                    "request_id"
+                ) == params.get("request_id"):
                     return None
             for existing in self.notification_drafts:
                 if (

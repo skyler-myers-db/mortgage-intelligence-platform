@@ -13,6 +13,7 @@ Three layers under test:
    predicate.
 3. The FastAPI viewport parsing (min<=max, plot-domain bounds).
 """
+
 from __future__ import annotations
 
 import json
@@ -23,15 +24,18 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from backend.schemas.analytics import AnalyticsFilters, EquitySpreadViewport
+from backend.schemas.analytics import AnalyticsFilters, EquitySpreadPoint, EquitySpreadViewport
 from backend.services import economics_scatter
 from backend.services.repositories.databricks_analytics import (
     DatabricksAnalyticsRepository,
 )
+from backend.services.scoring import score_band
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = json.loads(
-    (REPO_ROOT / "tests" / "fixtures" / "equity_spread_bins_golden.json").read_text(encoding="utf-8")
+    (REPO_ROOT / "tests" / "fixtures" / "equity_spread_bins_golden.json").read_text(
+        encoding="utf-8"
+    )
 )
 TRANSFORMATION = (
     REPO_ROOT / "sql" / "transformations" / "gold_equity_spread_points.sql"
@@ -109,6 +113,36 @@ def test_viewport_rejects_inverted_bounds() -> None:
         EquitySpreadViewport(spread_min=300, spread_max=0)
 
 
+def test_equity_spread_point_enforces_canonical_score_band_for_every_score() -> None:
+    bands = {"high", "med", "low"}
+    for opportunity_score in range(101):
+        expected = score_band(opportunity_score)
+        point = EquitySpreadPoint(
+            borrower_id="B-48291",
+            display_name="Owner anon",
+            segment="Prime Refi Candidates",
+            state="IL",
+            equity_pct=40,
+            rate_spread_bps=88,
+            opportunity_score=opportunity_score,
+            score_band=expected,
+        )
+        assert point.score_band == expected
+
+        wrong = next(iter(bands - {expected}))
+        with pytest.raises(ValidationError, match="canonical band"):
+            EquitySpreadPoint(
+                borrower_id="B-48291",
+                display_name="Owner anon",
+                segment="Prime Refi Candidates",
+                state="IL",
+                equity_pct=40,
+                rate_spread_bps=88,
+                opportunity_score=opportunity_score,
+                score_band=wrong,
+            )
+
+
 # ---------------------------------------------------------------------------
 # 2. Repository: cap + showing-N-of-M
 # ---------------------------------------------------------------------------
@@ -171,9 +205,7 @@ def test_points_showing_n_of_m_is_honest() -> None:
     assert len(client.statements) == 1
     points_sql = client.statements[0]
     assert "CAST(COUNT(*) OVER () AS BIGINT) AS total_matching" in points_sql
-    assert (
-        "COUNT(*) OVER (PARTITION BY p.equity_pct, p.rate_spread_bps)" in points_sql
-    )
+    assert "COUNT(*) OVER (PARTITION BY p.equity_pct, p.rate_spread_bps)" in points_sql
     assert "MAX(p.refreshed_at) OVER () AS refreshed_at" in points_sql
     for predicate in (
         "p.equity_pct BETWEEN :vp_equity_min AND :vp_equity_max",
@@ -235,4 +267,7 @@ def test_segment_display_labels_cover_every_product_segment() -> None:
     assert economics_scatter.segment_display_label("itm") == "Prime Refi Candidates"
     assert economics_scatter.segment_display_label("equity") == "Home Equity Candidate"
     assert economics_scatter.segment_display_label(None) == economics_scatter.UNSEGMENTED_LABEL
-    assert economics_scatter.segment_display_label("unknown_code") == economics_scatter.UNSEGMENTED_LABEL
+    assert (
+        economics_scatter.segment_display_label("unknown_code")
+        == economics_scatter.UNSEGMENTED_LABEL
+    )

@@ -31,7 +31,13 @@ class _FakeConn:
     def execute(self, sql: str, params: dict[str, Any]) -> _Result:
         if "INSERT INTO mip_app.action_audit" in sql:
             self.store.audits.append(params)
-            return _Result({"audit_id": uuid4(), "event_at": datetime.now(UTC)})
+            return _Result(
+                {
+                    "audit_id": uuid4(),
+                    "audit_sequence": len(self.store.audits),
+                    "event_at": datetime.now(UTC),
+                }
+            )
         return _Result(None)
 
 

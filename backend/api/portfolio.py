@@ -2,6 +2,7 @@
 
 from datetime import UTC, datetime, timedelta
 from typing import Annotated
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
@@ -107,19 +108,28 @@ def campaign_recommendation(
             visible_lo_emails=visible_los,
             counts=observed_funnel,
         )
+        snapshot_value = observed_funnel["snapshot_at"]
+        if isinstance(snapshot_value, datetime):
+            snapshot_at = snapshot_value
+        else:
+            snapshot_at = datetime.fromisoformat(str(snapshot_value).replace("Z", "+00:00"))
+        if snapshot_at.tzinfo is None or snapshot_at.utcoffset() is None:
+            raise ValueError("campaign performance snapshot must include a timezone")
         performance = CampaignPerformanceContext(
-            unique_leads_attempted=int(observed_funnel["unique_leads_attempted"]),
-            unique_contacts_reached=int(observed_funnel["unique_contacts_reached"]),
-            unique_application_starts=int(observed_funnel["unique_application_starts"]),
-            unique_applications_submitted=int(observed_funnel["unique_applications_submitted"]),
-            unique_closed_funded=int(observed_funnel["unique_closed_funded"]),
+            unique_leads_attempted=int(str(observed_funnel["unique_leads_attempted"])),
+            unique_contacts_reached=int(str(observed_funnel["unique_contacts_reached"])),
+            unique_application_starts=int(str(observed_funnel["unique_application_starts"])),
+            unique_applications_submitted=int(
+                str(observed_funnel["unique_applications_submitted"])
+            ),
+            unique_closed_funded=int(str(observed_funnel["unique_closed_funded"])),
             observed_from=start_date,
             observed_to=end_date,
-            snapshot_at=datetime.now(UTC),
+            snapshot_at=snapshot_at.astimezone(UTC),
             interval_days=(end_date - start_date).days + 1,
             observation_fingerprint=observation_fingerprint,
         )
-    except (KeyError, PermissionError, LakebaseError):
+    except (KeyError, PermissionError, ValueError, LakebaseError):
         # Campaign recommendations remain available from exact UC cohort facts
         # when the actor lacks Sales Ops scope or Lakebase is unavailable.
         performance = None
@@ -130,18 +140,23 @@ def campaign_recommendation(
     )
 
 
-@router.post("/create", response_model=PortfolioCreateResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
+@router.post(
+    "/create", response_model=PortfolioCreateResponse, responses=JSON_CONTENT_TYPE_RESPONSE
+)
 def create_portfolio(
     request: Request,
     payload: PortfolioCreateRequest,
     repo: RepoDep,
-    idempotency_key: Annotated[str, Header(alias="Idempotency-Key")],
     _: Annotated[None, Depends(require_json_content_type)],
+    idempotency_key: Annotated[str | None, Header(alias="Idempotency-Key")] = None,
 ) -> PortfolioCreateResponse:
-    try:
-        safe_idempotency_key = validate_public_opaque_id(idempotency_key)
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    if idempotency_key is None:
+        safe_idempotency_key = str(uuid4())
+    else:
+        try:
+            safe_idempotency_key = validate_public_opaque_id(idempotency_key)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         return repo.create(
             payload,

@@ -1,4 +1,4 @@
-import { useState, type ChangeEvent } from 'react';
+import { useEffect, useState, type ChangeEvent } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip } from '../components/Primitives';
@@ -49,6 +49,16 @@ export function CampaignSetupPanel({
 }) {
   const navigate = useNavigate();
   const [applyReviewOpen, setApplyReviewOpen] = useState(false);
+  const recommendationActionable = Boolean(
+    canRecommend
+    && recommendation
+    && !recommendationPending
+    && !recommendationError
+    && !recommendationFetching,
+  );
+  useEffect(() => {
+    if (!recommendationActionable) setApplyReviewOpen(false);
+  }, [recommendationActionable]);
   const hasEditedCopy = setup.generationMode === 'operator' && [
     setup.subjectA,
     setup.subjectB,
@@ -56,6 +66,7 @@ export function CampaignSetupPanel({
     setup.bodyB,
   ].some((value) => value.trim().length > 0);
   const applyRecommendation = () => {
+    if (!recommendationActionable) return;
     if (hasEditedCopy) {
       setApplyReviewOpen(true);
       return;
@@ -119,13 +130,13 @@ export function CampaignSetupPanel({
                 size="sm"
                 icon="check"
                 onClick={applyRecommendation}
-                disabled={!recommendation}
+                disabled={!recommendationActionable}
               >
                 Apply variants
               </Button>
             </div>
           </div>
-          {applyReviewOpen && (
+          {applyReviewOpen && recommendationActionable && (
             <div className="status-callout status-callout--warning" role="alert">
               <span>Applying this recommendation replaces the campaign copy currently in the editor.</span>
               <div className="chip-row mt-2">
@@ -133,6 +144,7 @@ export function CampaignSetupPanel({
                   variant="default"
                   size="sm"
                   onClick={() => {
+                    if (!recommendationActionable) return;
                     setApplyReviewOpen(false);
                     onApply();
                   }}

@@ -5547,6 +5547,7 @@
           "conversation_id": {
             "anyOf": [
               {
+                "maxLength": 256,
                 "type": "string"
               },
               {
@@ -5556,6 +5557,7 @@
             "title": "Conversation Id"
           },
           "question": {
+            "maxLength": 4000,
             "minLength": 1,
             "title": "Question",
             "type": "string"
@@ -19013,10 +19015,17 @@
           {
             "in": "header",
             "name": "Idempotency-Key",
-            "required": true,
+            "required": false,
             "schema": {
-              "title": "Idempotency-Key",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],
@@ -26062,10 +26071,17 @@
           {
             "in": "header",
             "name": "Idempotency-Key",
-            "required": true,
+            "required": false,
             "schema": {
-              "title": "Idempotency-Key",
-              "type": "string"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Idempotency-Key"
             }
           }
         ],

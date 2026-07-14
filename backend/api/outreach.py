@@ -10,6 +10,7 @@ Slice 5 landmarks:
   the caller needs the approval_id returned synchronously, and a
   failed approval must surface as 503 rather than silently drop.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -344,9 +345,7 @@ def _lookup_existing_approval(
     if not request_id:
         return None
     try:
-        row = lakebase.fetchone(
-            _APPROVAL_LOOKUP_BY_REQUEST_ID, {"request_id": request_id}
-        )
+        row = lakebase.fetchone(_APPROVAL_LOOKUP_BY_REQUEST_ID, {"request_id": request_id})
     except LakebaseError:
         # Don't paper over the outage -- let the subsequent INSERT raise
         # and surface the real error as 503. Returning None here means
@@ -603,8 +602,8 @@ def _decision_evidence_ids(
     """Resolve borrower-owned evidence IDs for an outreach decision.
 
     Clients may pass the evidence refs the approver saw, but the API must not
-    let the client invent audit provenance. If the payload supplies IDs, every
-    one must belong to the canonical borrower evidence list. Legacy clients can
+    let the client invent or selectively omit audit provenance. A supplied set
+    must exactly match the canonical borrower evidence list. Legacy clients can
     omit the list and the endpoint will audit all borrower evidence instead.
     """
     borrower_ids = _borrower_evidence_ids(borrower)
@@ -614,27 +613,21 @@ def _decision_evidence_ids(
             detail=f"{action_label} requires borrower evidence; refresh the borrower recommendation before deciding.",
         )
 
-    ids = list(
-        dict.fromkeys(str(value).strip() for value in payload_ids if str(value).strip())
-    )
+    ids = list(dict.fromkeys(str(value).strip() for value in payload_ids if str(value).strip()))
     if not ids:
         return borrower_ids
 
-    allowed = set(borrower_ids)
-    invalid = [value for value in ids if value not in allowed]
-    if invalid:
+    if set(ids) != set(borrower_ids) or len(ids) != len(borrower_ids):
         raise HTTPException(
             status_code=422,
-            detail=f"{action_label} evidence_ids must belong to the borrower recommendation.",
+            detail=f"{action_label} evidence_ids must exactly match the borrower recommendation.",
         )
-    return ids
+    return borrower_ids
 
 
 def _marketing_audit_payload(borrower: Any) -> dict[str, Any]:
     last_touch_at = _coerce_datetime(getattr(borrower, "last_touch_at", None))
-    eligible_recontact_at = _coerce_datetime(
-        getattr(borrower, "eligible_recontact_at", None)
-    )
+    eligible_recontact_at = _coerce_datetime(getattr(borrower, "eligible_recontact_at", None))
     return {
         "marketing_eligible": bool(getattr(borrower, "marketing_eligible", False)),
         "consent_status": str(getattr(borrower, "consent_status", "unknown") or "unknown"),
@@ -748,7 +741,9 @@ def _assert_final_draft_subject(*, draft_subject: str | None, channel: str) -> s
     subject = (draft_subject or "").strip()
     if channel == "sms":
         if subject:
-            raise HTTPException(status_code=422, detail="approved SMS drafts must not include a subject")
+            raise HTTPException(
+                status_code=422, detail="approved SMS drafts must not include a subject"
+            )
         return None
     if not subject:
         raise HTTPException(
@@ -913,7 +908,9 @@ def draft_outreach(
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
 
 
-@router.post("/approve", response_model=OutreachApproveResponse, responses=JSON_CONTENT_TYPE_RESPONSE)
+@router.post(
+    "/approve", response_model=OutreachApproveResponse, responses=JSON_CONTENT_TYPE_RESPONSE
+)
 def approve_outreach(
     payload: OutreachApproveRequest,
     request: Request,
@@ -954,7 +951,9 @@ def approve_outreach(
     normalized_draft_subject = (payload.draft_subject or "").strip() or None
     assigned_to_email = payload.assigned_to_email
     safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
-    safe_bulk_rationale = scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
+    safe_bulk_rationale = (
+        scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
+    )
     approval_rationale = (
         safe_rationale
         or safe_bulk_rationale
@@ -1164,9 +1163,7 @@ def approve_outreach(
         # the operator's next move is to check Lakebase status.
         # R5-03: constant string; structured log keeps the full ``str(exc)``
         # via ``from exc`` + the underlying LakebaseError WARNING.
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     response = OutreachApproveResponse.model_validate(response_data)
     if not created_new:
         return response
@@ -1354,9 +1351,7 @@ def reject_outreach(
             )
             created_new = True
     except LakebaseError as exc:
-        raise HTTPException(
-            status_code=503, detail=safe_dependency_detail("lakebase")
-        ) from exc
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     response = OutreachRejectResponse.model_validate(response_data)
     if not created_new:
         return response
