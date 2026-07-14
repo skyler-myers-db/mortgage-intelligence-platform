@@ -9,19 +9,23 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 from dotenv import dotenv_values
 
-from backend.config.runtime_secret_policy import (
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from backend.config.runtime_secret_policy import (  # noqa: E402
     require_distinct_rotation_secrets,
     require_strong_runtime_secret,
     runtime_secret_text,
 )
-from databricks.sdk import WorkspaceClient
+from databricks.sdk import WorkspaceClient  # noqa: E402
 
-REPO = Path(__file__).resolve().parents[2]
 ENV_LOCAL = REPO / ".env.local"
 DEFAULT_SCOPE = "mip-runtime"
 PLACEHOLDERS = frozenset(

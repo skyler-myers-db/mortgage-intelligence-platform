@@ -1,10 +1,29 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
 
 from tools.databricks import provision_runtime_secrets as subject
+
+
+def test_direct_execution_resolves_repository_imports() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(subject.REPO / "tools/databricks/provision_runtime_secrets.py"),
+            "--help",
+        ],
+        cwd="/tmp",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Provision Databricks Secret keys" in completed.stdout
 
 
 def _test_secret(label: str) -> str:
