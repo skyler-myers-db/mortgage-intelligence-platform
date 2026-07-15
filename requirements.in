@@ -16,6 +16,10 @@ cryptography==48.0.1  # security floor for GHSA-537c-gmf6-5ccf via google-auth
 # databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
 # so pip-audit failures have a first-party dependency contract to resolve.
 pyjwt==2.13.0
+# Security floor for PYSEC-2026-2253 through PYSEC-2026-2257. Matplotlib
+# depends on Pillow; keep the transitive fix explicit so lock refreshes cannot
+# silently reintroduce the vulnerable image decoder.
+pillow==12.3.0
 psycopg[binary]>=3.2.10,<3.4
 pytest==9.0.3
 pytest-cov==6.0.0

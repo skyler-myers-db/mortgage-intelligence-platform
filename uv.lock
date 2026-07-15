@@ -232,8 +232,10 @@ pandas==2.3.3
     #   mlflow
 pathspec==1.1.1
     # via mypy
-pillow==12.2.0
-    # via matplotlib
+pillow==12.3.0
+    # via
+    #   -r requirements.in
+    #   matplotlib
 pluggy==1.6.0
     # via pytest
 prettytable==3.18.0

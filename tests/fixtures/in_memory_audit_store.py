@@ -147,12 +147,11 @@ class InMemoryAuditStore:
             newest_first = [
                 event for event in newest_first if (event.audit_sequence or 0) < after_sequence
             ]
-        visible_snapshot = (
-            snapshot_token
-            or f"memory:{max(
-            (event.audit_sequence or 0 for event in newest_first), default=0
-        )}"
+        latest_sequence = max(
+            (event.audit_sequence or 0 for event in newest_first),
+            default=0,
         )
+        visible_snapshot = snapshot_token or f"memory:{latest_sequence}"
         for event in newest_first:
             event.audit_snapshot = visible_snapshot
         return newest_first[offset : offset + limit]
