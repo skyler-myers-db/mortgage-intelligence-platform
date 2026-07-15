@@ -47,6 +47,16 @@ def _cli_token(host: str) -> str:
     return token
 
 
+def _workspace_token(host: str) -> str:
+    """Use the configured PAT for its exact host, otherwise mint OAuth."""
+    token = (os.environ.get("DATABRICKS_TOKEN") or "").strip()
+    configured_host = (os.environ.get("DATABRICKS_HOST") or "").strip().rstrip("/")
+    requested_host = host.strip().rstrip("/")
+    if token and configured_host and configured_host == requested_host:
+        return token
+    return _cli_token(host)
+
+
 def main() -> None:
     _load_local_env()
     from backend.config.settings import settings
@@ -91,7 +101,7 @@ def _ensure_lakebase_env(settings: object) -> None:
     workspace_host = settings.databricks_host
     if not workspace_host:
         return
-    token = _cli_token(workspace_host)
+    token = _workspace_token(workspace_host)
     instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
     api_host = workspace_host.rstrip("/")
 
