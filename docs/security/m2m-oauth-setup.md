@@ -92,7 +92,7 @@ Flags of note:
 | `--expected-application-id` | role-owned configured client ID, when present | Optional assertion; cross-role and duplicate configured client IDs fail before external calls.    |
 | client ID/secret sink flags | role-owned names                            | Optional assertions only; custom or cross-role GitHub secret destinations are rejected.            |
 | `--app-name`            | resolved from `databricks.yml`                   | Deployed App to grant on.                                                                         |
-| `--gh-repo`             | inferred from `git remote get-url origin`        | Target GitHub repo for secret upload.                                                             |
+| `--gh-repo`             | inferred from `git remote get-url origin`        | Must resolve exactly to `skyler-myers-db/mortgage-intelligence-platform`; any other secret sink is rejected before SDK calls or minting. |
 | `--set-gh-secrets`      | off (explicit opt-in)                            | Required for minting and upload; the tool never prints or stores the one-shot client secret.       |
 | `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
 | `--grant-can-use` / `--no-grant-can-use` | role-specific | Control the App grant for normal/admin identities. The verifier role always forbids App `CAN_USE` and rejects `--grant-can-use`, including under `--dry-run`. |

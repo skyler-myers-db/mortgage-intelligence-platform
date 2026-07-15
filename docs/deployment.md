@@ -86,15 +86,16 @@ Lakebase instance exist. The live workspace does not initially contain
 
 ```bash
 python tools/databricks/provision_m2m_oauth.py \
-  --identity-role normal --set-gh-secrets --gh-repo <owner/repo>
+  --identity-role normal --set-gh-secrets \
+  --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
   --identity-role admin --create-group \
-  --set-gh-secrets --gh-repo <owner/repo>
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
   --identity-role verifier \
   --gateway-endpoint "${MIP_AI_GATEWAY_ENDPOINT}" \
   --warehouse-id "${DATABRICKS_WAREHOUSE_ID}" \
-  --set-gh-secrets --gh-repo <owner/repo>
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 ```
 
 Without `--create-group`, admin provisioning fails closed when `mip-admin` is
@@ -106,7 +107,10 @@ Databricks App `CAN_USE` permission by default. It receives only `CAN_USE`
 on the named SQL warehouse, `CAN_QUERY` on the AI Gateway endpoint, read-only
 access to the exact inference tables, and verifier-only Lakebase proof-ledger
 privileges. Provisioning fails closed if the verifier has a direct App grant
-or if any non-admin automation identity remains in `mip-admin`.
+or if any non-admin automation identity remains in `mip-admin`. A reused
+Lakebase verifier role must be reported by the SDK with
+`identity_type=SERVICE_PRINCIPAL`; `USER`, other identity types, and absent type
+metadata are rejected before endpoint, warehouse, or verifier grants.
 For an existing principal whose prior client secret is unavailable or being
 replaced, add `--rotate`; without it, the existing secret remains unchanged.
 
@@ -131,7 +135,10 @@ read-only proof-ledger access. The capability row becomes available only when
 Lakebase contains a fresh `mip_app.ai_gateway_proof_ledger` row proving an exact
 inference-log row for the current `MIP_GIT_SHA`. Set
 `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=1` for release signoff when the deploy must
-fail if that exact proof has not landed yet.
+fail if that exact proof has not landed yet. Proof and inference-row timestamps
+are bounded below by the request/freshness window and above by a five-minute
+clock tolerance. Future-dated evidence beyond that tolerance is rejected by the
+verifier, runtime lookup, and Lakebase write trigger.
 
 `MIP_COTALITY_ID_MASK_SECRET` and `MIP_GENIE_ACTION_SECRET_CURRENT` are
 mandatory for sandbox, staging, customer, and production app payloads. Only

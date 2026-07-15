@@ -94,6 +94,7 @@ DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
 # Deployed App URL. Written as a GitHub secret alongside the client id/secret
 # so the workflow's deployed-path detection flips on in a single admin pass.
 DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
+CANONICAL_GH_REPO = "skyler-myers-db/mortgage-intelligence-platform"
 _VERIFIER_APP_ACCESS_ERROR = (
     "--identity-role verifier forbids Databricks App CAN_USE; "
     "remove --grant-can-use before provisioning"
@@ -198,6 +199,15 @@ def _infer_gh_repo() -> str | None:
     return f"{match.group('owner')}/{match.group('repo')}"
 
 
+def _validate_gh_repo(gh_repo: str | None) -> None:
+    """Keep one-shot credentials bound to this repository's reviewed sink."""
+    if gh_repo is not None and gh_repo != CANONICAL_GH_REPO:
+        raise ValueError(
+            f"--gh-repo must be the canonical repository {CANONICAL_GH_REPO!r}; "
+            f"refusing target {gh_repo!r}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Core steps (each accepts an injected client so unit tests can mock)
 # ---------------------------------------------------------------------------
@@ -245,7 +255,25 @@ def _ensure_lakebase_service_principal_role(
         roles = list(client.database.list_database_instance_roles(instance_name))
     except Exception as exc:  # noqa: BLE001
         raise _wrap_admin_error(exc, step="list Lakebase roles") from exc
-    if any(str(getattr(role, "name", "") or "") == application_id for role in roles):
+    existing_role = next(
+        (role for role in roles if str(getattr(role, "name", "") or "") == application_id),
+        None,
+    )
+    if existing_role is not None:
+        from databricks.sdk.service.database import DatabaseInstanceRoleIdentityType
+
+        identity_type = getattr(existing_role, "identity_type", None)
+        identity_type_value = getattr(identity_type, "value", identity_type)
+        if identity_type_value != DatabaseInstanceRoleIdentityType.SERVICE_PRINCIPAL.value:
+            rendered_type = (
+                str(identity_type_value) if identity_type_value is not None else "absent"
+            )
+            raise SystemExit(
+                f"Existing Lakebase role {application_id!r} on instance {instance_name!r} "
+                f"has identity_type={rendered_type!r}; verifier grants require "
+                "identity_type='SERVICE_PRINCIPAL'. Refusing to reuse a USER or "
+                "untyped role."
+            )
         _diag(f"Lakebase service-principal role already exists on instance={instance_name!r}")
         return False
 
@@ -423,6 +451,11 @@ def provision(
             client_secret_secret_name=client_secret_secret_name,
             app_url_secret_name=app_url_secret_name,
         )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+    try:
+        _validate_gh_repo(gh_repo)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -702,7 +735,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--gh-repo",
         default=None,
-        help="GitHub repo owner/name (default: inferred from `git remote get-url origin`).",
+        help=(
+            f"Canonical GitHub repo owner/name ({CANONICAL_GH_REPO}); "
+            "default inferred from `git remote get-url origin` and verified exactly."
+        ),
     )
     parser.add_argument(
         "--set-gh-secrets",
@@ -788,8 +824,18 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         parser.error(str(exc))
 
+    if args.gh_repo is not None:
+        try:
+            _validate_gh_repo(args.gh_repo)
+        except ValueError as exc:
+            parser.error(str(exc))
+
     app_name = args.app_name or _load_app_name_from_bundle()
     gh_repo = args.gh_repo or _infer_gh_repo()
+    try:
+        _validate_gh_repo(gh_repo)
+    except ValueError as exc:
+        parser.error(str(exc))
 
     _diag(
         f"provisioning plan: identity_role={role!r} sp_name={sp_name!r} "

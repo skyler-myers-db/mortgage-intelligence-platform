@@ -320,6 +320,14 @@ def _run_outreach_integrity_probe(
                     expected_sqlstates=("23514",),
                 )
             cur.execute(
+                "SELECT json_contract_version FROM mip_app.campaigns WHERE campaign_id = %s",
+                (campaign_id,),
+            )
+            if cur.fetchone() != (1,):
+                raise RuntimeError(
+                    "Lakebase integrity probe campaign was not written under JSON contract version 1"
+                )
+            cur.execute(
                 """
                 INSERT INTO mip_app.action_audit (
                     audit_id, audit_sequence, event_type, actor_email,
@@ -710,6 +718,22 @@ def _run_outreach_integrity_probe(
                 raise RuntimeError(
                     "Lakebase integrity probe found missing or prematurely validated "
                     f"campaign JSON shape constraints: {reviewed_shape_state}"
+                )
+
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1
+                    FROM pg_trigger
+                    WHERE tgrelid = 'mip_app.campaigns'::regclass
+                      AND tgname = 'trg_campaigns_json_contract_enforcement'
+                      AND NOT tgisinternal
+                )
+                """
+            )
+            if cur.fetchone() != (True,):
+                raise RuntimeError(
+                    "Lakebase integrity probe did not find campaign JSON contract enforcement"
                 )
 
             cur.execute(

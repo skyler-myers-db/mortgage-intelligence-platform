@@ -12,6 +12,11 @@ from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S
 
 ProofStatus = Literal["pending", "verified", "failed", "expired"]
 
+# Lakebase, verifier hosts, and Databricks SQL may not share an exact clock.
+# Five minutes is the only accepted positive skew; evidence farther in the
+# future fails closed instead of extending proof freshness indefinitely.
+AI_GATEWAY_PROOF_CLOCK_SKEW_S = 5 * 60
+
 
 @dataclass(frozen=True)
 class AiGatewayVerifiedProof:
@@ -44,9 +49,10 @@ def latest_verified_proof(
     freshness_s: float,
     now: datetime | None = None,
 ) -> AiGatewayVerifiedProof | None:
-    cutoff = (now or datetime.now(UTC)) - timedelta(
-        seconds=bounded_gateway_proof_freshness_s(freshness_s)
-    )
+    reference_now = _as_aware_datetime(now or datetime.now(UTC))
+    clock_skew = timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S)
+    cutoff = reference_now - timedelta(seconds=bounded_gateway_proof_freshness_s(freshness_s))
+    future_cutoff = reference_now + clock_skew
     row = lakebase.fetchone(
         """
         SELECT proof_id, git_sha, client_request_id, endpoint_name, inference_table,
@@ -58,6 +64,9 @@ def latest_verified_proof(
           AND status = 'verified'
           AND verified_at IS NOT NULL
           AND verified_at >= %(cutoff)s
+          AND verified_at <= %(future_cutoff)s
+          AND sent_at <= %(future_cutoff)s
+          AND verified_at >= sent_at - (%(clock_skew_s)s * INTERVAL '1 second')
         ORDER BY verified_at DESC
         LIMIT 1
         """,
@@ -66,9 +75,20 @@ def latest_verified_proof(
             "endpoint_name": endpoint_name,
             "inference_table": inference_table,
             "cutoff": cutoff,
+            "future_cutoff": future_cutoff,
+            "clock_skew_s": AI_GATEWAY_PROOF_CLOCK_SKEW_S,
         },
     )
-    return _proof_from_row(row) if row else None
+    if not row:
+        return None
+    proof = _proof_from_row(row)
+    if not (
+        cutoff <= proof.verified_at <= future_cutoff
+        and proof.sent_at <= future_cutoff
+        and proof.verified_at >= proof.sent_at - clock_skew
+    ):
+        return None
+    return proof
 
 
 def bounded_gateway_proof_freshness_s(value: Any) -> float:
@@ -91,6 +111,9 @@ def insert_pending_proof(
     inference_table: str,
     sent_at: datetime | None = None,
 ) -> AiGatewayVerifiedProof:
+    observed_now = datetime.now(UTC)
+    proof_sent_at = _as_aware_datetime(sent_at or observed_now)
+    _reject_future_gateway_timestamp("sent_at", proof_sent_at, now=observed_now)
     row = lakebase.fetchone(
         """
         INSERT INTO mip_app.ai_gateway_proof_ledger (
@@ -111,7 +134,7 @@ def insert_pending_proof(
             "client_request_id": client_request_id,
             "endpoint_name": endpoint_name,
             "inference_table": inference_table,
-            "sent_at": sent_at or datetime.now(UTC),
+            "sent_at": proof_sent_at,
         },
     )
     if not row:
@@ -162,8 +185,14 @@ def mark_proof_verified(
     sent_at: datetime,
     verified_at: datetime | None = None,
 ) -> AiGatewayVerifiedProof:
-    verified = verified_at or datetime.now(UTC)
-    latency_s = max(0.0, (verified - _as_aware_datetime(sent_at)).total_seconds())
+    observed_now = datetime.now(UTC)
+    proof_sent_at = _as_aware_datetime(sent_at)
+    verified = _as_aware_datetime(verified_at or observed_now)
+    _reject_future_gateway_timestamp("sent_at", proof_sent_at, now=observed_now)
+    _reject_future_gateway_timestamp("verified_at", verified, now=observed_now)
+    if verified < proof_sent_at - timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S):
+        raise ValueError("AI Gateway verified_at precedes sent_at beyond clock tolerance")
+    latency_s = max(0.0, (verified - proof_sent_at).total_seconds())
     row = lakebase.fetchone(
         """
         UPDATE mip_app.ai_gateway_proof_ledger
@@ -235,3 +264,12 @@ def _as_aware_datetime(value: Any) -> datetime:
         return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
     parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
     return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _reject_future_gateway_timestamp(label: str, value: datetime, *, now: datetime) -> None:
+    future_cutoff = _as_aware_datetime(now) + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S)
+    if _as_aware_datetime(value) > future_cutoff:
+        raise ValueError(
+            f"AI Gateway {label} exceeds the {AI_GATEWAY_PROOF_CLOCK_SKEW_S}-second "
+            "clock tolerance"
+        )

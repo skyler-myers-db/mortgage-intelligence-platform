@@ -79,7 +79,7 @@ const budgets = {
   // 0.05 KiB above the measured artifact, violating the documented ~5%
   // cross-platform headroom policy. Measured: CSS 140.95 / gzip 23.89.
   initialCssBytes: 148 * KiB, // actual 140.95
-  initialCssGzipBytes: 25 * KiB, // actual 22.97
+  initialCssGzipBytes: 25 * KiB, // actual 23.89
   // Re-baselined 2026-07-10 for the UX declutter slice (batches 1-2). total JS
   // was red on main (990.51 > 990.00); restored ~5% headroom over the measured
   // actual per this file's policy. Batch 2 (asset-label helper, top-leads

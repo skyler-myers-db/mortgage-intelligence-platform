@@ -22,6 +22,7 @@ from backend.schemas.campaign_json_inputs import (
 )
 from backend.schemas.campaign_json_projection import (
     CampaignPublicJsonField,
+    project_public_campaign_name,
 )
 from backend.schemas.campaign_json_projection import (
     project_public_campaign_json_field as _project_public_campaign_json_field,
@@ -581,7 +582,7 @@ class PortfolioCreateRequest(BaseModel):
     @field_validator("name")
     @classmethod
     def _validate_name(cls, value: str) -> str:
-        return assert_public_campaign_text(value, field_name="campaign name", max_length=80)
+        return project_public_campaign_name(value)
 
     @field_validator("message_variants")
     @classmethod
@@ -732,6 +733,11 @@ class PortfolioCreateResponse(BaseModel):
     household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     audit_event_id: str | None = None
 
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return project_public_campaign_name(value)
+
 
 class CampaignSummary(BaseModel):
     campaign_id: str
@@ -749,6 +755,11 @@ class CampaignSummary(BaseModel):
     household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     created_at: datetime | None = None
     updated_at: datetime | None = None
+
+    @field_validator("name")
+    @classmethod
+    def _validate_name(cls, value: str) -> str:
+        return project_public_campaign_name(value)
 
 
 class CampaignListResponse(BaseModel):

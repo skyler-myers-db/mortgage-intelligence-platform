@@ -9,6 +9,10 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from databricks.sdk.service.database import (
+    DatabaseInstanceRole,
+    DatabaseInstanceRoleIdentityType,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 _PMO_PATH = REPO_ROOT / "tools" / "databricks" / "provision_m2m_oauth.py"
@@ -26,6 +30,8 @@ assert _mint_spec is not None and _mint_spec.loader is not None
 mint = importlib.util.module_from_spec(_mint_spec)
 sys.modules[_MINT_MODNAME] = mint
 _mint_spec.loader.exec_module(mint)  # type: ignore[union-attr]
+
+_CANONICAL_GH_REPO = pmo.CANONICAL_GH_REPO
 
 
 @pytest.fixture(autouse=True)
@@ -88,7 +94,7 @@ def _provision(client: MagicMock, **overrides: object):
         "lakebase_instance": None,
         "gateway_endpoint": None,
         "warehouse_id": None,
-        "gh_repo": "acme/repo",
+        "gh_repo": _CANONICAL_GH_REPO,
         "set_gh_secrets": True,
         "mint_secret": True,
         "rotate": False,
@@ -260,9 +266,13 @@ def test_normal_happy_path_creates_grants_mints_and_uses_role_owned_secret_names
         service_principal_id="1234"
     )
     assert set_secret.call_args_list == [
-        call("acme/repo", "DATABRICKS_CLIENT_SECRET", "dose_fake_secret_value"),
-        call("acme/repo", "DATABRICKS_CLIENT_ID", "app-id-abc"),
-        call("acme/repo", "MIP_APP_URL", "https://mip-app-test.aws.databricksapps.com"),
+        call(_CANONICAL_GH_REPO, "DATABRICKS_CLIENT_SECRET", "dose_fake_secret_value"),
+        call(_CANONICAL_GH_REPO, "DATABRICKS_CLIENT_ID", "app-id-abc"),
+        call(
+            _CANONICAL_GH_REPO,
+            "MIP_APP_URL",
+            "https://mip-app-test.aws.databricksapps.com",
+        ),
     ]
     assert result.created_sp is True
     assert result.secret_minted is True
@@ -528,7 +538,7 @@ def test_provision_rejects_verifier_app_can_use_before_client_or_any_mutation() 
             lakebase_instance="mip-app-state",
             gateway_endpoint="mip-agent-gateway",
             warehouse_id="warehouse-123",
-            gh_repo="acme/repo",
+            gh_repo=_CANONICAL_GH_REPO,
             set_gh_secrets=True,
             mint_secret=True,
             rotate=True,
@@ -850,7 +860,12 @@ def test_existing_verifier_lakebase_role_is_idempotent() -> None:
     )
     client = _make_client(
         existing_sp=verifier,
-        lakebase_roles=[SimpleNamespace(name="verifier-application-id")],
+        lakebase_roles=[
+            DatabaseInstanceRole(
+                name="verifier-application-id",
+                identity_type=DatabaseInstanceRoleIdentityType.SERVICE_PRINCIPAL,
+            )
+        ],
     )
 
     result = _provision(
@@ -865,6 +880,121 @@ def test_existing_verifier_lakebase_role_is_idempotent() -> None:
 
     client.database.create_database_instance_role.assert_not_called()
     assert result.created_lakebase_role is False
+
+
+@pytest.mark.parametrize(
+    "identity_type",
+    [DatabaseInstanceRoleIdentityType.USER, DatabaseInstanceRoleIdentityType.GROUP, None],
+    ids=["user", "group", "absent"],
+)
+def test_existing_verifier_lakebase_role_rejects_non_service_principal_identity_before_grants(
+    identity_type: DatabaseInstanceRoleIdentityType | None,
+) -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        application_id="verifier-application-id",
+    )
+    client = _make_client(
+        existing_sp=verifier,
+        lakebase_roles=[
+            DatabaseInstanceRole(
+                name="verifier-application-id",
+                identity_type=identity_type,
+            )
+        ],
+    )
+
+    with pytest.raises(SystemExit, match="identity_type='SERVICE_PRINCIPAL'"):
+        _provision(
+            client,
+            grant_can_use=False,
+            lakebase_instance="mip-app-state",
+            gateway_endpoint="mip-agent-gateway",
+            warehouse_id="warehouse-123",
+            identity_role="verifier",
+            rotate=True,
+        )
+
+    client.database.create_database_instance_role.assert_not_called()
+    client.serving_endpoints.update_permissions.assert_not_called()
+    client.warehouses.update_permissions.assert_not_called()
+    client.apps.update_permissions.assert_not_called()
+    client.service_principal_secrets_proxy.create.assert_not_called()
+
+
+@pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+def test_cli_rejects_noncanonical_github_repo_before_provisioning(
+    dry_run: bool,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    argv = ["--gh-repo", "attacker/unreviewed-repo"]
+    if dry_run:
+        argv.append("--dry-run")
+
+    with (
+        patch.object(pmo, "_load_app_name_from_bundle") as load_app,
+        patch.object(pmo, "_infer_gh_repo") as infer_repo,
+        patch.object(pmo, "_gh_available") as gh_available,
+        patch.object(pmo, "provision") as mock_provision,
+        pytest.raises(SystemExit) as exc,
+    ):
+        pmo.main(argv)
+
+    assert exc.value.code == 2
+    assert _CANONICAL_GH_REPO in capsys.readouterr().err
+    load_app.assert_not_called()
+    infer_repo.assert_not_called()
+    gh_available.assert_not_called()
+    mock_provision.assert_not_called()
+
+
+def test_cli_rejects_noncanonical_inferred_origin_before_provisioning() -> None:
+    with (
+        patch.object(pmo, "_load_app_name_from_bundle", return_value="mip-app"),
+        patch.object(pmo, "_infer_gh_repo", return_value="attacker/unreviewed-repo"),
+        patch.object(pmo, "_gh_available") as gh_available,
+        patch.object(pmo, "provision") as mock_provision,
+        pytest.raises(SystemExit) as exc,
+    ):
+        pmo.main(["--dry-run"])
+
+    assert exc.value.code == 2
+    gh_available.assert_not_called()
+    mock_provision.assert_not_called()
+
+
+def test_direct_provision_rejects_noncanonical_github_repo_before_client_or_mint() -> None:
+    client_factory = MagicMock()
+    with (
+        patch.object(pmo, "_gh_available") as gh_available,
+        patch.object(pmo, "_set_gh_secret") as set_secret,
+        pytest.raises(SystemExit, match="canonical repository"),
+    ):
+        pmo.provision(
+            sp_name="mip-nightly-ci-sp",
+            expected_application_id=None,
+            app_name="mip-app",
+            grant_can_use=True,
+            group_name=None,
+            create_group=False,
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            gh_repo="attacker/unreviewed-repo",
+            set_gh_secrets=True,
+            mint_secret=True,
+            rotate=True,
+            app_url="https://example",
+            client_id_secret_name="DATABRICKS_CLIENT_ID",
+            client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
+            app_url_secret_name="MIP_APP_URL",
+            identity_role="normal",
+            client_factory=client_factory,
+        )
+
+    client_factory.assert_not_called()
+    gh_available.assert_not_called()
+    set_secret.assert_not_called()
 
 
 def test_live_mint_requires_authenticated_gh_before_sdk_mutation() -> None:
@@ -883,7 +1013,7 @@ def test_live_mint_requires_authenticated_gh_before_sdk_mutation() -> None:
             lakebase_instance=None,
             gateway_endpoint=None,
             warehouse_id=None,
-            gh_repo="acme/repo",
+            gh_repo=_CANONICAL_GH_REPO,
             set_gh_secrets=True,
             mint_secret=True,
             rotate=False,

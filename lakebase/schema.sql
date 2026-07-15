@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     owner_email  TEXT NOT NULL,
     status       TEXT NOT NULL DEFAULT 'draft',
     criteria     JSONB NOT NULL DEFAULT '{}'::jsonb,
+    json_contract_version SMALLINT NOT NULL DEFAULT 1,
     suppression_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
     message_variants JSONB NOT NULL DEFAULT '[]'::jsonb,
     channel_cascade JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -84,6 +85,10 @@ ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS creation_response JSONB;
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+-- Existing deployments receive NULL first so the upgrade can distinguish
+-- preserved rows from fresh version-1 writes without inspecting legacy JSON.
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS json_contract_version SMALLINT;
 
 -- Campaign JSON is a compatibility store, not an untyped API surface. These
 -- immutable helpers back deploy-safe CHECK constraints added after the seed.
@@ -731,8 +736,99 @@ AS $$
        );
 $$;
 
--- Existing rows are intentionally not scanned here. The post-seed suffix
--- re-adds these checks NOT VALID, which enforces them on every future write.
+CREATE OR REPLACE FUNCTION mip_app.campaign_json_contract_is_reviewed(
+    criteria_document JSONB,
+    suppression_document JSONB,
+    cascade_document JSONB,
+    send_window_document JSONB,
+    holdout_document JSONB,
+    roi_document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_criteria_is_reviewed(criteria_document) IS TRUE
+       AND mip_app.campaign_suppression_policy_is_reviewed(suppression_document) IS TRUE
+       AND mip_app.campaign_channel_cascade_is_reviewed(cascade_document) IS TRUE
+       AND mip_app.campaign_send_window_is_reviewed(send_window_document) IS TRUE
+       AND (
+           holdout_document IS NULL
+           OR mip_app.campaign_holdout_is_reviewed(holdout_document) IS TRUE
+       )
+       AND (
+           roi_document IS NULL
+           OR mip_app.campaign_roi_assumptions_is_reviewed(roi_document) IS TRUE
+       );
+$$;
+
+-- Rows that predate the explicit contract remain readable and status-
+-- transitionable. Fresh installs already hold version 1 from CREATE TABLE;
+-- only rows encountered during an in-place upgrade receive legacy version 0.
+UPDATE mip_app.campaigns
+SET json_contract_version = 0
+WHERE json_contract_version IS NULL;
+ALTER TABLE mip_app.campaigns
+    ALTER COLUMN json_contract_version SET DEFAULT 1;
+ALTER TABLE mip_app.campaigns
+    ALTER COLUMN json_contract_version SET NOT NULL;
+
+CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_json_contract()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        NEW.json_contract_version := 1;
+        IF mip_app.campaign_json_contract_is_reviewed(
+            NEW.criteria,
+            NEW.suppression_policy,
+            NEW.channel_cascade,
+            NEW.send_window,
+            NEW.holdout,
+            NEW.roi_assumptions
+        ) IS NOT TRUE THEN
+            RAISE EXCEPTION 'campaign JSON does not satisfy reviewed contract version 1'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF NEW.json_contract_version IS DISTINCT FROM OLD.json_contract_version
+       OR NEW.criteria IS DISTINCT FROM OLD.criteria
+       OR NEW.suppression_policy IS DISTINCT FROM OLD.suppression_policy
+       OR NEW.channel_cascade IS DISTINCT FROM OLD.channel_cascade
+       OR NEW.send_window IS DISTINCT FROM OLD.send_window
+       OR NEW.holdout IS DISTINCT FROM OLD.holdout
+       OR NEW.roi_assumptions IS DISTINCT FROM OLD.roi_assumptions THEN
+        IF mip_app.campaign_json_contract_is_reviewed(
+            NEW.criteria,
+            NEW.suppression_policy,
+            NEW.channel_cascade,
+            NEW.send_window,
+            NEW.holdout,
+            NEW.roi_assumptions
+        ) IS NOT TRUE THEN
+            RAISE EXCEPTION 'modified campaign JSON must satisfy reviewed contract version 1'
+                USING ERRCODE = '23514';
+        END IF;
+        NEW.json_contract_version := 1;
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_campaigns_json_contract_enforcement
+    ON mip_app.campaigns;
+CREATE TRIGGER trg_campaigns_json_contract_enforcement
+    BEFORE INSERT OR UPDATE ON mip_app.campaigns
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_campaign_json_contract();
+
+-- The post-seed NOT VALID checks retain the legacy-version escape hatch on
+-- unchanged payloads. The trigger above closes that hatch for inserts and any
+-- governed JSON modification, promoting successful remediations to version 1.
 ALTER TABLE mip_app.campaigns
     DROP CONSTRAINT IF EXISTS campaigns_criteria_reviewed_shape_chk;
 ALTER TABLE mip_app.campaigns
@@ -1931,10 +2027,59 @@ CREATE INDEX IF NOT EXISTS idx_ai_gateway_proof_pending
     ON mip_app.ai_gateway_proof_ledger (status, sent_at)
     WHERE status = 'pending';
 
+-- Proof writers may run on a host whose clock differs slightly from Lakebase.
+-- Accept at most five minutes of positive skew; larger future timestamps or
+-- reversed send/verify chronology would let evidence outlive its real window.
+CREATE OR REPLACE FUNCTION mip_app.enforce_ai_gateway_proof_timestamp_bounds()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+DECLARE
+    observed_now TIMESTAMPTZ := clock_timestamp();
+    clock_tolerance CONSTANT INTERVAL := INTERVAL '5 minutes';
+BEGIN
+    IF NEW.status IN ('pending', 'verified')
+       AND NEW.sent_at > observed_now + clock_tolerance THEN
+        RAISE EXCEPTION
+            'AI Gateway proof sent_at exceeds the five-minute clock tolerance'
+            USING ERRCODE = '22007';
+    END IF;
+    IF NEW.status IN ('pending', 'verified')
+       AND NEW.verified_at IS NOT NULL
+       AND NEW.verified_at > observed_now + clock_tolerance THEN
+        RAISE EXCEPTION
+            'AI Gateway proof verified_at exceeds the five-minute clock tolerance'
+            USING ERRCODE = '22007';
+    END IF;
+    IF NEW.status IN ('pending', 'verified')
+       AND NEW.verified_at IS NOT NULL
+       AND NEW.verified_at < NEW.sent_at - clock_tolerance THEN
+        RAISE EXCEPTION
+            'AI Gateway proof verified_at precedes sent_at beyond clock tolerance'
+            USING ERRCODE = '22007';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_ai_gateway_proof_timestamp_bounds
+    ON mip_app.ai_gateway_proof_ledger;
+CREATE TRIGGER trg_ai_gateway_proof_timestamp_bounds
+    BEFORE INSERT OR UPDATE ON mip_app.ai_gateway_proof_ledger
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_ai_gateway_proof_timestamp_bounds();
+
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_02_ai_gateway_exact_proof_ledger',
     'Add AI Gateway exact inference-row proof ledger for strict capability claims'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_ai_gateway_proof_timestamp_bounds',
+    'Reject AI Gateway proof timestamps beyond a five-minute positive clock tolerance'
 )
 ON CONFLICT (version) DO NOTHING;
 
@@ -2278,35 +2423,45 @@ ON CONFLICT (version) DO NOTHING;
 
 ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_criteria_reviewed_shape_chk
-    CHECK (mip_app.campaign_criteria_is_reviewed(criteria) IS TRUE)
+    CHECK (
+        json_contract_version = 0
+        OR mip_app.campaign_criteria_is_reviewed(criteria) IS TRUE
+    )
     NOT VALID;
 ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_suppression_policy_reviewed_shape_chk
     CHECK (
-        mip_app.campaign_suppression_policy_is_reviewed(suppression_policy) IS TRUE
+        json_contract_version = 0
+        OR mip_app.campaign_suppression_policy_is_reviewed(suppression_policy) IS TRUE
     )
     NOT VALID;
 ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_channel_cascade_reviewed_shape_chk
     CHECK (
-        mip_app.campaign_channel_cascade_is_reviewed(channel_cascade) IS TRUE
+        json_contract_version = 0
+        OR mip_app.campaign_channel_cascade_is_reviewed(channel_cascade) IS TRUE
     )
     NOT VALID;
 ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_send_window_reviewed_shape_chk
-    CHECK (mip_app.campaign_send_window_is_reviewed(send_window) IS TRUE)
+    CHECK (
+        json_contract_version = 0
+        OR mip_app.campaign_send_window_is_reviewed(send_window) IS TRUE
+    )
     NOT VALID;
 ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_holdout_reviewed_shape_chk
     CHECK (
-        holdout IS NULL
+        json_contract_version = 0
+        OR holdout IS NULL
         OR mip_app.campaign_holdout_is_reviewed(holdout) IS TRUE
     )
     NOT VALID;
 ALTER TABLE mip_app.campaigns
     ADD CONSTRAINT campaigns_roi_assumptions_reviewed_shape_chk
     CHECK (
-        roi_assumptions IS NULL
+        json_contract_version = 0
+        OR roi_assumptions IS NULL
         OR mip_app.campaign_roi_assumptions_is_reviewed(roi_assumptions) IS TRUE
     )
     NOT VALID;
@@ -2315,6 +2470,13 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_15_campaign_json_reviewed_shapes',
     'Enforce exact reviewed shapes for new and changed campaign JSON fields'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_campaign_json_contract_version',
+    'Allow status-only updates on untouched legacy campaign JSON while enforcing reviewed version 1 on inserts and payload changes'
 )
 ON CONFLICT (version) DO NOTHING;
 

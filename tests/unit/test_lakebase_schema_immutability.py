@@ -102,6 +102,19 @@ def test_campaign_json_shape_checks_are_post_seed_not_valid_and_deploy_probed() 
         assert f'"{constraint}"' in migrate_source
     assert "VALIDATE CONSTRAINT campaigns_" not in post_seed
     assert "2026_07_15_campaign_json_reviewed_shapes" in post_seed
+    assert "json_contract_version SMALLINT NOT NULL DEFAULT 1" in pre_seed
+    assert "SET json_contract_version = 0" in pre_seed
+    assert "CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_json_contract()" in pre_seed
+    assert re.search(
+        r"CREATE TRIGGER trg_campaigns_json_contract_enforcement\s+"
+        r"BEFORE INSERT OR UPDATE ON mip_app\.campaigns\s+"
+        r"FOR EACH ROW\s+"
+        r"EXECUTE FUNCTION mip_app\.enforce_campaign_json_contract\(\);",
+        pre_seed,
+    )
+    assert post_seed.count("json_contract_version = 0") == len(constraints)
+    assert "2026_07_15_campaign_json_contract_version" in post_seed
+    assert "trg_campaigns_json_contract_enforcement" in migrate_source
     assert "document->>'route' = '/lead-queue'" in pre_seed
     assert "document->>'route' LIKE '/lead-queue?%'" in pre_seed
     assert "document->>'route' LIKE '/lead-queue%'" not in pre_seed

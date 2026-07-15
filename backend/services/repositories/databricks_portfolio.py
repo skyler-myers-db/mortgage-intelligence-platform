@@ -29,6 +29,7 @@ from backend.schemas.portfolio import (
     PortfolioPreview,
     PortfolioPreviewRequest,
     project_public_campaign_json_field,
+    project_public_campaign_name,
 )
 from backend.schemas.portfolio_campaign import (
     assert_borrower_campaign_copy,
@@ -1134,7 +1135,7 @@ class DatabricksPortfolioRepository:
             return PortfolioCreateResponse(
                 portfolio_id=campaign_id,
                 campaign_id=campaign_id,
-                name=str(response_data.get("name") or "Portfolio build"),
+                name=_project_campaign_name_or_default(response_data.get("name")),
                 marketable_population=int(response_data.get("marketable_population") or 0),
                 household_summary=household,
                 audit_event_id=str(row["audit_id"]) if row.get("audit_id") else None,
@@ -1752,6 +1753,20 @@ def _project_campaign_json_or_default(
         return fallback
 
 
+def _project_campaign_name_or_default(raw_value: Any) -> str:
+    try:
+        return project_public_campaign_name(raw_value)
+    except (TypeError, ValueError):
+        emit(
+            log,
+            "campaign_name_public_projection_rejected",
+            level=logging.WARNING,
+            outcome="replaced",
+            reason="invalid_public_name",
+        )
+        return "Campaign"
+
+
 def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
     criteria_value = cast(
         dict[str, object],
@@ -1829,7 +1844,7 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
     household_summary = json_value(row.get("household_summary"), {})
     return CampaignSummary(
         campaign_id=str(row.get("campaign_id")),
-        name=str(row.get("name") or "Campaign"),
+        name=_project_campaign_name_or_default(row.get("name")),
         owner_email=str(row.get("owner_email") or "unknown"),
         status=str(row.get("status") or "draft"),  # type: ignore[arg-type]
         criteria=criteria_value,

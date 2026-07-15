@@ -570,6 +570,74 @@ def test_campaign_projection_requires_exact_reviewed_lead_queue_route() -> None:
     }
 
 
+def test_campaign_summary_round_trips_all_reviewed_genie_proof_fields() -> None:
+    criteria = {
+        "source": "genie",
+        "borrower_ids": ["B-0000000000001"],
+        "criteria_hash": "criteria_hash_01",
+        "sql_hash": "sql_hash_01",
+        "question_hash": "question_hash_01",
+        "conversation_id": "conversation-01",
+        "message_id": "message-01",
+        "criteria_keys": ["states", "segment_codes"],
+        "source_assets": ["mip.gold.borrower_360", "mip.gold.lead_ranked"],
+        "visualization_kind": "table",
+        "row_count": 1,
+        "route": "/lead-queue?states=IL&segment=itm",
+        "result_filters": {"states": ["IL"], "segment_codes": ["itm"]},
+    }
+
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Reviewed campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": json.dumps(criteria),
+            "suppression_policy": {},
+            "normalized_message_variants": [],
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+    )
+
+    assert summary.criteria == criteria
+
+
+def test_campaign_summary_replaces_unsafe_legacy_titlecase_name_without_echo(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    unsafe_name = "Aoife Mbaye"
+
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": unsafe_name,
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": {},
+            "suppression_policy": {},
+            "normalized_message_variants": [],
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+    )
+
+    assert summary.name == "Campaign"
+    assert unsafe_name not in caplog.text
+    warning = next(
+        record
+        for record in caplog.records
+        if getattr(record, "mip_event", None) == "campaign_name_public_projection_rejected"
+    )
+    assert warning.mip_outcome == "replaced"
+    assert warning.mip_extras == {"reason": "invalid_public_name"}
+
+
 def test_campaign_summary_relational_variants_are_authoritative_and_verified_from_proof() -> None:
     generated = {
         "variant_name": "A",

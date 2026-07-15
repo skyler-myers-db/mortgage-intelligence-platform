@@ -261,6 +261,10 @@ def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(
         for constraint in _CAMPAIGN_JSON_SHAPE_CONSTRAINTS:
             cur.execute(f"ALTER TABLE mip_app.campaigns DROP CONSTRAINT {constraint}")
         cur.execute(
+            "DROP TRIGGER trg_campaigns_json_contract_enforcement ON mip_app.campaigns"
+        )
+        cur.execute("ALTER TABLE mip_app.campaigns DROP COLUMN json_contract_version")
+        cur.execute(
             """
             INSERT INTO mip_app.campaigns (
                 campaign_id, name, owner_email, criteria, suppression_policy,
@@ -288,11 +292,64 @@ def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(
             constraint: False for constraint in _CAMPAIGN_JSON_SHAPE_CONSTRAINTS
         }
         cur.execute(
-            "SELECT criteria->>'legacy_unreviewed' FROM mip_app.campaigns "
+            "SELECT criteria->>'legacy_unreviewed', json_contract_version "
+            "FROM mip_app.campaigns "
             "WHERE campaign_id = %s",
             (legacy_campaign_id,),
         )
-        assert cur.fetchone() == ("preserved",)
+        assert cur.fetchone() == ("preserved", 0)
+        status_request_id = f"legacy-status-{uuid4()}"
+        cur.execute(
+            """
+            WITH updated_campaign AS (
+                UPDATE mip_app.campaigns
+                SET status = 'pending_review', updated_at = now()
+                WHERE campaign_id = %s
+                RETURNING campaign_id::text, status
+            ), inserted_audit AS (
+                INSERT INTO mip_app.action_audit (
+                    event_type, actor_email, entity_type, entity_id,
+                    request_id, metadata
+                )
+                SELECT 'CAMPAIGN_STATUS_UPDATE', 'legacy-upgrade@test.example',
+                       'campaign', campaign_id, %s,
+                       '{"status":"pending_review"}'::jsonb
+                FROM updated_campaign
+                RETURNING audit_id
+            )
+            SELECT updated_campaign.status, inserted_audit.audit_id IS NOT NULL
+            FROM updated_campaign
+            JOIN inserted_audit ON TRUE
+            """,
+            (legacy_campaign_id, status_request_id),
+        )
+        assert cur.fetchone() == ("pending_review", True)
+        conn.commit()
+
+        cur.execute(
+            """
+            SELECT c.status, c.criteria->>'legacy_unreviewed',
+                   c.json_contract_version, COUNT(a.audit_id)
+            FROM mip_app.campaigns AS c
+            LEFT JOIN mip_app.action_audit AS a
+              ON a.entity_type = 'campaign'
+             AND a.entity_id = c.campaign_id::text
+             AND a.request_id = %s
+            WHERE c.campaign_id = %s
+            GROUP BY c.campaign_id
+            """,
+            (status_request_id, legacy_campaign_id),
+        )
+        assert cur.fetchone() == ("pending_review", "preserved", 0, 1)
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cur.execute(
+                "UPDATE mip_app.campaigns "
+                "SET criteria = '{\"unreviewed_change\":true}'::jsonb "
+                "WHERE campaign_id = %s",
+                (legacy_campaign_id,),
+            )
+        conn.rollback()
+
         with pytest.raises(psycopg.errors.CheckViolation):
             cur.execute(
                 """
@@ -307,6 +364,64 @@ def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(
                 poisoned_fields,
             )
         conn.rollback()
+
+
+def test_ai_gateway_proof_timestamp_trigger_rejects_unclaimable_clock_skew(
+    postgres_kwargs: dict[str, str],
+) -> None:
+    _apply_migration(postgres_kwargs)
+
+    sha = "a" * 40
+    inference_table = "system.serving.endpoint_usage"
+    with psycopg.connect(**postgres_kwargs, autocommit=True) as conn, conn.cursor() as cur:
+        with pytest.raises(psycopg.Error) as future_error:
+            cur.execute(
+                """
+                INSERT INTO mip_app.ai_gateway_proof_ledger (
+                    git_sha, client_request_id, endpoint_name,
+                    inference_table, sent_at, status
+                ) VALUES (
+                    %s, %s, 'mip-supervisor', %s,
+                    clock_timestamp() + INTERVAL '6 minutes', 'pending'
+                )
+                """,
+                (sha, f"mip-capability-{sha}-{'1' * 16}", inference_table),
+            )
+        assert future_error.value.sqlstate == "22007"
+
+        with pytest.raises(psycopg.Error) as chronology_error:
+            cur.execute(
+                """
+                INSERT INTO mip_app.ai_gateway_proof_ledger (
+                    git_sha, client_request_id, endpoint_name,
+                    inference_table, sent_at, verified_at,
+                    verify_latency_s, status
+                ) VALUES (
+                    %s, %s, 'mip-supervisor', %s,
+                    clock_timestamp(),
+                    clock_timestamp() - INTERVAL '6 minutes',
+                    0, 'verified'
+                )
+                """,
+                (sha, f"mip-capability-{sha}-{'2' * 16}", inference_table),
+            )
+        assert chronology_error.value.sqlstate == "22007"
+
+        quarantined_request_id = f"mip-capability-{sha}-{'3' * 16}"
+        cur.execute(
+            """
+            INSERT INTO mip_app.ai_gateway_proof_ledger (
+                git_sha, client_request_id, endpoint_name,
+                inference_table, sent_at, status
+            ) VALUES (
+                %s, %s, 'mip-supervisor', %s,
+                clock_timestamp() + INTERVAL '6 minutes', 'failed'
+            )
+            RETURNING status
+            """,
+            (sha, quarantined_request_id, inference_table),
+        )
+        assert cur.fetchone() == ("failed",)
 
 
 def test_unmapped_legacy_approval_fails_without_deleting_state(

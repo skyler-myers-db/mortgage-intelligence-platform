@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -32,6 +33,7 @@ from pydantic import SecretStr
 
 from backend.config.settings import get_settings
 from backend.services.ai_gateway_proof_ledger import (
+    AI_GATEWAY_PROOF_CLOCK_SKEW_S,
     AiGatewayVerifiedProof,
     insert_pending_proof,
     latest_verified_proof,
@@ -473,6 +475,7 @@ _ExactRowReason = Literal[
     "duplicate_rows",
     "non_success_status",
     "nonterminal_response",
+    "timestamp_out_of_bounds",
     "verified",
 ]
 
@@ -487,10 +490,19 @@ def _check_exact_inference_row(
     sql_client: Any,
     proof: AiGatewayVerifiedProof,
 ) -> _ExactRowCheck:
-    """Require one successful, terminal Responses row for the exact proof id."""
+    """Require one successful, timely terminal Responses row for the exact proof id."""
 
     catalog, schema, table_prefix = _split_three_part_relation(proof.inference_table)
-    substantiated_rows: list[dict[str, Any]] = []
+    observed_now = datetime.now(UTC)
+    clock_tolerance = timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S)
+    if proof.sent_at > observed_now + clock_tolerance:
+        return _ExactRowCheck("failed", "timestamp_out_of_bounds")
+    event_time_lower_bound = proof.sent_at - clock_tolerance
+    event_time_upper_bound = min(
+        proof.sent_at + clock_tolerance,
+        observed_now + clock_tolerance,
+    )
+    substantiated_rows: list[tuple[dict[str, Any], str]] = []
     unsubstantiated_matches = 0
     for table_name in inference_log_table_names(sql_client, proof.inference_table):
         if not table_name.startswith(table_prefix):
@@ -500,7 +512,8 @@ def _check_exact_inference_row(
         if predicate_and_params is None:
             continue
         predicate, params = predicate_and_params
-        if not {"status_code", "response"}.issubset(columns):
+        timestamp_column = _inference_timestamp_column(columns)
+        if not {"status_code", "response"}.issubset(columns) or timestamp_column is None:
             unsubstantiated_matches += _count_matching_rows(
                 sql_client,
                 relation=f"{catalog}.{schema}.{table_name}",
@@ -508,16 +521,21 @@ def _check_exact_inference_row(
                 params=params,
             )
             continue
-        substantiated_rows.extend(
-            sql_client.execute(
-                f"""
-                SELECT status_code, response
-                FROM {catalog}.{schema}.{table_name}
-                WHERE {predicate}
-                """,
-                params,
-            )
+        timestamp_projection, timestamp_params = _bounded_timestamp_projection(
+            timestamp_column,
+            lower_bound=event_time_lower_bound,
+            upper_bound=event_time_upper_bound,
         )
+        params.update(timestamp_params)
+        rows = sql_client.execute(
+            f"""
+            SELECT status_code, response, {timestamp_projection}
+            FROM {catalog}.{schema}.{table_name}
+            WHERE {predicate}
+            """,
+            params,
+        )
+        substantiated_rows.extend((row, timestamp_column) for row in rows)
 
     match_count = len(substantiated_rows) + unsubstantiated_matches
     if match_count == 0:
@@ -527,7 +545,14 @@ def _check_exact_inference_row(
     if unsubstantiated_matches:
         return _ExactRowCheck("pending", "schema_unsubstantiated")
 
-    row = substantiated_rows[0]
+    row, timestamp_column = substantiated_rows[0]
+    event_time = _inference_event_time(row.get(timestamp_column), timestamp_column)
+    if (
+        row.get("proof_timestamp_in_bounds") is not True
+        or event_time is None
+        or not event_time_lower_bound <= event_time <= event_time_upper_bound
+    ):
+        return _ExactRowCheck("failed", "timestamp_out_of_bounds")
     if not _successful_status_code(row.get("status_code")):
         return _ExactRowCheck("failed", "non_success_status")
     response = _logged_response(row.get("response"))
@@ -541,7 +566,7 @@ def _check_exact_inference_row(
 def _exact_row_predicate(
     columns: set[str],
     client_request_id: str,
-) -> tuple[str, dict[str, str]] | None:
+) -> tuple[str, dict[str, Any]] | None:
     if "client_request_id" in columns:
         return "client_request_id = :client_request_id", {"client_request_id": client_request_id}
     if "request" in columns:
@@ -551,12 +576,61 @@ def _exact_row_predicate(
     return None
 
 
+def _inference_timestamp_column(columns: set[str]) -> str | None:
+    """Resolve current AI Gateway and legacy serving inference timestamps."""
+    for column in ("event_time", "timestamp_ms", "request_time"):
+        if column in columns:
+            return column
+    return None
+
+
+def _bounded_timestamp_projection(
+    timestamp_column: str,
+    *,
+    lower_bound: datetime,
+    upper_bound: datetime,
+) -> tuple[str, dict[str, Any]]:
+    if timestamp_column == "timestamp_ms":
+        lower: Any = int(lower_bound.timestamp() * 1000)
+        upper: Any = int(upper_bound.timestamp() * 1000)
+    else:
+        lower = lower_bound
+        upper = upper_bound
+    return (
+        f"{timestamp_column}, "
+        f"({timestamp_column} >= :proof_time_lower_bound "
+        f"AND {timestamp_column} <= :proof_time_upper_bound) "
+        "AS proof_timestamp_in_bounds",
+        {
+            "proof_time_lower_bound": lower,
+            "proof_time_upper_bound": upper,
+        },
+    )
+
+
+def _inference_event_time(value: Any, timestamp_column: str) -> datetime | None:
+    try:
+        if timestamp_column == "timestamp_ms":
+            if isinstance(value, bool):
+                return None
+            timestamp_ms = float(value)
+            if not math.isfinite(timestamp_ms):
+                return None
+            return datetime.fromtimestamp(timestamp_ms / 1000.0, tz=UTC)
+        if isinstance(value, datetime):
+            return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    except (OSError, OverflowError, TypeError, ValueError):
+        return None
+
+
 def _count_matching_rows(
     sql_client: Any,
     *,
     relation: str,
     predicate: str,
-    params: dict[str, str],
+    params: dict[str, Any],
 ) -> int:
     rows = sql_client.execute(
         f"SELECT COUNT(*) AS row_count FROM {relation} WHERE {predicate}",
@@ -591,6 +665,8 @@ def _mark_proof_verified_if_pending(
     proof: AiGatewayVerifiedProof,
 ) -> AiGatewayVerifiedProof | None:
     verified_at = datetime.now(UTC)
+    if proof.sent_at > verified_at + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S):
+        return None
     verify_latency_s = max(0.0, (verified_at - proof.sent_at).total_seconds())
     row = lakebase.fetchone(
         """
@@ -600,12 +676,14 @@ def _mark_proof_verified_if_pending(
             verify_latency_s = %(verify_latency_s)s
         WHERE proof_id = %(proof_id)s
           AND status = 'pending'
+          AND sent_at <= %(sent_at_upper_bound)s
         RETURNING proof_id
         """,
         {
             "proof_id": proof.proof_id,
             "verified_at": verified_at,
             "verify_latency_s": verify_latency_s,
+            "sent_at_upper_bound": verified_at + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S),
         },
     )
     if not row:

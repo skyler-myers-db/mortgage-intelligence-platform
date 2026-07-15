@@ -11,6 +11,7 @@ import pytest
 
 from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S
 from backend.services.ai_gateway_proof_ledger import (
+    AI_GATEWAY_PROOF_CLOCK_SKEW_S,
     insert_pending_proof,
     latest_verified_proof,
     mark_expired_pending_proofs,
@@ -96,6 +97,8 @@ class _ProofLakebase:
             endpoint_name = params["endpoint_name"]
             inference_table = params["inference_table"]
             cutoff = params["cutoff"]
+            future_cutoff = params["future_cutoff"]
+            clock_skew = timedelta(seconds=int(params["clock_skew_s"]))
             matches = [
                 dict(row)
                 for row in self.rows
@@ -105,6 +108,9 @@ class _ProofLakebase:
                 and row["status"] == "verified"
                 and row["verified_at"] is not None
                 and row["verified_at"] >= cutoff
+                and row["verified_at"] <= future_cutoff
+                and row["sent_at"] <= future_cutoff
+                and row["verified_at"] >= row["sent_at"] - clock_skew
             ]
             matches.sort(key=lambda row: row["verified_at"], reverse=True)
             return matches[0] if matches else None
@@ -159,11 +165,14 @@ class _ProofSql:
             "databricks_request_id",
             "status_code",
             "response",
+            "timestamp_ms",
         ]
         self.statements: list[str] = []
+        self.parameters: list[object | None] = []
 
     def execute(self, statement: str, parameters: object | None = None) -> list[dict[str, Any]]:
         self.statements.append(statement)
+        self.parameters.append(parameters)
         if "system.information_schema.columns" in statement:
             return [{"column_name": column_name} for column_name in self.column_names]
         if "system.information_schema.tables" in statement:
@@ -171,11 +180,38 @@ class _ProofSql:
         request_id = self._request_id(parameters)
         if "SELECT status_code, response" in statement:
             if self.rows_by_request_id is not None:
-                return [dict(row) for row in self.rows_by_request_id.get(request_id, [])]
-            return [dict(self.valid_row) for _ in range(self._count(request_id))]
+                rows = [dict(row) for row in self.rows_by_request_id.get(request_id, [])]
+            else:
+                rows = [dict(self.valid_row) for _ in range(self._count(request_id))]
+            return self._with_timestamp_bounds(rows, parameters)
         if "COUNT(*) AS row_count" in statement:
             return [{"row_count": self._count(request_id)}]
         raise AssertionError(f"unexpected SQL: {statement}")
+
+    def _with_timestamp_bounds(
+        self,
+        rows: list[dict[str, Any]],
+        parameters: object | None,
+    ) -> list[dict[str, Any]]:
+        assert isinstance(parameters, dict)
+        lower = parameters["proof_time_lower_bound"]
+        upper = parameters["proof_time_upper_bound"]
+        timestamp_column = next(
+            column
+            for column in ("event_time", "timestamp_ms", "request_time")
+            if column in self.column_names
+        )
+        for row in rows:
+            if timestamp_column not in row:
+                if isinstance(lower, datetime) and isinstance(upper, datetime):
+                    row[timestamp_column] = lower + (upper - lower) / 2
+                else:
+                    row[timestamp_column] = (int(lower) + int(upper)) // 2
+            try:
+                row["proof_timestamp_in_bounds"] = lower <= row[timestamp_column] <= upper
+            except TypeError:
+                row["proof_timestamp_in_bounds"] = False
+        return rows
 
     def _count(self, request_id: str) -> int:
         if self.rows_by_request_id is not None:
@@ -352,6 +388,71 @@ def test_latest_verified_proof_caps_defensive_callers_at_26_hours() -> None:
     assert proof is None
     _sql, params = lakebase.fetchone_calls[-1]
     assert params["cutoff"] == now - timedelta(seconds=AI_GATEWAY_PROOF_FRESHNESS_MAX_S)
+
+
+def test_latest_verified_proof_rejects_future_timestamp_beyond_clock_tolerance() -> None:
+    now = datetime.now(UTC)
+    lakebase = _ProofLakebase(
+        [
+            _verified_row(
+                git_sha=_TEST_GIT_SHA,
+                verified_at=now + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S + 1),
+            )
+        ]
+    )
+
+    proof = latest_verified_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        freshness_s=60,
+        now=now,
+    )
+
+    assert proof is None
+    sql, params = lakebase.fetchone_calls[-1]
+    assert "verified_at <= %(future_cutoff)s" in sql
+    assert "sent_at <= %(future_cutoff)s" in sql
+    assert params["future_cutoff"] == now + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S)
+
+
+def test_pending_proof_insert_rejects_future_sent_at_before_lakebase_write() -> None:
+    lakebase = _ProofLakebase()
+
+    with pytest.raises(ValueError, match="sent_at exceeds"):
+        insert_pending_proof(
+            lakebase,
+            git_sha=_TEST_GIT_SHA,
+            client_request_id=f"mip-capability-{_TEST_GIT_SHA}-1010101010101010",
+            endpoint_name=_ENDPOINT,
+            inference_table=_INFERENCE_TABLE,
+            sent_at=datetime.now(UTC) + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S + 10),
+        )
+
+    assert lakebase.fetchone_calls == []
+
+
+def test_verified_proof_write_rejects_future_verified_at_before_lakebase_update() -> None:
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-2020202020202020",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+    )
+    calls_before_update = len(lakebase.fetchone_calls)
+
+    with pytest.raises(ValueError, match="verified_at exceeds"):
+        mark_proof_verified(
+            lakebase,
+            proof_id=proof.proof_id,
+            sent_at=proof.sent_at,
+            verified_at=datetime.now(UTC) + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S + 10),
+        )
+
+    assert len(lakebase.fetchone_calls) == calls_before_update
 
 
 def test_pending_proof_verification_and_expiry() -> None:
@@ -587,6 +688,70 @@ def test_exact_row_check_defensively_ignores_nonliteral_prefix_table(
 
     assert check.outcome == "verified"
     assert all("mipXagentXgatewayXllama_payload" not in statement for statement in sql.statements)
+
+
+@pytest.mark.parametrize("timestamp_column", ["event_time", "timestamp_ms"])
+@pytest.mark.parametrize(
+    "offset_s",
+    [-(AI_GATEWAY_PROOF_CLOCK_SKEW_S + 1), AI_GATEWAY_PROOF_CLOCK_SKEW_S + 1],
+    ids=["before-lower-bound", "future"],
+)
+def test_exact_row_check_rejects_out_of_window_inference_timestamp(
+    timestamp_column: str,
+    offset_s: int,
+) -> None:
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-3030303030303030",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+    )
+    event_time = proof.sent_at + timedelta(seconds=offset_s)
+    timestamp_value: object = event_time
+    if timestamp_column == "timestamp_ms":
+        timestamp_value = int(event_time.timestamp() * 1000)
+    sql = _ProofSql(
+        rows_by_request_id={
+            proof.client_request_id: [
+                {
+                    **_ProofSql.valid_row,
+                    timestamp_column: timestamp_value,
+                }
+            ]
+        },
+        column_names=[
+            "client_request_id",
+            "status_code",
+            "response",
+            timestamp_column,
+        ],
+    )
+
+    check = verify_ai_gateway_exact_proof._check_exact_inference_row(sql, proof)
+
+    assert check.outcome == "failed"
+    assert check.reason == "timestamp_out_of_bounds"
+    bounded_params = next(
+        params
+        for params in sql.parameters
+        if isinstance(params, dict) and "proof_time_upper_bound" in params
+    )
+    assert "proof_time_lower_bound" in bounded_params
+
+
+def test_lakebase_schema_rejects_future_gateway_proof_writes() -> None:
+    schema = (_REPO_ROOT / "lakebase" / "schema.sql").read_text(encoding="utf-8")
+
+    assert (
+        "CREATE OR REPLACE FUNCTION mip_app.enforce_ai_gateway_proof_timestamp_bounds()" in schema
+    )
+    assert "clock_tolerance CONSTANT INTERVAL := INTERVAL '5 minutes'" in schema
+    assert "IF NEW.status IN ('pending', 'verified')" in schema
+    assert "AND NEW.sent_at > observed_now + clock_tolerance" in schema
+    assert "NEW.verified_at > observed_now + clock_tolerance" in schema
+    assert "CREATE TRIGGER trg_ai_gateway_proof_timestamp_bounds" in schema
 
 
 def test_wait_for_exact_row_timeout_leaves_pending() -> None:

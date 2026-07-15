@@ -928,6 +928,12 @@ def test_campaign_name_rejects_protected_class_and_instruction_injection(
         )
 
 
+@pytest.mark.parametrize("person_name", ["aoife mbaye", "xochitl quenby", "may"])
+def test_campaign_name_rejects_uncommon_lowercase_person_names(person_name: str) -> None:
+    with pytest.raises(ValidationError, match="public-safe campaign taxonomy"):
+        PortfolioCreateRequest(name=person_name)
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [

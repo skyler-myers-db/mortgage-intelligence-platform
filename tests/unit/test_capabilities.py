@@ -22,6 +22,7 @@ import backend.services.capabilities as capabilities_module
 import backend.services.capability_request as capability_request_module
 from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S, Settings
 from backend.main import app
+from backend.services.ai_gateway_proof_ledger import AI_GATEWAY_PROOF_CLOCK_SKEW_S
 from backend.services.capabilities import (
     CapabilityStatus,
     LiveCapabilityStatus,
@@ -190,6 +191,8 @@ class _LiveLakebase:
         endpoint_name = str(params.get("endpoint_name") or "")
         inference_table = str(params.get("inference_table") or "")
         cutoff = params.get("cutoff")
+        future_cutoff = params.get("future_cutoff")
+        clock_skew = timedelta(seconds=int(params.get("clock_skew_s") or 0))
         matches: list[dict[str, object]] = []
         for proof in self.proofs:
             if proof.get("git_sha") != git_sha or proof.get("status") != "verified":
@@ -203,6 +206,25 @@ class _LiveLakebase:
                 isinstance(cutoff, datetime)
                 and isinstance(verified_at, datetime)
                 and verified_at < cutoff
+            ):
+                continue
+            sent_at = proof.get("sent_at")
+            if (
+                isinstance(future_cutoff, datetime)
+                and isinstance(verified_at, datetime)
+                and verified_at > future_cutoff
+            ):
+                continue
+            if (
+                isinstance(future_cutoff, datetime)
+                and isinstance(sent_at, datetime)
+                and sent_at > future_cutoff
+            ):
+                continue
+            if (
+                isinstance(verified_at, datetime)
+                and isinstance(sent_at, datetime)
+                and verified_at < sent_at - clock_skew
             ):
                 continue
             matches.append(dict(proof))
@@ -1115,6 +1137,28 @@ def test_ai_gateway_live_probe_rejects_stale_verified_ledger_row() -> None:
 
     assert statuses["ai_gateway"].available is False
     assert "no fresh ledger-verified exact row" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_live_probe_rejects_future_verified_ledger_row() -> None:
+    future_verified = datetime.now(UTC) + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S + 30)
+    lakebase = _LiveLakebase.verified(verified_at=future_verified)
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=2),
+        lakebase=lakebase,
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "no fresh ledger-verified exact row" in statuses["ai_gateway"].detail
+    query, params = lakebase.fetchone_calls[-1]
+    assert "verified_at <= %(future_cutoff)s" in query
+    assert isinstance(params["future_cutoff"], datetime)
 
 
 def test_ai_gateway_probe_caps_mutated_freshness_before_ledger_lookup(

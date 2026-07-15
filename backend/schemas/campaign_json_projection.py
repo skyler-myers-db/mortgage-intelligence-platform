@@ -7,7 +7,11 @@ import re
 from collections.abc import Callable
 from typing import Literal, cast
 
-from backend.schemas._validators import normalize_public_lender_ref, reviewed_state_codes
+from backend.schemas._validators import (
+    configured_public_lender_name,
+    normalize_public_lender_ref,
+    reviewed_state_codes,
+)
 from backend.schemas.campaign_json_inputs import (
     normalize_channel_cascade,
     normalize_holdout,
@@ -17,9 +21,9 @@ from backend.schemas.campaign_json_inputs import (
     require_exact_json_keys,
 )
 from backend.schemas.portfolio_campaign import (
-    assert_public_campaign_json,
     assert_public_campaign_text,
 )
+from backend.schemas.usps import USPS_STATE_CODES
 
 CampaignPublicJsonField = Literal[
     "criteria",
@@ -79,6 +83,188 @@ _GENIE_REPLAY_FILTER_KEYS = frozenset(
 )
 _GENIE_SEGMENT_CODES = frozenset({"itm", "listed", "permit", "investor", "equity", "retention"})
 _GENIE_VISUALIZATION_KINDS = frozenset({"bar", "line", "metric", "pie", "scatter", "table"})
+_GENIE_OPAQUE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
+_PUBLIC_CAMPAIGN_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 &(),./:+\-\u2014]{0,79}")
+_PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
+    {
+        "a",
+        "active",
+        "all",
+        "approval",
+        "audit",
+        "brief",
+        "build",
+        "campaign",
+        "cash",
+        "cohort",
+        "compatibility",
+        "competitor",
+        "contract",
+        "current",
+        "customer",
+        "daily",
+        "deployment",
+        "equity",
+        "former",
+        "forged",
+        "generated",
+        "governed",
+        "growth",
+        "heloc",
+        "high",
+        "household",
+        "idempotency",
+        "in",
+        "integrity",
+        "intelligence",
+        "intent",
+        "key",
+        "lakebase",
+        "lead",
+        "lien",
+        "live",
+        "listed",
+        "listing",
+        "loan",
+        "malformed",
+        "marketable",
+        "mixed",
+        "money",
+        "mortgage",
+        "occupied",
+        "operator",
+        "opportunities",
+        "opportunity",
+        "other",
+        "out",
+        "outreach",
+        "owner",
+        "pilot",
+        "portfolio",
+        "pre",
+        "probe",
+        "propensity",
+        "provided",
+        "provenance",
+        "purchase",
+        "q",
+        "qa",
+        "recapture",
+        "refi",
+        "refinance",
+        "relational",
+        "retention",
+        "review",
+        "reviewed",
+        "sale",
+        "sample",
+        "saved",
+        "segment",
+        "supervisor",
+        "synthetic",
+        "test",
+        "the",
+        "transplant",
+        "unsigned",
+        "unverified",
+        "upgrade",
+        "verified",
+        "watch",
+        "weekly",
+        "west",
+    }
+)
+_PUBLIC_CAMPAIGN_REQUIRED_WORDS = frozenset(
+    {
+        "approval",
+        "audit",
+        "brief",
+        "build",
+        "campaign",
+        "cash",
+        "cohort",
+        "compatibility",
+        "contract",
+        "equity",
+        "growth",
+        "heloc",
+        "household",
+        "idempotency",
+        "intelligence",
+        "intent",
+        "lakebase",
+        "lead",
+        "lien",
+        "listing",
+        "loan",
+        "mortgage",
+        "opportunities",
+        "opportunity",
+        "outreach",
+        "owner",
+        "pilot",
+        "portfolio",
+        "probe",
+        "propensity",
+        "provenance",
+        "purchase",
+        "recapture",
+        "refi",
+        "refinance",
+        "retention",
+        "review",
+        "sale",
+        "sample",
+        "segment",
+        "test",
+        "watch",
+    }
+)
+_PUBLIC_CAMPAIGN_GEOGRAPHY_WORDS = frozenset(
+    "alabama alaska arizona arkansas california colorado connecticut delaware district florida "
+    "georgia hawaii idaho illinois indiana iowa kansas kentucky louisiana maine maryland "
+    "massachusetts michigan minnesota mississippi missouri montana nebraska nevada hampshire "
+    "jersey mexico york carolina dakota ohio oklahoma oregon pennsylvania rhode island "
+    "tennessee texas utah vermont virginia washington wisconsin wyoming columbia north south "
+    "new west east central northeast northwest southeast southwest".split()
+)
+_PUBLIC_CAMPAIGN_MONTH_WORDS = frozenset(
+    "january february march april may june july august september october november december am pm".split()
+)
+
+
+def project_public_campaign_name(value: object) -> str:
+    """Return an exact public campaign label or reject unreviewed free text.
+
+    Human names and campaign labels share the same free-text shape. A denylist
+    cannot distinguish uncommon lower-case names from harmless prose, so this
+    boundary only admits reviewed campaign, geography, date, and tenant-label
+    vocabulary.
+    """
+
+    name = assert_public_campaign_text(value, field_name="campaign name", max_length=80)
+    if not name or not _PUBLIC_CAMPAIGN_NAME_PATTERN.fullmatch(name):
+        raise ValueError("campaign name must use the public-safe campaign taxonomy")
+    name_scan = name
+    for trusted_phrase in ("Summit Mortgage", configured_public_lender_name()):
+        phrase = trusted_phrase.strip()
+        if phrase:
+            name_scan = re.sub(re.escape(phrase), " ", name_scan, flags=re.IGNORECASE)
+    allowed_words = (
+        _PUBLIC_CAMPAIGN_NAME_WORDS
+        | _PUBLIC_CAMPAIGN_GEOGRAPHY_WORDS
+        | _PUBLIC_CAMPAIGN_MONTH_WORDS
+        | {state.casefold() for state in USPS_STATE_CODES}
+    )
+    words = re.findall(r"[A-Za-z]+", name_scan)
+    normalized_words = {word.casefold() for word in words}
+    if (
+        not words
+        or any(word.casefold() not in allowed_words for word in words)
+        or normalized_words.isdisjoint(_PUBLIC_CAMPAIGN_REQUIRED_WORDS)
+    ):
+        raise ValueError("campaign name must use the public-safe campaign taxonomy")
+    return name
 
 
 def _bounded_public_number(
@@ -285,22 +471,22 @@ def _project_genie_criteria(
             digest = str(value[field_name]).strip()
             if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", digest):
                 raise ValueError(f"criteria.{field_name} must be a bounded digest")
+            out[field_name] = digest
     for field_name in ("conversation_id", "message_id"):
         if field_name in value and value[field_name] is not None:
-            assert_public_campaign_text(
-                value[field_name],
-                field_name=f"criteria {field_name}",
-                max_length=256,
-            )
+            opaque_id = str(value[field_name]).strip()
+            if not _GENIE_OPAQUE_ID_PATTERN.fullmatch(opaque_id):
+                raise ValueError(f"criteria.{field_name} must be a public-safe opaque id")
+            out[field_name] = opaque_id
     if "criteria_keys" in value:
-        _reviewed_text_list(
+        out["criteria_keys"] = _reviewed_text_list(
             value["criteria_keys"],
             field_name="criteria.criteria_keys",
             pattern=r"[a-z][a-z0-9_]{0,63}",
             max_items=50,
         )
     if "source_assets" in value:
-        _reviewed_text_list(
+        out["source_assets"] = _reviewed_text_list(
             value["source_assets"],
             field_name="criteria.source_assets",
             pattern=r"[A-Za-z0-9_.]{1,160}",
@@ -310,6 +496,7 @@ def _project_genie_criteria(
         kind = str(value["visualization_kind"]).strip()
         if kind not in _GENIE_VISUALIZATION_KINDS:
             raise ValueError("criteria.visualization_kind must be reviewed")
+        out["visualization_kind"] = kind
     if not out.get("borrower_ids") and not out.get("result_filters"):
         raise ValueError("criteria must include a reviewed replay target")
     return out
@@ -323,7 +510,6 @@ def project_public_campaign_json_field(
     portfolio_projector: PortfolioProjector,
 ) -> dict[str, object] | list[dict[str, object]] | None:
     """Return the exact public projection for one persisted campaign JSON field."""
-    assert_public_campaign_json(value, field_name=f"campaign {field_name}")
     if field_name == "criteria":
         if not isinstance(value, dict):
             raise ValueError("campaign criteria must be a reviewed object")
