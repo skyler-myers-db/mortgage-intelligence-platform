@@ -27,7 +27,12 @@ class ServingEndpointExecution:
 
     @property
     def proves_agent_response(self) -> bool:
-        return _is_agent_responses_task(self.task) and serving_response_has_payload(self.response)
+        return (
+            self.transport == "responses_api"
+            and _is_agent_responses_task(self.task)
+            and serving_response_is_terminal_completed(self.response)
+            and serving_response_has_payload(self.response)
+        )
 
 
 def query_serving_endpoint(
@@ -68,9 +73,7 @@ def query_serving_endpoint_with_proof(
         }
         if client_request_id:
             body["client_request_id"] = client_request_id
-        response = workspace_client.api_client.do(
-            "POST", "/serving-endpoints/responses", body=body
-        )
+        response = workspace_client.api_client.do("POST", "/serving-endpoints/responses", body=body)
         return ServingEndpointExecution(
             endpoint=endpoint,
             task=task,
@@ -136,6 +139,18 @@ def serving_response_has_payload(response: Any) -> bool:
         if value is not None and serving_response_has_payload(value):
             return True
     return False
+
+
+def serving_response_is_terminal_completed(response: Any) -> bool:
+    """Return whether a Responses API payload is terminal and successful."""
+    value = _serving_response_value(response)
+    if isinstance(value, dict):
+        status = value.get("status") or value.get("state")
+    else:
+        status = getattr(value, "status", None) or getattr(value, "state", None)
+    raw = getattr(status, "value", status)
+    normalized = str(raw or "").strip().lower().replace("-", "_").replace("/", "_")
+    return normalized == "completed"
 
 
 def serving_response_id(response: Any) -> str | None:

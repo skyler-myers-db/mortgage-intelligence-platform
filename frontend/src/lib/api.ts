@@ -252,6 +252,7 @@ export interface LeadQueryOptions {
 }
 
 export interface GrowthAgentCohortProof {
+  runId: string;
   actionableTotal: number;
   cohortFingerprint: string;
   snapshotId: string;
@@ -261,6 +262,7 @@ export interface GrowthAgentCohortProof {
 
 export interface GrowthAgentCohortVerification {
   status: 'verified';
+  runId: string;
   total: number;
   cohortFingerprint: string;
   snapshotId: string;
@@ -535,6 +537,7 @@ function _newRequestId(): string {
 }
 
 const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const GROWTH_AGENT_RUN_ID_RE = /^[A-Za-z0-9_-]{8,128}$/;
 function _growthAgentProofError(message: string): ApiError {
   return new ApiError(message, {
     path: apiPath('/api/leads'),
@@ -546,16 +549,20 @@ function _growthAgentProofError(message: string): ApiError {
 function _growthAgentProofFromLocation(): GrowthAgentCohortProof | null {
   if (typeof window === 'undefined') return null;
   const params = new URLSearchParams(window.location.search);
+  const runId = params.get('growth_agent_run_id')?.trim() ?? '';
   const rawTotal = params.get('actionable_total')?.trim() ?? '';
   const cohortFingerprint = params.get('actionable_cohort_fingerprint')?.trim().toLowerCase() ?? '';
   const snapshotId = params.get('actionable_snapshot_id')?.trim() ?? '';
   const toolResultHash = params.get('tool_result_hash')?.trim().toLowerCase() ?? '';
   const growthHandoff = params.get('growth_handoff')?.trim() ?? '';
-  if (!rawTotal && !cohortFingerprint && !snapshotId && !toolResultHash && !growthHandoff) return null;
+  if (!runId && !rawTotal && !cohortFingerprint && !snapshotId && !toolResultHash && !growthHandoff) {
+    return null;
+  }
 
   const actionableTotal = Number(rawTotal);
   if (
-    !rawTotal
+    !GROWTH_AGENT_RUN_ID_RE.test(runId)
+    || !rawTotal
     || !Number.isSafeInteger(actionableTotal)
     || actionableTotal < 0
     || !SHA256_HEX_RE.test(cohortFingerprint)
@@ -566,7 +573,7 @@ function _growthAgentProofFromLocation(): GrowthAgentCohortProof | null {
   ) {
     throw _growthAgentProofError('Growth Agent cohort proof is incomplete.');
   }
-  return { actionableTotal, cohortFingerprint, snapshotId, toolResultHash, growthHandoff };
+  return { runId, actionableTotal, cohortFingerprint, snapshotId, toolResultHash, growthHandoff };
 }
 
 export async function growthAgentCohortFingerprint(
@@ -601,14 +608,18 @@ async function _verifyGrowthAgentCohort(
 ): Promise<GrowthAgentCohortVerification> {
   const rawTotal = headers.get('X-Total-Matching');
   const cohortDigest = headers.get('X-Cohort-Digest')?.trim().toLowerCase() ?? '';
+  const cohortFingerprint = headers.get('X-Cohort-Fingerprint')?.trim().toLowerCase() ?? '';
   const snapshotId = headers.get('X-Cohort-Snapshot-ID')?.trim() ?? '';
+  const runId = headers.get('X-Growth-Agent-Run-ID')?.trim() ?? '';
   const total = Number(rawTotal);
   if (
     rawTotal === null
     || !Number.isSafeInteger(total)
     || total < 0
     || !SHA256_HEX_RE.test(cohortDigest)
+    || !SHA256_HEX_RE.test(cohortFingerprint)
     || !snapshotId
+    || !GROWTH_AGENT_RUN_ID_RE.test(runId)
   ) {
     throw _growthAgentProofError(
       'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
@@ -621,7 +632,9 @@ async function _verifyGrowthAgentCohort(
   if (
     total !== proof.actionableTotal
     || destinationFingerprint !== proof.cohortFingerprint
+    || cohortFingerprint !== proof.cohortFingerprint
     || snapshotId !== proof.snapshotId
+    || runId !== proof.runId
   ) {
     throw _growthAgentProofError(
       'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
@@ -629,8 +642,9 @@ async function _verifyGrowthAgentCohort(
   }
   return {
     status: 'verified',
+    runId,
     total,
-    cohortFingerprint: destinationFingerprint,
+    cohortFingerprint,
     snapshotId,
   };
 }

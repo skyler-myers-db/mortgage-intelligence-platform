@@ -17,6 +17,7 @@ from backend.services.databricks_sql import DatabricksSqlClient, get_sql_client
 from jobs.sync_lifecycle_state import (
     _build_legacy_default_prune,
     _build_lifecycle_merge,
+    _ensure_lifecycle_schema,
     _fetch_lakebase_rows,
     _qualified_uc_table,
     _resolve_connection,
@@ -35,7 +36,7 @@ def sync_lifecycle_state_via_warehouse(
     catalog: str | None = None,
     sql_client: DatabricksSqlClient | None = None,
     record_funnel_snapshot: bool = True,
-    prune_legacy_defaults: bool = True,
+    prune_legacy_defaults: bool = False,
     funnel_sql_path: Path | None = None,
 ) -> LifecycleSyncResult:
     """Mirror Lakebase approvals into gold using only Lakebase + SQL Warehouse."""
@@ -43,6 +44,7 @@ def sync_lifecycle_state_via_warehouse(
     resolved_catalog = catalog or settings.mip_default_catalog
     client = sql_client or get_sql_client()
     rows = _fetch_lakebase_rows(_resolve_connection())
+    _ensure_lifecycle_schema(client.execute, catalog=resolved_catalog)
     if prune_legacy_defaults:
         client.execute(_build_legacy_default_prune(catalog=resolved_catalog))
     client.execute(_build_lifecycle_merge(rows, catalog=resolved_catalog))

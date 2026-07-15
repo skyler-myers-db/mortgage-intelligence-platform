@@ -66,6 +66,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from tools.databricks import m2m_access_policy as _access_policy  # noqa: E402
 from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
 from tools.databricks.m2m_identity_contract import (  # noqa: E402
     DEFAULT_ADMIN_GROUP,
@@ -79,13 +80,20 @@ _GH_SECRET_NAME_RE = _github_helpers.GH_SECRET_NAME_RE
 _gh_available = _github_helpers.gh_available
 _set_gh_secret = _github_helpers.set_gh_secret
 _which = _github_helpers.which
+_assert_no_app_permission = _access_policy.assert_no_app_permission
+_assert_not_admin_group_member = _access_policy.assert_not_admin_group_member
+_ensure_group_membership = _access_policy.ensure_group_membership
+_find_group = _access_policy.find_group
+_resolve_effective_groups = _access_policy.resolve_effective_groups
+_wrap_admin_error = _access_policy.wrap_admin_error
 
 DATABRICKS_YML = REPO_ROOT / "databricks.yml"
-DOCS_RUNBOOK = "docs/security/m2m-oauth-setup.md"
-
+DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
 # Deployed App URL. Written as a GitHub secret alongside the client id/secret
 # so the workflow's deployed-path detection flips on in a single admin pass.
 DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
+
+
 def _diag(msg: str) -> None:
     """Stderr diagnostic. Keeps stdout clean for scripted consumers."""
     print(f"[mip-m2m-provision] {msg}", file=sys.stderr)
@@ -173,78 +181,6 @@ def _create_sp(client: Any, display_name: str) -> Any:
         raise _wrap_admin_error(exc, step="create service_principal") from exc
 
 
-def _find_group(client: Any, display_name: str) -> Any | None:
-    """Return a hydrated exact SCIM group match, never a list-page stub."""
-    try:
-        groups = list(client.groups.list(filter=f"displayName eq '{display_name}'"))
-    except Exception as exc:  # noqa: BLE001
-        raise _wrap_admin_error(exc, step="list groups") from exc
-    for group in groups:
-        if getattr(group, "display_name", None) == display_name:
-            group_id = str(getattr(group, "id", "") or "").strip()
-            if not group_id:
-                raise SystemExit(f"Group {display_name!r} has no SCIM id")
-            try:
-                # SCIM list responses may omit ``members``. Membership is a
-                # privilege boundary here, so make the decision from the
-                # immutable-id resource rather than a potentially sparse row.
-                return client.groups.get(group_id)
-            except Exception as exc:  # noqa: BLE001
-                raise _wrap_admin_error(exc, step="get group membership") from exc
-    return None
-
-
-def _ensure_group_membership(
-    client: Any,
-    *,
-    group_name: str,
-    sp_id: str,
-    create_group: bool,
-) -> bool:
-    """Ensure the SP is a direct group member; return True only on mutation."""
-    group = _find_group(client, group_name)
-    if group is None:
-        if not create_group:
-            raise SystemExit(
-                f"Required admin group {group_name!r} does not exist. "
-                "Re-run with --create-group only after governance review."
-            )
-        _diag(f"creating group display_name={group_name!r} (--create-group)")
-        try:
-            group = client.groups.create(display_name=group_name)
-        except Exception as exc:  # noqa: BLE001
-            raise _wrap_admin_error(exc, step="create group") from exc
-
-    group_id = str(getattr(group, "id", "") or "").strip()
-    if not group_id:
-        raise SystemExit(f"Group {group_name!r} has no SCIM id")
-    members = getattr(group, "members", None) or []
-    if any(str(getattr(member, "value", "") or "") == sp_id for member in members):
-        _diag(f"service principal is already a member of group={group_name!r}")
-        return False
-
-    from databricks.sdk.service.iam import Patch, PatchOp, PatchSchema  # type: ignore
-
-    _diag(f"adding service principal id={sp_id} to group={group_name!r}")
-    try:
-        client.groups.patch(
-            id=group_id,
-            operations=[
-                Patch(
-                    op=PatchOp.ADD,
-                    # Patch.value is typed as Any. Nested SDK model instances
-                    # are not recursively serialized by Patch.as_dict(), so
-                    # keep the SCIM member payload JSON-native.
-                    value={"members": [{"value": sp_id}]},
-                )
-            ],
-            schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise _wrap_admin_error(exc, step="add service_principal to group") from exc
-    return True
-
-
 def _ensure_lakebase_service_principal_role(
     client: Any,
     *,
@@ -260,7 +196,7 @@ def _ensure_lakebase_service_principal_role(
         _diag(f"Lakebase service-principal role already exists on instance={instance_name!r}")
         return False
 
-    from databricks.sdk.service.database import (  # type: ignore
+    from databricks.sdk.service.database import (
         DatabaseInstanceRole,
         DatabaseInstanceRoleIdentityType,
     )
@@ -292,7 +228,7 @@ def _grant_can_use_on_app(
     under the hood). ``service_principal_name`` expects the SP's
     ``application_id`` (a.k.a. the OAuth client_id), NOT the SCIM ``id``.
     """
-    from databricks.sdk.service.apps import (  # type: ignore
+    from databricks.sdk.service.apps import (
         AppAccessControlRequest,
         AppPermissionLevel,
     )
@@ -326,7 +262,7 @@ def _grant_can_query_on_endpoint(
     sp_application_id: str,
 ) -> None:
     """Add the verifier's CAN_QUERY grant without replacing other endpoint ACLs."""
-    from databricks.sdk.service.serving import (  # type: ignore
+    from databricks.sdk.service.serving import (
         ServingEndpointAccessControlRequest,
         ServingEndpointPermissionLevel,
     )
@@ -357,7 +293,7 @@ def _grant_can_use_on_warehouse(
     sp_application_id: str,
 ) -> None:
     """Add verifier CAN_USE on one SQL warehouse without replacing ACLs."""
-    from databricks.sdk.service.sql import (  # type: ignore
+    from databricks.sdk.service.sql import (
         WarehouseAccessControlRequest,
         WarehousePermissionLevel,
     )
@@ -377,49 +313,6 @@ def _grant_can_use_on_warehouse(
         raise _wrap_admin_error(exc, step="update SQL warehouse permissions") from exc
 
 
-def _assert_not_admin_group_member(
-    client: Any,
-    *,
-    group_name: str,
-    sp_id: str,
-    identity_role: IdentityRole,
-) -> None:
-    """Fail closed if a non-admin automation identity retained admin access."""
-    group = _find_group(client, group_name)
-    if group is None:
-        return
-    members = getattr(group, "members", None) or []
-    if any(str(getattr(member, "value", "") or "") == sp_id for member in members):
-        raise SystemExit(
-            f"{identity_role} service principal is still a member of forbidden "
-            f"admin group {group_name!r}; remove that membership before provisioning"
-        )
-
-
-def _assert_no_direct_app_permission(
-    client: Any,
-    *,
-    app_name: str,
-    sp_application_id: str,
-) -> None:
-    """Fail closed when the verifier retained a direct Databricks App grant."""
-    try:
-        permissions = client.apps.get_permissions(app_name)
-    except Exception as exc:  # noqa: BLE001
-        raise _wrap_admin_error(exc, step="inspect app permissions") from exc
-    for entry in getattr(permissions, "access_control_list", None) or []:
-        if str(getattr(entry, "service_principal_name", "") or "") != sp_application_id:
-            continue
-        if any(
-            not bool(getattr(permission, "inherited", False))
-            for permission in (getattr(entry, "all_permissions", None) or [])
-        ):
-            raise SystemExit(
-                "verifier service principal retains forbidden direct Databricks App "
-                f"permission on {app_name!r}; remove it before provisioning"
-            )
-
-
 def _mint_oauth_secret(client: Any, sp_id: str) -> Any:
     """Mint a new OAuth client_secret for the SP. Returned once, never again."""
     _diag(f"minting OAuth secret for service_principal_id={sp_id}")
@@ -427,31 +320,6 @@ def _mint_oauth_secret(client: Any, sp_id: str) -> Any:
         return client.service_principal_secrets_proxy.create(service_principal_id=sp_id)
     except Exception as exc:  # noqa: BLE001
         raise _wrap_admin_error(exc, step="mint OAuth secret") from exc
-
-
-def _wrap_admin_error(exc: Exception, *, step: str) -> SystemExit:
-    """Turn an SDK exception into a pointed, actionable SystemExit.
-
-    The common failure mode when this tool is run by a non-admin is a
-    generic ``PermissionDenied``/403. Rather than surface a stack trace
-    we point to the manual UI path documented in the runbook appendix.
-    """
-    msg = str(exc)
-    is_admin_err = any(
-        token in msg.lower()
-        for token in ("forbidden", "permission denied", "403", "not authorized", "unauthorized")
-    )
-    hint_lines = [f"[mip-m2m-provision] {step} failed: {type(exc).__name__}: {msg[:400]}"]
-    if is_admin_err:
-        hint_lines.append(
-            "[mip-m2m-provision] this step requires workspace-admin auth; your current "
-            f"profile cannot perform {step!r}."
-        )
-        hint_lines.append(
-            f"[mip-m2m-provision] ask an admin to run this tool, or follow the manual "
-            f"appendix in {DOCS_RUNBOOK}."
-        )
-    return SystemExit("\n".join(hint_lines))
 
 
 # ---------------------------------------------------------------------------
@@ -490,7 +358,7 @@ def provision(
     if client_factory is None:
 
         def client_factory() -> Any:
-            from databricks.sdk import WorkspaceClient  # type: ignore
+            from databricks.sdk import WorkspaceClient
 
             return WorkspaceClient()
 
@@ -544,18 +412,21 @@ def provision(
             "configured client id; refusing to grant the wrong identity."
         )
 
+    effective_groups: dict[str, str] = {}
     if identity_role != "admin":
+        effective_groups = _resolve_effective_groups(client, sp_id=sp.id)
         _assert_not_admin_group_member(
-            client,
             group_name=DEFAULT_ADMIN_GROUP,
-            sp_id=sp.id,
+            effective_groups=effective_groups,
             identity_role=identity_role,
         )
     if identity_role == "verifier":
-        _assert_no_direct_app_permission(
+        _assert_no_app_permission(
             client,
             app_name=app_name,
             sp_application_id=sp.application_id,
+            sp_display_name=sp.display_name,
+            effective_group_names=set(effective_groups.values()),
         )
 
     added_to_group = False

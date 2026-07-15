@@ -18,7 +18,7 @@
  */
 
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import { act } from 'react';
+import { act, type ComponentProps } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -106,7 +106,10 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     container.remove();
   });
 
-  function mount(initialEntry = '/lead-queue') {
+  function mount(
+    initialEntry = '/lead-queue',
+    growthAgentVerification: ComponentProps<typeof LeadTable>['growthAgentVerification'] = null,
+  ) {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
@@ -114,7 +117,10 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       root.render(
         <QueryClientProvider client={queryClient}>
           <MemoryRouter initialEntries={[initialEntry]}>
-            <LeadTable leads={[lead('B-AAAAAAAAAAAA1')]} />
+            <LeadTable
+              leads={[lead('B-AAAAAAAAAAAA1')]}
+              growthAgentVerification={growthAgentVerification}
+            />
           </MemoryRouter>
         </QueryClientProvider>,
       );
@@ -243,17 +249,33 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     expect(offerUrl.searchParams.get('variant_name')).toBe('B');
   });
 
-  it('shows verified Growth Agent cohort provenance from a proof-bound route', () => {
-    mount(
-      `/lead-queue?actionable_total=5394&actionable_cohort_fingerprint=${'b'.repeat(64)}`
-      + '&actionable_snapshot_id=2026-07-14+12%3A00%3A00',
-    );
+  it('shows verified Growth Agent cohort provenance only from backend verification', () => {
+    const verification = {
+      status: 'verified' as const,
+      runId: '11111111-1111-4111-8111-111111111111',
+      total: 5394,
+      cohortFingerprint: 'b'.repeat(64),
+      snapshotId: '2026-07-14 12:00:00',
+    };
+    mount('/lead-queue', verification);
 
     const proof = container.querySelector('[data-testid="growth-agent-cohort-proof"]');
     expect(proof?.textContent).toContain('Verified Growth Agent cohort');
     expect(proof?.textContent).toContain('5,394 borrowers');
     expect(proof?.textContent).toContain('proof bbbbbbbbbbbb');
     expect(proof?.textContent).toContain('snapshot 2026-07-14 12:00:00');
+    expect(proof?.textContent).toContain('run 11111111-111');
+  });
+
+  it('does not trust a proof-shaped Lead Queue URL without backend verification', () => {
+    mount(
+      `/lead-queue?growth_agent_run_id=11111111-1111-4111-8111-111111111111`
+      + '&actionable_total=5394'
+      + `&actionable_cohort_fingerprint=${'b'.repeat(64)}`
+      + '&actionable_snapshot_id=2026-07-14+12%3A00%3A00',
+    );
+
+    expect(container.querySelector('[data-testid="growth-agent-cohort-proof"]')).toBeNull();
   });
 
   it("no-ops 'a' on an already-approved row, and the preview SAYS approved", async () => {

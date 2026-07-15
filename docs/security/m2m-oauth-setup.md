@@ -337,5 +337,14 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
 - The SP's scope is `CAN USE` on the deployed app and nothing else. If
   a future feature needs broader access (e.g. SQL warehouse reads), add
   a second purpose-built SP rather than widening this one.
+- The AI Gateway verifier SP is separate from the app-access SP. It may
+  receive only its scoped Lakebase role, serving-endpoint `CAN QUERY`, and
+  SQL-warehouse `CAN USE`; it must have no direct, inherited, or effective
+  app permission and no direct or nested membership in `mip-admin` or an
+  app-authorized group.
+- Verifier provisioning hydrates the workspace group graph and app ACL before
+  granting resources or minting a secret. Any group or permission resolution
+  error fails closed and requires an administrator to repair visibility before
+  retrying.
 - The workflow's mint step uses `run: |` with inline shell, not a
   third-party GitHub Action. No marketplace dependency is introduced.

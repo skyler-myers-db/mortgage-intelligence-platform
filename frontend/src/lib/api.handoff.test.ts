@@ -54,6 +54,7 @@ describe('campaign-bound outreach API client', () => {
 describe('Growth Agent Lead Queue proof', () => {
   const signedHandoff = 'v1.non-admin-growth-agent-handoff.signature';
   const proof = {
+    runId: '11111111-1111-4111-8111-111111111111',
     actionableTotal: 12,
     cohortFingerprint: '8c91a6378bcc3cd62df18369faed832c2016d8343fdd85b9d298978eea7eb40d',
     growthHandoff: signedHandoff,
@@ -61,7 +62,7 @@ describe('Growth Agent Lead Queue proof', () => {
     toolResultHash: 'a'.repeat(64),
   };
 
-  it('requests atomic identity headers and verifies total, fingerprint, and snapshot', async () => {
+  it('requests atomic identity headers and verifies total, fingerprint, snapshot, and run id', async () => {
     const calls: string[] = [];
     vi.stubGlobal('fetch', async (path: string) => {
       calls.push(path);
@@ -69,7 +70,9 @@ describe('Growth Agent Lead Queue proof', () => {
         'X-Total-Matching': '12',
         'X-Returned-Rows': '0',
         'X-Cohort-Digest': 'b'.repeat(64),
+        'X-Cohort-Fingerprint': proof.cohortFingerprint,
         'X-Cohort-Snapshot-ID': proof.snapshotId,
+        'X-Growth-Agent-Run-ID': proof.runId,
       });
     });
 
@@ -82,6 +85,7 @@ describe('Growth Agent Lead Queue proof', () => {
     )).toBe('true');
     expect(result.growthAgentVerification).toEqual({
       status: 'verified',
+      runId: proof.runId,
       total: 12,
       cohortFingerprint: proof.cohortFingerprint,
       snapshotId: proof.snapshotId,
@@ -92,7 +96,8 @@ describe('Growth Agent Lead Queue proof', () => {
     const calls: Array<{ path: string; init?: RequestInit }> = [];
     vi.stubGlobal('window', {
       location: {
-        search: `?actionable_total=${proof.actionableTotal}`
+        search: `?growth_agent_run_id=${proof.runId}`
+          + `&actionable_total=${proof.actionableTotal}`
           + `&actionable_cohort_fingerprint=${proof.cohortFingerprint}`
           + `&actionable_snapshot_id=${encodeURIComponent(proof.snapshotId)}`
           + `&tool_result_hash=${proof.toolResultHash}`
@@ -105,7 +110,9 @@ describe('Growth Agent Lead Queue proof', () => {
         'X-Total-Matching': '12',
         'X-Returned-Rows': '0',
         'X-Cohort-Digest': 'b'.repeat(64),
+        'X-Cohort-Fingerprint': proof.cohortFingerprint,
         'X-Cohort-Snapshot-ID': proof.snapshotId,
+        'X-Growth-Agent-Run-ID': proof.runId,
       });
     });
 
@@ -122,7 +129,9 @@ describe('Growth Agent Lead Queue proof', () => {
       'X-Total-Matching': '13',
       'X-Returned-Rows': '0',
       'X-Cohort-Digest': 'b'.repeat(64),
+      'X-Cohort-Fingerprint': proof.cohortFingerprint,
       'X-Cohort-Snapshot-ID': proof.snapshotId,
+      'X-Growth-Agent-Run-ID': proof.runId,
     }));
 
     await expect(api.leadsPage(undefined, undefined, undefined, {
@@ -135,6 +144,27 @@ describe('Growth Agent Lead Queue proof', () => {
       'X-Total-Matching': '12',
       'X-Returned-Rows': '0',
     }));
+
+    await expect(api.leadsPage(undefined, undefined, undefined, {
+      growthAgentProof: proof,
+    })).rejects.toThrow('Growth Agent cohort is stale');
+  });
+
+  it.each([
+    ['X-Cohort-Fingerprint', 'c'.repeat(64)],
+    ['X-Cohort-Snapshot-ID', '2026-07-15 12:00:00'],
+    ['X-Growth-Agent-Run-ID', '22222222-2222-4222-8222-222222222222'],
+  ])('fails closed when %s does not match the handoff', async (header, value) => {
+    const headers = {
+      'X-Total-Matching': '12',
+      'X-Returned-Rows': '0',
+      'X-Cohort-Digest': 'b'.repeat(64),
+      'X-Cohort-Fingerprint': proof.cohortFingerprint,
+      'X-Cohort-Snapshot-ID': proof.snapshotId,
+      'X-Growth-Agent-Run-ID': proof.runId,
+      [header]: value,
+    };
+    vi.stubGlobal('fetch', async () => jsonResponseWithHeaders(200, [], headers));
 
     await expect(api.leadsPage(undefined, undefined, undefined, {
       growthAgentProof: proof,

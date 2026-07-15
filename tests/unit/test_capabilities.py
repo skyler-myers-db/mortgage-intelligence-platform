@@ -383,7 +383,10 @@ class _FakeApiClient:
             raise self.error
         if self.empty_response:
             return {}
-        return {"output": [{"content": [{"text": "ready"}]}]}
+        return {
+            "status": "completed",
+            "output": [{"content": [{"text": "ready"}]}],
+        }
 
 
 class _FakeExperiments:

@@ -529,7 +529,11 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_lifecycle_state (
   outreach_status   STRING    NOT NULL COMMENT 'queued / actioned / none. Derived from latest outreach state.',
   offer_code        STRING             COMMENT 'Latest offer_code associated with the approval decision.',
   approved_at       TIMESTAMP          COMMENT 'decided_at for the latest approve action; NULL when not approved.',
+  approval_decided_at TIMESTAMP        COMMENT 'Timestamp component of the total-order approval version, including reject and hold actions.',
+  approval_event_id STRING             COMMENT 'Non-PII approval UUID used with approval_decided_at as the total-order approval version.',
   outreach_at       TIMESTAMP          COMMENT 'Timestamp of latest outreach action.',
+  outreach_created_at TIMESTAMP        COMMENT 'Creation timestamp of the latest outreach event; second field in the total-order outreach version.',
+  outreach_event_id STRING             COMMENT 'Non-PII disposition UUID used as the final total-order outreach version field.',
   synced_at         TIMESTAMP NOT NULL COMMENT 'Last sync run that touched this row.',
   refreshed_at      TIMESTAMP NOT NULL COMMENT 'Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.'
 )

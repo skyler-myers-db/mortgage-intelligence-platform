@@ -28,7 +28,7 @@ _PUBLIC_CAPABILITY_AVAILABLE_DETAILS = {
     "certified_metric_views": "Live certified metric-view probes passed for this workspace.",
     "uc_function_tools": "Live reviewed SQL tool probes passed for this workspace.",
     "agent_eval": "Live MLflow Agent Evaluation passed for this deployment.",
-    "agent_orchestrator": "Live Supervisor Agent endpoint probe passed for this workspace.",
+    "agent_orchestrator": "Live Databricks Agent Responses probe passed for this workspace.",
     "ai_gateway": (
         "Live AI Gateway endpoint probe passed; a freshness-bounded exact inference row "
         "has been verified in the deployment proof ledger."
@@ -40,7 +40,7 @@ _PUBLIC_CAPABILITY_CONFIGURED_DETAILS = {
     "certified_metric_views": "Certified metric-view SQL contracts are bundled; live proof is required before claiming this row.",
     "uc_function_tools": "Reviewed SQL tool contracts are bundled; live proof is required before claiming this row.",
     "agent_eval": "Agent Evaluation assets are configured; a live passing evaluation is required before claiming this row.",
-    "agent_orchestrator": "Supervisor Agent configuration is present; live endpoint proof is required before claiming this row.",
+    "agent_orchestrator": "Databricks Agent Responses configuration is present; live endpoint proof is required before claiming this row.",
     "ai_gateway": "AI Gateway configuration is present; live endpoint proof and a fresh exact-row proof-ledger entry are required before claiming this row.",
     "lakebase_sync": "Lakebase synced-table configuration is present; live row-count proof is required before claiming this row.",
 }

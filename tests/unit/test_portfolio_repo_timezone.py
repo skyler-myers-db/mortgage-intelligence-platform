@@ -26,10 +26,12 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services.campaign_intelligence import (
+    campaign_copy_hash,
     campaign_criteria_fingerprint,
     issue_campaign_variant_provenance,
 )
 from backend.services.lakebase import LakebaseError
+from backend.services.repositories.databricks_portfolio import campaign_summary_from_row
 from backend.services.repositories.databricks_repo import (
     DatabricksPortfolioRepository,
 )
@@ -539,6 +541,44 @@ def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
     assert len(first.campaigns) == len(second.campaigns) == 1
     assert len(lakebase.calls) == 2
     assert all("mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
+
+
+def test_campaign_summary_derives_creation_verification_from_durable_proof() -> None:
+    generated = {
+        "variant_name": "A",
+        "generation_mode": "supervisor",
+        "generator_label": "Databricks Agent Responses",
+        "provenance_key_id": "v1",
+        "subject": "Review your options",
+        "body": "A loan officer can review the available options.",
+        "provenance_copy_hash": campaign_copy_hash(
+            "Review your options",
+            "A loan officer can review the available options.",
+        ),
+        "provenance_criteria_fingerprint": campaign_criteria_fingerprint({}),
+        "provenance_issued_at": "2026-07-14T00:00:00Z",
+        "provenance_expires_at": "2026-07-15T00:00:00Z",
+    }
+    operator = {
+        "variant_name": "B",
+        "generation_mode": "operator",
+        "generator_label": "Operator edited",
+    }
+
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Verified campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": {},
+            "message_variants": [generated, operator],
+        }
+    )
+
+    assert summary.message_variants[0]["copy_verified_at_creation"] is True
+    assert summary.message_variants[1]["copy_verified_at_creation"] is False
+    assert "provenance_token" not in summary.message_variants[0]
 
 
 def test_campaign_list_excludes_archived_by_default(monkeypatch):

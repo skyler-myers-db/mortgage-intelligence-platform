@@ -490,7 +490,7 @@ def run_mortgage_growth_agent(
 ) -> GrowthAgentRunResponse:
     """Route a natural-language co-pilot request to reviewed workflows.
 
-    When the Databricks Supervisor Agent is configured, it may choose exactly
+    When Databricks Agent Responses is configured, it may choose exactly
     one reviewed workflow id from the app allowlist. The endpoint still does
     not call the normal Genie answer path for prompt planning because that path
     can compile and execute SQL. Reviewed deterministic tools own SQL, counts,

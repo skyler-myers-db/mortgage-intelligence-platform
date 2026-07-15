@@ -153,7 +153,7 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert "listing_watch" in calls[0]["prompt"]
     assert body["execution_mode"] == "agent_framework"
     assert body["trace_kind"] == "agent_framework"
-    assert body["planner_label"] == "Databricks Agent Responses endpoint"
+    assert body["planner_label"] == "Databricks Agent Responses"
     assert body["workflow"]["id"] == "listing_watch"
     _assert_signed_lead_queue_route(
         body["route"],
@@ -163,11 +163,13 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
             "states": ["IL"],
         },
     )
-    assert "Agent Responses endpoint selected reviewed workflow" in body["interpreted_intent"]
+    assert "Databricks Agent Responses selected reviewed workflow" in body["interpreted_intent"]
     assert "deterministic fallback candidate" in body["interpreted_intent"]
     assert "Daily Refi Opportunity Brief" in body["agent_reasoning"]
     selection_check = next(
-        check for check in body["policy_checks"] if check["label"] == "Supervisor workflow selection"
+        check
+        for check in body["policy_checks"]
+        if check["label"] == "Databricks Agent Responses workflow selection"
     )
     assert selection_check["status"] == "review_required"
     assert "listing_watch" in selection_check["detail"]
@@ -176,14 +178,16 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
         "databricks.serving_endpoint.mip-supervisor-endpoint",
     ]
     framework_chip = next(
-        chip for chip in body["governance_chips"] if chip["label"] == "Multi-agent framework"
+        chip
+        for chip in body["governance_chips"]
+        if chip["label"] == "Databricks Agent Responses"
     )
     assert framework_chip["status"] == "review_required"
     assert "different reviewed workflow" in framework_chip["detail"]
     assert framework_chip["evidence_ref"] == body["genie_question_hash"]
     gateway_chip = next(chip for chip in body["governance_chips"] if chip["label"] == "AI Gateway")
     assert gateway_chip["status"] == "review_required"
-    assert "Supervisor call was routed through the configured AI Gateway endpoint" in gateway_chip["detail"]
+    assert "Databricks Agent Responses was routed through the configured AI Gateway" in gateway_chip["detail"]
     assert "does not claim per-run row landing" in gateway_chip["detail"]
     assert str(calls[0]["client_request_id"]) not in json.dumps(body)
     assert len(body["genie_question_hash"]) == 64
@@ -254,11 +258,15 @@ def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
     assert replay.status_code == 200, replay.text
     assert replay.json()["run_id"] == first.json()["run_id"]
     selection_check = next(
-        check for check in replay.json()["policy_checks"] if check["label"] == "Supervisor workflow selection"
+        check
+        for check in replay.json()["policy_checks"]
+        if check["label"] == "Databricks Agent Responses workflow selection"
     )
     assert selection_check["status"] == "review_required"
     framework_chip = next(
-        chip for chip in replay.json()["governance_chips"] if chip["label"] == "Multi-agent framework"
+        chip
+        for chip in replay.json()["governance_chips"]
+        if chip["label"] == "Databricks Agent Responses"
     )
     assert framework_chip["status"] == "review_required"
     assert len(calls) == 2
@@ -322,7 +330,9 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
     assert body["execution_mode"] == "agent_framework"
     assert body["workflow"]["id"] == "daily_refi_brief"
     selection_check = next(
-        check for check in body["policy_checks"] if check["label"] == "Supervisor workflow selection"
+        check
+        for check in body["policy_checks"]
+        if check["label"] == "Databricks Agent Responses workflow selection"
     )
     assert selection_check["status"] == "passed"
     assert "agreed on daily_refi_brief" in selection_check["detail"]

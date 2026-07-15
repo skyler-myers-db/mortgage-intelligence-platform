@@ -265,7 +265,7 @@ _GENIE_PUBLIC_PROCESS_STEPS: tuple[tuple[tuple[str, ...], str, str], ...] = (
     (
         ("QUERY", "SQL", "EXECUT"),
         "query",
-        "Prepared and ran a query over approved data assets.",
+        "Prepared a governed query plan over approved data assets.",
     ),
     (
         ("SYNTH", "ANSWER", "SUMMAR"),

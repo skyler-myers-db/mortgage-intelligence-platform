@@ -140,7 +140,13 @@ class _ProofSql:
             if self.counts_by_request_id is not None:
                 if not isinstance(parameters, dict):
                     return [{"row_count": 0}]
-                return [{"row_count": self.counts_by_request_id.get(str(parameters.get("client_request_id")), 0)}]
+                return [
+                    {
+                        "row_count": self.counts_by_request_id.get(
+                            str(parameters.get("client_request_id")), 0
+                        )
+                    }
+                ]
             return [{"row_count": self.exact_count}]
         raise AssertionError(f"unexpected SQL: {statement}")
 
@@ -152,14 +158,19 @@ class _Workspace:
             (),
             {
                 "do": lambda _self, *_args, **_kwargs: {
-                    "choices": [{"message": {"content": "Gateway logging acknowledged."}}]
+                    "status": "completed",
+                    "output": [{"content": [{"text": "Gateway logging acknowledged."}]}],
                 }
             },
         )()
         self.serving_endpoints = type(
             "ServingEndpoints",
             (),
-            {"get": lambda _self, _endpoint: type("Endpoint", (), {"task": "agent/v1/responses"})()},
+            {
+                "get": lambda _self, _endpoint: type(
+                    "Endpoint", (), {"task": "agent/v1/responses"}
+                )()
+            },
         )()
 
 
@@ -171,6 +182,29 @@ class _NoPayloadWorkspace(_Workspace):
             (),
             {"do": lambda _self, *_args, **_kwargs: {}},
         )()
+
+
+def test_workspace_client_disables_sdk_transport_retries(monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def _config(**kwargs: Any) -> dict[str, Any]:
+        captured["config_kwargs"] = kwargs
+        return kwargs
+
+    def _workspace_client(*, config: object) -> object:
+        captured["config"] = config
+        return object()
+
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "Config", _config)
+    monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", _workspace_client)
+
+    verify_ai_gateway_exact_proof._workspace_client()
+
+    assert captured["config_kwargs"] == {
+        "http_timeout_seconds": 300,
+        "retry_timeout_seconds": 0,
+    }
+    assert captured["config"] == captured["config_kwargs"]
 
 
 def _verified_row(*, git_sha: str, verified_at: datetime) -> dict[str, Any]:
@@ -290,7 +324,9 @@ def test_mark_expired_pending_proofs_marks_expired_not_failed() -> None:
 def test_verifier_send_wait_records_exact_verified_row(monkeypatch) -> None:
     lakebase = _ProofLakebase()
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1))
+    monkeypatch.setattr(
+        verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1)
+    )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
@@ -322,7 +358,9 @@ def test_verifier_require_verified_accepts_existing_current_sha_proof(monkeypatc
         [_verified_row(git_sha=_TEST_GIT_SHA, verified_at=datetime.now(UTC) - timedelta(minutes=5))]
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=0))
+    monkeypatch.setattr(
+        verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=0)
+    )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
@@ -352,7 +390,9 @@ def test_verifier_require_verified_rejects_wrong_endpoint_pending_false_pass(mon
         sent_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1))
+    monkeypatch.setattr(
+        verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1)
+    )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
@@ -462,6 +502,101 @@ def test_wait_for_exact_row_timeout_leaves_pending() -> None:
     assert lakebase.rows[0]["status"] == "pending"
 
 
+def test_verify_pending_rejects_duplicate_exact_rows() -> None:
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-eeeeeeeeeeeeeeee",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        sent_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+
+    verified = verify_ai_gateway_exact_proof.verify_pending(
+        lakebase=lakebase,
+        sql_client=_ProofSql(counts_by_request_id={proof.client_request_id: 2}),
+        git_sha=_TEST_GIT_SHA,
+        endpoint=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        limit=100,
+    )
+
+    assert verified == []
+    assert lakebase.rows[0]["status"] == "pending"
+
+
+def test_wait_for_exact_row_rejects_duplicate_exact_rows() -> None:
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-ffffffffffffffff",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        sent_at=datetime.now(UTC) - timedelta(minutes=5),
+    )
+
+    verified = verify_ai_gateway_exact_proof.wait_for_exact_row(
+        lakebase=lakebase,
+        sql_client=_ProofSql(counts_by_request_id={proof.client_request_id: 2}),
+        proof=proof,
+        timeout_s=60,
+        interval_s=1,
+    )
+
+    assert verified == []
+    assert lakebase.rows[0]["status"] == "pending"
+
+
+@pytest.mark.parametrize(
+    "submission_error",
+    [TimeoutError("request timed out"), RuntimeError("503 Service Unavailable")],
+)
+def test_exact_proof_timeout_or_503_is_pending_and_never_retried(
+    submission_error: Exception,
+) -> None:
+    lakebase = _ProofLakebase()
+
+    class _ApiClient:
+        def __init__(self) -> None:
+            self.request_ids: list[str] = []
+
+        def do(self, _method: str, _path: str, *, body: dict[str, Any]) -> dict[str, Any]:
+            request_id = str(body["client_request_id"])
+            self.request_ids.append(request_id)
+            if request_id.startswith("mip-capability-"):
+                raise submission_error
+            return {"status": "completed", "output": [{"content": [{"text": "warm"}]}]}
+
+    workspace = _Workspace()
+    workspace.api_client = _ApiClient()
+
+    proof = verify_ai_gateway_exact_proof.send_probe(
+        lakebase=lakebase,
+        workspace=workspace,
+        endpoint=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        git_sha=_TEST_GIT_SHA,
+    )
+
+    proof_ids = [
+        request_id
+        for request_id in workspace.api_client.request_ids
+        if request_id.startswith("mip-capability-")
+    ]
+    warmup_ids = [
+        request_id
+        for request_id in workspace.api_client.request_ids
+        if request_id.startswith("mip-warmup-")
+    ]
+    assert proof.status == "pending"
+    assert proof_ids == [proof.client_request_id]
+    assert len(warmup_ids) == 1
+    assert proof.client_request_id not in warmup_ids
+    assert lakebase.rows[0]["status"] == "pending"
+
+
 def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
     lakebase = _ProofLakebase(
         [_verified_row(git_sha=_TEST_GIT_SHA, verified_at=datetime.now(UTC) - timedelta(minutes=5))]
@@ -528,7 +663,7 @@ def test_proof_summary_redacts_coordinates() -> None:
     assert proof.inference_table not in encoded
 
 
-def test_no_payload_error_redacts_endpoint_name() -> None:
+def test_non_completed_responses_payload_error_redacts_endpoint_name() -> None:
     lakebase = _ProofLakebase()
 
     with pytest.raises(RuntimeError) as exc:
@@ -541,10 +676,11 @@ def test_no_payload_error_redacts_endpoint_name() -> None:
         )
 
     message = str(exc.value)
-    assert "Configured AI Gateway endpoint returned no response payload" in message
+    assert "did not return a terminal completed payload" in message
     assert _ENDPOINT not in message
     assert _INFERENCE_TABLE not in message
-    assert lakebase.rows == []
+    assert len(lakebase.rows) == 1
+    assert lakebase.rows[0]["status"] == "pending"
 
 
 def test_verifier_script_path_help_runs_without_pythonpath() -> None:

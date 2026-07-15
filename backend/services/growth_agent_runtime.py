@@ -71,11 +71,11 @@ def tool_steps(
     supervisor_override = bool(copilot_evidence.workflow_override_review_required)
     if supervisor_override:
         planner_detail = (
-            "Supervisor selected a different allowlisted workflow than the deterministic fallback; "
+            "Databricks Agent Responses selected a different allowlisted workflow than the deterministic fallback; "
             "human review is required before acting."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
-        planner_detail = "Supervisor selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
+        planner_detail = "Databricks Agent Responses selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
     else:
         planner_detail = "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
     planner_step = GrowthAgentToolStep(
@@ -250,13 +250,13 @@ def policy_checks(
         override = bool(copilot_evidence.workflow_override_review_required)
         checks.append(
             GrowthAgentPolicyCheck(
-                label="Supervisor workflow selection",
+                label="Databricks Agent Responses workflow selection",
                 status="review_required" if override else "passed",
                 detail=(
-                    f"Supervisor selected {selected}; deterministic fallback candidate was "
+                    f"Databricks Agent Responses selected {selected}; deterministic fallback candidate was "
                     f"{deterministic}. Review the workflow choice before acting."
                     if override
-                    else f"Supervisor and deterministic planner agreed on {selected}."
+                    else f"Databricks Agent Responses and deterministic planner agreed on {selected}."
                 ),
             )
         )
@@ -328,13 +328,13 @@ def governance_chips(
     if copilot_evidence.workflow_override_review_required:
         framework_status: Literal["passed", "review_required", "not_attached"] = "review_required"
         framework_detail = (
-            "Databricks Agent Responses endpoint selected a different reviewed workflow than the "
+            "Databricks Agent Responses selected a different reviewed workflow than the "
             "deterministic fallback; review the workflow choice before acting."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
         framework_status = "passed"
         framework_detail = (
-            "Databricks Agent Responses endpoint selected a reviewed workflow; reviewed "
+            "Databricks Agent Responses selected a reviewed workflow; reviewed "
             "deterministic tools executed the run."
         )
     else:
@@ -366,7 +366,7 @@ def governance_chips(
             evidence_ref=None,
         ),
         GrowthAgentGovernanceChip(
-            label="Multi-agent framework",
+            label="Databricks Agent Responses",
             status=framework_status,
             detail=framework_detail,
             evidence_ref=copilot_evidence.question_hash
@@ -382,12 +382,12 @@ def governance_chips(
                 else "not_attached"
             ),
             detail=(
-                "Supervisor call was routed through the configured AI Gateway endpoint; "
+                "Databricks Agent Responses was routed through the configured AI Gateway; "
                 "deployment-level exact inference-row proof is required before AI Gateway is claimable. "
                 "This run card does not claim per-run row landing."
                 if copilot_evidence.execution_mode == "agent_framework"
                 and copilot_evidence.gateway_client_request_id
-                else "No AI Gateway-routed Supervisor request is attached to this run."
+                else "No AI Gateway-routed Databricks Agent Responses request is attached to this run."
             ),
             evidence_ref=None,
         ),

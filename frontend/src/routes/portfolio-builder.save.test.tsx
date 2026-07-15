@@ -377,7 +377,7 @@ describe('PortfolioBuilder save-build flow', () => {
               body: 'A body',
               generation_mode: 'supervisor',
               generator_label: 'Mortgage Growth Supervisor',
-              provenance_token: 'signed-variant-proof-token-0000000000001',
+              copy_verified_at_creation: true,
             },
             {
               variant_name: 'B',
@@ -386,7 +386,7 @@ describe('PortfolioBuilder save-build flow', () => {
               body: 'B body',
               generation_mode: 'supervisor',
               generator_label: 'Mortgage Growth Supervisor',
-              provenance_token: 'signed-variant-proof-token-0000000000002',
+              copy_verified_at_creation: true,
             },
           ],
         },
@@ -396,7 +396,7 @@ describe('PortfolioBuilder save-build flow', () => {
     await waitUntil(() => container.textContent?.includes('Supervisor IL refinance campaign') === true);
 
     expect(container.textContent).toContain('Mortgage Growth Supervisor');
-    expect(container.textContent).toContain('Copy verified');
+    expect(container.textContent).toContain('Verified at creation');
     const variant = container.querySelector<HTMLSelectElement>(
       'select[aria-label="Message variant for Supervisor IL refinance campaign"]',
     )!;

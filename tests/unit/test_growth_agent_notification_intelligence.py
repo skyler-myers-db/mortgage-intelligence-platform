@@ -73,7 +73,7 @@ class _ServingEndpoints:
         return SimpleNamespace(state=SimpleNamespace(ready="READY"), task="agent/v1/responses")
 
 
-def test_notification_intelligence_uses_validated_supervisor_fragments() -> None:
+def test_notification_intelligence_uses_validated_agent_response_fragments() -> None:
     client = SimpleNamespace(serving_endpoints=_ServingEndpoints(), api_client=_ApiClient())
     result = recommend_notification_intelligence(
         monitor_name="Daily Refi Watch",
@@ -87,7 +87,7 @@ def test_notification_intelligence_uses_validated_supervisor_fragments() -> None
     )
 
     assert result.generation_mode == "supervisor"
-    assert result.generator_label == "Supervisor-composed notification"
+    assert result.generator_label == "Databricks Agent Responses"
     assert result.slack_context != result.teams_summary
 
 

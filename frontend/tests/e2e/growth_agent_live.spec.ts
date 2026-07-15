@@ -119,6 +119,28 @@ async function expectLeadQueueHandoffMatchesActionableTotal(
   expect(leadResp.headers()['x-cohort-snapshot-id']).toBe(run.actionable_snapshot_id);
 }
 
+async function expectLeadQueueUiMatchesGrowthRun(
+  page: Page,
+  run: GrowthAgentRunResponse,
+): Promise<void> {
+  const landed = new URL(page.url());
+  expect(landed.pathname).toBe('/lead-queue');
+  expect(landed.searchParams.get('growth_agent_run_id')).toBe(run.run_id);
+  expect(landed.searchParams.get('actionable_total')).toBe(String(run.actionable_total));
+  expect(landed.searchParams.get('actionable_cohort_fingerprint'))
+    .toBe(run.actionable_cohort_fingerprint);
+  expect(landed.searchParams.get('actionable_snapshot_id')).toBe(run.actionable_snapshot_id);
+  expect(landed.searchParams.get('growth_handoff')).toBeTruthy();
+
+  const proof = page.getByTestId('growth-agent-cohort-proof');
+  await expect(proof).toBeVisible({ timeout: 60_000 });
+  await expect(proof).toContainText('Verified Growth Agent cohort');
+  await expect(proof).toContainText(`${run.actionable_total.toLocaleString()} borrowers`);
+  await expect(proof).toContainText(`proof ${run.actionable_cohort_fingerprint?.slice(0, 12)}`);
+  await expect(proof).toContainText(`snapshot ${run.actionable_snapshot_id}`);
+  await expect(proof).toContainText(`run ${run.run_id.slice(0, 12)}`);
+}
+
 async function expectAuditRowMatchesGrowthRun(
   request: APIRequestContext,
   run: GrowthAgentRunResponse,
@@ -175,13 +197,13 @@ function expectReviewedPlanningEvidence(
   expect(['deterministic', 'agent_framework']).toContain(run.execution_mode);
   if (run.execution_mode === 'agent_framework') {
     expect(run.trace_kind).toBe('agent_framework');
-    expect(run.planner_label).toBe('Databricks Agent Responses endpoint');
-    expect(run.agent_reasoning ?? '').toContain('Databricks Agent Responses endpoint selected');
+    expect(run.planner_label).toBe('Databricks Agent Responses');
+    expect(run.agent_reasoning ?? '').toContain('Databricks Agent Responses selected');
     expect(run.agent_reasoning ?? '').toContain('reviewed');
     expect(run.governance_chips).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
-          label: 'Multi-agent framework',
+          label: 'Databricks Agent Responses',
           status: 'passed',
         }),
       ]),
@@ -328,6 +350,7 @@ test('Growth Agent run, saved watchlist, and Lead Queue handoff are live and rec
   expect(landed.searchParams.get('marketing_eligibility')).toBe('Eligible only');
   expect(landed.searchParams.get('segment')).toBe('itm');
   expect(landed.searchParams.get('states')).toBe('IL,TX');
+  await expectLeadQueueUiMatchesGrowthRun(page, run);
 });
 
 test('custom Growth Agent Any and All workflows reconcile to live Lead Queue totals', async ({
@@ -366,15 +389,16 @@ test('custom Growth Agent Any and All workflows reconcile to live Lead Queue tot
   expect(anyUrl.searchParams.get('segment_mode')).toBe('any');
   expect(anyUrl.searchParams.get('marketing_eligibility')).toBe('Eligible only');
 
-  const allResponse = await request.post(`${API_URL}/api/growth-agent/custom/run`, {
-    headers: AUTH_HEADERS,
-    data: {
-      states: ['IL', 'TX'],
-      segment_codes: ['itm', 'listed'],
-      segment_mode: 'all',
-      save_monitor: false,
-    },
-  });
+  await gotoApp(page, '/ask-genie');
+  await page.getByLabel('Growth Agent state scope').fill('IL TX');
+  await page.getByLabel('Custom Growth Agent segment logic').selectOption('all');
+  await expect(page.getByLabel('Custom Growth Agent segment logic')).toHaveValue('all');
+  const customAllResponsePromise = page.waitForResponse((response) =>
+    response.request().method() === 'POST' &&
+    /\/api(?:\/v1)?\/growth-agent\/custom\/run/.test(response.url()),
+  );
+  await page.getByRole('button', { name: 'Run custom' }).click();
+  const allResponse = await customAllResponsePromise;
   expect(allResponse.status(), 'custom All workflow run returned non-200').toBe(200);
   const customAll = (await allResponse.json()) as GrowthAgentRunResponse;
 
@@ -385,6 +409,14 @@ test('custom Growth Agent Any and All workflows reconcile to live Lead Queue tot
   expect(customAll.broad_total).toBeGreaterThanOrEqual(customAll.actionable_total);
   await expectLeadQueueHandoffMatchesActionableTotal(request, customAll);
   await expectAuditRowMatchesGrowthRun(request, customAll);
+
+  await page.getByRole('button', { name: 'Open eligible custom subset' }).click();
+  await expect(page).toHaveURL(/\/lead-queue\?/);
+  const allUrl = new URL(page.url());
+  expect(allUrl.searchParams.get('segment_codes')).toBe('itm,listed');
+  expect(allUrl.searchParams.get('segment_mode')).toBe('all');
+  expect(allUrl.searchParams.get('marketing_eligibility')).toBe('Eligible only');
+  await expectLeadQueueUiMatchesGrowthRun(page, customAll);
 });
 
 test('remaining reviewed workflow cards reconcile to live Lead Queue totals', async ({ request }) => {
@@ -456,6 +488,12 @@ test('natural-language Mortgage Growth Agent routes to reviewed tools and reconc
     expect.arrayContaining(['PII-safe output', 'Human approval required']),
   );
   await expect(page.getByText(/Owner:\s*Structured data lens/)).toBeVisible();
+  if (run.execution_mode === 'agent_framework') {
+    const latestRun = page.getByLabel('Latest Growth Agent run');
+    await expect(latestRun).toContainText('Databricks Agent Responses');
+    await expect(latestRun).not.toContainText('Databricks Agent Responses endpoint');
+    await expect(latestRun).not.toContainText('Supervisor');
+  }
   await expect(page.getByLabel('Growth Agent governance proof')).toContainText('Human approval required');
   await expectLeadQueueHandoffMatchesActionableTotal(request, run);
   await expectAuditRowMatchesGrowthRun(request, run);

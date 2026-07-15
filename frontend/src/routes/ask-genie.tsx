@@ -445,7 +445,7 @@ export default function AskGenie() {
     <PageShell
       eyebrow="Mortgage Growth Agent"
       title="Mortgage growth co-pilot"
-      lede="Use the Genie Conversation API for portfolio analysis, then compose and run reviewed growth workflows with human approval at the action boundary. Supervisor automation is identified only when the configured capability is ready."
+      lede="Use the Genie Conversation API for portfolio analysis, then compose and run reviewed growth workflows with human approval at the action boundary. Databricks Agent Responses automation is identified only when the configured capability is ready."
       heroRight={<Chip variant="neutral" icon="sparkle">Genie analytics + reviewed automation</Chip>}
     >
       <div className="surface growth-agent" aria-busy={agentBusy}>
@@ -566,7 +566,7 @@ export default function AskGenie() {
             </div>
           )}
 
-          <div className="growth-agent__cards" aria-label="Governed Growth Agent workflows">
+          <section className="growth-agent__cards" aria-label="Governed Growth Agent workflows">
             {workflows.map((workflow) => {
               const pending = growthAgentPending === workflow.id;
               return (
@@ -620,9 +620,9 @@ export default function AskGenie() {
                 <div className="surface__body">Loading governed workflows…</div>
               </div>
             )}
-          </div>
+          </section>
 
-          <div className="growth-agent-custom" aria-label="Build a custom Growth Agent workflow">
+          <section className="growth-agent-custom" aria-label="Build a custom Growth Agent workflow">
             <div className="growth-agent-custom__head">
               <Icon name="filter" size={14} className="icon-accent" />
               <div>
@@ -690,7 +690,7 @@ export default function AskGenie() {
                 </Button>
               </div>
             </div>
-          </div>
+          </section>
 
           {latestGrowthRun && (
             <GrowthAgentRunCard

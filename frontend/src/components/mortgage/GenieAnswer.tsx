@@ -146,7 +146,12 @@ export function GenieAnswer({
   const chart = plan.chart;
   const proofToggle = payload.proof ? (
     <div className="genie-proof-toggle">
-      <button type="button" className="btn btn--ghost btn--sm" onClick={() => setShowProof((cur) => !cur)}>
+      <button
+        type="button"
+        className="btn btn--ghost btn--sm"
+        aria-expanded={showProof}
+        onClick={() => setShowProof((cur) => !cur)}
+      >
         <Icon name="audit" size={12} />
         {showProof ? 'Hide proof' : 'Show proof'}
       </button>
@@ -210,6 +215,7 @@ export function GenieAnswer({
       {sourceDisclosure && (
         <div
           className="genie-answer__api-source"
+          role="note"
           aria-label={sourceDisclosure.ariaLabel}
         >
           <Icon name={isGovernedActionResult ? 'check' : 'sparkle'} size={12} />
@@ -238,7 +244,7 @@ export function GenieAnswer({
           <div
             className="genie-answer__reasoning-body"
             role="list"
-            aria-label="Genie process summaries"
+            aria-label="Databricks Genie public process summaries"
           >
             {reasoningSummaries.map((step, i) => (
               <div
@@ -282,7 +288,7 @@ export function GenieAnswer({
           <div
             className="genie-answer__table-scroll"
             role="region"
-            aria-label="Answer table"
+            aria-label="Genie answer table"
             tabIndex={0}
           >
             <table className="genie-answer__table">

@@ -1,6 +1,7 @@
 import { Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
 import type { GrowthAgentNotificationDraft } from '../types';
+import { publicAgentResponsesText } from './ask-genie.growth-run-card';
 
 interface GrowthAgentDraftPanelProps {
   drafts: GrowthAgentNotificationDraft[];
@@ -10,7 +11,7 @@ export function GrowthAgentDraftPanel({ drafts }: GrowthAgentDraftPanelProps) {
   if (drafts.length === 0) return null;
 
   return (
-    <div className="surface surface--inset mt-3" aria-label="Watchlist notifications">
+    <section className="surface surface--inset mt-3" aria-label="Watchlist notifications">
       <div className="surface__hdr">
         <Icon name="doc" size={14} className="icon-accent" />
         <div>
@@ -35,7 +36,9 @@ export function GrowthAgentDraftPanel({ drafts }: GrowthAgentDraftPanelProps) {
               </div>
               <div className="chip-row mt-2">
                 <Chip variant={draft.generation_mode === 'supervisor' ? 'success' : 'neutral'}>
-                  {draft.generator_label ?? 'Governed notification framework'}
+                  {publicAgentResponsesText(
+                    draft.generator_label ?? 'Governed notification framework',
+                  )}
                 </Chip>
               </div>
               <div className="muted fs-12 mt-2">
@@ -51,6 +54,6 @@ export function GrowthAgentDraftPanel({ drafts }: GrowthAgentDraftPanelProps) {
           ))}
         </div>
       </div>
-    </div>
+    </section>
   );
 }

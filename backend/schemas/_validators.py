@@ -147,6 +147,7 @@ _REVIEWED_NON_PERSON_PHRASES: tuple[str, ...] = (
     "Portfolio Builder",
     "Genie Conversation",
     "Databricks Genie",
+    "Databricks Agent Responses",
     "Unity Catalog",
     "Supervisor Agent",
     "Growth Agent",

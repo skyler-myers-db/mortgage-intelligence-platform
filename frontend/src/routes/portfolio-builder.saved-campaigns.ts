@@ -5,7 +5,7 @@ export interface SavedCampaignVariant {
   variantName: string;
   generationMode: string;
   generatorLabel: string;
-  provenanceAttached: boolean;
+  verifiedAtCreation: boolean;
 }
 
 const SAVED_CAMPAIGN_ROUTE_KEYS = new Set([
@@ -36,7 +36,7 @@ export function savedCampaignVariants(campaign: CampaignSummary): SavedCampaignV
       generatorLabel: typeof raw.generator_label === 'string' && raw.generator_label.trim()
         ? raw.generator_label.trim()
         : 'Operator edited',
-      provenanceAttached: typeof raw.provenance_token === 'string' && raw.provenance_token.trim().length > 0,
+      verifiedAtCreation: raw.copy_verified_at_creation === true,
     }];
   });
 }

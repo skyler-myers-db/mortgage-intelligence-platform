@@ -164,20 +164,20 @@ def _agent_framework_plan(
     except Exception:  # noqa: BLE001 - framework failure must not block reviewed fallback
         return None
     diverged = selected.id != deterministic_workflow.id
-    interpreted_intent = f"Databricks Agent Responses endpoint selected reviewed workflow: {selected.title}."
+    interpreted_intent = f"Databricks Agent Responses selected reviewed workflow: {selected.title}."
     reasoning_summary = (
-        f"Databricks Agent Responses endpoint selected the reviewed {selected.title} workflow "
+        f"Databricks Agent Responses selected the reviewed {selected.title} workflow "
         "from an allowlist. Deterministic tools produced counts, filters, audit, "
         "and the human-review handoff; no model SQL, DML, outreach, or raw "
         "identity data was executed."
     )
     if diverged:
         interpreted_intent = (
-            f"Databricks Agent Responses endpoint selected reviewed workflow: {selected.title}; "
+            f"Databricks Agent Responses selected reviewed workflow: {selected.title}; "
             f"deterministic fallback candidate was {deterministic_workflow.title}."
         )
         reasoning_summary = (
-            f"Databricks Agent Responses endpoint selected {selected.title} instead of the "
+            f"Databricks Agent Responses selected {selected.title} instead of the "
             f"deterministic fallback candidate {deterministic_workflow.title}. "
             "Both workflows are reviewed and allowlisted, but the mismatch is marked "
             "review-required before any human action. Deterministic tools produced "
@@ -187,7 +187,7 @@ def _agent_framework_plan(
     return selected, GrowthAgentCopilotEvidence(
         execution_mode="agent_framework",
         trace_kind="agent_framework",
-        planner_label="Databricks Agent Responses endpoint",
+        planner_label="Databricks Agent Responses",
         interpreted_intent=interpreted_intent,
         reasoning_summary=reasoning_summary,
         question_hash=_prompt_hash(payload.prompt),

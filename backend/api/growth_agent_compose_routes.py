@@ -1,4 +1,4 @@
-"""Growth Agent plan-composition route — Supervisor-composed governed plans.
+"""Growth Agent plan-composition route for governed plans.
 
 Split out of ``backend/api/growth_agent.py`` (2026-07-08) to keep that module
 under the file-size gate, mirroring the ``genie_feedback_routes`` precedent.

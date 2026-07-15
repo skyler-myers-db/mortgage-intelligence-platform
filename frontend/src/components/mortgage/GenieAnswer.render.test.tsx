@@ -141,6 +141,7 @@ describe('GenieAnswer render surfaces', () => {
     expect(source?.getAttribute('aria-label')).toBe(
       'Answer source: Databricks Genie Conversation API',
     );
+    expect(source?.getAttribute('role')).toBe('note');
     const reasoning = container.querySelector<HTMLDetailsElement>('.genie-answer__reasoning');
     expect(reasoning).not.toBeNull();
     expect(reasoning?.open).toBe(false);
@@ -150,6 +151,9 @@ describe('GenieAnswer render surfaces', () => {
     expect(reasoning?.textContent).toContain('Text');
     expect(reasoning?.textContent).toContain('Summarized the verified result.');
     expect(reasoning?.textContent).not.toContain('chain-of-thought');
+    expect(
+      reasoning?.querySelector('[role="list"]')?.getAttribute('aria-label'),
+    ).toBe('Databricks Genie public process summaries');
   });
 
   it('surfaces API reasoning when a real Genie turn is verified by trusted SQL', () => {

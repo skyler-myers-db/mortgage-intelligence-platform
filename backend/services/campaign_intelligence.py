@@ -333,6 +333,12 @@ def _campaign_copy_hash(subject: object, body: object) -> str:
     return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def campaign_copy_hash(subject: object, body: object) -> str:
+    """Return the durable hash used to bind saved copy to its creation proof."""
+
+    return _campaign_copy_hash(subject, body)
+
+
 def _encode_provenance_claims(claims: dict[str, object], settings: Settings) -> str:
     body = (
         base64.urlsafe_b64encode(

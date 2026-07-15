@@ -53,9 +53,7 @@ def test_main_fails_clearly_when_admin_bearer_is_absent(monkeypatch) -> None:
     monkeypatch.delenv("MIP_ADMIN_BEARER_TOKEN", raising=False)
 
     with pytest.raises(ValueError, match="MIP_ADMIN_BEARER_TOKEN is required"):
-        run_agent_eval.main(
-            ["--app-url", "https://example.test", "--token", "normal-bearer"]
-        )
+        run_agent_eval.main(["--app-url", "https://example.test", "--token", "normal-bearer"])
 
 
 def test_live_invocation_case_clones_first_case_with_distinct_id() -> None:
@@ -930,19 +928,19 @@ def test_verifier_respects_real_lakebase_host_in_settings(monkeypatch) -> None:
     assert singleton.lakebase_host == "customer-real.db.example"
 
 
-def test_verifier_query_retries_through_cold_start_timeouts(monkeypatch) -> None:
+def test_verifier_warmup_retries_with_distinct_non_proof_ids(monkeypatch) -> None:
     """Scale-to-zero gateway endpoints hold cold requests past the SDK read
     timeout (observed: deploy step 18 died after the SDK's 5-minute retry
     budget, 2026-07-07). Timeout-shaped failures retry inside the warmup
     budget; the eventual warm response is returned."""
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
-    calls = {"n": 0}
+    request_ids: list[str] = []
 
     class _WarmingApiClient:
         def do(self, method: str, path: str, *, body: dict[str, object]):
-            calls["n"] += 1
-            if calls["n"] < 3:
+            request_ids.append(str(body["client_request_id"]))
+            if len(request_ids) < 3:
                 raise TimeoutError("Timed out after 0:05:00")
             return {"choices": [{"message": {"content": "warm"}}]}
 
@@ -950,22 +948,23 @@ def test_verifier_query_retries_through_cold_start_timeouts(monkeypatch) -> None
         api_client = _WarmingApiClient()
 
     naps: list[float] = []
-    response = verifier.query_with_cold_start_patience(
+    response = verifier.warm_endpoint_with_cold_start_patience(
         _Workspace(),
         "mip-agent-gateway",
         prompt="ping",
-        client_request_id="mip-capability-z",
         task="llm/v1/chat",
         warmup_timeout_s=600.0,
         interval_s=5.0,
         sleep=naps.append,
     )
-    assert calls["n"] == 3
+    assert len(request_ids) == 3
+    assert len(set(request_ids)) == 3
+    assert all(request_id.startswith("mip-warmup-") for request_id in request_ids)
     assert naps == [5.0, 5.0]
     assert response["choices"]
 
 
-def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
+def test_verifier_warmup_raises_immediately_on_non_timeout_errors() -> None:
     """A 400/permission failure will never heal by waiting — no retries."""
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
@@ -980,11 +979,10 @@ def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
         api_client = _RejectingApiClient()
 
     try:
-        verifier.query_with_cold_start_patience(
+        verifier.warm_endpoint_with_cold_start_patience(
             _Workspace(),
             "mip-agent-gateway",
             prompt="ping",
-            client_request_id="mip-capability-z",
             task="llm/v1/chat",
             warmup_timeout_s=600.0,
             sleep=lambda _s: None,
@@ -996,7 +994,7 @@ def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
     assert calls["n"] == 1
 
 
-def test_verifier_query_gives_up_after_warmup_budget() -> None:
+def test_verifier_warmup_gives_up_after_budget() -> None:
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
     class _ForeverColdApiClient:
@@ -1007,11 +1005,10 @@ def test_verifier_query_gives_up_after_warmup_budget() -> None:
         api_client = _ForeverColdApiClient()
 
     try:
-        verifier.query_with_cold_start_patience(
+        verifier.warm_endpoint_with_cold_start_patience(
             _Workspace(),
             "mip-agent-gateway",
             prompt="ping",
-            client_request_id="mip-capability-z",
             task="llm/v1/chat",
             warmup_timeout_s=0.0,
             sleep=lambda _s: None,

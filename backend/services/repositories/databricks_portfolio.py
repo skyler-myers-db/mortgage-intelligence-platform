@@ -29,6 +29,7 @@ from backend.schemas.portfolio import (
 )
 from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.campaign_intelligence import (
+    campaign_copy_hash,
     campaign_criteria_fingerprint,
     inspect_campaign_variant_provenance,
 )
@@ -1561,6 +1562,31 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
     criteria = json_value(row.get("criteria"), {})
     suppression_policy = json_value(row.get("suppression_policy"), {})
     message_variants = json_value(row.get("message_variants"), [])
+    criteria_value = criteria if isinstance(criteria, dict) else {}
+    criteria_fingerprint = campaign_criteria_fingerprint(criteria_value)
+    if isinstance(message_variants, list):
+        message_variants = [
+            {
+                **variant,
+                # Raw provenance tokens are intentionally never persisted. This
+                # server-owned fact is derived from the durable proof record so
+                # clients do not mistake token absence for missing validation.
+                "copy_verified_at_creation": bool(
+                    str(variant.get("generation_mode") or "")
+                    in {"supervisor", "reviewed_fallback"}
+                    and str(variant.get("provenance_key_id") or "").strip()
+                    and str(variant.get("provenance_copy_hash") or "").strip()
+                    == campaign_copy_hash(variant.get("subject"), variant.get("body"))
+                    and str(variant.get("provenance_criteria_fingerprint") or "").strip()
+                    == criteria_fingerprint
+                    and bool(str(variant.get("provenance_issued_at") or "").strip())
+                    and bool(str(variant.get("provenance_expires_at") or "").strip())
+                ),
+            }
+            if isinstance(variant, dict)
+            else variant
+            for variant in message_variants
+        ]
     channel_cascade = json_value(row.get("channel_cascade"), [])
     send_window = json_value(row.get("send_window"), {})
     holdout = json_value(row.get("holdout"), None)
@@ -1572,7 +1598,7 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
         name=str(row.get("name") or "Campaign"),
         owner_email=str(row.get("owner_email") or "unknown"),
         status=str(row.get("status") or "draft"),  # type: ignore[arg-type]
-        criteria=criteria if isinstance(criteria, dict) else {},
+        criteria=criteria_value,
         suppression_policy=suppression_policy if isinstance(suppression_policy, dict) else {},
         message_variants=message_variants if isinstance(message_variants, list) else [],
         channel_cascade=channel_cascade if isinstance(channel_cascade, list) else [],

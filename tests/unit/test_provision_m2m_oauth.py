@@ -98,7 +98,9 @@ def _provision(client: MagicMock, **overrides: object):
         return pmo.provision(**kwargs)
 
 
-def test_help_exposes_role_group_and_secret_name_contract(capsys: pytest.CaptureFixture[str]) -> None:
+def test_help_exposes_role_group_and_secret_name_contract(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     with pytest.raises(SystemExit) as exc:
         pmo.main(["--help"])
     assert exc.value.code == 0
@@ -151,9 +153,7 @@ def test_dry_run_does_not_touch_sdk() -> None:
     mock_provision.assert_not_called()
 
 
-@pytest.mark.parametrize(
-    "option", ["--lakebase-instance", "--gateway-endpoint", "--warehouse-id"]
-)
+@pytest.mark.parametrize("option", ["--lakebase-instance", "--gateway-endpoint", "--warehouse-id"])
 def test_verifier_grant_options_are_rejected_for_other_roles(option: str) -> None:
     with pytest.raises(SystemExit) as exc:
         pmo.main(["--identity-role", "normal", option, "unexpected-resource", "--dry-run"])
@@ -348,7 +348,7 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
     assert getattr(role.identity_type, "value", role.identity_type) == "SERVICE_PRINCIPAL"
     client.serving_endpoints.update_permissions.assert_called_once()
     client.serving_endpoints.get.assert_called_once_with("mip-agent-gateway")
-    endpoint_id, = client.serving_endpoints.update_permissions.call_args.args
+    (endpoint_id,) = client.serving_endpoints.update_permissions.call_args.args
     endpoint_acl = client.serving_endpoints.update_permissions.call_args.kwargs[
         "access_control_list"
     ]
@@ -360,13 +360,14 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
     assert result.created_lakebase_role is True
     assert result.granted_can_query is True
     client.warehouses.update_permissions.assert_called_once()
-    warehouse_id, = client.warehouses.update_permissions.call_args.args
+    (warehouse_id,) = client.warehouses.update_permissions.call_args.args
     warehouse_acl = client.warehouses.update_permissions.call_args.kwargs["access_control_list"]
     assert warehouse_id == "warehouse-123"
     assert warehouse_acl[0].service_principal_name == "verifier-application-id"
-    assert getattr(
-        warehouse_acl[0].permission_level, "value", warehouse_acl[0].permission_level
-    ) == "CAN_USE"
+    assert (
+        getattr(warehouse_acl[0].permission_level, "value", warehouse_acl[0].permission_level)
+        == "CAN_USE"
+    )
     assert result.granted_warehouse_can_use is True
 
 
@@ -415,6 +416,110 @@ def test_verifier_fails_closed_on_forbidden_direct_app_permission() -> None:
     client.warehouses.update_permissions.assert_not_called()
 
 
+def test_verifier_fails_closed_on_inherited_effective_app_permission() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        application_id="verifier-application-id",
+    )
+    client = _make_client(existing_sp=verifier)
+    client.apps.get_permissions.return_value = SimpleNamespace(
+        access_control_list=[
+            SimpleNamespace(
+                service_principal_name="verifier-application-id",
+                all_permissions=[SimpleNamespace(inherited=True)],
+            )
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="including inherited/effective permissions"):
+        _provision(
+            client,
+            sp_name=verifier.display_name,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.database.create_database_instance_role.assert_not_called()
+
+
+def test_verifier_fails_closed_on_direct_group_app_permission() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    app_group = SimpleNamespace(
+        id="app-group-id",
+        display_name="mip-app-users",
+        members=[SimpleNamespace(value="verifier-scim-id")],
+    )
+    client = _make_client(existing_sp=verifier, groups=[app_group])
+    client.apps.get_permissions.return_value = SimpleNamespace(
+        access_control_list=[
+            SimpleNamespace(
+                group_name="mip-app-users",
+                all_permissions=[SimpleNamespace(inherited=False)],
+            )
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="through group 'mip-app-users'"):
+        _provision(
+            client,
+            sp_name=verifier.display_name,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.database.create_database_instance_role.assert_not_called()
+
+
+def test_verifier_fails_closed_on_nested_group_app_permission() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    child_group = SimpleNamespace(
+        id="child-group-id",
+        display_name="mip-verifier-automation",
+        members=[SimpleNamespace(value="verifier-scim-id")],
+    )
+    app_group = SimpleNamespace(
+        id="app-group-id",
+        display_name="mip-app-users",
+        members=[SimpleNamespace(value="child-group-id")],
+    )
+    client = _make_client(existing_sp=verifier, groups=[app_group, child_group])
+    client.apps.get_permissions.return_value = SimpleNamespace(
+        access_control_list=[
+            SimpleNamespace(
+                group_name="mip-app-users",
+                all_permissions=[SimpleNamespace(inherited=True)],
+            )
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="through group 'mip-app-users'"):
+        _provision(
+            client,
+            sp_name=verifier.display_name,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.database.create_database_instance_role.assert_not_called()
+
+
 def test_non_admin_identity_fails_closed_on_admin_group_membership() -> None:
     normal = _sp(sp_id="normal-scim-id")
     admin_group = SimpleNamespace(
@@ -433,6 +538,85 @@ def test_non_admin_identity_fails_closed_on_admin_group_membership() -> None:
         )
 
     client.apps.update_permissions.assert_not_called()
+
+
+def test_verifier_fails_closed_on_nested_admin_group_membership() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    child_group = SimpleNamespace(
+        id="child-group-id",
+        display_name="mip-verifier-automation",
+        members=[SimpleNamespace(value="verifier-scim-id")],
+    )
+    admin_group = SimpleNamespace(
+        id="admin-group-id",
+        display_name="mip-admin",
+        members=[SimpleNamespace(value="child-group-id")],
+    )
+    client = _make_client(existing_sp=verifier, groups=[admin_group, child_group])
+
+    with pytest.raises(SystemExit, match="direct or nested membership"):
+        _provision(
+            client,
+            sp_name=verifier.display_name,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.apps.get_permissions.assert_not_called()
+    client.database.create_database_instance_role.assert_not_called()
+
+
+def test_verifier_group_resolution_error_fails_closed_before_grants() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        application_id="verifier-application-id",
+    )
+    client = _make_client(existing_sp=verifier)
+    client.groups.list.side_effect = RuntimeError("SCIM group resolution unavailable")
+
+    with pytest.raises(SystemExit, match="resolve effective group memberships failed"):
+        _provision(
+            client,
+            sp_name=verifier.display_name,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.apps.get_permissions.assert_not_called()
+    client.database.create_database_instance_role.assert_not_called()
+
+
+def test_verifier_app_permission_resolution_error_fails_closed_before_grants() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        application_id="verifier-application-id",
+    )
+    client = _make_client(existing_sp=verifier)
+    client.apps.get_permissions.side_effect = RuntimeError("App ACL resolution unavailable")
+
+    with pytest.raises(SystemExit, match="inspect app permissions failed"):
+        _provision(
+            client,
+            sp_name=verifier.display_name,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.database.create_database_instance_role.assert_not_called()
+    client.serving_endpoints.update_permissions.assert_not_called()
 
 
 def test_non_admin_identity_hydrates_sparse_group_before_membership_check() -> None:

@@ -51,12 +51,14 @@ One tool, two modes, "send-now / verify-previous" pattern so proof stays fresh r
 
 1. **verify-pending:** for every `pending` ledger row for the current SHA (and optionally prior
    SHAs), run `count_inference_log_rows(exact client_request_id)` (reuse the existing exact-id
-   helper — it already binds the id as a parameter). If ≥1: set `verified`,
+   helper — it already binds the id as a parameter). If and only if the count is exactly 1: set `verified`,
    `verified_at=now()`, compute `verify_latency_s`. If older than a hard ceiling (default 6h,
    `MIP_AI_GATEWAY_VERIFY_EXPIRY_S`): set `expired`.
-2. **send:** mint `mip-capability-{full-sha}-{uuid16}` (full deployment SHA), send one
-   bounded query via the existing `query_serving_endpoint` (max_tokens small, temperature 0),
-   assert `serving_response_has_payload`, insert a `pending` ledger row.
+2. **send:** warm scale-to-zero separately with non-proof `mip-warmup-*` request ids, then mint
+   `mip-capability-{full-sha}-{uuid16}` (full deployment SHA), insert its `pending` ledger row,
+   and send that exact bounded request once. Never retry the proof id: timeout/503 after submission
+   is unresolved, so leave the row `pending` for later exact-row verification. A Responses API
+   result is accepted as serving proof only when its terminal status is `completed` and it has output.
 3. **--wait mode (deploy-time):** after send, poll the exact id every 30–60s up to
    `MIP_AI_GATEWAY_VERIFY_TIMEOUT_S` (default 1200s, configurable up to 3600). On hit → mark
    verified inline and print measured latency. On timeout → leave `pending` (the next scheduled
@@ -130,6 +132,7 @@ Probe traffic alone is not "integration." Required:
 Backend:
 - Ledger migration idempotency (re-run safe), status CHECK, unique client_request_id.
 - Verifier: pending→verified on row landing (id-aware SQL fake); timeout leaves pending;
+  timeout/503 never retries the exact proof id; duplicate exact rows remain unverified;
   expiry→expired; latency recorded; SHA scoping; exit codes for strict/non-strict; verify-previous
   works across invocations; re-run idempotency.
 - Probe: claimable ONLY with fresh verified ledger row for current SHA. Rejection tests:

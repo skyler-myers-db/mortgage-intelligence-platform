@@ -779,9 +779,9 @@ export default function PortfolioBuilder() {
                               <span className="mono muted fs-11" title={campaign.campaign_id}>
                                 campaign {campaign.campaign_id.slice(0, 12)}
                               </span>
-                              <span className={`chip ${selectedVariant.provenanceAttached ? 'chip--success' : 'chip--warning'} chip--compact`}>
-                                {selectedVariant.provenanceAttached
-                                  ? 'Copy verified'
+                              <span className={`chip ${selectedVariant.verifiedAtCreation ? 'chip--success' : 'chip--warning'} chip--compact`}>
+                                {selectedVariant.verifiedAtCreation
+                                  ? 'Verified at creation'
                                   : 'Saved copy only'}
                               </span>
                               <select

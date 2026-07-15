@@ -187,10 +187,10 @@ def recommend_notification_intelligence(
     try:
         client = serving_client or workspace_client()
     except Exception:  # noqa: BLE001 - internal notification degrades honestly
-        return _fallback("Supervisor readiness check failed", workflow_id=workflow_id)
+        return _fallback("Databricks Agent Responses readiness check failed", workflow_id=workflow_id)
     runtime, reason = verify_supervisor_runtime(client, settings)
     if runtime is None:
-        return _fallback(reason or "Supervisor unavailable", workflow_id=workflow_id)
+        return _fallback(reason or "Databricks Agent Responses unavailable", workflow_id=workflow_id)
     endpoint = runtime.endpoint
     task = runtime.task
 
@@ -232,11 +232,11 @@ def recommend_notification_intelligence(
                 teams_summary=fragments.teams_summary,
                 operator_action=fragments.operator_action,
                 generation_mode="supervisor",
-                generator_label="Supervisor-composed notification",
+                generator_label="Databricks Agent Responses",
                 strategy_summary=strategy.rstrip("."),
             )
         except (ValidationError, ValueError, TypeError) as exc:
             repair_note = str(exc)[:400]
         except Exception:  # noqa: BLE001 - platform failure uses labelled fallback
-            return _fallback("Supervisor request failed", workflow_id=workflow_id)
-    return _fallback("Supervisor output failed validation", workflow_id=workflow_id)
+            return _fallback("Databricks Agent Responses request failed", workflow_id=workflow_id)
+    return _fallback("Databricks Agent Responses output failed validation", workflow_id=workflow_id)

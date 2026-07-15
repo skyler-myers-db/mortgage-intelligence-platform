@@ -827,8 +827,8 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
         runtime, reason = verify_supervisor_runtime(workspace_client, settings)
         if runtime is None:
             detail = {
-                "supervisor_endpoint_mismatch": "Configured Supervisor Agent does not map to MIP_AGENT_SERVING_ENDPOINT.",
-                "supervisor_identity_mismatch": "Supervisor Agent metadata did not match MIP_AGENT_SUPERVISOR_ID.",
+                "supervisor_endpoint_mismatch": "Configured Databricks Agent Responses resource does not map to MIP_AGENT_SERVING_ENDPOINT.",
+                "supervisor_identity_mismatch": "Databricks Agent Responses metadata did not match MIP_AGENT_SUPERVISOR_ID.",
                 "orchestrator_not_configured": "Agent id metadata or serving endpoint is not configured.",
             }.get(reason or "")
             if detail is None and (reason or "").startswith("supervisor_task_not_agent:"):
@@ -836,7 +836,7 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
             if detail is None and (reason or "").startswith("supervisor_endpoint_not_ready:"):
                 detail = f"Agent endpoint is not READY ({(reason or '').partition(':')[2]})."
             if detail is None:
-                detail = f"Supervisor runtime verification failed ({reason})."
+                detail = f"Databricks Agent Responses runtime verification failed ({reason})."
             return LiveCapabilityStatus(False, detail)
         endpoint = runtime.endpoint
         supervisor_id = runtime.supervisor_id
@@ -856,8 +856,8 @@ def _probe_agent_orchestrator(workspace_client: Any, settings: Settings) -> Live
         response_proof = f", response {execution.response_id}" if execution.response_id else ""
         return LiveCapabilityStatus(
             True,
-            f"Supervisor Agent metadata maps {supervisor_id} to {endpoint}; live Agent Responses "
-            f"endpoint returned output (task agent/v1/responses, transport "
+            f"Databricks Agent Responses metadata maps {supervisor_id} to {endpoint}; live endpoint "
+            f"returned output (task agent/v1/responses, transport "
             f"{execution.transport}{response_proof}).",
         )
     except Exception as exc:  # noqa: BLE001

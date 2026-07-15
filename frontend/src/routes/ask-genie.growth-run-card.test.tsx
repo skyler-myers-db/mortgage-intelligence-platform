@@ -28,7 +28,7 @@ const RUN: GrowthAgentRunResponse = {
   specialist_agent: 'structured_data_agent',
   execution_mode: 'agent_framework',
   trace_kind: 'agent_framework',
-  planner_label: 'Databricks Supervisor Agent',
+  planner_label: 'Databricks Agent Responses endpoint',
   trace_id: 'agent-trace-11111111-1111-4111-8111-111111111111',
   tool_result_hash: 'a'.repeat(64),
   actionable_cohort_fingerprint: 'b'.repeat(64),
@@ -52,36 +52,36 @@ const RUN: GrowthAgentRunResponse = {
   source_assets: ['mip.gold.borrower_360', 'mip.gold.lead_population'],
   tool_steps: [
     {
-      label: 'Supervisor reviewed objective',
+      label: 'Databricks Agent Responses reviewed objective',
       status: 'review_required',
-      detail: 'Supervisor selected Listing Watch; deterministic routing selected Daily Refi.',
+      detail: 'Databricks Agent Responses selected Listing Watch; deterministic routing selected Daily Refi.',
       tool_name: 'agent_framework_supervisor',
       result_hash: 'c'.repeat(64),
     },
   ],
   policy_checks: [
     {
-      label: 'Supervisor workflow selection',
+      label: 'Databricks Agent Responses workflow selection',
       status: 'review_required',
-      detail: 'Supervisor selected Listing Watch while deterministic routing selected Daily Refi.',
+      detail: 'Databricks Agent Responses selected Listing Watch while deterministic routing selected Daily Refi.',
     },
   ],
   governance_chips: [
     {
-      label: 'Multi-agent framework',
+      label: 'Databricks Agent Responses',
       status: 'review_required',
-      detail: 'Supervisor selected a different reviewed workflow; human review is required.',
+      detail: 'Databricks Agent Responses selected a different reviewed workflow; human review is required.',
       evidence_ref: 'agent-trace-11111111-1111-4111-8111-111111111111',
     },
     {
       label: 'AI Gateway',
       status: 'review_required',
       detail:
-        'Supervisor call was routed through the configured AI Gateway endpoint; deployment-level exact inference-row proof is required before AI Gateway is claimable. This run card does not claim per-run row landing.',
+        'Databricks Agent Responses was routed through the configured AI Gateway; deployment-level exact inference-row proof is required before AI Gateway is claimable. This run card does not claim per-run row landing.',
       evidence_ref: null,
     },
   ],
-  interpreted_intent: 'Supervisor Agent selected a reviewed workflow.',
+  interpreted_intent: 'Databricks Agent Responses selected a reviewed workflow.',
   agent_reasoning: 'The deterministic fallback selected Daily Refi.',
   genie_trusted_assets: ['databricks.supervisor_agent.supervisor-1'],
   audit_event_id: 'audit-11111111-1111-4111-8111-111111111111',
@@ -93,21 +93,21 @@ const PASSED_RUN: GrowthAgentRunResponse = {
     {
       ...RUN.tool_steps[0],
       status: 'completed',
-      detail: 'Supervisor and deterministic routing selected Daily Refi.',
+      detail: 'Databricks Agent Responses and deterministic routing selected Daily Refi.',
     },
   ],
   policy_checks: [
     {
       ...RUN.policy_checks[0],
       status: 'passed',
-      detail: 'Supervisor and deterministic routing selected the same workflow.',
+      detail: 'Databricks Agent Responses and deterministic routing selected the same workflow.',
     },
   ],
   governance_chips: [
     {
       ...RUN.governance_chips[0],
       status: 'passed',
-      detail: 'Supervisor selection matched the deterministic reviewed workflow.',
+      detail: 'Databricks Agent Responses selection matched the deterministic reviewed workflow.',
     },
   ],
 };
@@ -141,34 +141,34 @@ describe('GrowthAgentRunCard', () => {
     });
   }
 
-  it('renders supervisor divergence as a visible review-required state', () => {
+  it('renders Agent Responses divergence as a visible review-required state', () => {
     renderRun(RUN);
 
     const policyCheck = Array.from(
       container.querySelectorAll<HTMLElement>('.growth-agent-policy'),
-    ).find((node) => node.textContent?.includes('Supervisor workflow selection'));
+    ).find((node) => node.textContent?.includes('Databricks Agent Responses workflow selection'));
     const governanceChip = Array.from(
       container.querySelectorAll<HTMLElement>('.growth-agent-governance-item'),
-    ).find((node) => node.textContent?.includes('Multi-agent framework'));
+    ).find((node) => node.textContent?.includes('Databricks Agent Responses'));
     const gatewayChip = Array.from(
       container.querySelectorAll<HTMLElement>('.growth-agent-governance-item'),
     ).find((node) => node.textContent?.includes('AI Gateway'));
 
-    expect(container.textContent).toContain('Agent framework');
-    expect(container.textContent).toContain('Supervisor Agent');
-    expect(container.textContent).toContain('Databricks Supervisor Agent');
-    expect(container.textContent).toContain('Supervisor reviewed objective');
-    expect(container.textContent).toContain('Supervisor workflow selection');
+    expect(container.textContent).toContain('Databricks Agent Responses');
+    expect(container.textContent).toContain('Databricks Agent Responses reviewed objective');
+    expect(container.textContent).toContain('Databricks Agent Responses workflow selection');
     expect(container.textContent).toContain(
-      'Supervisor selected Listing Watch while deterministic routing selected Daily Refi.',
+      'Databricks Agent Responses selected Listing Watch while deterministic routing selected Daily Refi.',
     );
-    expect(container.textContent).toContain('Multi-agent framework');
+    expect(container.textContent).not.toMatch(
+      /Databricks Agent Responses endpoint|Supervisor|Agent framework|Multi-agent framework/i,
+    );
     expect(container.textContent).toContain(
-      'Supervisor selected a different reviewed workflow; human review is required.',
+      'Databricks Agent Responses selected a different reviewed workflow; human review is required.',
     );
     expect(container.textContent).toContain('AI Gateway');
     expect(container.textContent).toContain(
-      'Supervisor call was routed through the configured AI Gateway endpoint',
+      'Databricks Agent Responses was routed through the configured AI Gateway',
     );
     expect(container.textContent).toContain('does not claim per-run row landing');
     expect(container.textContent).not.toContain('mip-agent-run-');
@@ -184,15 +184,15 @@ describe('GrowthAgentRunCard', () => {
     expect(gatewayChip?.querySelector('.chip--success')).toBeNull();
   });
 
-  it('renders aligned supervisor selection as passed across policy and governance surfaces', () => {
+  it('renders aligned Agent Responses selection as passed across policy and governance surfaces', () => {
     renderRun(PASSED_RUN);
 
     const policyCheck = Array.from(
       container.querySelectorAll<HTMLElement>('.growth-agent-policy'),
-    ).find((node) => node.textContent?.includes('Supervisor workflow selection'));
+    ).find((node) => node.textContent?.includes('Databricks Agent Responses workflow selection'));
     const governanceChip = Array.from(
       container.querySelectorAll<HTMLElement>('.growth-agent-governance-item'),
-    ).find((node) => node.textContent?.includes('Multi-agent framework'));
+    ).find((node) => node.textContent?.includes('Databricks Agent Responses'));
 
     expect(container.querySelector('.growth-agent-step--completed')).not.toBeNull();
     expect(container.querySelector('.growth-agent-step--review_required')).toBeNull();
@@ -204,6 +204,9 @@ describe('GrowthAgentRunCard', () => {
     expect(governanceChip?.textContent).toContain('Passed');
     expect(governanceChip?.querySelector('.chip--success')).not.toBeNull();
     expect(governanceChip?.querySelector('.chip--warning')).toBeNull();
+    expect(container.textContent).not.toMatch(
+      /Databricks Agent Responses endpoint|Supervisor|Agent framework|Multi-agent framework/i,
+    );
   });
 
   it('carries the complete cohort proof into the Lead Queue action', () => {
@@ -244,6 +247,23 @@ describe('GrowthAgentRunCard', () => {
     act(() => open.click());
 
     expect(onOpenRoute).toHaveBeenCalledWith(genericRun.route);
+    expect(container.textContent).toContain('Cohort proof unavailable');
+  });
+
+  it('does not attach proof fields when the backend-signed handoff is absent', () => {
+    const unsignedRun = {
+      ...PASSED_RUN,
+      route: '/lead-queue?segment=itm&marketing_eligibility=Eligible+only',
+    };
+    renderRun(unsignedRun);
+
+    const open = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent?.includes('Open eligible refi subset'),
+    );
+    if (!open) throw new Error('Growth Agent action not rendered');
+    act(() => open.click());
+
+    expect(onOpenRoute).toHaveBeenCalledWith(unsignedRun.route);
     expect(container.textContent).toContain('Cohort proof unavailable');
   });
 });

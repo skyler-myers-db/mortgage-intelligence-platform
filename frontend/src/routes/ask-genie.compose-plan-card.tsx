@@ -1,7 +1,11 @@
 import type { ReactNode } from 'react';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
-import { formatGrowthAgentCount } from './ask-genie.growth-run-card';
+import {
+  DATABRICKS_AGENT_RESPONSES_LABEL,
+  formatGrowthAgentCount,
+  publicAgentResponsesText,
+} from './ask-genie.growth-run-card';
 import type {
   ComposePlanResponse,
   GrowthAgentWorkflow,
@@ -60,7 +64,9 @@ export function ComposePlanCard({
         <div>
           <div className="eyebrow">Composed plan</div>
           <div className="h-4">
-            {plan ? plan.objective_summary : response.message ?? 'Plan unavailable'}
+            {publicAgentResponsesText(
+              plan ? plan.objective_summary : response.message ?? 'Plan unavailable',
+            )}
           </div>
         </div>
         {status === 'composed' && (
@@ -72,7 +78,7 @@ export function ComposePlanCard({
 
       <div className="chip-row growth-agent-run__trace">
         <Chip variant="warning" icon="sparkle" title={response.model_endpoint ?? undefined}>
-          Model-composed (planner={response.planner}
+          Model-composed ({DATABRICKS_AGENT_RESPONSES_LABEL}
           {response.model_endpoint ? `, endpoint=${response.model_endpoint}` : ''})
         </Chip>
         {status === 'composed' && plan && (
@@ -89,10 +95,14 @@ export function ComposePlanCard({
       </div>
 
       {response.interpreted_intent && (
-        <div className="growth-agent-run__intent">{response.interpreted_intent}</div>
+        <div className="growth-agent-run__intent">
+          {publicAgentResponsesText(response.interpreted_intent)}
+        </div>
       )}
       {response.reasoning_summary && (
-        <div className="growth-agent-run__intent">{response.reasoning_summary}</div>
+        <div className="growth-agent-run__intent">
+          {publicAgentResponsesText(response.reasoning_summary)}
+        </div>
       )}
 
       {status !== 'composed' && response.message && (
@@ -100,8 +110,10 @@ export function ComposePlanCard({
           className={`status-callout ${status === 'invalid' ? 'status-callout--danger' : 'status-callout--warning'} mt-3`}
           role={status === 'invalid' ? 'alert' : 'status'}
         >
-          {response.message}
-          {response.degraded_reason ? ` (${response.degraded_reason})` : ''}
+          {publicAgentResponsesText(response.message)}
+          {response.degraded_reason
+            ? ` (${publicAgentResponsesText(response.degraded_reason)})`
+            : ''}
         </div>
       )}
 
@@ -123,9 +135,11 @@ export function ComposePlanCard({
                   <Icon name="sparkle" size={12} />
                   <div>
                     <div className="growth-agent-step__title">
-                      {index + 1}. {step.tool}
+                      {index + 1}. {publicAgentResponsesText(step.tool)}
                     </div>
-                    <div className="growth-agent-step__detail">{step.rationale}</div>
+                    <div className="growth-agent-step__detail">
+                      {publicAgentResponsesText(step.rationale)}
+                    </div>
                     <div className="growth-agent-step__meta">step {step.step_id}</div>
                   </div>
                 </div>
@@ -134,10 +148,14 @@ export function ComposePlanCard({
           </div>
 
           {plan.expected_outcome && (
-            <div className="growth-agent-run__intent">Expected: {plan.expected_outcome}</div>
+            <div className="growth-agent-run__intent">
+              Expected: {publicAgentResponsesText(plan.expected_outcome)}
+            </div>
           )}
           {plan.risk_notes && (
-            <div className="growth-agent-run__intent">Risk: {plan.risk_notes}</div>
+            <div className="growth-agent-run__intent">
+              Risk: {publicAgentResponsesText(plan.risk_notes)}
+            </div>
           )}
 
           {response.executed && response.trace.length > 0 && (
@@ -154,8 +172,12 @@ export function ComposePlanCard({
                     >
                       <Icon name={traceStepIcon(step.status)} size={12} />
                       <div>
-                        <div className="growth-agent-step__title">{step.label}</div>
-                        <div className="growth-agent-step__detail">{step.detail}</div>
+                        <div className="growth-agent-step__title">
+                          {publicAgentResponsesText(step.label)}
+                        </div>
+                        <div className="growth-agent-step__detail">
+                          {publicAgentResponsesText(step.detail)}
+                        </div>
                         <div className="chip-row">
                           <Chip variant={traceStepChipVariant(step.status)} icon="audit">
                             {traceStepStatusLabel(step.status)}

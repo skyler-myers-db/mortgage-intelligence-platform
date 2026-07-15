@@ -26,9 +26,15 @@ mirror instead.
   approval or disposition. Columns: `approval_status`
   (`pending` / `approved` / `rejected` / `hold`), `outreach_status`
   (`none` / `queued` / `actioned`), `offer_code`, `approved_at`,
-  `outreach_at`, `synced_at`, `refreshed_at`. `refreshed_at` is the
-  Lakebase mirror refresh boundary for this lifecycle snapshot; it is not the
-  scoring gold refresh boundary. Cluster BY `borrower_id`.
+  `approval_decided_at`, `approval_event_id`, `outreach_at`,
+  `outreach_created_at`, `outreach_event_id`, `synced_at`, `refreshed_at`.
+  `(approval_decided_at, approval_event_id)` versions the complete approval
+  dimension, including reject and hold decisions for which `approved_at` is
+  null. `(outreach_at, outreach_created_at, outreach_event_id)` versions the
+  disposition dimension. The event IDs are non-PII UUID strings.
+  `refreshed_at` is the Lakebase mirror refresh boundary for this lifecycle
+  snapshot; it is not the scoring gold refresh boundary. Cluster BY
+  `borrower_id`.
 
 - **`mip.gold.funnel_snapshot_daily`** (DDL §8). One row per
   `(snapshot_date, state, segment_code)` incl. the `_ALL` rollups.
@@ -43,7 +49,12 @@ mirror instead.
    rejection, `backend/services/job_trigger.py` schedules
    `backend/services/lifecycle_sync.py` on FastAPI `BackgroundTasks`. The
    service reads the durable current Lakebase lifecycle rows and applies a
-   changed-row Delta `MERGE` through the existing SQL warehouse. It does not
+   changed-row Delta `MERGE` through the existing SQL warehouse. Approval
+   fields advance only when the approval version tuple advances; disposition
+   fields advance only when the outreach version tuple advances. These are the
+   same tuples used by the Lakebase `ORDER BY`, so equal event timestamps remain
+   totally ordered and a delayed older snapshot cannot roll back a selected
+   newer decision or outreach action. It does not
    `INSERT OVERWRITE`, seed defaults, scan the lifecycle target for a count,
    or rebuild the population-wide funnel snapshot on each click. Consumers
    already use `LEFT JOIN` + `COALESCE('pending'/'none')` for borrowers with no
@@ -58,6 +69,9 @@ mirror instead.
    state, queues concurrent recovery submissions, and retries the task twice.
    The durable Lakebase source means a dropped process-local background task
    can be repaired by any later app, Admin Data operations, deploy, or job run.
+   Both write paths probe for all four additive version columns and add only
+   those absent from the Delta target, so partial and repeated upgrades are
+   idempotent before the guarded `MERGE`.
 
 3. **Snapshot the funnel** — `sql/transformations/gold_funnel_snapshot_daily.sql`
    does a `MERGE INTO` keyed by `(snapshot_date, state, segment_code)`,
@@ -80,7 +94,9 @@ can retain historical synthetic `pending` / `none` rows until an intentional
 one-time cleanup is approved. They are semantically harmless because the
 consumer defaults are identical, and the changed-row predicate leaves them
 untouched. Do not hide a multi-million-row Delta delete inside an app hook;
-validate and run that storage cleanup as an explicit operator migration.
+validate and run that storage cleanup as an explicit operator migration. The
+Spark entrypoint requires `--prune-legacy-defaults`; routine app, deploy, Admin,
+and repair-job calls leave the rows in place.
 
 ## Metric-view changes
 

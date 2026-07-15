@@ -24,9 +24,12 @@
 --   * Population is done by jobs/sync_lifecycle_state.py or the cheaper app
 --     warehouse hook. Both read durable Lakebase state and MERGE only those
 --     borrowers into this table.
---   * This file is a safe manual cleanup for workspaces upgraded from the
---     retired full-universe seed. It removes only untouched synthetic default
---     rows; real decisions, outreach, offers, and timestamps are preserved.
+--   * This file is an explicit operator cleanup for workspaces upgraded from
+--     the retired full-universe seed. Routine app and repair-job syncs do not
+--     execute it. The equivalent guarded job action requires
+--     `--prune-legacy-defaults`.
+--   * It removes only untouched synthetic default rows; real decisions,
+--     outreach, offers, and timestamps are preserved.
 --
 -- Run-order: after `refresh_scores` lands borrower_360, before
 --            `refresh_segments` / dashboards consume the metric views.
@@ -35,8 +38,8 @@
 --                LEFT JOIN + COALESCE so a borrower not yet reviewed counts
 --                correctly in the denominator.
 --
--- The deploy and durable repair paths execute the same predicate before the
--- sparse MERGE. It is intentionally absent from per-click app hooks.
+-- Never add this DELETE to routine deploy, app, or repair-job execution. The
+-- multi-million-row cleanup requires explicit operator intent.
 -- =============================================================================
 
 DELETE FROM mip.gold.borrower_lifecycle_state
@@ -44,4 +47,8 @@ WHERE approval_status = 'pending'
   AND outreach_status = 'none'
   AND offer_code IS NULL
   AND approved_at IS NULL
-  AND outreach_at IS NULL;
+  AND approval_decided_at IS NULL
+  AND approval_event_id IS NULL
+  AND outreach_at IS NULL
+  AND outreach_created_at IS NULL
+  AND outreach_event_id IS NULL;

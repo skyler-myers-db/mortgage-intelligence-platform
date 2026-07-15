@@ -2111,7 +2111,7 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
         "Cohort fingerprint and source snapshot bound."
     )
     assert "Masked references only" not in {chip["label"] for chip in metadata["governance_chips"]}
-    assert "Multi-agent framework" in json.dumps(metadata["governance_chips"])
+    assert "Databricks Agent Responses" in json.dumps(metadata["governance_chips"])
     assert metadata["result_filters"]["segment_codes"] == ["itm"]
     assert (
         metadata["result_filters"]["portfolio_criteria"]["marketing_eligibility"] == "Eligible only"

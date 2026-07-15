@@ -41,6 +41,7 @@ import argparse
 import os
 import re
 import sys
+from collections.abc import Callable
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -56,9 +57,26 @@ LIFECYCLE_COLUMN_COMMENTS: dict[str, str] = {
     "outreach_status": "queued / actioned / none. Derived from latest outreach state.",
     "offer_code": "Latest offer_code associated with the approval decision.",
     "approved_at": "decided_at for the latest approve action; NULL when not approved.",
+    "approval_decided_at": "Timestamp component of the total-order approval version, including reject and hold actions.",
+    "approval_event_id": "Non-PII approval UUID used with approval_decided_at as the total-order approval version.",
     "outreach_at": "Timestamp of latest outreach action.",
+    "outreach_created_at": "Creation timestamp of the latest outreach event; second field in the total-order outreach version.",
+    "outreach_event_id": "Non-PII disposition UUID used as the final total-order outreach version field.",
     "synced_at": "Last sync run that touched this row.",
     "refreshed_at": "Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.",
+}
+
+_APPROVAL_VERSION_FIELDS = ("approval_decided_at", "approval_event_id")
+_OUTREACH_VERSION_FIELDS = (
+    "outreach_at",
+    "outreach_created_at",
+    "outreach_event_id",
+)
+_LIFECYCLE_SCHEMA_MIGRATIONS = {
+    "approval_decided_at": "TIMESTAMP",
+    "approval_event_id": "STRING",
+    "outreach_created_at": "TIMESTAMP",
+    "outreach_event_id": "STRING",
 }
 
 
@@ -186,16 +204,23 @@ WITH latest_approvals AS (
         a.borrower_id,
         a.action,
         a.offer_code,
-        a.decided_at
+        a.decided_at,
+        a.approval_id::text AS approval_event_id
     FROM mip_app.approvals a
-    ORDER BY a.borrower_id, a.decided_at DESC
+    ORDER BY a.borrower_id, a.decided_at DESC, a.approval_id::text DESC
 ),
 latest_dispositions AS (
     SELECT DISTINCT ON (d.borrower_id)
         d.borrower_id,
-        d.occurred_at AS outreach_at
+        d.occurred_at AS outreach_at,
+        d.created_at AS outreach_created_at,
+        d.disposition_id::text AS outreach_event_id
     FROM mip_app.call_dispositions d
-    ORDER BY d.borrower_id, d.occurred_at DESC, d.created_at DESC
+    ORDER BY
+        d.borrower_id,
+        d.occurred_at DESC,
+        d.created_at DESC,
+        d.disposition_id::text DESC
 )
 SELECT
     COALESCE(a.borrower_id, d.borrower_id)              AS borrower_id,
@@ -214,7 +239,11 @@ SELECT
     CASE WHEN a.action = 'approve' THEN a.decided_at
          ELSE NULL
     END                                                  AS approved_at,
-    d.outreach_at                                        AS outreach_at
+    a.decided_at                                         AS approval_decided_at,
+    a.approval_event_id                                  AS approval_event_id,
+    d.outreach_at                                        AS outreach_at,
+    d.outreach_created_at                                AS outreach_created_at,
+    d.outreach_event_id                                  AS outreach_event_id
 FROM latest_approvals a
 FULL OUTER JOIN latest_dispositions d USING (borrower_id)
 """
@@ -229,11 +258,30 @@ def _fetch_lakebase_rows(conn_kwargs: dict) -> list[dict[str, Any]]:
         return [dict(zip(cols, row, strict=False)) for row in cur.fetchall()]
 
 
+def _build_total_order_guard(fields: tuple[str, ...]) -> str:
+    """Build a strict lexicographic source-newer-than-target predicate."""
+
+    def field_guard(index: int) -> str:
+        field = fields[index]
+        source = f"source.{field}"
+        target = f"target.{field}"
+        clauses = [f"{target} IS NULL", f"{source} > {target}"]
+        if index + 1 < len(fields):
+            clauses.append(f"({source} = {target} AND {field_guard(index + 1)})")
+        return f"({source} IS NOT NULL AND ({' OR '.join(clauses)}))"
+
+    if not fields:
+        raise ValueError("at least one version field is required")
+    return field_guard(0)
+
+
 def _build_lifecycle_merge(rows: list[dict[str, Any]], *, catalog: str) -> str:
     """Build the canonical sparse Delta MERGE used by app and job paths."""
     borrower_table = _qualified_uc_table(catalog, "gold", "borrower_360")
     lifecycle_table = _qualified_uc_table(catalog, "gold", "borrower_lifecycle_state")
     lakebase_rows = _lakebase_rows_cte(rows)
+    approval_advanced = _build_total_order_guard(_APPROVAL_VERSION_FIELDS)
+    outreach_advanced = _build_total_order_guard(_OUTREACH_VERSION_FIELDS)
     return f"""
     MERGE INTO {lifecycle_table} AS target
     USING (
@@ -246,25 +294,61 @@ def _build_lifecycle_merge(rows: list[dict[str, Any]], *, catalog: str) -> str:
         l.outreach_status,
         l.offer_code,
         l.approved_at,
+        l.approval_decided_at,
+        l.approval_event_id,
         l.outreach_at,
+        l.outreach_created_at,
+        l.outreach_event_id,
         CURRENT_TIMESTAMP() AS mirror_refreshed_at
       FROM lakebase_rows AS l
       INNER JOIN {borrower_table} AS b
         ON b.borrower_id = l.borrower_id
     ) AS source
       ON target.borrower_id = source.borrower_id
-    WHEN MATCHED AND NOT (
-      target.approval_status <=> source.approval_status
-      AND target.outreach_status <=> source.outreach_status
-      AND target.offer_code <=> source.offer_code
-      AND target.approved_at <=> source.approved_at
-      AND target.outreach_at <=> source.outreach_at
+    WHEN MATCHED AND (
+      {approval_advanced}
+      OR {outreach_advanced}
     ) THEN UPDATE SET
-      approval_status = source.approval_status,
-      outreach_status = source.outreach_status,
-      offer_code = source.offer_code,
-      approved_at = source.approved_at,
-      outreach_at = source.outreach_at,
+      approval_status = CASE
+        WHEN {approval_advanced} THEN source.approval_status
+        ELSE target.approval_status
+      END,
+      outreach_status = CASE
+        WHEN {outreach_advanced} THEN source.outreach_status
+        WHEN {approval_advanced}
+          AND target.outreach_at IS NULL
+          AND source.outreach_at IS NULL
+          THEN source.outreach_status
+        ELSE target.outreach_status
+      END,
+      offer_code = CASE
+        WHEN {approval_advanced} THEN source.offer_code
+        ELSE target.offer_code
+      END,
+      approved_at = CASE
+        WHEN {approval_advanced} THEN source.approved_at
+        ELSE target.approved_at
+      END,
+      approval_decided_at = CASE
+        WHEN {approval_advanced} THEN source.approval_decided_at
+        ELSE target.approval_decided_at
+      END,
+      approval_event_id = CASE
+        WHEN {approval_advanced} THEN source.approval_event_id
+        ELSE target.approval_event_id
+      END,
+      outreach_at = CASE
+        WHEN {outreach_advanced} THEN source.outreach_at
+        ELSE target.outreach_at
+      END,
+      outreach_created_at = CASE
+        WHEN {outreach_advanced} THEN source.outreach_created_at
+        ELSE target.outreach_created_at
+      END,
+      outreach_event_id = CASE
+        WHEN {outreach_advanced} THEN source.outreach_event_id
+        ELSE target.outreach_event_id
+      END,
       synced_at = source.mirror_refreshed_at,
       refreshed_at = source.mirror_refreshed_at
     WHEN NOT MATCHED THEN INSERT (
@@ -273,7 +357,11 @@ def _build_lifecycle_merge(rows: list[dict[str, Any]], *, catalog: str) -> str:
       outreach_status,
       offer_code,
       approved_at,
+      approval_decided_at,
+      approval_event_id,
       outreach_at,
+      outreach_created_at,
+      outreach_event_id,
       synced_at,
       refreshed_at
     ) VALUES (
@@ -282,11 +370,86 @@ def _build_lifecycle_merge(rows: list[dict[str, Any]], *, catalog: str) -> str:
       source.outreach_status,
       source.offer_code,
       source.approved_at,
+      source.approval_decided_at,
+      source.approval_event_id,
       source.outreach_at,
+      source.outreach_created_at,
+      source.outreach_event_id,
       source.mirror_refreshed_at,
       source.mirror_refreshed_at
     )
     """
+
+
+def _build_lifecycle_schema_probe(*, catalog: str) -> str:
+    columns_table = _qualified_uc_table(catalog, "information_schema", "columns")
+    column_names = ", ".join(f"'{name}'" for name in _LIFECYCLE_SCHEMA_MIGRATIONS)
+    return f"""
+    SELECT column_name
+    FROM {columns_table}
+    WHERE table_schema = 'gold'
+      AND table_name = 'borrower_lifecycle_state'
+      AND column_name IN ({column_names})
+    """
+
+
+def _build_lifecycle_schema_migration(
+    *,
+    catalog: str,
+    columns: tuple[str, ...] | None = None,
+) -> str:
+    lifecycle_table = _qualified_uc_table(catalog, "gold", "borrower_lifecycle_state")
+    requested = columns or tuple(_LIFECYCLE_SCHEMA_MIGRATIONS)
+    unknown = set(requested) - set(_LIFECYCLE_SCHEMA_MIGRATIONS)
+    if unknown:
+        raise ValueError(f"unknown lifecycle migration columns: {sorted(unknown)}")
+    definitions_list: list[str] = []
+    for column in requested:
+        comment = LIFECYCLE_COLUMN_COMMENTS[column].replace("'", "''")
+        definitions_list.append(
+            f"{column} {_LIFECYCLE_SCHEMA_MIGRATIONS[column]} COMMENT '{comment}'"
+        )
+    definitions = ",\n      ".join(definitions_list)
+    return f"""
+    ALTER TABLE {lifecycle_table}
+    ADD COLUMNS (
+      {definitions}
+    )
+    """
+
+
+def _missing_lifecycle_columns(rows: list[dict[str, Any]]) -> tuple[str, ...]:
+    existing = {str(row.get("column_name") or "").lower() for row in rows}
+    return tuple(name for name in _LIFECYCLE_SCHEMA_MIGRATIONS if name not in existing)
+
+
+def _ensure_lifecycle_schema(
+    execute: Callable[[str], list[dict[str, Any]]],
+    *,
+    catalog: str,
+) -> bool:
+    """Add total-order version columns once; tolerate a concurrent add."""
+    probe = _build_lifecycle_schema_probe(catalog=catalog)
+    missing = _missing_lifecycle_columns(execute(probe))
+    if not missing:
+        return False
+
+    while missing:
+        attempted = missing
+        try:
+            execute(_build_lifecycle_schema_migration(catalog=catalog, columns=missing))
+        except Exception:
+            # App and repair runs can overlap, including with an older rollout
+            # that adds only a subset. Retry only when the observed missing set
+            # shrank; every unrelated or non-progressing error stays visible.
+            missing = _missing_lifecycle_columns(execute(probe))
+            if not missing:
+                return False
+            if missing == attempted:
+                raise
+            continue
+        return True
+    return False
 
 
 def _build_legacy_default_prune(*, catalog: str) -> str:
@@ -304,7 +467,11 @@ def _build_legacy_default_prune(*, catalog: str) -> str:
       AND outreach_status = 'none'
       AND offer_code IS NULL
       AND approved_at IS NULL
+      AND approval_decided_at IS NULL
+      AND approval_event_id IS NULL
       AND outreach_at IS NULL
+      AND outreach_created_at IS NULL
+      AND outreach_event_id IS NULL
     """
 
 
@@ -315,7 +482,11 @@ def _lakebase_rows_cte(rows: list[dict[str, Any]]) -> str:
         "outreach_status",
         "offer_code",
         "approved_at",
+        "approval_decided_at",
+        "approval_event_id",
         "outreach_at",
+        "outreach_created_at",
+        "outreach_event_id",
     )
     values = ",\n        ".join(
         "("
@@ -326,7 +497,11 @@ def _lakebase_rows_cte(rows: list[dict[str, Any]]) -> str:
                 _sql_string(row.get("outreach_status")),
                 _sql_string(row.get("offer_code")),
                 _sql_timestamp(row.get("approved_at")),
+                _sql_timestamp(row.get("approval_decided_at")),
+                _sql_string(row.get("approval_event_id")),
                 _sql_timestamp(row.get("outreach_at")),
+                _sql_timestamp(row.get("outreach_created_at")),
+                _sql_string(row.get("outreach_event_id")),
             ]
         )
         + ")"
@@ -342,7 +517,11 @@ def _lakebase_rows_cte(rows: list[dict[str, Any]]) -> str:
           CAST(NULL AS STRING) AS outreach_status,
           CAST(NULL AS STRING) AS offer_code,
           CAST(NULL AS TIMESTAMP) AS approved_at,
-          CAST(NULL AS TIMESTAMP) AS outreach_at
+          CAST(NULL AS TIMESTAMP) AS approval_decided_at,
+          CAST(NULL AS STRING) AS approval_event_id,
+          CAST(NULL AS TIMESTAMP) AS outreach_at,
+          CAST(NULL AS TIMESTAMP) AS outreach_created_at,
+          CAST(NULL AS STRING) AS outreach_event_id
         WHERE FALSE
     """
 
@@ -379,10 +558,24 @@ def _get_spark() -> Any:
     return spark
 
 
-def _write_gold(rows: list[dict[str, Any]], *, catalog: str) -> None:
-    """Prune legacy defaults, then apply the canonical sparse MERGE."""
+def _write_gold(
+    rows: list[dict[str, Any]],
+    *,
+    catalog: str,
+    prune_legacy_defaults: bool = False,
+) -> None:
+    """Migrate and merge; prune defaults only on explicit operator request."""
     spark = _get_spark()
-    spark.sql(_build_legacy_default_prune(catalog=catalog))
+
+    def execute(statement: str) -> list[dict[str, Any]]:
+        result = spark.sql(statement)
+        if result is None:
+            return []
+        return [row.asDict(recursive=True) for row in result.collect()]
+
+    _ensure_lifecycle_schema(execute, catalog=catalog)
+    if prune_legacy_defaults:
+        spark.sql(_build_legacy_default_prune(catalog=catalog))
     spark.sql(_build_lifecycle_merge(rows, catalog=catalog))
 
 
@@ -399,6 +592,14 @@ def build_parser() -> argparse.ArgumentParser:
         default=_catalog_default(),
         help=("Unity Catalog catalog for gold tables " "(default: MIP_DEFAULT_CATALOG or mip)."),
     )
+    parser.add_argument(
+        "--prune-legacy-defaults",
+        action="store_true",
+        help=(
+            "Explicitly delete untouched pending/none rows from the retired "
+            "full-universe seed before merging. Never enabled by routine runs."
+        ),
+    )
     return parser
 
 
@@ -412,7 +613,11 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(2)
 
     print(f"[sync-lifecycle] read {len(rows)} rows from Lakebase")
-    _write_gold(rows, catalog=args.catalog)
+    _write_gold(
+        rows,
+        catalog=args.catalog,
+        prune_legacy_defaults=args.prune_legacy_defaults,
+    )
     print("[sync-lifecycle] gold mirror refreshed")
 
 

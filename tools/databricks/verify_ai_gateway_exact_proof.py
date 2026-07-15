@@ -42,6 +42,7 @@ from backend.services.ai_gateway_proof_ledger import (
 from backend.services.capability_serving_probes import (
     count_inference_log_rows,
     query_serving_endpoint,
+    query_serving_endpoint_with_proof,
     serving_response_has_payload,
 )
 from backend.services.databricks_sql import get_sql_client
@@ -53,12 +54,34 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("mode", choices=("verify-pending", "send"))
     parser.add_argument("--git-sha", default=os.environ.get("MIP_GIT_SHA"))
     parser.add_argument("--endpoint", default=os.environ.get("MIP_AI_GATEWAY_ENDPOINT"))
-    parser.add_argument("--inference-table", default=os.environ.get("MIP_AI_GATEWAY_INFERENCE_TABLE"))
-    parser.add_argument("--timeout-s", type=int, default=int(os.environ.get("MIP_AI_GATEWAY_VERIFY_TIMEOUT_S", "1200")))
-    parser.add_argument("--interval-s", type=int, default=int(os.environ.get("MIP_AI_GATEWAY_VERIFY_INTERVAL_S", "45")))
-    parser.add_argument("--expiry-s", type=int, default=int(os.environ.get("MIP_AI_GATEWAY_VERIFY_EXPIRY_S", "21600")))
-    parser.add_argument("--wait", action="store_true", help="After send, poll the exact id until verified or timeout.")
-    parser.add_argument("--require-verified", action="store_true", help="Exit non-zero when no current-SHA proof is verified.")
+    parser.add_argument(
+        "--inference-table", default=os.environ.get("MIP_AI_GATEWAY_INFERENCE_TABLE")
+    )
+    parser.add_argument(
+        "--timeout-s",
+        type=int,
+        default=int(os.environ.get("MIP_AI_GATEWAY_VERIFY_TIMEOUT_S", "1200")),
+    )
+    parser.add_argument(
+        "--interval-s",
+        type=int,
+        default=int(os.environ.get("MIP_AI_GATEWAY_VERIFY_INTERVAL_S", "45")),
+    )
+    parser.add_argument(
+        "--expiry-s",
+        type=int,
+        default=int(os.environ.get("MIP_AI_GATEWAY_VERIFY_EXPIRY_S", "21600")),
+    )
+    parser.add_argument(
+        "--wait",
+        action="store_true",
+        help="After send, poll the exact id until verified or timeout.",
+    )
+    parser.add_argument(
+        "--require-verified",
+        action="store_true",
+        help="Exit non-zero when no current-SHA proof is verified.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable summary.")
     return parser
 
@@ -67,14 +90,13 @@ def _workspace_client() -> Any:
     """Late-bound client factory — the test seam.
 
     Scale-to-zero gateway endpoints hold cold-start requests longer than the
-    SDK's 60s default read timeout, so the real client gets a 300s Config
-    (this SDK only accepts the timeout via Config, not a direct kwarg). Both
-    the Config and the client resolve credentials at CONSTRUCTION, so this
-    must never run under test fakes — tests monkeypatch this factory, not
-    WorkspaceClient (CI run 28945210525: patching the class still left the
-    real Config argument evaluating and dialing auth).
+    SDK's 60s default read timeout, so the real client gets a 300s HTTP timeout.
+    SDK retries are disabled: warmup retries explicitly with fresh non-proof
+    ids, while the exact proof id must be submitted at most once. Both Config
+    and the client resolve credentials at construction, so tests monkeypatch
+    this factory rather than WorkspaceClient.
     """
-    return WorkspaceClient(config=Config(http_timeout_seconds=300))
+    return WorkspaceClient(config=Config(http_timeout_seconds=300, retry_timeout_seconds=0))
 
 
 def ensure_lakebase_env(workspace_factory: Any = None) -> bool:
@@ -99,6 +121,7 @@ def ensure_lakebase_env(workspace_factory: Any = None) -> bool:
     because the proof ledger can only live in the real Lakebase instance.
     Returns True when env was minted here.
     """
+
     def _is_real_host(value: str | None) -> bool:
         host = (value or "").strip().lower()
         return bool(host) and host not in {"localhost", "127.0.0.1", "::1"}
@@ -166,7 +189,9 @@ def main(argv: list[str] | None = None) -> int:
     settings = get_settings()
     git_sha = _resolved_sha(args.git_sha or settings.mip_git_sha)
     endpoint = (args.endpoint or settings.mip_ai_gateway_endpoint or "").strip()
-    inference_table = (args.inference_table or settings.mip_ai_gateway_inference_table or "").strip()
+    inference_table = (
+        args.inference_table or settings.mip_ai_gateway_inference_table or ""
+    ).strip()
     if not endpoint:
         raise ValueError("AI Gateway endpoint is required")
     if not inference_table:
@@ -226,9 +251,8 @@ def main(argv: list[str] | None = None) -> int:
         proof.proof_id != latest_current.proof_id for proof in verified_current
     ):
         verified_current.append(latest_current)
-    sent_verified = (
-        sent is not None
-        and any(proof.proof_id == sent.proof_id and proof.status == "verified" for proof in verified)
+    sent_verified = sent is not None and any(
+        proof.proof_id == sent.proof_id and proof.status == "verified" for proof in verified
     )
     summary = {
         "mode": args.mode,
@@ -267,24 +291,22 @@ def _is_cold_start_error(exc: BaseException) -> bool:
     return any(marker in message for marker in _COLD_START_MARKERS)
 
 
-def query_with_cold_start_patience(
+def warm_endpoint_with_cold_start_patience(
     workspace: Any,
     endpoint: str,
     *,
     prompt: str,
-    client_request_id: str,
     task: str,
     warmup_timeout_s: float | None = None,
     interval_s: float = 20.0,
     sleep: Any = time.sleep,
 ) -> Any:
-    """Query the endpoint, riding out scale-to-zero cold starts.
+    """Warm the endpoint without ever reusing an exact-proof request id.
 
     A cold llama endpoint can take minutes to warm; the platform holds the
     request until the SDK read timeout trips (observed 2026-07-07, deploy
-    step 18). Retry timeout-shaped failures until the warmup budget is
-    spent; non-timeout errors raise immediately — a 400/permission error
-    will never heal by waiting.
+    step 18). Each retry gets a fresh non-proof id because a timed-out request
+    may still execute server-side. Non-timeout errors raise immediately.
     """
     if warmup_timeout_s is None:
         warmup_timeout_s = float(os.environ.get("MIP_AI_GATEWAY_WARMUP_TIMEOUT_S", "600"))
@@ -292,19 +314,20 @@ def query_with_cold_start_patience(
     attempt = 0
     while True:
         attempt += 1
+        warmup_request_id = f"mip-warmup-{uuid4().hex}"
         try:
             return query_serving_endpoint(
                 workspace,
                 endpoint,
                 task=task,
                 prompt=prompt,
-                client_request_id=client_request_id,
+                client_request_id=warmup_request_id,
             )
         except Exception as exc:  # noqa: BLE001 - classified below, re-raised when not cold-start
             if not _is_cold_start_error(exc) or time.monotonic() >= deadline:
                 raise
             print(
-                f"[ai-gateway-verify] endpoint {endpoint} looks cold "
+                "[ai-gateway-verify] configured endpoint looks cold "
                 f"(attempt {attempt}: {type(exc).__name__}); retrying in {int(interval_s)}s"
             )
             sleep(interval_s)
@@ -320,19 +343,21 @@ def send_probe(
 ) -> AiGatewayVerifiedProof:
     details = workspace.serving_endpoints.get(endpoint)
     task = getattr(details, "task", None)
+    try:
+        warm_endpoint_with_cold_start_patience(
+            workspace,
+            endpoint,
+            task=str(task or ""),
+            prompt="AI Gateway warmup check.",
+        )
+    except Exception as exc:  # noqa: BLE001 - only cold-start failures may proceed
+        if not _is_cold_start_error(exc):
+            raise
+        print(
+            "[ai-gateway-verify] warmup remained unresolved; sending the exact proof request once"
+        )
+
     client_request_id = f"mip-capability-{git_sha}-{uuid4().hex[:16]}"
-    response = query_with_cold_start_patience(
-        workspace,
-        endpoint,
-        task=str(task or ""),
-        prompt=(
-            "Capability exact-proof check. Reply with a one-sentence acknowledgement "
-            "for Mortgage Intelligence Platform AI Gateway logging."
-        ),
-        client_request_id=client_request_id,
-    )
-    if not serving_response_has_payload(response):
-        raise RuntimeError("Configured AI Gateway endpoint returned no response payload")
     proof = insert_pending_proof(
         lakebase,
         git_sha=git_sha,
@@ -340,6 +365,34 @@ def send_probe(
         endpoint_name=endpoint,
         inference_table=inference_table,
     )
+    try:
+        execution = query_serving_endpoint_with_proof(
+            workspace,
+            endpoint,
+            task=str(task or ""),
+            prompt=(
+                "Capability exact-proof check. Reply with a one-sentence acknowledgement "
+                "for Mortgage Intelligence Platform AI Gateway logging."
+            ),
+            client_request_id=client_request_id,
+        )
+    except Exception as exc:  # noqa: BLE001 - timeout/503 is an ambiguous submission result
+        if not _is_cold_start_error(exc):
+            raise
+        print(
+            "[ai-gateway-proof] exact probe submission unresolved after one request; "
+            f"left pending proof_id={proof.proof_id}"
+        )
+        return proof
+
+    if execution.transport == "responses_api" and not execution.proves_agent_response:
+        raise RuntimeError(
+            "Configured AI Gateway Responses endpoint did not return a terminal completed payload"
+        )
+    if execution.transport != "responses_api" and not serving_response_has_payload(
+        execution.response
+    ):
+        raise RuntimeError("Configured AI Gateway endpoint returned no response payload")
     print(f"[ai-gateway-proof] sent probe proof_id={proof.proof_id}")
     return proof
 
@@ -357,7 +410,7 @@ def verify_pending(
     for proof in list_pending_proofs(lakebase, git_sha=git_sha, limit=limit):
         if proof.endpoint_name != endpoint or proof.inference_table != inference_table:
             continue
-        if _exact_row_count(sql_client, proof) > 0:
+        if _exact_row_count(sql_client, proof) == 1:
             updated = mark_proof_verified(
                 lakebase,
                 proof_id=proof.proof_id,
@@ -381,7 +434,8 @@ def wait_for_exact_row(
 ) -> list[AiGatewayVerifiedProof]:
     deadline = time.monotonic() + timeout_s
     while True:
-        if _exact_row_count(sql_client, proof) > 0:
+        exact_row_count = _exact_row_count(sql_client, proof)
+        if exact_row_count == 1:
             updated = mark_proof_verified(
                 lakebase,
                 proof_id=proof.proof_id,
@@ -392,6 +446,12 @@ def wait_for_exact_row(
                 f"proof_id={updated.proof_id} latency_s={updated.verify_latency_s:.1f}"
             )
             return [updated]
+        if exact_row_count > 1:
+            print(
+                "[ai-gateway-proof] exact request matched multiple inference rows; "
+                f"left pending proof_id={proof.proof_id}"
+            )
+            return []
         if time.monotonic() >= deadline:
             print(
                 "[ai-gateway-proof] exact row not visible before timeout; "

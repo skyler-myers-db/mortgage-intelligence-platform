@@ -63,7 +63,14 @@ export type { LeadExportContext } from './LeadTable.types';
  * when the table has focus; plain A still approves only the expanded row.
  */
 
-export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exportContext, salesTeam = [] }: LeadTableProps) {
+export function LeadTable({
+  leads,
+  totalMatching = null,
+  truncatedAt = null,
+  growthAgentVerification = null,
+  exportContext,
+  salesTeam = [],
+}: LeadTableProps) {
   'use no memo';
 
   const queryClient = useQueryClient();
@@ -74,13 +81,6 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     ? { campaign_id: campaignId, variant_name: variantName }
     : null;
   const campaignBindingError = Boolean(campaignId || variantName) && !campaignBinding;
-  const growthAgentTotal = Number(searchParams.get('actionable_total'));
-  const growthAgentFingerprint = searchParams.get('actionable_cohort_fingerprint')?.trim() ?? '';
-  const growthAgentSnapshot = searchParams.get('actionable_snapshot_id')?.trim() ?? '';
-  const growthAgentProofVisible = Number.isSafeInteger(growthAgentTotal)
-    && growthAgentTotal >= 0
-    && /^[0-9a-f]{64}$/.test(growthAgentFingerprint)
-    && Boolean(growthAgentSnapshot);
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -855,14 +855,19 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           </Button>
         </div>
       </div>
-      {growthAgentProofVisible && (
+      {growthAgentVerification && (
         <div className="table-success chip-row" role="status" data-testid="growth-agent-cohort-proof">
           <Chip variant="success" icon="shield">Verified Growth Agent cohort</Chip>
-          <span className="num">{growthAgentTotal.toLocaleString()} borrowers</span>
-          <span className="mono" title={growthAgentFingerprint}>
-            proof {growthAgentFingerprint.slice(0, 12)}
+          <span className="num">{growthAgentVerification.total.toLocaleString()} borrowers</span>
+          <span className="mono" title={growthAgentVerification.cohortFingerprint}>
+            proof {growthAgentVerification.cohortFingerprint.slice(0, 12)}
           </span>
-          <span title={growthAgentSnapshot}>snapshot {growthAgentSnapshot}</span>
+          <span title={growthAgentVerification.snapshotId}>
+            snapshot {growthAgentVerification.snapshotId}
+          </span>
+          <span className="mono" title={growthAgentVerification.runId}>
+            run {growthAgentVerification.runId.slice(0, 12)}
+          </span>
         </div>
       )}
       {campaignBindingError && (
@@ -928,7 +933,13 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           {salesToast}
         </div>
       )}
-      <div ref={tableWrapRef} className="tbl-wrap" tabIndex={0} aria-label="Ranked borrowers table scroll region">
+      <div
+        ref={tableWrapRef}
+        className="tbl-wrap"
+        role="region"
+        tabIndex={0}
+        aria-label="Ranked borrowers table scroll region"
+      >
         <table className="tbl lead-table__table" aria-rowcount={sortedLeads.length + 1}>
           <colgroup>
             <col className="lead-table__col-select" />

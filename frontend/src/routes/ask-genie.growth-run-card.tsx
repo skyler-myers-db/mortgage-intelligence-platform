@@ -8,6 +8,30 @@ import type {
   GrowthAgentToolStep,
 } from '../types';
 
+export const DATABRICKS_AGENT_RESPONSES_LABEL = 'Databricks Agent Responses';
+
+export function publicAgentResponsesText(value: string | null | undefined): string {
+  if (!value) return '';
+  switch (value.trim()) {
+    case 'Supervisor-composed notification':
+    case 'Databricks Agent Responses endpoint':
+    case 'Agent Responses endpoint':
+    case 'Databricks Supervisor Agent':
+    case 'Supervisor Agent':
+    case 'Multi-agent framework':
+    case 'Agent framework':
+    case 'agent_framework_supervisor':
+      return DATABRICKS_AGENT_RESPONSES_LABEL;
+    default:
+      return value;
+  }
+}
+
+function publicToolName(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return publicAgentResponsesText(value);
+}
+
 export function formatGrowthAgentCount(value: number | null | undefined): string {
   return new Intl.NumberFormat('en-US').format(Math.max(0, Number(value ?? 0)));
 }
@@ -37,8 +61,18 @@ function shortHash(value: string | null | undefined): string {
 }
 
 function hasGrowthAgentCohortProof(run: GrowthAgentRunResponse): boolean {
+  let route: URL;
+  try {
+    route = new URL(run.route, 'https://mortgage-intelligence.local');
+  } catch {
+    return false;
+  }
   return (
-    Number.isSafeInteger(run.actionable_total)
+    route.origin === 'https://mortgage-intelligence.local'
+    && route.pathname === '/lead-queue'
+    && Boolean(route.searchParams.get('growth_handoff')?.trim())
+    && /^[A-Za-z0-9_-]{8,128}$/.test(run.run_id)
+    && Number.isSafeInteger(run.actionable_total)
     && run.actionable_total >= 0
     && /^[0-9a-f]{64}$/.test(run.tool_result_hash)
     && /^[0-9a-f]{64}$/.test(run.actionable_cohort_fingerprint ?? '')
@@ -68,14 +102,14 @@ export function traceDisplay(value: string | null | undefined): string {
 
 function executionModeLabel(run: GrowthAgentRunResponse): string {
   if (run.execution_mode === 'genie_conversation') return 'Genie Conversation';
-  if (run.execution_mode === 'agent_framework') return 'Agent framework';
+  if (run.execution_mode === 'agent_framework') return DATABRICKS_AGENT_RESPONSES_LABEL;
   return 'Reviewed workflow';
 }
 
 function traceLabel(run: GrowthAgentRunResponse): string {
   if (run.trace_kind === 'mlflow_trace') return 'MLflow trace';
   if (run.trace_kind === 'genie_conversation') return 'Genie message';
-  if (run.trace_kind === 'agent_framework') return 'Supervisor Agent';
+  if (run.trace_kind === 'agent_framework') return DATABRICKS_AGENT_RESPONSES_LABEL;
   return 'Run correlation';
 }
 
@@ -173,7 +207,7 @@ export function GrowthAgentRunCard({
         </Chip>
       </div>
       <div className="growth-agent-run__intent">
-        {run.planner_label}
+        {publicAgentResponsesText(run.planner_label)}
         {run.genie_conversation_id ? ` · conversation ${shortHash(run.genie_conversation_id)}` : ''}
         {run.genie_row_count !== null && run.genie_row_count !== undefined
           ? ` · ${formatGrowthAgentCount(run.genie_row_count)} Genie rows`
@@ -181,12 +215,12 @@ export function GrowthAgentRunCard({
       </div>
       {run.interpreted_intent && (
         <div className="growth-agent-run__intent">
-          {run.interpreted_intent}
+          {publicAgentResponsesText(run.interpreted_intent)}
         </div>
       )}
       {run.agent_reasoning && (
         <div className="growth-agent-run__intent">
-          {run.agent_reasoning}
+          {publicAgentResponsesText(run.agent_reasoning)}
         </div>
       )}
       <div className="growth-agent-run__metrics">
@@ -211,11 +245,15 @@ export function GrowthAgentRunCard({
               <div key={step.label} className={`growth-agent-step growth-agent-step--${step.status}`}>
                 <Icon name={toolStepIcon(step.status)} size={12} />
                 <div>
-                  <div className="growth-agent-step__title">{step.label}</div>
-                  <div className="growth-agent-step__detail">{step.detail}</div>
+                  <div className="growth-agent-step__title">
+                    {publicAgentResponsesText(step.label)}
+                  </div>
+                  <div className="growth-agent-step__detail">
+                    {publicAgentResponsesText(step.detail)}
+                  </div>
                   {(step.tool_name || step.result_hash) && (
                     <div className="growth-agent-step__meta">
-                      {[step.tool_name, step.result_hash ? `hash ${shortHash(step.result_hash)}` : null]
+                      {[publicToolName(step.tool_name), step.result_hash ? `hash ${shortHash(step.result_hash)}` : null]
                         .filter(Boolean)
                         .join(' · ')}
                     </div>
@@ -234,8 +272,12 @@ export function GrowthAgentRunCard({
                   {policyStatusLabel(check.status)}
                 </Chip>
                 <div>
-                  <div className="growth-agent-step__title">{check.label}</div>
-                  <div className="growth-agent-step__detail">{check.detail}</div>
+                  <div className="growth-agent-step__title">
+                    {publicAgentResponsesText(check.label)}
+                  </div>
+                  <div className="growth-agent-step__detail">
+                    {publicAgentResponsesText(check.detail)}
+                  </div>
                 </div>
               </div>
             ))}
@@ -254,13 +296,17 @@ export function GrowthAgentRunCard({
                 <Chip
                   variant={chip.status === 'passed' ? 'success' : 'warning'}
                   icon="shield"
-                  title={chip.detail}
+                  title={publicAgentResponsesText(chip.detail)}
                 >
                   {governanceStatusLabel(chip.status)}
                 </Chip>
                 <div>
-                  <div className="growth-agent-step__title">{chip.label}</div>
-                  <div className="growth-agent-step__detail">{chip.detail}</div>
+                  <div className="growth-agent-step__title">
+                    {publicAgentResponsesText(chip.label)}
+                  </div>
+                  <div className="growth-agent-step__detail">
+                    {publicAgentResponsesText(chip.detail)}
+                  </div>
                 </div>
               </div>
             ))}

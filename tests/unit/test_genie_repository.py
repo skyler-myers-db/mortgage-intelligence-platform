@@ -3744,6 +3744,17 @@ def test_live_genie_optional_text_fields_keep_safe_domain_controls() -> None:
     assert native.title == title
 
 
+def test_query_process_summary_does_not_claim_unverified_execution() -> None:
+    steps = genie_reasoning_trace_from_thoughts(
+        [{"kind": "SQL", "content": "Model-authored query metadata."}]
+    )
+
+    assert [step.content for step in steps] == [
+        "Prepared a governed query plan over approved data assets."
+    ]
+    assert "ran" not in steps[0].content.lower()
+
+
 def test_recognized_shape_verification_note_appends_not_replaces() -> None:
     live = GenieResponse(
         answer_text="There are about 147,742 borrowers in the money.",
