@@ -92,6 +92,7 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "all",
         "approval",
         "audit",
+        "booth",
         "brief",
         "build",
         "campaign",
@@ -104,8 +105,10 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "customer",
         "daily",
         "deployment",
+        "distinct",
         "equity",
         "former",
+        "fall",
         "forged",
         "generated",
         "governed",
@@ -125,6 +128,7 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "live",
         "listed",
         "listing",
+        "launch",
         "loan",
         "malformed",
         "marketable",
@@ -135,6 +139,7 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "operator",
         "opportunities",
         "opportunity",
+        "offer",
         "other",
         "out",
         "outreach",
@@ -161,6 +166,9 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "saved",
         "segment",
         "supervisor",
+        "spring",
+        "summer",
+        "summit",
         "synthetic",
         "test",
         "the",
@@ -172,6 +180,8 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "watch",
         "weekly",
         "west",
+        "winter",
+        "wave",
     }
 )
 _PUBLIC_CAMPAIGN_REQUIRED_WORDS = frozenset(
@@ -242,7 +252,13 @@ def project_public_campaign_name(value: object) -> str:
     vocabulary.
     """
 
-    name = assert_public_campaign_text(value, field_name="campaign name", max_length=80)
+    name = re.sub(r"\s+", " ", str(value or "").strip())
+    # The reviewed vocabulary below, not title casing, decides whether a name
+    # is public-safe. Run the shared policy scan case-insensitively so ordinary
+    # title-case campaign phrases such as "Distinct Illinois" are not mistaken
+    # for people while common lower-case names and all other policy classes
+    # still fail closed.
+    assert_public_campaign_text(name.casefold(), field_name="campaign name", max_length=80)
     if not name or not _PUBLIC_CAMPAIGN_NAME_PATTERN.fullmatch(name):
         raise ValueError("campaign name must use the public-safe campaign taxonomy")
     name_scan = name

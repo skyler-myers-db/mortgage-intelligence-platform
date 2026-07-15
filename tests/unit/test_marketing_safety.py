@@ -935,6 +935,20 @@ def test_campaign_name_rejects_uncommon_lowercase_person_names(person_name: str)
 
 
 @pytest.mark.parametrize(
+    "campaign_name",
+    [
+        "Booth build — Summit IL refi",
+        "Distinct Illinois refinance cohort",
+        "Fall 2026 HELOC campaign launch",
+    ],
+)
+def test_campaign_name_accepts_portfolio_ui_and_marketing_labels(
+    campaign_name: str,
+) -> None:
+    assert PortfolioCreateRequest(name=campaign_name).name == campaign_name
+
+
+@pytest.mark.parametrize(
     "kwargs",
     [
         {"suppression_policy": {"borrower_name": "Jane Smith"}},
