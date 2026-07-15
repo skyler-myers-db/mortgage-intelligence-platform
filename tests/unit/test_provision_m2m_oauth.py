@@ -60,11 +60,14 @@ def _make_client(
     )
     group_values = groups or []
     client.groups.list.side_effect = lambda **_kwargs: iter(group_values)
+    groups_by_id = {str(group.id): group for group in group_values if getattr(group, "id", None)}
+    client.groups.get.side_effect = lambda group_id: groups_by_id[str(group_id)]
     client.database.list_database_instance_roles.return_value = iter(lakebase_roles or [])
     client.serving_endpoints.get.return_value = SimpleNamespace(
         id="mip-gateway-endpoint-id",
         name="mip-agent-gateway",
     )
+    client.apps.get_permissions.return_value = SimpleNamespace(access_control_list=[])
     return client
 
 
@@ -78,6 +81,7 @@ def _provision(client: MagicMock, **overrides: object):
         "create_group": False,
         "lakebase_instance": None,
         "gateway_endpoint": None,
+        "warehouse_id": None,
         "gh_repo": "acme/repo",
         "set_gh_secrets": True,
         "mint_secret": True,
@@ -86,6 +90,7 @@ def _provision(client: MagicMock, **overrides: object):
         "client_id_secret_name": "DATABRICKS_CLIENT_ID",
         "client_secret_secret_name": "DATABRICKS_CLIENT_SECRET",
         "app_url_secret_name": "MIP_APP_URL",
+        "identity_role": "normal",
         "client_factory": lambda: client,
     }
     kwargs.update(overrides)
@@ -103,6 +108,7 @@ def test_help_exposes_role_group_and_secret_name_contract(capsys: pytest.Capture
         "--create-group",
         "--client-id-secret-name",
         "--client-secret-secret-name",
+        "--warehouse-id",
         "--no-mint-secret",
     ):
         assert option in out
@@ -145,7 +151,9 @@ def test_dry_run_does_not_touch_sdk() -> None:
     mock_provision.assert_not_called()
 
 
-@pytest.mark.parametrize("option", ["--lakebase-instance", "--gateway-endpoint"])
+@pytest.mark.parametrize(
+    "option", ["--lakebase-instance", "--gateway-endpoint", "--warehouse-id"]
+)
 def test_verifier_grant_options_are_rejected_for_other_roles(option: str) -> None:
     with pytest.raises(SystemExit) as exc:
         pmo.main(["--identity-role", "normal", option, "unexpected-resource", "--dry-run"])
@@ -201,6 +209,9 @@ def test_normal_happy_path_creates_grants_mints_and_uses_configurable_secret_nam
         active=True,
     )
     client.apps.update_permissions.assert_called_once()
+    app_acl = client.apps.update_permissions.call_args.kwargs["access_control_list"]
+    assert app_acl[0].service_principal_name == "app-id-abc"
+    assert getattr(app_acl[0].permission_level, "value", app_acl[0].permission_level) == "CAN_USE"
     client.service_principal_secrets_proxy.create.assert_called_once_with(
         service_principal_id="1234"
     )
@@ -224,6 +235,7 @@ def test_admin_missing_group_fails_closed_without_create_group() -> None:
             client,
             sp_name=admin_sp.display_name,
             group_name="mip-admin",
+            identity_role="admin",
             mint_secret=False,
             set_gh_secrets=False,
             gh_repo=None,
@@ -241,6 +253,7 @@ def test_admin_missing_group_fails_before_creating_service_principal() -> None:
             client,
             sp_name="mip-nightly-admin-ci-sp",
             group_name="mip-admin",
+            identity_role="admin",
             mint_secret=False,
             set_gh_secrets=False,
             gh_repo=None,
@@ -260,6 +273,7 @@ def test_admin_create_group_then_adds_membership() -> None:
         client,
         sp_name=admin_sp.display_name,
         group_name="mip-admin",
+        identity_role="admin",
         create_group=True,
         mint_secret=False,
         set_gh_secrets=False,
@@ -291,6 +305,7 @@ def test_admin_existing_membership_is_idempotent() -> None:
         client,
         sp_name=admin_sp.display_name,
         group_name="mip-admin",
+        identity_role="admin",
         mint_secret=False,
         set_gh_secrets=False,
         gh_repo=None,
@@ -316,12 +331,14 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
         group_name=None,
         lakebase_instance="mip-app-state",
         gateway_endpoint="mip-agent-gateway",
+        warehouse_id="warehouse-123",
+        identity_role="verifier",
         mint_secret=False,
         set_gh_secrets=False,
         gh_repo=None,
     )
 
-    client.groups.list.assert_not_called()
+    client.groups.list.assert_called_once()
     client.groups.patch.assert_not_called()
     client.apps.update_permissions.assert_not_called()
     client.database.create_database_instance_role.assert_called_once()
@@ -342,6 +359,104 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
     )
     assert result.created_lakebase_role is True
     assert result.granted_can_query is True
+    client.warehouses.update_permissions.assert_called_once()
+    warehouse_id, = client.warehouses.update_permissions.call_args.args
+    warehouse_acl = client.warehouses.update_permissions.call_args.kwargs["access_control_list"]
+    assert warehouse_id == "warehouse-123"
+    assert warehouse_acl[0].service_principal_name == "verifier-application-id"
+    assert getattr(
+        warehouse_acl[0].permission_level, "value", warehouse_acl[0].permission_level
+    ) == "CAN_USE"
+    assert result.granted_warehouse_can_use is True
+
+
+def test_expected_application_id_fails_before_creating_missing_principal() -> None:
+    client = _make_client(create_returns=_sp(application_id="unexpected-id"))
+
+    with pytest.raises(SystemExit, match="refusing to create"):
+        _provision(
+            client,
+            expected_application_id="authoritative-id",
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.service_principals.create.assert_not_called()
+    client.apps.update_permissions.assert_not_called()
+
+
+def test_verifier_fails_closed_on_forbidden_direct_app_permission() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        application_id="verifier-application-id",
+    )
+    client = _make_client(existing_sp=verifier)
+    client.apps.get_permissions.return_value = SimpleNamespace(
+        access_control_list=[
+            SimpleNamespace(
+                service_principal_name="verifier-application-id",
+                all_permissions=[SimpleNamespace(inherited=False)],
+            )
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="forbidden direct Databricks App"):
+        _provision(
+            client,
+            sp_name=verifier.display_name,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.warehouses.update_permissions.assert_not_called()
+
+
+def test_non_admin_identity_fails_closed_on_admin_group_membership() -> None:
+    normal = _sp(sp_id="normal-scim-id")
+    admin_group = SimpleNamespace(
+        id="group-1",
+        display_name="mip-admin",
+        members=[SimpleNamespace(value="normal-scim-id")],
+    )
+    client = _make_client(existing_sp=normal, groups=[admin_group])
+
+    with pytest.raises(SystemExit, match="forbidden admin group"):
+        _provision(
+            client,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.apps.update_permissions.assert_not_called()
+
+
+def test_non_admin_identity_hydrates_sparse_group_before_membership_check() -> None:
+    normal = _sp(sp_id="normal-scim-id")
+    sparse_group = SimpleNamespace(id="group-1", display_name="mip-admin")
+    hydrated_group = SimpleNamespace(
+        id="group-1",
+        display_name="mip-admin",
+        members=[SimpleNamespace(value="normal-scim-id")],
+    )
+    client = _make_client(existing_sp=normal, groups=[sparse_group])
+    client.groups.get.side_effect = None
+    client.groups.get.return_value = hydrated_group
+
+    with pytest.raises(SystemExit, match="forbidden admin group"):
+        _provision(
+            client,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.groups.get.assert_called_once_with("group-1")
+    client.apps.update_permissions.assert_not_called()
 
 
 def test_verifier_gateway_grant_fails_closed_without_endpoint_id() -> None:
@@ -372,6 +487,7 @@ def test_existing_verifier_lakebase_role_is_idempotent() -> None:
         client,
         grant_can_use=False,
         lakebase_instance="mip-app-state",
+        identity_role="verifier",
         mint_secret=False,
         set_gh_secrets=False,
         gh_repo=None,
@@ -396,6 +512,7 @@ def test_live_mint_requires_authenticated_gh_before_sdk_mutation() -> None:
             create_group=False,
             lakebase_instance=None,
             gateway_endpoint=None,
+            warehouse_id=None,
             gh_repo="acme/repo",
             set_gh_secrets=True,
             mint_secret=True,
@@ -404,6 +521,7 @@ def test_live_mint_requires_authenticated_gh_before_sdk_mutation() -> None:
             client_id_secret_name="DATABRICKS_CLIENT_ID",
             client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
             app_url_secret_name="MIP_APP_URL",
+            identity_role="normal",
             client_factory=client_factory,
         )
     client_factory.assert_not_called()

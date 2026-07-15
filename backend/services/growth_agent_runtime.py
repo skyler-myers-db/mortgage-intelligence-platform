@@ -328,12 +328,15 @@ def governance_chips(
     if copilot_evidence.workflow_override_review_required:
         framework_status: Literal["passed", "review_required", "not_attached"] = "review_required"
         framework_detail = (
-            "Databricks Supervisor Agent selected a different reviewed workflow than the deterministic "
-            "fallback; review the workflow choice before acting."
+            "Databricks Agent Responses endpoint selected a different reviewed workflow than the "
+            "deterministic fallback; review the workflow choice before acting."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
         framework_status = "passed"
-        framework_detail = "Databricks Supervisor Agent selected a reviewed workflow; reviewed deterministic tools executed the run."
+        framework_detail = (
+            "Databricks Agent Responses endpoint selected a reviewed workflow; reviewed "
+            "deterministic tools executed the run."
+        )
     else:
         framework_status = "not_attached"
         framework_detail = "Mosaic/Agent Bricks orchestration is not used by this run; reviewed SQL workflows executed instead."

@@ -93,6 +93,7 @@ python tools/databricks/provision_m2m_oauth.py \
 python tools/databricks/provision_m2m_oauth.py \
   --identity-role verifier \
   --gateway-endpoint "${MIP_AI_GATEWAY_ENDPOINT}" \
+  --warehouse-id "${DATABRICKS_WAREHOUSE_ID}" \
   --set-gh-secrets --gh-repo <owner/repo>
 ```
 
@@ -101,7 +102,11 @@ missing. Re-running is idempotent: existing principals, group membership, and
 the verifier Lakebase OAuth role are reused. Use
 `--client-id-secret-name` / `--client-secret-secret-name` when repository
 secret names differ. The verifier is never added to `mip-admin` and receives no
-Databricks App `CAN_USE` permission by default.
+Databricks App `CAN_USE` permission by default. It receives only `CAN_USE`
+on the named SQL warehouse, `CAN_QUERY` on the AI Gateway endpoint, read-only
+access to the exact inference tables, and verifier-only Lakebase proof-ledger
+privileges. Provisioning fails closed if the verifier has a direct App grant
+or if any non-admin automation identity remains in `mip-admin`.
 For an existing principal whose prior client secret is unavailable or being
 replaced, add `--rotate`; without it, the existing secret remains unchanged.
 
@@ -138,9 +143,9 @@ bundle's static optional-resource declaration still requires the backing
 Databricks Secret key to exist, so the provisioner replaces it with a random
 disabled sentinel that the runtime cannot read through an environment binding.
 Keep the real prior key available for at least two hours so
-existing action confirmations and one-hour campaign provenance tokens can
-expire. The previous key is verification-only; new tokens always use the
-current key.
+existing action confirmations and one-hour generated-copy/cohort provenance
+tokens can expire. The previous key is verification-only; new tokens always
+use the current key.
 
 After that bounded grace period, remove
 `MIP_GENIE_ACTION_SECRET_PREVIOUS` and

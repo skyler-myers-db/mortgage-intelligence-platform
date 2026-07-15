@@ -287,6 +287,10 @@ class LeadOutcomeRequest(BaseModel):
         name_scan = re.sub(r"[._-]+", " ", clean)
         if contains_human_name_shape(name_scan):
             raise ValueError("source_record_ref must be an opaque machine identifier")
+        if re.fullmatch(r"auto-[a-f0-9]{32}", clean):
+            raise ValueError(
+                "source_record_ref must be the upstream identifier, not a server-issued token"
+            )
         return validate_public_audit_identifier_or_none(clean)
 
     @field_validator("assigned_to_email")

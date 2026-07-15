@@ -777,6 +777,16 @@ def list_leads(
         audit_payload["target_lender_ref"] = target_lender_ref
     if cohort_id:
         audit_payload["cohort_id"] = cohort_id
+    if handoff_proof is not None:
+        audit_payload.update(
+            {
+                "growth_agent_run_id": handoff_proof.run_id,
+                "growth_agent_filters_fingerprint": handoff_proof.filters_fingerprint,
+                "growth_agent_cohort_fingerprint": handoff_proof.cohort_fingerprint,
+                "growth_agent_source_snapshot": handoff_proof.source_snapshot,
+                "tool_result_hash": handoff_proof.tool_result_hash,
+            }
+        )
     if funnel_stage:
         audit_payload["funnel_stage"] = funnel_stage
     if approval_status != "any":

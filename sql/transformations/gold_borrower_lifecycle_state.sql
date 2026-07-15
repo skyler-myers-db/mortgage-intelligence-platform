@@ -7,8 +7,9 @@
 --            lead_generation_metric_view) JOIN this to expose approval_rate
 --            and outreach_rate without a runtime federated join from a view.
 --
--- Grain:     One row per borrower_id. Lakebase is authoritative; this table
---            is a scheduled mirror refreshed by jobs/sync_lifecycle_state.py.
+-- Grain:     Zero or one row per borrower_id with durable lifecycle activity.
+--            Lakebase is authoritative; jobs/sync_lifecycle_state.py applies
+--            a sparse, event-triggered MERGE.
 --
 -- TODO (when UC foreign-catalog federation over Lakebase Postgres lands):
 --            Replace the body of this file with a CREATE OR REPLACE TABLE …
@@ -18,21 +19,14 @@
 --            source. See docs/validation/metric-views.md for the rollover
 --            plan.
 --
--- Today's posture (slice13-accuracy):
+-- Today's posture:
 --   * The schema is declared in sql/ddl/003_gold_tables.sql (§7).
---   * Population is done by jobs/sync_lifecycle_state.py, which opens a
---     psycopg3 connection to Lakebase (same auth path as lakebase_migrate.py),
---     materializes the per-borrower latest state, and writes the gold table
---     via the Databricks SQL warehouse (spark.sql / dbutils / dbsql-
---     statements). Idempotent: the job does a full CREATE OR REPLACE rewrite
---     of the gold table (~10k rows at Module 0 scale — a rewrite is cheaper
---     than a MERGE).
---   * This .sql file is the *manual fallback* for operators who want to wipe
---     the table back to a known-empty state (all borrowers pending / no
---     outreach) without running the Lakebase sync. That is the behavior we
---     want on a FIRST deploy before any approvals have been made — the
---     dashboards then render approval_rate = 0 / outreach_rate = 0 instead
---     of erroring on a missing table.
+--   * Population is done by jobs/sync_lifecycle_state.py or the cheaper app
+--     warehouse hook. Both read durable Lakebase state and MERGE only those
+--     borrowers into this table.
+--   * This file is a safe manual cleanup for workspaces upgraded from the
+--     retired full-universe seed. It removes only untouched synthetic default
+--     rows; real decisions, outreach, offers, and timestamps are preserved.
 --
 -- Run-order: after `refresh_scores` lands borrower_360, before
 --            `refresh_segments` / dashboards consume the metric views.
@@ -41,48 +35,13 @@
 --                LEFT JOIN + COALESCE so a borrower not yet reviewed counts
 --                correctly in the denominator.
 --
--- 2026-06-11 audit P2-8: this manual-fallback CTAS re-declares clustering/
--- comments/properties because COR TABLE drops DDL metadata on every refresh.
--- Clustering, column COMMENTs, and TBLPROPERTIES mirror the
--- mip.gold.borrower_lifecycle_state block in sql/ddl/003_gold_tables.sql (§7);
--- the column list order matches the SELECT. jobs/sync_lifecycle_state.py owns
--- the populated-state rewrite and must keep the same table shape.
+-- The deploy and durable repair paths execute the same predicate before the
+-- sparse MERGE. It is intentionally absent from per-click app hooks.
 -- =============================================================================
 
-CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state
-CLUSTER BY (borrower_id)
-TBLPROPERTIES (
-  'delta.enableChangeDataFeed' = 'false',
-  'delta.autoOptimize.optimizeWrite' = 'true',
-  'delta.autoOptimize.autoCompact'   = 'true'
-)
-AS
-WITH sync_anchor AS (
-  SELECT CURRENT_TIMESTAMP() AS mirror_refreshed_at
-)
-SELECT
-  b.borrower_id,
-  CAST('pending' AS STRING)   AS approval_status,
-  CAST('none'    AS STRING)   AS outreach_status,
-  CAST(NULL AS STRING)        AS offer_code,
-  CAST(NULL AS TIMESTAMP)     AS approved_at,
-  CAST(NULL AS TIMESTAMP)     AS outreach_at,
-  a.mirror_refreshed_at       AS synced_at,
-  a.mirror_refreshed_at       AS refreshed_at
-FROM mip.gold.borrower_360 AS b
-CROSS JOIN sync_anchor AS a;
-
--- Column comments re-applied post-CTAS (2026-06-11 audit P2-8 follow-up):
--- CREATE OR REPLACE drops DDL column comments on every refresh, and the
--- typeless CTAS column list is a PARSE_SYNTAX_ERROR on DBSQL (observed
--- live, run 2026-06-11). COMMENT ON COLUMN keeps the Genie grounding /
--- asset-page comments refresh-stable; the SQL file task executes the
--- statements in order.
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.borrower_id IS 'Masked borrower id; matches borrower_360.borrower_id.';
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.approval_status IS 'pending / approved / rejected / hold. Derived from latest decided_at row in mip_app.approvals.';
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.outreach_status IS 'queued / actioned / none. Derived from latest outreach state.';
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.offer_code IS 'Latest offer_code associated with the approval decision.';
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.approved_at IS 'decided_at for the latest approve action; NULL when not approved.';
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.outreach_at IS 'Timestamp of latest outreach action.';
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.synced_at IS 'Last sync run that touched this row.';
-COMMENT ON COLUMN mip.gold.borrower_lifecycle_state.refreshed_at IS 'Lakebase mirror refresh boundary for this lifecycle snapshot; distinct from the scoring gold refresh boundary.';
+DELETE FROM mip.gold.borrower_lifecycle_state
+WHERE approval_status = 'pending'
+  AND outreach_status = 'none'
+  AND offer_code IS NULL
+  AND approved_at IS NULL
+  AND outreach_at IS NULL;

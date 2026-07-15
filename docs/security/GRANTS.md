@@ -92,15 +92,15 @@ read-only helper functions `fn_build_cohort`, `fn_segment_counts`, and
 
 **Lifecycle mirror writes (two-table MODIFY exception).** The app service
 principal holds `MODIFY` on exactly two gold tables:
-`mip.gold.borrower_lifecycle_state` (atomic `INSERT OVERWRITE`) and
+`mip.gold.borrower_lifecycle_state` (sparse changed-row `MERGE`) and
 `mip.gold.funnel_snapshot_daily` (idempotent `MERGE INTO` keyed on
 snapshot_date/state/segment) — the pair the event-triggered post-approval
 sync writes. The second table surfaced live only after the first grant
 landed (2026-07-08): the sync fails at its first missing permission, so
 sibling gaps hide behind the leading one. The post-approval lifecycle mirror is
 event-triggered from the app (see `backend/services/job_trigger.py` for why
-event-triggered beats scheduled here) and writes via atomic
-`INSERT OVERWRITE` into the DDL-created table — never CTAS, so no CREATE or
+event-triggered beats scheduled here) and writes via a keyed Delta `MERGE`
+into the DDL-created table — never CTAS, so no CREATE or
 ownership rights are needed (external audit 2026-07-08: the earlier CTAS
 path 403'd with PERMISSION_DENIED under the SELECT-only schema grant). Every
 other gold object remains read-only to the app.
@@ -312,6 +312,8 @@ REVOKE ALL PRIVILEGES ON TABLE mip_app.kpi_snapshots FROM "service-principal-cli
 REVOKE ALL PRIVILEGES ON TABLE mip_app.user_visits FROM "service-principal-client-id";
 REVOKE ALL PRIVILEGES ON TABLE mip_app.genie_feedback_requests FROM "service-principal-client-id";
 REVOKE ALL PRIVILEGES ON SEQUENCE mip_app.action_audit_audit_sequence_seq FROM "service-principal-client-id";
+ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app
+  REVOKE ALL PRIVILEGES ON TABLES FROM "service-principal-client-id";
 ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app
   REVOKE ALL PRIVILEGES ON SEQUENCES FROM "service-principal-client-id";
 

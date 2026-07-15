@@ -128,10 +128,10 @@ class GenieMessageResponse(BaseModel):
     #: ``enable_visualization`` attachment). ``None`` on deterministic
     #: trusted_sql / refused / degraded paths and older API shapes.
     native_visualization: GenieNativeVisualization | None = None
-    #: Exposed Genie planning trace (from the query attachment ``thoughts``),
-    #: PII-scrubbed and bounded. Empty on deterministic trusted_sql / refused
-    #: paths (no fabrication). Mirrors ``proof.reasoning_trace`` for turns that
-    #: carry one.
+    #: Server-owned public process summary derived from the presence/type of
+    #: Genie query steps. Raw model thoughts never leave the backend. Empty on
+    #: deterministic trusted_sql / refused paths (no fabrication). Mirrors
+    #: ``proof.reasoning_trace`` for turns that carry one.
     reasoning_trace: list[GenieReasoningStep] = Field(default_factory=list)
     #: Terminal Genie message status for the polled turn (e.g. ``COMPLETED``).
     #: The ask is a single blocking backend call, so only the terminal status

@@ -441,8 +441,6 @@ def mask_source_record_ref(source_system: str, source_record_ref: str) -> str:
     record_ref = str(source_record_ref or "").strip()
     if not source or not record_ref:
         raise ValueError("source_system and source_record_ref are required")
-    if re.fullmatch(r"auto-[a-f0-9]{32}", record_ref):
-        return record_ref
     digest = hmac.new(
         secret.encode(),
         f"outcome-ref:{source}:{record_ref}".encode(),

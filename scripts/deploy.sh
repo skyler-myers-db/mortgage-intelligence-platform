@@ -894,6 +894,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --identity-role verifier \
       --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
       --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --no-mint-secret
     step "reconcile runtime read-only and verifier-only Lakebase proof-ledger grants"
     run "$PYTHON" jobs/lakebase_migrate.py

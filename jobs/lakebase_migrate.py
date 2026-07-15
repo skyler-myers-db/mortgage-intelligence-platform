@@ -1059,22 +1059,22 @@ def _postflight_app_role_grants(cur: object, role: str) -> None:
 
     cur.execute(  # type: ignore[attr-defined]
         """
-        SELECT e.privilege_type
+        SELECT d.defaclobjtype, e.privilege_type
         FROM pg_default_acl d
         JOIN pg_namespace n ON n.oid = d.defaclnamespace
         CROSS JOIN LATERAL aclexplode(d.defaclacl) e
         JOIN pg_roles grantee ON grantee.oid = e.grantee
         WHERE n.nspname = 'mip_app'
-          AND d.defaclobjtype = 'S'
+          AND d.defaclobjtype IN ('r', 'S')
           AND grantee.rolname = %s
         """,
         (role,),
     )
-    default_sequence_privileges = [row[0] for row in cur.fetchall()]  # type: ignore[attr-defined]
-    if default_sequence_privileges:
+    default_privileges = list(cur.fetchall())  # type: ignore[attr-defined]
+    if default_privileges:
         raise RuntimeError(
-            "Lakebase app role retains forbidden future-sequence default "
-            f"privileges: {sorted(default_sequence_privileges)}"
+            "Lakebase app role retains forbidden future table/sequence default "
+            f"privileges: {sorted(default_privileges)}"
         )
 
 
@@ -1337,6 +1337,11 @@ def _apply_app_role_grants(
                     f"REVOKE ALL PRIVILEGES ON SEQUENCE {sequence_identifier} "
                     f"FROM {role_identifier}"
                 )
+            cur.execute(
+                f"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema_identifier} "
+                "REVOKE ALL PRIVILEGES ON TABLES "
+                f"FROM {role_identifier}"
+            )
             cur.execute(
                 f"ALTER DEFAULT PRIVILEGES IN SCHEMA {schema_identifier} "
                 "REVOKE ALL PRIVILEGES ON SEQUENCES "

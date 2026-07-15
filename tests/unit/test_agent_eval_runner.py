@@ -939,15 +939,15 @@ def test_verifier_query_retries_through_cold_start_timeouts(monkeypatch) -> None
 
     calls = {"n": 0}
 
-    class _WarmingServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
+    class _WarmingApiClient:
+        def do(self, method: str, path: str, *, body: dict[str, object]):
             calls["n"] += 1
             if calls["n"] < 3:
                 raise TimeoutError("Timed out after 0:05:00")
             return {"choices": [{"message": {"content": "warm"}}]}
 
     class _Workspace:
-        serving_endpoints = _WarmingServingEndpoints()
+        api_client = _WarmingApiClient()
 
     naps: list[float] = []
     response = verifier.query_with_cold_start_patience(
@@ -971,13 +971,13 @@ def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
 
     calls = {"n": 0}
 
-    class _RejectingServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
+    class _RejectingApiClient:
+        def do(self, method: str, path: str, *, body: dict[str, object]):
             calls["n"] += 1
             raise ValueError("Encountered an unexpected error while evaluating the model")
 
     class _Workspace:
-        serving_endpoints = _RejectingServingEndpoints()
+        api_client = _RejectingApiClient()
 
     try:
         verifier.query_with_cold_start_patience(
@@ -999,12 +999,12 @@ def test_verifier_query_raises_immediately_on_non_timeout_errors() -> None:
 def test_verifier_query_gives_up_after_warmup_budget() -> None:
     from tools.databricks import verify_ai_gateway_exact_proof as verifier
 
-    class _ForeverColdServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
+    class _ForeverColdApiClient:
+        def do(self, method: str, path: str, *, body: dict[str, object]):
             raise TimeoutError("Timed out after 0:05:00")
 
     class _Workspace:
-        serving_endpoints = _ForeverColdServingEndpoints()
+        api_client = _ForeverColdApiClient()
 
     try:
         verifier.query_with_cold_start_patience(

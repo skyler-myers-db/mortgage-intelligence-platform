@@ -223,7 +223,7 @@ def test_source_record_ref_mask_is_deterministic_and_source_scoped(
 
     assert re.fullmatch(r"auto-[a-f0-9]{32}", first)
     assert first == replay
-    assert mask_source_record_ref("salesforce", first) == first
+    assert mask_source_record_ref("salesforce", first) != first
     assert first != other_source
     assert "sf_case_123" not in first
 

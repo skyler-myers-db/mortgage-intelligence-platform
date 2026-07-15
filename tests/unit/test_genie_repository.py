@@ -3654,11 +3654,11 @@ def test_recognized_shape_live_turn_preserves_genie_voice_and_live_fields() -> N
     # Live-intelligence fields carried through exactly like the generic path.
     assert result.genie_status == "COMPLETED"
     assert [step.content for step in result.reasoning_trace] == [
-        "Filtering to in-the-money borrowers."
+        "Analyzed the request within the governed Genie workflow."
     ]
     assert result.proof is not None
     assert [step.content for step in result.proof.reasoning_trace] == [
-        "Filtering to in-the-money borrowers."
+        "Analyzed the request within the governed Genie workflow."
     ]
     assert result.native_visualization is not None
     assert result.native_visualization.attachment_id == "att-1"
@@ -3688,7 +3688,10 @@ def test_live_reasoning_omits_title_lowercase_and_uppercase_identity_shapes() ->
     )
 
     assert [step.content for step in result.reasoning_trace] == [
-        "Filtering to the governed aggregate."
+        "Analyzed the request within the governed Genie workflow.",
+        "Analyzed the request within the governed Genie workflow.",
+        "Analyzed the request within the governed Genie workflow.",
+        "Analyzed the request within the governed Genie workflow.",
     ]
 
 
@@ -3714,7 +3717,11 @@ def test_live_reasoning_omits_title_lowercase_and_uppercase_identity_shapes() ->
 )
 def test_live_genie_optional_text_fields_omit_adversarial_content(unsafe_text: str) -> None:
     assert genie_follow_up_questions([unsafe_text]) == []
-    assert genie_reasoning_trace_from_thoughts([{"kind": "planning", "content": unsafe_text}]) == []
+    steps = genie_reasoning_trace_from_thoughts([{"kind": "planning", "content": unsafe_text}])
+    assert [step.content for step in steps] == [
+        "Analyzed the request within the governed Genie workflow."
+    ]
+    assert unsafe_text not in steps[0].content
     native = genie_native_visualization({"attachment_id": "att-1", "title": unsafe_text})
     assert native is not None
     assert native.title is None
@@ -3731,7 +3738,7 @@ def test_live_genie_optional_text_fields_keep_safe_domain_controls() -> None:
         for step in genie_reasoning_trace_from_thoughts(
             [{"kind": "planning", "content": reasoning}]
         )
-    ] == [reasoning]
+    ] == ["Analyzed the request within the governed Genie workflow."]
     native = genie_native_visualization({"attachment_id": "att-1", "title": title})
     assert native is not None
     assert native.title == title

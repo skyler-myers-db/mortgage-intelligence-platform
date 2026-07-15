@@ -242,8 +242,9 @@ def _safe_rendered_summary(text: object, *, max_length: int | None = None) -> st
 
 # ---------------------------------------------------------------------------
 # Genie enhancement fields (2026-07). The live Genie turn can carry a native
-# visualization reference, model-suggested follow-up questions, and an exposed
-# planning trace. Each string that ships in the response body is routed through
+# visualization reference, model-suggested follow-up questions, and a public
+# process summary. Raw model thoughts never cross the API boundary. Each
+# model-authored string that ships in the response body is routed through
 # the same fail-closed output guard as the answer text, before optional
 # scrubbing, so a drifting Space cannot leak or visibly redact unsafe text
 # through a suggestion, a viz title, or a reasoning step. Deterministic
@@ -251,29 +252,50 @@ def _safe_rendered_summary(text: object, *, max_length: int | None = None) -> st
 # call these builders; they emit empty list / None (no fabrication).
 # ---------------------------------------------------------------------------
 
-# Cap the exposed planning trace so a runaway thoughts array can't bloat the
-# response body; length-cap each step so one step stays a sentence.
+# Cap the public process summary so a runaway thoughts array cannot bloat the
+# response body.
 _GENIE_MAX_REASONING_STEPS = 12
-_GENIE_REASONING_CONTENT_MAX_LEN = 500
+
+_GENIE_PUBLIC_PROCESS_STEPS: tuple[tuple[tuple[str, ...], str, str], ...] = (
+    (
+        ("FILTER", "CONTEXT", "CLASSIFY"),
+        "context",
+        "Selected the governed mortgage context for this question.",
+    ),
+    (
+        ("QUERY", "SQL", "EXECUT"),
+        "query",
+        "Prepared and ran a query over approved data assets.",
+    ),
+    (
+        ("SYNTH", "ANSWER", "SUMMAR"),
+        "answer",
+        "Summarized the verified result for review.",
+    ),
+)
+
+
+def _public_genie_process_step(raw_kind: object) -> tuple[str, str]:
+    normalized = re.sub(r"[^A-Z0-9]+", "_", str(raw_kind or "").upper()).strip("_")
+    normalized = normalized.removeprefix("THOUGHT_TYPE_")
+    for tokens, kind, content in _GENIE_PUBLIC_PROCESS_STEPS:
+        if any(token in normalized for token in tokens):
+            return kind, content
+    return "analysis", "Analyzed the request within the governed Genie workflow."
 
 
 def genie_reasoning_trace_from_thoughts(
     thoughts: list[dict[str, str]] | None,
 ) -> list[GenieReasoningStep]:
-    """Scrub + bound the exposed Genie planning trace for the response body."""
+    """Translate private model thoughts into bounded server-owned process steps."""
     steps: list[GenieReasoningStep] = []
     for raw in thoughts or []:
         if not isinstance(raw, dict):
             continue
         raw_content = str(raw.get("content") or "").strip()
-        raw_kind = str(raw.get("kind") or "thought").strip() or "thought"
-        content = _safe_rendered_summary(
-            raw_content,
-            max_length=_GENIE_REASONING_CONTENT_MAX_LEN,
-        )
-        kind = _safe_rendered_summary(raw_kind)
-        if content is None or kind is None:
+        if not raw_content:
             continue
+        kind, content = _public_genie_process_step(raw.get("kind"))
         steps.append(GenieReasoningStep(kind=kind, content=content))
         if len(steps) >= _GENIE_MAX_REASONING_STEPS:
             break

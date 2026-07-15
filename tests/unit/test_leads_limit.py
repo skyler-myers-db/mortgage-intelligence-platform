@@ -24,6 +24,7 @@ from backend.api.leads import DEFAULT_LEAD_LIMIT, MAX_LEAD_LIMIT
 from backend.main import app
 from backend.schemas.lead import LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
+from backend.services.growth_agent_handoff import handoff_filters_fingerprint
 from backend.services.growth_agent_runtime import cohort_fingerprint
 from backend.services.repositories.databricks_lead_cohorts import (
     LeadCohortFilters,
@@ -1414,7 +1415,9 @@ def test_leads_identity_proof_requires_admin() -> None:
 
 
 def test_signed_growth_handoff_is_user_operable_and_atomic() -> None:
+    from backend.services.audit_store import get_audit_store
     from backend.services.repositories import get_lead_repository
+    from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
     class _SignedHandoffRepo:
         def __init__(self) -> None:
@@ -1437,9 +1440,12 @@ def test_signed_growth_handoff_is_user_operable_and_atomic() -> None:
             raise AssertionError("signed handoff must not run a second count query")
 
     repo = _SignedHandoffRepo()
+    audit = InMemoryAuditStore()
     token = _growth_handoff_token()
     prior = app.dependency_overrides.get(get_lead_repository)
+    prior_audit = app.dependency_overrides.get(get_audit_store)
     app.dependency_overrides[get_lead_repository] = lambda: repo
+    app.dependency_overrides[get_audit_store] = lambda: audit
     try:
         response = TestClient(app).get(
             "/api/leads",
@@ -1454,6 +1460,10 @@ def test_signed_growth_handoff_is_user_operable_and_atomic() -> None:
             app.dependency_overrides.pop(get_lead_repository, None)
         else:
             app.dependency_overrides[get_lead_repository] = prior
+        if prior_audit is None:
+            app.dependency_overrides.pop(get_audit_store, None)
+        else:
+            app.dependency_overrides[get_audit_store] = prior_audit
 
     assert response.status_code == 200, response.text
     assert repo.calls == 1
@@ -1467,6 +1477,24 @@ def test_signed_growth_handoff_is_user_operable_and_atomic() -> None:
         "11111111-1111-4111-8111-111111111111"
     )
     assert "X-Cohort-Digest" not in response.headers
+    event = audit.list(limit=1)[0]
+    assert event.event_type == "VIEW_LEADS"
+    assert event.payload_json["growth_agent_run_id"] == (
+        "11111111-1111-4111-8111-111111111111"
+    )
+    assert event.payload_json["growth_agent_filters_fingerprint"] == handoff_filters_fingerprint(
+        normalise_lead_queue_handoff_filters(
+            LeadCohortFilters(
+                segment="itm",
+                portfolio_criteria=PortfolioCriteria(marketing_eligibility="Eligible only"),
+            )
+        )
+    )
+    assert event.payload_json["growth_agent_cohort_fingerprint"] == response.headers[
+        "X-Cohort-Fingerprint"
+    ]
+    assert event.payload_json["growth_agent_source_snapshot"] == "snapshot-1"
+    assert event.payload_json["tool_result_hash"] == "a" * 64
 
 
 @pytest.mark.parametrize("attack", ["signature", "actor", "filters", "borrower_ids"])

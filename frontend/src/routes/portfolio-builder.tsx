@@ -780,7 +780,9 @@ export default function PortfolioBuilder() {
                                 campaign {campaign.campaign_id.slice(0, 12)}
                               </span>
                               <span className={`chip ${selectedVariant.provenanceAttached ? 'chip--success' : 'chip--warning'} chip--compact`}>
-                                {selectedVariant.provenanceAttached ? 'Provenance attached' : 'Saved provenance only'}
+                                {selectedVariant.provenanceAttached
+                                  ? 'Copy verified'
+                                  : 'Saved copy only'}
                               </span>
                               <select
                                 className="outreach-routing__select"

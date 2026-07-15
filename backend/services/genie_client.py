@@ -501,7 +501,9 @@ class GenieClient:
 
         - ``{"text": {"content": "..."}}`` for the natural-language answer.
         - ``{"query": {"query": "SELECT ...", "thoughts": [...]}}`` for
-          the SQL attachment and exposed Genie planning trace.
+          the SQL attachment and internal step metadata. Raw thought content
+          is retained only inside the backend client result and is translated
+          into server-owned process categories before any API response.
         - ``attachment_id`` next to the query attachment; the current API
           expects this id on the query-result endpoint.
 

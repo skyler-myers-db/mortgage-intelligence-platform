@@ -472,7 +472,14 @@ TRANSFORM_DIR = REPO_ROOT / "sql" / "transformations"
     [
         (
             "gold_borrower_lifecycle_state.sql",
-            ("CREATE OR REPLACE TABLE mip.gold.borrower_lifecycle_state",),
+            (
+                "DELETE FROM mip.gold.borrower_lifecycle_state",
+                "approval_status = 'pending'",
+                "outreach_status = 'none'",
+                "offer_code IS NULL",
+                "approved_at IS NULL",
+                "outreach_at IS NULL",
+            ),
         ),
         (
             "gold_funnel_snapshot_daily.sql",

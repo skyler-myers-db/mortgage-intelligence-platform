@@ -80,7 +80,7 @@ python tools/render_sql.py --catalog <name>    # ad-hoc one-off
 
 Two bundle jobs execute Python against Unity Catalog tables instead of SQL files:
 
-- `mip_sync_lifecycle_state` runs `jobs/sync_lifecycle_state.py` with `--catalog=${var.uc_catalog}` and writes `${var.uc_catalog}.gold.borrower_lifecycle_state`.
+- `mip_sync_lifecycle_state` runs `jobs/sync_lifecycle_state.py` with `--catalog=${var.uc_catalog}` and incrementally MERGEs durable Lakebase rows into `${var.uc_catalog}.gold.borrower_lifecycle_state`. The normal app hook uses the same canonical MERGE through the SQL warehouse; the job is durable failure recovery and explicit repair.
 - `mip_fred_rates_ingest` runs `jobs/fred_rates_ingest.py` with `--table=${var.uc_catalog}.silver.market_rates_weekly` for both seed and live FRED refresh tasks.
 
 This closes the last non-SQL path that could otherwise land state in `mip.*` during a renamed-catalog customer deploy.
@@ -88,8 +88,8 @@ This closes the last non-SQL path that could otherwise land state in `mip.*` dur
 Both scheduled fallback jobs deploy with `pause_status: PAUSED` in every target.
 If a customer unpauses a recurring FRED or lifecycle cadence, first confirm that
 target writes to an isolated catalog; two unpaused targets writing the same
-catalog can conflict on Delta table replacement and create avoidable compute
-spend.
+catalog can queue redundant recovery/snapshot runs and create avoidable
+compute spend.
 
 ## Genie space and eval — multi-catalog safe since 2026-05-17
 
@@ -154,3 +154,4 @@ curl -s http://localhost:8000/api/v1/admin/settings | jq .catalog
 - 2026-04-23 — hole-finder round-2 #19: introduced `qualify()` helper; refactored the Python API layer; documented the SQL-layer gap.
 - 2026-04-23 — R6-01 rollout: shipped `tools/render_sql.py`; `databricks.yml` and `Makefile` now consume `sql/_rendered/**`; retired the manual `sed` workaround.
 - 2026-05-17 — multi-tenant audit remediation: wired Spark Python lifecycle and FRED jobs to `${var.uc_catalog}` so renamed-catalog deploys stay isolated outside SQL-task paths too.
+- 2026-07-14 — lifecycle cost remediation: centralized sparse Delta MERGE logic across app/job paths, removed full-universe seeding from the job, and made queued Jobs runs the durable retry surface.

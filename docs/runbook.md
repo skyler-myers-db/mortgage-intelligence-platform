@@ -278,16 +278,20 @@ That single invocation executes:
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-10. `databricks bundle run mip_sync_lifecycle_state -t dev` — initial
-   seed run so `mip.gold.borrower_lifecycle_state` has a row per
-   borrower and `delta_vs_prior_*` columns can start resolving. After
-   deploy, this job is **event-triggered** from the backend approval
-   path (POST `/api/v1/outreach/approve` fires
-   `backend.services.job_trigger.trigger_lifecycle_sync` via FastAPI
-   `BackgroundTasks`, debounced 60 s). A fallback schedule is defined
-   but ships **PAUSED in every target**. Only
+10. The deploy script runs the warehouse lifecycle sync and records the daily
+   funnel snapshot. The lifecycle table is sparse; borrowers with no event
+   resolve to `pending` / `none` through consumer `LEFT JOIN` + `COALESCE`.
+   After deploy, accepted approval/rejection hooks apply a cheap changed-row
+   `MERGE` through FastAPI `BackgroundTasks` and skip the population-wide
+   snapshot. If that warehouse call fails, the backend submits
+   `mip_sync_lifecycle_state`; Databricks queues the run and retries the sync
+   task twice, so failure state is durable and operator-visible. A fallback
+   schedule is defined but ships **PAUSED in every target**. Only
    unpause it for a customer-approved production cadence; otherwise
    use the Admin Data operations button when a refresh is needed.
+   Deploy and durable repair runs remove only legacy untouched `pending` /
+   `none` rows before the sparse MERGE. Per-event hooks skip that cleanup, so
+   user actions never scan or rewrite the population-wide table.
 11. `databricks bundle run mip_growth_agent_monitor_scheduler -t dev` —
    optional draft-only Growth Agent automation. It calls the deployed app's
    admin-gated `/api/v1/growth-agent/monitors/run-due-all` endpoint, refreshes
@@ -328,12 +332,17 @@ and `/admin-config` exposes them under **Data operations**:
 3. **Rebuild scoring snapshot** (`mip_refresh_scores`) after either upstream
    refresh so Borrower 360, Lead Queue, segment populations, source readiness,
    and Genie metric views read the new snapshot.
-4. **Sync workflow state** (`mip_sync_lifecycle_state`) when approvals or
-   outreach state need to mirror into gold immediately.
+4. **Sync workflow state** uses the same sparse warehouse `MERGE` when
+   approvals or outreach state need repair, then refreshes the daily funnel
+   snapshot. The bundle job is the durable retry path when the app's warehouse
+   attempt fails.
 
-Each button is admin-only, writes a Lakebase audit row before launching
-compute, refuses duplicate active runs, and shows the latest Databricks run
-state. If the audit ledger is unavailable, the app does not launch the job.
+Each operation is admin-only and writes a Lakebase audit row before compute.
+Job-backed operations refuse duplicate active runs and show the latest
+Databricks run state. Lifecycle sync executes the sparse warehouse MERGE
+synchronously; when an app-hook MERGE fails, its queued repair job provides
+the durable run state. If the audit ledger is unavailable, Admin Data
+operations do not launch compute.
 The bundle-defined FRED, lifecycle fallback, and Growth Agent monitor
 schedules deploy **paused by default** in dev, prod, and prod_otlp so
 intermittent development and demo workspaces do not burn recurring

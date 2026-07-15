@@ -23,6 +23,7 @@ from backend.schemas.common import (
     validate_public_audit_event_type,
     validate_public_borrower_id,
 )
+from backend.services.audit_event_types import is_server_owned_audit_event_type
 from backend.services.audit_pagination import (
     audit_filter_fingerprint,
     decode_audit_cursor,
@@ -57,30 +58,6 @@ DEFAULT_AUDIT_LIMIT: int = 50
 MAX_AUDIT_LIMIT: int = 500
 DEFAULT_MY_ACTIVITY_LIMIT: int = 8
 MAX_MY_ACTIVITY_LIMIT: int = 50
-_ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
-    {
-        "APPROVE",
-        "CAMPAIGN_STATUS_UPDATE",
-        "DRAFT_OUTREACH",
-        "OUTREACH_APPROVE",
-        "OUTREACH_REJECT",
-        "PORTFOLIO_CREATE",
-        "RECOMMEND_OFFER",
-        "RUN_GENIE",
-        "SAVE_DRAFT",
-        "SAVE_LEAD",
-        "UNSAVE_LEAD",
-        "DELETE_DRAFT",
-        "CALL_DISPOSITION",
-        "LEAD_ASSIGN",
-        "LEAD_DISTRIBUTE",
-        "LEAD_OUTCOME",
-        "VIEW_BORROWER",
-        "VIEW_LEADS",
-    }
-)
-
-
 class ActorAuditEventSummary(BaseModel):
     """PII-minimized event shape for an operator's own recovery feed."""
 
@@ -410,7 +387,7 @@ def log_event(
     _actor: AdminDep,
 ) -> AuditEvent:
     event_type = _event_type_for_payload(payload)
-    if event_type in _ROUTER_OWNED_EVENT_TYPES or event_type.startswith("GENIE_ACTION_"):
+    if is_server_owned_audit_event_type(event_type):
         raise HTTPException(
             status_code=400,
             detail="event type is owned by a governed server route",

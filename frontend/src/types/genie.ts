@@ -37,10 +37,10 @@ export interface GenieAnswer {
    */
   native_visualization?: GenieNativeVisualization | null;
   /**
-   * Top-level Genie reasoning trace (Public Preview). Distinct from
-   * `proof.reasoning_trace` (the trusted "query trace"). Rendered as a
-   * collapsed-by-default plain-text section in the proof drawer. No PII
-   * expectation, but always rendered as escaped plain text.
+   * Bounded, server-owned Genie process summaries (Public Preview). The wire
+   * name is retained for API compatibility, but raw model thoughts are never
+   * exposed. Distinct from `proof.reasoning_trace`; rendered as a
+   * collapsed-by-default plain-text section in the proof drawer.
    */
   reasoning_trace?: GenieReasoningStep[];
   /**
@@ -120,4 +120,3 @@ export interface GenieActionResult {
   campaign_id?: string | null;
   message: string;
 }
-

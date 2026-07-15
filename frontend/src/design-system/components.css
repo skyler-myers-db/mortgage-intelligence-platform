@@ -622,9 +622,6 @@ kbd {
   flex-shrink: 0;
   background: var(--text-3);
 }
-.evidence-chip__dot--fresh { background: var(--signal-success); }
-.evidence-chip__dot--aging { background: var(--signal-warning); }
-.evidence-chip__dot--stale { background: var(--text-3); }
 
 /* Evidence hover micro-preview (re-audit #4 Buyer-Wow #8). Portal-rendered
    to document.body with position:fixed coords, so it never clips inside the
@@ -666,9 +663,6 @@ kbd {
   background: var(--text-3);
   flex-shrink: 0;
 }
-.evidence-hovercard__dot--fresh { background: var(--signal-success); }
-.evidence-hovercard__dot--aging { background: var(--signal-warning); }
-.evidence-hovercard__dot--stale { background: var(--text-3); }
 .evidence-hovercard__signal {
   display: flex;
   align-items: baseline;
@@ -710,8 +704,14 @@ kbd {
   border-radius: 50%;
   display: inline-block;
 }
+.evidence-chip__dot--fresh,
+.evidence-hovercard__dot--fresh,
 .freshness-legend__dot--fresh { background: var(--signal-success); }
+.evidence-chip__dot--aging,
+.evidence-hovercard__dot--aging,
 .freshness-legend__dot--aging { background: var(--signal-warning); }
+.evidence-chip__dot--stale,
+.evidence-hovercard__dot--stale,
 .freshness-legend__dot--stale { background: var(--text-3); }
 
 /* ============================================================
@@ -4662,6 +4662,10 @@ a.lineage-node__chip:focus-visible {
 /* ============================================================
    GENIE ANSWER — metric_value, table_rows, follow_up_questions
    ============================================================ */
+.genie-answer {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
 .genie-answer__metric {
   font-family: var(--font-sans);
   font-weight: 600;
@@ -4672,11 +4676,15 @@ a.lineage-node__chip:focus-visible {
   font-variant-numeric: tabular-nums;
   margin-bottom: var(--sp-2);
 }
+.genie-answer__table-scroll {
+  overflow-x: auto;
+  margin-top: var(--sp-3);
+}
 .genie-answer__table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
   font-size: var(--fs-12);
-  margin-top: var(--sp-3);
   font-variant-numeric: tabular-nums;
 }
 .genie-answer__table th,
@@ -5164,6 +5172,7 @@ a.lineage-node__chip:focus-visible {
 .section-actions {
   margin-top: var(--gap-grid);
   display: flex;
+  flex-wrap: wrap;
   gap: var(--sp-3);
 }
 .lead-cta {
@@ -5963,7 +5972,7 @@ a.lineage-node__chip:focus-visible {
 }
 .genie-board__grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, calc(var(--sp-10) * 4)), 1fr));
   gap: var(--sp-2);
 }
 .genie-board__card {

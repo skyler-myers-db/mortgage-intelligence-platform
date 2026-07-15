@@ -1,32 +1,20 @@
-"""Fire-and-forget lifecycle sync trigger.
+"""Warehouse-first lifecycle sync with durable Databricks Jobs recovery.
 
-Module 0 mirrors lifecycle state through on-demand event triggers from
-the backend approval/rejection paths and through explicit Admin Data
-operations launches. The bundle also declares a fallback schedule, but
-it ships paused in every target until a customer-approved cadence is
-configured.
+Module 0 mirrors lifecycle state after accepted approval/rejection writes and
+through explicit Admin Data operations. The accepted Lakebase row is the
+durable source of truth. The app first attempts a cheap sparse warehouse
+MERGE; if that fails, it submits the bundle job so Databricks persists run
+state and applies configured retries.
 
 Shutdown-drain caveat
 ---------------------
 
-FastAPI ``BackgroundTasks`` does NOT support shutdown drain -- if the
-process receives SIGTERM between the ``return`` of the approval handler
-and the background task actually running, the scheduled call is
-silently dropped. We deliberately accept this:
-
-1. Every enqueue emits ``event=lifecycle_trigger_enqueued`` via
-   :func:`enqueue_lifecycle_trigger` so dropped invocations leave an
-   audit breadcrumb (the approval_id in Lakebase correlates with the
-   absence of a later ``job_trigger_fired`` log).
-2. Operators can launch Admin Data operations if a trigger is dropped or
-   freshness needs to be repaired. A scheduled fallback is only active after
-   an explicit customer cadence decision, so the default product posture does
-   not assume unattended cron recovery.
-
-A proper drain would require moving to starlette's lifespan-managed
-task queue or an external queue (RQ/Celery); both are materially
-heavier than the current event-triggered path. Re-evaluate only if
-dropped triggers are observed in production telemetry.
+FastAPI ``BackgroundTasks`` does not drain on SIGTERM. Correctness therefore
+does not depend on the process-local task: approvals and call dispositions are
+already committed in Lakebase before enqueue, and every later app/admin/job
+sync re-reads that durable current state. A dropped task delays freshness but
+does not lose the event. Warehouse failures additionally submit a Databricks
+job whose run and retry history are workspace-durable.
 
 Why event-triggered, not fixed-interval schedules
 -------------------------------------------------
@@ -34,12 +22,11 @@ Why event-triggered, not fixed-interval schedules
 The lifecycle sync mirrors Lakebase approvals + outreach rows into
 ``mip.gold.borrower_lifecycle_state`` so UC metric views (segment +
 lead_generation) resolve ``approval_rate`` / ``outreach_rate`` without
-a federated runtime join. Data only changes when an operator approves
-or dispatches outreach, so a fixed-interval schedule against an idle
-workspace was burning Serverless compute for nothing (observed
-2026-04-22). A later release-hardening pass also removed the default
-Databricks Jobs launch from this path because a tiny Lakebase mirror could
-spend many minutes waiting for serverless Python cluster provisioning.
+a federated runtime join. Data only changes when an operator approves or
+dispatches outreach, so a fixed-interval schedule against an idle workspace
+was burning Serverless compute for nothing (observed 2026-04-22). The normal
+path uses the already-provisioned SQL warehouse; the serverless Python job is
+recovery, not the per-click primary mechanism.
 
 Commercial posture
 ------------------
@@ -55,12 +42,13 @@ Authority + safety model
 * **Never blocks the approval response.** We fire the trigger as a
   FastAPI ``BackgroundTasks`` coroutine AFTER the Lakebase approval row
   has been committed.
-* **Swallows failures.** A broken trigger never fails an approval.
-  Operators can use Admin Data operations to repair freshness; fallback
-  schedules remain paused unless explicitly enabled for a customer.
-* **Debounces.** A module-level ``_last_trigger_at`` timestamp keeps
-  clustered approvals (same-minute bursts) from triggering multiple
-  redundant sync runs. Default window: 60 s.
+* **Durable retry on failure.** A broken warehouse attempt submits the bound
+  lifecycle job. Databricks persists the run and retries the task; if job
+  submission also fails, an ERROR event identifies the durable Lakebase source
+  and the explicit repair command.
+* **No process-local debounce.** Each accepted hook gets a merge attempt.
+  Delta's changed-row predicate makes repeated/coincident calls idempotent
+  without letting one app replica suppress another replica's work.
 
 Public surface
 --------------
@@ -74,12 +62,13 @@ Public surface
   calling ``background.add_task(trigger_lifecycle_sync, ...)`` directly
   so every enqueue is auditable.
 """
+
 from __future__ import annotations
 
 import logging
 import os
-import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from backend.services.observability import emit
@@ -91,28 +80,21 @@ _log = logging.getLogger("mip.job_trigger")
 # job id at trigger time via ``WorkspaceClient.jobs.list(name=...)``.
 _LIFECYCLE_JOB_NAME = "mip_sync_lifecycle_state"
 
-# Debounce window. Multiple approvals inside this window coalesce into
-# a single ``jobs.run_now`` call. 60 s is long enough to swallow a
-# reviewer clicking through a queue; short enough that a single lagging
-# approval still gets its own freshness pass.
-_DEBOUNCE_SECONDS = 60.0
-
-# Module-level state (guarded by ``_STATE_LOCK`` -- FastAPI may call
-# ``trigger_lifecycle_sync`` from multiple request threads concurrently).
-# ``_last_trigger_at`` sentinel is ``-inf`` so the first approval after
-# process start always fires, regardless of ``time.monotonic()`` epoch.
-_STATE_LOCK = threading.Lock()
-_last_trigger_at: float = float("-inf")
 # Cached job id + the monotonic timestamp at which it was resolved. Must
 # expire after ``_JOB_ID_TTL_SECONDS``: if an operator redeploys the
 # bundle (new job_id) or rotates SDK OAuth between process starts,
 # ``run_now`` would otherwise hit a stale id forever and the error path
 # would be swallowed silently. 15 min matches the default bundle
-# redeploy cadence and is short enough that a manual redeploy self-heals
-# within one debounce cycle.
+# redeploy cadence and is short enough that a later recovery self-heals.
 _JOB_ID_TTL_SECONDS = 15 * 60.0
 _cached_job_id: int | None = None
 _cached_job_id_at: float = float("-inf")
+
+
+@dataclass(frozen=True)
+class JobRetrySubmission:
+    job_id: int
+    run_id: int | None
 
 
 def _resolve_job_id(workspace: Any) -> int | None:
@@ -137,10 +119,7 @@ def _resolve_job_id(workspace: Any) -> int | None:
     """
     global _cached_job_id, _cached_job_id_at
     now = time.monotonic()
-    if (
-        _cached_job_id is not None
-        and (now - _cached_job_id_at) < _JOB_ID_TTL_SECONDS
-    ):
+    if _cached_job_id is not None and (now - _cached_job_id_at) < _JOB_ID_TTL_SECONDS:
         return _cached_job_id
 
     configured_job_id = _job_id_from_env()
@@ -225,45 +204,18 @@ def _looks_stale_error(exc: BaseException) -> bool:
     return any(needle in msg for needle in ("404", "401", "does not exist", "not found"))
 
 
-def _should_trigger(now: float) -> bool:
-    """Return True iff we're outside the debounce window.
-
-    Called under ``_STATE_LOCK``. Updates ``_last_trigger_at`` as a side
-    effect iff the answer is True, so callers can race without double-
-    firing.
-    """
-    global _last_trigger_at
-    if now - _last_trigger_at < _DEBOUNCE_SECONDS:
-        return False
-    _last_trigger_at = now
-    return True
-
-
 def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
     """Run the lifecycle mirror after an approval/reject response.
 
-    Safe to call from any FastAPI handler via ``BackgroundTasks``:
-    never raises and swallows every error class. The default mode mirrors
-    Lakebase through the already-provisioned SQL Warehouse. Set
-    ``MIP_LIFECYCLE_SYNC_MODE=job`` only as a rollback path to launch the
-    legacy Databricks Job.
+    The default mode applies a sparse MERGE through the already-provisioned
+    SQL Warehouse. A warehouse error immediately submits the bound Databricks
+    job, whose run state and retries are durable. Set
+    ``MIP_LIFECYCLE_SYNC_MODE=job`` only to force that recovery path.
 
     ``reason`` is stamped into the structured log line so an operator
     grepping lifecycle sync events sees which endpoint initiated the
     run (approval, outreach dispatch, etc).
     """
-    now = time.monotonic()
-    with _STATE_LOCK:
-        if not _should_trigger(now):
-            emit(
-                _log,
-                "job_trigger_debounced",
-                job_name=_LIFECYCLE_JOB_NAME,
-                reason=reason,
-                debounce_seconds=_DEBOUNCE_SECONDS,
-            )
-            return
-
     if os.environ.get("MIP_LIFECYCLE_SYNC_MODE", "warehouse").strip().lower() == "job":
         _trigger_lifecycle_sync_job(reason=reason)
         return
@@ -271,7 +223,10 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
     try:
         from backend.services.lifecycle_sync import sync_lifecycle_state_via_warehouse
 
-        result = sync_lifecycle_state_via_warehouse()
+        result = sync_lifecycle_state_via_warehouse(
+            record_funnel_snapshot=False,
+            prune_legacy_defaults=False,
+        )
         emit(
             _log,
             "lifecycle_sync_completed",
@@ -281,7 +236,7 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
             mirrored_rows=result.mirrored_rows,
             funnel_snapshot_rows=result.funnel_snapshot_rows,
         )
-    except Exception as exc:  # noqa: BLE001 -- must never raise to caller
+    except Exception as exc:  # noqa: BLE001 -- approval is already durable
         emit(
             _log,
             "lifecycle_sync_error",
@@ -291,10 +246,30 @@ def trigger_lifecycle_sync(*, reason: str = "approval") -> None:
             exc_type=type(exc).__name__,
             exc_msg=str(exc)[:500],
         )
+        retry = _trigger_lifecycle_sync_job(reason=f"{reason}:warehouse_failure")
+        if retry is None:
+            emit(
+                _log,
+                "lifecycle_sync_retry_unavailable",
+                level=logging.ERROR,
+                mode="warehouse",
+                reason=reason,
+                durable_source="mip_app.approvals,mip_app.call_dispositions",
+                repair_command="databricks bundle run mip_sync_lifecycle_state -t <target>",
+            )
+        else:
+            emit(
+                _log,
+                "lifecycle_sync_retry_queued",
+                mode="job",
+                reason=reason,
+                job_id=retry.job_id,
+                run_id=retry.run_id,
+            )
 
 
-def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> None:
-    """Launch the legacy Databricks lifecycle job.
+def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> JobRetrySubmission | None:
+    """Launch the durable Databricks lifecycle repair job.
 
     Kept as an explicit rollback mode and for the unit tests that pin
     bounded job-id caching. The default product path should not call this.
@@ -318,7 +293,7 @@ def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> None:
                 job_name=_LIFECYCLE_JOB_NAME,
                 reason=reason,
             )
-            return
+            return None
         # ``run_now`` is non-blocking -- returns a ``RunNowResponse`` with
         # a ``run_id`` once the workspace has accepted the request. We
         # don't wait on completion; Admin Data operations is the operator
@@ -341,6 +316,10 @@ def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> None:
             run_id=getattr(run, "run_id", None),
             reason=reason,
         )
+        return JobRetrySubmission(
+            job_id=job_id,
+            run_id=(int(run.run_id) if getattr(run, "run_id", None) is not None else None),
+        )
     except Exception as exc:  # noqa: BLE001 -- must never raise to caller
         emit(
             _log,
@@ -351,15 +330,15 @@ def _trigger_lifecycle_sync_job(*, reason: str = "approval") -> None:
             exc_type=type(exc).__name__,
             exc_msg=str(exc)[:500],
         )
+        return None
 
 
 def enqueue_lifecycle_trigger(background: Any, *, reason: str = "approval") -> None:
     """Schedule ``trigger_lifecycle_sync`` on a FastAPI BackgroundTasks.
 
-    Emits ``event=lifecycle_trigger_enqueued`` *before* scheduling so
-    every enqueue is traceable even when SIGTERM drops the scheduled
-    task between response commit and execution. See the module
-    docstring for the shutdown-drain caveat.
+    Emits ``event=lifecycle_trigger_enqueued`` before scheduling. The approval
+    or disposition row is already durable in Lakebase, so loss of this
+    process-local task affects freshness only; a later run retries the state.
 
     ``background`` is typed as ``Any`` to avoid pulling the FastAPI
     import into services/; routers already hold a ``BackgroundTasks``
@@ -370,20 +349,18 @@ def enqueue_lifecycle_trigger(background: Any, *, reason: str = "approval") -> N
         "lifecycle_trigger_enqueued",
         job_name=_LIFECYCLE_JOB_NAME,
         reason=reason,
+        durable_source="lakebase",
     )
     background.add_task(trigger_lifecycle_sync, reason=reason)
 
 
 # ---------------------------------------------------------------------------
-# Test helpers -- not part of the production surface. Tests reset state
-# to ensure the debounce doesn't leak across test cases.
+# Test helpers -- not part of the production surface.
 # ---------------------------------------------------------------------------
 
 
 def _reset_for_tests() -> None:
     """Drop cached state. Called by unit-test fixtures only."""
-    global _last_trigger_at, _cached_job_id, _cached_job_id_at
-    with _STATE_LOCK:
-        _last_trigger_at = float("-inf")
-        _cached_job_id = None
-        _cached_job_id_at = float("-inf")
+    global _cached_job_id, _cached_job_id_at
+    _cached_job_id = None
+    _cached_job_id_at = float("-inf")

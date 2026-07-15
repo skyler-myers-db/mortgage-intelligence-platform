@@ -155,6 +155,7 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
         assert secret in script
     assert "--identity-role verifier" in script
     assert '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in script
+    assert '--warehouse-id "$_GRANTS_WAREHOUSE_ID"' in script
     assert "run_as_m2m_identity" in script
     assert "jobs/lakebase_migrate.py" in script
     assert 'export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"' in script

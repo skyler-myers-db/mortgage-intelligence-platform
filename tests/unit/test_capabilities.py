@@ -864,7 +864,7 @@ def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transpor
     assert workspace.api_client.requests[1][1] == "/serving-endpoints/responses"
 
 
-def test_agent_orchestrator_live_probe_falls_back_when_responses_route_returns_non_json() -> None:
+def test_agent_orchestrator_live_probe_does_not_retry_after_responses_route_failure() -> None:
     workspace = _FakeWorkspaceClient(responses_api_error=json.JSONDecodeError("bad", "", 0))
     statuses = collect_live_capability_statuses(
         settings=_settings(
@@ -875,20 +875,10 @@ def test_agent_orchestrator_live_probe_falls_back_when_responses_route_returns_n
         workspace_client=workspace,
     )
 
-    assert statuses["agent_orchestrator"].available is True
-    assert workspace.api_client.requests
-    assert workspace.serving_endpoints.queries
-    endpoint, kwargs = workspace.serving_endpoints.queries[0]
-    assert endpoint == "mip-supervisor-endpoint"
-    assert kwargs["input"] == [
-        {
-            "role": "user",
-            "content": (
-                "Capability readiness check. Reply with a one-sentence acknowledgement "
-                "that the Mortgage Growth Agent endpoint is reachable."
-            ),
-        }
-    ]
+    assert statuses["agent_orchestrator"].available is False
+    assert "JSONDecodeError" in statuses["agent_orchestrator"].detail
+    assert len(workspace.api_client.requests) == 2
+    assert workspace.serving_endpoints.queries == []
 
 
 def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None:
@@ -1748,17 +1738,17 @@ def test_query_serving_endpoint_chat_path_omits_temperature() -> None:
     proof only needs a bounded round-trip, so the model default is fine."""
     from backend.services.capability_serving_probes import query_serving_endpoint
 
-    class _RecordingServingEndpoints:
+    class _RecordingApiClient:
         def __init__(self) -> None:
-            self.calls: list[tuple[str, dict]] = []
+            self.calls: list[tuple[str, str, dict]] = []
 
-        def query(self, endpoint: str, **kwargs):
-            self.calls.append((endpoint, kwargs))
+        def do(self, method: str, path: str, *, body: dict):
+            self.calls.append((method, path, body))
             return {"choices": [{"message": {"content": "ok"}}]}
 
     class _Workspace:
         def __init__(self) -> None:
-            self.serving_endpoints = _RecordingServingEndpoints()
+            self.api_client = _RecordingApiClient()
 
     workspace = _Workspace()
     query_serving_endpoint(
@@ -1768,28 +1758,20 @@ def test_query_serving_endpoint_chat_path_omits_temperature() -> None:
         client_request_id="mip-capability-x",
         task="llm/v1/chat",
     )
-    endpoint, kwargs = workspace.serving_endpoints.calls[0]
-    assert endpoint == "mip-agent-gateway"
-    assert "temperature" not in kwargs
-    assert kwargs["max_tokens"] == 64
-    assert kwargs["client_request_id"] == "mip-capability-x"
+    method, path, body = workspace.api_client.calls[0]
+    assert method == "POST"
+    assert path == "/serving-endpoints/mip-agent-gateway/invocations"
+    assert "temperature" not in body
+    assert body["max_tokens"] == 64
+    assert body["client_request_id"] == "mip-capability-x"
 
 
-def test_query_serving_endpoint_falls_back_to_raw_invocations_on_sdk_parse_failure() -> None:
-    """databricks-sdk's typed QueryEndpointResponse.from_dict raises
-    AttributeError when a custom FM endpoint answers with a JSON list body
-    (observed live on mip-agent-gateway / llama_v3_2_3b_instruct,
-    2026-07-07). The probe must re-issue the bounded request via the raw
-    REST client with the same client_request_id so the inference-table
-    binding survives."""
+def test_query_serving_endpoint_uses_raw_invocation_without_sdk_retry() -> None:
+    """The probe uses one untyped request so parsing cannot trigger a second inference."""
     from backend.services.capability_serving_probes import (
         query_serving_endpoint,
         serving_response_has_payload,
     )
-
-    class _ParseFailingServingEndpoints:
-        def query(self, endpoint: str, **kwargs):
-            raise AttributeError("'list' object has no attribute 'get'")
 
     class _RecordingApiClient:
         def __init__(self) -> None:
@@ -1801,7 +1783,6 @@ def test_query_serving_endpoint_falls_back_to_raw_invocations_on_sdk_parse_failu
 
     class _Workspace:
         def __init__(self) -> None:
-            self.serving_endpoints = _ParseFailingServingEndpoints()
             self.api_client = _RecordingApiClient()
 
     workspace = _Workspace()

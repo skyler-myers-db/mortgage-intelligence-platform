@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from backend.services.databricks_sql_helpers import _validate_identifier
 
-ServingTransport = Literal["responses_api", "endpoint_query", "endpoint_invocation"]
+ServingTransport = Literal["responses_api", "endpoint_invocation"]
 
 
 @dataclass(frozen=True)
@@ -68,85 +68,36 @@ def query_serving_endpoint_with_proof(
         }
         if client_request_id:
             body["client_request_id"] = client_request_id
-        try:
-            response = workspace_client.api_client.do(
-                "POST", "/serving-endpoints/responses", body=body
-            )
-            return ServingEndpointExecution(
-                endpoint=endpoint,
-                task=task,
-                transport="responses_api",
-                response=response,
-                client_request_id=client_request_id,
-            )
-        except Exception:
-            # Databricks Apps workspace identity can receive a non-JSON platform
-            # response from the shared Responses route even when the endpoint is
-            # queryable. The per-endpoint SDK query path still proves the agent
-            # serving endpoint accepted a bounded request.
-            response = workspace_client.serving_endpoints.query(
-                endpoint,
-                input=input_messages,
-                stream=False,
-                client_request_id=client_request_id,
-            )
-            return ServingEndpointExecution(
-                endpoint=endpoint,
-                task=task,
-                transport="endpoint_query",
-                response=response,
-                client_request_id=client_request_id,
-            )
+        response = workspace_client.api_client.do(
+            "POST", "/serving-endpoints/responses", body=body
+        )
+        return ServingEndpointExecution(
+            endpoint=endpoint,
+            task=task,
+            transport="responses_api",
+            response=response,
+            client_request_id=client_request_id,
+        )
 
-    try:
-        from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
-
-        messages: list[Any] = [ChatMessage(role=ChatMessageRole.USER, content=prompt)]
-    except Exception:  # noqa: BLE001 - keep tests/lightweight clients decoupled from SDK internals
-        messages = [{"role": "user", "content": prompt}]
-    # No temperature: HF-served foundation models (e.g. system.ai llama)
-    # reject 0.0 ("has to be a strictly positive float") and the probe only
-    # needs a bounded round-trip that lands in the inference table, so the
-    # model default is fine for every endpoint family.
-    kwargs: dict[str, Any] = {
-        "messages": messages,
+    # Use one untyped REST transport. Retrying after an SDK deserialization
+    # error can execute the same model request twice because the endpoint may
+    # already have returned a successful payload before local parsing failed.
+    body = {
+        "messages": [{"role": "user", "content": prompt}],
         "max_tokens": max_tokens,
     }
     if client_request_id:
-        kwargs["client_request_id"] = client_request_id
-    try:
-        response = workspace_client.serving_endpoints.query(endpoint, **kwargs)
-        return ServingEndpointExecution(
-            endpoint=endpoint,
-            task=task,
-            transport="endpoint_query",
-            response=response,
-            client_request_id=client_request_id,
-        )
-    except (AttributeError, TypeError):
-        # databricks-sdk's QueryEndpointResponse.from_dict AttributeErrors
-        # when a custom FM endpoint answers with a JSON list body (observed
-        # live on mip-agent-gateway / system.ai llama_v3_2_3b_instruct,
-        # 2026-07-07: "'list' object has no attribute 'get'"). The HTTP
-        # round-trip itself succeeded, so re-issue the same bounded request
-        # through the raw REST client, which returns untyped JSON. Same
-        # client_request_id: the inference-table binding stays intact.
-        fallback_body: dict[str, Any] = {
-            "messages": [{"role": "user", "content": prompt}],
-            "max_tokens": max_tokens,
-        }
-        if client_request_id:
-            fallback_body["client_request_id"] = client_request_id
-        response = workspace_client.api_client.do(
-            "POST", f"/serving-endpoints/{endpoint}/invocations", body=fallback_body
-        )
-        return ServingEndpointExecution(
-            endpoint=endpoint,
-            task=task,
-            transport="endpoint_invocation",
-            response=response,
-            client_request_id=client_request_id,
-        )
+        body["client_request_id"] = client_request_id
+    response = workspace_client.api_client.do(
+        "POST", f"/serving-endpoints/{endpoint}/invocations", body=body
+    )
+    return ServingEndpointExecution(
+        endpoint=endpoint,
+        task=task,
+        transport="endpoint_invocation",
+        response=response,
+        client_request_id=client_request_id,
+    )
 
 
 def serving_response_has_payload(response: Any) -> bool:

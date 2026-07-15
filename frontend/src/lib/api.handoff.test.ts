@@ -52,9 +52,11 @@ describe('campaign-bound outreach API client', () => {
 });
 
 describe('Growth Agent Lead Queue proof', () => {
+  const signedHandoff = 'v1.non-admin-growth-agent-handoff.signature';
   const proof = {
     actionableTotal: 12,
     cohortFingerprint: '8c91a6378bcc3cd62df18369faed832c2016d8343fdd85b9d298978eea7eb40d',
+    growthHandoff: signedHandoff,
     snapshotId: '2026-07-14 12:00:00',
     toolResultHash: 'a'.repeat(64),
   };
@@ -84,6 +86,35 @@ describe('Growth Agent Lead Queue proof', () => {
       cohortFingerprint: proof.cohortFingerprint,
       snapshotId: proof.snapshotId,
     });
+  });
+
+  it('forwards the backend-signed handoff for a non-admin Lead Queue identity request', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('window', {
+      location: {
+        search: `?actionable_total=${proof.actionableTotal}`
+          + `&actionable_cohort_fingerprint=${proof.cohortFingerprint}`
+          + `&actionable_snapshot_id=${encodeURIComponent(proof.snapshotId)}`
+          + `&tool_result_hash=${proof.toolResultHash}`
+          + `&growth_handoff=${encodeURIComponent(signedHandoff)}`,
+      },
+    });
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponseWithHeaders(200, [], {
+        'X-Total-Matching': '12',
+        'X-Returned-Rows': '0',
+        'X-Cohort-Digest': 'b'.repeat(64),
+        'X-Cohort-Snapshot-ID': proof.snapshotId,
+      });
+    });
+
+    await api.leadsPage();
+
+    const request = new URL(calls[0].path, 'https://mortgage-intelligence.local');
+    expect(request.searchParams.get('include_identity_proof')).toBe('true');
+    expect(request.searchParams.get('growth_handoff')).toBe(signedHandoff);
+    expect(new Headers(calls[0].init?.headers).has('Authorization')).toBe(false);
   });
 
   it('fails closed with compact stale guidance when the destination count changes', async () => {

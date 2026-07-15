@@ -30,6 +30,8 @@ type GrowthAgentRunResponse = {
   actionable_label: string;
   broad_total: number;
   actionable_total: number;
+  actionable_cohort_fingerprint?: string | null;
+  actionable_snapshot_id?: string | null;
   route: string;
   criteria: {
     lead_queue_filters?: {
@@ -106,10 +108,15 @@ async function expectLeadQueueHandoffMatchesActionableTotal(
   request: APIRequestContext,
   run: GrowthAgentRunResponse,
 ): Promise<void> {
+  const routeUrl = new URL(run.route, APP_URL);
+  expect(routeUrl.searchParams.get('growth_handoff')).toBeTruthy();
   const apiPath = apiPathFromLeadQueueRoute(run.route);
   const leadResp = await request.get(`${API_URL}${apiPath}`, { headers: AUTH_HEADERS });
   expect(leadResp.status(), `GET ${apiPath} returned non-200`).toBe(200);
   expect(Number(leadResp.headers()['x-total-matching'] ?? -1)).toBe(run.actionable_total);
+  expect(leadResp.headers()['x-growth-agent-run-id']).toBe(run.run_id);
+  expect(leadResp.headers()['x-cohort-fingerprint']).toBe(run.actionable_cohort_fingerprint);
+  expect(leadResp.headers()['x-cohort-snapshot-id']).toBe(run.actionable_snapshot_id);
 }
 
 async function expectAuditRowMatchesGrowthRun(
@@ -168,8 +175,8 @@ function expectReviewedPlanningEvidence(
   expect(['deterministic', 'agent_framework']).toContain(run.execution_mode);
   if (run.execution_mode === 'agent_framework') {
     expect(run.trace_kind).toBe('agent_framework');
-    expect(run.planner_label).toBe('Databricks Supervisor Agent');
-    expect(run.agent_reasoning ?? '').toContain('Databricks Supervisor Agent selected');
+    expect(run.planner_label).toBe('Databricks Agent Responses endpoint');
+    expect(run.agent_reasoning ?? '').toContain('Databricks Agent Responses endpoint selected');
     expect(run.agent_reasoning ?? '').toContain('reviewed');
     expect(run.governance_chips).toEqual(
       expect.arrayContaining([
@@ -182,7 +189,6 @@ function expectReviewedPlanningEvidence(
     expect(run.genie_trusted_assets ?? []).toEqual(
       expect.arrayContaining([
         expect.stringMatching(/^databricks\.serving_endpoint\./),
-        expect.stringMatching(/^databricks\.supervisor_agent\./),
       ]),
     );
     return;

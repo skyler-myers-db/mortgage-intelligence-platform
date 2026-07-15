@@ -229,6 +229,12 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "target_lender_ref",
         "portfolio_criteria",
         "cohort_id",
+        # Verified Growth Agent -> Lead Queue handoff provenance. These values
+        # come from a server-verified signed token, never from URL labels.
+        "growth_agent_run_id",
+        "growth_agent_filters_fingerprint",
+        "growth_agent_cohort_fingerprint",
+        "growth_agent_source_snapshot",
         # Sales manager workflow state
         "assignment_id",
         "assigned_by",
@@ -425,6 +431,7 @@ _OPAQUE_ID_METADATA_KEYS: frozenset[str] = frozenset(
         "activation_id",
         "loan_officer_id",
         "draft_generation_id",
+        "growth_agent_run_id",
     }
 )
 _CAMPAIGN_LABEL_METADATA_KEYS: frozenset[str] = frozenset(
@@ -1013,13 +1020,29 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, value in _metadata_values_for(metadata, {"trace_id"}):
         if value is not None and not re.fullmatch(r"agent-trace-[0-9a-fA-F-]{36}", str(value)):
             raise AuditMetadataValueViolation(field, "must be a governed agent trace id")
-    for field, value in _metadata_values_for(metadata, {"tool_result_hash"}):
+    for field, value in _metadata_values_for(
+        metadata,
+        {
+            "tool_result_hash",
+            "growth_agent_filters_fingerprint",
+            "growth_agent_cohort_fingerprint",
+        },
+    ):
         if value is None:
             continue
         try:
             validate_sql_hash(value)
         except ValueError as exc:
             raise AuditMetadataValueViolation(field, str(exc)) from exc
+    for field, value in _metadata_values_for(metadata, {"growth_agent_source_snapshot"}):
+        if value is None:
+            continue
+        try:
+            validate_public_audit_identifier_or_none(str(value))
+        except ValueError as exc:
+            raise AuditMetadataValueViolation(
+                field, "must be a public-safe source snapshot identifier"
+            ) from exc
     for field, value in _metadata_values_for(metadata, {"specialist_agent"}):
         if value is not None and str(value) not in _GROWTH_AGENT_SPECIALISTS:
             raise AuditMetadataValueViolation(field, "must be a governed specialist id")

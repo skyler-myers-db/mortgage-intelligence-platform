@@ -682,8 +682,8 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
             "competitor_lender_label": "Competitor D",
         },
     )
-    assert replay_by_returned_token.status_code == 200
-    assert replay_by_returned_token.json()["outcome"]["outcome_id"] == body["outcome"]["outcome_id"]
+    assert replay_by_returned_token.status_code == 422
+    assert body["outcome"]["source_record_ref"] not in replay_by_returned_token.text
 
     today = datetime.now(UTC).date().isoformat()
     summary = client.get(f"/api/sales/outcomes/summary?from={today}&to={today}")

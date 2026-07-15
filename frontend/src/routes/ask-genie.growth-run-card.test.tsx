@@ -10,6 +10,8 @@ import { GrowthAgentRunCard } from './ask-genie.growth-run-card';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+const SIGNED_GROWTH_HANDOFF = 'v1.non-admin-growth-agent-handoff.signature';
+
 const RUN: GrowthAgentRunResponse = {
   workflow: {
     id: 'daily_refi_brief',
@@ -39,7 +41,7 @@ const RUN: GrowthAgentRunResponse = {
   actionable_avg_score: 73.1,
   avg_rate_spread_bps: 187.9,
   avg_equity_pct: 42.4,
-  route: '/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL',
+  route: `/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL&growth_handoff=${SIGNED_GROWTH_HANDOFF}`,
   criteria: {
     states: ['IL'],
     lead_queue_filters: {
@@ -222,6 +224,7 @@ describe('GrowthAgentRunCard', () => {
     expect(url.searchParams.get('actionable_cohort_fingerprint'))
       .toBe(PASSED_RUN.actionable_cohort_fingerprint);
     expect(url.searchParams.get('actionable_snapshot_id')).toBe(PASSED_RUN.actionable_snapshot_id);
+    expect(url.searchParams.get('growth_handoff')).toBe(SIGNED_GROWTH_HANDOFF);
     expect(container.textContent).toContain('Cohort proof bbbbbbbbbbbb');
     expect(container.textContent).toContain('Snapshot 2026-07-14 12:00:00');
   });

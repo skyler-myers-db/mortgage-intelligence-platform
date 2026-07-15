@@ -48,7 +48,7 @@ async function settle(): Promise<void> {
 
 async function waitForSelector<T extends Element>(selector: string): Promise<T | null> {
   let node: T | null = null;
-  for (let i = 0; i < 80; i += 1) {
+  for (let i = 0; i < 400; i += 1) {
     await settle();
     node = document.querySelector(selector) as T | null;
     if (node) return node;

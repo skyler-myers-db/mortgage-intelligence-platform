@@ -739,4 +739,3 @@ def _string_list(value: object) -> list[str] | None:
         raise ValueError("Growth Agent handoff list filter is invalid")
     out = [str(item).strip() for item in values if str(item).strip()]
     return out or None
-

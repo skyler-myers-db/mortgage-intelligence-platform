@@ -438,6 +438,14 @@ def test_apply_grants_uses_exact_quoted_role_and_strict_matrix(
         'TO "sp-client-""quoted"""'
     ) in grant_statements
     assert 'REVOKE CREATE ON DATABASE "mip_app_state" FROM "sp-client-""quoted"""' in statements
+    assert (
+        'ALTER DEFAULT PRIVILEGES IN SCHEMA "mip_app" '
+        'REVOKE ALL PRIVILEGES ON TABLES FROM "sp-client-""quoted"""'
+    ) in statements
+    assert (
+        'ALTER DEFAULT PRIVILEGES IN SCHEMA "mip_app" '
+        'REVOKE ALL PRIVILEGES ON SEQUENCES FROM "sp-client-""quoted"""'
+    ) in statements
 
 
 def test_acl_reconciliation_rolls_back_on_mid_grant_failure(
@@ -633,6 +641,25 @@ def test_postflight_rejects_missing_required_sequence_usage() -> None:
         lakebase_migrate._postflight_app_role_grants(cursor, role)
 
 
+@pytest.mark.parametrize("object_type", ["r", "S"])
+def test_postflight_rejects_future_object_default_privilege(object_type: str) -> None:
+    role = "app-role"
+    cursor = _Cursor(
+        fetchall_results=[
+            [(role,)],
+            _table_rows(),
+            _table_privilege_rows(),
+            _sequence_rows(),
+            _sequence_privilege_rows(),
+            [(object_type, "SELECT" if object_type == "r" else "USAGE")],
+        ],
+        fetchone_results=[(True, False, True, False)],
+    )
+
+    with pytest.raises(RuntimeError, match="future table/sequence default"):
+        lakebase_migrate._postflight_app_role_grants(cursor, role)
+
+
 def test_lakebase_grant_docs_match_strict_automated_contract() -> None:
     grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
     lakebase_section = grants_doc.split("## 6. Schema `mip_app` (Lakebase Postgres — required)", 1)[
@@ -648,6 +675,7 @@ def test_lakebase_grant_docs_match_strict_automated_contract() -> None:
     assert "GRANT SELECT, INSERT, UPDATE, DELETE" not in lakebase_section
     assert "GRANT USAGE ON SEQUENCE mip_app.action_audit_audit_sequence_seq" in (lakebase_section)
     assert "REVOKE ALL PRIVILEGES ON SEQUENCES" in lakebase_section
+    assert "REVOKE ALL PRIVILEGES ON TABLES" in lakebase_section
     for table, privileges in lakebase_migrate._APP_ROLE_TABLE_PRIVILEGES.items():
         assert f"REVOKE ALL PRIVILEGES ON TABLE mip_app.{table}" in lakebase_section
         if table == "ai_gateway_proof_ledger":

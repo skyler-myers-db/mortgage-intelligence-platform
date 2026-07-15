@@ -12,12 +12,15 @@ What this tool does (in order):
    is re-used rather than duplicated.
 2. Grant ``CAN USE`` on the deployed Databricks App resource
    (``--app-name``) so the SP can traverse the Apps OAuth proxy.
-3. Mint an OAuth client_id + client_secret for the SP. A live mint requires
+3. For the verifier identity, grant ``CAN USE`` on the exact SQL warehouse
+   used to validate AI Gateway inference rows. The verifier still receives no
+   Databricks App access and is never an admin-group member.
+5. Mint an OAuth client_id + client_secret for the SP. A live mint requires
    ``--set-gh-secrets`` and pipes the one-shot secret directly to ``gh``.
    Secret names are configurable so normal, admin, and verifier identities
    never share one client credential.
 
-4. Optionally rotate an existing SP's secret (``--rotate``). The old
+6. Optionally rotate an existing SP's secret (``--rotate``). The old
    secret stays valid until the admin revokes it in the Accounts Console
    — same zero-downtime rotation cadence as the manual flow.
 
@@ -31,17 +34,6 @@ Safety invariants
   pointed message directing the reader to
   ``docs/security/m2m-oauth-setup.md`` appendix (manual UI path) rather
   than a stack trace.
-
-SDK surface used (pinned to databricks-sdk shipped in requirements.txt)
-----------------------------------------------------------------------
-* ``w.service_principals.list(filter=...)`` — idempotent lookup.
-* ``w.service_principals.create(display_name=..., active=True)`` — create SP.
-* ``w.service_principal_secrets_proxy.create(service_principal_id=...)``
-  — mint the OAuth client_secret. Returns a
-  ``CreateServicePrincipalSecretResponse`` whose ``.secret`` field is
-  the one-shot value. The ``client_id`` is the SP's ``application_id``.
-* ``w.apps.update_permissions(app_name, access_control_list=[...])`` —
-  grant ``CAN USE`` on the deployed App resource.
 
 Usage
 -----
@@ -67,15 +59,21 @@ import os
 import re
 import subprocess
 import sys
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
+from tools.databricks.m2m_identity_contract import (  # noqa: E402
+    DEFAULT_ADMIN_GROUP,
+    DEFAULT_LAKEBASE_INSTANCE,
+    IDENTITY_DEFAULTS,
+    IdentityRole,
+    ProvisionResult,
+)
 
 _GH_SECRET_NAME_RE = _github_helpers.GH_SECRET_NAME_RE
 _gh_available = _github_helpers.gh_available
@@ -88,54 +86,6 @@ DOCS_RUNBOOK = "docs/security/m2m-oauth-setup.md"
 # Deployed App URL. Written as a GitHub secret alongside the client id/secret
 # so the workflow's deployed-path detection flips on in a single admin pass.
 DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
-DEFAULT_ADMIN_GROUP = "mip-admin"
-DEFAULT_LAKEBASE_INSTANCE = "mip-app-state"
-
-IdentityRole = Literal["normal", "admin", "verifier"]
-
-
-@dataclass(frozen=True)
-class IdentityDefaults:
-    sp_name: str
-    client_id_secret_name: str
-    client_secret_secret_name: str
-    app_url_secret_name: str | None
-    group_name: str | None
-    grant_can_use: bool
-    lakebase_instance: str | None
-
-
-IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
-    "normal": IdentityDefaults(
-        sp_name="mip-nightly-ci-sp",
-        client_id_secret_name="DATABRICKS_CLIENT_ID",
-        client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
-        app_url_secret_name="MIP_APP_URL",
-        group_name=None,
-        grant_can_use=True,
-        lakebase_instance=None,
-    ),
-    "admin": IdentityDefaults(
-        sp_name="mip-nightly-admin-ci-sp",
-        client_id_secret_name="DATABRICKS_ADMIN_CLIENT_ID",
-        client_secret_secret_name="DATABRICKS_ADMIN_CLIENT_SECRET",
-        app_url_secret_name=None,
-        group_name=DEFAULT_ADMIN_GROUP,
-        grant_can_use=True,
-        lakebase_instance=None,
-    ),
-    "verifier": IdentityDefaults(
-        sp_name="mip-ai-gateway-verifier-ci-sp",
-        client_id_secret_name="DATABRICKS_VERIFIER_CLIENT_ID",
-        client_secret_secret_name="DATABRICKS_VERIFIER_CLIENT_SECRET",
-        app_url_secret_name=None,
-        group_name=None,
-        grant_can_use=False,
-        lakebase_instance=DEFAULT_LAKEBASE_INSTANCE,
-    ),
-}
-
-
 def _diag(msg: str) -> None:
     """Stderr diagnostic. Keeps stdout clean for scripted consumers."""
     print(f"[mip-m2m-provision] {msg}", file=sys.stderr)
@@ -188,32 +138,6 @@ def _infer_gh_repo() -> str | None:
 
 
 # ---------------------------------------------------------------------------
-# Provisioning state container
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class ProvisionResult:
-    """Structured return so tests and callers can assert without parsing stdout."""
-
-    sp_id: str
-    sp_application_id: str
-    sp_display_name: str
-    created_sp: bool
-    granted_can_use: bool
-    group_name: str | None
-    added_to_group: bool
-    lakebase_instance: str | None
-    created_lakebase_role: bool
-    gateway_endpoint: str | None
-    granted_can_query: bool
-    client_id: str
-    secret_minted: bool
-    secret_written_to_gh: bool
-    gh_repo: str | None
-
-
-# ---------------------------------------------------------------------------
 # Core steps (each accepts an injected client so unit tests can mock)
 # ---------------------------------------------------------------------------
 
@@ -250,14 +174,23 @@ def _create_sp(client: Any, display_name: str) -> Any:
 
 
 def _find_group(client: Any, display_name: str) -> Any | None:
-    """Return the exact SCIM group match, never a prefix/similar group."""
+    """Return a hydrated exact SCIM group match, never a list-page stub."""
     try:
         groups = list(client.groups.list(filter=f"displayName eq '{display_name}'"))
     except Exception as exc:  # noqa: BLE001
         raise _wrap_admin_error(exc, step="list groups") from exc
     for group in groups:
         if getattr(group, "display_name", None) == display_name:
-            return group
+            group_id = str(getattr(group, "id", "") or "").strip()
+            if not group_id:
+                raise SystemExit(f"Group {display_name!r} has no SCIM id")
+            try:
+                # SCIM list responses may omit ``members``. Membership is a
+                # privilege boundary here, so make the decision from the
+                # immutable-id resource rather than a potentially sparse row.
+                return client.groups.get(group_id)
+            except Exception as exc:  # noqa: BLE001
+                raise _wrap_admin_error(exc, step="get group membership") from exc
     return None
 
 
@@ -418,6 +351,75 @@ def _grant_can_query_on_endpoint(
         raise _wrap_admin_error(exc, step="update serving endpoint permissions") from exc
 
 
+def _grant_can_use_on_warehouse(
+    client: Any,
+    warehouse_id: str,
+    sp_application_id: str,
+) -> None:
+    """Add verifier CAN_USE on one SQL warehouse without replacing ACLs."""
+    from databricks.sdk.service.sql import (  # type: ignore
+        WarehouseAccessControlRequest,
+        WarehousePermissionLevel,
+    )
+
+    _diag(f"granting CAN_USE on warehouse={warehouse_id!r} to verifier identity")
+    try:
+        client.warehouses.update_permissions(
+            warehouse_id,
+            access_control_list=[
+                WarehouseAccessControlRequest(
+                    service_principal_name=sp_application_id,
+                    permission_level=WarehousePermissionLevel.CAN_USE,
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _wrap_admin_error(exc, step="update SQL warehouse permissions") from exc
+
+
+def _assert_not_admin_group_member(
+    client: Any,
+    *,
+    group_name: str,
+    sp_id: str,
+    identity_role: IdentityRole,
+) -> None:
+    """Fail closed if a non-admin automation identity retained admin access."""
+    group = _find_group(client, group_name)
+    if group is None:
+        return
+    members = getattr(group, "members", None) or []
+    if any(str(getattr(member, "value", "") or "") == sp_id for member in members):
+        raise SystemExit(
+            f"{identity_role} service principal is still a member of forbidden "
+            f"admin group {group_name!r}; remove that membership before provisioning"
+        )
+
+
+def _assert_no_direct_app_permission(
+    client: Any,
+    *,
+    app_name: str,
+    sp_application_id: str,
+) -> None:
+    """Fail closed when the verifier retained a direct Databricks App grant."""
+    try:
+        permissions = client.apps.get_permissions(app_name)
+    except Exception as exc:  # noqa: BLE001
+        raise _wrap_admin_error(exc, step="inspect app permissions") from exc
+    for entry in getattr(permissions, "access_control_list", None) or []:
+        if str(getattr(entry, "service_principal_name", "") or "") != sp_application_id:
+            continue
+        if any(
+            not bool(getattr(permission, "inherited", False))
+            for permission in (getattr(entry, "all_permissions", None) or [])
+        ):
+            raise SystemExit(
+                "verifier service principal retains forbidden direct Databricks App "
+                f"permission on {app_name!r}; remove it before provisioning"
+            )
+
+
 def _mint_oauth_secret(client: Any, sp_id: str) -> Any:
     """Mint a new OAuth client_secret for the SP. Returned once, never again."""
     _diag(f"minting OAuth secret for service_principal_id={sp_id}")
@@ -467,6 +469,7 @@ def provision(
     create_group: bool,
     lakebase_instance: str | None,
     gateway_endpoint: str | None,
+    warehouse_id: str | None,
     gh_repo: str | None,
     set_gh_secrets: bool,
     mint_secret: bool,
@@ -475,6 +478,7 @@ def provision(
     client_id_secret_name: str,
     client_secret_secret_name: str,
     app_url_secret_name: str | None,
+    identity_role: IdentityRole = "normal",
     client_factory: Any | None = None,
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
@@ -524,6 +528,11 @@ def provision(
     sp = _find_existing_sp(client, sp_name)
     created_sp = False
     if sp is None:
+        if expected_application_id:
+            raise SystemExit(
+                f"Service principal {sp_name!r} was not found; refusing to create a new "
+                "identity because --expected-application-id was supplied"
+            )
         sp = _create_sp(client, sp_name)
         created_sp = True
         _diag(f"created SP id={sp.id} application_id={sp.application_id}")
@@ -533,6 +542,20 @@ def provision(
         raise SystemExit(
             f"Service principal {sp_name!r} application id does not match the "
             "configured client id; refusing to grant the wrong identity."
+        )
+
+    if identity_role != "admin":
+        _assert_not_admin_group_member(
+            client,
+            group_name=DEFAULT_ADMIN_GROUP,
+            sp_id=sp.id,
+            identity_role=identity_role,
+        )
+    if identity_role == "verifier":
+        _assert_no_direct_app_permission(
+            client,
+            app_name=app_name,
+            sp_application_id=sp.application_id,
         )
 
     added_to_group = False
@@ -556,6 +579,11 @@ def provision(
     if gateway_endpoint:
         _grant_can_query_on_endpoint(client, gateway_endpoint, sp.application_id)
         granted_can_query = True
+
+    granted_warehouse_can_use = False
+    if warehouse_id:
+        _grant_can_use_on_warehouse(client, warehouse_id, sp.application_id)
+        granted_warehouse_can_use = True
 
     granted = False
     if grant_can_use:
@@ -607,6 +635,8 @@ def provision(
         created_lakebase_role=created_lakebase_role,
         gateway_endpoint=gateway_endpoint,
         granted_can_query=granted_can_query,
+        warehouse_id=warehouse_id,
+        granted_warehouse_can_use=granted_warehouse_can_use,
         client_id=client_id,
         secret_minted=should_mint,
         secret_written_to_gh=wrote_secrets,
@@ -629,6 +659,8 @@ def _print_summary(result: ProvisionResult) -> None:
         f"  Lakebase role created:    {result.created_lakebase_role}",
         f"  Gateway endpoint:         {result.gateway_endpoint or '(none)'}",
         f"  granted CAN_QUERY:        {result.granted_can_query}",
+        f"  SQL warehouse:            {result.warehouse_id or '(none)'}",
+        f"  granted warehouse CAN_USE:{result.granted_warehouse_can_use}",
         f"  OAuth secret minted:      {result.secret_minted}",
         f"  GitHub secrets updated:   {result.secret_written_to_gh}",
     ]
@@ -721,6 +753,11 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Serving endpoint on which the verifier receives CAN_QUERY.",
     )
     parser.add_argument(
+        "--warehouse-id",
+        default=None,
+        help="SQL warehouse on which the verifier receives CAN_USE.",
+    )
+    parser.add_argument(
         "--gh-repo",
         default=None,
         help="GitHub repo owner/name (default: inferred from `git remote get-url origin`).",
@@ -798,16 +835,21 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("only --identity-role admin may be assigned to an admin group")
     if args.create_group and role != "admin":
         parser.error("--create-group is valid only with --identity-role admin")
-    if role != "verifier" and (args.lakebase_instance or args.gateway_endpoint):
+    if role != "verifier" and (
+        args.lakebase_instance or args.gateway_endpoint or args.warehouse_id
+    ):
         parser.error(
-            "--lakebase-instance and --gateway-endpoint are valid only with "
+            "--lakebase-instance, --gateway-endpoint, and --warehouse-id are valid only with "
             "--identity-role verifier"
         )
+    if role == "verifier" and args.gateway_endpoint and not args.warehouse_id:
+        parser.error("--gateway-endpoint requires --warehouse-id for exact proof verification")
 
     _diag(
         f"provisioning plan: identity_role={role!r} sp_name={sp_name!r} "
         f"app_name={app_name!r} group_name={group_name!r} "
         f"create_group={args.create_group} lakebase_instance={lakebase_instance!r} "
+        f"warehouse_id={args.warehouse_id!r} "
         f"gh_repo={gh_repo!r} set_gh_secrets={args.set_gh_secrets} rotate={args.rotate}"
     )
 
@@ -831,6 +873,7 @@ def main(argv: list[str] | None = None) -> int:
             create_group=args.create_group,
             lakebase_instance=lakebase_instance,
             gateway_endpoint=args.gateway_endpoint,
+            warehouse_id=args.warehouse_id,
             gh_repo=gh_repo,
             set_gh_secrets=args.set_gh_secrets,
             mint_secret=args.mint_secret,
@@ -839,6 +882,7 @@ def main(argv: list[str] | None = None) -> int:
             client_id_secret_name=client_id_secret_name,
             client_secret_secret_name=client_secret_secret_name,
             app_url_secret_name=app_url_secret_name,
+            identity_role=role,
         )
     except SystemExit:
         raise

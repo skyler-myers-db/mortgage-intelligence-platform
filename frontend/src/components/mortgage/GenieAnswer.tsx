@@ -203,7 +203,7 @@ export function GenieAnswer({
       : null;
 
   return (
-    <div>
+    <div className="genie-answer">
       <div className="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {liveAnswerAnnouncement}
       </div>
@@ -226,19 +226,19 @@ export function GenieAnswer({
       {proofToggle}
       {nativeVizBadge}
       {cleanedAnswer && <MarkdownAnswer text={cleanedAnswer} />}
-      {/* Databricks exposes bounded, PII-scrubbed planning summaries for live
-          Genie turns. Render them as escaped text in a native disclosure; do
-          not describe them as private or hidden chain-of-thought. */}
+      {/* The backend exposes bounded, public process summaries for live Genie
+          turns through the existing reasoning_trace wire field. Render them
+          as escaped text in a native disclosure. */}
       {reasoningSummaries.length > 0 && (
         <details className="genie-answer__reasoning">
           <summary className="genie-answer__reasoning-summary">
             <Icon name="flow" size={12} />
-            <span>API reasoning summary</span>
+            <span>Genie process summary</span>
           </summary>
           <div
             className="genie-answer__reasoning-body"
             role="list"
-            aria-label="Databricks Genie API reasoning summaries"
+            aria-label="Genie process summaries"
           >
             {reasoningSummaries.map((step, i) => (
               <div
@@ -279,30 +279,37 @@ export function GenieAnswer({
       )}
       {visibleRows.length > 0 && columns.length > 0 && (
         <>
-          <table className="genie-answer__table">
-            <thead>
-              <tr>
-                {columns.map((c) => (
-                  <th key={c}>{humanizeKey(c)}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {visibleRows.map((row, i) => (
-                <tr key={i}>
-                  {columns.map((c) => {
-                    const v = row[c];
-                    const isNum = typeof v === 'number' && !isIdentifierColumn(c);
-                    return (
-                      <td key={c} className={isNum ? 'num' : undefined}>
-                        {formatCell(c, v)}
-                      </td>
-                    );
-                  })}
+          <div
+            className="genie-answer__table-scroll"
+            role="region"
+            aria-label="Answer table"
+            tabIndex={0}
+          >
+            <table className="genie-answer__table">
+              <thead>
+                <tr>
+                  {columns.map((c) => (
+                    <th key={c}>{humanizeKey(c)}</th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {visibleRows.map((row, i) => (
+                  <tr key={i}>
+                    {columns.map((c) => {
+                      const v = row[c];
+                      const isNum = typeof v === 'number' && !isIdentifierColumn(c);
+                      return (
+                        <td key={c} className={isNum ? 'num' : undefined}>
+                          {formatCell(c, v)}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
           {hiddenRows > 0 && (
             <div className="genie-answer__more">+{hiddenRows} more row{hiddenRows === 1 ? '' : 's'}</div>
           )}

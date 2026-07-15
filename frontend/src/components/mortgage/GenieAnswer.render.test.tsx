@@ -120,7 +120,7 @@ describe('GenieAnswer render surfaces', () => {
     expect(container.querySelector('.genie-answer__native-viz svg.recharts-surface')).toBeNull();
   });
 
-  it('labels genuine Genie answers and renders API reasoning summaries collapsed', () => {
+  it('labels genuine Genie answers and renders public process summaries collapsed', () => {
     act(() =>
       root.render(
         <GenieAnswer
@@ -144,7 +144,7 @@ describe('GenieAnswer render surfaces', () => {
     const reasoning = container.querySelector<HTMLDetailsElement>('.genie-answer__reasoning');
     expect(reasoning).not.toBeNull();
     expect(reasoning?.open).toBe(false);
-    expect(reasoning?.textContent).toContain('API reasoning summary');
+    expect(reasoning?.textContent).toContain('Genie process summary');
     expect(reasoning?.textContent).toContain('Filtering Context');
     expect(reasoning?.textContent).toContain('Scoped the request to trusted assets.');
     expect(reasoning?.textContent).toContain('Text');

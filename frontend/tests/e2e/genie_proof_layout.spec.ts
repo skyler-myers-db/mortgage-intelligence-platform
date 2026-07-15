@@ -90,7 +90,11 @@ function intersects(a: Box, b: Box): boolean {
   );
 }
 
-async function mockGenieProofAnswer(page: Page, messageGate?: Promise<void>) {
+async function mockGenieProofAnswer(
+  page: Page,
+  messageGate?: Promise<void>,
+  longContent = false,
+) {
   await page.route(/\/api\/(?:v1\/)?genie\/start$/, async (route) => {
     await route.fulfill({
       status: 200,
@@ -116,11 +120,13 @@ async function mockGenieProofAnswer(page: Page, messageGate?: Promise<void>) {
         genie_status: 'COMPLETED',
         reasoning_trace: [
           {
-            kind: 'THOUGHT_TYPE_PLANNING',
-            content: 'Selected the reviewed retention cohort and competitor-lien evidence assets.',
+            kind: 'PROCESS_STEP_SELECTION',
+            content: longContent
+              ? `Selected_${'reviewed_retention_cohort_'.repeat(18)}evidence_assets.`
+              : 'Selected the reviewed retention cohort and competitor-lien evidence assets.',
           },
           {
-            kind: 'THOUGHT_TYPE_QUERY',
+            kind: 'PROCESS_STEP_QUERY',
             content: 'Aggregated the governed borrower rows and retained source-level proof.',
           },
         ],
@@ -158,8 +164,10 @@ async function mockGenieProofAnswer(page: Page, messageGate?: Promise<void>) {
         },
         table_rows: [
           {
-            borrower_id: 'B-102FL7THC6Q3L',
-            city: 'Calumet City',
+            borrower_id: longContent
+              ? `B-${'102FL7THC6Q3L'.repeat(8)}`
+              : 'B-102FL7THC6Q3L',
+            city: longContent ? 'Calumet City with a deliberately wide governed result' : 'Calumet City',
             state: 'IL',
             opportunity_score: 88,
           },
@@ -181,7 +189,9 @@ test.describe('Genie proof drawer layout', () => {
     await mockGenieProofAnswer(page);
 
     await page.goto('/ask-genie');
-    await page.locator('textarea[aria-label="Ask Genie — question"]').fill('Show the retention proof layout.');
+    const composer = page.locator('textarea[aria-label="Ask Genie — question"]');
+    await expect(composer).toBeVisible({ timeout: 45_000 });
+    await composer.fill('Show the retention proof layout.');
     await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
     await page.getByRole('button', { name: /Show proof/i }).click();
 
@@ -222,7 +232,7 @@ test.describe('Genie proof drawer layout', () => {
     }
   });
 
-  test('keeps loading context continuous, then renders reasoning and both feedback controls', async ({
+  test('keeps loading context continuous, then renders the public process summary and feedback controls', async ({
     page,
   }) => {
     let releaseMessage!: () => void;
@@ -259,14 +269,19 @@ test.describe('Genie proof drawer layout', () => {
     await expect(progress).toBeHidden();
     await expect(composer).toHaveValue(question);
 
-    const reasoning = page.locator('details.genie-answer__reasoning');
-    await expect(reasoning).toBeVisible();
-    await expect(reasoning).not.toHaveAttribute('open', '');
-    await reasoning.locator('summary').click();
-    await expect(reasoning).toContainText(
+    const processSummary = page.locator('details.genie-answer__reasoning');
+    await expect(processSummary).toBeVisible();
+    await expect(processSummary.locator('summary')).toContainText('Genie process summary');
+    await expect(processSummary.locator('[role="list"]')).toHaveAttribute(
+      'aria-label',
+      'Databricks Genie public process summaries',
+    );
+    await expect(processSummary).not.toHaveAttribute('open', '');
+    await processSummary.locator('summary').click();
+    await expect(processSummary).toContainText(
       'Selected the reviewed retention cohort and competitor-lien evidence assets.',
     );
-    await expect(reasoning).toContainText(
+    await expect(processSummary).toContainText(
       'Aggregated the governed borrower rows and retained source-level proof.',
     );
 
@@ -280,4 +295,45 @@ test.describe('Genie proof drawer layout', () => {
     await expect(notHelpful.locator('svg')).toBeVisible();
     expect(feedbackRequests).toBe(0);
   });
+
+  for (const width of [320, 390]) {
+    test(`populated table and process summary stay inside .main at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 844 });
+      await mockGenieProofAnswer(page, undefined, true);
+
+      await page.goto('/ask-genie');
+      const composer = page.locator('textarea[aria-label="Ask Genie — question"]');
+      await expect(composer).toBeVisible({ timeout: 45_000 });
+      await composer.fill('Show the retention proof layout.');
+      await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+
+      const scroller = page.getByRole('region', { name: 'Genie answer table' });
+      await expect(scroller).toBeVisible();
+      const processSummary = page.locator('details.genie-answer__reasoning');
+      await processSummary.locator('summary').click();
+      await expect(processSummary).toHaveAttribute('open', '');
+
+      const metrics = await page.evaluate(() => {
+        const main = document.querySelector('.main') as HTMLElement | null;
+        const tableScroller = document.querySelector('.genie-answer__table-scroll') as HTMLElement | null;
+        if (!main || !tableScroller) return null;
+        return {
+          mainClientWidth: main.clientWidth,
+          mainScrollWidth: main.scrollWidth,
+          scrollerClientWidth: tableScroller.clientWidth,
+          scrollerScrollWidth: tableScroller.scrollWidth,
+        };
+      });
+
+      expect(metrics, 'Genie answer should render inside the route').toBeTruthy();
+      expect(
+        metrics!.mainScrollWidth,
+        'Genie content must not create route-level horizontal overflow',
+      ).toBeLessThanOrEqual(metrics!.mainClientWidth + 2);
+      expect(
+        metrics!.scrollerScrollWidth,
+        'Wide table content should remain reachable in the local scroller',
+      ).toBeGreaterThan(metrics!.scrollerClientWidth);
+    });
+  }
 });

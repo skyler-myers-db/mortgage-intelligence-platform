@@ -396,7 +396,7 @@ describe('PortfolioBuilder save-build flow', () => {
     await waitUntil(() => container.textContent?.includes('Supervisor IL refinance campaign') === true);
 
     expect(container.textContent).toContain('Mortgage Growth Supervisor');
-    expect(container.textContent).toContain('Provenance attached');
+    expect(container.textContent).toContain('Copy verified');
     const variant = container.querySelector<HTMLSelectElement>(
       'select[aria-label="Message variant for Supervisor IL refinance campaign"]',
     )!;

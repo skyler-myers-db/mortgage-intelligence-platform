@@ -519,8 +519,9 @@ TBLPROPERTIES (
 --    Mirror of the Lakebase mip_app.approvals + outreach state, keyed by
 --    borrower_id, so UC metric views can surface per-segment approval_rate
 --    and outreach_rate without a runtime federated join. Authoritative state
---    still lives in Lakebase; this table is a scheduled sync (hourly) written
---    by jobs/sync_lifecycle_state.py. Metric views JOIN this, not Lakebase.
+--    still lives in Lakebase; this sparse table is updated on accepted events
+--    and by explicit repair through jobs/sync_lifecycle_state.py. Metric views
+--    LEFT JOIN this, not Lakebase, and COALESCE missing rows to pending/none.
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mip.gold.borrower_lifecycle_state (
   borrower_id       STRING    NOT NULL COMMENT 'Masked borrower id; matches borrower_360.borrower_id.',
@@ -534,7 +535,7 @@ CREATE TABLE IF NOT EXISTS mip.gold.borrower_lifecycle_state (
 )
 USING DELTA
 CLUSTER BY (borrower_id)
-COMMENT 'Hourly sync of Lakebase mip_app.approvals + outreach into gold for metric-view joins. Lakebase remains authoritative. Sync job: jobs/sync_lifecycle_state.py.'
+COMMENT 'Sparse event-triggered mirror of Lakebase approvals + outreach for metric-view joins. Missing rows mean pending/none; Lakebase remains authoritative.'
 TBLPROPERTIES (
   'delta.enableChangeDataFeed' = 'false',
   'delta.autoOptimize.optimizeWrite' = 'true',
