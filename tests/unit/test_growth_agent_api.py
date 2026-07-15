@@ -2181,7 +2181,10 @@ def test_workflow_metric_sql_uses_live_predicates_and_actionability_gates() -> N
             assert snippet in statement
         if workflow_id != "source_freshness_sentinel":
             assert "FROM mip.ref.refresh_run_state" in statement
-            assert "CAST(anchor.run_id AS STRING)" in statement
+            assert "NULLIF(TRIM(CAST(anchor.run_id AS STRING)), '')" in statement
+            assert "concat(anchor.source, ':', CAST(anchor.captured_at AS STRING))" in statement
+            assert "anchor.source IN ('mip_refresh_scores', 'ad_hoc', 'backfill')" in statement
+            assert "anchor.run_id IS NOT NULL" not in statement
             assert "versions.borrower_360_at = anchor.refresh_at" in statement
         if workflow_id == "borrower_dossier_review":
             assert "(SELECT MAX(refreshed_at) FROM mip.gold.borrower_dossier)" in statement

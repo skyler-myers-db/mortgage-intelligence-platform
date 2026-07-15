@@ -569,7 +569,7 @@ LEFT JOIN ranked ON TRUE
         )
         return f"""
 refresh_anchor AS (
-  SELECT run_id, refresh_at
+  SELECT run_id, refresh_at, captured_at, source
   FROM {qualify('ref', 'refresh_run_state')}
   ORDER BY captured_at DESC
   LIMIT 1
@@ -581,13 +581,19 @@ source_versions AS (
 snapshot_validation AS (
   SELECT CASE
     WHEN anchor.refresh_at IS NOT NULL
-      AND anchor.run_id IS NOT NULL
+      AND anchor.captured_at IS NOT NULL
+      AND anchor.source IN ('mip_refresh_scores', 'ad_hoc', 'backfill')
       AND versions.borrower_360_at = anchor.refresh_at
       {lead_check}
       {lifecycle_check}
     THEN sha2(
       concat(
-        'gold-refresh:', CAST(anchor.run_id AS STRING), '|',
+        'gold-refresh:',
+        COALESCE(
+          NULLIF(TRIM(CAST(anchor.run_id AS STRING)), ''),
+          concat(anchor.source, ':', CAST(anchor.captured_at AS STRING))
+        ),
+        '|',
         CAST(anchor.refresh_at AS STRING){lifecycle_token}
       ),
       256

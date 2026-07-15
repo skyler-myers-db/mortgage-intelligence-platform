@@ -265,7 +265,10 @@ def test_lead_repository_cohort_identity_hashes_complete_distinct_set() -> None:
     assert "sort_array(collect_set(CAST(m.borrower_id AS STRING)))" in sql
     assert "FROM mip.ref.refresh_run_state" in sql
     assert "versions.borrower_360_at = anchor.refresh_at" in sql
-    assert "CAST(anchor.run_id AS STRING)" in sql
+    assert "NULLIF(TRIM(CAST(anchor.run_id AS STRING)), '')" in sql
+    assert "concat(anchor.source, ':', CAST(anchor.captured_at AS STRING))" in sql
+    assert "anchor.source IN ('mip_refresh_scores', 'ad_hoc', 'backfill')" in sql
+    assert "anchor.run_id IS NOT NULL" not in sql
     assert "array_contains(segment_codes, :seg_0) AND" in sql
     assert captured["params"] == {"seg_0": "itm", "seg_1": "equity", "state_0": "IL"}
 
@@ -312,7 +315,9 @@ def test_lead_repository_atomic_identity_binds_rows_total_digest_and_snapshot() 
     assert sql.count("WITH matched AS") == 1
     assert "LEFT JOIN ranked ON TRUE" in sql
     assert "__identity_total" in sql
-    assert "CAST(anchor.run_id AS STRING)" in sql
+    assert "NULLIF(TRIM(CAST(anchor.run_id AS STRING)), '')" in sql
+    assert "concat(anchor.source, ':', CAST(anchor.captured_at AS STRING))" in sql
+    assert "anchor.run_id IS NOT NULL" not in sql
     assert "versions.borrower_360_at = anchor.refresh_at" in sql
     assert captured["params"] == {"seg_0": "itm", "seg_1": "equity", "state_0": "IL"}
 
