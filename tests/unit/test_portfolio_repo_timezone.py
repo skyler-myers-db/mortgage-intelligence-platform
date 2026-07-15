@@ -53,6 +53,7 @@ class _StubClient:
         trend_rows: list[dict[str, Any]],
         day_zero_row: dict[str, Any] | None = None,
         workflow_row: dict[str, Any] | None = None,
+        treatment_preflight_row: dict[str, Any] | None = None,
     ):
         self._preview_row = preview_row
         self._trend_rows = trend_rows
@@ -65,6 +66,11 @@ class _StubClient:
                 "in_outreach_count": 0,
             }
         )
+        self._treatment_preflight_row = treatment_preflight_row or {
+            "candidate_count": 1000,
+            "selected_primary_count": 1000,
+            "source_snapshot_id": "d" * 64,
+        }
         self.preview_calls: int = 0
         self.statements: list[str] = []
         self.parameters: list[dict[str, Any] | None] = []
@@ -86,6 +92,27 @@ class _StubClient:
     def execute_one(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self.statements.append(sql)
         self.parameters.append(params)
+        if "SELECT COUNT(*) AS selected_primary_count" in sql:
+            return self._treatment_preflight_row
+        if sql.startswith("DESCRIBE HISTORY"):
+            return {"version": 17}
+        if "AS manifest_rows" in sql and "VERSION AS OF 17" in sql:
+            return {
+                "manifest_rows": 1,
+                "member_rows": 1000,
+                "distinct_member_rows": 1000,
+                "candidate_count": 1000,
+                "selected_primary_count": 1000,
+                "treatment_count": 1000,
+                "holdout_count": 0,
+                "assignment_digest": "b" * 64,
+                "treatment_fingerprint": "c" * 64,
+                "source_snapshot_id": "d" * 64,
+                "household_count": 1000,
+                "owner_link_household_count": 0,
+                "mailing_address_household_count": 0,
+                "singleton_household_count": 1000,
+            }
         if "funnel_snapshot_daily" in sql:
             return self._trend_rows[0] if self._trend_rows else {}
         if "borrower_lifecycle_state" in sql:
@@ -101,15 +128,25 @@ class _StubLakebase:
         self.rows: list[dict[str, object]] = []
 
     def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
-        self.rows.append({"sql": sql, "params": params or {}})
-        if "WITH inserted_campaign AS" not in sql and "FROM mip_app.campaigns c" in sql:
+        values = params or {}
+        self.rows.append({"sql": sql, "params": values})
+        if "FROM mip_app.campaigns c" in sql:
             return None
-        return {
-            "campaign_id": "11111111-1111-1111-1111-111111111111",
-            "audit_id": "22222222-2222-2222-2222-222222222222",
-            "request_payload_hash": (params or {}).get("request_payload_hash"),
-            "creation_response": json.loads(str((params or {}).get("creation_response") or "{}")),
-        }
+        if sql.lstrip().startswith("INSERT INTO mip_app.campaigns"):
+            return {
+                "campaign_id": "11111111-1111-4111-8111-111111111111",
+                "treatment_materialization_id": values["materialization_id"],
+                "request_payload_hash": values["request_payload_hash"],
+                "treatment_state": "building",
+            }
+        if sql.lstrip().startswith("WITH finalized AS"):
+            return {
+                "campaign_id": "11111111-1111-4111-8111-111111111111",
+                "audit_id": "22222222-2222-4222-8222-222222222222",
+                "request_payload_hash": values["request_payload_hash"],
+                "creation_response": json.loads(str(values["creation_response"])),
+            }
+        raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
 
 
 class _IdempotentCampaignLakebase:
@@ -122,20 +159,30 @@ class _IdempotentCampaignLakebase:
 
     def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         values = params or {}
-        if "WITH inserted_campaign AS" in sql:
+        if "FROM mip_app.campaigns c" in sql:
+            self.lookup_calls += 1
+            return dict(self.stored) if self.stored is not None else None
+        if sql.lstrip().startswith("INSERT INTO mip_app.campaigns"):
             self.insert_calls += 1
             assert self.stored is None
             self.stored = {
                 "campaign_id": "11111111-1111-4111-8111-111111111111",
-                "audit_id": "22222222-2222-4222-8222-222222222222",
                 "request_payload_hash": values["request_payload_hash"],
-                "creation_response": json.loads(str(values["creation_response"])),
-                "created": True,
+                "treatment_state": "building",
+                "treatment_materialization_id": values["materialization_id"],
+                "treatment_build_lease_until": datetime.now(UTC) + timedelta(minutes=5),
             }
             return dict(self.stored)
-        if "FROM mip_app.campaigns c" in sql:
-            self.lookup_calls += 1
-            return dict(self.stored) if self.stored is not None else None
+        if sql.lstrip().startswith("WITH finalized AS"):
+            assert self.stored is not None
+            self.stored.update(
+                {
+                    "audit_id": "22222222-2222-4222-8222-222222222222",
+                    "creation_response": json.loads(str(values["creation_response"])),
+                    "treatment_state": "ready",
+                }
+            )
+            return dict(self.stored)
         raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
 
 
@@ -151,17 +198,6 @@ class _ConcurrentCampaignLakebase:
 
     def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         values = params or {}
-        if "WITH inserted_campaign AS" in sql:
-            self.insert_calls += 1
-            assert "selected_campaign" not in sql
-            payload_hash = str(values["request_payload_hash"])
-            self.stored = {
-                "campaign_id": "11111111-1111-4111-8111-111111111118",
-                "audit_id": "22222222-2222-4222-8222-222222222228",
-                "request_payload_hash": "different-hash" if self.mismatch else payload_hash,
-                "creation_response": json.loads(str(values["creation_response"])),
-            }
-            return None
         if "FROM mip_app.campaigns c" in sql:
             self.lookup_calls += 1
             if (
@@ -170,6 +206,22 @@ class _ConcurrentCampaignLakebase:
                 and self.lookup_calls >= self.publish_after_lookup
             ):
                 return dict(self.stored)
+            return None
+        if sql.lstrip().startswith("INSERT INTO mip_app.campaigns"):
+            self.insert_calls += 1
+            payload_hash = str(values["request_payload_hash"])
+            self.stored = {
+                "campaign_id": "11111111-1111-4111-8111-111111111118",
+                "audit_id": "22222222-2222-4222-8222-222222222228",
+                "request_payload_hash": "different-hash" if self.mismatch else payload_hash,
+                "creation_response": {
+                    "name": str(values["name"]),
+                    "marketable_population": 1000,
+                    "household_summary": {},
+                },
+                "treatment_state": "ready",
+                "treatment_materialization_id": values["materialization_id"],
+            }
             return None
         raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
 
@@ -211,9 +263,13 @@ class _CampaignPatchLakebase:
         *,
         suppression_policy: dict[str, object],
         current_status: str = "draft",
+        treatment_state: str = "ready",
+        verified_copy: bool = True,
     ) -> None:
         self.suppression_policy = suppression_policy
         self.current_status = current_status
+        self.treatment_state = treatment_state
+        self.verified_copy = verified_copy
         self.calls: list[dict[str, object]] = []
 
     def _row(self, *, status: str = "draft") -> dict[str, object]:
@@ -222,9 +278,37 @@ class _CampaignPatchLakebase:
             "name": "Maya QA CA recapture",
             "owner_email": "skyler@entrada.ai",
             "status": status,
+            "json_contract_version": 1,
+            "treatment_state": self.treatment_state,
             "criteria": {"marketing_eligibility": "Eligible only"},
             "suppression_policy": self.suppression_policy,
-            "normalized_message_variants": [],
+            "normalized_message_variants": (
+                [
+                    {
+                        "variant_name": "Primary",
+                        "channel": "email",
+                        "subject": "Review your mortgage options",
+                        "body": "Contact a loan officer to review available options.",
+                        "weight_pct": 100,
+                        "generation_mode": "supervisor",
+                        "generator_label": "Databricks Agent Responses",
+                        "provenance_key_id": "v1",
+                        "provenance_issued_at": "2026-07-15T12:00:00Z",
+                        "provenance_expires_at": "2026-07-15T13:00:00Z",
+                        "provenance_copy_hash": campaign_copy_hash(
+                            "Review your mortgage options",
+                            "Contact a loan officer to review available options.",
+                        ),
+                        "provenance_criteria_fingerprint": campaign_criteria_fingerprint(
+                            {"marketing_eligibility": "Eligible only"}
+                        ),
+                        "provenance_performance_fingerprint": None,
+                        "provenance_token_digest": "d" * 64,
+                    }
+                ]
+                if self.verified_copy
+                else []
+            ),
             "channel_cascade": [],
             "send_window": {},
             "holdout": None,
@@ -503,6 +587,36 @@ def test_preview_cache_key_distinguishes_distinct_criteria():
     assert k1 != k2 != k3 and k1 != k3
 
 
+def test_preview_cache_key_binds_exact_campaign_build_config() -> None:
+    hot_path = DatabricksPortfolioRepository._preview_cache_key("", {})
+    default_build = DatabricksPortfolioRepository._preview_cache_key(
+        "",
+        {},
+        campaign_build_config={
+            "suppression_policy": {},
+            "household_dedup": {
+                "enabled": False,
+                "dedupe_unit": "borrower",
+                "primary_contact_strategy": "highest_opportunity_eligible",
+            },
+        },
+    )
+    dedup_build = DatabricksPortfolioRepository._preview_cache_key(
+        "",
+        {},
+        campaign_build_config={
+            "suppression_policy": {"frequency_cap_days": 60},
+            "household_dedup": {
+                "enabled": True,
+                "dedupe_unit": "household",
+                "primary_contact_strategy": "highest_opportunity_eligible",
+            },
+        },
+    )
+
+    assert len({hot_path, default_build, dedup_build}) == 3
+
+
 def test_preview_second_call_same_order_hits_cache():
     """Functional: two calls with semantically-equivalent criteria must
     share the same cache entry. The second call should NOT re-run the
@@ -594,6 +708,7 @@ def test_campaign_summary_round_trips_all_reviewed_genie_proof_fields() -> None:
             "owner_email": "skyler@entrada.ai",
             "status": "draft",
             "json_contract_version": 1,
+            "treatment_state": "ready",
             "criteria": json.dumps(criteria),
             "suppression_policy": {},
             "normalized_message_variants": [],
@@ -682,7 +797,7 @@ def test_campaign_summary_relational_variants_are_authoritative_and_verified_fro
         ),
         "provenance_criteria_fingerprint": campaign_criteria_fingerprint({}),
         "provenance_issued_at": "2026-07-14T00:00:00Z",
-        "provenance_expires_at": "2026-07-15T00:00:00Z",
+        "provenance_expires_at": "2026-07-14T01:00:00Z",
         "provenance_token_digest": "d" * 64,
         "internal_proof_note": "must not serialize",
     }
@@ -876,6 +991,162 @@ def test_campaign_summary_omits_poisoned_legacy_variant_without_echoing_values(
     )
     assert warning.mip_outcome == "omitted"
     assert warning.mip_extras == {"reason": "invalid_public_payload"}
+
+
+@pytest.mark.parametrize(
+    "unsafe_body",
+    [
+        "People of faith may benefit; review mortgage options today.",
+        "New parents may benefit; review mortgage options today.",
+        "Wom€n homeowners may benefit; review mortgage options today.",
+        "Musl!m homeowners may benefit; review mortgage options today.",
+        "Men homeowners may benefit; review mortgage options today.",
+        "Parents may benefit; review mortgage options today.",
+        "Households with dependents may benefit; review mortgage options today.",
+        "Families raising children may benefit; review mortgage options today.",
+        "Caregivers of minors may benefit; review mortgage options today.",
+        "Churchgoers may benefit; review mortgage options today.",
+        "Worshippers may benefit; review mortgage options today.",
+        "Believers may benefit; review mortgage options today.",
+        "People born abroad may benefit; review mortgage options today.",
+        "Naturalized homeowners may benefit; review mortgage options today.",
+        "Mobility aid users may benefit; review mortgage options today.",
+        "People with special needs may benefit; review mortgage options today.",
+        "Recent divorcees may benefit; review mortgage options today.",
+        "Military families may benefit; review mortgage options today.",
+        "Active duty homeowners may benefit; review mortgage options today.",
+        "Servicemembers may benefit; review mortgage options today.",
+        "Borrowers born abroad may benefit; review mortgage options today.",
+        "Homeowners born overseas may benefit; review mortgage options today.",
+        "Applicants born outside the United States may benefit; review mortgage options today.",
+        "People who attend church may benefit; review mortgage options today.",
+        "Husbands may benefit; review mortgage options today.",
+        "Wives may benefit; review mortgage options today.",
+        "Congregants may benefit; review mortgage options today.",
+        "People who worship may benefit; review mortgage options today.",
+        "Reservists may benefit; review mortgage options today.",
+        "National Guard members may benefit; review mortgage options today.",
+        "Armed forces members may benefit; review mortgage options today.",
+        "SSI recipients may benefit; review mortgage options today.",
+        "Neurodivergent homeowners may benefit; review mortgage options today.",
+        "People using mobility aids may benefit; review mortgage options today.",
+        "Young professionals may benefit; review mortgage options today.",
+        "Senior homeowners may benefit; review mortgage options today.",
+        "People in their twenties may benefit; review mortgage options today.",
+        "Under-30 homeowners may benefit; review mortgage options today.",
+        "Over-62 borrowers may benefit; review mortgage options today.",
+        "Empty nesters may benefit; review mortgage options today.",
+        "Newlyweds may benefit; review mortgage options today.",
+        "Single homeowners may benefit; review mortgage options today.",
+        "Couples may benefit; review mortgage options today.",
+        "Faith community members may benefit; review mortgage options today.",
+        "Members of a congregation may benefit; review mortgage options today.",
+        "Expatriate homeowners may benefit; review mortgage options today.",
+        "People born outside America may benefit; review mortgage options today.",
+        "Assistive device users may benefit; review mortgage options today.",
+        "People with chronic illnesses may benefit; review mortgage options today.",
+        "Mobility-limited borrowers may benefit; review mortgage options today.",
+        "Social Security recipients may benefit; review mortgage options today.",
+        "SNAP recipients may benefit; review mortgage options today.",
+        "Child-support recipients may benefit; review mortgage options today.",
+        "Pension recipients may benefit; review mortgage options today.",
+        "Borrowers who filed a discrimination complaint may benefit today.",
+        "Parishioners may benefit; review mortgage options today.",
+        "Members of a church may benefit; review mortgage options today.",
+        "Members of a mosque may benefit; review mortgage options today.",
+        "Overseas-born homeowners may benefit; review mortgage options today.",
+        "Non-US-born borrowers may benefit; review mortgage options today.",
+        "Hearing-aid users may benefit; review mortgage options today.",
+        "People with long-term health conditions may benefit; review mortgage options today.",
+        "Food stamp recipients may benefit; review mortgage options today.",
+        "Medicaid recipients may benefit; review mortgage options today.",
+        "Borrowers who reported discrimination may benefit today.",
+        "Applicants who exercised fair lending rights may benefit today.",
+        "Unpartnered homeowners may benefit; review mortgage options today.",
+        "Domestic partners may benefit; review mortgage options today.",
+        "Retirement-community residents may benefit; review mortgage options today.",
+        "Recent graduates may benefit; review mortgage options today.",
+        "Unlisted demographic cohort may benefit; review mortgage options today.",
+        (
+            "Unlisted demographic cohort "
+            + "with a carefully selected profile " * 5
+            + "may benefit from this review."
+        ),
+        (
+            "Affinity segment "
+            + "with an extensively described shared characteristic " * 3
+            + "may qualify for this offer."
+        ),
+        (
+            "Traditional community "
+            + "with a deliberately padded audience description " * 3
+            + "may be eligible for this review."
+        ),
+        "Unlisted demographic cohort may especially benefit from this review.",
+        "Unlisted demographic cohort may benefit substantially from this review.",
+        "Unlisted demographic cohort may be able to benefit from this review.",
+        "Unlisted demographic cohort may ultimately qualify for this review.",
+        "Unlisted demographic cohort could potentially be eligible for this review.",
+        "Unlisted demographic cohort may•benefit from this review.",
+        "Unlisted demographic cohort may—benefit from this review.",
+        "Unlisted demographic cohort may/benefit from this review.",
+        "Unlisted demographic cohort may|benefit from this review.",
+        "Unlisted demographic cohort may_benefit from this review.",
+        "Unlisted demographic cohort may-benefit from this review.",
+        "Unlisted demographic cohort m@ay benefit from this review.",
+        "Unlisted demographic cohort may benef!t from this review.",
+        "Unlisted demographic cohort may benef1t from this review.",
+        "Unlisted demographic cohort may ben efit from this review.",
+        "Unlisted demographic cohort may qua.lify for this review.",
+        "Unlisted demographic cohort may be elig!ble for this review.",
+        "Exclusive mortgage options for members of the clergy.",
+        "Reach visually challenged customers with this campaign.",
+        "Offer options to people managing serious medical conditions.",
+        "Reach people with accessibility accommodations.",
+        "Exclusive mortgage reviews for elders.",
+        "Offer options to older generations.",
+        "Offer options to Section 8 voucher holders.",
+        "Reach housing-assistance recipients with this campaign.",
+        "Prioritize former service personnel.",
+        "For first-generation Americans, review available options.",
+        "Exclusive options for members of the diaspora.",
+        "Target observant households for a mortgage review.",
+    ],
+)
+def test_campaign_summary_quarantines_protected_copy_at_saved_campaign_read(
+    unsafe_body: str,
+) -> None:
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Governed campaign review",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "json_contract_version": 1,
+            "treatment_state": "ready",
+            "criteria": {},
+            "suppression_policy": {},
+            "normalized_message_variants": [
+                {
+                    "variant_name": "Primary",
+                    "channel": "email",
+                    "subject": "Review your mortgage options",
+                    "body": unsafe_body,
+                    "weight_pct": 100,
+                    "generation_mode": "operator",
+                    "generator_label": "Operator edited",
+                }
+            ],
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+    )
+
+    assert summary.message_variants == []
+    assert summary.actionable is False
+    assert summary.actionability_issue == "invalid_message_variants"
 
 
 def test_campaign_summary_omits_all_poisoned_json_fields_without_value_echo(
@@ -1077,7 +1348,7 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
 
-    repo.create(
+    created = repo.create(
         PortfolioCreateRequest(
             name="Owner occupied",
             criteria=PortfolioCriteria(occupancy="Owner-occupied", min_equity_pct_label="≥ 25%"),
@@ -1086,22 +1357,29 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     )
 
     preview_index = next(
-        i for i, sql in enumerate(client.statements) if "portfolio_headline_metric_view" in sql
+        i
+        for i, sql in enumerate(client.statements)
+        if "MERGE INTO mip.audit.campaign_treatment_snapshot" in sql
     )
     preview_sql = client.statements[preview_index]
     preview_params = client.parameters[preview_index]
     assert "is_owner_occupied = TRUE" in preview_sql
     assert "equity_pct >= :equity_floor" in preview_sql
     assert "marketing_eligible = TRUE" in preview_sql
-    assert preview_params == {"equity_floor": 25}
+    assert preview_params is not None
+    assert preview_params["equity_floor"] == 25
     assert lakebase.rows
     write = next(row for row in lakebase.rows if "INSERT INTO mip_app.campaigns" in str(row["sql"]))
-    assert "mip_app.action_audit" in write["sql"]
-    assert write["params"]["criteria"] == (
-        '{"occupancy": "Owner-occupied", "marketing_eligibility": "Eligible only", '
-        '"min_equity_pct_label": "\\u2265 25%"}'
+    assert json.loads(str(write["params"]["criteria"])) == {
+        "occupancy": "Owner-occupied",
+        "marketing_eligibility": "Eligible only",
+        "min_equity_pct_label": "≥ 25%",
+    }
+    finalize = next(
+        row for row in lakebase.rows if str(row["sql"]).lstrip().startswith("WITH finalized AS")
     )
-    metadata = json.loads(str(write["params"]["metadata"]))
+    assert "mip_app.action_audit" in finalize["sql"]
+    metadata = json.loads(str(finalize["params"]["audit_metadata"]))
     assert metadata["source"] == "portfolio_builder"
     assert metadata["portfolio_criteria"] == {
         "occupancy": "Owner-occupied",
@@ -1110,7 +1388,74 @@ def test_create_uses_submitted_criteria_for_population_count(monkeypatch):
     }
     assert "criteria" not in metadata
     assert metadata["action"] == "portfolio.create"
-    assert metadata["marketable_population"] == 1000
+    assert metadata["treatment_count"] == 1000
+    assert created.campaign_build_limit == 10_000
+    assert created.campaign_build_eligible is True
+
+
+def test_home_preview_omits_exact_campaign_count_without_build_config() -> None:
+    client = _StubClient(_preview_row(), [])
+
+    preview = DatabricksPortfolioRepository(client).preview(None)  # type: ignore[arg-type]
+
+    assert preview.campaign_build_limit == 10_000
+    assert preview.campaign_build_contact_count is None
+    assert preview.campaign_build_eligible is None
+    assert not any("SELECT COUNT(*) AS selected_primary_count" in sql for sql in client.statements)
+
+
+@pytest.mark.parametrize(
+    ("selected_primary_count", "expected_eligible"),
+    [(10_000, True), (10_001, False)],
+)
+def test_builder_preview_uses_exact_treatment_contact_count(
+    selected_primary_count: int,
+    expected_eligible: bool,
+) -> None:
+    client = _StubClient(
+        _preview_row(),
+        [],
+        treatment_preflight_row={
+            "candidate_count": selected_primary_count,
+            "selected_primary_count": selected_primary_count,
+            "source_snapshot_id": "d" * 64,
+        },
+    )
+
+    preview = DatabricksPortfolioRepository(client).preview(  # type: ignore[arg-type]
+        PortfolioPreviewRequest(campaign_build_config={})  # type: ignore[arg-type]
+    )
+
+    assert preview.campaign_build_contact_count == selected_primary_count
+    assert preview.campaign_build_eligible is expected_eligible
+
+
+def test_builder_preview_allows_large_borrower_cohort_when_dedup_contacts_fit() -> None:
+    row = _preview_row()
+    row["marketable_population"] = 15_000
+    client = _StubClient(
+        row,
+        [],
+        treatment_preflight_row={
+            "candidate_count": 15_000,
+            "selected_primary_count": 9_500,
+            "source_snapshot_id": "d" * 64,
+        },
+    )
+
+    preview = DatabricksPortfolioRepository(client).preview(  # type: ignore[arg-type]
+        PortfolioPreviewRequest(
+            campaign_build_config={"household_dedup": {"enabled": True}}  # type: ignore[arg-type]
+        )
+    )
+
+    assert preview.marketable_population == 15_000
+    assert preview.campaign_build_contact_count == 9_500
+    assert preview.campaign_build_eligible is True
+    preflight_sql = next(
+        sql for sql in client.statements if "SELECT COUNT(*) AS selected_primary_count" in sql
+    )
+    assert "WHERE NOT TRUE" in preflight_sql
 
 
 def test_create_commits_message_variants_and_generation_provenance_atomically(monkeypatch):
@@ -1157,12 +1502,12 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
         idempotency_key="11111111-1111-4111-8111-111111111114",
     )
 
-    assert len(lakebase.rows) == 2
-    write = next(row for row in lakebase.rows if "INSERT INTO mip_app.campaigns" in str(row["sql"]))
+    assert len(lakebase.rows) == 3
+    write = next(
+        row for row in lakebase.rows if str(row["sql"]).lstrip().startswith("WITH finalized AS")
+    )
     sql = str(write["sql"])
-    assert "WITH inserted_campaign AS" in sql
-    assert "selected_campaign" not in sql
-    assert "FROM mip_app.campaigns c" not in sql
+    assert "WITH finalized AS" in sql
     assert "inserted_audit AS" in sql
     assert "inserted_variants AS" in sql
     assert "jsonb_to_recordset(%(variant_rows)s::jsonb)" in sql
@@ -1179,7 +1524,7 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     assert all(len(variant["provenance_token_digest"]) == 64 for variant in variants)
     assert all(variant["provenance_issued_at"] for variant in variants)
     assert all(variant["provenance_expires_at"] for variant in variants)
-    metadata = json.loads(str(params["metadata"]))
+    metadata = json.loads(str(params["audit_metadata"]))
     assert metadata["campaign_generation_mode"] == "supervisor"
     assert metadata["generator_label"] == "Databricks Agent Responses"
 
@@ -1219,8 +1564,10 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
         idempotency_key="11111111-1111-4111-8111-111111111117",
     )
 
-    write = next(row for row in lakebase.rows if "INSERT INTO mip_app.campaigns" in str(row["sql"]))
-    metadata = json.loads(str(write["params"]["metadata"]))
+    write = next(
+        row for row in lakebase.rows if str(row["sql"]).lstrip().startswith("WITH finalized AS")
+    )
+    metadata = json.loads(str(write["params"]["audit_metadata"]))
     assert metadata["campaign_generation_mode"] == "mixed"
     assert metadata["generator_label"] == "Multiple generators"
     generated, operator = metadata["variant_provenance"]
@@ -1374,9 +1721,9 @@ def test_campaign_replay_treats_malformed_stored_response_as_dependency_failure(
         )
 
 
-def test_create_resolves_concurrent_insert_with_bounded_separate_lookup(monkeypatch):
+def test_create_resolves_concurrent_insert_with_separate_lookup(monkeypatch):
     client = _StubClient(_preview_row(), [])
-    lakebase = _ConcurrentCampaignLakebase(publish_after_lookup=3)
+    lakebase = _ConcurrentCampaignLakebase(publish_after_lookup=2)
     monkeypatch.setattr(
         "backend.services.repositories.databricks_repo.get_lakebase_client",
         lambda: lakebase,
@@ -1395,7 +1742,7 @@ def test_create_resolves_concurrent_insert_with_bounded_separate_lookup(monkeypa
 
     assert result.campaign_id == "11111111-1111-4111-8111-111111111118"
     assert lakebase.insert_calls == 1
-    assert lakebase.lookup_calls == 3
+    assert lakebase.lookup_calls == 2
 
 
 def test_create_rejects_concurrent_idempotency_payload_mismatch(monkeypatch):
@@ -1428,7 +1775,7 @@ def test_create_bounds_empty_post_conflict_idempotency_lookup(monkeypatch):
     )
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
 
-    with pytest.raises(LakebaseError, match="idempotency lookup was empty"):
+    with pytest.raises(LakebaseError, match="idempotency winner was not visible"):
         repo.create(
             PortfolioCreateRequest(name="Illinois refinance review"),
             actor="manager@example.com",
@@ -1436,7 +1783,7 @@ def test_create_bounds_empty_post_conflict_idempotency_lookup(monkeypatch):
         )
 
     assert lakebase.insert_calls == 1
-    assert lakebase.lookup_calls == 4
+    assert lakebase.lookup_calls == 2
 
 
 def test_campaign_create_audit_lookup_uses_action_audit_event_at() -> None:
@@ -1716,6 +2063,55 @@ def test_campaign_status_request_identity_payload_mismatch_is_conflict(monkeypat
     assert exc_info.value.status_code == 409
 
 
+def test_campaign_status_replay_binds_expected_source_status(monkeypatch) -> None:
+    class _ExpectedStatusReplayLakebase(_CampaignPatchLakebase):
+        def fetchone(
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            self.calls.append({"sql": sql, "params": params or {}})
+            if "JOIN mip_app.action_audit" in sql:
+                return {
+                    **self._row(status="pending_review"),
+                    "audit_id": "22222222-2222-4222-8222-222222222222",
+                    "audit_metadata": {
+                        "status": "pending_review",
+                        "expected_status": "draft",
+                        "rationale": None,
+                    },
+                }
+            return self._row(status="pending_review")
+
+    lakebase = _ExpectedStatusReplayLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status="pending_review",
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        lambda: "campaign-status-expected-source-replay",
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    with pytest.raises(HTTPException) as exc_info:
+        repo.patch_status(
+            "11111111-1111-4111-8111-111111111111",
+            CampaignStatusPatchRequest(
+                status="pending_review",
+                expected_status="pending_review",
+            ),
+            actor="manager@example.com",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "idempotency key belongs to a different transition" in str(exc_info.value.detail)
+    assert not any("UPDATE mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
+
+
 def test_campaign_status_lost_update_maps_to_conflict(monkeypatch):
     class _LostUpdateLakebase(_CampaignPatchLakebase):
         def __init__(self) -> None:
@@ -1757,6 +2153,98 @@ def test_campaign_status_lost_update_maps_to_conflict(monkeypatch):
     assert lakebase.replay_lookups == 4
 
 
+def test_campaign_status_stale_expected_status_is_conflict(monkeypatch) -> None:
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status="approved",
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    with pytest.raises(HTTPException) as exc_info:
+        repo.patch_status(
+            "11111111-1111-4111-8111-111111111111",
+            CampaignStatusPatchRequest(status="rejected", expected_status="draft"),
+            actor="manager@example.com",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert "refresh before retrying" in str(exc_info.value.detail)
+    assert not any("UPDATE mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
+
+
+def test_distinct_status_correlations_allow_only_one_expected_source_update(monkeypatch) -> None:
+    class _CasLakebase(_CampaignPatchLakebase):
+        def __init__(self) -> None:
+            super().__init__(
+                suppression_policy={"default": "eligible_only"},
+                current_status="approved",
+            )
+            self.patch_count = 0
+
+        def fetchone(
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            values = params or {}
+            self.calls.append({"sql": sql, "params": values})
+            if "JOIN mip_app.action_audit" in sql:
+                return None
+            if "UPDATE mip_app.campaigns" not in sql:
+                return self._row(status=self.current_status)
+            if self.current_status != values.get("current_status"):
+                return None
+            self.current_status = str(values["status"])
+            self.patch_count += 1
+            return {
+                **self._row(status=self.current_status),
+                "audit_id": "22222222-2222-4222-8222-222222222222",
+            }
+
+    correlations = iter(("approved-to-live", "approved-to-rejected"))
+    lakebase = _CasLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        lambda: next(correlations),
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    live_payload = authorize_campaign_status_transition(
+        CampaignStatusPatchRequest(
+            status="live",
+            expected_status="approved",
+            rationale="Governance launch approved",
+        ),
+        campaign_id="11111111-1111-4111-8111-111111111111",
+        current_status="approved",
+        approver_email="manager@example.com",
+    )
+
+    live = repo.patch_status(
+        "11111111-1111-4111-8111-111111111111",
+        live_payload,
+        actor="manager@example.com",
+    )
+    with pytest.raises(HTTPException) as exc_info:
+        repo.patch_status(
+            "11111111-1111-4111-8111-111111111111",
+            CampaignStatusPatchRequest(status="rejected", expected_status="approved"),
+            actor="manager@example.com",
+        )
+
+    assert live.status == "live"
+    assert exc_info.value.status_code == 409
+    assert lakebase.current_status == "live"
+    assert lakebase.patch_count == 1
+
+
 @pytest.mark.parametrize(
     "suppression_policy",
     [
@@ -1796,9 +2284,66 @@ def test_campaign_status_accepts_reviewed_eligible_only_policy_shapes(
     metadata = json.loads(str(patch_call["params"]["metadata"]))
     assert metadata == {
         "action": "campaign.status_update",
+        "expected_status": None,
         "rationale": None,
         "status": "pending_review",
+        "terminal_archive_without_treatment": False,
+        "treatment_state": "ready",
     }
+
+
+@pytest.mark.parametrize("treatment_state", ["legacy_unbound", "failed"])
+def test_nonready_terminal_campaign_can_only_take_audited_archive(
+    monkeypatch,
+    treatment_state: str,
+) -> None:
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status="active",
+        treatment_state=treatment_state,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    summary = repo.patch_status(
+        "11111111-1111-4111-8111-111111111111",
+        CampaignStatusPatchRequest(status="archived", rationale="Quarantine pre-T0 seed"),
+        actor="admin@example.com",
+    )
+
+    assert summary.status == "archived"
+    assert summary.treatment_state == treatment_state
+    patch = next(call for call in lakebase.calls if "UPDATE mip_app.campaigns" in str(call["sql"]))
+    assert patch["params"]["current_treatment_state"] == treatment_state
+    metadata = json.loads(str(patch["params"]["metadata"]))
+    assert metadata["terminal_archive_without_treatment"] is True
+    assert metadata["treatment_state"] == treatment_state
+
+
+def test_building_campaign_cannot_be_archived_or_advanced(monkeypatch) -> None:
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        treatment_state="building",
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    for target in ("pending_review", "archived"):
+        with pytest.raises(HTTPException) as exc_info:
+            repo.patch_status(
+                "11111111-1111-4111-8111-111111111111",
+                CampaignStatusPatchRequest(status=target),  # type: ignore[arg-type]
+                actor="admin@example.com",
+            )
+        assert exc_info.value.status_code == 409
+
+    assert not any("UPDATE mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
 
 
 @pytest.mark.parametrize(
@@ -1874,6 +2419,72 @@ def test_approved_campaign_transition_persists_signed_approval_evidence(monkeypa
     assert metadata["approval_id"] == params["evidence_ids"][0]
     assert metadata["occurred_at"] == authorized_at.isoformat()
     assert metadata["status"] == "approved"
+
+
+@pytest.mark.parametrize(
+    "extra_variant",
+    [
+        {
+            "variant_name": "Operator",
+            "channel": "email",
+            "subject": "Review another option",
+            "body": "Contact a loan officer to review another option.",
+            "weight_pct": 50,
+            "generation_mode": "operator",
+            "generator_label": "Operator edited",
+        },
+        {
+            "variant_name": "Quarantined",
+            "channel": "email",
+            "subject": "Protected audience offer",
+            "body": "Women homeowners may benefit. Contact a loan officer to review options.",
+            "weight_pct": 50,
+            "generation_mode": "operator",
+            "generator_label": "Operator edited",
+        },
+    ],
+    ids=("mixed_operator_copy", "mixed_quarantined_copy"),
+)
+def test_campaign_approval_rejects_any_unverified_or_omitted_variant(
+    monkeypatch,
+    extra_variant: dict[str, object],
+) -> None:
+    campaign_id = "11111111-1111-4111-8111-111111111111"
+    actor = "approver@example.com"
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        current_status="pending_review",
+    )
+    original_row = lakebase._row
+
+    def _mixed_row(*, status: str = "draft") -> dict[str, object]:
+        row = original_row(status=status)
+        variants = list(row["normalized_message_variants"])  # type: ignore[arg-type]
+        row["normalized_message_variants"] = [*variants, extra_variant]
+        return row
+
+    monkeypatch.setattr(lakebase, "_row", _mixed_row)
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    payload = authorize_campaign_status_transition(
+        CampaignStatusPatchRequest(
+            status="approved",
+            rationale="Governance and legal review completed",
+        ),
+        campaign_id=campaign_id,
+        current_status="pending_review",
+        approver_email=actor,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        repo.patch_status(campaign_id, payload, actor=actor)
+
+    assert exc_info.value.status_code == 409
+    assert "unverified copy" in str(exc_info.value.detail)
+    assert not any("UPDATE mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
 
 
 def test_campaign_approval_evidence_is_bound_to_the_authorized_actor(monkeypatch):

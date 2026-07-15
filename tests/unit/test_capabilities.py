@@ -21,6 +21,11 @@ from fastapi.testclient import TestClient
 import backend.services.ai_gateway_capability_probe as ai_gateway_probe_module
 import backend.services.capabilities as capabilities_module
 import backend.services.capability_request as capability_request_module
+from backend.agents.gateway_contract import (
+    GATEWAY_PROXY_SOURCE_HASH_TAG,
+    GATEWAY_UPSTREAM_TAG,
+    gateway_proxy_source_hash,
+)
 from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S, Settings
 from backend.main import app
 from backend.services.ai_gateway_proof_attestation import (
@@ -56,7 +61,21 @@ def _settings(**overrides: object) -> Settings:
         "lakebase_host": "lb-test",
         "lakebase_user": "mip_app",
         "mip_ai_gateway_proof_verify_key": _TEST_VERIFY_KEY,
+        "mip_agent_serving_endpoint": "mip-growth-agent-gateway",
+        "mip_ai_gateway_endpoint": "mip-growth-agent-gateway",
+        "mip_agent_supervisor_endpoint": "mip-supervisor-endpoint",
+        "mip_agent_supervisor_id": "supervisor-1",
+        "mip_agent_gateway_model_version": 7,
+        "mip_ai_gateway_inference_table": "mip_app_state.mip_sync.mip_agent_inference",
     }
+    if overrides.get("mip_ai_gateway") is True and "mip_agent_orchestrator" not in overrides:
+        base["mip_agent_orchestrator"] = True
+    overridden_gateway_endpoint = overrides.get("mip_ai_gateway_endpoint")
+    if (
+        isinstance(overridden_gateway_endpoint, str)
+        and "mip_agent_serving_endpoint" not in overrides
+    ):
+        base["mip_agent_serving_endpoint"] = overridden_gateway_endpoint
     base.update(overrides)
     return Settings(**base)
 
@@ -200,9 +219,7 @@ class _LiveLakebase:
                 attestation_key_id=key_id,
                 attestation_signature=signature,
             )
-        return cls(
-            [row]
-        )
+        return cls([row])
 
     def fetchone(
         self,
@@ -397,9 +414,27 @@ class _FakeServingEndpoints:
 
     def get(self, name: str) -> object:
         _ = name
+        upstream = "mip-supervisor-endpoint"
         return SimpleNamespace(
             state=SimpleNamespace(ready="READY" if self.ready else "NOT_READY"),
             task=self.task,
+            pending_config=None,
+            config=SimpleNamespace(
+                served_entities=[
+                    SimpleNamespace(
+                        entity_name="mip.audit.mortgage_growth_supervisor_proxy",
+                        entity_version="7",
+                        environment_vars={"MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream},
+                    )
+                ]
+            ),
+            tags=[
+                SimpleNamespace(
+                    key=GATEWAY_PROXY_SOURCE_HASH_TAG,
+                    value=gateway_proxy_source_hash(upstream_endpoint=upstream),
+                ),
+                SimpleNamespace(key=GATEWAY_UPSTREAM_TAG, value=upstream),
+            ],
             ai_gateway=SimpleNamespace(
                 inference_table_config=SimpleNamespace(
                     enabled=self.inference_enabled,
@@ -455,6 +490,18 @@ class _FakeApiClient:
             "status": self.serving_response_status,
             "output": [{"content": [{"text": "ready"}]}],
         }
+
+
+def _gateway_probe_requests(
+    workspace: _FakeWorkspaceClient,
+) -> list[tuple[str, str, dict[str, object] | None]]:
+    return [
+        request
+        for request in workspace.api_client.requests
+        if request[0] == "POST"
+        and isinstance(request[2], dict)
+        and str(request[2].get("client_request_id") or "").startswith("mip-capability-")
+    ]
 
 
 class _FakeExperiments:
@@ -562,13 +609,12 @@ def test_preview_capabilities_are_never_claimable() -> None:
             assert cap.status is expected, f"{key} -> {cap.status}"
 
 
-def test_orchestrator_flag_on_without_libs_is_not_provisioned() -> None:
-    """databricks-agents / mlflow>=3.1.3 are not installed in CI, so flipping the
-    flag on must NOT yield a claimable capability — it surfaces honestly."""
+def test_orchestrator_config_is_not_claimable_without_live_proof() -> None:
+    """Source-bound endpoint config is visible but cannot claim live capability."""
     caps = probe_capabilities(_settings(mip_agent_orchestrator=True))
     orch = _by_key(caps, "agent_orchestrator")
     assert orch.ga is True
-    assert orch.status is CapabilityStatus.NOT_PROVISIONED
+    assert orch.status is CapabilityStatus.CONFIGURED
     assert orch.claimable is False
 
 
@@ -850,7 +896,7 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
@@ -864,7 +910,7 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
     assert method == "POST"
     assert path == "/serving-endpoints/responses"
     assert body is not None
-    assert body["model"] == "mip-supervisor-endpoint"
+    assert body["model"] == "mip-growth-agent-gateway"
 
 
 def test_agent_orchestrator_rejects_supervisor_endpoint_metadata_mismatch() -> None:
@@ -873,7 +919,7 @@ def test_agent_orchestrator_rejects_supervisor_endpoint_metadata_mismatch() -> N
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
@@ -890,7 +936,7 @@ def test_agent_orchestrator_rejects_supervisor_identity_metadata_mismatch() -> N
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
@@ -910,7 +956,7 @@ def test_agent_orchestrator_fails_closed_when_supervisor_metadata_is_unavailable
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
@@ -929,7 +975,7 @@ def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transpor
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
@@ -944,7 +990,7 @@ def test_agent_orchestrator_live_probe_does_not_retry_after_responses_route_fail
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=workspace,
     )
@@ -960,7 +1006,7 @@ def test_agent_orchestrator_live_probe_rejects_empty_endpoint_response() -> None
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=_FakeWorkspaceClient(empty_serving_response=True),
     )
@@ -975,7 +1021,7 @@ def test_agent_orchestrator_live_probe_requires_exact_agent_responses_task(task:
         settings=_settings(
             mip_agent_orchestrator=True,
             mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
+            mip_agent_serving_endpoint="mip-growth-agent-gateway",
         ),
         workspace_client=_FakeWorkspaceClient(serving_task=task),
     )
@@ -1002,8 +1048,9 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_verified_ledger_proof
     assert statuses["ai_gateway"].available is True
     assert "exact inference-row round-trip verified" in statuses["ai_gateway"].detail
     assert "Current deployment inference rows visible: 3" in statuses["ai_gateway"].detail
-    assert workspace.api_client.requests
-    method, path, body = workspace.api_client.requests[0]
+    gateway_requests = _gateway_probe_requests(workspace)
+    assert len(gateway_requests) == 1
+    method, path, body = gateway_requests[0]
     assert method == "POST"
     assert path == "/serving-endpoints/responses"
     assert body is not None
@@ -1088,31 +1135,35 @@ def test_ai_gateway_live_probe_does_not_retry_or_write_ledger_at_runtime() -> No
     )
 
     assert statuses["ai_gateway"].available is True
-    assert len(workspace.api_client.requests) == 1
+    assert len(_gateway_probe_requests(workspace)) == 1
     assert len(lakebase.fetchone_calls) == 1
 
 
 @pytest.mark.parametrize(
-    ("workspace", "expected_path"),
+    ("workspace", "expected_path", "expected_detail"),
     [
         (
             _FakeWorkspaceClient(serving_task="llm/v1/chat"),
-            "/serving-endpoints/mip-agent-gateway/invocations",
+            None,
+            "gateway_task_not_agent",
         ),
         (
             _FakeWorkspaceClient(empty_serving_response=True),
             "/serving-endpoints/responses",
+            "terminal completed Responses payload",
         ),
         (
             _FakeWorkspaceClient(serving_response_status="in_progress"),
             "/serving-endpoints/responses",
+            "terminal completed Responses payload",
         ),
     ],
     ids=["generic-payload", "no-payload", "nonterminal"],
 )
 def test_ai_gateway_live_probe_requires_terminal_responses_execution(
     workspace: _FakeWorkspaceClient,
-    expected_path: str,
+    expected_path: str | None,
+    expected_detail: str,
 ) -> None:
     statuses = collect_live_capability_statuses(
         settings=_settings(
@@ -1127,9 +1178,13 @@ def test_ai_gateway_live_probe_requires_terminal_responses_execution(
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "terminal completed Responses payload" in statuses["ai_gateway"].detail
-    assert len(workspace.api_client.requests) == 1
-    assert workspace.api_client.requests[0][1] == expected_path
+    assert expected_detail in statuses["ai_gateway"].detail
+    gateway_requests = _gateway_probe_requests(workspace)
+    if expected_path is None:
+        assert gateway_requests == []
+    else:
+        assert len(gateway_requests) == 1
+        assert gateway_requests[0][1] == expected_path
 
 
 def test_ai_gateway_live_probe_rejects_prefix_rows_without_verified_ledger() -> None:
@@ -1377,7 +1432,7 @@ def test_ai_gateway_live_probe_rejects_endpoint_not_ready() -> None:
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "not READY" in statuses["ai_gateway"].detail
+    assert "gateway_endpoint_not_ready:NOT_READY" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_disabled_inference_logging() -> None:
@@ -1394,7 +1449,7 @@ def test_ai_gateway_live_probe_rejects_disabled_inference_logging() -> None:
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "inference table is not enabled" in statuses["ai_gateway"].detail
+    assert "gateway_inference_table_mismatch" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
@@ -1411,7 +1466,7 @@ def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "expected mip_app_state.mip_sync.other_gateway_prefix" in statuses["ai_gateway"].detail
+    assert "gateway_inference_table_mismatch" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_malformed_inference_table_config() -> None:
@@ -1432,7 +1487,7 @@ def test_ai_gateway_live_probe_rejects_malformed_inference_table_config() -> Non
     )
 
     assert statuses["ai_gateway"].available is False
-    assert "AI Gateway probe failed (ValueError)" in statuses["ai_gateway"].detail
+    assert "gateway_inference_table_not_configured" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_rejects_missing_lakebase_proof_ledger() -> None:
@@ -1699,7 +1754,7 @@ def test_ai_gateway_audit_grant_is_table_scoped() -> None:
     assert "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit" not in deploy
     assert "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit" in deploy
     assert "grant_ai_gateway_inference_table.py" in deploy
-    assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload" in grants
+    assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload" in grants
     assert "Do not grant `SELECT ON SCHEMA mip.audit`" in grants
 
 
@@ -1724,7 +1779,7 @@ def test_ai_gateway_and_lakebase_sync_gated_by_flags() -> None:
     assert _by_key(off, "ai_gateway").status is CapabilityStatus.NOT_PROVISIONED
     assert _by_key(off, "lakebase_sync").status is CapabilityStatus.NOT_PROVISIONED
     on = probe_capabilities(_settings(mip_ai_gateway=True, mip_lakebase_sync=True))
-    assert _by_key(on, "ai_gateway").status is CapabilityStatus.NOT_PROVISIONED
+    assert _by_key(on, "ai_gateway").status is CapabilityStatus.CONFIGURED
     assert _by_key(on, "lakebase_sync").status is CapabilityStatus.CONFIGURED
 
 
@@ -1828,7 +1883,7 @@ def test_capabilities_live_probe_bypasses_cache_for_ai_gateway_exact_precheck(
     second_rows = {row["key"]: row for row in second.json()["capabilities"]}
     assert first_rows["ai_gateway"]["status"] == "available"
     assert second_rows["ai_gateway"]["status"] == "available"
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_live_probe_cache_expires(
@@ -1867,7 +1922,7 @@ def test_capabilities_live_probe_cache_expires(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_live_probe_ttl_zero_disables_cache(
@@ -1901,7 +1956,7 @@ def test_capabilities_live_probe_ttl_zero_disables_cache(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_live_probe_cache_key_tracks_gateway_settings(
@@ -1944,7 +1999,7 @@ def test_capabilities_live_probe_cache_key_tracks_gateway_settings(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    assert len(workspace.api_client.requests) == 2
+    assert len(_gateway_probe_requests(workspace)) == 2
 
 
 def test_capabilities_endpoint_requires_admin() -> None:

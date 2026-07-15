@@ -42,7 +42,10 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_GIT_SHA",
     "MIP_ADMIN_GROUP_NAME",
     "MIP_ADMIN_EMAILS",
+    "MIP_ADMIN_IDENTITIES",
+    "MIP_APPROVER_GROUP_NAME",
     "MIP_APPROVER_EMAILS",
+    "MIP_APPROVER_IDENTITIES",
     "MIP_DEFAULT_ACTOR",
     "MIP_TRUST_FORWARDED_HEADERS",
     "MIP_RUM_ENABLED",
@@ -69,6 +72,9 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_LAKEBASE_SYNC",
     "MIP_AGENT_MODEL",
     "MIP_AGENT_SERVING_ENDPOINT",
+    "MIP_AGENT_SUPERVISOR_ENDPOINT",
+    "MIP_AI_GATEWAY_AGENT_MODEL",
+    "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
     "MIP_AGENT_SUPERVISOR_ID",
     "MIP_AGENT_SUPERVISOR_NAME",
     "MIP_AI_GATEWAY_ENDPOINT",
@@ -81,13 +87,34 @@ NON_SECRET_OPERATOR_VARS = (
     "MIP_LAKEBASE_SYNC_CATALOG",
     "MIP_LAKEBASE_SYNC_SCHEMA",
     "MIP_LAKEBASE_SYNC_TABLES",
+    "SALESFORCE_INSTANCE_URL",
+    "SALESFORCE_CLIENT_ID",
+    "SALESFORCE_USERNAME",
+    "SALESFORCE_API_VERSION",
+    "SALESFORCE_SOBJECT",
+    "SALESFORCE_EXTERNAL_ID_FIELD",
+    "SALESFORCE_TIMEOUT_S",
 )
 
 SECRET_RESOURCE_BINDINGS = {
     "MIP_COTALITY_ID_MASK_SECRET": "cotality_id_mask_secret",
     "MIP_GENIE_ACTION_SECRET_CURRENT": "genie_action_current_secret",
     "MIP_GENIE_ACTION_SECRET_PREVIOUS": "genie_action_previous_secret",
+    "SALESFORCE_CLIENT_SECRET": "salesforce_client_secret",
+    "SALESFORCE_PASSWORD": "salesforce_password",
+    "SALESFORCE_SECURITY_TOKEN": "salesforce_security_token",
 }
+SALESFORCE_REQUIRED_VARS = (
+    "SALESFORCE_INSTANCE_URL",
+    "SALESFORCE_CLIENT_ID",
+    "SALESFORCE_USERNAME",
+    "SALESFORCE_EXTERNAL_ID_FIELD",
+    "SALESFORCE_CLIENT_SECRET",
+    "SALESFORCE_PASSWORD",
+)
+SALESFORCE_SECRET_ENVS = frozenset(
+    {"SALESFORCE_CLIENT_SECRET", "SALESFORCE_PASSWORD", "SALESFORCE_SECURITY_TOKEN"}
+)
 PREVIOUS_SECRET_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_SECRET_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 
@@ -146,7 +173,7 @@ def build_payload(
         *(
             {"name": name, "value_from": resource}
             for name, resource in SECRET_RESOURCE_BINDINGS.items()
-            if name != PREVIOUS_SECRET_ENV
+            if name != PREVIOUS_SECRET_ENV and name not in SALESFORCE_SECRET_ENVS
         ),
         {"name": "MIP_DEFAULT_CATALOG", "value": catalog},
         {"name": "MIP_DEFAULT_SCHEMA", "value": schema},
@@ -160,6 +187,13 @@ def build_payload(
             }
         )
         _append_value(env_vars, PREVIOUS_SECRET_KID_ENV, previous_secret_kid)
+
+    salesforce_configured = all(_env_value(name, dotenv) for name in SALESFORCE_REQUIRED_VARS)
+    if salesforce_configured:
+        for name in sorted(SALESFORCE_SECRET_ENVS):
+            if name == "SALESFORCE_SECURITY_TOKEN" and not _env_value(name, dotenv):
+                continue
+            env_vars.append({"name": name, "value_from": SECRET_RESOURCE_BINDINGS[name]})
 
     for name in NON_SECRET_OPERATOR_VARS:
         _append_value(

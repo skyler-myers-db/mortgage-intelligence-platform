@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
-from threading import Barrier, Lock
 from urllib.parse import parse_qs, urlsplit
 
 import pytest
@@ -24,10 +22,9 @@ from backend.config.settings import settings
 from backend.main import app
 from backend.schemas.common import validate_public_audit_identifier_or_none
 from backend.services.audit_store import get_audit_store
+from backend.services.campaign_treatment import CampaignTreatmentCreateResult
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.genie_actions import (
-    _CAMPAIGN_AUDIT_BY_REQUEST_ID_SQL,
-    _CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL,
     _CAMPAIGN_INSERT_SQL,
     _cohort_route_filters,
     _decode_action_token,
@@ -1591,8 +1588,38 @@ class _RecordingLakebase:
         return None
 
 
-def test_genie_create_draft_campaign_persists_full_cohort_criteria() -> None:
+class _RecordingTreatmentCoordinator:
+    def __init__(
+        self,
+        *,
+        audit_id: str | None = "audit-1",
+        error: Exception | None = None,
+    ) -> None:
+        self.audit_id = audit_id
+        self.error = error
+        self.specs: list[object] = []
+
+    def create(self, spec: object) -> CampaignTreatmentCreateResult:
+        self.specs.append(spec)
+        if self.error is not None:
+            raise self.error
+        return CampaignTreatmentCreateResult(
+            campaign_id="campaign-1",
+            creation_response={"name": "Genie strategy draft", "marketable_population": 1},
+            audit_id=self.audit_id,
+            replayed=False,
+        )
+
+
+def test_genie_create_draft_campaign_persists_full_cohort_criteria(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     lakebase = _RecordingLakebase()
+    coordinator = _RecordingTreatmentCoordinator()
+    monkeypatch.setattr(
+        "backend.services.genie_actions._campaign_treatment_coordinator",
+        lambda _lakebase: coordinator,
+    )
     prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
     prior_lakebase = app.dependency_overrides.get(get_lakebase_client)
     app.dependency_overrides[get_genie_answer_repository] = _DraftCampaignRepo
@@ -1618,11 +1645,10 @@ def test_genie_create_draft_campaign_persists_full_cohort_criteria() -> None:
     body = res.json()
     assert body["ok"] is True
     assert body["campaign_id"] == "campaign-1"
-    campaign_params = next(
-        params for sql, params in lakebase.fetchones if "INSERT INTO mip_app.campaigns" in sql
-    )
-    criteria = json.loads(str(campaign_params["criteria"]))
+    spec = coordinator.specs[0]
+    criteria = spec.criteria  # type: ignore[attr-defined]
     assert criteria["source"] == "trusted_sql"
+    assert criteria["marketing_eligibility"] == "Eligible only"
     assert criteria["result_filters"]["zips"] == ["60617", "60628"]
     assert criteria["result_filters"]["segment_codes"] == ["itm"]
     assert criteria["sql_hash"] == "abc123"
@@ -1649,47 +1675,6 @@ def test_genie_campaign_sql_uses_hash_guarded_atomic_idempotency_contract() -> N
     assert "UPDATE mip_app.action_audit" not in sql
 
 
-class _ConcurrentGenieCampaignLakebase:
-    def __init__(self) -> None:
-        self._initial_lookup_barrier = Barrier(2)
-        self._lock = Lock()
-        self._initial_lookup_count = 0
-        self.campaign: dict[str, object] | None = None
-        self.audit_id = "22222222-2222-4222-8222-222222222222"
-        self.audit_insert_count = 0
-
-    def fetchone(
-        self,
-        sql: str,
-        params: dict[str, object] | None = None,
-    ) -> dict[str, object] | None:
-        values = params or {}
-        if sql == _CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL:
-            with self._lock:
-                self._initial_lookup_count += 1
-                initial = self._initial_lookup_count <= 2
-            if initial:
-                self._initial_lookup_barrier.wait(timeout=2)
-                return None
-            with self._lock:
-                return dict(self.campaign) if self.campaign is not None else None
-        if sql == _CAMPAIGN_INSERT_SQL:
-            with self._lock:
-                if self.campaign is None:
-                    self.campaign = {
-                        "campaign_id": "11111111-1111-4111-8111-111111111111",
-                        "request_payload_hash": values["request_payload_hash"],
-                    }
-                    self.audit_insert_count += 1
-                    return {**self.campaign, "audit_id": self.audit_id}
-                if self.campaign["request_payload_hash"] != values["request_payload_hash"]:
-                    return None
-                return {**self.campaign, "audit_id": None}
-        if sql == _CAMPAIGN_AUDIT_BY_REQUEST_ID_SQL:
-            return {"audit_id": self.audit_id}
-        raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
-
-
 def _confirmed_draft_campaign_request() -> GenieActionRequest:
     prior_repo = app.dependency_overrides.get(get_genie_answer_repository)
     app.dependency_overrides[get_genie_answer_repository] = _DraftCampaignRepo
@@ -1704,136 +1689,88 @@ def _confirmed_draft_campaign_request() -> GenieActionRequest:
             app.dependency_overrides[get_genie_answer_repository] = prior_repo
 
 
-def test_concurrent_genie_campaign_confirmation_returns_one_campaign_and_audit() -> None:
+def test_genie_campaign_confirmation_returns_coordinator_campaign_and_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = _confirmed_draft_campaign_request()
-    lakebase = _ConcurrentGenieCampaignLakebase()
-    workspace = InMemoryWorkspaceStore()
+    coordinator = _RecordingTreatmentCoordinator(audit_id="audit-1")
+    monkeypatch.setattr(
+        "backend.services.genie_actions._campaign_treatment_coordinator",
+        lambda _lakebase: coordinator,
+    )
 
-    def confirm() -> object:
-        return handle_genie_action(
-            payload,
-            actor="lo@example.com",
-            workspace=workspace,
-            lakebase=lakebase,  # type: ignore[arg-type]
-        )
+    response = handle_genie_action(
+        payload,
+        actor="lo@example.com",
+        workspace=InMemoryWorkspaceStore(),
+        lakebase=_RecordingLakebase(),  # type: ignore[arg-type]
+    )
 
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        responses = list(pool.map(lambda _index: confirm(), range(2)))
-
-    assert {response.campaign_id for response in responses} == {
-        "11111111-1111-4111-8111-111111111111"
-    }
-    assert {response.audit_event_id for response in responses} == {
-        "22222222-2222-4222-8222-222222222222"
-    }
-    assert lakebase.audit_insert_count == 1
+    assert response.campaign_id == "campaign-1"
+    assert response.audit_event_id == "audit-1"
 
 
-def test_genie_campaign_confirmation_rejects_idempotency_hash_mismatch() -> None:
+def test_genie_campaign_confirmation_rejects_idempotency_hash_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     payload = _confirmed_draft_campaign_request()
-
-    class _MismatchLakebase:
-        def fetchone(
-            self,
-            sql: str,
-            params: dict[str, object] | None = None,
-        ) -> dict[str, object] | None:
-            _ = params
-            if sql == _CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL:
-                return {
-                    "campaign_id": "11111111-1111-4111-8111-111111111111",
-                    "request_payload_hash": "different-payload-hash",
-                }
-            raise AssertionError("hash mismatch must stop before another write")
+    coordinator = _RecordingTreatmentCoordinator(
+        error=ValueError("Idempotency-Key already belongs to a different campaign payload")
+    )
+    monkeypatch.setattr(
+        "backend.services.genie_actions._campaign_treatment_coordinator",
+        lambda _lakebase: coordinator,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         handle_genie_action(
             payload,
             actor="lo@example.com",
             workspace=InMemoryWorkspaceStore(),
-            lakebase=_MismatchLakebase(),  # type: ignore[arg-type]
+            lakebase=_RecordingLakebase(),  # type: ignore[arg-type]
         )
 
     assert exc_info.value.status_code == 409
 
 
-def test_genie_campaign_confirmation_bounds_winner_audit_lookup(
+def test_genie_campaign_confirmation_uses_atomic_coordinator_audit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = _confirmed_draft_campaign_request()
-
-    class _DelayedAuditLakebase:
-        def __init__(self) -> None:
-            self.audit_lookups = 0
-
-        def fetchone(
-            self,
-            sql: str,
-            params: dict[str, object] | None = None,
-        ) -> dict[str, object] | None:
-            values = params or {}
-            if sql == _CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL:
-                return None
-            if sql == _CAMPAIGN_INSERT_SQL:
-                return {
-                    "campaign_id": "11111111-1111-4111-8111-111111111111",
-                    "request_payload_hash": values["request_payload_hash"],
-                    "audit_id": None,
-                }
-            if sql == _CAMPAIGN_AUDIT_BY_REQUEST_ID_SQL:
-                self.audit_lookups += 1
-                if self.audit_lookups == 3:
-                    return {"audit_id": "22222222-2222-4222-8222-222222222222"}
-                return None
-            raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
-
-    lakebase = _DelayedAuditLakebase()
-    monkeypatch.setattr("backend.services.genie_actions.time.sleep", lambda _delay: None)
+    coordinator = _RecordingTreatmentCoordinator(audit_id="audit-1")
+    monkeypatch.setattr(
+        "backend.services.genie_actions._campaign_treatment_coordinator",
+        lambda _lakebase: coordinator,
+    )
 
     response = handle_genie_action(
         payload,
         actor="lo@example.com",
         workspace=InMemoryWorkspaceStore(),
-        lakebase=lakebase,  # type: ignore[arg-type]
+        lakebase=_RecordingLakebase(),  # type: ignore[arg-type]
     )
 
     assert response.campaign_id
     assert response.audit_event_id
-    assert lakebase.audit_lookups == 3
+    assert len(coordinator.specs) == 1
 
 
 def test_genie_campaign_confirmation_never_returns_blank_audit_id(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = _confirmed_draft_campaign_request()
-
-    class _MissingAuditLakebase:
-        def fetchone(
-            self,
-            sql: str,
-            params: dict[str, object] | None = None,
-        ) -> dict[str, object] | None:
-            values = params or {}
-            if sql == _CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL:
-                return None
-            if sql == _CAMPAIGN_INSERT_SQL:
-                return {
-                    "campaign_id": "11111111-1111-4111-8111-111111111111",
-                    "request_payload_hash": values["request_payload_hash"],
-                    "audit_id": None,
-                }
-            if sql == _CAMPAIGN_AUDIT_BY_REQUEST_ID_SQL:
-                return None
-            raise AssertionError(f"unexpected Lakebase query: {sql[:80]}")
-
-    monkeypatch.setattr("backend.services.genie_actions.time.sleep", lambda _delay: None)
+    coordinator = _RecordingTreatmentCoordinator(audit_id=None)
+    monkeypatch.setattr(
+        "backend.services.genie_actions._campaign_treatment_coordinator",
+        lambda _lakebase: coordinator,
+    )
 
     with pytest.raises(HTTPException) as exc_info:
         handle_genie_action(
             payload,
             actor="lo@example.com",
             workspace=InMemoryWorkspaceStore(),
-            lakebase=_MissingAuditLakebase(),  # type: ignore[arg-type]
+            lakebase=_RecordingLakebase(),  # type: ignore[arg-type]
         )
 
     assert exc_info.value.status_code == 503

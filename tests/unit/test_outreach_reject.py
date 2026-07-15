@@ -901,7 +901,18 @@ def test_approve_forwards_final_subject_and_body_into_audit_metadata(
     assert events[0].payload_json.get("draft_body") == draft
 
 
+@pytest.mark.parametrize(
+    "protected_copy",
+    [
+        "Women homeowners",
+        "African American homeowners",
+        "Latina homeowners",
+        "Catholic homeowners",
+        "Widowed homeowners",
+    ],
+)
 def test_approve_rejects_protected_class_language_before_write(
+    protected_copy: str,
     override_deps,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -920,7 +931,7 @@ def test_approve_rejects_protected_class_language_before_write(
         json={
             "borrower_id": "B-48291",
             "draft_subject": "Your mortgage review",
-            "draft_body": f"Women homeowners should call for a review. {DISCLOSURE_BODY}",
+            "draft_body": f"{protected_copy} should call for a review. {DISCLOSURE_BODY}",
         },
     )
 

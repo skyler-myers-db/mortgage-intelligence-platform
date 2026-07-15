@@ -69,7 +69,10 @@ function deferred<T>() {
 }
 
 const PREVIEW = {
-  marketable_population: 79_730,
+  marketable_population: 7_973,
+  campaign_build_contact_count: 7_973,
+  campaign_build_limit: 10_000,
+  campaign_build_eligible: true,
   avg_score: 71,
   top_tier_opportunities: 3_990,
   offers_recommended: 44_700,

@@ -3163,6 +3163,16 @@ a.lineage-node__chip:focus-visible {
   font-size: var(--fs-12);
   color: var(--signal-danger);
 }
+.campaign-build-guard {
+  margin-top: var(--sp-4);
+}
+.campaign-build-guard--blocked {
+  border-color: color-mix(in oklab, var(--signal-warning) 55%, var(--line-2));
+  background: color-mix(in oklab, var(--signal-warning) 8%, var(--bg-2));
+}
+.campaign-build-guard > .chip {
+  flex: 0 0 auto;
+}
 
 /* Campaign ROI projector (re-audit #4 Buyer-Wow #7). Board-room headline
    + tunable assumptions; pure client-side, tokens only. */

@@ -33,6 +33,7 @@ def _test_secret(label: str) -> str:
 MASK_SECRET = _test_secret("mask")
 CURRENT_SECRET = _test_secret("current")
 PREVIOUS_SECRET = _test_secret("previous")
+DEFAULT_WRITTEN_KEYS = tuple(subject.ENV_TO_KEY.values())
 
 
 @pytest.fixture(autouse=True)
@@ -79,17 +80,11 @@ def test_provisions_required_values_without_previous_by_default(
     written = subject.provision_runtime_secrets(client=SimpleNamespace(secrets=secrets_api))
 
     assert secrets_api.scope_exists is True
-    assert written == (
-        "cotality-id-mask-v1",
-        "genie-action-current",
-        "genie-action-previous",
+    assert written == DEFAULT_WRITTEN_KEYS
+    assert [key for _scope, key, _value in secrets_api.puts] == list(DEFAULT_WRITTEN_KEYS)
+    disabled_value = next(
+        value for _scope, key, value in secrets_api.puts if key == "genie-action-previous"
     )
-    assert [key for _scope, key, _value in secrets_api.puts] == [
-        "cotality-id-mask-v1",
-        "genie-action-current",
-        "genie-action-previous",
-    ]
-    disabled_value = secrets_api.puts[-1][2]
     assert disabled_value.startswith(subject.DISABLED_PREVIOUS_PREFIX)
     assert disabled_value not in {MASK_SECRET, CURRENT_SECRET}
     assert secrets_api.deletes == []
@@ -104,16 +99,12 @@ def test_provisions_previous_only_for_explicit_rotation_grace(monkeypatch) -> No
 
     written = subject.provision_runtime_secrets(client=SimpleNamespace(secrets=secrets_api))
 
-    assert written == (
-        "cotality-id-mask-v1",
-        "genie-action-current",
-        "genie-action-previous",
-    )
-    assert secrets_api.puts[-1] == (
+    assert written == DEFAULT_WRITTEN_KEYS
+    assert (
         subject.DEFAULT_SCOPE,
         "genie-action-previous",
         PREVIOUS_SECRET,
-    )
+    ) in secrets_api.puts
 
 
 def test_retires_existing_previous_key_when_grace_is_not_configured(monkeypatch) -> None:
@@ -126,17 +117,12 @@ def test_retires_existing_previous_key_when_grace_is_not_configured(monkeypatch)
 
     written = subject.provision_runtime_secrets(client=SimpleNamespace(secrets=secrets_api))
 
-    assert written == (
-        "cotality-id-mask-v1",
-        "genie-action-current",
-        "genie-action-previous",
+    assert written == DEFAULT_WRITTEN_KEYS
+    assert [key for _scope, key, _value in secrets_api.puts] == list(DEFAULT_WRITTEN_KEYS)
+    previous_value = next(
+        value for _scope, key, value in secrets_api.puts if key == "genie-action-previous"
     )
-    assert [key for _scope, key, _value in secrets_api.puts] == [
-        "cotality-id-mask-v1",
-        "genie-action-current",
-        "genie-action-previous",
-    ]
-    assert secrets_api.puts[-1][2].startswith(subject.DISABLED_PREVIOUS_PREFIX)
+    assert previous_value.startswith(subject.DISABLED_PREVIOUS_PREFIX)
     assert secrets_api.deletes == []
 
 
@@ -197,3 +183,18 @@ def test_rejects_previous_secret_without_explicit_rotation_kid(monkeypatch) -> N
 
     with pytest.raises(ValueError, match="MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"):
         subject.provision_runtime_secrets(client=SimpleNamespace(secrets=_Secrets()))
+
+
+def test_provisions_optional_salesforce_credentials_without_logging_values(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", MASK_SECRET)
+    monkeypatch.setenv("MIP_GENIE_ACTION_SECRET_CURRENT", CURRENT_SECRET)
+    monkeypatch.setenv("SALESFORCE_CLIENT_SECRET", "sf-client-secret")
+    monkeypatch.setenv("SALESFORCE_PASSWORD", "sf-password")
+    monkeypatch.setenv("SALESFORCE_SECURITY_TOKEN", "sf-token")
+    secrets_api = _Secrets()
+
+    subject.provision_runtime_secrets(client=SimpleNamespace(secrets=secrets_api))
+
+    assert (subject.DEFAULT_SCOPE, "salesforce-client-secret", "sf-client-secret") in secrets_api.puts
+    assert (subject.DEFAULT_SCOPE, "salesforce-password", "sf-password") in secrets_api.puts
+    assert (subject.DEFAULT_SCOPE, "salesforce-security-token", "sf-token") in secrets_api.puts

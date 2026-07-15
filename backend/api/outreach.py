@@ -34,7 +34,7 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
-from backend.schemas.portfolio import project_public_campaign_json_field
+from backend.schemas.portfolio import HouseholdDedupConfig, project_public_campaign_json_field
 from backend.schemas.portfolio_campaign import (
     assert_borrower_campaign_copy,
     assert_public_campaign_text,
@@ -51,7 +51,14 @@ from backend.services.audit_store import (
     get_audit_store,
     resolve_actor,
 )
-from backend.services.campaign_targeting import campaign_contains_borrower
+from backend.services.campaign_intelligence import (
+    campaign_criteria_fingerprint,
+    durable_campaign_variant_copy_verified,
+)
+from backend.services.campaign_targeting import (
+    campaign_contains_borrower,
+    campaign_treatment_fingerprint,
+)
 from backend.services.disclosures import (
     MissingTenantDisclosureError,
     disclosure_audit_payload,
@@ -189,8 +196,12 @@ LIMIT 1
 """
 
 _CAMPAIGN_ACCESS_LOOKUP = """
-SELECT campaign_id::text, owner_email, json_contract_version, criteria,
-       suppression_policy
+SELECT campaign_id::text, owner_email, status, json_contract_version, criteria,
+       suppression_policy, holdout, household_dedup,
+       treatment_state, treatment_materialization_id::text,
+       treatment_algorithm_version, treatment_contract_fingerprint,
+       treatment_fingerprint, treatment_source_snapshot_id,
+       treatment_delta_version
 FROM mip_app.campaigns
 WHERE campaign_id = %(campaign_id)s::uuid
 LIMIT 1
@@ -198,7 +209,10 @@ LIMIT 1
 
 _CAMPAIGN_VARIANT_LOOKUP = """
 SELECT campaign_id::text, variant_name, channel, subject, body,
-       generation_mode, generator_label
+       generation_mode, generator_label, provenance_key_id,
+       provenance_issued_at, provenance_expires_at, provenance_copy_hash,
+       provenance_criteria_fingerprint, provenance_performance_fingerprint,
+       provenance_token_digest
 FROM mip_app.campaign_message_variants
 WHERE campaign_id = %(campaign_id)s::uuid
   AND variant_name = %(variant_name)s
@@ -224,6 +238,7 @@ def _outreach_draft_response_hash(response: OutreachDraft) -> str:
         # fields existed. Bound drafts always retain both fields in the hash.
         payload.pop("campaign_id", None)
         payload.pop("variant_name", None)
+        payload.pop("campaign_treatment_fingerprint", None)
     return _intent_hash(_canonical_intent(payload))
 
 
@@ -235,6 +250,7 @@ def _approval_decision_intent(
     evidence_ids: list[str],
     safe_rationale: str | None,
     safe_bulk_rationale: str | None,
+    campaign_treatment_fingerprint: str | None,
 ) -> str:
     return _canonical_intent(
         {
@@ -246,6 +262,7 @@ def _approval_decision_intent(
             "channel": payload.channel,
             "campaign_id": payload.campaign_id,
             "variant_name": payload.variant_name,
+            "campaign_treatment_fingerprint": campaign_treatment_fingerprint,
             "evidence_ids": evidence_ids,
             "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
             "rationale": safe_rationale,
@@ -275,6 +292,7 @@ def _reject_decision_intent(
     safe_rationale: str,
     campaign_id: str | None,
     variant_name: str | None,
+    campaign_treatment_fingerprint: str | None,
 ) -> str:
     return _canonical_intent(
         {
@@ -286,6 +304,7 @@ def _reject_decision_intent(
             "channel": payload.channel,
             "campaign_id": campaign_id,
             "variant_name": variant_name,
+            "campaign_treatment_fingerprint": campaign_treatment_fingerprint,
             "evidence_ids": evidence_ids,
             "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
             "rationale_code": payload.rationale_code,
@@ -304,6 +323,7 @@ def _resolve_governed_campaign_variant(
     channel: str,
     borrower_id: str,
     lead_repo: LeadRepository,
+    require_approved_copy: bool = False,
 ) -> GovernedCampaignVariant | None:
     """Authorize and load the exact normalized campaign variant."""
 
@@ -324,6 +344,17 @@ def _resolve_governed_campaign_variant(
             require_admin(request)
         except HTTPException:
             raise HTTPException(status_code=404, detail="campaign not found") from None
+    campaign_status = str(campaign.get("status") or "").strip().lower()
+    if campaign_status not in {"draft", "pending_review", "approved", "live", "active"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Campaign lifecycle state does not allow outreach review.",
+        )
+    if require_approved_copy and campaign_status not in {"approved", "live", "active"}:
+        raise HTTPException(
+            status_code=409,
+            detail="Campaign outreach cannot be approved before the campaign copy is approved.",
+        )
     contract_raw = campaign.get("json_contract_version")
     try:
         contract_version = int(contract_raw) if contract_raw is not None else 0
@@ -334,23 +365,66 @@ def _resolve_governed_campaign_variant(
             status_code=409,
             detail="Campaign must be rebuilt before it can be used for outreach.",
         )
+    if (
+        str(campaign.get("treatment_state") or "") != "ready"
+        or str(campaign.get("treatment_algorithm_version") or "")
+        != "campaign-treatment-v2"
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="Campaign must be rebuilt before it can be used for outreach.",
+        )
     try:
         projected_criteria = project_public_campaign_json_field(
             "criteria",
             campaign.get("criteria"),
         )
-        project_public_campaign_json_field(
+        projected_suppression = project_public_campaign_json_field(
             "suppression_policy",
             campaign.get("suppression_policy"),
         )
+        projected_holdout = project_public_campaign_json_field(
+            "holdout",
+            campaign.get("holdout"),
+        )
+        household_dedup = HouseholdDedupConfig.model_validate(campaign.get("household_dedup") or {})
         if not isinstance(projected_criteria, dict):
             raise ValueError("campaign criteria are invalid")
+        if not isinstance(projected_suppression, dict):
+            raise ValueError("campaign suppression policy is invalid")
+        if projected_holdout is not None and not isinstance(projected_holdout, dict):
+            raise ValueError("campaign holdout is invalid")
+        contract_fingerprint = campaign_treatment_fingerprint(
+            json_contract_version=contract_version,
+            criteria=projected_criteria,
+            suppression_policy=projected_suppression,
+            holdout=projected_holdout,
+            household_dedup=household_dedup.model_dump(mode="json"),
+        )
+        if contract_fingerprint != str(campaign.get("treatment_contract_fingerprint") or ""):
+            raise ValueError("campaign treatment contract fingerprint is invalid")
+        treatment_fingerprint = str(campaign.get("treatment_fingerprint") or "")
+        materialization_id = str(campaign.get("treatment_materialization_id") or "")
+        delta_version_raw = campaign.get("treatment_delta_version")
+        if isinstance(delta_version_raw, bool) or not isinstance(delta_version_raw, int | str):
+            raise ValueError("campaign treatment Delta version is invalid")
+        delta_version = int(delta_version_raw)
+        if (
+            re.fullmatch(r"[0-9a-f]{64}", treatment_fingerprint) is None
+            or not materialization_id
+            or delta_version < 0
+        ):
+            raise ValueError("campaign treatment manifest is invalid")
         is_member = campaign_contains_borrower(
             lead_repo,
             borrower_id=borrower_id,
-            criteria=projected_criteria,
+            campaign_id=campaign_id,
+            materialization_id=materialization_id,
+            delta_version=delta_version,
+            treatment_fingerprint=treatment_fingerprint,
+            suppression_policy=projected_suppression,
         )
-    except ValueError as exc:
+    except (TypeError, ValueError) as exc:
         raise HTTPException(
             status_code=409,
             detail="Campaign targeting contract is invalid; rebuild the campaign.",
@@ -398,13 +472,24 @@ def _resolve_governed_campaign_variant(
         assert_borrower_campaign_copy(body, field_name="campaign variant body")
         generator_label = assert_public_campaign_text(
             row.get("generator_label") or "Governed campaign variant",
-            field_name="campaign variant generator label",
+            field_name="campaign variant generator_label",
             max_length=80,
         )
     except ValueError as exc:
         raise HTTPException(status_code=409, detail="campaign variant content is invalid") from exc
     if not body:
         raise HTTPException(status_code=409, detail="campaign variant content is invalid")
+    if require_approved_copy and not durable_campaign_variant_copy_verified(
+        row,
+        criteria_fingerprint=campaign_criteria_fingerprint(projected_criteria),
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Campaign variant copy is not bound to durable server proof; "
+                "regenerate the campaign message before approval."
+            ),
+        )
     return GovernedCampaignVariant(
         campaign_id=campaign_id,
         variant_name=variant_name,
@@ -413,6 +498,7 @@ def _resolve_governed_campaign_variant(
         body=body,
         generation_mode=str(row.get("generation_mode") or "operator"),
         generator_label=generator_label,
+        treatment_fingerprint=treatment_fingerprint,
     )
 
 
@@ -428,6 +514,7 @@ def _verified_generated_draft(
     actor: str,
     borrower: Any,
     offer_code: str,
+    campaign_variant: GovernedCampaignVariant | None,
 ) -> tuple[OutreachDraft | None, bool]:
     """Load and verify the audited draft that the operator is approving.
 
@@ -501,6 +588,8 @@ def _verified_generated_draft(
         and str(row.get("offer_code") or "") == offer_code == generated.offer_code
         and stored_hash == generated.response_hash == payload.draft_response_hash == expected_hash
         and generated.source_refreshed_at == payload.draft_source_refreshed_at
+        and generated.campaign_treatment_fingerprint
+        == (campaign_variant.treatment_fingerprint if campaign_variant is not None else None)
     )
     if not proof_matches:
         raise HTTPException(
@@ -520,6 +609,14 @@ def _verified_generated_draft(
     generated_subject = (generated.subject or "").strip() or None
     final_body = (payload.draft_body or "").strip()
     draft_edited = final_body != generated.body.strip() or final_subject != generated_subject
+    if draft_edited:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Edited outreach copy cannot be approved from an older proof; "
+                "regenerate an audited draft before approval."
+            ),
+        )
     return generated, draft_edited
 
 
@@ -694,8 +791,16 @@ def _approve_intent_matches_payload(
         "assigned_to_email": payload.assigned_to_email,
         "follow_up_in_days": payload.follow_up_in_days,
     }
+    treatment_fingerprint = intent.get("campaign_treatment_fingerprint")
+    fingerprint_matches = (
+        treatment_fingerprint is None
+        if payload.campaign_id is None
+        else isinstance(treatment_fingerprint, str)
+        and re.fullmatch(r"[0-9a-f]{64}", treatment_fingerprint) is not None
+    )
     return (
         all(intent.get(key) == value for key, value in expected.items())
+        and fingerprint_matches
         and _intent_offer_matches(intent, payload.offer_code)
         and _intent_evidence_matches(intent, payload.evidence_ids)
     )
@@ -718,8 +823,16 @@ def _reject_intent_matches_payload(
         "rationale_code": payload.rationale_code,
         "rationale": safe_rationale,
     }
+    treatment_fingerprint = intent.get("campaign_treatment_fingerprint")
+    fingerprint_matches = (
+        treatment_fingerprint is None
+        if payload.campaign_id is None
+        else isinstance(treatment_fingerprint, str)
+        and re.fullmatch(r"[0-9a-f]{64}", treatment_fingerprint) is not None
+    )
     return (
         all(intent.get(key) == value for key, value in expected.items())
+        and fingerprint_matches
         and _intent_offer_matches(intent, payload.offer_code)
         and _intent_evidence_matches(intent, payload.evidence_ids)
     )
@@ -1200,6 +1313,7 @@ def _persist_generated_outreach_draft(
             "offer_code": response.offer_code,
             "campaign_id": response.campaign_id,
             "variant_name": response.variant_name,
+            "campaign_treatment_fingerprint": response.campaign_treatment_fingerprint,
             "generation_mode": response.generation_mode,
             **_marketing_audit_payload(borrower),
             "disclosure_version": response.disclosure_version,
@@ -1308,6 +1422,9 @@ def draft_outreach(
         borrower_id=b.borrower_id,
         campaign_id=payload.campaign_id,
         variant_name=payload.variant_name,
+        campaign_treatment_fingerprint=(
+            campaign_variant.treatment_fingerprint if campaign_variant is not None else None
+        ),
         offer_code=offer_code,
         channel=payload.channel,
         subject=draft.subject if payload.channel in {"email", "direct_mail"} else None,
@@ -1412,6 +1529,25 @@ def approve_outreach(
         or safe_bulk_rationale
         or "Approved with governed recommendation and human review."
     )
+    try:
+        campaign_variant = _resolve_governed_campaign_variant(
+            lakebase,
+            request=request,
+            actor=actor,
+            campaign_id=payload.campaign_id,
+            variant_name=payload.variant_name,
+            channel=payload.channel,
+            borrower_id=payload.borrower_id,
+            lead_repo=lead_repo,
+            require_approved_copy=True,
+        )
+    except HTTPException:
+        raise
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    treatment_fingerprint = (
+        campaign_variant.treatment_fingerprint if campaign_variant is not None else None
+    )
     decision_intent = _approval_decision_intent(
         payload,
         actor=actor,
@@ -1419,6 +1555,7 @@ def approve_outreach(
         evidence_ids=audit_evidence_ids,
         safe_rationale=safe_rationale,
         safe_bulk_rationale=safe_bulk_rationale,
+        campaign_treatment_fingerprint=treatment_fingerprint,
     )
     effective_request_id = payload.request_id or _derive_fallback_request_id(
         actor=actor,
@@ -1435,21 +1572,6 @@ def approve_outreach(
     )
     if existing is not None:
         return OutreachApproveResponse.model_validate(existing)
-    try:
-        _resolve_governed_campaign_variant(
-            lakebase,
-            request=request,
-            actor=actor,
-            campaign_id=payload.campaign_id,
-            variant_name=payload.variant_name,
-            channel=payload.channel,
-            borrower_id=payload.borrower_id,
-            lead_repo=lead_repo,
-        )
-    except HTTPException:
-        raise
-    except LakebaseError as exc:
-        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     _enforce_contact_eligibility(
         borrower,
         audit=audit,
@@ -1465,6 +1587,7 @@ def approve_outreach(
             actor=actor,
             borrower=borrower,
             offer_code=offer_code,
+            campaign_variant=campaign_variant,
         )
     except LakebaseError as exc:
         raise HTTPException(
@@ -1508,6 +1631,7 @@ def approve_outreach(
         "channel": payload.channel,
         "campaign_id": proof_campaign_id,
         "variant_name": proof_variant_name,
+        "campaign_treatment_fingerprint": treatment_fingerprint,
         "decision_inputs": decision_inputs_from_borrower(borrower),
         **_marketing_audit_payload(borrower),
         **disclosure_audit_payload(disclosure),
@@ -1726,6 +1850,9 @@ def reject_outreach(
         raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     verified_campaign_id = campaign_variant.campaign_id if campaign_variant else None
     verified_variant_name = campaign_variant.variant_name if campaign_variant else None
+    treatment_fingerprint = (
+        campaign_variant.treatment_fingerprint if campaign_variant is not None else None
+    )
     borrower = repo.find_borrower(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -1746,6 +1873,7 @@ def reject_outreach(
         safe_rationale=safe_rationale,
         campaign_id=verified_campaign_id,
         variant_name=verified_variant_name,
+        campaign_treatment_fingerprint=treatment_fingerprint,
     )
     effective_request_id = payload.request_id or _derive_fallback_request_id(
         actor=actor,
@@ -1770,6 +1898,7 @@ def reject_outreach(
         "channel": payload.channel,
         "campaign_id": verified_campaign_id,
         "variant_name": verified_variant_name,
+        "campaign_treatment_fingerprint": treatment_fingerprint,
         "rationale_code": payload.rationale_code,
         **_marketing_audit_payload(borrower),
     }

@@ -641,6 +641,17 @@ verify_exact_deploy_source
 step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
 run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
 
+# The first migration grants the dedicated verifier's proof-ledger role. On a
+# fresh workspace that Lakebase OAuth role does not exist merely because the
+# workspace service principal exists, so create/reconcile it before the job's
+# grant postflight. Endpoint and warehouse grants stay in the later agentic
+# convergence step, after those concrete resources are known.
+step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"
+run "$PYTHON" tools/databricks/provision_m2m_oauth.py \
+  --identity-role verifier \
+  --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  --no-mint-secret
+
 # -----------------------------------------------------------------------------
 # Step 4b: Lakebase migration — BEFORE the app snapshot restart
 # -----------------------------------------------------------------------------
@@ -677,9 +688,11 @@ _GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREH
 _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
 _GRANTS_SYNC_CATALOG="${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}"
 _GRANTS_SYNC_SCHEMA="${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}"
-APP_SP_CLIENT_ID="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' || true)"
-if [[ -z "$APP_SP_CLIENT_ID" ]]; then
-  echo "${RED}[deploy] could not resolve service_principal_client_id for app '$_GRANTS_APP_NAME'.${RST}" >&2
+APP_RESOURCE_JSON="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null || true)"
+APP_SP_CLIENT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' 2>/dev/null || true)"
+APP_SP_SCIM_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_id") or "").strip())' 2>/dev/null || true)"
+if [[ -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
+  echo "${RED}[deploy] could not resolve both service-principal identifiers for app '$_GRANTS_APP_NAME'.${RST}" >&2
   echo "  The bundle apply (step 4) should have created the app. Inspect 'databricks apps get $_GRANTS_APP_NAME'." >&2
   exit 4
 fi
@@ -721,12 +734,57 @@ GRANT MODIFY ON TABLE ${_GRANTS_CATALOG}.gold.borrower_lifecycle_state TO \`${AP
 GRANT MODIFY ON TABLE ${_GRANTS_CATALOG}.gold.funnel_snapshot_daily TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.ref TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${APP_SP_CLIENT_ID}\`
+GRANT SELECT, MODIFY ON TABLE ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE CATALOG ON CATALOG ${_GRANTS_SYNC_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_SYNC_CATALOG}.${_GRANTS_SYNC_SCHEMA} TO \`${APP_SP_CLIENT_ID}\`
 GRANTS_EOF
+
+_treatment_grant_stmt="SHOW GRANTS \`${APP_SP_CLIENT_ID}\` ON TABLE ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
+_treatment_grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
+  "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+    "$_GRANTS_WAREHOUSE_ID" "$_treatment_grant_stmt"
+)")"
+if ! printf '%s' "$_treatment_grant_resp" | "$PYTHON" -c '
+import json, sys
+body = json.load(sys.stdin)
+if body.get("status", {}).get("state") != "SUCCEEDED":
+    raise SystemExit(1)
+cells = {str(cell).upper() for row in body.get("result", {}).get("data_array", []) for cell in row}
+if not any("SELECT" in cell for cell in cells) or not any("MODIFY" in cell for cell in cells):
+    raise SystemExit(1)
+'; then
+  echo "${RED}[deploy] campaign treatment table grant postflight failed for app principal.${RST}" >&2
+  exit 4
+fi
+echo "  verified: app principal has SELECT + MODIFY on ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
+
+_treatment_properties_stmt="SHOW TBLPROPERTIES ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
+_treatment_properties_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
+  "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+    "$_GRANTS_WAREHOUSE_ID" "$_treatment_properties_stmt"
+)")"
+if ! printf '%s' "$_treatment_properties_resp" | "$PYTHON" -c '
+import json, sys
+body = json.load(sys.stdin)
+if body.get("status", {}).get("state") != "SUCCEEDED":
+    raise SystemExit(1)
+rows = body.get("result", {}).get("data_array", [])
+actual = {str(row[0]): str(row[1]) for row in rows if len(row) >= 2}
+expected = {
+    "delta.appendOnly": "true",
+    "delta.logRetentionDuration": "interval 2555 days",
+    "delta.deletedFileRetentionDuration": "interval 2555 days",
+}
+if any(actual.get(key) != value for key, value in expected.items()):
+    raise SystemExit(1)
+'; then
+  echo "${RED}[deploy] campaign treatment table property postflight failed.${RST}" >&2
+  exit 4
+fi
+echo "  verified: campaign treatment table is append-only with exact log and deleted-file retention"
 
 # -----------------------------------------------------------------------------
 # Step 4d: provision the PII-salt secret scope (audit P1-4, zero-click)
@@ -923,39 +981,82 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --identity-role verifier \
       --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
       --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --revoke-gateway-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-}" \
+      --revoke-gateway-endpoint "mip-agent-gateway" \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --no-mint-secret
     step "reconcile runtime read-only and verifier-only Lakebase proof-ledger grants"
     run "$PYTHON" jobs/lakebase_migrate.py
+    AI_GATEWAY_GRANTS_READY=1
     step "grant least-privilege AI Gateway inference-table access to the app service principal"
-    run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
+    if ! run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
       --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
-      --principal "$APP_SP_CLIENT_ID"
-    step "grant read-only AI Gateway inference-table access to the verifier service principal"
-    run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
-      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
-      --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
-      --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
-      --principal "$DATABRICKS_VERIFIER_CLIENT_ID"
-    step "verify AI Gateway exact inference-row proof with dedicated verifier identity"
-    AI_GATEWAY_PROOF_ARGS=(
-      tools/databricks/verify_ai_gateway_exact_proof.py
-      send
-      --wait
-      --git-sha "$APP_GIT_SHA"
-      --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
-      --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
-    )
-    if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
-      AI_GATEWAY_PROOF_ARGS+=(--require-verified)
+      --principal "$APP_SP_CLIENT_ID"; then
+      AI_GATEWAY_GRANTS_READY=0
     fi
-    run_as_m2m_identity \
-      verifier \
-      DATABRICKS_VERIFIER_CLIENT_ID \
-      DATABRICKS_VERIFIER_CLIENT_SECRET \
-      "$PYTHON" "${AI_GATEWAY_PROOF_ARGS[@]}"
+    if [[ "$AI_GATEWAY_GRANTS_READY" -eq 1 ]]; then
+      step "grant read-only AI Gateway inference-table access to the verifier service principal"
+      if ! run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+        --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+        --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+        --principal "$DATABRICKS_VERIFIER_CLIENT_ID"; then
+        AI_GATEWAY_GRANTS_READY=0
+      fi
+    fi
+    if [[ "$AI_GATEWAY_GRANTS_READY" -eq 0 ]]; then
+      if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
+        echo "${RED}[deploy] strict AI Gateway inference-table grant convergence failed.${RST}" >&2
+        exit 1
+      fi
+      echo "${YLW}[deploy] AI Gateway inference-table delivery/grants are pending; skipping exact proof and continuing with the capability honestly configured/unavailable.${RST}" >&2
+    else
+      DATABRICKS_ACCOUNT_HOST="${DATABRICKS_ACCOUNT_HOST:-https://accounts.cloud.databricks.com}"
+      if [[ -z "${DATABRICKS_ACCOUNT_ID:-}" ]]; then
+        echo "${RED}[deploy] DATABRICKS_ACCOUNT_ID is required before the verifier can write an exact Gateway proof.${RST}" >&2
+        exit 1
+      fi
+      step "prove verifier effective authorization boundary before exact Gateway proof"
+      run_as_m2m_identity \
+        verifier \
+        DATABRICKS_VERIFIER_CLIENT_ID \
+        DATABRICKS_VERIFIER_CLIENT_SECRET \
+        "$PYTHON" tools/databricks/verify_verifier_identity_boundary.py \
+        --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+        --account-host "$DATABRICKS_ACCOUNT_HOST" \
+        --account-id "$DATABRICKS_ACCOUNT_ID" \
+        --app-name "$_GRANTS_APP_NAME" \
+        --app-url "${MIP_APP_URL:?deployed app URL is required}" \
+        --protected-service-principal-id "$APP_SP_SCIM_ID" \
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+        --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+        --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+      step "verify AI Gateway exact inference-row proof with dedicated verifier identity"
+      AI_GATEWAY_PROOF_ARGS=(
+        tools/databricks/verify_ai_gateway_exact_proof.py
+        send
+        --wait
+        --git-sha "$APP_GIT_SHA"
+        --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+        --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
+      )
+      if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
+        AI_GATEWAY_PROOF_ARGS+=(--require-verified)
+      fi
+      if ! run_as_m2m_identity \
+        verifier \
+        DATABRICKS_VERIFIER_CLIENT_ID \
+        DATABRICKS_VERIFIER_CLIENT_SECRET \
+        "$PYTHON" "${AI_GATEWAY_PROOF_ARGS[@]}"; then
+        if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
+          echo "${RED}[deploy] strict AI Gateway exact proof failed.${RST}" >&2
+          exit 1
+        fi
+        echo "${YLW}[deploy] AI Gateway exact proof is not claimable; continuing with the capability honestly configured/unavailable.${RST}" >&2
+      fi
+    fi
   fi
 fi
 

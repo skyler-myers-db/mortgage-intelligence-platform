@@ -231,6 +231,19 @@ class LeadRepository(Protocol):
         """Return the total matching the same predicates as ``list``."""
         ...
 
+    def is_campaign_treatment_member(
+        self,
+        *,
+        borrower_id: str,
+        campaign_id: str,
+        materialization_id: str,
+        delta_version: int,
+        treatment_fingerprint: str,
+        frequency_cap_days: int,
+    ) -> bool:
+        """Return immutable T0 treatment membership narrowed by live eligibility."""
+        ...
+
 
 @runtime_checkable
 class BorrowerRepository(Protocol):

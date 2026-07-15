@@ -90,7 +90,15 @@ from pathlib import Path
 
 # The five UC schema segments governed by this rewrite. Order does not
 # matter (they are disjoint). Documented in docs/multi-catalog-plan.md.
-_UC_SCHEMAS: tuple[str, ...] = ("gold", "silver", "ref", "semantics", "raw", "first_party")
+_UC_SCHEMAS: tuple[str, ...] = (
+    "gold",
+    "silver",
+    "ref",
+    "semantics",
+    "raw",
+    "first_party",
+    "audit",
+)
 
 # Pre-compile one regex per prefix. Anchoring: word boundary before
 # ``mip`` ensures ``mip_app`` (Lakebase schema) is never matched. The

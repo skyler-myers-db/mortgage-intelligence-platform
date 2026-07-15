@@ -142,9 +142,7 @@ interface OfferReviewGridProps {
   draftLoaded: boolean;
   draftError: string | null;
   draftSubject: string;
-  onDraftSubjectChange: (subject: string) => void;
   draftText: string;
-  onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
   draftDirty?: boolean;
   draftProofFresh: boolean;
@@ -180,9 +178,7 @@ export function OfferReviewGrid({
   draftLoaded,
   draftError,
   draftSubject,
-  onDraftSubjectChange,
   draftText,
-  onDraftChange,
   draftChannel,
   draftDirty = false,
   draftProofFresh,
@@ -223,9 +219,7 @@ export function OfferReviewGrid({
         draftLoaded={draftLoaded}
         draftError={draftError}
         draftSubject={draftSubject}
-        onDraftSubjectChange={onDraftSubjectChange}
         draftText={draftText}
-        onDraftChange={onDraftChange}
         draftChannel={draftChannel}
         draftDirty={draftDirty}
         draftProofFresh={draftProofFresh}
@@ -348,9 +342,7 @@ interface DraftOutreachPanelProps {
   draftLoaded: boolean;
   draftError: string | null;
   draftSubject: string;
-  onDraftSubjectChange: (subject: string) => void;
   draftText: string;
-  onDraftChange: (body: string) => void;
   draftChannel: OutreachChannel;
   draftDirty?: boolean;
   draftProofFresh: boolean;
@@ -382,9 +374,7 @@ function DraftOutreachPanel({
   draftLoaded,
   draftError,
   draftSubject,
-  onDraftSubjectChange,
   draftText,
-  onDraftChange,
   draftChannel,
   draftDirty = false,
   draftProofFresh,
@@ -413,7 +403,7 @@ function DraftOutreachPanel({
     <div className="surface">
       <div className="surface__hdr">
         <Icon name="doc" size={14} className="icon-accent" />
-        <div className="h-4">Draft outreach · review only</div>
+        <div className="h-4">Governed outreach · exact audited copy</div>
       </div>
       <div className="surface__body">
         {draftWarming && (
@@ -479,10 +469,7 @@ function DraftOutreachPanel({
               aria-label="Outreach subject — review only"
               value={draftSubject}
               maxLength={120}
-              onChange={(e) => {
-                if (!draftLoaded) return;
-                onDraftSubjectChange(e.target.value);
-              }}
+              readOnly
               disabled={!draftLoaded || draftSavePending}
               data-testid="outreach-subject"
             />
@@ -492,23 +479,21 @@ function DraftOutreachPanel({
           key={borrower?.borrower_id ?? 'empty'}
           aria-label="Outreach draft — review only"
           value={draftText}
-          onChange={(e) => {
-            if (!draftLoaded) return;
-            onDraftChange(e.target.value);
-          }}
+          readOnly
           disabled={!draftLoaded || draftSavePending}
           data-testid="outreach-draft"
           className="route-textarea route-textarea--outreach"
         />
         <p className="muted fs-12 mt-2">
-          A licensed loan officer must review the offer, disclosures, and borrower-facing copy before approval.
+          Review the exact audited copy before approval. To change the message, regenerate a new
+          governed draft so its approval proof remains valid.
         </p>
         {draftGeneratorLabel && (
           <div className="offer-message-intelligence mt-3" data-testid="offer-message-intelligence">
             <div className="split-row">
               <Chip
-                variant={!draftDirty && draftGenerationMode === 'supervisor' ? 'success' : 'neutral'}
-                icon={!draftDirty && draftGenerationMode === 'supervisor' ? 'sparkle' : 'doc'}
+                variant={!draftDirty && draftProofFresh && draftGenerationMode === 'supervisor' ? 'success' : 'neutral'}
+                icon={!draftDirty && draftProofFresh && draftGenerationMode === 'supervisor' ? 'sparkle' : 'doc'}
               >
                 {draftGeneratorLabel}
               </Chip>
@@ -524,7 +509,7 @@ function DraftOutreachPanel({
             </div>
             {regenerateReviewOpen && (
               <div className="status-callout status-callout--warning" role="alert">
-                <span>Regenerating replaces the subject and message currently in the editor.</span>
+                <span>Regenerating replaces the current audited subject and message.</span>
                 <div className="chip-row mt-2">
                   <Button
                     variant="default"
@@ -634,7 +619,7 @@ function DraftOutreachPanel({
           <div className="status-callout status-callout--warning mt-3" role="alert">
             <span>
               Switching to {pendingChannel === 'direct_mail' ? 'direct mail' : pendingChannel.toUpperCase()}
-              {' '}replaces the unsaved subject and message currently in the editor.
+              {' '}replaces the current audited subject and message.
             </span>
             <div className="chip-row mt-2">
               <Button
@@ -654,7 +639,7 @@ function DraftOutreachPanel({
                 size="sm"
                 onClick={() => setPendingChannel(null)}
               >
-                Keep current edits
+                Keep current copy
               </Button>
             </div>
           </div>

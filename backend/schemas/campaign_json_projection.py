@@ -54,6 +54,7 @@ _LEGACY_CRITERIA_KEYS = frozenset(
 _GENIE_CRITERIA_KEYS = frozenset(
     {
         "source",
+        "marketing_eligibility",
         "borrower_ids",
         "criteria_hash",
         "criteria_keys",
@@ -469,6 +470,10 @@ def _project_genie_criteria(
     if source not in {"genie", "trusted_sql"}:
         raise ValueError("criteria.source must use a reviewed Genie source")
     out: dict[str, object] = {"source": source}
+    if "marketing_eligibility" in value:
+        if value.get("marketing_eligibility") != "Eligible only":
+            raise ValueError("criteria.marketing_eligibility must be Eligible only")
+        out["marketing_eligibility"] = "Eligible only"
     if "borrower_ids" in value:
         out["borrower_ids"] = _reviewed_text_list(
             value["borrower_ids"],

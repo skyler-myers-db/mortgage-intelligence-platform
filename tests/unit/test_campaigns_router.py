@@ -37,6 +37,7 @@ class _GovernedTransitionRepo:
             name="Governed compatibility campaign",
             owner_email=self.owner_email,
             status=status or self.current_status,  # type: ignore[arg-type]
+            treatment_state="ready",
             criteria={"marketing_eligibility": "Eligible only"},
             suppression_policy={"default": "eligible_only"},
             message_variants=[],

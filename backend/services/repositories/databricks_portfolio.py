@@ -15,6 +15,7 @@ from fastapi import HTTPException
 
 from backend.schemas.campaign_status import validate_campaign_status_transition
 from backend.schemas.portfolio import (
+    CAMPAIGN_BUILD_LIMIT,
     CampaignListResponse,
     CampaignPublicJsonField,
     CampaignStatusPatchRequest,
@@ -38,8 +39,8 @@ from backend.schemas.portfolio_campaign import (
 )
 from backend.services.audit_store import build_safe_audit_metadata
 from backend.services.campaign_intelligence import (
-    campaign_copy_hash,
     campaign_criteria_fingerprint,
+    durable_campaign_variant_copy_verified,
     inspect_campaign_variant_provenance,
 )
 from backend.services.databricks_sql import DatabricksSqlClient
@@ -484,6 +485,7 @@ class DatabricksPortfolioRepository:
     # (load-test + Genie-draft rows) is archived.
     _CAMPAIGN_LIST_SQL = f"""
     SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.json_contract_version,
+           c.treatment_state,
            c.criteria,
            c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
@@ -503,6 +505,7 @@ class DatabricksPortfolioRepository:
 
     _CAMPAIGN_GET_SQL = f"""
     SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.json_contract_version,
+           c.treatment_state,
            c.criteria,
            c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
@@ -519,7 +522,16 @@ class DatabricksPortfolioRepository:
       SET status = %(status)s, updated_at = %(transition_at)s::timestamptz
       WHERE campaign_id = %(campaign_id)s::uuid
         AND status = %(current_status)s
+        AND treatment_state = %(current_treatment_state)s
+        AND (
+          treatment_state = 'ready'
+          OR (
+            %(status)s = 'archived'
+            AND treatment_state IN ('legacy_unbound', 'failed')
+          )
+        )
       RETURNING campaign_id::text, name, owner_email, status, json_contract_version, criteria,
+                treatment_state,
                 suppression_policy, message_variants AS legacy_message_variants,
                 channel_cascade, send_window,
                 holdout, roi_assumptions, household_dedup, household_summary, created_at, updated_at
@@ -551,6 +563,7 @@ class DatabricksPortfolioRepository:
 
     _CAMPAIGN_STATUS_IDEMPOTENCY_LOOKUP_SQL = f"""
     SELECT c.campaign_id::text, c.name, c.owner_email, c.json_contract_version,
+           c.treatment_state,
            COALESCE(NULLIF(a.metadata->>'status', ''), c.status) AS status,
            c.criteria,
            c.suppression_policy, c.message_variants AS legacy_message_variants,
@@ -691,7 +704,12 @@ class DatabricksPortfolioRepository:
         return coerce_utc_datetime(value)
 
     @classmethod
-    def _preview_cache_key(cls, where_clause: str, params: dict[str, Any]) -> str:
+    def _preview_cache_key(
+        cls,
+        where_clause: str,
+        params: dict[str, Any],
+        campaign_build_config: dict[str, Any] | None = None,
+    ) -> str:
         """Deterministic cache key for ``preview`` results.
 
         R5-08: the prior key embedded ``str(sorted(params.items()))``,
@@ -704,7 +722,12 @@ class DatabricksPortfolioRepository:
         for everything pydantic emits (``default=str``), and bounded in
         length via SHA-256.
         """
-        return preview_cache_key(cls._PREVIEW_CACHE_KEY, where_clause, params)
+        return preview_cache_key(
+            cls._PREVIEW_CACHE_KEY,
+            where_clause,
+            params,
+            campaign_build_config=campaign_build_config,
+        )
 
     def _load_day_zero(self) -> bool:
         """Return True when ``mip.gold.lead_population`` is empty.
@@ -748,6 +771,12 @@ class DatabricksPortfolioRepository:
 
     def preview(self, request: PortfolioPreviewRequest | None) -> PortfolioPreview:
         criteria = request.criteria if request is not None else None
+        campaign_build_config = request.campaign_build_config if request is not None else None
+        campaign_build_cache_config = (
+            campaign_build_config.model_dump(mode="json")
+            if campaign_build_config is not None
+            else None
+        )
         where_clause, params = self._build_preview_predicates(criteria)
         # R6-17: when caching is disabled (MIP_CACHE_TTL_S=0, test
         # defaults, some dev loops), skip the SHA-256 hash + dict
@@ -755,11 +784,47 @@ class DatabricksPortfolioRepository:
         # invocation per request on the hottest route without changing
         # the caller contract.
         caching_enabled = self._cache_ttl_s > 0
-        cache_key = self._preview_cache_key(where_clause, params) if caching_enabled else ""
+        cache_key = (
+            self._preview_cache_key(
+                where_clause,
+                params,
+                campaign_build_config=campaign_build_cache_config,
+            )
+            if caching_enabled
+            else ""
+        )
 
         def build() -> PortfolioPreview:
             sql = self._PREVIEW_SQL_TEMPLATE.format(where=where_clause)
             row = self._client.execute_one(sql, params) or {}
+            campaign_build_contact_count: int | None = None
+            if campaign_build_config is not None:
+                # Local import avoids the portfolio/lead-cohort compiler cycle.
+                from backend.services.repositories.databricks_lead_cohorts import (
+                    LeadCohortFilters,
+                    LeadCohortQueries,
+                )
+
+                treatment_preflight = LeadCohortQueries(
+                    self._client,
+                    cache_ttl_s=0,
+                ).campaign_treatment_preflight(
+                    LeadCohortFilters(
+                        segment=None,
+                        portfolio_criteria=criteria or PortfolioCriteria(),
+                    ),
+                    frequency_cap_days=int(
+                        str(
+                            campaign_build_config.suppression_policy.get(
+                                "frequency_cap_days", 30
+                            )
+                        )
+                    ),
+                    household_dedup_enabled=campaign_build_config.household_dedup.enabled,
+                )
+                campaign_build_contact_count = int(
+                    treatment_preflight["selected_primary_count"]
+                )
             trends, latest, trend_status, trend_note = self._load_funnel(
                 include_trends=not bool(where_clause),
             )
@@ -784,6 +849,13 @@ class DatabricksPortfolioRepository:
             ]
             return PortfolioPreview(
                 marketable_population=int(row.get("marketable_population") or 0),
+                campaign_build_limit=CAMPAIGN_BUILD_LIMIT,
+                campaign_build_contact_count=campaign_build_contact_count,
+                campaign_build_eligible=(
+                    campaign_build_contact_count <= CAMPAIGN_BUILD_LIMIT
+                    if campaign_build_contact_count is not None
+                    else None
+                ),
                 high_intent_leads=int(row.get("high_intent_leads") or 0),
                 top_tier_opportunities=(
                     int(row["top_tier_opportunities"])
@@ -892,19 +964,6 @@ class DatabricksPortfolioRepository:
             json.dumps(request_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
         lakebase = _get_lakebase_client()
-        existing = lakebase.fetchone(
-            self._CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL,
-            {"owner_email": owner_email, "idempotency_key": idempotency_key},
-        )
-        if existing is not None:
-            return self._campaign_create_response_from_idempotency_row(
-                existing,
-                expected_payload_hash=request_payload_hash,
-            )
-        preview = self.preview(PortfolioPreviewRequest(criteria=payload.criteria))
-        household_summary = self._load_household_dedup_summary(payload)
-        household_summary_dict = household_summary.model_dump()
-        household_dedup_dict = payload.household_dedup.model_dump()
         criteria_fingerprint = campaign_criteria_fingerprint(payload.criteria)
         variant_rows: list[dict[str, object]] = []
         for variant in payload.message_variants:
@@ -1010,90 +1069,78 @@ class DatabricksPortfolioRepository:
                     }
                 )
             variant_provenance.append(proof_row)
-        creation_response = {
-            "name": payload.name,
-            "marketable_population": preview.marketable_population,
-            "household_summary": household_summary_dict,
-        }
-        row = lakebase.fetchone(
-            self._CAMPAIGN_INSERT_SQL,
-            {
-                "name": payload.name,
-                "owner_email": owner_email,
-                "criteria": json.dumps(payload.criteria.model_dump(exclude_none=True)),
-                "suppression_policy": json.dumps(payload.suppression_policy, sort_keys=True),
-                "message_variants": json.dumps(variant_rows, sort_keys=True),
-                "channel_cascade": json.dumps(payload.channel_cascade, sort_keys=True),
-                "send_window": json.dumps(payload.send_window, sort_keys=True),
-                "holdout": json.dumps(payload.holdout, sort_keys=True)
-                if payload.holdout is not None
-                else "null",
-                "roi_assumptions": json.dumps(payload.roi_assumptions, sort_keys=True)
-                if payload.roi_assumptions is not None
-                else "null",
-                "household_dedup": json.dumps(household_dedup_dict, sort_keys=True),
-                "household_summary": json.dumps(household_summary_dict, sort_keys=True),
-                "variant_rows": json.dumps(variant_rows, sort_keys=True),
-                "idempotency_key": idempotency_key,
-                "request_payload_hash": request_payload_hash,
-                "creation_response": json.dumps(creation_response, sort_keys=True),
-                "request_id": idempotency_key,
-                "correlation_id": get_correlation_id(),
-                "metadata": json.dumps(
-                    build_safe_audit_metadata(
-                        {
-                            "source": "portfolio_builder",
-                            "portfolio_criteria": payload.criteria.model_dump(exclude_none=True),
-                            "suppression_policy": payload.suppression_policy,
-                            "channel_cascade": payload.channel_cascade,
-                            "send_window": payload.send_window,
-                            "holdout": payload.holdout,
-                            "roi_assumptions": payload.roi_assumptions,
-                            "marketable_population": preview.marketable_population,
-                            "dedupe_unit": payload.household_dedup.dedupe_unit,
-                            "household_dedup_enabled": payload.household_dedup.enabled,
-                            "household_primary_strategy": (
-                                payload.household_dedup.primary_contact_strategy
-                            ),
-                            "household_candidate_count": (
-                                household_summary.candidate_borrower_count
-                            ),
-                            "household_primary_count": household_summary.selected_primary_count,
-                            "household_suppressed_count": (
-                                household_summary.suppressed_co_owner_count
-                            ),
-                            "household_household_count": household_summary.household_count,
-                            "household_owner_link_count": (
-                                household_summary.owner_link_household_count
-                            ),
-                            "household_mailing_address_count": (
-                                household_summary.mailing_address_household_count
-                            ),
-                            "household_singleton_count": (
-                                household_summary.singleton_household_count
-                            ),
-                            "source_assets": household_summary.source_assets,
-                            "campaign_generation_mode": campaign_generation_mode,
-                            "generator_label": campaign_generator_label,
-                            "variant_provenance": variant_provenance,
-                        },
-                        action="portfolio.create",
-                    ),
-                    sort_keys=True,
-                ),
-            },
+        # Local imports avoid a module cycle: LeadCohortQueries reuses this
+        # module's reviewed Portfolio predicate compiler.
+        from backend.services.campaign_treatment import (
+            CampaignTreatmentCoordinator,
+            CampaignTreatmentCreateSpec,
         )
-        if row is None or not row.get("campaign_id"):
-            return self._campaign_create_response_after_insert_conflict(
-                lakebase,
+        from backend.services.repositories.databricks_lead_cohorts import LeadCohortQueries
+
+        coordinator = CampaignTreatmentCoordinator(
+            lakebase=lakebase,
+            cohort_queries=LeadCohortQueries(self._client, cache_ttl_s=0),
+        )
+        result = coordinator.create(
+            CampaignTreatmentCreateSpec(
+                name=payload.name,
                 owner_email=owner_email,
                 idempotency_key=idempotency_key,
-                expected_payload_hash=request_payload_hash,
+                request_payload_hash=request_payload_hash,
+                criteria=payload.criteria.model_dump(mode="json", exclude_none=True),
+                suppression_policy=dict(payload.suppression_policy),
+                holdout=dict(payload.holdout) if payload.holdout is not None else None,
+                household_dedup=payload.household_dedup,
+                message_variants=[dict(row) for row in variant_rows],
+                channel_cascade=[dict(row) for row in payload.channel_cascade],
+                send_window=dict(payload.send_window),
+                roi_assumptions=(
+                    dict(payload.roi_assumptions) if payload.roi_assumptions is not None else None
+                ),
+                variant_rows=[dict(row) for row in variant_rows],
+                event_type="PORTFOLIO_CREATE",
+                correlation_id=get_correlation_id(),
+                audit_metadata=build_safe_audit_metadata(
+                    {
+                        "source": "portfolio_builder",
+                        "portfolio_criteria": payload.criteria.model_dump(exclude_none=True),
+                        "suppression_policy": payload.suppression_policy,
+                        "channel_cascade": payload.channel_cascade,
+                        "send_window": payload.send_window,
+                        "holdout": payload.holdout,
+                        "roi_assumptions": payload.roi_assumptions,
+                        "dedupe_unit": payload.household_dedup.dedupe_unit,
+                        "household_dedup_enabled": payload.household_dedup.enabled,
+                        "household_primary_strategy": (
+                            payload.household_dedup.primary_contact_strategy
+                        ),
+                        "campaign_generation_mode": campaign_generation_mode,
+                        "generator_label": campaign_generator_label,
+                        "variant_provenance": variant_provenance,
+                    },
+                    action="portfolio.create",
+                ),
             )
-        return self._campaign_create_response_from_idempotency_row(
-            row,
-            expected_payload_hash=request_payload_hash,
         )
+        response = result.creation_response
+        try:
+            household = HouseholdDedupSummary.model_validate(
+                response.get("household_summary") or {}
+            )
+            return PortfolioCreateResponse(
+                portfolio_id=result.campaign_id,
+                campaign_id=result.campaign_id,
+                name=_project_campaign_name_or_default(response.get("name")),
+                marketable_population=int(response.get("marketable_population") or 0),
+                campaign_build_limit=int(
+                    response.get("campaign_build_limit") or CAMPAIGN_BUILD_LIMIT
+                ),
+                campaign_build_eligible=bool(response.get("campaign_build_eligible", True)),
+                household_summary=household,
+                audit_event_id=result.audit_id,
+            )
+        except (TypeError, ValueError) as exc:
+            raise LakebaseError("campaign treatment result is invalid") from exc
 
     def _campaign_create_response_after_insert_conflict(
         self,
@@ -1225,6 +1272,7 @@ class DatabricksPortfolioRepository:
         actor: str,
         request_id: str,
         target_status: str,
+        expected_status: str | None,
         rationale: str | None,
         attempts: int = 1,
     ) -> CampaignSummary | None:
@@ -1245,7 +1293,16 @@ class DatabricksPortfolioRepository:
             audited_rationale = (
                 audit_metadata.get("rationale") if isinstance(audit_metadata, dict) else None
             )
-            if str(row.get("status") or "") != target_status or audited_rationale != rationale:
+            audited_expected_status = (
+                audit_metadata.get("expected_status")
+                if isinstance(audit_metadata, dict)
+                else None
+            )
+            if (
+                str(row.get("status") or "") != target_status
+                or audited_expected_status != expected_status
+                or audited_rationale != rationale
+            ):
                 raise HTTPException(
                     status_code=409,
                     detail="campaign status idempotency key belongs to a different transition",
@@ -1267,6 +1324,16 @@ class DatabricksPortfolioRepository:
         )
         if existing is None:
             raise LakebaseError("campaign status update returned no row")
+        treatment_state = str(existing.get("treatment_state") or "legacy_unbound")
+        can_quarantine = payload.status == "archived" and treatment_state in {
+            "legacy_unbound",
+            "failed",
+        }
+        if treatment_state != "ready" and not can_quarantine:
+            raise HTTPException(
+                status_code=409,
+                detail="Campaign must be rebuilt before its lifecycle can advance.",
+            )
         actor_email = actor or "unknown"
         # The request middleware accepts and echoes X-Correlation-ID. A caller
         # preserves that ID for lost-response replay and uses a new one for a
@@ -1287,10 +1354,16 @@ class DatabricksPortfolioRepository:
             actor=actor_email,
             request_id=request_id,
             target_status=payload.status,
+            expected_status=payload.expected_status,
             rationale=payload.rationale,
         )
         if replay is not None:
             return replay
+        if payload.expected_status is not None and current_status != payload.expected_status:
+            raise HTTPException(
+                status_code=409,
+                detail="campaign status changed; refresh before retrying",
+            )
         if current_status == payload.status:
             raise HTTPException(
                 status_code=409,
@@ -1322,9 +1395,25 @@ class DatabricksPortfolioRepository:
                 raise ValueError(
                     "campaign cannot advance without an Eligible only contactability policy"
                 )
+        if payload.status in {"approved", "live", "active"}:
+            campaign = self._campaign_from_row(existing)
+            variants = campaign.message_variants
+            if not campaign.actionable or not variants or not all(
+                variant.get("copy_verified_at_creation") is True for variant in variants
+            ):
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Campaign cannot advance with operator-edited or unverified copy; "
+                        "regenerate every message variant with the governed campaign agent."
+                    ),
+                )
         metadata: dict[str, object] = {
             "status": payload.status,
+            "expected_status": payload.expected_status,
             "rationale": payload.rationale,
+            "treatment_state": treatment_state,
+            "terminal_archive_without_treatment": can_quarantine,
         }
         evidence_ids: list[str] = []
         if transition_evidence is not None:
@@ -1340,6 +1429,7 @@ class DatabricksPortfolioRepository:
             {
                 "campaign_id": portfolio_id,
                 "current_status": current_status,
+                "current_treatment_state": treatment_state,
                 "status": payload.status,
                 "actor": actor_email,
                 "request_id": request_id,
@@ -1362,6 +1452,7 @@ class DatabricksPortfolioRepository:
                 actor=actor_email,
                 request_id=request_id,
                 target_status=payload.status,
+                expected_status=payload.expected_status,
                 rationale=payload.rationale,
                 attempts=_CAMPAIGN_STATUS_LOOKUP_ATTEMPTS,
             )
@@ -1582,10 +1673,20 @@ def coerce_utc_datetime(value: Any) -> datetime | None:
         return None
 
 
-def preview_cache_key(prefix: str, where_clause: str, params: dict[str, Any]) -> str:
+def preview_cache_key(
+    prefix: str,
+    where_clause: str,
+    params: dict[str, Any],
+    *,
+    campaign_build_config: dict[str, Any] | None = None,
+) -> str:
     """Build a deterministic bounded cache key for preview results."""
     canonical = json.dumps(
-        {"where": where_clause, "params": params},
+        {
+            "where": where_clause,
+            "params": params,
+            "campaign_build_config": campaign_build_config,
+        },
         sort_keys=True,
         default=str,
         separators=(",", ":"),
@@ -1705,19 +1806,12 @@ def _public_campaign_variant(
         )
         return None
 
-    token_digest = str(variant.get("provenance_token_digest") or "").strip()
     copy_verified_at_creation = bool(
         allow_durable_verification
-        and generation_mode in {"supervisor", "reviewed_fallback"}
-        and str(variant.get("provenance_key_id") or "").strip()
-        and str(variant.get("provenance_copy_hash") or "").strip()
-        == campaign_copy_hash(variant.get("subject"), variant.get("body"))
-        and str(variant.get("provenance_criteria_fingerprint") or "").strip()
-        == criteria_fingerprint
-        and str(variant.get("provenance_issued_at") or "").strip()
-        and str(variant.get("provenance_expires_at") or "").strip()
-        and len(token_digest) == 64
-        and all(character in "0123456789abcdef" for character in token_digest)
+        and durable_campaign_variant_copy_verified(
+            variant,
+            criteria_fingerprint=criteria_fingerprint,
+        )
     )
     public_variant: dict[str, object] = {
         "variant_name": variant_name,
@@ -1891,6 +1985,8 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
         issue = "invalid_configuration"
     elif not variants_valid:
         issue = "invalid_message_variants"
+    elif str(row.get("treatment_state") or "legacy_unbound") != "ready":
+        issue = "treatment_unbound"
     household_dedup = json_value(row.get("household_dedup"), {})
     household_summary = json_value(row.get("household_summary"), {})
     return CampaignSummary(
@@ -1898,6 +1994,7 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
         name=campaign_name,
         owner_email=str(row.get("owner_email") or "unknown"),
         status=str(row.get("status") or "draft"),  # type: ignore[arg-type]
+        treatment_state=str(row.get("treatment_state") or "legacy_unbound"),  # type: ignore[arg-type]
         actionable=issue is None,
         actionability_issue=issue,  # type: ignore[arg-type]
         criteria=criteria_value,

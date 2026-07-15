@@ -277,3 +277,32 @@ def test_payload_local_runtime_can_omit_durable_secrets(monkeypatch) -> None:
     env = _env_map(payload)
     assert env["MIP_COTALITY_ID_MASK_SECRET"]["value_from"] == "cotality_id_mask_secret"
     assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == "genie_action_current_secret"
+
+
+def test_payload_binds_salesforce_secrets_only_for_complete_idempotent_connector(
+    monkeypatch,
+) -> None:
+    for name, value in {
+        "SALESFORCE_INSTANCE_URL": "https://summit.example.my.salesforce.com",
+        "SALESFORCE_CLIENT_ID": "connected-app-id",
+        "SALESFORCE_USERNAME": "mip-integration@example.com",
+        "SALESFORCE_EXTERNAL_ID_FIELD": "MIP_Activation_Id__c",
+        "SALESFORCE_CLIENT_SECRET": "sf-client-secret",
+        "SALESFORCE_PASSWORD": "sf-password",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    payload = build_payload(source_code_path="/Workspace/app/files", target="prod")
+    env = _env_map(payload)
+
+    assert env["SALESFORCE_EXTERNAL_ID_FIELD"]["value"] == "MIP_Activation_Id__c"
+    assert env["SALESFORCE_CLIENT_SECRET"]["value_from"] == "salesforce_client_secret"
+    assert env["SALESFORCE_PASSWORD"]["value_from"] == "salesforce_password"
+    assert "SALESFORCE_SECURITY_TOKEN" not in env
+    assert "sf-client-secret" not in str(payload)
+    assert "sf-password" not in str(payload)
+
+    monkeypatch.delenv("SALESFORCE_EXTERNAL_ID_FIELD")
+    incomplete = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
+    assert "SALESFORCE_CLIENT_SECRET" not in incomplete
+    assert "SALESFORCE_PASSWORD" not in incomplete

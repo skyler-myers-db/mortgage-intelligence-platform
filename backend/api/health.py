@@ -40,6 +40,7 @@ from typing import Any
 
 from fastapi import APIRouter, Request
 
+from backend.agents.gateway_contract import gateway_runtime_binding_hash
 from backend.config.settings import looks_like_databricks_app_deploy, settings
 from backend.schemas.health import AdminHealthResponse, HealthResponse
 from backend.services.audit_store import get_fallback_identity_count
@@ -60,6 +61,32 @@ from backend.services.rbac import AdminDep
 router = APIRouter()
 
 _PROCESS_ACTOR_CACHE_SECRET = secrets.token_urlsafe(32)
+
+
+def _agent_gateway_binding_sha256() -> str | None:
+    endpoint = (settings.mip_agent_serving_endpoint or "").strip()
+    supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
+    upstream = (settings.mip_agent_supervisor_endpoint or "").strip()
+    model_name = settings.mip_agent_gateway_model.strip()
+    model_version = settings.mip_agent_gateway_model_version
+    inference_table = (settings.mip_ai_gateway_inference_table or "").strip()
+    if (
+        not endpoint
+        or not supervisor_id
+        or not upstream
+        or not model_name
+        or model_version is None
+        or not inference_table
+    ):
+        return None
+    return gateway_runtime_binding_hash(
+        endpoint=endpoint,
+        supervisor_id=supervisor_id,
+        upstream_endpoint=upstream,
+        model_name=model_name,
+        model_version=model_version,
+        inference_table=inference_table,
+    )
 
 
 def _actor_cache_key(actor_email: str) -> str:
@@ -199,6 +226,9 @@ def _diagnostic_body(
     }
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
+    gateway_binding = _agent_gateway_binding_sha256()
+    if gateway_binding:
+        body["agent_gateway_binding_sha256"] = gateway_binding
     if forced_degraded is not None:
         body["forced_degraded"] = forced_degraded
     return body
@@ -255,6 +285,9 @@ def health(request: Request) -> dict[str, Any]:
     }
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
+    gateway_binding = _agent_gateway_binding_sha256()
+    if gateway_binding:
+        body["agent_gateway_binding_sha256"] = gateway_binding
     if forced_degraded is not None:
         body["forced_degraded"] = forced_degraded
     return body

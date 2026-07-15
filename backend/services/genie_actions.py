@@ -819,6 +819,7 @@ def _campaign_criteria(payload: GenieActionRequest) -> dict[str, Any]:
     )
     out: dict[str, Any] = {
         "source": str(payload.criteria.get("source") or "genie"),
+        "marketing_eligibility": "Eligible only",
         "borrower_ids": payload_borrower_ids,
         "criteria_hash": criteria_hash,
         "criteria_keys": criteria_keys,
@@ -1102,6 +1103,19 @@ def _materialize_genie_cohort(
     return cohort_id, route_filters
 
 
+def _campaign_treatment_coordinator(lakebase: LakebaseClient) -> Any:
+    """Build the live coordinator lazily so non-campaign Genie actions stay warehouse-neutral."""
+
+    from backend.services.campaign_treatment import CampaignTreatmentCoordinator
+    from backend.services.databricks_sql import get_sql_client
+    from backend.services.repositories.databricks_lead_cohorts import LeadCohortQueries
+
+    return CampaignTreatmentCoordinator(
+        lakebase=lakebase,
+        cohort_queries=LeadCohortQueries(get_sql_client(), cache_ttl_s=0),
+    )
+
+
 def handle_genie_action(
     payload: GenieActionRequest,
     *,
@@ -1194,75 +1208,41 @@ def handle_genie_action(
                     detail="Genie campaign action has no replayable lead filters",
                 )
             request_payload_hash = _campaign_request_payload_hash(payload, campaign_payload)
-            existing_campaign = _lookup_campaign_idempotency_row(
-                lakebase,
-                actor=actor,
-                request_id=request_id,
+            from backend.schemas.portfolio import HouseholdDedupConfig
+            from backend.services.campaign_treatment import CampaignTreatmentCreateSpec
+
+            metadata = json.loads(
+                _reviewed_audit_metadata(
+                    "genie.create_draft_campaign",
+                    {**_audit_payload(payload)},
+                )
             )
-            if existing_campaign is not None:
-                campaign_id = _campaign_identity(
-                    existing_campaign,
-                    expected_payload_hash=request_payload_hash,
+            result = _campaign_treatment_coordinator(lakebase).create(
+                CampaignTreatmentCreateSpec(
+                    name="Genie strategy draft",
+                    owner_email=actor,
+                    idempotency_key=request_id,
+                    request_payload_hash=request_payload_hash,
+                    criteria=campaign_payload,
+                    suppression_policy={
+                        "default": "eligible_only",
+                        "marketing_eligibility": "Eligible only",
+                    },
+                    holdout=None,
+                    household_dedup=HouseholdDedupConfig(),
+                    event_type="GENIE_ACTION_CREATE_DRAFT_CAMPAIGN",
+                    correlation_id=get_correlation_id(),
+                    audit_metadata=metadata,
                 )
-                audit_event_id = _lookup_campaign_audit_id(
-                    lakebase,
-                    actor=actor,
-                    request_id=request_id,
-                    campaign_id=campaign_id,
-                )
-                return _campaign_action_response(
-                    payload=payload,
-                    campaign_id=campaign_id,
-                    audit_event_id=audit_event_id,
-                    replayed=True,
-                )
-            metadata = {
-                **_audit_payload(payload),
-            }
-            row = lakebase.fetchone(
-                _CAMPAIGN_INSERT_SQL,
-                {
-                    "name": "Genie strategy draft",
-                    "owner_email": actor,
-                    "criteria": json.dumps(campaign_payload),
-                    "request_id": request_id,
-                    "request_payload_hash": request_payload_hash,
-                    "correlation_id": get_correlation_id(),
-                    "metadata": _reviewed_audit_metadata(
-                        "genie.create_draft_campaign",
-                        metadata,
-                    ),
-                },
             )
-            replayed = row is None or not row.get("audit_id")
-            if row is None or not row.get("campaign_id"):
-                row = _lookup_campaign_idempotency_row(
-                    lakebase,
-                    actor=actor,
-                    request_id=request_id,
-                    attempts=_CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS,
-                )
-                if row is None:
-                    raise LakebaseError(
-                        "Genie campaign insert returned no row and idempotency lookup was empty"
-                    )
-            campaign_id = _campaign_identity(
-                row,
-                expected_payload_hash=request_payload_hash,
-            )
-            audit_event_id = str(row.get("audit_id") or "")
+            audit_event_id = result.audit_id or ""
             if not audit_event_id:
-                audit_event_id = _lookup_campaign_audit_id(
-                    lakebase,
-                    actor=actor,
-                    request_id=request_id,
-                    campaign_id=campaign_id,
-                )
+                raise LakebaseError("Genie campaign finalization is missing its audit id")
             return _campaign_action_response(
                 payload=payload,
-                campaign_id=campaign_id,
+                campaign_id=result.campaign_id,
                 audit_event_id=audit_event_id,
-                replayed=replayed,
+                replayed=result.replayed,
             )
 
         row = lakebase.fetchone(
@@ -1281,6 +1261,8 @@ def handle_genie_action(
         )
         if row is None:
             raise LakebaseError("genie action audit insert returned no row")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise HTTPException(
             status_code=503,

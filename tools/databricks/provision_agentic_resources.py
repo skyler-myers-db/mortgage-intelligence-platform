@@ -19,6 +19,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from backend.agents.gateway_contract import (
+    DEFAULT_GATEWAY_AGENT_MODEL,
+    DEFAULT_GATEWAY_ENDPOINT,
+)
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from databricks.sdk.service.database import (
@@ -26,6 +30,14 @@ from databricks.sdk.service.database import (
     SyncedDatabaseTable,
     SyncedTableSchedulingPolicy,
     SyncedTableSpec,
+)
+from tools.databricks.provision_gateway_responses_agent import (
+    ensure_gateway_responses_agent,
+    verify_gateway_responses_agent,
+)
+from tools.databricks.serving_endpoint_acl import (
+    grant_direct_can_query,
+    revoke_direct_permissions,
 )
 
 REPO = Path(__file__).resolve().parents[2]
@@ -38,6 +50,7 @@ DEFAULT_SYNC_TABLES = (
         ("snapshot_date", "state", "segment_code"),
     ),
 )
+LEGACY_GATEWAY_ENDPOINT = "mip-agent-gateway"
 
 
 @dataclass(frozen=True)
@@ -48,8 +61,11 @@ class ProvisionedResources:
     agent_supervisor_id: str | None = None
     agent_supervisor_name: str | None = None
     agent_serving_endpoint: str | None = None
+    agent_supervisor_endpoint: str | None = None
     ai_gateway_endpoint: str | None = None
     ai_gateway_inference_table: str | None = None
+    ai_gateway_agent_model: str | None = None
+    ai_gateway_agent_model_version: int | None = None
 
     def env_lines(self) -> list[str]:
         def assignment(key: str, value: str) -> str:
@@ -68,6 +84,10 @@ class ProvisionedResources:
                     assignment("MIP_AGENT_SUPERVISOR_ID", self.agent_supervisor_id),
                     assignment("MIP_AGENT_SUPERVISOR_NAME", self.agent_supervisor_name or ""),
                     assignment("MIP_AGENT_SERVING_ENDPOINT", self.agent_serving_endpoint),
+                    assignment(
+                        "MIP_AGENT_SUPERVISOR_ENDPOINT",
+                        self.agent_supervisor_endpoint or self.agent_serving_endpoint,
+                    ),
                 ]
             )
         if self.ai_gateway_endpoint and self.ai_gateway_inference_table:
@@ -76,6 +96,11 @@ class ProvisionedResources:
                     assignment("MIP_AI_GATEWAY", "1"),
                     assignment("MIP_AI_GATEWAY_ENDPOINT", self.ai_gateway_endpoint),
                     assignment("MIP_AI_GATEWAY_INFERENCE_TABLE", self.ai_gateway_inference_table),
+                    assignment("MIP_AI_GATEWAY_AGENT_MODEL", self.ai_gateway_agent_model or ""),
+                    assignment(
+                        "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
+                        str(self.ai_gateway_agent_model_version or ""),
+                    ),
                 ]
             )
         return rows
@@ -237,112 +262,6 @@ def _wait_synced_table_online(workspace: WorkspaceClient, name: str, *, timeout_
     raise TimeoutError(f"{name} did not become online in {timeout_s}s: {last_state} {last_message}")
 
 
-# Databricks rejects per-endpoint AI Gateway config for endpoint types outside
-# its eligibility list (observed 2026-07-07 on the managed Supervisor Agent
-# endpoint, which accepted the same PUT on 2026-07-02 — the platform tightened
-# classification and wiped the prior config). This phrase is the stable part
-# of that platform error; matching it lets provisioning degrade honestly
-# (warn + skip) instead of aborting the whole deploy. The capability probe's
-# own pre-checks then report AI Gateway as non-claimable, which is the truth.
-_AI_GATEWAY_INELIGIBLE_MARKER = "AI Gateway is currently only supported for"
-
-
-def ensure_gateway_serving_endpoint(
-    *,
-    name: str,
-    entity_name: str,
-    entity_version: str,
-) -> None:
-    """Create the dedicated MIP-owned gateway FM endpoint if it is missing.
-
-    Eligibility fact (live-verified 2026-07-07): `put-ai-gateway` succeeds on a
-    workspace-created endpoint serving a system.ai foundation model, while the
-    managed Supervisor Agent endpoint is rejected. This endpoint exists so MIP
-    owns a gateway-eligible model door for governed probe/product traffic;
-    scale-to-zero keeps idle cost at zero.
-    """
-    try:
-        _run(["serving-endpoints", "get", name])
-        print(f"[agentic] gateway serving endpoint exists: {name}")
-        return
-    except RuntimeError as exc:
-        if "does not exist" not in str(exc) and "RESOURCE_DOES_NOT_EXIST" not in str(exc):
-            raise
-    print(f"[agentic] creating gateway serving endpoint: {name} ({entity_name} v{entity_version})")
-    _run(
-        ["serving-endpoints", "create", "--no-wait"],
-        input_json={
-            "name": name,
-            "config": {
-                "served_entities": [
-                    {
-                        "entity_name": entity_name,
-                        "entity_version": entity_version,
-                        "scale_to_zero_enabled": True,
-                        "workload_size": "Small",
-                    }
-                ]
-            },
-        },
-    )
-
-
-def ensure_ai_gateway_on_endpoint(
-    *,
-    endpoint: str,
-    catalog: str,
-    schema: str,
-    table_prefix: str,
-    per_user_calls_per_minute: int,
-    timeout: str,
-) -> str | None:
-    print(f"[agentic] configuring AI Gateway on serving endpoint: {endpoint}")
-    if per_user_calls_per_minute <= 0:
-        raise ValueError("AI Gateway per-user rate limit must be positive")
-    try:
-        _run(
-            ["serving-endpoints", "put-ai-gateway", endpoint],
-            input_json={
-                "inference_table_config": {
-                    "enabled": True,
-                    "catalog_name": catalog,
-                    "schema_name": schema,
-                    "table_name_prefix": table_prefix,
-                },
-                "rate_limits": [
-                    {
-                        "key": "user",
-                        "calls": per_user_calls_per_minute,
-                        "renewal_period": "minute",
-                    }
-                ],
-            },
-        )
-    except RuntimeError as exc:
-        if _AI_GATEWAY_INELIGIBLE_MARKER not in str(exc):
-            raise
-        print(
-            "[agentic] WARNING: the workspace rejects AI Gateway config for this "
-            f"endpoint type ({endpoint}). Skipping gateway provisioning; the "
-            "ai_gateway capability will honestly report non-claimable until an "
-            "eligible endpoint is configured. Platform message: "
-            f"{str(exc)[-200:]}"
-        )
-        return None
-    try:
-        _wait_serving_endpoint_ready(endpoint, timeout=timeout)
-    except RuntimeError as exc:
-        # First-time FM endpoints can take longer than the deploy budget to go
-        # READY (GPU provisioning). The gateway config is already applied; the
-        # capability/verifier pre-checks handle NOT_READY honestly, so a slow
-        # warm-up must not abort the deploy.
-        print(
-            f"[agentic] WARNING: gateway endpoint {endpoint} not READY within {timeout} "
-            f"({exc}); gateway config is applied and readiness will complete in the background."
-        )
-    return ".".join([catalog, schema, table_prefix])
-
-
 def _wait_serving_endpoint_ready(endpoint: str, *, timeout: str) -> None:
     # The CLI create call may already wait, but get/poll keeps the path
     # idempotent when the endpoint existed in an updating state.
@@ -360,40 +279,50 @@ def _wait_serving_endpoint_ready(endpoint: str, *, timeout: str) -> None:
     raise TimeoutError(f"serving endpoint {endpoint} did not become ready")
 
 
-def _serving_endpoint_id(endpoint: str) -> str | None:
-    endpoints = _run(["serving-endpoints", "list"])
-    rows = endpoints if isinstance(endpoints, list) else endpoints.get("endpoints", [])
-    for row in rows:
-        if row.get("name") == endpoint:
-            return row.get("id")
-    return None
+def _converge_app_gateway_permissions(
+    workspace: WorkspaceClient,
+    *,
+    gateway_endpoint: str,
+    supervisor_endpoint: str,
+    app_name: str,
+) -> None:
+    """Grant only the outer proxy and revoke historical direct bypasses."""
 
-
-def _grant_app_can_query_serving_endpoint(*, endpoint: str, app_name: str) -> None:
-    app = _run(["apps", "get", app_name])
-    service_principal = app.get("service_principal_client_id")
-    endpoint_id = _serving_endpoint_id(endpoint)
+    app = workspace.apps.get(app_name)
+    service_principal = str(
+        getattr(app, "service_principal_client_id", None)
+        or (app.get("service_principal_client_id") if isinstance(app, dict) else "")
+        or ""
+    ).strip()
     if not service_principal:
-        print(f"[agentic] app service principal not found for {app_name}; skipping endpoint ACL")
-        return
-    if not endpoint_id:
-        print(f"[agentic] serving endpoint id not found for {endpoint}; skipping endpoint ACL")
-        return
-    _run(
-        ["serving-endpoints", "update-permissions", endpoint_id],
-        input_json={
-            "access_control_list": [
-                {
-                    "service_principal_name": service_principal,
-                    "permission_level": "CAN_QUERY",
-                }
-            ]
-        },
+        raise RuntimeError(f"app service principal not found for {app_name!r}")
+    grant_direct_can_query(
+        workspace,
+        endpoint_name=gateway_endpoint,
+        service_principal=service_principal,
     )
-    print(f"[agentic] granted CAN_QUERY on {endpoint} to app service principal {service_principal}")
+    print(
+        f"[agentic] granted CAN_QUERY on {gateway_endpoint} "
+        f"to app service principal {service_principal}"
+    )
+    for obsolete_endpoint in {supervisor_endpoint, LEGACY_GATEWAY_ENDPOINT}:
+        if obsolete_endpoint == gateway_endpoint:
+            continue
+        removed = revoke_direct_permissions(
+            workspace,
+            endpoint_name=obsolete_endpoint,
+            service_principal=service_principal,
+            missing_ok=obsolete_endpoint == LEGACY_GATEWAY_ENDPOINT,
+        )
+        print(
+            f"[agentic] {'revoked' if removed else 'verified absent'} direct App ACL "
+            f"on obsolete endpoint {obsolete_endpoint}"
+        )
 
 
-def ensure_supervisor_agent(*, display_name: str, genie_space_id: str, catalog: str) -> tuple[str, str]:
+def ensure_supervisor_agent(
+    *, display_name: str, genie_space_id: str, catalog: str
+) -> tuple[str, str]:
     agents = _run(["supervisor-agents", "list-supervisor-agents"])
     for agent in agents if isinstance(agents, list) else agents.get("supervisor_agents", []):
         if agent.get("display_name") == display_name:
@@ -420,7 +349,9 @@ def ensure_supervisor_agent(*, display_name: str, genie_space_id: str, catalog: 
     _ensure_supervisor_tools(supervisor_id, genie_space_id=genie_space_id, catalog=catalog)
     endpoint = created.get("endpoint_name") or ""
     if not endpoint:
-        refreshed = _run(["supervisor-agents", "get-supervisor-agent", f"supervisor-agents/{supervisor_id}"])
+        refreshed = _run(
+            ["supervisor-agents", "get-supervisor-agent", f"supervisor-agents/{supervisor_id}"]
+        )
         endpoint = refreshed.get("endpoint_name") or ""
     return supervisor_id, endpoint
 
@@ -486,41 +417,54 @@ def _write_env(path: Path, resources: ProvisionedResources) -> None:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", default=os.environ.get("MIP_DEFAULT_CATALOG", "mip"))
-    parser.add_argument("--lakebase-catalog", default=os.environ.get("MIP_LAKEBASE_SYNC_CATALOG", "mip_app_state"))
-    parser.add_argument("--lakebase-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_SCHEMA", "mip_sync"))
-    parser.add_argument("--database-instance", default=os.environ.get("MIP_LAKEBASE_INSTANCE", "mip-app-state"))
-    parser.add_argument("--logical-database", default=os.environ.get("MIP_LAKEBASE_DATABASE_NAME", "mip_app_state"))
-    parser.add_argument("--storage-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_STORAGE_SCHEMA", "app"))
+    parser.add_argument(
+        "--lakebase-catalog", default=os.environ.get("MIP_LAKEBASE_SYNC_CATALOG", "mip_app_state")
+    )
+    parser.add_argument(
+        "--lakebase-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_SCHEMA", "mip_sync")
+    )
+    parser.add_argument(
+        "--database-instance", default=os.environ.get("MIP_LAKEBASE_INSTANCE", "mip-app-state")
+    )
+    parser.add_argument(
+        "--logical-database", default=os.environ.get("MIP_LAKEBASE_DATABASE_NAME", "mip_app_state")
+    )
+    parser.add_argument(
+        "--storage-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_STORAGE_SCHEMA", "app")
+    )
     parser.add_argument(
         "--gateway-endpoint",
-        default=os.environ.get("MIP_AI_GATEWAY_ENDPOINT", "mip-agent-gateway"),
+        default=os.environ.get("MIP_AI_GATEWAY_ENDPOINT", DEFAULT_GATEWAY_ENDPOINT),
         help=(
-            "Serving endpoint to govern with AI Gateway. Defaults to the dedicated "
-            "MIP-owned FM endpoint (created here if missing). Managed Supervisor "
-            "Agent endpoints are excluded from per-endpoint AI Gateway by the "
-            "Databricks eligibility rules observed 2026-07-07."
+            "MIP-owned ResponsesAgent endpoint that delegates to the managed Supervisor "
+            "and accepts per-endpoint AI Gateway governance."
         ),
     )
     parser.add_argument(
-        "--gateway-endpoint-entity",
-        default=os.environ.get("MIP_AI_GATEWAY_ENTITY", "system.ai.llama_v3_2_3b_instruct"),
-        help="system.ai entity served by the dedicated gateway endpoint (must be a servable FM).",
+        "--gateway-schema", default=os.environ.get("MIP_AI_GATEWAY_SCHEMA", "audit")
     )
-    parser.add_argument(
-        "--gateway-endpoint-entity-version",
-        default=os.environ.get("MIP_AI_GATEWAY_ENTITY_VERSION", "1"),
-    )
-    parser.add_argument("--gateway-schema", default=os.environ.get("MIP_AI_GATEWAY_SCHEMA", "audit"))
     parser.add_argument(
         "--gateway-table-prefix",
-        default=os.environ.get("MIP_AI_GATEWAY_TABLE_PREFIX", "mip_agent_gateway_llama"),
+        default=os.environ.get("MIP_AI_GATEWAY_TABLE_PREFIX", "mip_agent_gateway_growth_agent"),
     )
     parser.add_argument(
-        "--gateway-per-user-calls-per-minute",
-        type=int,
-        default=int(os.environ.get("MIP_AI_GATEWAY_PER_USER_CALLS_PER_MINUTE", "60")),
+        "--gateway-agent-model",
+        default=os.environ.get(
+            "MIP_AI_GATEWAY_AGENT_MODEL",
+            DEFAULT_GATEWAY_AGENT_MODEL,
+        ),
     )
-    parser.add_argument("--supervisor-name", default=os.environ.get("MIP_AGENT_SUPERVISOR_NAME", "Mortgage Growth Agent"))
+    parser.add_argument(
+        "--gateway-agent-experiment",
+        default=os.environ.get(
+            "MIP_AI_GATEWAY_AGENT_EXPERIMENT",
+            "/Shared/mip/agent-gateway-proxy",
+        ),
+    )
+    parser.add_argument(
+        "--supervisor-name",
+        default=os.environ.get("MIP_AGENT_SUPERVISOR_NAME", "Mortgage Growth Agent"),
+    )
     parser.add_argument("--app-name", default=os.environ.get("MIP_APP_NAME", "mip-app"))
     parser.add_argument("--genie-space-id", default=os.environ.get("GENIE_SPACE_ID", ""))
     parser.add_argument("--skip-gateway", action="store_true")
@@ -556,39 +500,54 @@ def main(argv: list[str] | None = None) -> int:
         )
         if supervisor_endpoint:
             _wait_serving_endpoint_ready(supervisor_endpoint, timeout=f"{args.timeout_s}s")
-            _grant_app_can_query_serving_endpoint(endpoint=supervisor_endpoint, app_name=args.app_name)
     gateway_endpoint: str | None = None
     gateway_table: str | None = None
+    gateway_model: str | None = None
+    gateway_model_version: int | None = None
     if not args.skip_gateway:
-        gateway_endpoint = args.gateway_endpoint or supervisor_endpoint
-        if not gateway_endpoint:
+        gateway_endpoint = args.gateway_endpoint
+        if not gateway_endpoint or not supervisor_endpoint:
             raise ValueError(
-                "AI Gateway provisioning needs --gateway-endpoint or a Supervisor Agent endpoint"
+                "AI Gateway provisioning needs both its ResponsesAgent endpoint and Supervisor"
             )
-        ensure_gateway_serving_endpoint(
-            name=gateway_endpoint,
-            entity_name=args.gateway_endpoint_entity,
-            entity_version=args.gateway_endpoint_entity_version,
-        )
-        gateway_table = ensure_ai_gateway_on_endpoint(
+        if gateway_endpoint == supervisor_endpoint:
+            raise ValueError(
+                "AI Gateway ResponsesAgent endpoint must be distinct from its managed "
+                "Supervisor upstream; refusing a self-recursive proxy deployment"
+            )
+        gateway_deployment = ensure_gateway_responses_agent(
+            workspace,
             endpoint=gateway_endpoint,
-            catalog=args.catalog,
-            schema=args.gateway_schema,
-            table_prefix=args.gateway_table_prefix,
-            per_user_calls_per_minute=args.gateway_per_user_calls_per_minute,
-            timeout=f"{args.timeout_s}s",
+            upstream_endpoint=supervisor_endpoint,
+            model_name=args.gateway_agent_model,
+            experiment_name=args.gateway_agent_experiment,
+            inference_catalog=args.catalog,
+            inference_schema=args.gateway_schema,
+            inference_table_prefix=args.gateway_table_prefix,
         )
-        if gateway_table:
-            _grant_app_can_query_serving_endpoint(endpoint=gateway_endpoint, app_name=args.app_name)
+        _wait_serving_endpoint_ready(gateway_endpoint, timeout=f"{args.timeout_s}s")
+        verify_gateway_responses_agent(workspace, gateway_deployment)
+        gateway_table = gateway_deployment.inference_table
+        gateway_model = gateway_deployment.model_name
+        gateway_model_version = gateway_deployment.model_version
+        _converge_app_gateway_permissions(
+            workspace,
+            gateway_endpoint=gateway_endpoint,
+            supervisor_endpoint=supervisor_endpoint,
+            app_name=args.app_name,
+        )
     resources = ProvisionedResources(
         lakebase_sync_catalog=args.lakebase_catalog,
         lakebase_sync_schema=args.lakebase_schema,
         lakebase_sync_tables=tables,
         agent_supervisor_id=supervisor_id,
         agent_supervisor_name=args.supervisor_name if supervisor_id else None,
-        agent_serving_endpoint=supervisor_endpoint,
+        agent_serving_endpoint=gateway_endpoint or supervisor_endpoint,
+        agent_supervisor_endpoint=supervisor_endpoint,
         ai_gateway_endpoint=gateway_endpoint,
         ai_gateway_inference_table=gateway_table,
+        ai_gateway_agent_model=gateway_model,
+        ai_gateway_agent_model_version=gateway_model_version,
     )
     for line in resources.env_lines():
         print(line)

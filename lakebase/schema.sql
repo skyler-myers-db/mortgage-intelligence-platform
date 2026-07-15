@@ -58,6 +58,20 @@ CREATE TABLE IF NOT EXISTS mip_app.campaigns (
     idempotency_key TEXT,
     request_payload_hash TEXT,
     creation_response JSONB,
+    treatment_state TEXT NOT NULL DEFAULT 'legacy_unbound',
+    treatment_materialization_id UUID,
+    treatment_algorithm_version TEXT,
+    treatment_contract_fingerprint TEXT,
+    treatment_fingerprint TEXT,
+    treatment_source_snapshot_id TEXT,
+    treatment_delta_version BIGINT,
+    treatment_assignment_digest TEXT,
+    treatment_candidate_count BIGINT,
+    treatment_selected_primary_count BIGINT,
+    treatment_count BIGINT,
+    treatment_holdout_count BIGINT,
+    treatment_materialized_at TIMESTAMPTZ,
+    treatment_build_lease_until TIMESTAMPTZ,
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -83,6 +97,34 @@ ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS request_payload_hash TEXT;
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS creation_response JSONB;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_state TEXT NOT NULL DEFAULT 'legacy_unbound';
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_materialization_id UUID;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_algorithm_version TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_contract_fingerprint TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_fingerprint TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_source_snapshot_id TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_delta_version BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_assignment_digest TEXT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_candidate_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_selected_primary_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_holdout_count BIGINT;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_materialized_at TIMESTAMPTZ;
+ALTER TABLE mip_app.campaigns
+    ADD COLUMN IF NOT EXISTS treatment_build_lease_until TIMESTAMPTZ;
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 -- Existing deployments receive NULL first so the upgrade can distinguish
@@ -567,7 +609,7 @@ AS $$
                jsonb_typeof(document->'frequency_cap_days') = 'number'
                AND (document->>'frequency_cap_days')::NUMERIC =
                    trunc((document->>'frequency_cap_days')::NUMERIC)
-               AND (document->>'frequency_cap_days')::NUMERIC BETWEEN 1 AND 365
+               AND (document->>'frequency_cap_days')::NUMERIC BETWEEN 30 AND 365
            )
        );
 $$;
@@ -826,6 +868,121 @@ CREATE TRIGGER trg_campaigns_json_contract_enforcement
     FOR EACH ROW
     EXECUTE FUNCTION mip_app.enforce_campaign_json_contract();
 
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_state_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_state_chk
+    CHECK (treatment_state IN ('legacy_unbound','building','ready','failed'));
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_treatment_counts_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_treatment_counts_chk
+    CHECK (
+        treatment_candidate_count IS NULL
+        OR (
+            treatment_candidate_count >= 0
+            AND treatment_selected_primary_count >= 0
+            AND treatment_count >= 0
+            AND treatment_holdout_count >= 0
+            AND treatment_selected_primary_count <= treatment_candidate_count
+            AND treatment_selected_primary_count = treatment_count + treatment_holdout_count
+        )
+    );
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_ready_treatment_manifest_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_ready_treatment_manifest_chk
+    CHECK (
+        treatment_state <> 'ready'
+        OR (
+            treatment_materialization_id IS NOT NULL
+            AND treatment_algorithm_version = 'campaign-treatment-v2'
+            AND treatment_contract_fingerprint ~ '^[0-9a-f]{64}$'
+            AND treatment_fingerprint ~ '^[0-9a-f]{64}$'
+            AND treatment_source_snapshot_id ~ '^[0-9a-f]{64}$'
+            AND treatment_delta_version >= 0
+            AND treatment_assignment_digest ~ '^[0-9a-f]{64}$'
+            AND treatment_candidate_count IS NOT NULL
+            AND treatment_selected_primary_count IS NOT NULL
+            AND treatment_count IS NOT NULL
+            AND treatment_holdout_count IS NOT NULL
+            AND treatment_materialized_at IS NOT NULL
+        )
+    );
+
+CREATE OR REPLACE FUNCTION mip_app.enforce_campaign_treatment_boundary()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        IF NEW.treatment_state = 'ready' THEN
+            RAISE EXCEPTION 'campaign treatment must pass through building before ready'
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END IF;
+
+    IF OLD.treatment_state IN ('building','ready','failed') AND (
+        NEW.criteria IS DISTINCT FROM OLD.criteria
+        OR NEW.json_contract_version IS DISTINCT FROM OLD.json_contract_version
+        OR NEW.suppression_policy IS DISTINCT FROM OLD.suppression_policy
+        OR NEW.holdout IS DISTINCT FROM OLD.holdout
+        OR NEW.household_dedup IS DISTINCT FROM OLD.household_dedup
+        OR NEW.treatment_algorithm_version IS DISTINCT FROM OLD.treatment_algorithm_version
+        OR NEW.treatment_contract_fingerprint IS DISTINCT FROM OLD.treatment_contract_fingerprint
+    ) THEN
+        RAISE EXCEPTION 'campaign treatment contract is immutable after reservation'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF NEW.treatment_materialization_id IS DISTINCT FROM OLD.treatment_materialization_id
+       AND NOT (
+           OLD.treatment_state = 'building'
+           AND NEW.treatment_state = 'building'
+           AND OLD.treatment_build_lease_until <= now()
+           AND OLD.treatment_fingerprint IS NULL
+           AND OLD.treatment_delta_version IS NULL
+       ) THEN
+        RAISE EXCEPTION 'campaign materialization id may rotate only during an expired build reclaim'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF OLD.treatment_state = 'legacy_unbound' AND NEW.treatment_state <> 'legacy_unbound' THEN
+        RAISE EXCEPTION 'legacy campaigns must be rebuilt with a new campaign id'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF OLD.treatment_state = 'ready' AND (
+        NEW.treatment_state IS DISTINCT FROM OLD.treatment_state
+        OR NEW.treatment_fingerprint IS DISTINCT FROM OLD.treatment_fingerprint
+        OR NEW.treatment_source_snapshot_id IS DISTINCT FROM OLD.treatment_source_snapshot_id
+        OR NEW.treatment_delta_version IS DISTINCT FROM OLD.treatment_delta_version
+        OR NEW.treatment_assignment_digest IS DISTINCT FROM OLD.treatment_assignment_digest
+        OR NEW.treatment_candidate_count IS DISTINCT FROM OLD.treatment_candidate_count
+        OR NEW.treatment_selected_primary_count IS DISTINCT FROM OLD.treatment_selected_primary_count
+        OR NEW.treatment_count IS DISTINCT FROM OLD.treatment_count
+        OR NEW.treatment_holdout_count IS DISTINCT FROM OLD.treatment_holdout_count
+        OR NEW.treatment_materialized_at IS DISTINCT FROM OLD.treatment_materialized_at
+    ) THEN
+        RAISE EXCEPTION 'ready campaign treatment manifest is immutable'
+            USING ERRCODE = '55000';
+    END IF;
+
+    IF NEW.treatment_state = 'ready' AND OLD.treatment_state <> 'building' THEN
+        RAISE EXCEPTION 'only a building campaign treatment may become ready'
+            USING ERRCODE = '23514';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS trg_campaigns_treatment_boundary ON mip_app.campaigns;
+CREATE TRIGGER trg_campaigns_treatment_boundary
+    BEFORE INSERT OR UPDATE ON mip_app.campaigns
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_campaign_treatment_boundary();
+
 -- The post-seed NOT VALID checks retain the legacy-version escape hatch on
 -- unchanged payloads. The trigger above closes that hatch for inserts and any
 -- governed JSON modification, promoting successful remediations to version 1.
@@ -854,6 +1011,13 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_14_campaign_idempotency',
     'Add owner-scoped campaign idempotency keys and request payload hashes'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_campaign_t0_treatment_boundary',
+    'Reserve campaigns in Lakebase and bind ready execution to an immutable Unity Catalog treatment snapshot'
 )
 ON CONFLICT (version) DO NOTHING;
 

@@ -17,6 +17,7 @@ from backend.services.capability_serving_probes import (
     inference_log_table_names,
     query_serving_endpoint_with_proof,
 )
+from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 
 def probe_ai_gateway(
@@ -47,6 +48,13 @@ def probe_ai_gateway(
             "AI Gateway proof verification key is not configured for this deployment.",
         )
     try:
+        runtime, runtime_reason = verify_supervisor_runtime(workspace_client, settings)
+        if runtime is None or runtime.endpoint != endpoint:
+            return make_status(
+                False,
+                "AI Gateway proof is not bound to the verified product Agent runtime "
+                f"({runtime_reason or 'endpoint_mismatch'}).",
+            )
         details = workspace_client.serving_endpoints.get(endpoint)
         state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
         task = getattr(details, "task", None)

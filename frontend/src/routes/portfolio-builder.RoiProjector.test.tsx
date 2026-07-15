@@ -7,6 +7,9 @@ import { RoiProjector } from './portfolio-builder.components';
 
 const PREVIEW = {
   marketable_population: 10_000,
+  campaign_build_contact_count: 10_000,
+  campaign_build_limit: 10_000,
+  campaign_build_eligible: true,
   high_intent_leads: 1_200,
   top_tier_opportunities: 400,
   offers_recommended: 8_000,

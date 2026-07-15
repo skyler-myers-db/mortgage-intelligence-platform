@@ -339,6 +339,65 @@ def campaign_copy_hash(subject: object, body: object) -> str:
     return _campaign_copy_hash(subject, body)
 
 
+def durable_campaign_variant_copy_verified(
+    variant: Mapping[str, object],
+    *,
+    criteria_fingerprint: str,
+) -> bool:
+    """Verify the immutable, server-owned facts retained after token validation.
+
+    The signed token is intentionally not persisted. At campaign creation the
+    server verifies it, then writes these forensic facts into the normalized
+    variant table in the same transaction as the campaign. Later lifecycle and
+    outreach decisions re-bind the stored copy and criteria to those facts.
+    Expiry constrains token *acceptance* at creation; it does not make already
+    reviewed saved copy become unverified an hour later.
+    """
+
+    mode = str(variant.get("generation_mode") or "").strip()
+    label = str(variant.get("generator_label") or "").strip()
+    issued_raw = variant.get("provenance_issued_at")
+    expires_raw = variant.get("provenance_expires_at")
+
+    def _timestamp(value: object) -> int | None:
+        if isinstance(value, datetime):
+            parsed = value
+        elif isinstance(value, str) and value.strip():
+            try:
+                parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        else:
+            return None
+        if parsed.tzinfo is None:
+            return None
+        return int(parsed.astimezone(UTC).timestamp())
+
+    issued_at = _timestamp(issued_raw)
+    expires_at = _timestamp(expires_raw)
+    token_digest = str(variant.get("provenance_token_digest") or "").strip()
+    performance_fingerprint = str(
+        variant.get("provenance_performance_fingerprint") or ""
+    ).strip()
+    return bool(
+        mode in _GENERATOR_LABELS
+        and label == _GENERATOR_LABELS[mode]
+        and str(variant.get("provenance_key_id") or "").strip()
+        and issued_at is not None
+        and expires_at is not None
+        and expires_at - issued_at == _CAMPAIGN_PROVENANCE_TTL_S
+        and str(variant.get("provenance_copy_hash") or "").strip()
+        == _campaign_copy_hash(variant.get("subject"), variant.get("body"))
+        and str(variant.get("provenance_criteria_fingerprint") or "").strip()
+        == criteria_fingerprint
+        and (
+            not performance_fingerprint
+            or re.fullmatch(r"[0-9a-f]{64}", performance_fingerprint) is not None
+        )
+        and re.fullmatch(r"[0-9a-f]{64}", token_digest) is not None
+    )
+
+
 def _encode_provenance_claims(claims: dict[str, object], settings: Settings) -> str:
     body = (
         base64.urlsafe_b64encode(

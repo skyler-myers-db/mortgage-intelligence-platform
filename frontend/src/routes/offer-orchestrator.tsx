@@ -93,12 +93,6 @@ export default function OfferOrchestrator() {
   } = useApp();
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${draftChannel}` : null;
-  const savedDraftBody = savedDraftKey && !campaignBinding
-    ? savedDrafts[savedDraftKey]?.body
-    : undefined;
-  const savedDraftSubject = savedDraftKey && !campaignBinding
-    ? savedDrafts[savedDraftKey]?.subject
-    : undefined;
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
@@ -118,18 +112,6 @@ export default function OfferOrchestrator() {
       && reloadToken === 0
       && offerSnapshotMatches(cached.borrower, cached.recommendation)
     ) {
-      const cachedDraftBody =
-        savedDraftBody && savedDraftBody.trim().length > 0
-          ? savedDraftBody
-          : !campaignBinding && cached.draftChannel === draftChannel
-            ? cached.draftBody
-            : null;
-      const cachedDraftSubject =
-        savedDraftSubject && savedDraftSubject.trim().length > 0
-          ? savedDraftSubject
-          : !campaignBinding && cached.draftChannel === draftChannel
-            ? cached.draftSubject
-            : null;
       setB(cached.borrower);
       setRec(cached.recommendation);
       setLifecycle(null);
@@ -138,25 +120,15 @@ export default function OfferOrchestrator() {
       setLoadError(null);
       setLoadErrorStatus(null);
       setWarmingUp(null);
-      if (cachedDraftBody && cachedDraftBody.trim().length > 0) {
-        setDraftBody(cachedDraftBody);
-        setDraftSubject(cachedDraftSubject ?? '');
-        setDraftLoaded(false);
-        setDraftPending(true);
-        setDraftBaselineBody('');
-        setDraftBaselineSubject('');
-        setDraftProof(null);
-      } else {
-        setDraftBody('');
-        setDraftSubject('');
-        setDraftLoaded(false);
-        setDraftPending(true);
-        setDraftBaselineBody('');
-        setDraftBaselineSubject('');
-        setDraftDisclosureVersion(null);
-        setDraftDisclosureState(null);
-        setDraftProof(null);
-      }
+      setDraftBody('');
+      setDraftSubject('');
+      setDraftLoaded(false);
+      setDraftPending(true);
+      setDraftBaselineBody('');
+      setDraftBaselineSubject('');
+      setDraftDisclosureVersion(null);
+      setDraftDisclosureState(null);
+      setDraftProof(null);
     } else {
       setB(null);
       setRec(null);
@@ -277,14 +249,8 @@ export default function OfferOrchestrator() {
         }
         setDraftWarming(null);
         if (draft?.body && draft.body.trim().length > 0) {
-          const body =
-            savedDraftBody && savedDraftBody.trim().length > 0
-              ? savedDraftBody
-              : draft.body;
-          const subject =
-            savedDraftSubject && savedDraftSubject.trim().length > 0
-              ? savedDraftSubject
-              : (draft.subject ?? '');
+          const body = draft.body;
+          const subject = draft.subject ?? '';
           setDraftBody(body);
           setDraftSubject(subject);
           setDraftLoaded(true);
@@ -375,8 +341,6 @@ export default function OfferOrchestrator() {
     draftChannel,
     id,
     reloadToken,
-    savedDraftBody,
-    savedDraftSubject,
   ]);
 
   if (!id && lastBorrowerId) {
@@ -716,15 +680,7 @@ export default function OfferOrchestrator() {
         draftLoaded={draftLoaded}
         draftError={draftError}
         draftSubject={draftSubject}
-        onDraftSubjectChange={(subject) => {
-          setDraftSubject(subject);
-          setDraftSaveError(null);
-        }}
         draftText={draftText}
-        onDraftChange={(body) => {
-          setDraftBody(body);
-          setDraftSaveError(null);
-        }}
         draftChannel={draftChannel}
         draftDirty={draftDirty}
         draftProofFresh={draftProofFresh}
@@ -749,11 +705,7 @@ export default function OfferOrchestrator() {
         approving={approving}
         draftDisclosureVersion={draftDisclosureVersion}
         draftDisclosureState={draftDisclosureState}
-        draftGeneratorLabel={
-          draftDirty && draftGeneratorLabel
-            ? `Human edited from ${draftGeneratorLabel}`
-            : draftGeneratorLabel
-        }
+        draftGeneratorLabel={draftGeneratorLabel}
         draftGenerationMode={draftGenerationMode}
         draftStrategy={draftStrategy}
         draftEvidence={draftEvidence}

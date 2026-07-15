@@ -268,17 +268,6 @@ describe('OfferOrchestrator route behavior', () => {
     }
   }
 
-  function setInputValue(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
-    const prototype = input instanceof HTMLTextAreaElement
-      ? HTMLTextAreaElement.prototype
-      : HTMLInputElement.prototype;
-    const setter = Object.getOwnPropertyDescriptor(prototype, 'value')!.set!;
-    act(() => {
-      setter.call(input, value);
-      input.dispatchEvent(new Event('input', { bubbles: true }));
-    });
-  }
-
   function button(text: string): HTMLButtonElement {
     const match = [...container.querySelectorAll<HTMLButtonElement>('button')].find(
       (candidate) => candidate.textContent?.trim() === text,
@@ -287,7 +276,7 @@ describe('OfferOrchestrator route behavior', () => {
     return match;
   }
 
-  it('keeps pending copy honest and approves the edited governed draft', async () => {
+  it('keeps pending copy immutable and approves the exact governed draft', async () => {
     const pendingDraft = deferred<typeof DRAFT>();
     apiMocks.draftOutreach.mockReturnValue(pendingDraft.promise);
     mount();
@@ -301,8 +290,8 @@ describe('OfferOrchestrator route behavior', () => {
     await waitUntil(() => container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value === DRAFT.subject);
     const subject = container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')!;
     const body = container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!;
-    setInputValue(subject, 'Operator reviewed subject');
-    setInputValue(body, 'Operator reviewed governed body.');
+    expect(subject.readOnly).toBe(true);
+    expect(body.readOnly).toBe(true);
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
@@ -312,8 +301,8 @@ describe('OfferOrchestrator route behavior', () => {
     expect(apiMocks.approve.mock.calls[0][1]).toMatchObject({
       offer_code: 'rate_term_refi',
       evidence_ids: ['ev-1', 'ev-2'],
-      draft_subject: 'Operator reviewed subject',
-      draft_body: 'Operator reviewed governed body.',
+      draft_subject: DRAFT.subject,
+      draft_body: DRAFT.body,
       draft_generation_id: DRAFT.generation_id,
       draft_response_hash: DRAFT.response_hash,
       draft_source_refreshed_at: DRAFT.source_refreshed_at,
@@ -386,7 +375,7 @@ describe('OfferOrchestrator route behavior', () => {
     });
   });
 
-  it('hydrates a saved draft over backend copy and marks it saved', async () => {
+  it('never hydrates operator-saved copy over a fresh audited proof', async () => {
     appMocks.savedDrafts[`${BORROWER_ID}::email`] = {
       borrower_id: BORROWER_ID,
       offer_code: 'rate_term_refi',
@@ -398,10 +387,10 @@ describe('OfferOrchestrator route behavior', () => {
     };
     mount();
 
-    await waitUntil(() => container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value === 'Saved operator subject');
+    await waitUntil(() => container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.value === 'email subject');
     expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.value)
-      .toBe('Saved operator body.');
-    expect(button('Draft saved').disabled).toBe(false);
+      .toBe('email governed body');
+    expect(button('Save draft').disabled).toBe(false);
   });
 
   it('shows the durable audit reference after a rejection succeeds', async () => {
@@ -422,7 +411,7 @@ describe('OfferOrchestrator route behavior', () => {
     expect(container.textContent).toContain('audit: audit-reject-1');
   });
 
-  it('keeps the draft dirty and locked until persistence succeeds', async () => {
+  it('keeps exact audited copy locked while persistence succeeds', async () => {
     const pendingSave = deferred<SavedDraft>();
     appMocks.saveDraft.mockImplementation((draft: SavedDraftInput) => (
       pendingSave.promise.then((saved) => {
@@ -433,7 +422,7 @@ describe('OfferOrchestrator route behavior', () => {
     mount();
     await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
     const body = container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!;
-    setInputValue(body, 'Persist this operator edit.');
+    expect(body.readOnly).toBe(true);
 
     act(() => button('Save draft').click());
     await waitUntil(() => container.textContent?.includes('Saving…') === true);
@@ -446,7 +435,7 @@ describe('OfferOrchestrator route behavior', () => {
       offer_code: 'rate_term_refi',
       channel: 'email',
       subject: 'email subject',
-      body: 'Persist this operator edit.',
+      body: 'email governed body',
       saved_at: '2026-07-13T12:00:00Z',
       updated_at: '2026-07-13T12:00:00Z',
     }));
@@ -454,14 +443,12 @@ describe('OfferOrchestrator route behavior', () => {
     expect(body.disabled).toBe(false);
   });
 
-  it('surfaces persistence failure and preserves the dirty baseline', async () => {
+  it('surfaces persistence failure without unlocking audited copy', async () => {
     appMocks.saveDraft.mockRejectedValue(new Error('Lakebase unavailable'));
     mount();
     await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
-    setInputValue(
-      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!,
-      'Unsaved operator edit.',
-    );
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.readOnly)
+      .toBe(true);
 
     act(() => button('Save draft').click());
     await waitUntil(() => container.textContent?.includes("Couldn't save draft: Lakebase unavailable") === true);
@@ -469,7 +456,8 @@ describe('OfferOrchestrator route behavior', () => {
     expect(appMocks.savedDrafts[`${BORROWER_ID}::email`]).toBeUndefined();
 
     act(() => button('SMS').click());
-    expect(container.textContent).toContain('replaces the unsaved subject and message');
+    await waitUntil(() => apiMocks.draftOutreach.mock.calls.length === 2);
+    expect(apiMocks.draftOutreach.mock.calls[1][1]).toBe('sms');
   });
 
   it('uses persisted lifecycle approval after reload', async () => {
@@ -602,24 +590,13 @@ describe('OfferOrchestrator route behavior', () => {
     expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(2);
   });
 
-  it('preserves dirty edits until a channel switch is explicitly confirmed', async () => {
+  it('switches channels by loading a new exact audited draft', async () => {
     mount();
     await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled === false);
     const body = container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')!;
-    setInputValue(body, 'Unsaved operator edit.');
+    expect(body.readOnly).toBe(true);
 
     act(() => button('SMS').click());
-    expect(body.value).toBe('Unsaved operator edit.');
-    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(1);
-    await waitUntil(() => container.textContent?.includes(
-      'replaces the unsaved subject and message',
-    ) === true);
-    expect(container.textContent).toContain('replaces the unsaved subject and message');
-
-    act(() => button('Keep current edits').click());
-    expect(body.value).toBe('Unsaved operator edit.');
-    act(() => button('SMS').click());
-    act(() => button('Switch channel').click());
     await waitUntil(() => apiMocks.draftOutreach.mock.calls.length === 2);
     expect(apiMocks.draftOutreach.mock.calls[1][1]).toBe('sms');
     await waitUntil(() => container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.value === 'sms governed body');

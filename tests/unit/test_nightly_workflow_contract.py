@@ -14,9 +14,7 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
-LIVE_HARDENING_SPEC = (
-    REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
-)
+LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
 CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
 
 
@@ -40,9 +38,7 @@ def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
     intersection_pos = text.index(
         "pytest tests/integration/test_segment_intersection_parity.py -q --tb=short"
     )
-    source_pos = text.index(
-        "pytest tests/integration/test_source_readiness_live.py -q --tb=short"
-    )
+    source_pos = text.index("pytest tests/integration/test_source_readiness_live.py -q --tb=short")
 
     assert (
         validate_pos
@@ -54,6 +50,52 @@ def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
         < intersection_pos
         < source_pos
     )
+
+
+def test_live_validation_proves_source_bound_app_before_expensive_mutations() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    resolve_pos = text.index("- name: Resolve source-bound Gateway runtime contract")
+    app_proof_pos = text.index(
+        "- name: Fail fast unless the exact app commit and Gateway binding are deployed"
+    )
+    refresh_pos = text.index("- name: Refresh live FRED market rates before validation")
+    grant_pos = text.index("- name: Reconcile delayed AI Gateway inference-table grants")
+    exact_proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
+
+    assert resolve_pos < app_proof_pos < refresh_pos < grant_pos < exact_proof_pos
+    app_proof_block = text[app_proof_pos:refresh_pos]
+    assert "tools/verify_deployed_app_contract.py" in app_proof_block
+    assert '--git-sha "$GITHUB_SHA"' in app_proof_block
+    assert "MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" in app_proof_block
+
+
+def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "secrets.MIP_AI_GATEWAY_ENDPOINT" not in text
+    assert "secrets.MIP_AI_GATEWAY_INFERENCE_TABLE" not in text
+    assert text.count("tools/databricks/export_gateway_runtime_contract.py") == 2
+
+
+def test_live_browser_rechecks_exact_contract_before_live_mutations() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    job_pos = text.index("\n  playwright-e2e-live:")
+    next_job_pos = text.index("\n  kill-drill-simulated:", job_pos + 1)
+    job = text[job_pos:next_job_pos]
+
+    resolve_pos = job.index("- name: Resolve source-bound Gateway runtime contract")
+    mint_pos = job.index("- name: Mint per-run Playwright Bearer tokens")
+    recheck_pos = job.index(
+        "- name: Recheck deployed commit and Gateway binding with the browser identity"
+    )
+    mutations_pos = job.index("- name: Low-volume deployed workflow contracts")
+
+    assert resolve_pos < mint_pos < recheck_pos < mutations_pos
+    recheck_block = job[recheck_pos:mutations_pos]
+    assert "tools/verify_deployed_app_contract.py" in recheck_block
+    assert "--token-env MIP_NON_ADMIN_BEARER_TOKEN" in recheck_block
+    assert '--git-sha "$GITHUB_SHA"' in recheck_block
 
 
 def test_live_validation_refresh_steps_use_real_dev_bundle_profile() -> None:
@@ -91,11 +133,19 @@ def test_live_validation_mints_admin_token_for_every_admin_proof() -> None:
     assert "skip_admin_degraded_proof:" not in text
     assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in text
     assert "DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}" in text
+    assert "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
+    assert "DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}" in text
     assert (
-        "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
-    )
+        "DATABRICKS_OPERATOR2_CLIENT_SECRET: "
+        "${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}"
+    ) in text
+    assert "--github-env MIP_OPERATOR2_BEARER_TOKEN" in text
     assert "--github-env MIP_ADMIN_BEARER_TOKEN" in text
-    assert "Normal and admin M2M client IDs must be distinct" in text
+    assert "DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in text
+    assert (
+        "Operator A, operator B, admin, and verifier M2M client IDs must be distinct"
+        in text
+    )
     assert "campaign-audit" in text
     assert "Growth Agent audit" in text
     assert "exit 1" in text
@@ -159,8 +209,20 @@ def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
     assert "Missing DATABRICKS_HOST or DATABRICKS_TOKEN" in resolve_block
     assert "exit 1" in resolve_block
     assert "DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in bearer_block
+    assert "DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET" in bearer_block
+    assert "DATABRICKS_VERIFIER_CLIENT_ID" in bearer_block
+    for left, right in (
+        ("DATABRICKS_CLIENT_ID", "DATABRICKS_OPERATOR2_CLIENT_ID"),
+        ("DATABRICKS_CLIENT_ID", "DATABRICKS_ADMIN_CLIENT_ID"),
+        ("DATABRICKS_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
+        ("DATABRICKS_OPERATOR2_CLIENT_ID", "DATABRICKS_ADMIN_CLIENT_ID"),
+        ("DATABRICKS_OPERATOR2_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
+        ("DATABRICKS_ADMIN_CLIENT_ID", "DATABRICKS_VERIFIER_CLIENT_ID"),
+    ):
+        assert f'[ "${left}" = "${right}" ]' in bearer_block
     assert "Missing required M2M OAuth secret(s)" in bearer_block
     assert "--github-env MIP_BEARER_TOKEN" in bearer_block
+    assert "--github-env MIP_OPERATOR2_BEARER_TOKEN" in bearer_block
     assert "--github-env MIP_ADMIN_BEARER_TOKEN" in bearer_block
     assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in bearer_block
     assert "exit 1" in bearer_block
@@ -169,12 +231,34 @@ def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
     assert resolve_pos < bearer_pos < run_pos
 
 
+def test_live_gate_runs_two_operator_recovery_contract() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "tests/integration/test_lakebase_concurrency_live.py" in text
+    assert "tests/integration/test_two_operator_recovery_live.py" in text
+    assert "tests/integration/test_lifecycle_delta_replay_live.py" in text
+    assert "tests/integration/test_campaign_treatment_at_cap_live.py" in text
+    assert '"operator_b": os.environ["MIP_OPERATOR2_BEARER_TOKEN"]' in text
+
+
+def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    step_pos = text.index("- name: Low-volume deployed workflow contracts")
+    next_step_pos = text.index("\n      - name:", step_pos + 1)
+    block = text[step_pos:next_step_pos]
+
+    assert "MIP_LIVE_MUTATION_OK: '1'" in block
+    assert "DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}" in block
+    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in block
+    assert "DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}" in block
+    assert "tests/integration/test_lifecycle_delta_replay_live.py" in block
+    assert "tests/integration/test_campaign_treatment_at_cap_live.py" in block
+
+
 def test_nightly_agent_eval_passes_distinct_normal_and_admin_bearers() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
-    remint_pos = text.index(
-        "- name: Remint per-run Bearers immediately before Agent Evaluation"
-    )
+    remint_pos = text.index("- name: Remint per-run Bearers immediately before Agent Evaluation")
     eval_pos = text.index("- name: Growth Agent evaluation with admin identity proof")
     next_step_pos = text.index("\n      - name:", eval_pos + 1)
     remint_block = text[remint_pos:eval_pos]
@@ -207,6 +291,25 @@ def test_ai_gateway_proof_uses_dedicated_verifier_m2m_identity() -> None:
     assert "dedicated AI Gateway verifier" in proof_block
 
 
+def test_verifier_boundary_uses_its_own_identity_and_precedes_exact_proof() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    boundary_pos = text.index("- name: Prove the verifier's effective authorization boundary")
+    proof_pos = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
+    block = text[boundary_pos:proof_pos]
+
+    assert boundary_pos < proof_pos
+    assert "tools/databricks/verify_verifier_identity_boundary.py" in block
+    assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in block
+    assert "secrets.DATABRICKS_VERIFIER_CLIENT_ID" in block
+    assert "secrets.DATABRICKS_VERIFIER_CLIENT_SECRET" in block
+    assert "secrets.DATABRICKS_ACCOUNT_ID" in block
+    assert "unset DATABRICKS_TOKEN" in block
+    assert "--protected-service-principal-id" in block
+    assert "--forbidden-relation" not in block
+    assert "--obsolete-endpoint" not in block
+    assert "Missing required verifier-boundary input" in block
+
+
 def test_native_genie_browser_gate_requires_live_governed_turn_and_visible_trust() -> None:
     text = REAL_DATA_SPEC.read_text(encoding="utf-8")
 
@@ -218,7 +321,7 @@ def test_native_genie_browser_gate_requires_live_governed_turn_and_visible_trust
     helper_pos = text.index("async function expectLiveGenieUi")
     helper_end = text.index("\n}\n\ntype MapDrillTarget", helper_pos) + 2
     helper_block = text[helper_pos:helper_end]
-    turn_helper_block = text[text.index("function expectLiveGenieTurn"):helper_pos]
+    turn_helper_block = text[text.index("function expectLiveGenieTurn") : helper_pos]
 
     assert "NATIVE_GENIE_CONVERSATION_QUESTION" in native_block
     assert "expect(payload.source" in native_block
@@ -241,16 +344,23 @@ def test_native_genie_browser_gate_requires_live_governed_turn_and_visible_trust
 def test_deterministic_genie_has_no_native_reasoning_or_follow_ups() -> None:
     text = REAL_DATA_SPEC.read_text(encoding="utf-8")
 
-    canonical_pos = text.index(
-        "genie FAB returns a non-empty answer and source chip opens lineage"
-    )
+    canonical_pos = text.index("genie FAB returns a non-empty answer and source chip opens lineage")
     next_test_pos = text.index("\n  test(", canonical_pos + 1)
     canonical_block = text[canonical_pos:next_test_pos]
 
     assert ").toBe('trusted_sql')" in canonical_block
-    assert "deterministic trusted_sql must not expose native Genie reasoning summaries" in canonical_block
-    assert "deterministic trusted_sql proof must not fabricate native reasoning summaries" in canonical_block
-    assert "deterministic trusted_sql must not claim Genie-authored follow-up suggestions" in canonical_block
+    assert (
+        "deterministic trusted_sql must not expose native Genie reasoning summaries"
+        in canonical_block
+    )
+    assert (
+        "deterministic trusted_sql proof must not fabricate native reasoning summaries"
+        in canonical_block
+    )
+    assert (
+        "deterministic trusted_sql must not claim Genie-authored follow-up suggestions"
+        in canonical_block
+    )
     assert "trusted_sql UI must not render a native reasoning disclosure" in canonical_block
     assert "test.skip(" not in canonical_block
 
@@ -260,7 +370,9 @@ def test_live_browser_specs_pin_campaign_role_segment_and_catalog_proofs() -> No
     hardening = LIVE_HARDENING_SPEC.read_text(encoding="utf-8")
 
     assert "/api/v1/admin/capabilities?live=1" in real_data
-    assert "a claimable Supervisor capability must produce the AI campaign recommendation" in real_data
+    assert (
+        "a claimable Supervisor capability must produce the AI campaign recommendation" in real_data
+    )
     assert "recommendation.performance_status" in real_data
     assert "campaign response must carry governed evidence" in real_data
     assert "clicking a lineage asset must open its exact Catalog Explorer destination" in real_data

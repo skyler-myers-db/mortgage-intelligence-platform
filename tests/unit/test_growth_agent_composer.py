@@ -14,37 +14,30 @@ from backend.services.growth_agent_composer import (
     compose_growth_agent_plan,
     composer_prompt,
 )
+from tests.fixtures.supervisor_runtime import (
+    GATEWAY_ENDPOINT,
+    gateway_endpoint_details,
+    runtime_settings,
+    supervisor_metadata,
+)
 
 
 def _compose_settings() -> Settings:
-    return Settings(
+    return runtime_settings(
         databricks_host="dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
         genie_space_id="space-abc",
         lakebase_host="lb-test",
         lakebase_user="mip_app",
-        mip_agent_orchestrator=True,
-        mip_agent_supervisor_id="supervisor-123",
-        mip_agent_serving_endpoint="mas-supervisor-endpoint",
     )
-
-
-class _State:
-    def __init__(self, ready: str) -> None:
-        self.ready = ready
-
-
-class _Details:
-    def __init__(self, ready: str, task: str) -> None:
-        self.state = _State(ready)
-        self.task = task
 
 
 class _Endpoints:
     def __init__(self, ready: str, task: str) -> None:
-        self._details = _Details(ready, task)
+        self._details = gateway_endpoint_details(ready=ready, task=task)
 
-    def get(self, _endpoint: str) -> _Details:
+    def get(self, _endpoint: str) -> object:
+        assert _endpoint == GATEWAY_ENDPOINT
         return self._details
 
 
@@ -56,10 +49,7 @@ class _ApiClient:
     def do(self, _method: str, _path: str, body: dict[str, Any] | None = None) -> Any:
         if _method == "GET":
             assert _path == "/api/2.1/supervisor-agents/supervisor-123"
-            return {
-                "supervisor_agent_id": "supervisor-123",
-                "endpoint_name": "mas-supervisor-endpoint",
-            }
+            return supervisor_metadata()
         if self._raise:
             raise RuntimeError("serving endpoint unreachable")
         return self._body
@@ -82,7 +72,9 @@ def _responses_body(plan_json: str) -> dict[str, Any]:
     return {"output": [{"content": [{"text": plan_json}]}]}
 
 
-def _request(objective: str = "Compose a refi and equity growth plan for branch review.") -> ComposePlanRequest:
+def _request(
+    objective: str = "Compose a refi and equity growth plan for branch review.",
+) -> ComposePlanRequest:
     return ComposePlanRequest(objective=objective, execute=False)
 
 
@@ -95,7 +87,12 @@ def test_valid_plan_composes_with_registry_tools() -> None:
     parsed = {
         "objective_summary": "Screen refi economics then gate to eligible leads.",
         "steps": [
-            {"step_id": "step-1", "tool": "fn_build_cohort", "params": {}, "rationale": "broad screen"},
+            {
+                "step_id": "step-1",
+                "tool": "fn_build_cohort",
+                "params": {},
+                "rationale": "broad screen",
+            },
             {
                 "step_id": "step-2",
                 "tool": "fn_segment_counts",
@@ -141,7 +138,9 @@ def test_out_of_domain_state_param_is_rejected() -> None:
 
 
 def test_step_cap_is_enforced() -> None:
-    parsed = {"steps": [{"step_id": f"s{i}", "tool": "fn_build_cohort", "params": {}} for i in range(9)]}
+    parsed = {
+        "steps": [{"step_id": f"s{i}", "tool": "fn_build_cohort", "params": {}} for i in range(9)]
+    }
     outcome = build_validated_plan(parsed, _request(), endpoint="ep")
     assert outcome.status == "invalid"
     assert "step limit" in (outcome.message or "")
@@ -232,31 +231,46 @@ def test_compose_with_valid_model_json() -> None:
         {
             "objective_summary": "Refi screen then gate.",
             "steps": [
-                {"step_id": "step-1", "tool": "fn_build_cohort", "params": {}, "rationale": "screen"},
-                {"step_id": "step-2", "tool": "fn_lead_queue_url", "params": {"segment_codes": ["itm"]}},
+                {
+                    "step_id": "step-1",
+                    "tool": "fn_build_cohort",
+                    "params": {},
+                    "rationale": "screen",
+                },
+                {
+                    "step_id": "step-2",
+                    "tool": "fn_lead_queue_url",
+                    "params": {"segment_codes": ["itm"]},
+                },
             ],
         }
     )
     client = _FakeServingClient(body=_responses_body(plan_json))
-    outcome = compose_growth_agent_plan(_request(), settings=_compose_settings(), serving_client=client)
+    outcome = compose_growth_agent_plan(
+        _request(), settings=_compose_settings(), serving_client=client
+    )
     assert outcome.status == "composed"
     assert outcome.plan is not None
     assert outcome.plan.requires_approval is True
-    assert outcome.endpoint == "mas-supervisor-endpoint"
+    assert outcome.endpoint == GATEWAY_ENDPOINT
 
 
 def test_compose_with_malformed_json_is_invalid() -> None:
     client = _FakeServingClient(body=_responses_body("this is not json {{{"))
-    outcome = compose_growth_agent_plan(_request(), settings=_compose_settings(), serving_client=client)
+    outcome = compose_growth_agent_plan(
+        _request(), settings=_compose_settings(), serving_client=client
+    )
     assert outcome.status == "invalid"
     assert outcome.plan is None
 
 
 def test_compose_degrades_when_endpoint_not_ready() -> None:
     client = _FakeServingClient(ready="NOT_READY", body=_responses_body("{}"))
-    outcome = compose_growth_agent_plan(_request(), settings=_compose_settings(), serving_client=client)
+    outcome = compose_growth_agent_plan(
+        _request(), settings=_compose_settings(), serving_client=client
+    )
     assert outcome.status == "degraded"
-    assert outcome.degraded_reason == "supervisor_endpoint_not_ready:NOT_READY"
+    assert outcome.degraded_reason == "gateway_endpoint_not_ready:NOT_READY"
 
 
 def test_compose_degrades_when_orchestrator_disabled() -> None:
@@ -267,14 +281,18 @@ def test_compose_degrades_when_orchestrator_disabled() -> None:
         lakebase_host="lb-test",
         lakebase_user="mip_app",
     )
-    outcome = compose_growth_agent_plan(_request(), settings=settings, serving_client=_FakeServingClient())
+    outcome = compose_growth_agent_plan(
+        _request(), settings=settings, serving_client=_FakeServingClient()
+    )
     assert outcome.status == "degraded"
     assert outcome.degraded_reason == "orchestrator_disabled"
 
 
 def test_compose_degrades_when_call_raises() -> None:
     client = _FakeServingClient(raise_on_query=True)
-    outcome = compose_growth_agent_plan(_request(), settings=_compose_settings(), serving_client=client)
+    outcome = compose_growth_agent_plan(
+        _request(), settings=_compose_settings(), serving_client=client
+    )
     assert outcome.status == "degraded"
     assert outcome.degraded_reason == "orchestrator_call_failed"
 
@@ -342,10 +360,7 @@ class _SequentialApiClient:
     def do(self, _method: str, _path: str, body: dict[str, Any] | None = None) -> Any:
         if _method == "GET":
             assert _path == "/api/2.1/supervisor-agents/supervisor-123"
-            return {
-                "supervisor_agent_id": "supervisor-123",
-                "endpoint_name": "mas-supervisor-endpoint",
-            }
+            return supervisor_metadata()
         messages = (body or {}).get("input") or []
         self.prompts.append(str((messages[0] if messages else {}).get("content", "")))
         return self._bodies.pop(0)
@@ -375,9 +390,7 @@ def test_composer_repairs_invalid_plan_once_with_error_feedback() -> None:
     honestly but the endpoint gave up. One bounded repair turn (mirroring the
     Genie SQL-repair precedent) feeds the validation error back; a corrected
     second plan composes."""
-    client = _sequential_client(
-        [_responses_body(_BAD_PARAMS_PLAN), _responses_body(_GOOD_PLAN)]
-    )
+    client = _sequential_client([_responses_body(_BAD_PARAMS_PLAN), _responses_body(_GOOD_PLAN)])
     outcome = compose_growth_agent_plan(
         _request(), settings=_compose_settings(), serving_client=client
     )
@@ -410,9 +423,7 @@ def test_composer_prompt_carries_the_validated_objective_text() -> None:
     text must be in the prompt."""
     from backend.services.growth_agent_composer import composer_prompt
 
-    req = _request(
-        "Find investor owners in Illinois with high equity and stage a handoff"
-    )
+    req = _request("Find investor owners in Illinois with high equity and stage a handoff")
     prompt = composer_prompt(req)
     assert "investor owners in Illinois with high equity" in prompt
     assert "Objective hash:" in prompt  # correlation id retained
@@ -427,9 +438,7 @@ def test_planner_catalog_excludes_pii_param_tools_and_composer_rejects_them() ->
     from backend.services.agent_tools import get_agent_tool, tool_catalog_for_planner
 
     assert "fn_property_loan_lookup" not in tool_catalog_for_planner()
-    assert get_agent_tool("fn_property_loan_lookup").specialists == (
-        "borrower_dossier_agent",
-    )
+    assert get_agent_tool("fn_property_loan_lookup").specialists == ("borrower_dossier_agent",)
 
     parsed = {
         "objective_summary": "s",

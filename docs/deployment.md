@@ -71,7 +71,7 @@ verified by the live smoke test.
 
 ### Per-run M2M identities
 
-Live app validation uses three service principals and stores only their OAuth
+Live app validation uses four service principals and stores only their OAuth
 client credentials. No bearer token is a GitHub secret or `.env.local` value:
 
 One-shot OAuth secrets are written only to the repository detected from the
@@ -83,6 +83,7 @@ does not require this binding and can run from a customer fork unchanged.
 | Role | Default service principal | GitHub Actions secrets |
 |---|---|---|
 | normal app user | `mip-nightly-ci-sp` | `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` |
+| second app operator | `mip-nightly-operator2-ci-sp` | `DATABRICKS_OPERATOR2_CLIENT_ID`, `DATABRICKS_OPERATOR2_CLIENT_SECRET` |
 | app admin | `mip-nightly-admin-ci-sp` | `DATABRICKS_ADMIN_CLIENT_ID`, `DATABRICKS_ADMIN_CLIENT_SECRET` |
 | AI Gateway verifier | `mip-ai-gateway-verifier-ci-sp` | `DATABRICKS_VERIFIER_CLIENT_ID`, `DATABRICKS_VERIFIER_CLIENT_SECRET` |
 
@@ -93,6 +94,9 @@ Lakebase instance exist. The live workspace does not initially contain
 ```bash
 python tools/databricks/provision_m2m_oauth.py \
   --identity-role normal --set-gh-secrets \
+  --gh-repo skyler-myers-db/mortgage-intelligence-platform
+python tools/databricks/provision_m2m_oauth.py \
+  --identity-role operator2 --set-gh-secrets \
   --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
   --identity-role admin --create-group \
@@ -106,9 +110,9 @@ python tools/databricks/provision_m2m_oauth.py \
 
 Without `--create-group`, admin provisioning fails closed when `mip-admin` is
 missing. Re-running is idempotent: existing principals, group membership, and
-the verifier Lakebase OAuth role are reused. Use
-`--client-id-secret-name` / `--client-secret-secret-name` when repository
-secret names differ. The verifier is never added to `mip-admin` and receives no
+the verifier Lakebase OAuth role are reused. Client ID and secret sink flags
+are assertions for the reserved role-owned names; custom or cross-role sink
+names are rejected. The verifier is never added to `mip-admin` and receives no
 Databricks App `CAN_USE` permission by default. It receives only `CAN_USE`
 on the named SQL warehouse, `CAN_QUERY` on the AI Gateway endpoint, read-only
 access to the exact inference tables, and verifier-only Lakebase proof-ledger
@@ -126,6 +130,9 @@ client IDs, mints distinct normal/admin bearers at preflight, remints both
 immediately before Agent Evaluation, and remints the normal bearer again before
 the final smoke sweep. GitHub workflows use `tools/oauth_m2m_mint.py` to append
 fresh values directly to `$GITHUB_ENV`; minted values are not printed.
+The second-operator credential pair is intentionally required only by the
+on-demand `nightly.yml` isolation gate; deployment does not impersonate that
+operator.
 
 The deploy script's live smoke now requires agentic capability proof by
 default (`MIP_EXPECT_AGENTIC_CAPABILITIES=1`). The admin proof uses the fresh
@@ -145,6 +152,33 @@ fail if that exact proof has not landed yet. Proof and inference-row timestamps
 are bounded below by the request/freshness window and above by a five-minute
 clock tolerance. Future-dated evidence beyond that tolerance is rejected by the
 verifier, runtime lookup, and Lakebase write trigger.
+Without strict mode, a proof submission or verification failure is surfaced as
+a deploy warning and the App remains honestly configured/unavailable; it never
+becomes claimable without the exact signed row. This permits non-release
+diagnostics and browser validation while preserving the release gate.
+Inference-log tables are delivered asynchronously, so deploy waits up to
+`MIP_AI_GATEWAY_GRANT_TIMEOUT_S` (1200 seconds by default, bounded at 3600)
+before treating their table-level grants as pending. Non-strict deploys may
+continue in configured/unavailable state; the manual live-validation workflow
+reconciles the app and verifier grants again before exact proof verification.
+Strict deploys fail if grant convergence is incomplete.
+
+Product requests use the MIP-owned `mip-growth-agent-gateway` Agent Model
+endpoint. Its MLflow `ResponsesAgent` delegates the unchanged bounded input to
+the managed Mortgage Growth Agent Supervisor through a declared serving-endpoint
+resource, so Model Serving supplies scoped automatic authentication. The App is
+granted `CAN_QUERY` only on the outer Agent Model endpoint; it does not receive a
+direct grant on the managed Supervisor endpoint. The runtime separately proves
+the configured Supervisor ID-to-managed-endpoint mapping and the outer
+endpoint's `agent/v1/responses` task before labeling a response as
+Supervisor-generated.
+
+Databricks Agent Model endpoints currently support AI Gateway payload logging,
+but not Gateway rate limiting or usage tracking. The provisioner therefore
+creates the endpoint with exactly one inference-table configuration at
+`mip.audit.mip_agent_gateway_growth_agent`; request budgets remain enforced by
+the application's authenticated backpressure middleware. Do not add unsupported
+Gateway rate-limit fields to this Agent endpoint or describe them as live proof.
 
 Exact-row proof also requires an Ed25519 attestation from the verifier. Store
 `MIP_AI_GATEWAY_PROOF_SIGNING_KEY` only in deploy/nightly automation. The deploy
@@ -226,6 +260,24 @@ Databricks App resources expected by `app.yaml`:
   database `CREATE` and fails unless postflight proves connect-only access plus
   the exact reviewed `mip_app` table/sequence matrix in the internal security
   grant runbook.
+
+## Optional Salesforce activation
+
+Salesforce delivery is disabled unless the full connector is configured. In
+addition to the OAuth values, the customer must create a unique External ID
+text field on the configured sObject and set
+`SALESFORCE_EXTERNAL_ID_FIELD` (for example `MIP_Activation_Id__c`). MIP uses
+the immutable activation UUID as that field's value and performs a Salesforce
+External-ID `PATCH` upsert; ordinary non-idempotent `POST` delivery is not
+used. This makes exact request retries and recovery after an ambiguous local
+commit reuse one remote record.
+
+The dev deploy workflow accepts the non-secret connector values as GitHub
+environment variables and the client secret, integration-user password, and
+optional security token as GitHub environment secrets. `deploy.sh` writes
+those secret values directly to the `mip-runtime` Databricks secret scope and
+the App payload uses `value_from` bindings. A partial connector remains
+honestly staged and cannot claim delivery.
 
 ## Optional OTLP log export
 

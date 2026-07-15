@@ -43,6 +43,25 @@ export function savedCampaignVariants(campaign: CampaignSummary): SavedCampaignV
   });
 }
 
+/**
+ * Only campaigns which cannot be bound to immutable treatment proof may use
+ * the quarantine archive affordance. Current servers expose the exact state;
+ * the issue-only fallback preserves the remediation path during a rolling
+ * deployment and the API remains the final transition guard.
+ */
+export function savedCampaignCanArchive(campaign: CampaignSummary): boolean {
+  if (
+    campaign.status === 'archived'
+    || campaign.actionable !== false
+    || campaign.actionability_issue !== 'treatment_unbound'
+  ) {
+    return false;
+  }
+  return campaign.treatment_state === undefined
+    || campaign.treatment_state === 'legacy_unbound'
+    || campaign.treatment_state === 'failed';
+}
+
 export function savedCampaignLeadQueueUrl(
   campaign: CampaignSummary,
   variantName: string,

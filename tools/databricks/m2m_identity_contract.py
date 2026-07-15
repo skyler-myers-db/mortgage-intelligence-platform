@@ -10,7 +10,7 @@ from typing import Literal
 DEFAULT_ADMIN_GROUP = "mip-admin"
 DEFAULT_LAKEBASE_INSTANCE = "mip-app-state"
 
-IdentityRole = Literal["normal", "admin", "verifier"]
+IdentityRole = Literal["normal", "operator2", "admin", "verifier"]
 
 
 @dataclass(frozen=True)
@@ -30,6 +30,15 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         client_id_secret_name="DATABRICKS_CLIENT_ID",
         client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
         app_url_secret_name="MIP_APP_URL",
+        group_name=None,
+        grant_can_use=True,
+        lakebase_instance=None,
+    ),
+    "operator2": IdentityDefaults(
+        sp_name="mip-nightly-operator2-ci-sp",
+        client_id_secret_name="DATABRICKS_OPERATOR2_CLIENT_ID",
+        client_secret_secret_name="DATABRICKS_OPERATOR2_CLIENT_SECRET",
+        app_url_secret_name=None,
         group_name=None,
         grant_can_use=True,
         lakebase_instance=None,

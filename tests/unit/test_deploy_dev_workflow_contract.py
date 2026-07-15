@@ -10,6 +10,7 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
+NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 DEPLOY_SCRIPT = REPO / "scripts" / "deploy.sh"
 
 
@@ -129,7 +130,6 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers(
 
     assert "MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}" in text
     assert "MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}" in text
-    assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" in text
     assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}" in text
     assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in text
     assert "DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}" in text
@@ -140,7 +140,13 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers(
     assert "python tools/oauth_m2m_mint.py" in text
     assert "--github-env MIP_BEARER_TOKEN" in text
     assert "--github-env MIP_ADMIN_BEARER_TOKEN" in text
-    assert "Normal and admin M2M client IDs must be distinct" in text
+    assert (
+        "Normal, operator2, admin, and verifier M2M client IDs must be pairwise distinct."
+        in text
+    )
+    assert "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}" in text
+    assert "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID}" in text
+    assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" not in text
 
 
 def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
@@ -159,6 +165,92 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     assert "run_as_m2m_identity" in script
     assert "jobs/lakebase_migrate.py" in script
     assert 'export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"' in script
+    boundary = script.index(
+        'step "prove verifier effective authorization boundary before exact Gateway proof"'
+    )
+    proof = script.index('step "verify AI Gateway exact inference-row proof')
+    assert boundary < proof
+    assert "tools/databricks/verify_verifier_identity_boundary.py" in script[boundary:proof]
+    assert '--protected-service-principal-id "$APP_SP_SCIM_ID"' in script[boundary:proof]
+    assert 'DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}' in workflow
+
+
+def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    proof_step = script.index('step "verify AI Gateway exact inference-row proof')
+    next_step = script.index("wait_for_app_deployable", proof_step)
+    proof_block = script[proof_step:next_step]
+    assert 'AI_GATEWAY_PROOF_ARGS+=(--require-verified)' in proof_block
+    assert 'if ! run_as_m2m_identity \\' in proof_block
+    assert "strict AI Gateway exact proof failed" in proof_block
+    assert "exit 1" in proof_block
+    assert "continuing with the capability honestly configured/unavailable" in proof_block
+    assert "${YLW}" in proof_block
+    assert "${YEL}" not in script
+
+
+def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    workflow = NIGHTLY.read_text(encoding="utf-8")
+
+    grant_start = script.index('AI_GATEWAY_GRANTS_READY=1')
+    proof_start = script.index('step "verify AI Gateway exact inference-row proof', grant_start)
+    grant_block = script[grant_start:proof_start]
+    assert 'if ! run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py' in grant_block
+    assert "strict AI Gateway inference-table grant convergence failed" in grant_block
+    assert "delivery/grants are pending" in grant_block
+    assert "honestly configured/unavailable" in grant_block
+    assert "Reconcile delayed AI Gateway inference-table grants" in workflow
+    assert workflow.count("tools/databricks/grant_ai_gateway_inference_table.py") >= 1
+
+
+def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    bundle_apply = script.index('tools/databricks/bundle_env.py deploy -t "$TARGET"')
+    role_bootstrap = script.index(
+        'step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"'
+    )
+    first_migration = script.index(
+        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
+    )
+    assert bundle_apply < role_bootstrap < first_migration
+    bootstrap_block = script[role_bootstrap:first_migration]
+    assert "tools/databricks/provision_m2m_oauth.py" in bootstrap_block
+    assert "--identity-role verifier" in bootstrap_block
+    assert '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in bootstrap_block
+    assert "--no-mint-secret" in bootstrap_block
+    assert "--gateway-endpoint" not in bootstrap_block
+    assert "--warehouse-id" not in bootstrap_block
+
+
+def test_deploy_dev_wires_required_gateway_proof_signing_key() -> None:
+    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    secret_binding = (
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: "
+        "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
+    )
+    assert workflow.count(secret_binding) == 2
+    required_loop = workflow[workflow.index("missing=\"\"") : workflow.index("python - <<'PY'")]
+    assert "MIP_GENIE_ACTION_SECRET_CURRENT" in required_loop
+    assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" in required_loop
+
+
+def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflight() -> None:
+    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    for binding in (
+        "SALESFORCE_EXTERNAL_ID_FIELD: ${{ vars.SALESFORCE_EXTERNAL_ID_FIELD }}",
+        "SALESFORCE_CLIENT_SECRET: ${{ secrets.SALESFORCE_CLIENT_SECRET }}",
+        "SALESFORCE_PASSWORD: ${{ secrets.SALESFORCE_PASSWORD }}",
+    ):
+        assert binding in workflow
+    required_preflight = workflow[workflow.index('missing=""') : workflow.index(
+        'if [ -n "$missing" ]'
+    )]
+    assert "SALESFORCE" not in required_preflight
 
 
 def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_path: Path) -> None:

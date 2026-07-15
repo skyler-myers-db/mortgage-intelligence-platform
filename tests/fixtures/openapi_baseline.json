@@ -476,6 +476,17 @@
             ],
             "title": "Actor Cache Key"
           },
+          "agent_gateway_binding_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Gateway Binding Sha256"
+          },
           "app_env": {
             "anyOf": [
               {
@@ -3278,6 +3289,21 @@
         "title": "CallDisposition",
         "type": "object"
       },
+      "CampaignBuildPreviewConfig": {
+        "additionalProperties": false,
+        "description": "Optional exact treatment-count contract for Portfolio Builder previews.",
+        "properties": {
+          "household_dedup": {
+            "$ref": "#/components/schemas/HouseholdDedupConfig"
+          },
+          "suppression_policy": {
+            "title": "Suppression Policy",
+            "type": "object"
+          }
+        },
+        "title": "CampaignBuildPreviewConfig",
+        "type": "object"
+      },
       "CampaignListResponse": {
         "properties": {
           "campaigns": {
@@ -3526,6 +3552,26 @@
       "CampaignStatusPatchRequest": {
         "additionalProperties": false,
         "properties": {
+          "expected_status": {
+            "anyOf": [
+              {
+                "enum": [
+                  "draft",
+                  "pending_review",
+                  "approved",
+                  "live",
+                  "active",
+                  "rejected",
+                  "archived"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Status"
+          },
           "rationale": {
             "anyOf": [
               {
@@ -3565,6 +3611,7 @@
               {
                 "enum": [
                   "legacy_contract",
+                  "treatment_unbound",
                   "invalid_name",
                   "invalid_criteria",
                   "invalid_policy",
@@ -3675,6 +3722,16 @@
             "title": "Suppression Policy",
             "type": "object"
           },
+          "treatment_state": {
+            "enum": [
+              "legacy_unbound",
+              "building",
+              "ready",
+              "failed"
+            ],
+            "title": "Treatment State",
+            "type": "string"
+          },
           "updated_at": {
             "anyOf": [
               {
@@ -3693,6 +3750,7 @@
           "name",
           "owner_email",
           "status",
+          "treatment_state",
           "criteria"
         ],
         "title": "CampaignSummary",
@@ -7519,6 +7577,17 @@
             ],
             "title": "Actor Cache Key"
           },
+          "agent_gateway_binding_sha256": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Gateway Binding Sha256"
+          },
           "circuit_breakers": {
             "additionalProperties": {
               "type": "string"
@@ -9706,6 +9775,18 @@
             ],
             "title": "Campaign Id"
           },
+          "campaign_treatment_fingerprint": {
+            "anyOf": [
+              {
+                "pattern": "^[0-9a-f]{64}$",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Treatment Fingerprint"
+          },
           "channel": {
             "enum": [
               "email",
@@ -10232,6 +10313,17 @@
             ],
             "title": "Audit Event Id"
           },
+          "campaign_build_eligible": {
+            "default": true,
+            "title": "Campaign Build Eligible",
+            "type": "boolean"
+          },
+          "campaign_build_limit": {
+            "default": 10000,
+            "minimum": 1.0,
+            "title": "Campaign Build Limit",
+            "type": "integer"
+          },
           "campaign_id": {
             "anyOf": [
               {
@@ -10558,6 +10650,35 @@
             ],
             "title": "Avg Score"
           },
+          "campaign_build_contact_count": {
+            "anyOf": [
+              {
+                "minimum": 0.0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Build Contact Count"
+          },
+          "campaign_build_eligible": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Build Eligible"
+          },
+          "campaign_build_limit": {
+            "default": 10000,
+            "minimum": 1.0,
+            "title": "Campaign Build Limit",
+            "type": "integer"
+          },
           "data_refreshed_at": {
             "anyOf": [
               {
@@ -10680,6 +10801,16 @@
       "PortfolioPreviewRequest": {
         "additionalProperties": false,
         "properties": {
+          "campaign_build_config": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/CampaignBuildPreviewConfig"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "criteria": {
             "$ref": "#/components/schemas/PortfolioCriteria"
           }
@@ -12268,10 +12399,15 @@
           "can_access_admin": {
             "title": "Can Access Admin",
             "type": "boolean"
+          },
+          "can_approve": {
+            "title": "Can Approve",
+            "type": "boolean"
           }
         },
         "required": [
-          "can_access_admin"
+          "can_access_admin",
+          "can_approve"
         ],
         "title": "SessionResponse",
         "type": "object"

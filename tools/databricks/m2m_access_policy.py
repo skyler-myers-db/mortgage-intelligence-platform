@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from collections.abc import Iterable
 from typing import Any
 
 DOCS_RUNBOOK = "docs/security/m2m-oauth-setup.md"
@@ -53,7 +54,13 @@ def find_group(client: Any, display_name: str) -> Any | None:
 
 
 def resolve_effective_groups(client: Any, *, sp_id: str) -> dict[str, str]:
-    """Return every direct or nested group containing the service principal."""
+    """Return workspace-visible direct and nested groups containing the principal.
+
+    Databricks automatic identity management can make some account-level nested
+    memberships effective without exposing them through workspace SCIM. Callers
+    must therefore pair this useful preflight with verifier-credential negative
+    authorization probes before making an authoritative least-privilege claim.
+    """
     principal_id = str(sp_id or "").strip()
     if not principal_id:
         raise SystemExit(
@@ -126,7 +133,7 @@ def ensure_group_membership(
     if group is None:
         if not create_group:
             raise SystemExit(
-                f"Required admin group {group_name!r} does not exist. "
+                f"Required identity group {group_name!r} does not exist. "
                 "Re-run with --create-group only after governance review."
             )
         _diag(f"creating group display_name={group_name!r} (--create-group)")
@@ -178,6 +185,75 @@ def assert_not_admin_group_member(
         )
 
 
+def assert_non_admin_service_principal(
+    client: Any,
+    *,
+    sp_id: str,
+    effective_groups: dict[str, str],
+    identity_role: str,
+) -> None:
+    """Reject visible built-in admin membership, roles, and powerful entitlements."""
+    try:
+        principal = client.service_principals.get(sp_id)
+    except Exception as exc:  # noqa: BLE001
+        raise wrap_admin_error(exc, step="inspect service principal roles") from exc
+    hydrated_id = str(getattr(principal, "id", "") or "").strip()
+    if hydrated_id != sp_id:
+        raise SystemExit("Cannot inspect service principal roles: hydrated SCIM id mismatch")
+
+    forbidden_groups = {"admins", "account admins", "workspace admins", "metastore admins"}
+    visible = {name.casefold() for name in effective_groups.values()}
+    matched_groups = sorted(forbidden_groups.intersection(visible))
+    if matched_groups:
+        raise SystemExit(
+            f"{identity_role} service principal has forbidden built-in administrator group "
+            f"membership: {', '.join(matched_groups)}"
+        )
+
+    def _values(items: Iterable[Any] | None) -> set[str]:
+        return {
+            str(
+                getattr(item, "value", None)
+                or getattr(item, "display", None)
+                or item
+                or ""
+            )
+            .strip()
+            .casefold()
+            for item in (items or [])
+            if str(
+                getattr(item, "value", None)
+                or getattr(item, "display", None)
+                or item
+                or ""
+            ).strip()
+        }
+
+    roles = _values(getattr(principal, "roles", None))
+    forbidden_roles = {
+        role
+        for role in roles
+        if any(token in role for token in ("admin", "manager", "metastore"))
+    }
+    if forbidden_roles:
+        raise SystemExit(
+            f"{identity_role} service principal has forbidden administrative role(s): "
+            f"{', '.join(sorted(forbidden_roles))}"
+        )
+
+    entitlements = _values(getattr(principal, "entitlements", None))
+    powerful_entitlements = {
+        "allow-cluster-create",
+        "allow-instance-pool-create",
+    }
+    forbidden_entitlements = sorted(entitlements.intersection(powerful_entitlements))
+    if forbidden_entitlements:
+        raise SystemExit(
+            f"{identity_role} service principal has forbidden powerful entitlement(s): "
+            f"{', '.join(forbidden_entitlements)}"
+        )
+
+
 def assert_no_app_permission(
     client: Any,
     *,
@@ -209,3 +285,81 @@ def assert_no_app_permission(
                 f"permission on {app_name!r} through group {group_name!r}; remove the group "
                 "grant or membership before provisioning"
             )
+
+
+def grant_can_query_on_endpoint(
+    client: Any,
+    endpoint_name: str,
+    sp_application_id: str,
+    *,
+    sp_id: str,
+    effective_group_names: set[str],
+) -> None:
+    """Converge the verifier's exact, group-aware CAN_QUERY grant."""
+
+    from tools.databricks.serving_endpoint_acl import grant_direct_can_query
+
+    _diag(f"resolving serving endpoint id for endpoint={endpoint_name!r}")
+    try:
+        _diag(f"granting CAN_QUERY on endpoint={endpoint_name!r} to verifier identity")
+        grant_direct_can_query(
+            client,
+            endpoint_name=endpoint_name,
+            service_principal=sp_application_id,
+            service_principal_id=sp_id,
+            effective_group_names=effective_group_names,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise wrap_admin_error(exc, step="update serving endpoint permissions") from exc
+
+
+def revoke_can_query_on_obsolete_endpoint(
+    client: Any,
+    endpoint_name: str,
+    sp_application_id: str,
+    *,
+    sp_id: str,
+    effective_group_names: set[str],
+) -> None:
+    """Remove and disprove direct or group-derived access to an obsolete endpoint."""
+
+    from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
+
+    try:
+        removed = revoke_direct_permissions(
+            client,
+            endpoint_name=endpoint_name,
+            service_principal=sp_application_id,
+            missing_ok=True,
+            service_principal_id=sp_id,
+            effective_group_names=effective_group_names,
+        )
+        _diag(
+            f"{'revoked' if removed else 'verified absent'} verifier query access "
+            f"on obsolete endpoint={endpoint_name!r}"
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise wrap_admin_error(exc, step="revoke obsolete serving endpoint permissions") from exc
+
+
+def grant_can_use_on_warehouse(
+    client: Any,
+    warehouse_id: str,
+    sp_application_id: str,
+    *,
+    effective_group_names: set[str],
+) -> None:
+    """Converge exact verifier CAN_USE on one SQL warehouse."""
+
+    from tools.databricks.warehouse_acl import converge_exact_can_use
+
+    _diag(f"granting CAN_USE on warehouse={warehouse_id!r} to verifier identity")
+    try:
+        converge_exact_can_use(
+            client,
+            warehouse_id=warehouse_id,
+            service_principal=sp_application_id,
+            effective_group_names=effective_group_names,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise wrap_admin_error(exc, step="update SQL warehouse permissions") from exc

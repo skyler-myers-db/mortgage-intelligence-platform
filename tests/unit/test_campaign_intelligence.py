@@ -13,6 +13,12 @@ from backend.services.campaign_intelligence import (
     inspect_campaign_variant_provenance,
     recommend_campaign,
 )
+from tests.fixtures.supervisor_runtime import (
+    GATEWAY_ENDPOINT,
+    gateway_endpoint_details,
+    runtime_settings,
+    supervisor_metadata,
+)
 
 client = TestClient(app)
 
@@ -20,6 +26,8 @@ client = TestClient(app)
 def _preview() -> PortfolioPreview:
     return PortfolioPreview(
         marketable_population=2_119,
+        campaign_build_contact_count=2_119,
+        campaign_build_eligible=True,
         high_intent_leads=1_200,
         avg_score=73,
         avg_current_lien_balance_usd=412_500,
@@ -184,8 +192,8 @@ def test_campaign_recommendation_route_returns_reviewed_strategy() -> None:
 class _ApiClient:
     def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
         if method == "GET":
-            assert path == "/api/2.1/supervisor-agents/supervisor-id"
-            return {"supervisor_agent_id": "supervisor-id", "endpoint_name": "mip-supervisor"}
+            assert path == "/api/2.1/supervisor-agents/supervisor-123"
+            return supervisor_metadata()
         assert method == "POST"
         assert path == "/serving-endpoints/responses"
         assert body is not None
@@ -223,11 +231,8 @@ class _ApiClient:
 
 class _ServingEndpoints:
     def get(self, endpoint: str):
-        assert endpoint == "mip-supervisor"
-        return SimpleNamespace(
-            state=SimpleNamespace(ready="READY"),
-            task="agent/v1/responses",
-        )
+        assert endpoint == GATEWAY_ENDPOINT
+        return gateway_endpoint_details()
 
 
 class _PromptCaptureApiClient(_ApiClient):
@@ -254,10 +259,7 @@ def test_supervisor_copy_is_validated_while_evidence_remains_server_derived() ->
     client = SimpleNamespace(serving_endpoints=_ServingEndpoints(), api_client=_ApiClient())
     result = recommend_campaign(
         _preview(),
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
+        settings=runtime_settings(
             mip_lender_name="Summit Mortgage",
         ),
         serving_client=client,
@@ -279,10 +281,7 @@ def test_supervisor_transport_failure_uses_labelled_data_backed_fallback() -> No
     result = recommend_campaign(
         _preview(),
         performance=_qualified_performance(),
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
+        settings=runtime_settings(
             mip_lender_name="Summit Mortgage",
         ),
         serving_client=serving,
@@ -299,11 +298,7 @@ def test_supervisor_transport_failure_uses_labelled_data_backed_fallback() -> No
 def test_model_prompt_omits_unqualified_performance_and_includes_complete_proof() -> None:
     api_client = _PromptCaptureApiClient()
     serving = SimpleNamespace(serving_endpoints=_ServingEndpoints(), api_client=api_client)
-    settings = Settings(
-        mip_agent_orchestrator=True,
-        mip_agent_serving_endpoint="mip-supervisor",
-        mip_agent_supervisor_id="supervisor-id",
-    )
+    settings = runtime_settings()
     low_quality = CampaignPerformanceContext(
         unique_leads_attempted=100,
         unique_contacts_reached=80,
@@ -415,10 +410,7 @@ def test_unsafe_supervisor_copy_fails_closed_to_reviewed_fallback() -> None:
     )
     result = recommend_campaign(
         _preview(),
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
+        settings=runtime_settings(
             mip_lender_name="Summit Mortgage",
         ),
         serving_client=serving,
@@ -441,10 +433,7 @@ def test_internal_supervisor_summary_is_dropped_via_reviewed_fallback() -> None:
     )
     result = recommend_campaign(
         _preview(),
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
+        settings=runtime_settings(
             mip_lender_name="Summit Mortgage",
         ),
         serving_client=serving,

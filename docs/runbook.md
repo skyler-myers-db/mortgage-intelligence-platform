@@ -299,8 +299,8 @@ That single invocation executes:
    review drafts. It never sends messages or connector writes. Its weekday
    schedule ships **PAUSED in every target**; run it manually or unpause only
    after the customer approves a cadence. The Databricks job run identity must
-   be admitted by the app's admin policy (`MIP_ADMIN_EMAILS` or the configured
-   admin group, usually `mip-admin`) before the job is unpaused; otherwise the
+   be admitted by the app's admin policy (`MIP_ADMIN_IDENTITIES` or
+   `MIP_ADMIN_EMAILS`) before the job is unpaused; otherwise the
    all-actor endpoint fails closed with `403 {"detail":"forbidden"}`.
 12. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
@@ -546,15 +546,18 @@ If any fail, route to data-modeler + principal-architect before release.
 
 ---
 
-## 11. Admin RBAC header for local dev
+## 11. Admin RBAC compatibility header for local dev
 
 The `/api/v1/admin/*` endpoints are gated by
-[`backend/services/rbac.py`](../backend/services/rbac.py). Admission is
-a match against the configured admin group (default `mip-admin`, env
-override `MIP_ADMIN_GROUP_NAME`) or the hard-coded fallback `admins`.
-Databricks Apps forwards workspace group membership via
-`X-Forwarded-Groups`; the deployed app gets this for free from the
-edge.
+[`backend/services/rbac.py`](../backend/services/rbac.py). Sandbox and
+production admission requires an exact resolved actor in
+`MIP_ADMIN_IDENTITIES` or `MIP_ADMIN_EMAILS`. The deploy workflow derives the
+automation identity from the dedicated admin service-principal client ID.
+
+`X-Forwarded-Groups` is not a documented Databricks Apps identity-header
+contract. The configured group (default `mip-admin`) and the `admins` fallback
+therefore work only as local/test compatibility helpers; they are never an
+authoritative deployed authorization path.
 
 Local `uvicorn` and `curl` do **not** get that header automatically —
 we deliberately chose fail-closed over an `app_env == "local"` auto-
@@ -668,24 +671,24 @@ row.
    `lakebase == "down"` is the smoking gun. Fix: §1.2 (re-auth /
    bounce the instance).
 
-2. **RBAC denied the approval call** — the analyst isn't in the admin
-   group, or the Databricks Apps edge isn't forwarding
-   `X-Forwarded-Groups`, so `POST /api/v1/outreach/approve` returns 403.
+2. **RBAC denied the approval call** — the resolved actor is absent from
+   `MIP_APPROVER_IDENTITIES`, `MIP_APPROVER_EMAILS`, or the admin allowlists,
+   so `POST /api/v1/outreach/approve` returns 403.
 
    Confirm in the browser devtools Network panel: the approve POST
    should be 200. If it's 403 with body `{"detail":"forbidden"}`, RBAC
-   is rejecting. Replay from a trusted host:
+   is rejecting. For local-only diagnosis, replay with an email configured in
+   `MIP_APPROVER_EMAILS`:
    ```bash
    BORROWER_ID="$(curl -s "$MIP_APP_URL/api/v1/leads?limit=1" | jq -r '.[0].borrower_id')"
    curl -s -X POST "$MIP_APP_URL/api/v1/outreach/approve" \
-     -H "X-Forwarded-Groups: mip-admin" \
      -H "X-Forwarded-Email: you@entrada.ai" \
      -H "Content-Type: application/json" \
      -d "{\"borrower_id\":\"$BORROWER_ID\",\"offer_code\":\"RATE_TERM_REFI\"}" | jq
    ```
-   Fix: see §11 for the header contract; for production the edge should
-   be forwarding both headers automatically — if it isn't, route to
-   governance-security-reviewer.
+   Fix: inspect `/api/v1/session` under the same authenticated identity and
+   reconcile the exact server-owned allowlist. Do not grant deployed access by
+   trusting a caller-supplied group header.
 
 3. **Write succeeded, read filtered it out** — the audit list query
    scopes by `actor_email`, and the email the write recorded disagrees

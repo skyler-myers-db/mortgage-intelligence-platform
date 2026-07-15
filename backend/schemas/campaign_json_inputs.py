@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import math
 import re
+from decimal import Decimal, InvalidOperation
 from typing import cast
 
 from backend.schemas.portfolio_campaign import assert_public_campaign_json
@@ -166,11 +167,14 @@ def normalize_holdout(value: dict[str, object] | None) -> dict[str, object] | No
     if isinstance(size_pct_raw, bool) or not isinstance(size_pct_raw, int | float | str):
         raise ValueError("holdout.size_pct must be numeric")
     try:
-        size_pct = float(size_pct_raw)
-    except (TypeError, ValueError) as exc:
+        size_pct_decimal = Decimal(str(size_pct_raw).strip())
+    except (InvalidOperation, ValueError) as exc:
         raise ValueError("holdout.size_pct must be numeric") from exc
-    if not math.isfinite(size_pct) or not 0 <= size_pct <= 50:
+    if not size_pct_decimal.is_finite() or not Decimal(0) <= size_pct_decimal <= Decimal(50):
         raise ValueError("holdout.size_pct must be finite and between 0 and 50")
+    if size_pct_decimal * 100 != (size_pct_decimal * 100).to_integral_value():
+        raise ValueError("holdout.size_pct must use at most two decimal places")
+    size_pct = float(size_pct_decimal)
     return {"method": method, "size_pct": size_pct}
 
 
@@ -203,8 +207,8 @@ def normalize_suppression_policy(value: dict[str, object]) -> dict[str, object]:
             days = int(cast(int | str, raw_days))
         except (TypeError, ValueError) as exc:
             raise ValueError("suppression_policy.frequency_cap_days must be an integer") from exc
-        if str(raw_days).strip() != str(days) or not 1 <= days <= 365:
-            raise ValueError("suppression_policy.frequency_cap_days must be between 1 and 365")
+        if str(raw_days).strip() != str(days) or not 30 <= days <= 365:
+            raise ValueError("suppression_policy.frequency_cap_days must be between 30 and 365")
         normalized["frequency_cap_days"] = days
     return normalized
 

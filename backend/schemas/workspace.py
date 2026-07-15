@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, field_validator
 
-from backend.schemas.common import validate_no_human_name_shape, validate_public_borrower_id
+from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.portfolio_campaign import (
     assert_borrower_campaign_copy,
     assert_public_campaign_text,
@@ -59,8 +59,15 @@ class SavedDraftInput(BaseModel):
 
     @field_validator("body")
     @classmethod
-    def _body_has_no_human_names(cls, value: str) -> str:
-        return validate_no_human_name_shape(value, field_name="saved draft body")
+    def _body_is_governed_borrower_copy(cls, value: str) -> str:
+        body = assert_public_campaign_text(
+            value,
+            field_name="saved draft body",
+            max_length=5000,
+        )
+        assert_borrower_campaign_copy(body, field_name="saved draft body")
+        return body
+
 
 class SavedDraft(SavedDraftInput):
     saved_at: str

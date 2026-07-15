@@ -7,6 +7,12 @@ from backend.config.settings import Settings
 from backend.services.growth_agent_notification_intelligence import (
     recommend_notification_intelligence,
 )
+from tests.fixtures.supervisor_runtime import (
+    GATEWAY_ENDPOINT,
+    gateway_endpoint_details,
+    runtime_settings,
+    supervisor_metadata,
+)
 
 
 def test_notification_intelligence_fallback_is_explicit() -> None:
@@ -43,8 +49,8 @@ def test_notification_intelligence_fallback_is_workflow_specific() -> None:
 class _ApiClient:
     def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
         if method == "GET":
-            assert path == "/api/2.1/supervisor-agents/supervisor-id"
-            return {"supervisor_agent_id": "supervisor-id", "endpoint_name": "mip-supervisor"}
+            assert path == "/api/2.1/supervisor-agents/supervisor-123"
+            return supervisor_metadata()
         assert method == "POST"
         assert path == "/serving-endpoints/responses"
         assert body is not None
@@ -69,8 +75,8 @@ class _ApiClient:
 
 class _ServingEndpoints:
     def get(self, endpoint: str):
-        assert endpoint == "mip-supervisor"
-        return SimpleNamespace(state=SimpleNamespace(ready="READY"), task="agent/v1/responses")
+        assert endpoint == GATEWAY_ENDPOINT
+        return gateway_endpoint_details()
 
 
 def test_notification_intelligence_uses_validated_agent_response_fragments() -> None:
@@ -78,11 +84,7 @@ def test_notification_intelligence_uses_validated_agent_response_fragments() -> 
     result = recommend_notification_intelligence(
         monitor_name="Daily Refi Watch",
         workflow_id="daily_refi_brief",
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
-        ),
+        settings=runtime_settings(),
         serving_client=client,
     )
 
@@ -113,11 +115,7 @@ def test_notification_intelligence_rejects_normalized_duplicate_channel_content(
     result = recommend_notification_intelligence(
         monitor_name="Daily Refi Watch",
         workflow_id="daily_refi_brief",
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
-        ),
+        settings=runtime_settings(),
         serving_client=client,
     )
 
@@ -149,11 +147,7 @@ def test_notification_intelligence_rejects_materially_similar_channel_content() 
     result = recommend_notification_intelligence(
         monitor_name="Daily Refi Watch",
         workflow_id="daily_refi_brief",
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
-        ),
+        settings=runtime_settings(),
         serving_client=client,
     )
 
@@ -181,11 +175,7 @@ def test_notification_intelligence_rejects_model_controlled_counts_routes_and_pr
     result = recommend_notification_intelligence(
         monitor_name="Daily Refi Watch",
         workflow_id="daily_refi_brief",
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
-        ),
+        settings=runtime_settings(),
         serving_client=client,
     )
 
@@ -235,11 +225,7 @@ def test_notification_intelligence_rejects_each_pressure_phrase_independently(
     result = recommend_notification_intelligence(
         monitor_name="Daily Refi Watch",
         workflow_id="daily_refi_brief",
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
-        ),
+        settings=runtime_settings(),
         serving_client=client,
     )
 
@@ -280,11 +266,7 @@ def test_notification_intelligence_fails_closed_on_names_and_protected_targeting
     result = recommend_notification_intelligence(
         monitor_name="Daily Refi Watch",
         workflow_id="daily_refi_brief",
-        settings=Settings(
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor",
-            mip_agent_supervisor_id="supervisor-id",
-        ),
+        settings=runtime_settings(),
         serving_client=client,
     )
 

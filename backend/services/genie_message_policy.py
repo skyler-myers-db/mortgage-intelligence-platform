@@ -64,6 +64,13 @@ _SAFE_PHRASE_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"(?<![a-z0-9])ages? of (?:the )?loans?(?![a-z0-9])", re.IGNORECASE),
     re.compile(r"(?<![a-z0-9])loan aging(?![a-z0-9])", re.IGNORECASE),
     re.compile(r"(?<![a-z0-9])lien ages?(?![a-z0-9])", re.IGNORECASE),
+    # The geography router treats this reviewed wording as country scope,
+    # not borrower national origin. Campaign/outreach validators do not carry
+    # this exemption.
+    re.compile(
+        r"(?<![a-z0-9])canadian borrowers by (?:zip|postal code)(?![a-z0-9])",
+        re.IGNORECASE,
+    ),
     re.compile(
         r"(?<![a-z0-9])(?:white|black)\s+"
         r"(?:plains|settlement|salmon|center|creek|river|falls|rock|oaks?|"

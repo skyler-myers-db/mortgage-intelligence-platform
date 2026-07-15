@@ -89,13 +89,18 @@ class _ActivationStore:
         *,
         approved_decisions: dict[str, dict[str, object]] | None = None,
         fail_stage: bool = False,
+        campaign_status: str | None = "active",
     ) -> None:
         self.destination = destination or _destination()
         self.outbox: list[ActivationOutboxItem] = []
         self.stage_calls = 0
         self.fail_stage = fail_stage
         self.approved_decisions = approved_decisions or {}
+        self.campaign_status = campaign_status
         self.last_approved_decision: dict[str, object] | None = None
+        self.delivery_guard_entered = False
+        self.activation: ActivationOutboxItem | None = None
+        self.should_deliver = False
 
     def list_destinations(self) -> list[ActivationDestination]:
         return [self.destination]
@@ -124,6 +129,55 @@ class _ActivationStore:
         if decision and decision.get("borrower_id") == borrower_id and decision.get("action") == "approve":
             return decision
         return None
+
+    def campaign_status_for_approval(
+        self,
+        *,
+        approval_id: str,
+        borrower_id: str,
+        campaign_id: str,
+    ) -> str | None:
+        decision = self.approved_decision_for(
+            approval_id=approval_id,
+            borrower_id=borrower_id,
+        )
+        if decision is None or str(decision.get("campaign_id") or "") != campaign_id:
+            return None
+        return self.campaign_status
+
+    @contextmanager
+    def delivery_guard(
+        self,
+        *,
+        activation: ActivationOutboxItem,
+    ) -> Iterator[_ActivationStore]:
+        self.delivery_guard_entered = True
+        self.activation = activation
+        campaign_active = not activation.campaign_id or (
+            self.campaign_status_for_approval(
+                approval_id=str(activation.approval_id or ""),
+                borrower_id=str(activation.borrower_id or ""),
+                campaign_id=activation.campaign_id,
+            )
+            == "active"
+        )
+        self.should_deliver = campaign_active and activation.status in {"staged", "failed"}
+        yield self
+
+    def update_delivery_state(
+        self,
+        *,
+        activation_id: str,
+        status: str,
+        delivery_metadata: dict[str, object],
+    ) -> ActivationOutboxItem | None:
+        if self.activation is None or self.activation.activation_id != activation_id:
+            return None
+        self.activation = self.activation.model_copy(
+            update={"status": status, "delivery_metadata": delivery_metadata}
+        )
+        self.should_deliver = False
+        return self.activation
 
     def stage_borrower(self, *, borrower, destination, payload, approved_decision, actor: str) -> ActivationWriteResult:
         self.stage_calls += 1
@@ -246,6 +300,69 @@ def test_stage_activation_requires_approved_eligible_borrower_and_writes_outbox(
     assert store.last_approved_decision
     assert store.last_approved_decision["approval_id"] == approval_id
     assert store.stage_calls == 1
+
+
+def test_stage_campaign_activation_requires_current_active_campaign() -> None:
+    borrower_id = mock_data.BORROWERS[0].borrower_id
+    approval_id = str(uuid4())
+    campaign_id = str(uuid4())
+    store = _ActivationStore(
+        approved_decisions={
+            approval_id: _approval_decision(
+                approval_id,
+                borrower_id,
+                campaign_id=campaign_id,
+            )
+        },
+        campaign_status="archived",
+    )
+
+    with _activation_overrides(store=store, sales_state=_SalesState(approval_id=approval_id)):
+        response = client.post(
+            "/api/activation/stage",
+            json={
+                "borrower_id": borrower_id,
+                "destination_key": "salesforce_crm",
+                "campaign_id": campaign_id,
+                "approval_id": approval_id,
+                "request_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "campaign must be active at activation staging time"
+    assert store.stage_calls == 0
+
+
+def test_stage_campaign_activation_accepts_current_active_campaign() -> None:
+    borrower_id = mock_data.BORROWERS[0].borrower_id
+    approval_id = str(uuid4())
+    campaign_id = str(uuid4())
+    store = _ActivationStore(
+        approved_decisions={
+            approval_id: _approval_decision(
+                approval_id,
+                borrower_id,
+                campaign_id=campaign_id,
+            )
+        },
+        campaign_status="active",
+    )
+
+    with _activation_overrides(store=store, sales_state=_SalesState(approval_id=approval_id)):
+        response = client.post(
+            "/api/activation/stage",
+            json={
+                "borrower_id": borrower_id,
+                "destination_key": "salesforce_crm",
+                "campaign_id": campaign_id,
+                "approval_id": approval_id,
+                "request_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 202, response.text
+    assert response.json()["activation"]["campaign_id"] == campaign_id
 
 
 def test_stage_activation_requires_request_id_and_approval_id() -> None:

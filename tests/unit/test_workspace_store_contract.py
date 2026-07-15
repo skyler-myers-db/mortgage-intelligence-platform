@@ -12,6 +12,7 @@ class _RecordingLakebase:
     def __init__(self) -> None:
         self.fetchones: list[tuple[str, dict[str, Any]]] = []
         self.fetchalls: list[tuple[str, dict[str, Any], int]] = []
+        self.draft_rows: list[dict[str, Any]] = []
 
     def fetchone(
         self,
@@ -63,6 +64,8 @@ class _RecordingLakebase:
         limit: int = 100,
     ) -> list[dict[str, Any]]:
         self.fetchalls.append((sql, params or {}, limit))
+        if "mip_app.outreach_drafts" in sql:
+            return list(self.draft_rows)
         return []
 
 
@@ -97,7 +100,7 @@ def test_save_lead_is_single_statement_with_audit_insert() -> None:
     }
 
 
-def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
+def test_save_governed_draft_and_keep_audit_bodyless() -> None:
     client = _RecordingLakebase()
     store = LakebaseWorkspaceStore(client=client)  # type: ignore[arg-type]
 
@@ -108,7 +111,7 @@ def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
             offer_code="OFFER-123",
             channel="email",
             subject="Review your mortgage options",
-            body="Call 212-555-1212 at 123 Main St.",
+            body="Review your mortgage options, then reply to discuss the next step.",
         ),
     )
 
@@ -116,8 +119,7 @@ def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
     assert "mip_app.outreach_drafts" in sql
     assert "mip_app.action_audit" in sql
     assert "'SAVE_DRAFT'" in sql
-    assert "[PHONE-REDACTED]" in saved.body
-    assert "[ADDRESS-REDACTED]" in saved.body
+    assert saved.body == "Review your mortgage options, then reply to discuss the next step."
     metadata = json.loads(params["metadata"])
     assert metadata == {
         "action": "workspace.save_draft",
@@ -129,6 +131,36 @@ def test_save_draft_scrubs_body_before_storage_and_audit_is_bodyless() -> None:
     }
     assert "draft_body" not in metadata
     assert saved.subject == "Review your mortgage options"
+
+
+def test_list_quarantines_legacy_drafts_that_violate_current_copy_policy() -> None:
+    client = _RecordingLakebase()
+    now = datetime.now(UTC)
+    client.draft_rows = [
+        {
+            "borrower_id": "B-LEGACY",
+            "offer_code": "refi",
+            "channel": "email",
+            "subject": "Old draft",
+            "body": "[PHONE-REDACTED]",
+            "saved_at": now,
+            "updated_at": now,
+        },
+        {
+            "borrower_id": "B-CURRENT",
+            "offer_code": "refi",
+            "channel": "email",
+            "subject": "Review your mortgage options",
+            "body": "Review your mortgage options, then reply to discuss the next step.",
+            "saved_at": now,
+            "updated_at": now,
+        },
+    ]
+    store = LakebaseWorkspaceStore(client=client)  # type: ignore[arg-type]
+
+    state = store.list(actor="lo@example.com")
+
+    assert [draft.borrower_id for draft in state.saved_drafts] == ["B-CURRENT"]
 
 
 def test_genie_save_action_sql_avoids_raw_percent_predicates() -> None:

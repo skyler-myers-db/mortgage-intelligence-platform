@@ -44,14 +44,20 @@ jobs:
           MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
           MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}
           MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}
+          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
           MIP_GENIE_ACTION_SECRET_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_KID }}
           MIP_GENIE_ACTION_SECRET_PREVIOUS_KID: ${{ vars.MIP_GENIE_ACTION_SECRET_PREVIOUS_KID }}
           MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}
           MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}
+          MIP_APPROVER_GROUP_NAME: ${{ vars.MIP_APPROVER_GROUP_NAME }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT; do
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi
@@ -60,11 +66,19 @@ jobs:
             echo "::error::Missing required secrets:$missing"
             exit 1
           fi
-          if [ -z "${MIP_ADMIN_EMAILS:-}" ] && [ -z "${MIP_ADMIN_GROUP_NAME:-}" ]; then
-            echo "::error::Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME as a dev environment/repository variable before deploying."
-            exit 1
-          fi
+          python - <<'PY'
+          import os
 
+          names = (
+              "DATABRICKS_CLIENT_ID",
+              "DATABRICKS_OPERATOR2_CLIENT_ID",
+              "DATABRICKS_ADMIN_CLIENT_ID",
+              "DATABRICKS_VERIFIER_CLIENT_ID",
+          )
+          values = [os.environ[name].strip() for name in names]
+          if len(set(values)) != len(values):
+              raise SystemExit("Normal, operator2, admin, and verifier M2M client IDs must be pairwise distinct.")
+          PY
           {
             echo "[DEFAULT]"
             echo "host  = ${DATABRICKS_HOST}"
@@ -81,6 +95,8 @@ jobs:
             echo "MIP_DEFAULT_CATALOG=mip"
             echo "MIP_DEFAULT_SCHEMA=gold"
             echo "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1"
+            echo "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}"
+            echo "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID}"
             if [ -n "${MIP_GENIE_ACTION_SECRET_KID:-}" ]; then
               echo "MIP_GENIE_ACTION_SECRET_KID=${MIP_GENIE_ACTION_SECRET_KID}"
             fi
@@ -93,6 +109,9 @@ jobs:
             if [ -n "${MIP_ADMIN_GROUP_NAME:-}" ]; then
               echo "MIP_ADMIN_GROUP_NAME=${MIP_ADMIN_GROUP_NAME}"
             fi
+            if [ -n "${MIP_APPROVER_GROUP_NAME:-}" ]; then
+              echo "MIP_APPROVER_GROUP_NAME=${MIP_APPROVER_GROUP_NAME}"
+            fi
           } > .env.local
           chmod 600 .env.local
       - name: Mint initial per-run app Bearers
@@ -100,12 +119,15 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
+          DATABRICKS_OPERATOR2_CLIENT_SECRET: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}
           DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
           DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           missing=""
           for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+                   DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
                    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET; do
             if [ -z "${!v:-}" ]; then
               missing="$missing $v"
@@ -115,11 +137,15 @@ jobs:
             echo "::error::Missing required per-run M2M OAuth secret(s):$missing"
             exit 1
           fi
-          if [ "$DATABRICKS_CLIENT_ID" = "$DATABRICKS_ADMIN_CLIENT_ID" ]; then
-            echo "::error::Normal and admin M2M client IDs must be distinct."
+          if [ "$(printf '%s\n' "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" "$DATABRICKS_ADMIN_CLIENT_ID" | sort -u | wc -l | tr -d ' ')" != "3" ]; then
+            echo "::error::Normal, operator2, and admin M2M client IDs must be distinct."
             exit 1
           fi
           python tools/oauth_m2m_mint.py --github-env MIP_BEARER_TOKEN
+          python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_OPERATOR2_CLIENT_ID \
+            --client-secret-env DATABRICKS_OPERATOR2_CLIENT_SECRET \
+            --github-env MIP_OPERATOR2_BEARER_TOKEN
           python tools/oauth_m2m_mint.py \
             --client-id-env DATABRICKS_ADMIN_CLIENT_ID \
             --client-secret-env DATABRICKS_ADMIN_CLIENT_SECRET \
@@ -131,13 +157,27 @@ jobs:
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
+          DATABRICKS_OPERATOR2_CLIENT_SECRET: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}
           DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
           DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
           DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
           DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
+          DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
+          DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
           MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
           MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}
           MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}
+          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
+          SALESFORCE_INSTANCE_URL: ${{ vars.SALESFORCE_INSTANCE_URL }}
+          SALESFORCE_CLIENT_ID: ${{ vars.SALESFORCE_CLIENT_ID }}
+          SALESFORCE_USERNAME: ${{ vars.SALESFORCE_USERNAME }}
+          SALESFORCE_API_VERSION: ${{ vars.SALESFORCE_API_VERSION }}
+          SALESFORCE_SOBJECT: ${{ vars.SALESFORCE_SOBJECT }}
+          SALESFORCE_EXTERNAL_ID_FIELD: ${{ vars.SALESFORCE_EXTERNAL_ID_FIELD }}
+          SALESFORCE_CLIENT_SECRET: ${{ secrets.SALESFORCE_CLIENT_SECRET }}
+          SALESFORCE_PASSWORD: ${{ secrets.SALESFORCE_PASSWORD }}
+          SALESFORCE_SECURITY_TOKEN: ${{ secrets.SALESFORCE_SECURITY_TOKEN }}
         run: |
           set -euo pipefail
           args=(-t dev --no-confirm)

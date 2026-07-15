@@ -42,6 +42,10 @@ from backend.schemas.portfolio_campaign import (
     bind_portfolio_criteria,
 )
 
+CAMPAIGN_BUILD_LIMIT = 10_000
+CAMPAIGN_TREATMENT_ALGORITHM_VERSION = "campaign-treatment-v2"
+CampaignTreatmentState = Literal["legacy_unbound", "building", "ready", "failed"]
+
 _OCCUPANCY_LABELS: frozenset[str] = frozenset(
     {"Owner-occupied", "Non-owner-occupied", "All"},
 )
@@ -184,6 +188,9 @@ class PortfolioPreview(BaseModel):
     # trends from funnel_snapshot_daily). Cotality Delta Share + public FRED
     # data only; no lender CRM / campaign / app-activity signal contributes.
     marketable_population: int
+    campaign_build_limit: int = Field(default=CAMPAIGN_BUILD_LIMIT, ge=1)
+    campaign_build_contact_count: int | None = Field(default=None, ge=0)
+    campaign_build_eligible: bool | None = None
     high_intent_leads: int
     # SUM(is_high_opportunity) — canonical threshold pinned in
     # mip.gold.fn_high_opportunity / scoring.HIGH_OPPORTUNITY_THRESHOLD.
@@ -495,12 +502,6 @@ class PortfolioCriteria(BaseModel):
         return self.min_equity_pct_label in {"≥ 15%", "≥ 25%", "≥ 40%"}
 
 
-class PortfolioPreviewRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    criteria: PortfolioCriteria = Field(default_factory=PortfolioCriteria)
-
-
 bind_portfolio_criteria(PortfolioCriteria)
 
 
@@ -523,6 +524,27 @@ class HouseholdDedupConfig(BaseModel):
     def _normalize_dedupe_unit(self) -> "HouseholdDedupConfig":
         self.dedupe_unit = "household" if self.enabled else "borrower"
         return self
+
+
+class CampaignBuildPreviewConfig(BaseModel):
+    """Optional exact treatment-count contract for Portfolio Builder previews."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    suppression_policy: dict[str, object] = Field(default_factory=dict)
+    household_dedup: HouseholdDedupConfig = Field(default_factory=HouseholdDedupConfig)
+
+    @field_validator("suppression_policy")
+    @classmethod
+    def _validate_suppression_policy(cls, value: dict[str, object]) -> dict[str, object]:
+        return normalize_suppression_policy(value)
+
+
+class PortfolioPreviewRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    criteria: PortfolioCriteria = Field(default_factory=PortfolioCriteria)
+    campaign_build_config: CampaignBuildPreviewConfig | None = None
 
 
 class HouseholdDedupSummary(BaseModel):
@@ -730,6 +752,8 @@ class PortfolioCreateResponse(BaseModel):
     campaign_id: str | None = None
     name: str
     marketable_population: int
+    campaign_build_limit: int = Field(default=CAMPAIGN_BUILD_LIMIT, ge=1)
+    campaign_build_eligible: bool = True
     household_summary: HouseholdDedupSummary = Field(default_factory=HouseholdDedupSummary)
     audit_event_id: str | None = None
 
@@ -744,15 +768,20 @@ class CampaignSummary(BaseModel):
     name: str
     owner_email: str
     status: CampaignStatus
+    treatment_state: CampaignTreatmentState
     actionable: bool = True
-    actionability_issue: Literal[
-        "legacy_contract",
-        "invalid_name",
-        "invalid_criteria",
-        "invalid_policy",
-        "invalid_configuration",
-        "invalid_message_variants",
-    ] | None = None
+    actionability_issue: (
+        Literal[
+            "legacy_contract",
+            "treatment_unbound",
+            "invalid_name",
+            "invalid_criteria",
+            "invalid_policy",
+            "invalid_configuration",
+            "invalid_message_variants",
+        ]
+        | None
+    ) = None
     criteria: dict[str, object]
     suppression_policy: dict[str, object] = Field(default_factory=dict)
     message_variants: list[dict[str, object]] = Field(default_factory=list)

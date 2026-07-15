@@ -410,6 +410,25 @@ class DatabricksLeadRepository:
             )
         )
 
+    def is_campaign_treatment_member(
+        self,
+        *,
+        borrower_id: str,
+        campaign_id: str,
+        materialization_id: str,
+        delta_version: int,
+        treatment_fingerprint: str,
+        frequency_cap_days: int,
+    ) -> bool:
+        return self._cohort_queries.is_campaign_treatment_member(
+            borrower_id=borrower_id,
+            campaign_id=campaign_id,
+            materialization_id=materialization_id,
+            delta_version=delta_version,
+            treatment_fingerprint=treatment_fingerprint,
+            frequency_cap_days=frequency_cap_days,
+        )
+
     def list_with_identity(
         self,
         segment: str | None,

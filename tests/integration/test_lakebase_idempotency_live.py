@@ -6,6 +6,7 @@ This intentionally exercises the app API backed by real Lakebase constraints;
 the in-memory fake remains useful for fast unit tests but cannot prove
 production ``ON CONFLICT`` / partial-index behavior.
 """
+
 from __future__ import annotations
 
 import json
@@ -18,16 +19,18 @@ import pytest
 
 APP_URL = (os.environ.get("MIP_APP_URL") or "").rstrip("/")
 TOKEN = os.environ.get("MIP_BEARER_TOKEN") or os.environ.get("DATABRICKS_TOKEN") or ""
+ADMIN_TOKEN = os.environ.get("MIP_ADMIN_BEARER_TOKEN") or ""
 LIVE_MUTATION_OK = os.environ.get("MIP_LIVE_MUTATION_OK") == "1"
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("LAKEBASE_INTEGRATION") != "1"
     or not APP_URL
     or not TOKEN
+    or not ADMIN_TOKEN
     or not LIVE_MUTATION_OK,
     reason=(
         "Set LAKEBASE_INTEGRATION=1, MIP_APP_URL, MIP_BEARER_TOKEN/DATABRICKS_TOKEN, "
-        "and MIP_LIVE_MUTATION_OK=1 for the dev app"
+        "MIP_ADMIN_BEARER_TOKEN, and MIP_LIVE_MUTATION_OK=1 for the dev app"
     ),
 )
 
@@ -38,10 +41,11 @@ def _request(
     payload: dict[str, object] | None = None,
     *,
     idempotency_key: str | None = None,
+    token: str = TOKEN,
 ) -> tuple[int, object]:
     data = json.dumps(payload).encode("utf-8") if payload is not None else None
     headers = {
-        "Authorization": f"Bearer {TOKEN}",
+        "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
     if idempotency_key is not None:
@@ -80,17 +84,57 @@ def _required_string(payload: dict[str, object], field: str) -> str:
     return value
 
 
-def _create_email_campaign_variant() -> tuple[str, str, str]:
+def _tiny_reviewed_campaign_criteria() -> tuple[dict[str, object], list[str]]:
+    for state in ("IL", "CA", "FL", "WA"):
+        criteria: dict[str, object] = {
+            "states": [state],
+            "min_equity_pct": 99.9,
+            "occupancy": "Owner-occupied",
+            "recency": "Untouched 30d",
+        }
+        preview_status, preview = _request(
+            "POST",
+            "/api/portfolio/preview",
+            {"criteria": criteria, "campaign_build_config": {}},
+        )
+        if (
+            preview_status != 200
+            or not isinstance(preview, dict)
+            or preview.get("campaign_build_eligible") is not True
+            or not isinstance(preview.get("campaign_build_contact_count"), int)
+            or int(preview["campaign_build_contact_count"]) <= 0
+        ):
+            continue
+        status, leads = _request(
+            "GET",
+            f"/api/leads?states={state}&min_equity_pct=99.9&occupancy=Owner-occupied"
+            "&recency=Untouched%2030d&limit=100",
+        )
+        if status == 200 and isinstance(leads, list) and leads:
+            borrower_ids = [
+                str(lead["borrower_id"])
+                for lead in leads
+                if isinstance(lead, dict)
+                and isinstance(lead.get("borrower_id"), str)
+                and str(lead["borrower_id"]).startswith("B-")
+            ]
+            if borrower_ids:
+                return criteria, borrower_ids
+    pytest.fail("No lead exists for the bounded live campaign fixture")
+
+
+def _create_email_campaign_variant() -> tuple[str, str, str, list[str]]:
     variant_name = "Approval proof"
     channel = "email"
     subject = "Review your mortgage options"
     body = "Reply to review your mortgage options with our team."
+    criteria, candidate_borrower_ids = _tiny_reviewed_campaign_criteria()
     status, created = _request(
         "POST",
         "/api/portfolio/create",
         {
             "name": "Live Lakebase approval contract",
-            "criteria": {},
+            "criteria": criteria,
             "message_variants": [
                 {
                     "variant_name": variant_name,
@@ -125,7 +169,37 @@ def _create_email_campaign_variant() -> tuple[str, str, str]:
     assert persisted.get("channel") == channel
     assert persisted.get("subject") == subject
     assert persisted.get("body") == body
-    return campaign_id, variant_name, channel
+    return campaign_id, variant_name, channel, candidate_borrower_ids
+
+
+def _campaign_treatment_member_draft(
+    *,
+    campaign_id: str,
+    variant_name: str,
+    channel: str,
+    candidate_borrower_ids: list[str],
+) -> tuple[str, dict[str, object]]:
+    """Select through the public authorization gate, never a broad member export."""
+
+    rejected: list[object] = []
+    for borrower_id in candidate_borrower_ids:
+        draft_status, draft = _request(
+            "POST",
+            "/api/outreach/draft",
+            {
+                "borrower_id": borrower_id,
+                "campaign_id": campaign_id,
+                "variant_name": variant_name,
+                "channel": channel,
+            },
+        )
+        if draft_status == 200 and isinstance(draft, dict):
+            return borrower_id, draft
+        rejected.append(draft)
+    pytest.fail(
+        "No lead passed the campaign's exact T0 treatment and current-eligibility gate; "
+        f"sample responses={rejected[:3]!r}"
+    )
 
 
 def _approval_payload(draft: dict[str, object], *, request_id: str) -> dict[str, object]:
@@ -196,7 +270,7 @@ def _assert_lakebase_healthy() -> None:
 
 
 def _assert_dev_mutation_target() -> None:
-    status, health = _request("GET", "/api/admin/health")
+    status, health = _request("GET", "/api/admin/health", token=ADMIN_TOKEN)
     assert status == 200
     assert isinstance(health, dict)
     app_env = health.get("app_env")
@@ -209,21 +283,13 @@ def _assert_dev_mutation_target() -> None:
 def test_live_generated_draft_approval_binding_and_replay_without_breaker_trip() -> None:
     _assert_dev_mutation_target()
     _assert_lakebase_healthy()
-    borrower_id = _first_borrower_id()
-    campaign_id, variant_name, channel = _create_email_campaign_variant()
-
-    status, draft = _request(
-        "POST",
-        "/api/outreach/draft",
-        {
-            "borrower_id": borrower_id,
-            "campaign_id": campaign_id,
-            "variant_name": variant_name,
-            "channel": channel,
-        },
+    campaign_id, variant_name, channel, candidate_borrower_ids = _create_email_campaign_variant()
+    borrower_id, draft = _campaign_treatment_member_draft(
+        campaign_id=campaign_id,
+        variant_name=variant_name,
+        channel=channel,
+        candidate_borrower_ids=candidate_borrower_ids,
     )
-    assert status == 200, draft
-    assert isinstance(draft, dict)
     assert draft.get("borrower_id") == borrower_id
     assert draft.get("campaign_id") == campaign_id
     assert draft.get("variant_name") == variant_name

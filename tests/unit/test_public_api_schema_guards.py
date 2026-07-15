@@ -245,7 +245,7 @@ def test_state_changing_schemas_reject_raw_borrower_ids(schema_cls: type) -> Non
     if schema_cls is SavedLeadInput:
         payload.update({"city": "Chicago"})
     if schema_cls is SavedDraftInput:
-        payload.update({"body": "Draft text."})
+        payload.update({"body": "Review your mortgage options."})
     if schema_cls is OutreachApproveRequest:
         payload.update({"offer_code": "refi"})
 
@@ -260,7 +260,7 @@ def test_state_changing_schemas_reject_raw_borrower_ids(schema_cls: type) -> Non
 def test_state_changing_schemas_accept_public_borrower_ids(schema_cls: type) -> None:
     payload: dict[str, object] = {"borrower_id": "B-102FL7THC6Q3L"}
     if schema_cls is SavedDraftInput:
-        payload.update({"body": "Draft text."})
+        payload.update({"body": "Review your mortgage options."})
     if schema_cls is OutreachApproveRequest:
         payload.update({"offer_code": "refi"})
 

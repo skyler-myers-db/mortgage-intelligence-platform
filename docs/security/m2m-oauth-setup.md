@@ -65,6 +65,13 @@ python tools/databricks/provision_m2m_oauth.py \
     --app-name mip-app \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
+
+# Repeat for the separately owned, non-admin recovery-check principal.
+python tools/databricks/provision_m2m_oauth.py \
+    --identity-role operator2 \
+    --app-name mip-app \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
 ```
 
 What this runs (in order, all via `databricks-sdk`):
@@ -83,6 +90,14 @@ What this runs (in order, all via `databricks-sdk`):
    `::add-mask::` directive so any accidental echo downstream is
    redacted.
 
+The normal and operator2 principals are not assigned to an approver group.
+The deployed workflow writes their exact client IDs to
+`MIP_APPROVER_IDENTITIES`; the admin client ID is written to
+`MIP_ADMIN_IDENTITIES`. Those server-owned exact allowlists are the automation
+authorization boundary. `X-Forwarded-Groups` is not part of the documented
+Databricks Apps identity-header contract and is only a local/test compatibility
+path in the application.
+
 Flags of note:
 
 | Flag                    | Default                                          | Purpose                                                                                           |
@@ -92,10 +107,10 @@ Flags of note:
 | `--expected-application-id` | role-owned configured client ID, when present | Optional assertion; cross-role and duplicate configured client IDs fail before external calls.    |
 | client ID/secret sink flags | role-owned names                            | Optional assertions only; custom or cross-role GitHub secret destinations are rejected.            |
 | `--app-name`            | resolved from `databricks.yml`                   | Deployed App to grant on.                                                                         |
-| `--gh-repo`             | inferred from `git remote get-url origin`        | Must resolve exactly to `skyler-myers-db/mortgage-intelligence-platform`; any other secret sink is rejected before SDK calls or minting. |
+| `--gh-repo`             | inferred from `git remote get-url origin`        | Must match the detected origin or `MIP_M2M_GITHUB_REPOSITORY`; a different secret sink is rejected before SDK calls or minting. |
 | `--set-gh-secrets`      | off (explicit opt-in)                            | Required for minting and upload; the tool never prints or stores the one-shot client secret.       |
 | `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
-| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control the App grant for normal/admin identities. The verifier role always forbids App `CAN_USE` and rejects `--grant-can-use`, including under `--dry-run`. |
+| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control the App grant for both operator identities and the admin identity. The verifier role always forbids App `CAN_USE` and rejects `--grant-can-use`, including under `--dry-run`. |
 | `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
 
 Rotation (replaces the "Rotation cadence" section below when you use
@@ -212,7 +227,7 @@ export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
 export DATABRICKS_CLIENT_ID=<your-m2m-client-id>
 export DATABRICKS_CLIENT_SECRET=<your-m2m-client-secret>
 
-python tools/oauth_m2m_mint.py > /tmp/bearer.txt
+.venv/bin/python tools/oauth_m2m_mint.py --output-file /tmp/bearer.txt
 
 # Expect: a JSON body from the deployed app (not a consent HTML page).
 curl -sSf \
@@ -237,18 +252,15 @@ than a local runner.
 
 ## Token TTL and refresh
 
-M2M tokens from Databricks have a **~1 hour TTL**. A Playwright run
-takes 5–10 minutes end-to-end. A single mint at job start is therefore
-enough — we don't need mid-run refresh. `tools/oauth_m2m_mint.py`
-comments mirror this; if the spec ever grows past ~45 min, re-mint
-before the long phase rather than caching across steps.
+M2M tokens from Databricks have a **~1 hour TTL**. Mint immediately before
+each long or independently retried phase rather than assuming one token covers
+the whole workflow. The nightly currently remints before Agent Evaluation, and
+the deploy script remints before Agent Evaluation and the final smoke sweep.
 
-The token itself is written to `$GITHUB_ENV` as `MIP_BEARER_TOKEN`. It
-lives only in the runner VM's process environment — GitHub does not
-persist it, and it is **not** exposed in the Actions logs because the
-mint helper writes the token to stdout while all diagnostics go to
-stderr (GitHub only redacts declared secrets, so the helper's stderr
-lines deliberately never include the token).
+In CI, the token is appended directly to `$GITHUB_ENV` as
+`MIP_BEARER_TOKEN`. It lives only in the runner VM's process environment;
+GitHub does not persist it. The helper never writes a token to stdout. For a
+local check, `--output-file` creates a mode-0600 file.
 
 ---
 
@@ -299,10 +311,12 @@ success.
    export DATABRICKS_HOST=https://<your-workspace>.cloud.databricks.com
    export DATABRICKS_CLIENT_ID=<the-same-client-id>
    export DATABRICKS_CLIENT_SECRET=<the-now-revoked-secret>
-   python tools/oauth_m2m_mint.py
+   rm -f /tmp/revoked-bearer.txt
+   .venv/bin/python tools/oauth_m2m_mint.py \
+     --output-file /tmp/revoked-bearer.txt
    echo "exit=$?"
    ```
-   **Expected:** exit code `4` and a stderr line matching
+   **Expected:** exit code `4`, no token output file, and a stderr line matching
    `ERROR authenticate() raised ... invalid_client` (or similar;
    Databricks' OAuth server returns a 401 with `error=invalid_client`
    for revoked credentials). **Not expected:** exit 0 with a stale
@@ -334,9 +348,8 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
 
 - `DATABRICKS_CLIENT_SECRET` is **never** printed to stdout, embedded
   in a commit, pasted in `app.yaml`, or included in a screenshot.
-- The mint helper writes diagnostics to stderr only; stdout carries
-  exactly one payload (the token) so `TOKEN=$(python tools/oauth_m2m_mint.py)`
-  works cleanly.
+- The mint helper writes diagnostics to stderr only and never writes the token
+  to stdout. Use `--github-env` in CI or `--output-file` locally.
 - The SP's scope is `CAN USE` on the deployed app and nothing else. If
   a future feature needs broader access (e.g. SQL warehouse reads), add
   a second purpose-built SP rather than widening this one.
@@ -356,9 +369,24 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
   IDs, and cross-role secret destinations fail before repository inference,
   `gh` checks, workspace-client construction, or mutation. Dry-run enforces the
   same binding.
-- Verifier provisioning hydrates the workspace group graph and app ACL before
-  granting resources or minting a secret. Any group or permission resolution
-  error fails closed and requires an administrator to repair visibility before
-  retrying.
+- Verifier provisioning hydrates the workspace-visible group graph, direct
+  roles/entitlements, App ACL, serving ACL, and every warehouse ACL before
+  granting resources or minting a secret. It removes direct access to every
+  non-target warehouse and requires exact direct `CAN_USE` on the target.
+  Databricks automatic identity management can hide account-level nested
+  membership from workspace SCIM, so this preflight is not the authoritative
+  identity proof by itself.
+- The manual live workflow runs
+  `tools/databricks/verify_verifier_identity_boundary.py` with the verifier's
+  own OAuth credentials. Its read-only negative probes must disprove account
+  administration, App use/administration, service-principal secret management,
+  metastore administration or privileges; direct, inherited, and hidden-group
+  ownership/privileges on every visible catalog and schema (including empty
+  containers); and metadata access to every verifier-visible non-target UC
+  relation, serving endpoint, and SQL warehouse before the exact Gateway proof
+  can run. These probes do not invoke a non-target model, execute
+  SQL on a non-target warehouse, or mutate permissions. `DATABRICKS_ACCOUNT_ID`
+  is a required repository secret for this release gate; AWS defaults the
+  account host to `https://accounts.cloud.databricks.com`.
 - The workflow's mint step uses `run: |` with inline shell, not a
   third-party GitHub Action. No marketplace dependency is introduced.

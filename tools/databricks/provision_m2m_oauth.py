@@ -10,15 +10,16 @@ What this tool does (in order):
 1. Create (or reuse) a workspace service principal with the requested
    ``--sp-name``. Idempotent: an SP whose ``displayName`` already matches
    is re-used rather than duplicated.
-2. For normal app-access and admin identities, grant ``CAN USE`` on the
-   deployed Databricks App resource (``--app-name``). The verifier role
+2. For both non-admin operator identities and the admin identity, grant
+   ``CAN USE`` on the deployed Databricks App resource (``--app-name``).
+   The verifier role
    rejects this grant even when ``--grant-can-use`` is supplied explicitly.
 3. For the verifier identity, grant ``CAN USE`` on the exact SQL warehouse
    used to validate AI Gateway inference rows. The verifier still receives no
    Databricks App access and is never an admin-group member.
 4. Mint an OAuth client_id + client_secret for the SP. A live mint requires
    ``--set-gh-secrets`` and pipes the one-shot secret directly to ``gh``.
-   Secret names are role-owned constants so normal, admin, and verifier
+   Secret names are role-owned constants so both operators, admin, and verifier
    identities cannot overwrite one another's client credentials.
 
 5. Optionally rotate an existing SP's secret (``--rotate``); the old secret
@@ -61,6 +62,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from tools.databricks import m2m_access_policy as _access_policy  # noqa: E402
+from tools.databricks import m2m_oauth_config as _config_helpers  # noqa: E402
 from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
 from tools.databricks.m2m_identity_contract import (  # noqa: E402
     DEFAULT_ADMIN_GROUP,
@@ -76,10 +78,14 @@ _gh_available = _github_helpers.gh_available
 _set_gh_secret = _github_helpers.set_gh_secret
 _which = _github_helpers.which
 _assert_no_app_permission = _access_policy.assert_no_app_permission
+_assert_non_admin_service_principal = _access_policy.assert_non_admin_service_principal
 _assert_not_admin_group_member = _access_policy.assert_not_admin_group_member
 _ensure_group_membership = _access_policy.ensure_group_membership
 _find_group = _access_policy.find_group
+_grant_can_use_on_warehouse = _access_policy.grant_can_use_on_warehouse
+_grant_can_query_on_endpoint = _access_policy.grant_can_query_on_endpoint
 _resolve_effective_groups = _access_policy.resolve_effective_groups
+_revoke_can_query_on_obsolete_endpoint = _access_policy.revoke_can_query_on_obsolete_endpoint
 _wrap_admin_error = _access_policy.wrap_admin_error
 
 DATABRICKS_YML = REPO_ROOT / "databricks.yml"
@@ -126,10 +132,15 @@ def _validate_provisioning_contract(
         identity_role=identity_role,
         grant_can_use=grant_can_use,
     )
-    if identity_role != "admin" and group_name:
-        raise ValueError("only --identity-role admin may be assigned to an admin group")
-    if create_group and identity_role != "admin":
-        raise ValueError("--create-group is valid only with --identity-role admin")
+    expected_group = IDENTITY_DEFAULTS[identity_role].group_name
+    if group_name != expected_group:
+        expected_label = expected_group or "no group"
+        raise ValueError(
+            f"--identity-role {identity_role} is bound to {expected_label!r}; "
+            "--group-name may not select another identity boundary"
+        )
+    if create_group and expected_group is None:
+        raise ValueError("--create-group is invalid for an identity role with no group")
     if identity_role != "verifier" and (lakebase_instance or gateway_endpoint or warehouse_id):
         raise ValueError(
             "--lakebase-instance, --gateway-endpoint, and --warehouse-id are valid only with "
@@ -148,49 +159,12 @@ def _validate_provisioning_contract(
 
 
 def _load_app_name_from_bundle(path: Path = DATABRICKS_YML) -> str:
-    """Best-effort parse of the deployed App name out of databricks.yml.
-
-    We want a default that matches what ``databricks bundle deploy`` will
-    actually create, without pulling PyYAML in just for this lookup —
-    a shallow regex over the known shape is sufficient and keeps this
-    tool's dependency surface to the already-present databricks-sdk.
-    """
-    try:
-        text = path.read_text(encoding="utf-8")
-    except OSError:
-        return "mip-app"
-    # Look for
-    #   apps:
-    #     mip_app:
-    #       name: mip-app
-    match = re.search(
-        r"^\s+apps:\s*\n(?:\s+#[^\n]*\n)*\s+\w+:\s*\n\s+name:\s*([A-Za-z0-9_-]+)",
-        text,
-        re.MULTILINE,
-    )
-    if match:
-        return match.group(1)
-    return "mip-app"
+    return _config_helpers.load_app_name_from_bundle(path)
 
 
 def _infer_gh_repo() -> str | None:
     """Infer ``owner/repo`` from the ``origin`` remote. None if unresolved."""
-    try:
-        out = subprocess.run(
-            ["git", "remote", "get-url", "origin"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=True,
-        ).stdout.strip()
-    except (OSError, subprocess.CalledProcessError):
-        return None
-    # Accept both SSH (git@github.com:owner/repo.git) and HTTPS
-    # (https://github.com/owner/repo[.git]).
-    match = re.search(r"github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/.\s]+)", out)
-    if not match:
-        return None
-    return f"{match.group('owner')}/{match.group('repo')}"
+    return _config_helpers.infer_gh_repo(REPO_ROOT, runner=subprocess.run)
 
 
 def _reviewed_gh_repo() -> str | None:
@@ -346,63 +320,6 @@ def _grant_can_use_on_app(
         raise _wrap_admin_error(exc, step="update_permissions on app") from exc
 
 
-def _grant_can_query_on_endpoint(
-    client: Any,
-    endpoint_name: str,
-    sp_application_id: str,
-) -> None:
-    """Add the verifier's CAN_QUERY grant without replacing other endpoint ACLs."""
-    from databricks.sdk.service.serving import (
-        ServingEndpointAccessControlRequest,
-        ServingEndpointPermissionLevel,
-    )
-
-    _diag(f"resolving serving endpoint id for endpoint={endpoint_name!r}")
-    try:
-        endpoint = client.serving_endpoints.get(endpoint_name)
-        endpoint_id = str(getattr(endpoint, "id", "") or "").strip()
-        if not endpoint_id:
-            raise ValueError(f"serving endpoint {endpoint_name!r} has no immutable id")
-        _diag(f"granting CAN_QUERY on endpoint={endpoint_name!r} to verifier identity")
-        client.serving_endpoints.update_permissions(
-            endpoint_id,
-            access_control_list=[
-                ServingEndpointAccessControlRequest(
-                    service_principal_name=sp_application_id,
-                    permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
-                )
-            ],
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise _wrap_admin_error(exc, step="update serving endpoint permissions") from exc
-
-
-def _grant_can_use_on_warehouse(
-    client: Any,
-    warehouse_id: str,
-    sp_application_id: str,
-) -> None:
-    """Add verifier CAN_USE on one SQL warehouse without replacing ACLs."""
-    from databricks.sdk.service.sql import (
-        WarehouseAccessControlRequest,
-        WarehousePermissionLevel,
-    )
-
-    _diag(f"granting CAN_USE on warehouse={warehouse_id!r} to verifier identity")
-    try:
-        client.warehouses.update_permissions(
-            warehouse_id,
-            access_control_list=[
-                WarehouseAccessControlRequest(
-                    service_principal_name=sp_application_id,
-                    permission_level=WarehousePermissionLevel.CAN_USE,
-                )
-            ],
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise _wrap_admin_error(exc, step="update SQL warehouse permissions") from exc
-
-
 def _mint_oauth_secret(client: Any, sp_id: str) -> Any:
     """Mint a new OAuth client_secret for the SP. Returned once, never again."""
     _diag(f"minting OAuth secret for service_principal_id={sp_id}")
@@ -438,6 +355,7 @@ def provision(
     app_url_secret_name: str | None,
     identity_role: IdentityRole = "normal",
     client_factory: Any | None = None,
+    revoke_gateway_endpoints: tuple[str, ...] = (),
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
 
@@ -497,12 +415,12 @@ def provision(
 
     client = client_factory()
 
-    # A missing admin group is a governance decision, not an incidental SP
+    # A missing identity group is a governance decision, not an incidental SP
     # bootstrap side effect. Fail before creating or mutating any identity
     # unless the operator explicitly approved --create-group.
     if group_name and not create_group and _find_group(client, group_name) is None:
         raise SystemExit(
-            f"Required admin group {group_name!r} does not exist. "
+            f"Required identity group {group_name!r} does not exist. "
             "Re-run with --create-group only after governance review."
         )
 
@@ -533,6 +451,12 @@ def provision(
             effective_groups=effective_groups,
             identity_role=identity_role,
         )
+        _assert_non_admin_service_principal(
+            client,
+            sp_id=sp.id,
+            effective_groups=effective_groups,
+            identity_role=identity_role,
+        )
     if identity_role == "verifier":
         _assert_no_app_permission(
             client,
@@ -544,12 +468,47 @@ def provision(
 
     added_to_group = False
     if group_name:
+        target_group = _find_group(client, group_name)
+        if target_group is not None and identity_role != "admin":
+            target_group_id = str(getattr(target_group, "id", "") or "").strip()
+            target_parents = _resolve_effective_groups(client, sp_id=target_group_id)
+            _assert_not_admin_group_member(
+                group_name=DEFAULT_ADMIN_GROUP,
+                effective_groups=target_parents,
+                identity_role=identity_role,
+            )
+            forbidden_parent_names = {
+                "admins",
+                "account admins",
+                "workspace admins",
+                "metastore admins",
+            }
+            if forbidden_parent_names.intersection(
+                {name.casefold() for name in target_parents.values()}
+            ):
+                raise SystemExit(
+                    f"Reserved group {group_name!r} is nested into an administrator group; "
+                    "remove that privilege before provisioning"
+                )
         added_to_group = _ensure_group_membership(
             client,
             group_name=group_name,
             sp_id=sp.id,
             create_group=create_group,
         )
+        if identity_role != "admin":
+            effective_groups = _resolve_effective_groups(client, sp_id=sp.id)
+            _assert_not_admin_group_member(
+                group_name=DEFAULT_ADMIN_GROUP,
+                effective_groups=effective_groups,
+                identity_role=identity_role,
+            )
+            _assert_non_admin_service_principal(
+                client,
+                sp_id=sp.id,
+                effective_groups=effective_groups,
+                identity_role=identity_role,
+            )
 
     created_lakebase_role = False
     if lakebase_instance:
@@ -560,13 +519,33 @@ def provision(
         )
 
     granted_can_query = False
+    for obsolete_endpoint in revoke_gateway_endpoints:
+        if obsolete_endpoint and obsolete_endpoint != gateway_endpoint:
+            _revoke_can_query_on_obsolete_endpoint(
+                client,
+                obsolete_endpoint,
+                sp.application_id,
+                sp_id=sp.id,
+                effective_group_names=set(effective_groups.values()),
+            )
     if gateway_endpoint:
-        _grant_can_query_on_endpoint(client, gateway_endpoint, sp.application_id)
+        _grant_can_query_on_endpoint(
+            client,
+            gateway_endpoint,
+            sp.application_id,
+            sp_id=sp.id,
+            effective_group_names=set(effective_groups.values()),
+        )
         granted_can_query = True
 
     granted_warehouse_can_use = False
     if warehouse_id:
-        _grant_can_use_on_warehouse(client, warehouse_id, sp.application_id)
+        _grant_can_use_on_warehouse(
+            client,
+            warehouse_id,
+            sp.application_id,
+            effective_group_names=set(effective_groups.values()),
+        )
         granted_warehouse_can_use = True
 
     granted = False
@@ -637,7 +616,7 @@ def _print_summary(result: ProvisionResult) -> None:
         f"  application_id (client_id): {result.client_id}",
         f"  created this run:         {result.created_sp}",
         f"  granted CAN_USE on app:   {result.granted_can_use}",
-        f"  admin group:              {result.group_name or '(none)'}",
+        f"  identity group:           {result.group_name or '(none)'}",
         f"  group membership added:   {result.added_to_group}",
         f"  Lakebase instance:        {result.lakebase_instance or '(none)'}",
         f"  Lakebase role created:    {result.created_lakebase_role}",
@@ -664,7 +643,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="provision_m2m_oauth",
         description=(
-            "Create or converge a normal, admin, or verifier M2M identity "
+            "Create or converge an operator, admin, or verifier M2M identity "
             "without printing one-shot OAuth secrets."
         ),
     )
@@ -672,7 +651,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--identity-role",
         choices=tuple(IDENTITY_DEFAULTS),
         default="normal",
-        help="Identity contract to provision (default: normal).",
+        help="Identity contract to provision (default: normal operator).",
     )
     parser.add_argument(
         "--sp-name",
@@ -713,13 +692,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--group-name",
         default=None,
-        help=f"Admin group override (admin default: {DEFAULT_ADMIN_GROUP}).",
+        help=(
+            "Role-reserved group (admin default: "
+            f"{DEFAULT_ADMIN_GROUP}; normal/operator2/verifier: none)."
+        ),
     )
     parser.add_argument(
         "--create-group",
         action="store_true",
         help=(
-            "Create the configured admin group if absent. Without this explicit "
+            "Create the configured role group if absent. Without this explicit "
             "flag, a missing group fails closed."
         ),
     )
@@ -735,6 +717,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--gateway-endpoint",
         default=None,
         help="Serving endpoint on which the verifier receives CAN_QUERY.",
+    )
+    parser.add_argument(
+        "--revoke-gateway-endpoint",
+        action="append",
+        default=[],
+        help=(
+            "Obsolete endpoint on which this identity must retain no effective "
+            "query access; repeat for migrations."
+        ),
     )
     parser.add_argument(
         "--warehouse-id",
@@ -775,7 +766,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--no-app-url-secret",
         action="store_true",
-        help="Explicitly retain no app-URL sink for admin/verifier; invalid for normal.",
+        help=(
+            "Explicitly retain no app-URL sink for operator2/admin/verifier; "
+            "invalid for normal."
+        ),
     )
     parser.add_argument(
         "--no-mint-secret",
@@ -884,6 +878,7 @@ def main(argv: list[str] | None = None) -> int:
             client_secret_secret_name=client_secret_secret_name,
             app_url_secret_name=app_url_secret_name,
             identity_role=role,
+            revoke_gateway_endpoints=tuple(args.revoke_gateway_endpoint),
         )
     except SystemExit:
         raise

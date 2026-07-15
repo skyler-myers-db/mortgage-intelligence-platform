@@ -160,24 +160,42 @@ The `refresh_run_state` read fails silently and every gold table's
 ## 4. Schema `mip.audit` (AI Gateway inference proof — required when enabled)
 
 ```sql
+GRANT USE CATALOG ON CATALOG mip TO `mip-app`;
 GRANT USE SCHEMA ON SCHEMA mip.audit TO `mip-app`;
+GRANT SELECT, MODIFY ON TABLE mip.audit.campaign_treatment_snapshot TO `mip-app`;
 -- Table prefix comes from MIP_AI_GATEWAY_INFERENCE_TABLE. The default
--- provisioner value is mip.audit.mip_agent_gateway_llama, which usually
--- materializes at least mip.audit.mip_agent_gateway_llama_payload.
-GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload TO `mip-app`;
+-- provisioner value is mip.audit.mip_agent_gateway_growth_agent, which usually
+-- materializes at least mip.audit.mip_agent_gateway_growth_agent_payload.
+GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload TO `mip-app`;
+GRANT USE CATALOG ON CATALOG mip TO `verifier-client-id`;
 GRANT USE SCHEMA ON SCHEMA mip.audit TO `verifier-client-id`;
-GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload TO `verifier-client-id`;
+GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload TO `verifier-client-id`;
 ```
 
-**Objects covered.** Only the MIP-owned AI Gateway inference-log tables
+**Objects covered.** The runtime app receives `SELECT, MODIFY` on the single
+append-only `mip.audit.campaign_treatment_snapshot` table. Campaign creation
+writes the exact T0 treatment/holdout assignment and Lakebase pins the committed
+Delta version; outreach reads that pinned version and intersects it with current
+eligibility. The verifier receives no privilege on this table.
+
+The treatment table retains both Delta transaction logs and deleted data files
+for 2,555 days. Both properties are required: the Lakebase manifest pins a
+concrete `VERSION AS OF`, so shortening deleted-file retention (or vacuuming
+below that governed window) can make an otherwise valid campaign proof
+unreadable. Verify both effective properties and a pinned-version read in the
+live staging drill before claiming this boundary is deployable.
+
+All other audit access is limited to the MIP-owned AI Gateway inference-log tables
 whose names match the configured prefix `MIP_AI_GATEWAY_INFERENCE_TABLE`
-(default prefix `mip.audit.mip_agent_gateway_llama`). `scripts/deploy.sh`
+(default prefix `mip.audit.mip_agent_gateway_growth_agent`). `scripts/deploy.sh`
 runs `tools/databricks/grant_ai_gateway_inference_table.py` after AI
 Gateway provisioning to discover the concrete prefixed table names and grant
 `SELECT` on those tables only to both the runtime app and dedicated verifier.
 `tools/databricks/provision_m2m_oauth.py --identity-role verifier` separately
-converges `CAN_QUERY` on the configured serving endpoint. Neither identity gets
-schema-wide table reads.
+converges `CAN_QUERY` on the configured serving endpoint. Both identities need
+the catalog's non-data-bearing `USE CATALOG` privilege before `USE SCHEMA` and
+table-scoped `SELECT` can take effect; neither identity gets schema-wide table
+reads.
 
 **What breaks if missing.** The AI Gateway capability row remains
 `configured` / non-claimable because the deployment verifier cannot mark a
@@ -188,9 +206,14 @@ claiming AI Gateway governance live.
 
 **What not to grant.** Do not grant `SELECT ON SCHEMA mip.audit` to either the
 runtime app or verifier service principal. That would expose every current and
-future audit table in the schema. Each needs `USE SCHEMA` plus `SELECT` on the
-MIP Gateway prefix tables only. The verifier must not join `mip-admin` and the
-runtime app must not write the Lakebase proof ledger.
+future audit table in the schema. Each needs `USE SCHEMA`; the runtime app has
+the exact treatment-table grant above plus Gateway-prefix `SELECT`, while the
+verifier has only Gateway-prefix `SELECT`. The verifier must fail its identity
+boundary if `campaign_treatment_snapshot` is visible, must not join `mip-admin`,
+and the runtime app must not write the Lakebase proof ledger. The verifier
+boundary also rejects metastore privileges and any direct, inherited, or
+hidden-group privilege/ownership on non-target catalogs or schemas, including
+empty containers that would not appear in a table scan.
 
 ---
 
@@ -488,7 +511,7 @@ SHOW GRANTS `mip-app` ON CATALOG mip;
 SHOW GRANTS `mip-app` ON SCHEMA mip.gold;
 SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
 SHOW GRANTS `mip-app` ON SCHEMA mip.audit;
-SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_llama_payload;
+SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload;
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.public;
 
 -- Cotality share (catalog name depends on customer) -- ETL/deploy identity only
@@ -500,7 +523,7 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 -- Concrete round-trip
 SELECT COUNT(*) FROM mip.gold.borrower_360;     -- expect > 0 after refresh
 SELECT COUNT(*) FROM mip.ref.offer_rules_config; -- expect > 0 after seed
-SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_llama_payload
+SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_growth_agent_payload
 WHERE client_request_id LIKE 'mip-capability-%'; -- expect > 0 after live capability probe
 -- Optional ETL-only proof; run as `sp-mip-etl`, not `mip-app`.
 SELECT COUNT(*) FROM mip.silver.property_master;
@@ -510,21 +533,26 @@ SELECT COUNT(*) FROM mip.silver.property_master;
 
 ## 11. Trust boundary — X-Forwarded-* headers
 
-Databricks Apps is the authoritative identity edge. The platform strips
-every inbound `X-Forwarded-Email`, `X-Forwarded-User`, and
-`X-Forwarded-Groups` header from customer traffic and injects its own
-values based on the authenticated workspace user. The FastAPI backend
-reads those headers to attribute audit rows
+Databricks Apps is the authoritative identity edge. Its documented identity
+contract supplies `X-Forwarded-Email` and `X-Forwarded-User` for the
+authenticated workspace principal. `X-Forwarded-Groups` is **not** in that
+contract and is never a deployed authorization source. The FastAPI backend
+resolves the documented email header first and user header second to attribute audit rows
 ([`backend/services/audit_store.py::resolve_actor`](../../backend/services/audit_store.py))
-and to gate the admin surface
+and matches that resolved actor against the server-owned exact
+`MIP_ADMIN_IDENTITIES` / `MIP_APPROVER_IDENTITIES` allowlists (plus reviewed
+human email allowlists) to gate privileged surfaces
 ([`backend/services/rbac.py::require_admin`](../../backend/services/rbac.py)).
+The group header path exists only for local/test compatibility and is disabled
+when `MIP_APP_ENV` is `sandbox`, `dev`, `prod`, `production`, or `customer`.
 
 The setting `MIP_TRUST_FORWARDED_HEADERS` (default `True`) controls this
 behavior:
 
-- **`True` — Databricks Apps posture (default).** The backend trusts
-  `X-Forwarded-*` values because the Databricks Apps edge has already
-  validated the caller. This matches every Entrada-shipped deploy.
+- **`True` — Databricks Apps posture (default).** The backend trusts the
+  documented `X-Forwarded-Email` / `X-Forwarded-User` identity values because
+  the Databricks Apps edge has already validated the caller. It does not make
+  `X-Forwarded-Groups` authoritative in a deployed environment.
 - **`False` — fail-closed for unusual deploys.** If the customer fronts
   the FastAPI process with a reverse proxy that does NOT strip inbound
   `X-Forwarded-*` headers (a misconfigured NGINX, an Envoy sidecar
@@ -536,12 +564,10 @@ behavior:
     and write audit rows attributed to `unknown-actor@untrusted-edge` —
     a distinct marker string that is trivially greppable and will never
     collide with a real workspace email.
-  * Ignore `X-Forwarded-Groups` in `require_admin`, which means the
-    group-membership admit path is disabled entirely. Only the email
-    allowlist (`MIP_ADMIN_EMAILS`, a server-side env var) can admit to
-    admin routes — and with the email header untrusted, even that path
-    fails. Effective posture: admin surface is closed until the deploy
-    is corrected.
+  * Fail every exact identity/email authorization check because the actor is
+    the untrusted-edge marker. Effective posture: admin and approver surfaces
+    are closed until the deploy is corrected. The compatibility group header
+    remains disabled outside local/test regardless.
 
 Flip this flag only if you cannot guarantee the edge strips
 `X-Forwarded-*`. The default is correct for Databricks Apps; changing
@@ -555,9 +581,9 @@ A handful of customers run the FastAPI process outside Databricks Apps
 but unusual shape, and the `trust_forwarded_headers=True` default is
 **unsafe** there: without the Apps edge, there is no guarantee the
 upstream proxy strips client-supplied `X-Forwarded-Email` /
-`X-Forwarded-Groups` headers. A caller can then send any email and
-claim any identity — audit rows become forgeable, and if your proxy
-also doesn't strip `X-Forwarded-Groups`, the admin surface is as well.
+`X-Forwarded-User` headers. A caller can then send any actor identity, making
+audit attribution and exact allowlist authorization forgeable. Group claims
+remain non-authoritative outside local/test.
 
 **Boot-time warning.** On process start
 (`backend/config/settings.py::check_trust_boundary_at_startup`), the
@@ -598,9 +624,9 @@ assumption in your runbook.
 - **`MODIFY`** on `mip.gold` / `mip.silver`. Gold/silver are
   materialized by bundle jobs under a separate jobs SP; the app SP
   should never write there.
-- **`SELECT ON SCHEMA mip.audit`**. The app only needs the MIP-owned AI
-  Gateway inference-log table prefix described in §4, not every audit
-  object that may later land in the schema.
+- **`SELECT ON SCHEMA mip.audit`**. The app only needs the exact
+  `campaign_treatment_snapshot` table and MIP-owned AI Gateway inference-log
+  prefix described in §4, not every audit object that may later land in the schema.
 - **`CAN_MANAGE`** on the app resource. That belongs to the Entrada
   delivery team's admin group, not the app identity itself.
 - **Direct Postgres `SUPERUSER` or database `CREATE`** on the Lakebase role.

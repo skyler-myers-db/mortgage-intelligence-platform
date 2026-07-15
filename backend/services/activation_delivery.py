@@ -7,8 +7,8 @@ creates it via the real REST client.
 
 Honesty contract (commercial product -- do not weaken):
 
-- We ONLY mark a row ``delivered`` after a real ``201 Created`` returns a
-  Salesforce record id. Any other outcome is recorded truthfully:
+- We ONLY mark a row ``delivered`` after a real External-ID upsert returns or
+  resolves a Salesforce record id. Any other outcome is recorded truthfully:
   * unconfigured (no client) -> status UNCHANGED, metadata
     ``{delivered: false, reason: "salesforce_not_configured"}``.
   * REST/breaker failure -> status ``failed``, metadata
@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 
 from backend.schemas.activation import ActivationOutboxItem
 from backend.services.observability import emit
@@ -33,12 +33,21 @@ from backend.services.salesforce_client import (
 )
 
 if TYPE_CHECKING:
-    from backend.services.activation_state import ActivationStateStore
     from backend.services.salesforce_client import ResilientSalesforceClient
 
 log = logging.getLogger(__name__)
 
 REASON_NOT_CONFIGURED = "salesforce_not_configured"
+
+
+class DeliveryStateWriter(Protocol):
+    def update_delivery_state(
+        self,
+        *,
+        activation_id: str,
+        status: str,
+        delivery_metadata: dict[str, Any],
+    ) -> ActivationOutboxItem | None: ...
 
 
 @dataclass(frozen=True)
@@ -87,7 +96,7 @@ def _task_fields(row: ActivationOutboxItem, sobject: str) -> dict[str, Any]:
 def deliver_to_salesforce(
     row: ActivationOutboxItem,
     *,
-    store: ActivationStateStore,
+    store: DeliveryStateWriter,
     sobject: str | None = None,
     client: ResilientSalesforceClient | None = None,
 ) -> DeliveryResult:
@@ -102,9 +111,20 @@ def deliver_to_salesforce(
     from backend.config.settings import settings
 
     resolved_sobject = sobject or settings.salesforce_sobject
+    external_id_field = str(settings.salesforce_external_id_field or "").strip()
+
+    if row.status in {"delivered", "cancelled"}:
+        return DeliveryResult(
+            delivered=row.status == "delivered",
+            attempted=False,
+            status=row.status,
+            delivery_metadata=dict(row.delivery_metadata or {}),
+            activation=row,
+            salesforce_id=str((row.delivery_metadata or {}).get("salesforce_id") or "") or None,
+        )
     sf_client = client if client is not None else get_salesforce_client()
 
-    if sf_client is None:
+    if sf_client is None or not external_id_field:
         # Honest degraded path: never claim a delivery happened.
         metadata = {"delivered": False, "reason": REASON_NOT_CONFIGURED}
         emit(
@@ -123,7 +143,12 @@ def deliver_to_salesforce(
         )
 
     try:
-        created = sf_client.create_record(resolved_sobject, _task_fields(row, resolved_sobject))
+        created = sf_client.upsert_record(
+            resolved_sobject,
+            external_id_field,
+            row.activation_id,
+            _task_fields(row, resolved_sobject),
+        )
     except (SalesforceClientError, DependencyDownError) as exc:
         error_detail = _error_detail(exc)
         metadata = {

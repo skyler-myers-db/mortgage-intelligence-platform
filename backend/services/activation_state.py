@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
@@ -99,11 +101,48 @@ _OUTBOX_BY_ACTIVATION_ID = _OUTBOX_SELECT_BASE.format(
     where_clause="WHERE o.activation_id = %(activation_id)s"
 )
 
+_OUTBOX_BY_ACTIVATION_ID_FOR_UPDATE = """
+SELECT o.activation_id, o.destination_key, d.destination_type,
+       d.display_name AS destination_display_name, d.status AS destination_status,
+       o.entity_type, o.entity_id, o.borrower_id, o.campaign_id, o.approval_id,
+       o.offer_code, o.channel, o.status, o.request_id, o.created_by,
+       o.created_at, o.updated_at, o.delivery_metadata
+FROM mip_app.activation_outbox AS o
+JOIN mip_app.activation_destinations AS d
+  ON d.destination_key = o.destination_key
+WHERE o.activation_id = %(activation_id)s
+LIMIT 1
+FOR UPDATE OF o
+"""
+
 _APPROVAL_BY_ID = """
 SELECT approval_id, borrower_id, action, actor_email, offer_code, campaign_id, decided_at
 FROM mip_app.approvals
 WHERE approval_id = %(approval_id)s::uuid
 LIMIT 1
+"""
+
+_CAMPAIGN_STATUS_FOR_APPROVAL = """
+SELECT c.status
+FROM mip_app.approvals AS a
+JOIN mip_app.campaigns AS c ON c.campaign_id = a.campaign_id
+WHERE a.approval_id = %(approval_id)s::uuid
+  AND a.borrower_id = %(borrower_id)s
+  AND a.action = 'approve'
+  AND c.campaign_id = %(campaign_id)s::uuid
+LIMIT 1
+"""
+
+_ACTIVE_CAMPAIGN_APPROVAL_LOCK = """
+SELECT c.status
+FROM mip_app.approvals AS a
+JOIN mip_app.campaigns AS c ON c.campaign_id = a.campaign_id
+WHERE a.approval_id = %(approval_id)s::uuid
+  AND a.borrower_id = %(borrower_id)s
+  AND a.action = 'approve'
+  AND c.campaign_id = %(campaign_id)s::uuid
+  AND c.status = 'active'
+FOR SHARE OF c
 """
 
 _OUTBOX_INSERT = """
@@ -125,6 +164,42 @@ RETURNING activation_id
 class ActivationWriteResult:
     activation: ActivationOutboxItem
     audit_event_id: str | None
+
+
+@dataclass
+class ActivationDeliveryGuard:
+    """One checked-out transaction that serializes and persists a delivery."""
+
+    activation: ActivationOutboxItem
+    should_deliver: bool
+    _conn: Any
+
+    def update_delivery_state(
+        self,
+        *,
+        activation_id: str,
+        status: str,
+        delivery_metadata: dict[str, Any],
+    ) -> ActivationOutboxItem | None:
+        if activation_id != self.activation.activation_id:
+            raise PermissionError("delivery guard is bound to a different activation")
+        self._conn.execute(
+            _OUTBOX_UPDATE_DELIVERY,
+            {
+                "activation_id": activation_id,
+                "status": status,
+                "delivery_metadata": json.dumps(delivery_metadata, sort_keys=True),
+            },
+        )
+        row = self._conn.execute(
+            _OUTBOX_BY_ACTIVATION_ID_FOR_UPDATE,
+            {"activation_id": activation_id},
+        ).fetchone()
+        if row is None:
+            return None
+        self.activation = _outbox_from_row(dict(row))
+        self.should_deliver = False
+        return self.activation
 
 
 def get_activation_state_store() -> ActivationStateStore:
@@ -357,6 +432,66 @@ class ActivationStateStore:
             return None
         return dict(row)
 
+    def campaign_status_for_approval(
+        self,
+        *,
+        approval_id: str,
+        borrower_id: str,
+        campaign_id: str,
+    ) -> str | None:
+        row = self._client.fetchone(
+            _CAMPAIGN_STATUS_FOR_APPROVAL,
+            {
+                "approval_id": approval_id,
+                "borrower_id": borrower_id,
+                "campaign_id": campaign_id,
+            },
+        )
+        return str(row.get("status") or "").strip().lower() if row else None
+
+    @contextmanager
+    def delivery_guard(
+        self,
+        *,
+        activation: ActivationOutboxItem,
+    ) -> Iterator[ActivationDeliveryGuard]:
+        """Serialize one outbox delivery and hold any campaign row stable.
+
+        Campaign pause/archive updates require an exclusive row lock. Holding a
+        share lock through the synchronous connector call gives the two
+        operations a deterministic order: a committed pause prevents delivery,
+        while a delivery that acquired the lock first completes before pause.
+        The outbox ``FOR UPDATE`` lock also makes concurrent/replayed stage
+        requests observe the first committed delivery instead of repeating it.
+        """
+
+        with self._client.transaction() as conn, conn.cursor() as cur:
+            campaign_active = True
+            if activation.campaign_id:
+                cur.execute(
+                    _ACTIVE_CAMPAIGN_APPROVAL_LOCK,
+                    {
+                        "approval_id": str(activation.approval_id or ""),
+                        "borrower_id": str(activation.borrower_id or ""),
+                        "campaign_id": activation.campaign_id,
+                    },
+                )
+                campaign_active = cur.fetchone() is not None
+            cur.execute(
+                _OUTBOX_BY_ACTIVATION_ID_FOR_UPDATE,
+                {"activation_id": activation.activation_id},
+            )
+            locked_row = cur.fetchone()
+            if locked_row is None:
+                raise PermissionError("activation disappeared before delivery")
+            current = _outbox_from_row(dict(locked_row))
+            yield ActivationDeliveryGuard(
+                activation=current,
+                should_deliver=campaign_active
+                and current.status in {"staged", "failed"},
+                _conn=conn,
+            )
+
     def _validate_existing(
         self,
         existing: ActivationOutboxItem,
@@ -457,6 +592,20 @@ class ActivationStateStore:
         }
         try:
             with self._client.transaction() as conn, conn.cursor() as cur:
+                if approved_campaign_id is not None:
+                    cur.execute(
+                        _ACTIVE_CAMPAIGN_APPROVAL_LOCK,
+                        {
+                            "approval_id": payload.approval_id,
+                            "borrower_id": payload.borrower_id,
+                            "campaign_id": approved_campaign_id,
+                        },
+                    )
+                    campaign_lock = cur.fetchone()
+                    if campaign_lock is None:
+                        raise PermissionError(
+                            "campaign must be active at activation staging time"
+                        )
                 cur.execute(_OUTBOX_INSERT, insert_params)
                 inserted = cur.fetchone()
                 if inserted is None:

@@ -21,15 +21,11 @@ import { FilterSelect } from '../components/ui/FilterSelect';
 import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { parseCampaignPrefill } from '../lib/campaignPrefill';
 import { DRAWER_SOURCES } from '../lib/drawerSources';
-import { parseBackendTimestamp } from '../lib/time';
 import { useFootprint } from '../components/FootprintProvider';
 import { queryKeys } from '../lib/queryKeys';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
 import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
-import {
-  savedCampaignLeadQueueUrl,
-  savedCampaignVariants,
-} from './portfolio-builder.saved-campaigns';
+import { CampaignBuildGuard, SavedCampaignsPanel } from './portfolio-builder.governance';
 import {
   BASE_DEFAULT_FILTERS,
   DEFAULT_CAMPAIGN_SETUP,
@@ -42,8 +38,6 @@ import {
   buildSegmentIntelligenceUrlFromFilters,
   buildUrlFromFilters,
   campaignCopyValidationError,
-  campaignCriteriaSummary,
-  groupSavedCampaigns,
   dayZeroSafe,
   defaultGeographyForOptions,
   formatDelta,
@@ -61,12 +55,6 @@ import { HIGH_OPPORTUNITY_KPI_LABEL } from '../lib/opportunityScore';
  * primary forward motion into segment intelligence.
  */
 
-/** Compact "Mon D" date for a saved-campaign timestamp (wire-safe parse). */
-function formatSavedCampaignDate(iso: string | null): string | null {
-  const parsed = parseBackendTimestamp(iso);
-  return parsed ? parsed.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null;
-}
-
 function isoDateDaysAgo(days: number): string {
   const date = new Date();
   date.setUTCDate(date.getUTCDate() - days);
@@ -75,7 +63,7 @@ function isoDateDaysAgo(days: number): string {
 
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { setDrawer, canAccessAdmin } = useApp();
+  const { canAccessAdmin } = useApp();
   const footprint = useFootprint();
   // S9 geo → campaign handoff: a `prefill_source=geo-drilldown` link seeds a
   // draft context banner. The state predicate itself applies through the
@@ -145,7 +133,13 @@ export default function PortfolioBuilder() {
   const [saveName, setSaveName] = useState('');
   const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
-  const [selectedCampaignVariants, setSelectedCampaignVariants] = useState<Record<string, string>>({});
+  const campaignBuildConfig = useMemo(() => {
+    const config = buildCampaignConfig(campaignSetup);
+    return {
+      suppression_policy: config.suppression_policy,
+      household_dedup: config.household_dedup,
+    };
+  }, [campaignSetup]);
   const {
     data: campaignsData,
     isPending: campaignsLoading,
@@ -163,8 +157,12 @@ export default function PortfolioBuilder() {
   // changes (via Run build or URL navigation). 6 retries / 5s apart =
   // 30s of auto-retry before surfacing the red error path.
   const committedKey = useMemo(
-    () => JSON.stringify({ filters: committedFilters, stateCodes: committedStateCodes }),
-    [committedFilters, committedStateCodes],
+    () => JSON.stringify({
+      filters: committedFilters,
+      stateCodes: committedStateCodes,
+      campaignBuildConfig,
+    }),
+    [campaignBuildConfig, committedFilters, committedStateCodes],
   );
   const {
     data: preview,
@@ -173,7 +171,11 @@ export default function PortfolioBuilder() {
     manualRetry: retryBuild,
     isFetching: previewFetching,
   } = useWarmingUpRetry<PortfolioPreview>(
-    (signal) => api.portfolioPreview(buildPreviewCriteria(committedFilters, committedStateCodes), signal),
+    (signal) => api.portfolioPreview(
+      buildPreviewCriteria(committedFilters, committedStateCodes),
+      signal,
+      campaignBuildConfig,
+    ),
     [committedKey],
     { queryKey: queryKeys.portfolioPreview([committedKey]), keepPreviousData: true },
   );
@@ -183,6 +185,12 @@ export default function PortfolioBuilder() {
   // "Run build → Save build within ~1s" found Save enabled mid-build.
   // Everything that must not race an in-flight build gates on this.
   const buildInFlight = building || previewFetching;
+  // The server owns both the treatment limit and the eligibility decision.
+  // Equality to true is deliberate: an older or malformed response fails
+  // closed for persistence while Run build and recommendation exploration
+  // remain available.
+  const campaignBuildEligible = preview?.campaign_build_eligible === true;
+  const campaignBuildLimit = preview?.campaign_build_limit ?? 10_000;
   const previewError = error
     ? error instanceof Error
       ? `Couldn't load portfolio preview: ${error.message}`
@@ -292,17 +300,24 @@ export default function PortfolioBuilder() {
 
   const saveRequestRef = useRef<{ fingerprint: string; requestId: string } | null>(null);
   const onOpenSavePanel = useCallback(() => {
-    if (buildDirty || buildInFlight) return;
+    if (buildDirty || buildInFlight || preview?.campaign_build_eligible !== true) return;
     saveRequestRef.current = null;
     setSaveName(`Portfolio build ${new Date().toLocaleString()}`);
     setSaveValidationError(null);
     setSavePanelOpen(true);
-  }, [buildDirty, buildInFlight]);
+  }, [buildDirty, buildInFlight, preview?.campaign_build_eligible]);
 
   const [saving, setSaving] = useState(false);
   const onConfirmSave = useCallback(async () => {
     const name = saveName.trim();
-    if (!name || saving) return;
+    if (!name || saving || buildInFlight) return;
+    if (preview?.campaign_build_eligible !== true) {
+      setSaveValidationError(
+        `This build is not eligible for the governed ${campaignBuildLimit.toLocaleString()}-contact campaign limit. Refine the filters and run it again.`,
+      );
+      setSaveHint('failed');
+      return;
+    }
     const copyError = campaignCopyValidationError(campaignSetup);
     if (copyError) {
       setSaveValidationError(copyError);
@@ -340,7 +355,17 @@ export default function PortfolioBuilder() {
     } finally {
       setSaving(false);
     }
-  }, [campaignSetup, committedFilters, committedStateCodes, refetchCampaigns, saveName, saving]);
+  }, [
+    campaignBuildLimit,
+    campaignSetup,
+    buildInFlight,
+    committedFilters,
+    committedStateCodes,
+    preview?.campaign_build_eligible,
+    refetchCampaigns,
+    saveName,
+    saving,
+  ]);
 
   useEffect(() => {
     if (copyHint === 'idle') return;
@@ -467,7 +492,7 @@ export default function PortfolioBuilder() {
               size="default"
               icon="doc"
               onClick={onOpenSavePanel}
-              disabled={buildDirty || buildInFlight}
+              disabled={buildDirty || buildInFlight || !campaignBuildEligible}
               aria-label="Save current portfolio build"
               aria-expanded={savePanelOpen}
               data-testid="portfolio-save-build"
@@ -480,6 +505,8 @@ export default function PortfolioBuilder() {
                 ? 'Run before saving'
                 : buildInFlight
                 ? 'Build running…'
+                : !campaignBuildEligible
+                ? 'Refine before saving'
                 : 'Save build'}
             </Button>
             <Button
@@ -517,11 +544,11 @@ export default function PortfolioBuilder() {
                 size="sm"
                 type="submit"
                 icon="check"
-                disabled={saveName.trim().length === 0 || saving}
-                aria-busy={saving}
+                disabled={saveName.trim().length === 0 || saving || buildInFlight || !campaignBuildEligible}
+                aria-busy={saving || buildInFlight}
                 data-testid="portfolio-save-confirm"
               >
-                {saving ? 'Saving…' : 'Save'}
+                {saving ? 'Saving…' : buildInFlight ? 'Rechecking…' : 'Save'}
               </Button>
               <Button
                 variant="ghost"
@@ -612,6 +639,8 @@ export default function PortfolioBuilder() {
             </div>
           )}
 
+          {preview && <CampaignBuildGuard preview={preview} />}
+
           <div className="kpi-row kpi-row--spaced">
             <KpiCard
               label="Marketable population"
@@ -692,141 +721,12 @@ export default function PortfolioBuilder() {
         onApply={applyRecommendation}
       />
 
-      <div className="surface mt-4">
-        <div className="surface__hdr surface__hdr--split">
-          <div className="surface__hdr-main">
-            <div className="surface__icon">
-              <Icon name="doc" size={14} />
-            </div>
-            <div>
-              <div className="h-4">Saved campaigns</div>
-              <div className="muted fs-12">Drafts and review status for portfolio builds.</div>
-            </div>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            icon="tweak"
-            onClick={() => void refetchCampaigns()}
-            aria-label="Refresh saved campaigns"
-          >
-            Refresh
-          </Button>
-        </div>
-        <div className="surface__body">
-          {campaignsLoading ? (
-            <div className="muted fs-12">Loading campaigns…</div>
-          ) : campaignsError ? (
-            <div className="status-callout status-callout--danger">{campaignsError}</div>
-          ) : campaigns.length === 0 ? (
-            <div className="muted fs-12">No saved campaigns.</div>
-          ) : (
-            <div className="saved-workspace">
-              <div className="saved-workspace__summary">
-                <span>{campaigns.length.toLocaleString()} saved</span>
-                <span>eligible-only policy required before approval</span>
-              </div>
-              {groupSavedCampaigns(campaigns).slice(0, 8).map((row) => {
-                const campaign = row.campaign;
-                const variants = savedCampaignVariants(campaign);
-                const selectedVariantName = selectedCampaignVariants[campaign.campaign_id]
-                  ?? variants[0]?.variantName
-                  ?? '';
-                const selectedVariant = variants.find(
-                  (variant) => variant.variantName === selectedVariantName,
-                );
-                const householdEnabled = campaign.household_dedup?.enabled === true;
-                const suppressedCount = campaign.household_summary?.suppressed_co_owner_count ?? 0;
-                const grouped = row.draftCount > 1;
-                const latestSaved = grouped ? formatSavedCampaignDate(row.latestAt) : null;
-                return (
-                  <div key={campaign.campaign_id} className="saved-workspace__item">
-                    <span
-                      className={`status-dot status-dot--${campaign.actionable === false ? 'warn' : 'ok'}`}
-                      aria-hidden="true"
-                    />
-                    <div className="saved-workspace__body">
-                      <span className="text-1">{campaign.name}</span>
-                      <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
-                      {campaign.actionable === false && (
-                        <span className="chip chip--warning chip--compact">
-                          Rebuild this campaign before opening its cohort
-                        </span>
-                      )}
-                      {(grouped || householdEnabled || selectedVariant) && (
-                        <div className="saved-workspace__proof">
-                          {grouped && (
-                            <span className="chip chip--neutral chip--compact">×{row.draftCount} drafts</span>
-                          )}
-                          {grouped && latestSaved && (
-                            <span className="muted fs-11">latest {latestSaved}</span>
-                          )}
-                          {householdEnabled && (
-                            <>
-                              <span className="chip chip--warning">
-                                {suppressedCount.toLocaleString()} co-owner
-                                {suppressedCount === 1 ? '' : 's'} suppressed
-                              </span>
-                              <button
-                                type="button"
-                                className="evidence-chip"
-                                onClick={() => setDrawer(DRAWER_SOURCES.householdRollup)}
-                              >
-                                <Icon name="link" size={9} className="e-ico" />
-                                <span className="evidence-chip__label">household_rollup</span>
-                              </button>
-                            </>
-                          )}
-                          {selectedVariant && (
-                            <>
-                              <span
-                                className={`chip ${selectedVariant.generationMode === 'supervisor' ? 'chip--success' : 'chip--neutral'} chip--compact`}
-                              >
-                                {selectedVariant.generatorLabel}
-                              </span>
-                              <span className="mono muted fs-11" title={campaign.campaign_id}>
-                                campaign {campaign.campaign_id.slice(0, 12)}
-                              </span>
-                              <span className={`chip ${selectedVariant.verifiedAtCreation ? 'chip--success' : 'chip--warning'} chip--compact`}>
-                                {selectedVariant.verifiedAtCreation
-                                  ? 'Verified at creation'
-                                  : 'Saved copy only'}
-                              </span>
-                              <select
-                                className="outreach-routing__select"
-                                value={selectedVariantName}
-                                onChange={(event) => setSelectedCampaignVariants((current) => ({
-                                  ...current,
-                                  [campaign.campaign_id]: event.target.value,
-                                }))}
-                                aria-label={`Message variant for ${campaign.name}`}
-                              >
-                                {variants.map((variant) => (
-                                  <option key={variant.variantName} value={variant.variantName}>
-                                    Variant {variant.variantName}
-                                  </option>
-                                ))}
-                              </select>
-                              <Link
-                                to={savedCampaignLeadQueueUrl(campaign, selectedVariant.variantName)}
-                                className="btn btn--primary btn--sm"
-                                aria-label={`Open ${campaign.name} variant ${selectedVariant.variantName} in Lead Queue`}
-                              >
-                                Open lead queue
-                                <Icon name="chevright" size={12} />
-                              </Link>
-                            </>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+      <SavedCampaignsPanel
+        campaigns={campaigns}
+        loading={campaignsLoading}
+        error={campaignsError}
+        onRefresh={refetchCampaigns}
+      />
 
       {preview?.high_intent_leads !== undefined && preview.high_intent_leads > 0 && (
         <div className="lead-cta">

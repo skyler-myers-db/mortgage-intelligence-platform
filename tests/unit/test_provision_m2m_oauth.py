@@ -1,4 +1,4 @@
-"""Contracts for distinct normal/admin/verifier M2M provisioning."""
+"""Contracts for distinct operator/admin/verifier M2M provisioning."""
 
 from __future__ import annotations
 
@@ -12,6 +12,18 @@ import pytest
 from databricks.sdk.service.database import (
     DatabaseInstanceRole,
     DatabaseInstanceRoleIdentityType,
+)
+from databricks.sdk.service.serving import (
+    ServingEndpointAccessControlResponse,
+    ServingEndpointPermission,
+    ServingEndpointPermissionLevel,
+    ServingEndpointPermissions,
+)
+from databricks.sdk.service.sql import (
+    WarehouseAccessControlResponse,
+    WarehousePermission,
+    WarehousePermissionLevel,
+    WarehousePermissions,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -66,6 +78,7 @@ def _make_client(
         [existing_sp] if existing_sp is not None else []
     )
     client.service_principals.create.return_value = create_returns
+    client.service_principals.get.return_value = existing_sp or create_returns
     client.service_principal_secrets_proxy.create.return_value = SimpleNamespace(
         id="secret-id-xyz",
         secret=mint_secret_value,
@@ -79,8 +92,70 @@ def _make_client(
         id="mip-gateway-endpoint-id",
         name="mip-agent-gateway",
     )
+    endpoint_principal = (
+        getattr(existing_sp, "application_id", None)
+        or getattr(create_returns, "application_id", None)
+        or "app-id-abc"
+    )
+    client.serving_endpoints.get_permissions.return_value = ServingEndpointPermissions(
+        access_control_list=[
+            ServingEndpointAccessControlResponse(
+                service_principal_name=endpoint_principal,
+                all_permissions=[
+                    ServingEndpointPermission(
+                        inherited=False,
+                        permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
+                    )
+                ],
+            )
+        ]
+    )
     client.apps.get_permissions.return_value = SimpleNamespace(access_control_list=[])
+    client.warehouses.list.return_value = iter([SimpleNamespace(id="warehouse-123")])
+    warehouse_principal = endpoint_principal
+    client.warehouses.get_permissions.return_value = WarehousePermissions(
+        access_control_list=[
+            WarehouseAccessControlResponse(
+                service_principal_name=warehouse_principal,
+                all_permissions=[
+                    WarehousePermission(
+                        inherited=False,
+                        permission_level=WarehousePermissionLevel.CAN_USE,
+                    )
+                ],
+            )
+        ]
+    )
     return client
+
+
+@pytest.mark.parametrize(
+    ("origin", "expected"),
+    [
+        (
+            "git@github.com:acme-bank/mortgage.intelligence-platform.git",
+            "acme-bank/mortgage.intelligence-platform",
+        ),
+        (
+            "https://github.com/acme-bank/mortgage.intelligence-platform.git",
+            "acme-bank/mortgage.intelligence-platform",
+        ),
+        (
+            "https://github.com/acme-bank/mortgage.intelligence-platform",
+            "acme-bank/mortgage.intelligence-platform",
+        ),
+    ],
+)
+def test_infer_gh_repo_preserves_dotted_repository_names(
+    origin: str,
+    expected: str,
+) -> None:
+    with patch.object(
+        pmo.subprocess,
+        "run",
+        return_value=SimpleNamespace(stdout=origin),
+    ):
+        assert pmo._infer_gh_repo() == expected
 
 
 def _provision(client: MagicMock, **overrides: object):
@@ -142,6 +217,12 @@ def test_help_exposes_role_group_and_secret_name_contract(
     [
         ("normal", "mip-nightly-ci-sp", "DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"),
         (
+            "operator2",
+            "mip-nightly-operator2-ci-sp",
+            "DATABRICKS_OPERATOR2_CLIENT_ID",
+            "DATABRICKS_OPERATOR2_CLIENT_SECRET",
+        ),
+        (
             "admin",
             "mip-nightly-admin-ci-sp",
             "DATABRICKS_ADMIN_CLIENT_ID",
@@ -198,10 +279,11 @@ def test_cli_rejects_verifier_app_can_use_before_provision(
     ("role", "role_args"),
     [
         pytest.param("normal", [], id="app-runtime"),
+        pytest.param("operator2", [], id="second-operator"),
         pytest.param("admin", ["--create-group"], id="admin"),
     ],
 )
-def test_cli_allows_app_can_use_for_app_runtime_and_admin_roles(
+def test_cli_allows_app_can_use_for_operator_and_admin_roles(
     role: str,
     role_args: list[str],
 ) -> None:
@@ -766,6 +848,83 @@ def test_verifier_fails_closed_on_nested_admin_group_membership() -> None:
     client.database.create_database_instance_role.assert_not_called()
 
 
+@pytest.mark.parametrize("group_name", ["admins", "Account Admins", "Metastore Admins"])
+def test_verifier_rejects_visible_builtin_admin_group(group_name: str) -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    group = SimpleNamespace(
+        id="builtin-admin-group",
+        display_name=group_name,
+        members=[SimpleNamespace(value="verifier-scim-id")],
+    )
+    client = _make_client(existing_sp=verifier, groups=[group])
+
+    with pytest.raises(SystemExit, match="forbidden built-in administrator group"):
+        _provision(
+            client,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.apps.get_permissions.assert_not_called()
+
+
+def test_verifier_rejects_direct_administrative_role() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    hydrated = SimpleNamespace(
+        **vars(verifier),
+        roles=[SimpleNamespace(value="service-principal-manager")],
+        entitlements=[],
+    )
+    client = _make_client(existing_sp=verifier)
+    client.service_principals.get.return_value = hydrated
+
+    with pytest.raises(SystemExit, match="forbidden administrative role"):
+        _provision(
+            client,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+
+def test_verifier_rejects_powerful_cluster_create_entitlement() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    hydrated = SimpleNamespace(
+        **vars(verifier),
+        roles=[],
+        entitlements=[SimpleNamespace(value="allow-cluster-create")],
+    )
+    client = _make_client(existing_sp=verifier)
+    client.service_principals.get.return_value = hydrated
+
+    with pytest.raises(SystemExit, match="forbidden powerful entitlement"):
+        _provision(
+            client,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+
 def test_verifier_group_resolution_error_fails_closed_before_grants() -> None:
     verifier = _sp(
         "mip-ai-gateway-verifier-ci-sp",
@@ -848,6 +1007,8 @@ def test_verifier_gateway_grant_fails_closed_without_endpoint_id() -> None:
             client,
             "mip-agent-gateway",
             "verifier-application-id",
+            sp_id="verifier-scim-id",
+            effective_group_names=set(),
         )
 
     client.serving_endpoints.update_permissions.assert_not_called()

@@ -112,11 +112,17 @@ Detail strings (update all surfaces consistently, §4):
 
 Probe traffic alone is not "integration." Required:
 
-1. **Route the Supervisor/orchestrator bounded queries through the AI-Gateway-enabled endpoint**
-   (or apply the same `ai_gateway` config — inference logging + usage tracking + rate limits —
-   to the Supervisor endpoint via `provision_agentic_resources.py`). All config stays in the
-   provisioner/bundle; zero click-ops. After this, real `agent_framework` runs produce inference
-   rows (request ids should carry a distinguishable prefix, e.g. `mip-agent-run-{full-sha}-…`).
+1. **Route the Supervisor/orchestrator bounded queries through the AI-Gateway-enabled endpoint.**
+   The provisioner deploys an MLflow `ResponsesAgent` as the product boundary and delegates its
+   bounded input to the managed Supervisor endpoint through Model Serving automatic
+   authentication. All config stays in the provisioner/bundle; zero click-ops. After this, real
+   `agent_framework` runs produce inference rows (request ids should carry a distinguishable
+   prefix, e.g. `mip-agent-run-{full-sha}-…`).
+   Deployment/export postflight must independently read the exact Unity Catalog model version
+   receiving endpoint traffic and require its `mip.proxy_source_hash` and
+   `mip.upstream_supervisor_endpoint` tags to match the reviewed proxy source and Supervisor.
+   Endpoint tags alone are not authoritative because they can be changed independently of the
+   served registered-model version.
 2. **Run-card governance chip binds to a real, synchronously-true signal:** for
    `agent_framework` runs, record the gateway `client_request_id` used for the Supervisor call
    in the run evidence, and render the AI Gateway chip as "routed through governed endpoint"
@@ -126,8 +132,10 @@ Probe traffic alone is not "integration." Required:
    proof time + measured latency + count of gateway inference rows for the current SHA (probe +
    product prefixes) read from the inference table. No identifiers on public surfaces (existing
    leak-guard tests stay green).
-4. **Rate limits:** ensure per-user rate limits are set on the gateway endpoint via the
-   provisioner (was planned in Phase 6; verify present or add), asserted by a provisioning test.
+4. **Request budgets:** Databricks Agent Model endpoints support Gateway inference tables but do
+   not currently support Gateway rate limits or usage tracking. Keep those unsupported fields off
+   the endpoint, assert that the provisioning payload contains only the inference-table config,
+   and retain authenticated application-level backpressure as the request budget.
 
 ## 3. Test requirements (all must exist; enumerate every added/removed assertion in the report)
 

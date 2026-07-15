@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import type { CampaignSummary } from '../types';
-import { savedCampaignVariants } from './portfolio-builder.saved-campaigns';
+import {
+  savedCampaignCanArchive,
+  savedCampaignVariants,
+} from './portfolio-builder.saved-campaigns';
 
 function campaignWithVariant(variant: Record<string, unknown>): CampaignSummary {
   return {
@@ -56,5 +59,29 @@ describe('savedCampaignVariants', () => {
     campaign.actionability_issue = 'legacy_contract';
 
     expect(savedCampaignVariants(campaign)).toEqual([]);
+  });
+});
+
+describe('savedCampaignCanArchive', () => {
+  it('allows only legacy or failed immutable-treatment quarantines', () => {
+    const legacy = campaignWithVariant({});
+    legacy.actionable = false;
+    legacy.actionability_issue = 'treatment_unbound';
+    legacy.treatment_state = 'legacy_unbound';
+    expect(savedCampaignCanArchive(legacy)).toBe(true);
+
+    expect(savedCampaignCanArchive({ ...legacy, treatment_state: 'failed' })).toBe(true);
+    expect(savedCampaignCanArchive({ ...legacy, treatment_state: 'building' })).toBe(false);
+    expect(savedCampaignCanArchive({ ...legacy, treatment_state: 'ready' })).toBe(false);
+    expect(savedCampaignCanArchive({ ...legacy, actionability_issue: 'invalid_criteria' })).toBe(false);
+    expect(savedCampaignCanArchive({ ...legacy, actionable: true })).toBe(false);
+  });
+
+  it('keeps the archive remediation available during an issue-only rolling deploy', () => {
+    const campaign = campaignWithVariant({});
+    campaign.actionable = false;
+    campaign.actionability_issue = 'treatment_unbound';
+
+    expect(savedCampaignCanArchive(campaign)).toBe(true);
   });
 });

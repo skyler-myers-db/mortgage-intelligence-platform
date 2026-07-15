@@ -109,7 +109,8 @@ DO UPDATE SET
     suppression_policy = EXCLUDED.suppression_policy,
     channel_cascade = EXCLUDED.channel_cascade,
     send_window = EXCLUDED.send_window,
-    updated_at = now();
+    updated_at = now()
+WHERE campaigns.treatment_state = 'legacy_unbound';
 
 -- Campaign message variants -------------------------------------------
 -- Approval proof must bind to the exact immutable campaign copy and

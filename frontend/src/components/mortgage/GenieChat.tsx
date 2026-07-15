@@ -71,6 +71,7 @@ export function GenieChat() {
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [conversationId, setConversationId] = useState<string | null>(() => readGenieConversationId());
   const bodyRef = useRef<HTMLDivElement>(null);
+  const suppressBootstrapConversationRef = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -78,7 +79,7 @@ export function GenieChat() {
       .then((result) => {
         setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
         const startConversationId = result.conversation_id;
-        if (!startConversationId) return;
+        if (!startConversationId || suppressBootstrapConversationRef.current) return;
         setConversationId((current) => {
           if (current) return current;
           writeGenieConversationId(startConversationId);
@@ -93,6 +94,7 @@ export function GenieChat() {
 
   useEffect(() => {
     const onActorBoundaryReset = () => {
+      suppressBootstrapConversationRef.current = true;
       setConversationId(null);
       setMsgs([]);
       setInput('');
@@ -177,7 +179,7 @@ export function GenieChat() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setConversationId(null);
-        clearGenieConversationState();
+        clearGenieConversationState({ notify: true });
       }
       setMsgs((m) => [
         ...m,
@@ -198,10 +200,11 @@ export function GenieChat() {
 
   const newConversation = () => {
     if (typing) return;
+    suppressBootstrapConversationRef.current = true;
     setConversationId(null);
     setMsgs([]);
     setInput('');
-    clearGenieConversationState();
+    clearGenieConversationState({ notify: true });
   };
 
   const runAction = async (action: GenieActionSuggestion, payload: GenieAnswerShape) => {
@@ -248,7 +251,7 @@ export function GenieChat() {
     } catch (err) {
       if (err instanceof ApiError && err.status === 403) {
         setConversationId(null);
-        clearGenieConversationState();
+        clearGenieConversationState({ notify: true });
       }
       setMsgs((m) => [
         ...m,

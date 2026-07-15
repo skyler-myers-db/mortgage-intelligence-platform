@@ -129,6 +129,7 @@ _PII_DENYLIST_KEYS: frozenset[str] = frozenset(
 #   backend/api/outreach.py::approve_outreach
 #     approval_id, offer_code, borrower_id, request_id, draft_subject, draft_body,
 #     draft_generation_id, draft_response_hash, draft_source_refreshed_at,
+#     campaign_treatment_fingerprint,
 #     draft_edited, draft_attribution, rationale, bulk_id, bulk_rationale,
 #     decision_inputs
 #   backend/api/outreach.py::reject_outreach
@@ -176,6 +177,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "draft_body",
         "draft_generation_id",
         "draft_response_hash",
+        "campaign_treatment_fingerprint",
         "draft_source_refreshed_at",
         "draft_edited",
         "draft_attribution",
@@ -334,6 +336,19 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
         "household_mailing_address_count",
         "household_singleton_count",
         "status",
+        "expected_status",
+        # T0 campaign quarantine proof. Enum + boolean only; no cohort members.
+        "treatment_state",
+        "terminal_archive_without_treatment",
+        # Immutable T0 campaign manifest proof (bounded enums, hashes, counts).
+        "treatment_algorithm_version",
+        "treatment_contract_fingerprint",
+        "treatment_fingerprint",
+        "source_snapshot_id",
+        "candidate_count",
+        "selected_primary_count",
+        "treatment_count",
+        "holdout_count",
         # Admin degraded-banner proof drill
         "forced_state",
         "forced_dependency",
@@ -776,7 +791,10 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     for field, edited in _metadata_values_for(metadata, {"draft_edited"}):
         if not isinstance(edited, bool):
             raise AuditMetadataValueViolation(field, "must be boolean")
-    for field, value in _metadata_values_for(metadata, {"draft_response_hash"}):
+    for field, value in _metadata_values_for(
+        metadata,
+        {"draft_response_hash", "campaign_treatment_fingerprint"},
+    ):
         if value is not None and re.fullmatch(r"[0-9a-f]{64}", str(value)) is None:
             raise AuditMetadataValueViolation(field, "must be a SHA-256 hex digest")
     for field, value in _metadata_values_for(metadata, {"draft_source_refreshed_at"}):

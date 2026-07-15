@@ -26,6 +26,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from backend.config.settings import settings
 from backend.schemas.activation import ActivationOutboxItem
 from backend.services import activation_delivery
 from backend.services.activation_delivery import (
@@ -179,7 +180,8 @@ def _real_client(monkeypatch: pytest.MonkeyPatch, responses: list[Any]) -> Resil
 
 
 @pytest.fixture(autouse=True)
-def _reset_singletons() -> Iterator[None]:
+def _reset_singletons(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(settings, "salesforce_external_id_field", "MIP_Activation_Id__c")
     _reset_salesforce_client_for_tests()
     _reset_breakers_for_tests()
     yield
@@ -295,6 +297,41 @@ def test_delivery_401_triggers_token_refresh_then_succeeds(
     assert "/services/oauth2/token" in captured[2][0]
 
 
+def test_external_id_upsert_resolves_existing_record_after_empty_204(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured = _patch_urlopen(
+        monkeypatch,
+        [
+            {"access_token": "sf-token"},
+            b"",
+            {"Id": "00T-existing"},
+        ],
+    )
+    client = SalesforceClient(
+        instance_url="https://example.my.salesforce.com",
+        client_id="cid",
+        client_secret="csecret",
+        username="user@example.com",
+        password="pw",
+    )
+
+    result = client.upsert_record(
+        "Task",
+        "MIP_Activation_Id__c",
+        "11111111-1111-4111-8111-111111111111",
+        {"Subject": "x", "Description": "y"},
+    )
+
+    assert result == {"id": "00T-existing", "success": True}
+    assert len(captured) == 3
+    assert "MIP_Activation_Id__c/11111111-1111-4111-8111-111111111111" in captured[1][0]
+    assert captured[2][0].endswith("?fields=Id")
+    assert json.loads(captured[1][1])["MIP_Activation_Id__c"] == (
+        "11111111-1111-4111-8111-111111111111"
+    )
+
+
 # ---------------------------------------------------------------------------
 # (d) UNCONFIGURED -> honest no-op
 # ---------------------------------------------------------------------------
@@ -363,7 +400,13 @@ def test_breaker_open_records_dependency_down(monkeypatch: pytest.MonkeyPatch) -
     """Directly assert the DependencyDownError path is handled honestly."""
 
     class _OpenClient:
-        def create_record(self, sobject: str, fields: dict[str, Any]) -> dict[str, Any]:
+        def upsert_record(
+            self,
+            sobject: str,
+            external_id_field: str,
+            external_id: str,
+            fields: dict[str, Any],
+        ) -> dict[str, Any]:
             raise DependencyDownError(
                 "salesforce", reason="circuit breaker is open",
                 kind=DependencyDownError.KIND_BREAKER_OPEN,
@@ -374,3 +417,62 @@ def test_breaker_open_records_dependency_down(monkeypatch: pytest.MonkeyPatch) -
     assert result.delivered is False
     assert result.status == "failed"
     assert result.delivery_metadata["delivered"] is False
+
+
+def test_delivered_replay_never_calls_salesforce_or_updates_state() -> None:
+    class _ExplodingClient:
+        def upsert_record(self, *_args: object, **_kwargs: object) -> dict[str, Any]:
+            raise AssertionError("delivered activation must not be sent again")
+
+    store = _FakeStore()
+    row = _outbox_row(status="delivered").model_copy(
+        update={"delivery_metadata": {"delivered": True, "salesforce_id": "00T-existing"}}
+    )
+
+    result = deliver_to_salesforce(row, store=store, client=_ExplodingClient())  # type: ignore[arg-type]
+
+    assert result.delivered is True
+    assert result.attempted is False
+    assert result.salesforce_id == "00T-existing"
+    assert store.updates == []
+
+
+def test_retry_after_remote_success_uses_same_external_id() -> None:
+    class _IdempotentClient:
+        def __init__(self) -> None:
+            self.records: dict[str, str] = {}
+            self.calls: list[str] = []
+
+        def upsert_record(
+            self,
+            _sobject: str,
+            _external_id_field: str,
+            external_id: str,
+            _fields: dict[str, Any],
+        ) -> dict[str, Any]:
+            self.calls.append(external_id)
+            self.records.setdefault(external_id, "00T-stable")
+            return {"id": self.records[external_id], "success": True}
+
+    class _FailFirstStore(_FakeStore):
+        def __init__(self) -> None:
+            super().__init__()
+            self.fail = True
+
+        def update_delivery_state(self, **kwargs: Any) -> ActivationOutboxItem:
+            if self.fail:
+                self.fail = False
+                raise RuntimeError("commit connection failed after remote success")
+            return super().update_delivery_state(**kwargs)
+
+    sf = _IdempotentClient()
+    store = _FailFirstStore()
+    row = _outbox_row()
+    with pytest.raises(RuntimeError, match="commit connection failed"):
+        deliver_to_salesforce(row, store=store, client=sf)  # type: ignore[arg-type]
+
+    result = deliver_to_salesforce(row, store=store, client=sf)  # type: ignore[arg-type]
+
+    assert result.delivered is True
+    assert sf.calls == [row.activation_id, row.activation_id]
+    assert sf.records == {row.activation_id: "00T-stable"}

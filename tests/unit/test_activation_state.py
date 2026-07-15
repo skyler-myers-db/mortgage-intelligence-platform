@@ -61,7 +61,11 @@ class _Cursor:
 
     def execute(self, sql: str, params: dict[str, object]) -> None:
         self.conn.executions.append((sql, params))
-        if "INSERT INTO mip_app.activation_outbox" in sql:
+        if "FOR SHARE OF c" in sql:
+            self._row = {"status": "active"} if self.conn.campaign_active else None
+        elif "FOR UPDATE OF o" in sql:
+            self._row = self.conn._activation_row() if self.conn.insert_params else None
+        elif "INSERT INTO mip_app.activation_outbox" in sql:
             self.conn.insert_params = dict(params)
             self._row = {"activation_id": params["activation_id"]}
 
@@ -70,15 +74,19 @@ class _Cursor:
 
 
 class _Conn:
-    def __init__(self) -> None:
+    def __init__(self, *, campaign_active: bool = True) -> None:
+        self.campaign_active = campaign_active
         self.executions: list[tuple[str, dict[str, object]]] = []
         self.insert_params: dict[str, object] | None = None
         self.audit_params: dict[str, object] | None = None
+        self.in_transaction = False
 
     def __enter__(self) -> _Conn:
+        self.in_transaction = True
         return self
 
     def __exit__(self, *_exc: object) -> None:
+        self.in_transaction = False
         return None
 
     def cursor(self) -> _Cursor:
@@ -86,6 +94,13 @@ class _Conn:
 
     def execute(self, sql: str, params: dict[str, object]) -> _Result:
         self.executions.append((sql, params))
+        if "UPDATE mip_app.activation_outbox" in sql:
+            assert self.insert_params is not None
+            self.insert_params["status"] = params["status"]
+            self.insert_params["delivery_metadata"] = params["delivery_metadata"]
+            return _Result(None)
+        if "FOR UPDATE OF o" in sql:
+            return _Result(self._activation_row() if self.insert_params else None)
         if "INSERT INTO mip_app.action_audit" in sql:
             self.audit_params = dict(params)
             return _Result(
@@ -126,8 +141,8 @@ class _Conn:
 
 
 class _Client:
-    def __init__(self) -> None:
-        self.conn = _Conn()
+    def __init__(self, *, campaign_active: bool = True) -> None:
+        self.conn = _Conn(campaign_active=campaign_active)
 
     def fetchone(self, _sql: str, _params: dict[str, object] | None = None) -> None:
         return None
@@ -173,6 +188,53 @@ class _RequestConflictConn(_Conn):
 class _RequestConflictClient(_Client):
     def __init__(self, conflict_row: dict[str, object]) -> None:
         self.conn = _RequestConflictConn(conflict_row)
+
+
+@pytest.mark.parametrize(("campaign_active", "expected"), [(True, True), (False, False)])
+def test_campaign_delivery_guard_holds_transaction_through_delivery_body(
+    campaign_active: bool,
+    expected: bool,
+) -> None:
+    client = _Client(campaign_active=True)
+    store = ActivationStateStore(client=client)  # type: ignore[arg-type]
+    borrower = mock_data.BORROWERS[0]
+    approval_id = str(uuid4())
+    campaign_id = str(uuid4())
+    staged = store.stage_borrower(
+        borrower=borrower,
+        destination=_destination(status="connected"),
+        payload=ActivationStageRequest(
+            borrower_id=borrower.borrower_id,
+            destination_key="salesforce_crm",
+            channel="email",
+            approval_id=approval_id,
+            request_id=str(uuid4()),
+        ),
+        approved_decision=_approved_decision(
+            approval_id,
+            borrower.borrower_id,
+            campaign_id=campaign_id,
+        ),
+        actor="skyler@entrada.ai",
+    ).activation
+    client.conn.campaign_active = campaign_active
+
+    with store.delivery_guard(activation=staged) as guard:
+        assert guard.should_deliver is expected
+        assert client.conn.in_transaction is True
+        if expected:
+            refreshed = guard.update_delivery_state(
+                activation_id=staged.activation_id,
+                status="delivered",
+                delivery_metadata={"delivered": True, "salesforce_id": "00T-stable"},
+            )
+            assert refreshed is not None
+            assert refreshed.status == "delivered"
+            assert guard.should_deliver is False
+
+    assert client.conn.in_transaction is False
+    assert any("FOR SHARE OF c" in sql for sql, _params in client.conn.executions)
+    assert any("FOR UPDATE OF o" in sql for sql, _params in client.conn.executions)
 
 
 def test_stage_borrower_writes_sanitized_outbox_payload_and_audit_metadata() -> None:
@@ -261,6 +323,44 @@ def test_stage_borrower_derives_offer_and_campaign_from_approved_decision() -> N
     payload = json.loads(str(client.conn.insert_params["payload_json"]))
     assert payload["offer_code"] == "heloc"
     assert payload["recommended_offer"] == "Home-equity line review"
+    statements = [sql for sql, _params in client.conn.executions]
+    lock_pos = next(i for i, sql in enumerate(statements) if "FOR SHARE OF c" in sql)
+    insert_pos = next(
+        i for i, sql in enumerate(statements) if "INSERT INTO mip_app.activation_outbox" in sql
+    )
+    assert lock_pos < insert_pos
+
+
+def test_stage_borrower_rejects_inactive_campaign_under_transaction_lock() -> None:
+    borrower = mock_data.BORROWERS[0]
+    destination = _destination()
+    approval_id = str(uuid4())
+    campaign_id = str(uuid4())
+    client = _Client(campaign_active=False)
+    store = ActivationStateStore(client=client)  # type: ignore[arg-type]
+
+    with pytest.raises(PermissionError, match="campaign must be active"):
+        store.stage_borrower(
+            borrower=borrower,
+            destination=destination,
+            payload=ActivationStageRequest(
+                borrower_id=borrower.borrower_id,
+                destination_key=destination.destination_key,
+                channel="email",
+                approval_id=approval_id,
+                request_id=str(uuid4()),
+            ),
+            approved_decision=_approved_decision(
+                approval_id,
+                borrower.borrower_id,
+                campaign_id=campaign_id,
+            ),
+            actor="skyler@entrada.ai",
+        )
+
+    statements = [sql for sql, _params in client.conn.executions]
+    assert any("FOR SHARE OF c" in sql for sql in statements)
+    assert not any("INSERT INTO mip_app.activation_outbox" in sql for sql in statements)
 
 
 def test_stage_borrower_rejects_client_offer_that_differs_from_approval() -> None:

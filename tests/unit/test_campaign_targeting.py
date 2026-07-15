@@ -2,84 +2,107 @@ from __future__ import annotations
 
 from typing import Any
 
-from backend.services.campaign_targeting import campaign_contains_borrower
+import pytest
+
+from backend.services.campaign_targeting import (
+    campaign_contains_borrower,
+    campaign_treatment_fingerprint,
+)
 
 
 class _CaptureLeadRepository:
-    def __init__(self, *, count: int = 1) -> None:
-        self.result = count
-        self.kwargs: dict[str, Any] = {}
+    def __init__(self, *, result: bool = True) -> None:
+        self.result = result
+        self.treatment_kwargs: dict[str, Any] = {}
 
-    def count(self, **kwargs: Any) -> int:
-        self.kwargs = kwargs
+    def is_campaign_treatment_member(self, **kwargs: Any) -> bool:
+        self.treatment_kwargs = kwargs
         return self.result
 
 
-def test_portfolio_campaign_replays_exact_criteria_for_one_borrower() -> None:
-    repo = _CaptureLeadRepository()
+def _fingerprint(**updates: object) -> str:
+    contract: dict[str, object] = {
+        "json_contract_version": 1,
+        "criteria": {"states": ["IL"], "marketing_eligibility": "Eligible only"},
+        "suppression_policy": {"default": "eligible_only", "frequency_cap_days": 30},
+        "holdout": {"method": "hash_modulo", "size_pct": 10},
+        "household_dedup": {
+            "enabled": False,
+            "dedupe_unit": "borrower",
+            "primary_contact_strategy": "highest_opportunity_eligible",
+        },
+        **updates,
+    }
+    return campaign_treatment_fingerprint(**contract)  # type: ignore[arg-type]
 
-    assert campaign_contains_borrower(
-        repo,  # type: ignore[arg-type]
-        borrower_id="B-0000000000001",
-        criteria={
-            "states": ["IL"],
-            "owner_link": "Multi-property (2-4)",
-            "marketing_eligibility": "Eligible only",
+
+def test_treatment_contract_fingerprint_is_canonical_and_binds_execution_fields() -> None:
+    expected = _fingerprint()
+    assert expected == campaign_treatment_fingerprint(
+        json_contract_version=1,
+        criteria={"marketing_eligibility": "Eligible only", "states": ["IL"]},
+        suppression_policy={"frequency_cap_days": 30, "default": "eligible_only"},
+        holdout={"size_pct": 10, "method": "hash_modulo"},
+        household_dedup={
+            "primary_contact_strategy": "highest_opportunity_eligible",
+            "dedupe_unit": "borrower",
+            "enabled": False,
         },
     )
-
-    assert repo.kwargs["borrower_ids"] == ["B-0000000000001"]
-    assert repo.kwargs["state_codes"] is None
-    portfolio = repo.kwargs["portfolio_criteria"]
-    assert portfolio.states == ["IL"]
-    assert portfolio.owner_link == "Multi-property (2-4)"
-    assert portfolio.marketing_eligibility == "Eligible only"
+    assert expected != _fingerprint(criteria={"states": ["NY"]})
+    assert expected != _fingerprint(suppression_policy={"frequency_cap_days": 60})
+    assert expected != _fingerprint(holdout={"method": "hash_modulo", "size_pct": 20})
 
 
-def test_genie_campaign_replays_nested_filters_without_double_counting() -> None:
+def test_bound_campaign_uses_only_immutable_t0_proof_and_live_frequency_cap() -> None:
     repo = _CaptureLeadRepository()
 
     assert campaign_contains_borrower(
         repo,  # type: ignore[arg-type]
         borrower_id="B-0000000000001",
-        criteria={
-            "source": "trusted_sql",
-            "borrower_ids": ["B-0000000000001"],
-            "result_filters": {
-                "states": ["IL"],
-                "segment_codes": ["itm", "equity"],
-                "segment_mode": "all",
-                "portfolio_criteria": {"marketing_eligibility": "Eligible only"},
-            },
-        },
+        campaign_id="11111111-1111-4111-8111-111111111111",
+        materialization_id="22222222-2222-4222-8222-222222222222",
+        delta_version=17,
+        treatment_fingerprint="a" * 64,
+        suppression_policy={"default": "eligible_only", "frequency_cap_days": 60},
     )
 
-    assert repo.kwargs["borrower_ids"] == ["B-0000000000001"]
-    assert repo.kwargs["state_codes"] == ["IL"]
-    assert repo.kwargs["segment_codes"] == ["itm", "equity"]
-    assert repo.kwargs["segment_mode"] == "all"
-    assert repo.kwargs["portfolio_criteria"].marketing_eligibility == "Eligible only"
+    assert repo.treatment_kwargs == {
+        "borrower_id": "B-0000000000001",
+        "campaign_id": "11111111-1111-4111-8111-111111111111",
+        "materialization_id": "22222222-2222-4222-8222-222222222222",
+        "delta_version": 17,
+        "treatment_fingerprint": "a" * 64,
+        "frequency_cap_days": 60,
+    }
 
 
-def test_genie_campaign_fails_before_query_when_explicit_borrower_set_excludes_subject() -> None:
+def test_t0_membership_result_fails_closed() -> None:
+    repo = _CaptureLeadRepository(result=False)
+
+    assert not campaign_contains_borrower(
+        repo,  # type: ignore[arg-type]
+        borrower_id="B-0000000000001",
+        campaign_id="11111111-1111-4111-8111-111111111111",
+        materialization_id="22222222-2222-4222-8222-222222222222",
+        delta_version=17,
+        treatment_fingerprint="a" * 64,
+    )
+
+
+@pytest.mark.parametrize("frequency_cap", [True, 29, 366, "30"])
+def test_bound_campaign_rejects_invalid_live_frequency_contract(frequency_cap: object) -> None:
     repo = _CaptureLeadRepository()
 
-    assert campaign_contains_borrower(
-        repo,  # type: ignore[arg-type]
-        borrower_id="B-0000000000001",
-        criteria={
-            "source": "genie",
-            "borrower_ids": ["B-0000000000002"],
-        },
-    ) is False
-    assert repo.kwargs == {}
+    with pytest.raises(ValueError, match="campaign suppression contract"):
+        campaign_contains_borrower(
+            repo,  # type: ignore[arg-type]
+            borrower_id="B-0000000000001",
+            campaign_id="11111111-1111-4111-8111-111111111111",
+            materialization_id="22222222-2222-4222-8222-222222222222",
+            delta_version=17,
+            treatment_fingerprint="a" * 64,
+            suppression_policy={"frequency_cap_days": frequency_cap},
+        )
 
-
-def test_campaign_membership_requires_exactly_one_unique_borrower_match() -> None:
-    repo = _CaptureLeadRepository(count=2)
-
-    assert campaign_contains_borrower(
-        repo,  # type: ignore[arg-type]
-        borrower_id="B-0000000000001",
-        criteria={"marketing_eligibility": "Eligible only"},
-    ) is False
+    assert repo.treatment_kwargs == {}

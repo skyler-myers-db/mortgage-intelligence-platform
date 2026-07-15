@@ -15,6 +15,7 @@ We stub the probe helpers so the test never opens a warehouse / Lakebase
 connection. Health must return HTTP 200 even when degraded so the
 Databricks App load-balancer doesn't yank the container.
 """
+
 from __future__ import annotations
 
 import base64
@@ -25,6 +26,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
+from backend.agents.gateway_contract import gateway_runtime_binding_hash
 from backend.api import health as health_mod
 from backend.main import app
 from backend.services import health_probes, resilience
@@ -431,18 +433,51 @@ def test_authenticated_health_surfaces_deployed_git_sha(
     monkeypatch.setattr(health_probes, "probe_lakebase", lambda: True)
     monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
     monkeypatch.setattr(health_mod.settings, "mip_git_sha", "abc123def456")
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_serving_endpoint",
+        "mip-growth-agent-gateway",
+    )
+    monkeypatch.setattr(health_mod.settings, "mip_agent_supervisor_id", "supervisor-123")
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_supervisor_endpoint",
+        "mas-supervisor-endpoint",
+    )
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_gateway_model",
+        "mip.audit.mortgage_growth_supervisor_proxy",
+    )
+    monkeypatch.setattr(health_mod.settings, "mip_agent_gateway_model_version", 7)
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_ai_gateway_inference_table",
+        "mip.audit.mip_agent_gateway_growth_agent",
+    )
+    expected_binding = gateway_runtime_binding_hash(
+        endpoint="mip-growth-agent-gateway",
+        supervisor_id="supervisor-123",
+        upstream_endpoint="mas-supervisor-endpoint",
+        model_name="mip.audit.mortgage_growth_supervisor_proxy",
+        model_version=7,
+        inference_table="mip.audit.mip_agent_gateway_growth_agent",
+    )
 
     anon = client.get("/api/health")
     assert anon.status_code == 200
     assert "git_sha" not in anon.json()
+    assert "agent_gateway_binding_sha256" not in anon.json()
 
     auth = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
     assert auth.status_code == 200
     assert auth.json()["git_sha"] == "abc123def456"
+    assert auth.json()["agent_gateway_binding_sha256"] == expected_binding
 
     admin = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     assert admin.status_code == 200
     assert admin.json()["git_sha"] == "abc123def456"
+    assert admin.json()["agent_gateway_binding_sha256"] == expected_binding
 
 
 def test_health_admin_endpoint_returns_full_diagnostics(

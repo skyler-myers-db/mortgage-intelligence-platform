@@ -1,79 +1,76 @@
-"""Replay a reviewed saved-campaign cohort for one public borrower id."""
+"""Replay one reviewed saved-campaign treatment cohort without widening it."""
 
 from __future__ import annotations
 
-from backend.schemas.portfolio import PortfolioCriteria
+import hashlib
+import json
+
+from backend.schemas.portfolio import (
+    CAMPAIGN_TREATMENT_ALGORITHM_VERSION,
+)
 from backend.services.repositories import LeadRepository
+
+
+def campaign_treatment_fingerprint(
+    *,
+    json_contract_version: int,
+    criteria: dict[str, object],
+    suppression_policy: dict[str, object],
+    holdout: dict[str, object] | None,
+    household_dedup: dict[str, object],
+) -> str:
+    """Hash the complete saved treatment contract used for execution.
+
+    The algorithm version makes later cohort-semantics changes explicit rather
+    than silently reinterpreting an already generated outreach proof.
+    """
+
+    contract = {
+        "treatment_algorithm_version": CAMPAIGN_TREATMENT_ALGORITHM_VERSION,
+        "json_contract_version": json_contract_version,
+        "criteria": criteria,
+        "suppression_policy": suppression_policy,
+        "holdout": holdout,
+        "household_dedup": household_dedup,
+    }
+    canonical = json.dumps(
+        contract,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def campaign_contains_borrower(
     repo: LeadRepository,
     *,
     borrower_id: str,
-    criteria: dict[str, object],
+    campaign_id: str,
+    materialization_id: str,
+    delta_version: int,
+    treatment_fingerprint: str,
+    suppression_policy: dict[str, object] | None = None,
 ) -> bool:
-    """Return whether ``borrower_id`` remains inside the exact saved cohort.
+    """Authorize one immutable T0 treatment member under today's safety gates."""
 
-    Campaign criteria have two governed shapes: Portfolio Builder criteria and
-    Genie proof criteria with nested ``result_filters``. Both are projected by
-    ``project_public_campaign_json_field`` before reaching this function.
-    """
+    frequency_cap_days = 30
+    if suppression_policy is not None and "frequency_cap_days" in suppression_policy:
+        raw_frequency_cap_days = suppression_policy["frequency_cap_days"]
+        if isinstance(raw_frequency_cap_days, bool) or not isinstance(
+            raw_frequency_cap_days,
+            int,
+        ):
+            raise ValueError("campaign suppression contract is invalid")
+        frequency_cap_days = raw_frequency_cap_days
+    if not 30 <= frequency_cap_days <= 365:
+        raise ValueError("campaign suppression contract is invalid")
 
-    filters: dict[str, object]
-    is_genie_criteria = criteria.get("source") in {"genie", "trusted_sql"}
-    top_level_borrower_ids: list[str] = []
-    if is_genie_criteria:
-        nested = criteria.get("result_filters")
-        filters = dict(nested) if isinstance(nested, dict) else {}
-        raw_top_level = criteria.get("borrower_ids")
-        if isinstance(raw_top_level, list):
-            top_level_borrower_ids = [str(value) for value in raw_top_level]
-    else:
-        filters = dict(criteria)
-
-    raw_filter_borrower_ids = filters.get("borrower_ids")
-    filter_borrower_ids = (
-        [str(value) for value in raw_filter_borrower_ids]
-        if isinstance(raw_filter_borrower_ids, list)
-        else []
+    return repo.is_campaign_treatment_member(
+        borrower_id=borrower_id,
+        campaign_id=campaign_id,
+        materialization_id=materialization_id,
+        delta_version=delta_version,
+        treatment_fingerprint=treatment_fingerprint,
+        frequency_cap_days=frequency_cap_days,
     )
-    if top_level_borrower_ids and borrower_id not in top_level_borrower_ids:
-        return False
-    if filter_borrower_ids and borrower_id not in filter_borrower_ids:
-        return False
-
-    portfolio_raw = filters.get("portfolio_criteria")
-    if not is_genie_criteria:
-        portfolio_raw = filters
-    portfolio_criteria = PortfolioCriteria.model_validate(
-        portfolio_raw if isinstance(portfolio_raw, dict) else {}
-    )
-
-    def _strings(value: object) -> list[str] | None:
-        if not isinstance(value, list):
-            return None
-        normalized = [str(item).strip() for item in value if str(item).strip()]
-        return normalized or None
-
-    segment_codes = _strings(filters.get("segment_codes"))
-    segment_mode = str(filters.get("segment_mode") or "any").strip().lower()
-    if segment_mode not in {"any", "all"}:
-        raise ValueError("campaign segment mode is invalid")
-    counties = _strings(filters.get("counties"))
-    county = str(filters.get("county") or "").strip() or None
-    target_lender_ref = str(filters.get("target_lender_ref") or "").strip() or None
-
-    count = repo.count(
-        segment=None,
-        portfolio_id=None,
-        borrower_ids=[borrower_id],
-        state_codes=_strings(filters.get("states")) if is_genie_criteria else None,
-        zip_codes=_strings(filters.get("zips")) if is_genie_criteria else None,
-        county_fips=county,
-        county_fipses=counties,
-        segment_codes=segment_codes,
-        segment_mode=segment_mode,
-        target_lender_ref=target_lender_ref,
-        portfolio_criteria=portfolio_criteria,
-    )
-    return count == 1

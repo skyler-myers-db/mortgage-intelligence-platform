@@ -9,6 +9,12 @@ import pytest
 
 import backend.agents.mortgage_growth_copilot as copilot_module
 from backend.config.settings import Settings
+from tests.fixtures.supervisor_runtime import (
+    GATEWAY_ENDPOINT,
+    gateway_endpoint_details,
+    runtime_settings,
+    supervisor_metadata,
+)
 from tests.unit.test_growth_agent_api import (
     _clear_overrides,
     _client,
@@ -43,11 +49,8 @@ class _ReadyWorkspace:
 class _SupervisorMetadataApi:
     def do(self, method: str, path: str) -> dict[str, str]:
         assert method == "GET"
-        assert path == "/api/2.1/supervisor-agents/supervisor-1"
-        return {
-            "supervisor_agent_id": "supervisor-1",
-            "endpoint_name": "mip-supervisor-endpoint",
-        }
+        assert path == "/api/2.1/supervisor-agents/supervisor-123"
+        return supervisor_metadata()
 
 
 class _ReadyServingEndpoints:
@@ -56,28 +59,19 @@ class _ReadyServingEndpoints:
         self.task = task
 
     def get(self, endpoint: str) -> object:
-        _ = endpoint
-        return type(
-            "EndpointDetails",
-            (),
-            {
-                "state": type("EndpointState", (), {"ready": "READY" if self.ready else "NOT_READY"})(),
-                "task": self.task,
-            },
-        )()
+        assert endpoint == GATEWAY_ENDPOINT
+        return gateway_endpoint_details(
+            ready="READY" if self.ready else "NOT_READY",
+            task=self.task,
+        )
 
 
 def _enable_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         copilot_module,
         "get_settings",
-        lambda: Settings(
+        lambda: runtime_settings(
             mip_git_sha=_TEST_GATEWAY_SHA,
-            mip_agent_orchestrator=True,
-            mip_agent_serving_endpoint="mip-supervisor-endpoint",
-            mip_agent_supervisor_id="supervisor-1",
-            mip_ai_gateway=True,
-            mip_ai_gateway_endpoint="mip-supervisor-endpoint",
         ),
     )
 
@@ -142,7 +136,7 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert response.status_code == 200, response.text
     body = response.json()
     assert len(calls) == 1
-    assert calls[0]["endpoint"] == "mip-supervisor-endpoint"
+    assert calls[0]["endpoint"] == GATEWAY_ENDPOINT
     assert calls[0]["task"] == "agent/v1/responses"
     assert calls[0]["client_request_id"].startswith(f"mip-agent-run-{_TEST_GATEWAY_SHA}-")
     assert "Reviewed objective signals:" in calls[0]["prompt"]
@@ -175,19 +169,20 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert "listing_watch" in selection_check["detail"]
     assert "daily_refi_brief" in selection_check["detail"]
     assert body["genie_trusted_assets"] == [
-        "databricks.serving_endpoint.mip-supervisor-endpoint",
+        f"databricks.serving_endpoint.{GATEWAY_ENDPOINT}",
     ]
     framework_chip = next(
-        chip
-        for chip in body["governance_chips"]
-        if chip["label"] == "Databricks Agent Responses"
+        chip for chip in body["governance_chips"] if chip["label"] == "Databricks Agent Responses"
     )
     assert framework_chip["status"] == "review_required"
     assert "different reviewed workflow" in framework_chip["detail"]
     assert framework_chip["evidence_ref"] == body["genie_question_hash"]
     gateway_chip = next(chip for chip in body["governance_chips"] if chip["label"] == "AI Gateway")
     assert gateway_chip["status"] == "review_required"
-    assert "Databricks Agent Responses was routed through the configured AI Gateway" in gateway_chip["detail"]
+    assert (
+        "Databricks Agent Responses was routed through the configured AI Gateway"
+        in gateway_chip["detail"]
+    )
     assert "does not claim per-run row landing" in gateway_chip["detail"]
     assert str(calls[0]["client_request_id"]) not in json.dumps(body)
     assert len(body["genie_question_hash"]) == 64
@@ -196,7 +191,7 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert evidence["deterministic_workflow_id"] == "daily_refi_brief"
     assert evidence["workflow_override_review_required"] is True
     assert evidence["gateway_client_request_id"] == calls[0]["client_request_id"]
-    assert evidence["serving_endpoint"] == "mip-supervisor-endpoint"
+    assert evidence["serving_endpoint"] == GATEWAY_ENDPOINT
     assert evidence["serving_task"] == "agent/v1/responses"
     assert prompt_text.lower() not in json.dumps(body).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.runs, default=str).lower()
@@ -440,7 +435,10 @@ def test_prompt_agent_does_not_let_supervisor_override_explicit_custom_segments(
 
     def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
         calls.append({"args": args, "kwargs": kwargs})
-        return {"id": "resp-supervisor-1", "output": [{"content": '{"workflow_id":"listing_watch"}'}]}
+        return {
+            "id": "resp-supervisor-1",
+            "output": [{"content": '{"workflow_id":"listing_watch"}'}],
+        }
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
     monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
@@ -670,7 +668,10 @@ def test_prompt_agent_allows_numeric_rank_prompts_with_supervisor_enabled(
                 "task": task,
             }
         )
-        return {"id": "resp-supervisor-1", "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}]}
+        return {
+            "id": "resp-supervisor-1",
+            "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
+        }
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
     monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)

@@ -46,8 +46,21 @@ ENV_TO_KEY = {
     "MIP_COTALITY_ID_MASK_SECRET": "cotality-id-mask-v1",
     "MIP_GENIE_ACTION_SECRET_CURRENT": "genie-action-current",
     "MIP_GENIE_ACTION_SECRET_PREVIOUS": "genie-action-previous",
+    "SALESFORCE_CLIENT_SECRET": "salesforce-client-secret",
+    "SALESFORCE_PASSWORD": "salesforce-password",
+    "SALESFORCE_SECURITY_TOKEN": "salesforce-security-token",
 }
 REQUIRED = frozenset({"MIP_COTALITY_ID_MASK_SECRET", "MIP_GENIE_ACTION_SECRET_CURRENT"})
+STRONG_SECRET_ENVS = frozenset(
+    {
+        "MIP_COTALITY_ID_MASK_SECRET",
+        "MIP_GENIE_ACTION_SECRET_CURRENT",
+        "MIP_GENIE_ACTION_SECRET_PREVIOUS",
+    }
+)
+OPTIONAL_RESOURCE_ENVS = frozenset(
+    {"SALESFORCE_CLIENT_SECRET", "SALESFORCE_PASSWORD", "SALESFORCE_SECURITY_TOKEN"}
+)
 PREVIOUS_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS"
 PREVIOUS_KID_ENV = "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID"
 PREVIOUS_KEY = ENV_TO_KEY[PREVIOUS_ENV]
@@ -117,7 +130,7 @@ def provision_runtime_secrets(
         )
 
     for env_name, value in values.items():
-        if value:
+        if value and env_name in STRONG_SECRET_ENVS:
             values[env_name] = require_strong_runtime_secret(
                 value,
                 name=env_name,
@@ -138,7 +151,7 @@ def provision_runtime_secrets(
     written: list[str] = []
     for env_name, key in ENV_TO_KEY.items():
         value = values[env_name]
-        if key == PREVIOUS_KEY and not value:
+        if (key == PREVIOUS_KEY or env_name in OPTIONAL_RESOURCE_ENVS) and not value:
             # Databricks App resources are declared statically in the bundle,
             # so the backing key must exist even when no rotation grace key is
             # injected into the runtime. Replacing it with a random disabled

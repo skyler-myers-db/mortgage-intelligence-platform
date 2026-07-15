@@ -66,6 +66,7 @@ export default function AskGenie() {
   const navigate = useNavigate();
   const { refreshWorkspace, setDrawer } = useApp();
   const questionRef = useRef<HTMLTextAreaElement>(null);
+  const suppressBootstrapConversationRef = useRef(false);
   const [question, setQuestion] = useState('');
   const [sampleQuestions, setSampleQuestions] = useState<string[]>([]);
   const [activeAssetPath, setActiveAssetPath] = useState<string | null>(null);
@@ -123,7 +124,7 @@ export default function AskGenie() {
     if (!result) return;
     setSampleQuestions(Array.isArray(result.sample_questions) ? result.sample_questions : []);
     const startConversationId = result.conversation_id;
-    if (!startConversationId) return;
+    if (!startConversationId || suppressBootstrapConversationRef.current) return;
     setConversationId((current) => {
       if (current) return current;
       writeGenieConversationId(startConversationId);
@@ -172,11 +173,12 @@ export default function AskGenie() {
     if (!(error instanceof ApiError) || error.status !== 403) return;
     setConversationId(null);
     setSubmittedConversationId(null);
-    clearGenieConversationState();
+    clearGenieConversationState({ notify: true });
   }, [error]);
 
   useEffect(() => {
     const onActorBoundaryReset = () => {
+      suppressBootstrapConversationRef.current = true;
       setConversationId(null);
       setSubmittedConversationId(null);
       setSubmittedQuestion(null);
@@ -206,12 +208,13 @@ export default function AskGenie() {
   }
 
   function newConversation() {
+    suppressBootstrapConversationRef.current = true;
     setConversationId(null);
     setSubmittedConversationId(null);
     setSubmittedQuestion(null);
     setActiveAssetPath(null);
     setActionStatus('Started a new Genie thread.');
-    clearGenieConversationState();
+    clearGenieConversationState({ notify: true });
   }
 
   function scopeToTrustedAsset(asset: { label: string; path: string }) {

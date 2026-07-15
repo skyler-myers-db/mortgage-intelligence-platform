@@ -28,6 +28,7 @@ _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 _ALLOWED_RELATIONS: frozenset[tuple[str, str]] = frozenset(
     {
+        ("audit", "campaign_treatment_snapshot"),
         ("first_party", "crm_campaign_membership"),
         ("first_party", "customer_interactions"),
         ("first_party", "loan_applications"),

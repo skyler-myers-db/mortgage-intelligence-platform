@@ -987,10 +987,22 @@ export const api = {
   portfolioPreview: (
     criteria: Record<string, unknown> = {},
     signal?: AbortSignal,
+    campaignBuildConfig?: {
+      suppression_policy: Record<string, unknown>;
+      household_dedup: Record<string, unknown>;
+    },
   ) =>
-    postJson<PortfolioPreview, { criteria: Record<string, unknown> }>(
+    postJson<PortfolioPreview, {
+      criteria: Record<string, unknown>;
+      campaign_build_config?: {
+        suppression_policy: Record<string, unknown>;
+        household_dedup: Record<string, unknown>;
+      };
+    }>(
       '/api/portfolio/preview',
-      { criteria },
+      campaignBuildConfig
+        ? { criteria, campaign_build_config: campaignBuildConfig }
+        : { criteria },
       signal,
     ),
 

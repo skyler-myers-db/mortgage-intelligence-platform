@@ -91,6 +91,7 @@ def _cache_key(request: Request, *, settings: Settings, include_lakebase: bool) 
         settings.genie_space_id,
         settings.mip_agent_orchestrator,
         settings.mip_agent_serving_endpoint,
+        settings.mip_agent_supervisor_endpoint,
         settings.mip_agent_supervisor_id,
         settings.mip_ai_gateway,
         settings.mip_ai_gateway_endpoint,

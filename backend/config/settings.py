@@ -183,6 +183,22 @@ class Settings(BaseSettings):
     # (Phase 3b). When set AND reachable, the in-App route may delegate to
     # the served endpoint; otherwise it runs the orchestrator in-process.
     mip_agent_serving_endpoint: str | None = None
+    mip_agent_supervisor_endpoint: str | None = None
+    mip_agent_gateway_model: str = Field(
+        default="mip.audit.mortgage_growth_supervisor_proxy",
+        validation_alias=AliasChoices(
+            "MIP_AI_GATEWAY_AGENT_MODEL",
+            "AI_GATEWAY_AGENT_MODEL",
+        ),
+    )
+    mip_agent_gateway_model_version: int | None = Field(
+        default=None,
+        ge=1,
+        validation_alias=AliasChoices(
+            "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
+            "AI_GATEWAY_AGENT_MODEL_VERSION",
+        ),
+    )
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
     # Public Ed25519 key for exact inference-row proof attestations. The
@@ -297,6 +313,10 @@ class Settings(BaseSettings):
     salesforce_security_token: SecretStr | None = Field(default=None, repr=False)
     salesforce_api_version: str = "v60.0"
     salesforce_sobject: str = "Task"
+    # Customer-created Salesforce External ID field used for idempotent
+    # upsert. A connected destination remains staged unless this is set;
+    # ordinary sObject POST cannot provide exactly-once retry semantics.
+    salesforce_external_id_field: str | None = None
     # Per-HTTP-call timeout for the Salesforce REST client. Kept short because
     # delivery runs synchronously inside POST /activation/stage; the circuit
     # breaker (failure_threshold=3) fast-fails after a few slow calls so a
@@ -316,6 +336,7 @@ class Settings(BaseSettings):
                 self.salesforce_client_secret,
                 self.salesforce_username,
                 self.salesforce_password,
+                self.salesforce_external_id_field,
             )
         )
 
@@ -337,17 +358,10 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("MIP_DEFAULT_ACTOR", "DEFAULT_ACTOR"),
     )
 
-    # Admin RBAC gate for /api/admin/* endpoints. Two recognition paths
-    # in ``backend/services/rbac.py::require_admin``:
-    #
-    # 1. Group membership — ``X-Forwarded-Groups`` includes this name or
-    #    the hard-coded fallback ``"admins"``. Overrideable via
-    #    ``MIP_ADMIN_GROUP_NAME``.
-    # 2. Email allowlist — ``X-Forwarded-Email`` is in the comma-
-    #    separated list below. Day-0 customer deploys may opt into this
-    #    path with ``MIP_ADMIN_EMAILS`` before workspace groups are
-    #    provisioned. The default is intentionally empty so a customer
-    #    deploy never inherits Entrada developer admin access.
+    # Deployed admin automation is authorized by exact actor identities.
+    # Human email allowlists are additive. Group matching exists only as a
+    # local/test compatibility path because Databricks Apps does not document
+    # a forwarded group header as an application authorization contract.
     admin_group_name: str = Field(
         default="mip-admin",
         validation_alias=AliasChoices("MIP_ADMIN_GROUP_NAME", "ADMIN_GROUP_NAME"),
@@ -356,16 +370,24 @@ class Settings(BaseSettings):
         default="",
         validation_alias=AliasChoices("MIP_ADMIN_EMAILS", "ADMIN_EMAILS"),
     )
-    # 2026-06-11 audit P2-5: OPTIONAL approver allowlist for the human
-    # decision endpoints (/outreach/approve|reject). Module 0's demo
-    # contract is that any authenticated workspace user may decide (with
-    # full audit attribution), so the default stays permissive. Customers
-    # opt INTO enforcement by listing approver emails; admins always pass
-    # so the deploying operator cannot lock themselves out of the surface
-    # they administer.
+    admin_identities: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_ADMIN_IDENTITIES", "ADMIN_IDENTITIES"),
+    )
+    # Human decision endpoints admit exact automation identities, explicit
+    # approver emails, or admins. The group name is local/test compatibility
+    # only and is not provisioned onto the two automation principals.
+    approver_group_name: str = Field(
+        default="mip-approver",
+        validation_alias=AliasChoices("MIP_APPROVER_GROUP_NAME", "APPROVER_GROUP_NAME"),
+    )
     approver_emails: str = Field(
         default="",
         validation_alias=AliasChoices("MIP_APPROVER_EMAILS", "APPROVER_EMAILS"),
+    )
+    approver_identities: str = Field(
+        default="",
+        validation_alias=AliasChoices("MIP_APPROVER_IDENTITIES", "APPROVER_IDENTITIES"),
     )
 
     # R5-09 trust boundary. Databricks Apps is the authoritative
@@ -373,9 +395,9 @@ class Settings(BaseSettings):
     # injects its own based on the authenticated workspace user. That's
     # the posture the default (True) assumes -- matching production.
     #
-    # Flip to False for unusual deploys where an intermediate proxy
-    # does NOT strip client-supplied ``X-Forwarded-Email`` /
-    # ``X-Forwarded-Groups`` headers. With trust disabled:
+    # Flip to False for unusual deploys where an intermediate proxy does NOT
+    # strip client-supplied ``X-Forwarded-Email`` / ``X-Forwarded-User``.
+    # With trust disabled:
     #
     # * ``backend.services.rbac.require_admin`` ignores the forwarded
     #   group list and denies unless the email allowlist admits the

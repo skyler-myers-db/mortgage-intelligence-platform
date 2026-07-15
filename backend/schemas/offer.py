@@ -251,6 +251,10 @@ class OutreachDraft(BaseModel):
     borrower_id: str
     campaign_id: str | None = Field(default=None, max_length=64)
     variant_name: str | None = Field(default=None, max_length=64)
+    campaign_treatment_fingerprint: str | None = Field(
+        default=None,
+        pattern=r"^[0-9a-f]{64}$",
+    )
     offer_code: str
     channel: OutreachChannel
     subject: str | None = None
@@ -282,6 +286,10 @@ class OutreachDraft(BaseModel):
     @model_validator(mode="after")
     def _campaign_binding_is_complete(self) -> "OutreachDraft":
         validate_complete_campaign_binding(self.campaign_id, self.variant_name)
+        if (self.campaign_id is None) != (self.campaign_treatment_fingerprint is None):
+            raise ValueError(
+                "campaign_treatment_fingerprint is required exactly when a campaign is bound"
+            )
         return self
 
 

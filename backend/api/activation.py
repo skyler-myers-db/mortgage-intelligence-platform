@@ -188,6 +188,18 @@ def stage_activation(
             raise HTTPException(
                 status_code=409, detail="approval_id is not an approved decision for this borrower"
             )
+        approved_campaign_id = str(approved_decision.get("campaign_id") or "").strip()
+        if approved_campaign_id:
+            campaign_status = store.campaign_status_for_approval(
+                approval_id=payload.approval_id,
+                borrower_id=payload.borrower_id,
+                campaign_id=approved_campaign_id,
+            )
+            if campaign_status != "active":
+                raise HTTPException(
+                    status_code=409,
+                    detail="campaign must be active at activation staging time",
+                )
         result = store.stage_borrower(
             borrower=borrower,
             destination=destination,
@@ -238,12 +250,24 @@ def _maybe_deliver_salesforce(
         return activation
     if not settings.salesforce_configured:
         return activation
-
     try:
         from backend.services.activation_delivery import deliver_to_salesforce
 
-        outcome = deliver_to_salesforce(activation, store=store)
-        return outcome.activation
+        with store.delivery_guard(activation=activation) as delivery:
+            if not delivery.should_deliver:
+                if activation.campaign_id and delivery.activation.status not in {
+                    "delivered",
+                    "cancelled",
+                }:
+                    emit(
+                        logging.getLogger(__name__),
+                        "salesforce_delivery_campaign_not_active",
+                        level=logging.WARNING,
+                        activation_id=activation.activation_id,
+                    )
+                return delivery.activation
+            outcome = deliver_to_salesforce(delivery.activation, store=delivery)
+            return outcome.activation
     except Exception as exc:  # noqa: BLE001 -- delivery must never fail the stage
         emit(
             logging.getLogger(__name__),

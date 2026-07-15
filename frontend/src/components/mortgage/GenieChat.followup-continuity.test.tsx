@@ -6,6 +6,7 @@ import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ApiError } from '../../lib/api';
 import type { GenieAnswer, GenieStartResult } from '../../types';
 
 const mocks = vi.hoisted(() => ({
@@ -210,14 +211,58 @@ describe('floating Genie conversation continuity', () => {
 
     await waitUntil(() => window.localStorage.getItem('mip.genie.conversationId') === 'conv-next');
     await waitUntil(() => !button('Start a new Genie thread').disabled);
+    const resetListener = vi.fn();
+    window.addEventListener('mip:genie-conversation-reset', resetListener);
     act(() => button('Start a new Genie thread').click());
     expect(window.localStorage.getItem('mip.genie.conversationId')).toBeNull();
     expect(container.querySelectorAll('.genie__msg')).toHaveLength(0);
+    expect(resetListener).toHaveBeenCalledOnce();
+    window.removeEventListener('mip:genie-conversation-reset', resetListener);
 
     act(() => setInputValue(input(), 'Start from the full portfolio'));
     await clickAndFlush(button('Ask'));
     await waitUntil(() => mocks.genie.mock.calls.length === 3);
     expect(mocks.genie).toHaveBeenNthCalledWith(3, 'Start from the full portfolio', null);
+  });
+
+  it('does not restore a late bootstrap response after New thread', async () => {
+    let resolveStart: ((value: GenieStartResult) => void) | undefined;
+    mocks.genieStart.mockReturnValue(new Promise((resolve) => { resolveStart = resolve; }));
+    mocks.genie.mockResolvedValueOnce(answer({ conversation_id: 'conv-new' }));
+
+    mount();
+    act(() => button('Start a new Genie thread').click());
+    await act(async () => {
+      resolveStart?.({ ...START, conversation_id: 'conv-late-bootstrap' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(window.localStorage.getItem('mip.genie.conversationId')).toBeNull();
+
+    act(() => setInputValue(input(), 'Start from the full portfolio'));
+    await clickAndFlush(button('Ask'));
+    await waitUntil(() => mocks.genie.mock.calls.length === 1);
+    expect(mocks.genie).toHaveBeenCalledWith('Start from the full portfolio', null);
+  });
+
+  it('clears and broadcasts a restored conversation after a forbidden follow-up', async () => {
+    window.localStorage.setItem('mip.genie.conversationId', 'conv-restored');
+    mocks.genie.mockRejectedValueOnce(new ApiError('conversation is no longer accessible', {
+      path: '/api/ask-genie',
+      status: 403,
+    }));
+    const resetListener = vi.fn();
+    window.addEventListener('mip:genie-conversation-reset', resetListener);
+
+    mount();
+    act(() => setInputValue(input(), 'Continue the prior analysis'));
+    await clickAndFlush(button('Ask'));
+    await waitUntil(() => mocks.genie.mock.calls.length === 1);
+    await waitUntil(() => container.textContent?.includes('Genie session reset') ?? false);
+
+    expect(mocks.genie).toHaveBeenCalledWith('Continue the prior analysis', 'conv-restored');
+    expect(window.localStorage.getItem('mip.genie.conversationId')).toBeNull();
+    expect(resetListener).toHaveBeenCalledOnce();
+    window.removeEventListener('mip:genie-conversation-reset', resetListener);
   });
 
   it('renders action completion as a governed action result, not a Genie API answer', async () => {

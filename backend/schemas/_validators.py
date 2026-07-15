@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import re
+import unicodedata
 from collections.abc import Callable, Sequence
+
+from backend.schemas.marketing_safety_terms import PROTECTED_NATIONAL_ORIGIN_RE
 
 _DEFAULT_PUBLIC_LENDER_NAME = "Summit Mortgage"
 _PUBLIC_COMPETITOR_REF_RE = re.compile(r"^Competitor ([A-Z]|Other)$")
@@ -11,20 +14,222 @@ _PublicLenderNameProvider = Callable[[], str]
 _StateFootprintProvider = Callable[[], tuple[Sequence[tuple[str, str]], bool]]
 _public_lender_name_provider: _PublicLenderNameProvider | None = None
 _state_footprint_provider: _StateFootprintProvider | None = None
+_MARKETING_SYMBOL_CONFUSABLES: dict[int, str] = {
+    ord("!"): "i",
+    ord("$"): "s",
+    ord("@"): "a",
+    ord("|"): "l",
+    ord("¢"): "c",
+    ord("£"): "l",
+    ord("€"): "e",
+    ord("¥"): "y",
+}
 
 _PROTECTED_CLASS_MARKETING_RE = re.compile(
-    r"\b(?:age|aged|asian|autis(?:m|tic)|black|blind|buddhist|color|deaf|"
-    r"disab(?:ility|led)|wheelchair(?:\s+users?)?|elderly|ethnic(?:ity)?|"
-    r"familial status|families? with children|family status|female|gender|handicap(?:ped)?|"
-    r"gay|lesbian|bisexual|transgender|non[- ]?binary|queer|gender identity|"
-    r"hispanic|latino|male|marital status|military status|muslim|islam(?:ic)?|"
-    r"christian|hindu|jewish|jew|sikh|national origin|native american|"
-    r"pacific islander|pregnan(?:cy|t)|race|racial|religion|religious|"
-    r"senior citizens?|sex|sexual orientation|single (?:mothers?|fathers?|parents?)|"
-    r"source of income|veteran|white|woman|women)\b",
+    r"\b(?:age|aged|african[\s\-\u2010-\u2015]+americans?|"
+    r"alaska[\s\-\u2010-\u2015]+natives?|american[\s\-\u2010-\u2015]+indians?|"
+    r"arabs?|asians?|autis(?:m|tic)|blacks?|blind|"
+    r"agnostics?|atheists?|baptists?|buddhists?|catholics?|color|deaf|"
+    r"disab(?:ility|ilities|led)|wheelchair(?:\s+users?)?|elderly|ethnic(?:ity|ities)?|"
+    r"familial status(?:es)?|families? with children|family status(?:es)?|"
+    r"parents?|dependents?|"
+    r"(?:families?|households?|caregivers?)\s+(?:raising|with|of)\s+"
+    r"(?:children|dependents?|minors?)|expecting (?:a )?baby|"
+    r"females?|genders?|handicap(?:s|ped)?|"
+    r"gay|lesbian|bisexual|transgender|lgbt(?:q(?:ia2s?)?)?\+?|"
+    r"non[- ]?binary|queer|gender identity|"
+    r"filipinos?|hispanics?|indigenous|koreans?|latin(?:a|o|x)s?|"
+    r"males?|men|man|marital status|"
+    r"married|mexicans?|military status(?:es)?|mothers?|fathers?|"
+    r"middle eastern|mormons?|muslims?|islam(?:ic)?|christians?|hindus?|jewish|jews?|"
+    r"evangelicals?|episcopalians?|jehovah(?:'s)? witnesses?|lutherans?|methodists?|"
+    r"pentecostals?|presbyterians?|protestants?|scientologists?|"
+    r"churchgoers?|congregants?|worshipp?ers?|believers?|"
+    r"(?:people|persons?)\s+who\s+(?:attend\s+church|worship)|"
+    r"orthodox|sikhs?|national origins?|native[\s\-\u2010-\u2015]+americans?|"
+    r"native[\s\-\u2010-\u2015]+hawaiians?|pacific islanders?|"
+    r"hawaiians?|chamorros?|guamanians?|biracial|multiracial|"
+    r"pregnanc(?:y|ies)|pregnant|races?|racial|impair(?:ment|ments|ed)|"
+    r"mobility[- ]impaired|mobility[- ]aid users?|"
+    r"(?:people|persons?)\s+using\s+mobility\s+aids?|"
+    r"neurodivergent|special[- ]needs|"
+    r"religions?|religious|people of faith|faith[- ]based|divorced|divorcees?|"
+    r"marital status(?:es)?|unmarried|widowed|husbands?|wife|wives|spouses?|"
+    r"senior citizens?|sex(?:es)?|sexual orientations?|single (?:mothers?|fathers?|parents?)|"
+    r"(?:moms?|dads?|parents?|households?|families?)\s+with\s+(?:kids|children)|"
+    r"consumer[- ]credit[- ]rights?|fair[- ]lending\s+complaints?|"
+    r"source of income|welfare(?:\s+recipients?)?|"
+    r"(?:ssi|supplemental security income)\s+recipients?|veterans?|reservists?|"
+    r"national guard members?|armed forces members?|"
+    r"military families?|active[- ]duty(?:\s+(?:homeowners?|borrowers?|people|persons?))?|"
+    r"service[- ]?members?|whites?|woman|women|womxn|"
+    r"(?:people|persons?|adults?|applicants?|borrowers?|customers?|homeowners?|recipients?)"
+    r"\s+(?:aged?\s+)?(?:over|under|older than|younger than)\s+\d{1,3}"
+    r"(?!\s*(?:bps?|basis\s+points?|%|percent|spread\s+points?))|"
+    r"older\s+(?:adults?|applicants?|borrowers?|customers?|homeowners?|people|persons?)|"
+    r"younger\s+(?:adults?|applicants?|borrowers?|customers?|homeowners?|people|persons?))\b",
     re.IGNORECASE,
 )
 
+_PROTECTED_AGE_CITIZENSHIP_MARKETING_RE = re.compile(
+    r"\b(?:baby\s+boomers?|boomers?|gen(?:eration)?\s*[xyz]|millennials?|retirees?|"
+    r"retirement[- ]age|young\s+families|foreign[- ]born|non[- ]?citizens?|"
+    r"citizenship\s+status|citizens?|naturalized\s+(?:citizens?|homeowners?|"
+    r"borrowers?|people|persons?)|"
+    r"(?:people|persons?|borrowers?|homeowners?|applicants?)\s+(?:who\s+)?"
+    r"(?:were\s+)?born\s+(?:abroad|overseas|outside(?:\s+the)?\s+"
+    r"(?:u\.?s\.?|united states))|"
+    r"green[ -]?card\s+holders?|lawful[ -]?permanent\s+residents?|"
+    r"permanent\s+residents?|visa\s+holders?|immigrants?|refugees?|asylum\s+seekers?|"
+    r"undocumented\s+(?:people|persons?|applicants?|borrowers?|homeowners?))\b",
+    re.IGNORECASE,
+)
+
+# Natural protected-status descriptions that require category-level context
+# rather than another flat spelling alias. These patterns deliberately bind
+# ambiguous adjectives (for example ``single``, ``young``, and ``senior``) to
+# people/population nouns, leaving product phrases such as ``single-family``
+# and ``senior lien`` available on governed mortgage surfaces.
+_PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE = re.compile(
+    r"\b(?:"
+    r"(?:young|senior|middle[- ]aged)\s+(?:professionals?|homeowners?|borrowers?|"
+    r"applicants?|customers?|people|persons?|adults?)|"
+    r"(?:under|over)[ -]?\d{1,3}\s+(?:homeowners?|borrowers?|applicants?|"
+    r"customers?|people|persons?|adults?)|"
+    r"(?:people|persons?|adults?)\s+in\s+their\s+(?:teens?|twenties|thirties|"
+    r"forties|fifties|sixties|seventies|eighties|nineties)|empty[- ]nesters?|"
+    r"newlyweds?|couples?|(?:single|separated|engaged|cohabiting)\s+"
+    r"(?:homeowners?|borrowers?|applicants?|customers?|people|persons?|adults?)|"
+    r"(?:foster|adoptive)\s+parents?|guardians?\s+of\s+minors?|"
+    r"faith\s+community\s+members?|parishioners?|(?:members?\s+of\s+the\s+)?clergy|"
+    r"members?\s+of\s+(?:a\s+)?(?:congregation|church|mosque|synagogue|temple)|"
+    r"religious\s+community\s+members?|"
+    r"(?:expats?|expatriates?|foreign\s+nationals?)\s+(?:homeowners?|borrowers?|"
+    r"applicants?|customers?|people|persons?)|"
+    r"(?:overseas|non[- ]?u\.?s\.?)[- ]born\s+(?:homeowners?|borrowers?|"
+    r"applicants?|customers?|people|persons?)|"
+    r"(?:people|persons?|homeowners?|borrowers?|applicants?)\s+(?:who\s+)?"
+    r"(?:were\s+)?born\s+outside(?:\s+the)?\s+(?:u\.?s\.?|united states|america)|"
+    r"assistive[- ]device\s+users?|hearing[- ]aid\s+users?|visually[- ]challenged|"
+    r"mobility[- ]limited\s+(?:homeowners?|borrowers?|"
+    r"applicants?|customers?|people|persons?)|"
+    r"(?:people|persons?)\s+(?:with|who have)\s+(?:chronic\s+)?"
+    r"(?:illness(?:es)?|conditions?|accessibility\s+needs)|"
+    r"(?:serious|long[- ]term)\s+(?:medical|health)\s+conditions?|"
+    r"accessibility\s+accommodations?|differently[- ]abled|"
+    r"(?:social security|snap|wic|tanf|ssi|child[- ]support|alimony|pension|"
+    r"unemployment|disability[- ]income|food[- ]stamps?|medicaid|housing[- ]assistance)"
+    r"\s+recipients?|section\s*8\s+voucher\s+holders?|"
+    r"(?:borrowers?|applicants?|customers?|people|persons?)\s+who\s+"
+    r"(?:(?:filed|made|submitted)\s+(?:a\s+)?(?:discrimination|fair[- ]lending)\s+complaint|"
+    r"reported\s+discrimination|exercised\s+fair[- ]lending\s+rights)|"
+    r"unpartnered\s+(?:homeowners?|borrowers?|applicants?|customers?|people|persons?)|"
+    r"domestic\s+partners?|retirement[- ]community\s+residents?|recent\s+graduates?|"
+    r"elders?|older\s+generations?|former\s+service\s+personnel|"
+    r"first[- ]generation\s+americans?|members?\s+of\s+the\s+diaspora|"
+    r"observant\s+households?"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_AUDIENCE_OUTCOME_CLAIM_RE = re.compile(
+    r"(?:^|[.!?;:\n])\s*(?P<audience>[^.!?;:\n]+?)\s+"
+    r"(?:may|might|could|can|should)"
+    r"(?:[^A-Za-z0-9.!?;]+[A-Za-z-]+ly){0,3}"
+    r"(?:[^A-Za-z0-9.!?;]+be[^A-Za-z0-9.!?;]+able"
+    r"[^A-Za-z0-9.!?;]+to)?"
+    r"[^A-Za-z0-9.!?;]+(?:benefit|qualify|"
+    r"be[^A-Za-z0-9.!?;]+eligible)"
+    r"(?:[^A-Za-z0-9.!?;]+[A-Za-z-]+ly){0,3}"
+    r"(?=\s*(?:from\b|for\b|today\b|[;,!?.]|$))",
+    re.IGNORECASE,
+)
+_REVIEWED_GENERIC_AUDIENCE_RE = re.compile(
+    r"(?:today[,]?\s+)?(?:you|your\s+(?:property\s+portfolio|portfolio|profile|loan|"
+    r"mortgage\s+profile|household)|(?:a|an|this|that)\s+(?:borrower|homeowner|"
+    r"applicant|customer|household|profile)|(?:(?:all|many|some|eligible|qualified|"
+    r"reviewed|current|prospective|these|those|our|your)\s+)?(?:borrowers?|"
+    r"homeowners?|applicants?|customers?|households?|people|persons?|recipients?|"
+    r"property\s+portfolios?|loan\s+profiles?))",
+    re.IGNORECASE,
+)
+_STRUCTURAL_AUDIENCE_KEYWORD_PATTERNS = tuple(
+    (
+        keyword,
+        re.compile(
+            r"(?<![A-Za-z])"
+            + r"[^A-Za-z]*".join(re.escape(letter) for letter in keyword)
+            + r"(?![A-Za-z])",
+            re.IGNORECASE,
+        ),
+    )
+    for keyword in (
+        "eligible",
+        "benefit",
+        "qualify",
+        "should",
+        "might",
+        "could",
+        "may",
+        "can",
+    )
+)
+
+
+def _structural_audience_scan_variants(value: str) -> set[str]:
+    """Canonicalize only governed audience-claim keywords, preserving sentences."""
+
+    in_word_symbols: list[str] = []
+    for index, char in enumerate(value):
+        replacement = _MARKETING_SYMBOL_CONFUSABLES.get(ord(char))
+        previous_is_ascii_letter = index > 0 and value[index - 1].isascii() and value[
+            index - 1
+        ].isalpha()
+        next_is_ascii_letter = (
+            index + 1 < len(value)
+            and value[index + 1].isascii()
+            and value[index + 1].isalpha()
+        )
+        in_word_symbols.append(
+            replacement
+            if replacement is not None and previous_is_ascii_letter and next_is_ascii_letter
+            else char
+        )
+    symbol_folded = "".join(in_word_symbols)
+    variants = {
+        value,
+        symbol_folded,
+        value.translate(str.maketrans("013457", "oleast")),
+        value.translate(str.maketrans("013457", "oieast")),
+        symbol_folded.translate(str.maketrans("013457", "oleast")),
+        symbol_folded.translate(str.maketrans("013457", "oieast")),
+    }
+    canonical: set[str] = set()
+    for variant in variants:
+        folded = variant
+        for keyword, pattern in _STRUCTURAL_AUDIENCE_KEYWORD_PATTERNS:
+            folded = pattern.sub(keyword, folded)
+        canonical.add(folded)
+    return canonical
+
+
+def _contains_unreviewed_audience_outcome_claim(value: str) -> bool:
+    """Fail closed on unreviewed population descriptions in benefit claims."""
+
+    for match in _AUDIENCE_OUTCOME_CLAIM_RE.finditer(value):
+        audience = " ".join(match.group("audience").strip(" ,").split())
+        if not _is_reviewed_generic_audience(audience):
+            return True
+    return False
+
+
+def _is_reviewed_generic_audience(value: str) -> bool:
+    return _REVIEWED_GENERIC_AUDIENCE_RE.fullmatch(value) is not None
+
+
+# Governed national-origin vocabulary used only when the term occurs near a
+# population or targeting verb. Keeping this explicit makes changes auditable
+# and avoids treating arbitrary geography/product prose as protected targeting.
 _PROMPT_INJECTION_RE = re.compile(
     r"\b(?:ignore|disregard|override|bypass|forget)\b.{0,80}\b"
     r"(?:previous|prior|system|developer|safety|guardrail|policy|rules?|instructions?|prompt)\b|"
@@ -72,8 +277,7 @@ _CONFIDENTIAL_OR_INTERNAL_TEXT_PATTERNS: tuple[re.Pattern[str], ...] = (
 )
 
 _TITLECASE_HUMAN_NAME_RE = re.compile(
-    r"\b[A-Z][a-z]{1,30}(?:\s+|\s*\|\s*)(?:[A-Z](?:\s+|\s*\|\s*))?"
-    r"[A-Z][a-z]{1,30}\b"
+    r"\b[A-Z][a-z]{1,30}(?:\s+|\s*\|\s*)(?:[A-Z](?:\s+|\s*\|\s*))?" r"[A-Z][a-z]{1,30}\b"
 )
 _LEADING_ANALYTICS_COMMAND_RE = re.compile(
     r"\b(?:Compare|Explain|Find|List|Open|Prioritize|Rank|Review|Show|Target)\s+(?=[A-Z])"
@@ -367,13 +571,141 @@ def assert_no_protected_class_marketing_text(value: str, *, field_name: str) -> 
 def contains_protected_class_marketing_text(value: str) -> bool:
     """Return true for protected-class or obvious proxy targeting language."""
 
-    scannable = str(value)
+    normalized = unicodedata.normalize("NFKC", str(value))
+    # Campaign copy is an English-language governed surface. Invisible format
+    # controls and non-ASCII alphabetic confusables make exact safety matching
+    # non-auditable, so reject rather than attempting a lossy transliteration.
+    if any(unicodedata.category(char) == "Cf" for char in normalized):
+        return True
+    if any(
+        unicodedata.category(char).startswith("L")
+        and not ("A" <= char <= "Z" or "a" <= char <= "z")
+        for char in normalized
+    ):
+        return True
+    # NFKC intentionally preserves ordinary Latin diacritics. Strip combining
+    # marks from an NFKD scan copy so accents cannot split a protected term
+    # into unrelated ASCII fragments (for example ``Wómën`` or ``Müslïm``).
+    # Keep ``normalized`` above for script/control validation and never persist
+    # this lossy safety-only representation.
+    mark_folded = "".join(
+        char
+        for char in unicodedata.normalize("NFKD", normalized)
+        if not unicodedata.category(char).startswith("M")
+    )
+    if any(
+        _contains_unreviewed_audience_outcome_claim(candidate)
+        for candidate in _structural_audience_scan_variants(mark_folded)
+    ):
+        return True
+    # Scan ordinary prose plus bounded de-obfuscations. The marketing surface
+    # has no valid need for leetspeak or split-word spelling; joining up to
+    # eight adjacent ASCII tokens catches forms such as ``w0men``, ``wo.men``,
+    # ``w o m e n``, and ``mus lim`` without stripping the whole sentence into
+    # one unauditable string.
+    symbol_variants = {
+        mark_folded,
+        # Explicit, reviewed in-word symbol substitutions. Keep the original
+        # scan alongside this fold so ordinary punctuation remains a boundary
+        # while evasions such as ``Wom€n`` and ``Musl!m`` cannot pass.
+        mark_folded.translate(_MARKETING_SYMBOL_CONFUSABLES),
+    }
+    leet_variants = {
+        translated
+        for variant in symbol_variants
+        for translated in (
+            variant.translate(str.maketrans("013457", "oleast")),
+            variant.translate(str.maketrans("013457", "oieast")),
+        )
+    }
+    # Add only reviewed ASCII lookalike folds. These variants are safety-scan
+    # inputs, never rewritten campaign copy: ``vv`` is commonly substituted
+    # for ``w`` and a capital ``I`` for lowercase ``l`` in otherwise ordinary
+    # words. Applying both orders catches combinations without opening a
+    # general edit-distance matcher that would be difficult to audit.
+    def ascii_confusable_folds(variant: str) -> set[str]:
+        capital_i_folded = variant.replace("I", "l")
+        double_v_folded = re.sub(r"vv", "w", variant, flags=re.IGNORECASE)
+        return {
+            variant,
+            capital_i_folded,
+            double_v_folded,
+            re.sub(r"vv", "w", capital_i_folded, flags=re.IGNORECASE),
+            double_v_folded.replace("I", "l"),
+        }
+
+    ascii_confusable_variants = {
+        folded
+        for variant in leet_variants
+        for folded in ascii_confusable_folds(variant)
+    }
+    deobfuscated: set[str] = set()
+    separator_folded: set[str] = set()
+    joined_tokens: set[str] = set()
+    for leet_folded in ascii_confusable_variants:
+        separator_folded.add(
+            # Safety-scan only: campaign prose has no legitimate reason to
+            # make punctuation distinguish a protected multiword term. Fold
+            # every non-alphanumeric separator run (including Unicode
+            # bullets/dashes) to one space while preserving the submitted
+            # copy unchanged for ordinary validation/persistence.
+            re.sub(r"[^A-Za-z0-9]+", " ", leet_folded).strip()
+        )
+        deobfuscated.add(
+            re.sub(
+                r"(?<=[A-Za-z])[\-\u2010-\u2015](?=[A-Za-z])",
+                "",
+                leet_folded,
+            )
+        )
+        tokenized = re.findall(r"[A-Za-z]+", leet_folded)
+        joined_tokens.update(
+            "".join(tokenized[start:stop])
+            for start in range(len(tokenized))
+            # Only join genuinely split terms. Re-emitting ordinary one-token
+            # windows detaches words such as ``age`` and ``English`` from the
+            # safe context already reviewed above, creating false positives.
+            for stop in range(start + 2, min(len(tokenized), start + 8) + 1)
+            if sum(len(token) for token in tokenized[start:stop]) <= 32
+        )
+    # Composition order must not reopen the boundary: apply the same bounded
+    # folds after punctuation/split-token joining as well as before it.
+    ascii_confusable_variants.update(
+        folded
+        for variant in deobfuscated | joined_tokens
+        for folded in ascii_confusable_folds(variant)
+    )
+    scannable = " ".join(
+        (
+            mark_folded,
+            *sorted(ascii_confusable_variants),
+            *sorted(deobfuscated),
+            *sorted(separator_folded),
+            *sorted(joined_tokens),
+        )
+    )
     for pattern in _PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS:
         scannable = pattern.sub(" ", scannable)
     return bool(
         _PROTECTED_CLASS_MARKETING_RE.search(scannable)
+        or _PROTECTED_AGE_CITIZENSHIP_MARKETING_RE.search(scannable)
+        or _PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE.search(scannable)
+        or _contains_national_origin_marketing_text(scannable)
         or contains_protected_class_proxy_marketing_text(scannable)
     )
+
+
+def _contains_national_origin_marketing_text(value: str) -> bool:
+    scannable = value
+    for safe_pattern in _PROTECTED_CLASS_PROXY_SAFE_CONTEXT_PATTERNS:
+        scannable = safe_pattern.sub(" ", scannable)
+    for match in PROTECTED_NATIONAL_ORIGIN_RE.finditer(scannable):
+        window = scannable[max(0, match.start() - 120) : match.end() + 120]
+        if _PROTECTED_CLASS_PROXY_HARD_TARGETING_RE.search(window):
+            return True
+        if _PROTECTED_CLASS_PROXY_POPULATION_RE.search(window):
+            return True
+    return False
 
 
 def contains_protected_class_proxy_marketing_text(value: str) -> bool:
@@ -426,8 +758,7 @@ def contains_human_name_shape(
     text = _remove_reviewed_non_person_phrases(str(value), allowed_phrases=allowed_phrases)
     text = _LEADING_ANALYTICS_COMMAND_RE.sub(" ", text)
     if include_titlecase and any(
-        re.split(r"\s+|\|", match.group(0))[-1].casefold()
-        not in _NON_PERSON_TITLECASE_SUFFIXES
+        re.split(r"\s+|\|", match.group(0))[-1].casefold() not in _NON_PERSON_TITLECASE_SUFFIXES
         for match in _TITLECASE_HUMAN_NAME_RE.finditer(text)
     ):
         return True

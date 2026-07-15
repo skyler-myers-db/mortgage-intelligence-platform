@@ -76,6 +76,7 @@ class CampaignStatusPatchRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     status: CampaignStatus
+    expected_status: CampaignStatus | None = None
     rationale: str | None = Field(default=None, max_length=500)
     _transition_evidence: CampaignTransitionEvidence | None = PrivateAttr(default=None)
 

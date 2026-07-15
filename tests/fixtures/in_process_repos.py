@@ -111,6 +111,7 @@ class InProcessMockPortfolioRepository:
             name="Synthetic campaign",
             owner_email="skyler@entrada.ai",
             status="draft",
+            treatment_state="ready",
             criteria={"marketing_eligibility": "Eligible only"},
             suppression_policy={"default": "eligible_only"},
             message_variants=[],
@@ -682,6 +683,25 @@ class InProcessMockLeadRepository:
             outreach_status=outreach_status,
             aged_days=aged_days,
         ))
+
+    def is_campaign_treatment_member(
+        self,
+        *,
+        borrower_id: str,
+        campaign_id: str,
+        materialization_id: str,
+        delta_version: int,
+        treatment_fingerprint: str,
+        frequency_cap_days: int,
+    ) -> bool:
+        _ = (
+            campaign_id,
+            materialization_id,
+            delta_version,
+            treatment_fingerprint,
+            frequency_cap_days,
+        )
+        return any(row.borrower_id == borrower_id for row in mock_data.BORROWERS)
 
     @staticmethod
     def _filter_funnel_stage(leads: list[LeadSummary], funnel_stage: str) -> list[LeadSummary]:

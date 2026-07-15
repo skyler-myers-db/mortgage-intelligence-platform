@@ -129,6 +129,34 @@ jobs:
           } > "$HOME/.databrickscfg"
           chmod 600 "$HOME/.databrickscfg"
           databricks bundle validate -t dev --profile DEFAULT
+      - name: Resolve source-bound Gateway runtime contract
+        # Endpoint/table repository secrets are intentionally not authoritative:
+        # the reviewed source constants plus live Supervisor/Agent metadata must
+        # agree before grants, proof, or expensive refreshes run.
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+        run: |
+          python tools/databricks/export_gateway_runtime_contract.py \
+            --github-env "$GITHUB_ENV"
+      - name: Fail fast unless the exact app commit and Gateway binding are deployed
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+        run: |
+          set -euo pipefail
+          APP_URL="$(
+            databricks apps get "${MIP_APP_NAME:-mip-app}" -o json |
+              python -c 'import json,sys; print((json.load(sys.stdin).get("url") or "").rstrip("/"))'
+          )"
+          if [ -z "$APP_URL" ]; then
+            echo "::error::Deployed app URL is unavailable."
+            exit 1
+          fi
+          echo "MIP_DEPLOYED_APP_URL=$APP_URL" >> "$GITHUB_ENV"
+          python tools/verify_deployed_app_contract.py \
+            --base-url "$APP_URL" \
+            --token-env DATABRICKS_TOKEN \
+            --git-sha "$GITHUB_SHA" \
+            --gateway-binding-sha256 "$MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256"
       - name: Refresh live FRED market rates before validation
         # The parity gate compares gold borrower scoring against the latest
         # reviewed FRED MORTGAGE30US row. FRED publishes independently of repo
@@ -158,6 +186,80 @@ jobs:
           BUNDLE_VAR_sql_warehouse_id: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           BUNDLE_VAR_genie_space_id: ${{ secrets.GENIE_SPACE_ID }}
         run: databricks bundle run mip_refresh_scores -t dev --profile DEFAULT
+      - name: Reconcile delayed AI Gateway inference-table grants
+        # Inference tables are delivered asynchronously. A non-strict deploy may
+        # finish while the table is still pending, so every manual live gate
+        # retries the least-privilege grants before the verifier identity reads
+        # the exact row. The PAT remains scoped to this administrative step.
+        env:
+          DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in DATABRICKS_WAREHOUSE_ID MIP_AI_GATEWAY_ENDPOINT \
+                   MIP_AI_GATEWAY_INFERENCE_TABLE DATABRICKS_VERIFIER_CLIENT_ID; do
+            if [ -z "${!v:-}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required AI Gateway grant input(s):$missing"
+            exit 1
+          fi
+          APP_JSON="$(databricks apps get "${MIP_APP_NAME:-mip-app}" -o json)"
+          read -r APP_SP_CLIENT_ID APP_SP_ID < <(
+            python -c 'import json,sys; d=json.load(sys.stdin); print((d.get("service_principal_client_id") or "").strip(), (d.get("service_principal_id") or "").strip())' <<< "$APP_JSON"
+          )
+          if [ -z "$APP_SP_CLIENT_ID" ] || [ -z "$APP_SP_ID" ]; then
+            echo "::error::Could not resolve the deployed app service principal."
+            exit 1
+          fi
+          echo "MIP_APP_SERVICE_PRINCIPAL_ID=$APP_SP_ID" >> "$GITHUB_ENV"
+          for principal in "$APP_SP_CLIENT_ID" "$DATABRICKS_VERIFIER_CLIENT_ID"; do
+            python tools/databricks/grant_ai_gateway_inference_table.py \
+              --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
+              --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+              --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+              --principal "$principal"
+          done
+      - name: Prove the verifier's effective authorization boundary
+        # Workspace SCIM is not authoritative under automatic identity
+        # management. Exercise read-only positive and negative probes with the
+        # verifier's own OAuth credentials, including the account control plane,
+        # App proxy, secret-management API, UC, endpoints, and every warehouse.
+        env:
+          DATABRICKS_AUTH_TYPE: oauth-m2m
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
+          DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
+          DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
+        run: |
+          set -euo pipefail
+          unset DATABRICKS_TOKEN
+          missing=""
+          for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+                   DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID \
+                   DATABRICKS_WAREHOUSE_ID MIP_AI_GATEWAY_ENDPOINT \
+                   MIP_AI_GATEWAY_INFERENCE_TABLE MIP_DEPLOYED_APP_URL \
+                   MIP_APP_SERVICE_PRINCIPAL_ID; do
+            if [ -z "${!v:-}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required verifier-boundary input(s):$missing"
+            exit 1
+          fi
+          python tools/databricks/verify_verifier_identity_boundary.py \
+            --expected-application-id "$DATABRICKS_CLIENT_ID" \
+            --account-host "$DATABRICKS_ACCOUNT_HOST" \
+            --account-id "$DATABRICKS_ACCOUNT_ID" \
+            --app-name "${MIP_APP_NAME:-mip-app}" \
+            --app-url "$MIP_DEPLOYED_APP_URL" \
+            --protected-service-principal-id "$MIP_APP_SERVICE_PRINCIPAL_ID" \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
+            --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+            --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
       - name: Refresh and verify AI Gateway exact proof ledger
         # AI Gateway is claimable only when the deployment verifier has marked
         # an exact inference-log row for the current SHA in Lakebase. Verify
@@ -169,8 +271,6 @@ jobs:
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
           MIP_GIT_SHA: ${{ github.sha }}
-          MIP_AI_GATEWAY_ENDPOINT: ${{ secrets.MIP_AI_GATEWAY_ENDPOINT }}
-          MIP_AI_GATEWAY_INFERENCE_TABLE: ${{ secrets.MIP_AI_GATEWAY_INFERENCE_TABLE }}
           MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
         run: |
           set -euo pipefail
@@ -295,6 +395,13 @@ jobs:
       - name: Install Playwright browsers
         working-directory: frontend
         run: npx playwright install --with-deps chromium firefox webkit
+      - name: Resolve source-bound Gateway runtime contract
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+        run: |
+          python tools/databricks/export_gateway_runtime_contract.py \
+            --github-env "$GITHUB_ENV"
       - name: Resolve deployed app URL
         # This job intentionally has one path:
         #   deployed -> hit the real Databricks App through its OAuth proxy.
@@ -335,20 +442,27 @@ jobs:
         # is intentionally non-admin; the smoke step below proves it can read
         # allowed lead surfaces while admin/audit endpoints fail closed. Do
         # not fall back to the admin PAT for the normal browser session. The
-        # separate admin M2M bearer backs campaign-audit and Growth Agent audit
-        # proofs without storing a bearer in GitHub.
+        # separate operator2 and admin M2M bearers back the per-actor recovery,
+        # campaign-audit, and Growth Agent audit proofs without storing a
+        # bearer in GitHub.
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
+          DATABRICKS_OPERATOR2_CLIENT_SECRET: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}
           DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
           DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
+          DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
+          DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           missing=""
           for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
-                   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET; do
+                   DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
+                   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+                   DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET; do
             if [ -z "${!v:-}" ]; then
               missing="$missing $v"
             fi
@@ -357,40 +471,61 @@ jobs:
             echo "::error::Missing required M2M OAuth secret(s):$missing"
             exit 1
           fi
-          if [ "$DATABRICKS_CLIENT_ID" = "$DATABRICKS_ADMIN_CLIENT_ID" ]; then
-            echo "::error::Normal and admin M2M client IDs must be distinct."
+          if [ "$DATABRICKS_CLIENT_ID" = "$DATABRICKS_OPERATOR2_CLIENT_ID" ] || \
+             [ "$DATABRICKS_CLIENT_ID" = "$DATABRICKS_ADMIN_CLIENT_ID" ] || \
+             [ "$DATABRICKS_CLIENT_ID" = "$DATABRICKS_VERIFIER_CLIENT_ID" ] || \
+             [ "$DATABRICKS_OPERATOR2_CLIENT_ID" = "$DATABRICKS_ADMIN_CLIENT_ID" ] || \
+             [ "$DATABRICKS_OPERATOR2_CLIENT_ID" = "$DATABRICKS_VERIFIER_CLIENT_ID" ] || \
+             [ "$DATABRICKS_ADMIN_CLIENT_ID" = "$DATABRICKS_VERIFIER_CLIENT_ID" ]; then
+            echo "::error::Operator A, operator B, admin, and verifier M2M client IDs must be distinct."
             exit 1
           fi
           python tools/oauth_m2m_mint.py \
             --github-env MIP_NON_ADMIN_BEARER_TOKEN \
             --github-env MIP_BEARER_TOKEN
           python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_OPERATOR2_CLIENT_ID \
+            --client-secret-env DATABRICKS_OPERATOR2_CLIENT_SECRET \
+            --github-env MIP_OPERATOR2_BEARER_TOKEN
+          python tools/oauth_m2m_mint.py \
             --client-id-env DATABRICKS_ADMIN_CLIENT_ID \
             --client-secret-env DATABRICKS_ADMIN_CLIENT_SECRET \
             --github-env MIP_ADMIN_BEARER_TOKEN
-          echo "::notice::Minted distinct per-run non-admin and admin M2M Bearers."
+          python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_VERIFIER_CLIENT_ID \
+            --client-secret-env DATABRICKS_VERIFIER_CLIENT_SECRET \
+            --github-env MIP_VERIFIER_BEARER_TOKEN
+          echo "::notice::Minted distinct per-run operator A, operator B, admin, and verifier M2M Bearers."
       - name: Authenticated non-admin smoke (M2M)
         run: |
           python - <<'PY'
           from __future__ import annotations
 
           import os
+          import json
           import urllib.error
           import urllib.request
 
           app_url = os.environ["MIP_APP_URL"].rstrip("/")
-          token = os.environ["MIP_NON_ADMIN_BEARER_TOKEN"]
+          tokens = {
+              "operator_a": os.environ["MIP_NON_ADMIN_BEARER_TOKEN"],
+              "operator_b": os.environ["MIP_OPERATOR2_BEARER_TOKEN"],
+          }
 
-          def status(path: str) -> int:
+          def response(path: str, *, token: str) -> tuple[int, object]:
               req = urllib.request.Request(
                   app_url + path,
                   headers={"Authorization": f"Bearer {token}"},
               )
               try:
                   with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                      return int(resp.status)
+                      raw = resp.read().decode("utf-8")
+                      return int(resp.status), json.loads(raw) if raw else {}
               except urllib.error.HTTPError as exc:
-                  return int(exc.code)
+                  return int(exc.code), {}
+
+          def status(path: str, *, token: str) -> int:
+              return response(path, token=token)[0]
 
           checks = {
               "/api/leads?limit=1": 200,
@@ -398,14 +533,51 @@ jobs:
               "/api/admin/rules": 403,
           }
           failed = []
-          for path, expected in checks.items():
-              actual = status(path)
-              print(f"{path} -> {actual}")
-              if actual != expected:
-                  failed.append(f"{path}: expected {expected}, got {actual}")
+          for label, token in tokens.items():
+              session_status, session = response("/api/session", token=token)
+              if session_status != 200 or session != {
+                  "can_access_admin": False,
+                  "can_approve": True,
+              }:
+                  failed.append(
+                      f"{label} session: expected non-admin approver, "
+                      f"got status={session_status} body={session!r}"
+                  )
+              for path, expected in checks.items():
+                  actual = status(path, token=token)
+                  print(f"{label}: {path} -> {actual}")
+                  if actual != expected:
+                      failed.append(f"{label} {path}: expected {expected}, got {actual}")
+          admin_status, admin_session = response(
+              "/api/session",
+              token=os.environ["MIP_ADMIN_BEARER_TOKEN"],
+          )
+          if admin_status != 200 or admin_session != {
+              "can_access_admin": True,
+              "can_approve": True,
+          }:
+              failed.append(
+                  "admin session: expected admin approver, "
+                  f"got status={admin_status} body={admin_session!r}"
+              )
+          verifier_status = status(
+              "/api/session",
+              token=os.environ["MIP_VERIFIER_BEARER_TOKEN"],
+          )
+          if verifier_status not in {401, 403}:
+              failed.append(
+                  f"verifier /api/session: expected no App access, got {verifier_status}"
+              )
           if failed:
               raise SystemExit("; ".join(failed))
           PY
+      - name: Recheck deployed commit and Gateway binding with the browser identity
+        run: |
+          python tools/verify_deployed_app_contract.py \
+            --base-url "$MIP_APP_URL" \
+            --token-env MIP_NON_ADMIN_BEARER_TOKEN \
+            --git-sha "$GITHUB_SHA" \
+            --gateway-binding-sha256 "$MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256"
       - name: Low-volume deployed workflow contracts
         # Reuse this manual release workflow rather than creating another
         # schedule. These checks mutate only the dev/sandbox app and prove the
@@ -420,6 +592,10 @@ jobs:
           pytest -q --tb=short \
             tests/integration/test_campaign_audit_workflow_live.py \
             tests/integration/test_lakebase_idempotency_live.py \
+            tests/integration/test_lakebase_concurrency_live.py \
+            tests/integration/test_two_operator_recovery_live.py \
+            tests/integration/test_lifecycle_delta_replay_live.py \
+            tests/integration/test_campaign_treatment_at_cap_live.py \
             tests/integration/test_lineage_manifest_live.py
       - name: Genie semantic eval scorecard (deployed app)
         env:

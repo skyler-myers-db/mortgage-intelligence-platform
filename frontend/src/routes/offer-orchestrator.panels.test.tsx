@@ -48,9 +48,7 @@ describe('OfferReviewGrid message intelligence', () => {
           draftLoaded
           draftError={null}
           draftSubject="A clearer mortgage review"
-          onDraftSubjectChange={vi.fn()}
           draftText="A useful governed draft."
-          onDraftChange={vi.fn()}
           draftChannel="email"
           draftProofFresh
           onDraftChannelChange={vi.fn()}
@@ -92,11 +90,15 @@ describe('OfferReviewGrid message intelligence', () => {
       (button) => button.textContent?.trim() === 'Regenerate',
     );
     expect(regenerateButton?.disabled).toBe(false);
-    expect(container.textContent).toContain('A licensed loan officer must review');
+    expect(container.textContent).toContain('Review the exact audited copy before approval');
+    expect(container.querySelector<HTMLInputElement>('[data-testid="outreach-subject"]')?.readOnly)
+      .toBe(true);
+    expect(container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.readOnly)
+      .toBe(true);
     expect(container.querySelector('a[href="/admin-config#offer-rules"]')).not.toBeNull();
     act(() => regenerateButton?.click());
     expect(regenerate).not.toHaveBeenCalled();
-    expect(container.textContent).toContain('Regenerating replaces the subject and message');
+    expect(container.textContent).toContain('Regenerating replaces the current audited subject');
     const replace = Array.from(container.querySelectorAll('button')).find(
       (button) => button.textContent?.trim() === 'Replace current draft',
     );
@@ -170,9 +172,7 @@ describe('OfferReviewGrid message intelligence', () => {
           draftLoaded={false}
           draftError={null}
           draftSubject=""
-          onDraftSubjectChange={vi.fn()}
           draftText=""
-          onDraftChange={vi.fn()}
           draftChannel="email"
           draftProofFresh={false}
           onDraftChannelChange={vi.fn()}
@@ -217,9 +217,7 @@ describe('OfferReviewGrid message intelligence', () => {
           draftLoaded={false}
           draftError="The audited draft could not be loaded."
           draftSubject="Do not edit"
-          onDraftSubjectChange={vi.fn()}
           draftText="Do not send"
-          onDraftChange={vi.fn()}
           draftChannel="email"
           draftProofFresh={false}
           onDraftChannelChange={vi.fn()}
@@ -251,7 +249,7 @@ describe('OfferReviewGrid message intelligence', () => {
       .toBe(true);
   });
 
-  it('explains stale proof and styles a human-edited supervisor draft neutrally', () => {
+  it('explains stale proof and styles stale supervisor copy neutrally', () => {
     const regenerate = vi.fn();
     act(() => root.render(
       <MemoryRouter>
@@ -265,18 +263,15 @@ describe('OfferReviewGrid message intelligence', () => {
           draftWarming={null}
           draftLoaded
           draftError={null}
-          draftSubject="Edited subject"
-          onDraftSubjectChange={vi.fn()}
-          draftText="Edited message"
-          onDraftChange={vi.fn()}
+          draftSubject="Audited subject"
+          draftText="Audited message"
           draftChannel="email"
-          draftDirty
           draftProofFresh={false}
           onDraftChannelChange={vi.fn()}
           approving={false}
           draftDisclosureVersion="v1"
           draftDisclosureState="IL"
-          draftGeneratorLabel="Human edited from Supervisor-optimized message"
+          draftGeneratorLabel="Supervisor-optimized message"
           draftGenerationMode="supervisor"
           draftStrategy={null}
           draftEvidence={[]}
@@ -300,6 +295,6 @@ describe('OfferReviewGrid message intelligence', () => {
     expect(regenerate).toHaveBeenCalledTimes(1);
     const generatorChip = container.querySelector('[data-testid="offer-message-intelligence"] .chip');
     expect(generatorChip?.classList.contains('chip--neutral')).toBe(true);
-    expect(generatorChip?.textContent).toContain('Human edited from');
+    expect(generatorChip?.textContent).toContain('Supervisor-optimized message');
   });
 });

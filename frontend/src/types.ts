@@ -456,6 +456,9 @@ export interface KpiTrend {
 
 export interface PortfolioPreview {
   marketable_population: number;
+  campaign_build_contact_count: number | null;
+  campaign_build_limit: number;
+  campaign_build_eligible: boolean | null;
   high_intent_leads: number;
   top_tier_opportunities: number | null;
   offers_recommended: number | null;
@@ -487,6 +490,8 @@ export interface PortfolioCreateResponse {
   campaign_id?: string | null;
   name: string;
   marketable_population: number;
+  campaign_build_limit: number;
+  campaign_build_eligible: boolean;
   household_summary?: HouseholdDedupSummary;
   audit_event_id?: string | null;
 }
@@ -516,7 +521,14 @@ export interface CampaignSummary {
   owner_email: string;
   status: 'draft' | 'pending_review' | 'approved' | 'live' | 'active' | 'rejected' | 'archived';
   actionable?: boolean;
-  actionability_issue?: 'legacy_contract' | 'invalid_name' | 'invalid_criteria' | 'invalid_policy' | 'invalid_configuration' | 'invalid_message_variants' | null;
+  actionability_issue?: 'legacy_contract' | 'treatment_unbound' | 'invalid_name' | 'invalid_criteria' | 'invalid_policy' | 'invalid_configuration' | 'invalid_message_variants' | null;
+  /**
+   * Present on current campaign responses so the UI can distinguish a
+   * transient materialization from an archive-only quarantine. Optional
+   * during the rolling deploy because older API workers only reported the
+   * coarser `treatment_unbound` actionability issue.
+   */
+  treatment_state?: 'building' | 'ready' | 'failed' | 'legacy_unbound';
   criteria: Record<string, unknown>;
   suppression_policy?: Record<string, unknown>;
   message_variants?: Record<string, unknown>[];

@@ -1,0 +1,437 @@
+from __future__ import annotations
+
+from types import SimpleNamespace
+
+import pytest
+from databricks.sdk.errors import PermissionDenied
+
+from tools.databricks.verify_verifier_identity_boundary import verify_boundary
+
+
+def _sql_response(state: str, *, rows: list[list[object]] | None = None, error: str = ""):
+    return SimpleNamespace(
+        status=SimpleNamespace(state=state, error=error),
+        result=SimpleNamespace(data_array=rows or []),
+    )
+
+
+class _Statements:
+    def __init__(
+        self,
+        *,
+        extra_relation: bool = False,
+        extra_relation_name: str = "mip.gold.borrower_360",
+        extra_catalog_privilege: bool = False,
+        extra_schema_privilege: bool = False,
+        owner_group_member: bool = False,
+        metastore_privilege: bool = False,
+        non_target_catalog_privilege: bool = False,
+        non_target_schema_privilege: bool = False,
+        non_target_owner: bool = False,
+        hidden_group_table_modify: bool = False,
+        missing_target_table_select: bool = False,
+    ) -> None:
+        self.extra_relation = extra_relation
+        self.extra_relation_name = extra_relation_name
+        self.extra_catalog_privilege = extra_catalog_privilege
+        self.extra_schema_privilege = extra_schema_privilege
+        self.owner_group_member = owner_group_member
+        self.metastore_privilege = metastore_privilege
+        self.non_target_catalog_privilege = non_target_catalog_privilege
+        self.non_target_schema_privilege = non_target_schema_privilege
+        self.non_target_owner = non_target_owner
+        self.hidden_group_table_modify = hidden_group_table_modify
+        self.missing_target_table_select = missing_target_table_select
+        self.calls: list[tuple[str, str]] = []
+
+    def execute_statement(self, *, statement: str, warehouse_id: str, **_kwargs: object):
+        self.calls.append((warehouse_id, statement))
+        if "system.information_schema.metastore_privileges" in statement:
+            rows = (
+                [["metastore-id", "CREATE CATALOG", "verifier-client-id", "false"]]
+                if self.metastore_privilege
+                else []
+            )
+            return _sql_response("SUCCEEDED", rows=rows)
+        if "system.information_schema.catalog_privileges" in statement:
+            rows = [["mip", "USE CATALOG", "verifier-client-id", "false"]]
+            if self.extra_catalog_privilege:
+                rows.append(["mip", "CREATE SCHEMA", "verifier-client-id", "false"])
+            if self.non_target_catalog_privilege:
+                rows.append(["empty_catalog", "CREATE SCHEMA", "hidden-group", "true"])
+            return _sql_response("SUCCEEDED", rows=rows)
+        if "system.information_schema.schema_privileges" in statement:
+            rows = [["mip", "audit", "USE SCHEMA", "verifier-client-id", "false"]]
+            if self.extra_schema_privilege:
+                rows.append(["mip", "audit", "CREATE TABLE", "verifier-client-id", "false"])
+            if self.non_target_schema_privilege:
+                rows.append(
+                    ["empty_catalog", "empty_schema", "CREATE TABLE", "hidden-group", "true"]
+                )
+            return _sql_response("SUCCEEDED", rows=rows)
+        if "system.information_schema.table_privileges" in statement:
+            rows = []
+            if not self.missing_target_table_select:
+                rows.append(
+                    [
+                        "mip",
+                        "audit",
+                        "mip_agent_gateway_growth_agent_payload",
+                        "SELECT",
+                        "verifier-client-id",
+                        "false",
+                    ]
+                )
+            if self.hidden_group_table_modify:
+                rows.append(
+                    [
+                        "mip",
+                        "audit",
+                        "mip_agent_gateway_growth_agent_payload",
+                        "MODIFY",
+                        "hidden-account-group",
+                        "true",
+                    ]
+                )
+            return _sql_response("SUCCEEDED", rows=rows)
+        if "SELECT object_kind, catalog_name" in statement:
+            rows = [
+                ["CATALOG", "mip", None, "platform-owner", "false"],
+                ["SCHEMA", "mip", "audit", "platform-owner", "false"],
+            ]
+            if self.non_target_owner:
+                rows.append(["SCHEMA", "empty_catalog", "empty_schema", "hidden-group", "true"])
+            return _sql_response("SUCCEEDED", rows=rows)
+        if statement.startswith("SHOW GRANTS") and " ON CATALOG " in statement:
+            rows = [["verifier-client-id", "USE CATALOG", "CATALOG", "mip"]]
+            if self.extra_catalog_privilege:
+                rows.append(["verifier-client-id", "CREATE SCHEMA", "CATALOG", "mip"])
+            return _sql_response("SUCCEEDED", rows=rows)
+        if statement.startswith("SHOW GRANTS") and " ON SCHEMA " in statement:
+            rows = [["verifier-client-id", "USE SCHEMA", "SCHEMA", "mip.audit"]]
+            if self.extra_schema_privilege:
+                rows.append(["verifier-client-id", "CREATE TABLE", "SCHEMA", "mip.audit"])
+            return _sql_response("SUCCEEDED", rows=rows)
+        if "system.information_schema.catalogs AS c" in statement:
+            return _sql_response(
+                "SUCCEEDED",
+                rows=[
+                    [
+                        "platform-owner",
+                        "platform-owner",
+                        str(self.owner_group_member).lower(),
+                        "false",
+                    ]
+                ],
+            )
+        rows = [["mip", "audit", "mip_agent_gateway_growth_agent_payload"]]
+        if self.extra_relation:
+            rows.append(self.extra_relation_name.split("."))
+        return _sql_response("SUCCEEDED", rows=rows)
+
+
+class _DeniedAccountPrincipals:
+    def list(self, **_kwargs: object):
+        raise PermissionDenied("account administrator required")
+
+
+class _Serving:
+    def __init__(self, *, extra_access: bool = False, target_admin: bool = False) -> None:
+        self.extra_access = extra_access
+        self.target_admin = target_admin
+
+    def list(self):
+        return iter([SimpleNamespace(name="outer"), SimpleNamespace(name="other")])
+
+    def get(self, endpoint: str):
+        if endpoint == "other" and not self.extra_access:
+            raise PermissionDenied("endpoint permission required")
+        return SimpleNamespace(name=endpoint, id=f"{endpoint}-id")
+
+    def get_permissions(self, _endpoint_id: str):
+        if not self.target_admin:
+            raise PermissionDenied("endpoint manager permission required")
+        return SimpleNamespace(access_control_list=[])
+
+
+class _Warehouses:
+    def __init__(self, *, extra_access: bool = False, target_admin: bool = False) -> None:
+        self.extra_access = extra_access
+        self.target_admin = target_admin
+
+    def list(self):
+        return iter([SimpleNamespace(id="target-warehouse"), SimpleNamespace(id="other-warehouse")])
+
+    def get(self, warehouse_id: str):
+        if warehouse_id == "other-warehouse" and not self.extra_access:
+            raise PermissionDenied("warehouse permission required")
+        return SimpleNamespace(id=warehouse_id)
+
+    def get_permissions(self, _warehouse_id: str):
+        if not self.target_admin:
+            raise PermissionDenied("warehouse manager permission required")
+        return SimpleNamespace(access_control_list=[])
+
+
+def _workspace(
+    *,
+    extra_relation: bool = False,
+    extra_relation_name: str = "mip.gold.borrower_360",
+    app_permissions_denied: bool = True,
+    metastore_admin: bool = False,
+    endpoint_extra_access: bool = False,
+    warehouse_extra_access: bool = False,
+    endpoint_target_admin: bool = False,
+    warehouse_target_admin: bool = False,
+    extra_catalog_privilege: bool = False,
+    extra_schema_privilege: bool = False,
+    owner_group_member: bool = False,
+    metastore_privilege: bool = False,
+    non_target_catalog_privilege: bool = False,
+    non_target_schema_privilege: bool = False,
+    non_target_owner: bool = False,
+    hidden_group_table_modify: bool = False,
+    missing_target_table_select: bool = False,
+):
+    apps = SimpleNamespace()
+    if app_permissions_denied:
+        apps.get_permissions = lambda _name: (_ for _ in ()).throw(
+            PermissionDenied("workspace admin required")
+        )
+    else:
+        apps.get_permissions = lambda _name: SimpleNamespace(access_control_list=[])
+    metastores = SimpleNamespace(
+        current=lambda: SimpleNamespace(metastore_id="metastore-id"),
+        get=(
+            (lambda _id: SimpleNamespace(metastore_id="metastore-id"))
+            if metastore_admin
+            else lambda _id: (_ for _ in ()).throw(PermissionDenied("metastore admin required"))
+        ),
+    )
+    return SimpleNamespace(
+        current_user=SimpleNamespace(
+            me=lambda: SimpleNamespace(user_name="verifier-client-id")
+        ),
+        apps=apps,
+        metastores=metastores,
+        service_principal_secrets_proxy=SimpleNamespace(
+            list=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                PermissionDenied("service principal manager required")
+            )
+        ),
+        statement_execution=_Statements(
+            extra_relation=extra_relation,
+            extra_relation_name=extra_relation_name,
+            extra_catalog_privilege=extra_catalog_privilege,
+            extra_schema_privilege=extra_schema_privilege,
+            owner_group_member=owner_group_member,
+            metastore_privilege=metastore_privilege,
+            non_target_catalog_privilege=non_target_catalog_privilege,
+            non_target_schema_privilege=non_target_schema_privilege,
+            non_target_owner=non_target_owner,
+            hidden_group_table_modify=hidden_group_table_modify,
+            missing_target_table_select=missing_target_table_select,
+        ),
+        serving_endpoints=_Serving(
+            extra_access=endpoint_extra_access,
+            target_admin=endpoint_target_admin,
+        ),
+        warehouses=_Warehouses(
+            extra_access=warehouse_extra_access,
+            target_admin=warehouse_target_admin,
+        ),
+        config=SimpleNamespace(authenticate=lambda: {"Authorization": "Bearer redacted"}),
+    )
+
+
+def _verify(**overrides: object) -> None:
+    kwargs: dict[str, object] = {
+        "workspace": _workspace(),
+        "account": SimpleNamespace(service_principals=_DeniedAccountPrincipals()),
+        "expected_application_id": "verifier-client-id",
+        "app_name": "mip-app",
+        "app_url": "https://mip-app.example",
+        "protected_service_principal_id": "protected-scim-id",
+        "warehouse_id": "target-warehouse",
+        "relation_prefix": "mip.audit.mip_agent_gateway_growth_agent",
+        "endpoint": "outer",
+        "http_get": lambda *_args, **_kwargs: SimpleNamespace(status_code=403),
+    }
+    kwargs.update(overrides)
+    verify_boundary(**kwargs)
+
+
+def test_effective_boundary_accepts_targets_and_all_expected_denials() -> None:
+    _verify()
+
+
+def test_rejects_account_admin_api_access() -> None:
+    account = SimpleNamespace(
+        service_principals=SimpleNamespace(list=lambda **_kwargs: iter([object()]))
+    )
+    with pytest.raises(RuntimeError, match="account administrator.*unexpectedly succeeded"):
+        _verify(account=account)
+
+
+def test_rejects_metastore_admin_get_access() -> None:
+    with pytest.raises(RuntimeError, match="metastore administrator.*unexpectedly succeeded"):
+        _verify(workspace=_workspace(metastore_admin=True))
+
+
+def test_rejects_any_non_target_uc_relation_visibility() -> None:
+    with pytest.raises(RuntimeError, match="non-target UC relations.*mip.gold.borrower_360"):
+        _verify(workspace=_workspace(extra_relation=True))
+
+
+def test_rejects_campaign_treatment_snapshot_visibility() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="non-target UC relations.*mip.audit.campaign_treatment_snapshot",
+    ):
+        _verify(
+            workspace=_workspace(
+                extra_relation=True,
+                extra_relation_name="mip.audit.campaign_treatment_snapshot",
+            )
+        )
+
+
+def test_rejects_saturated_uc_visibility_result() -> None:
+    workspace = _workspace()
+    workspace.statement_execution.execute_statement = lambda **_kwargs: _sql_response(
+        "SUCCEEDED",
+        rows=[["mip", "audit", f"mip_agent_gateway_growth_agent_{index}"] for index in range(1001)],
+    )
+    with pytest.raises(RuntimeError, match="saturated its fail-closed relation limit"):
+        _verify(workspace=workspace)
+
+
+def test_rejects_effective_catalog_create_privilege() -> None:
+    with pytest.raises(RuntimeError, match="unexpected effective catalog privileges"):
+        _verify(workspace=_workspace(extra_catalog_privilege=True))
+
+
+def test_rejects_effective_schema_create_privilege() -> None:
+    with pytest.raises(RuntimeError, match="unexpected effective schema privileges"):
+        _verify(workspace=_workspace(extra_schema_privilege=True))
+
+
+def test_rejects_effective_uc_ownership_through_hidden_account_group() -> None:
+    with pytest.raises(RuntimeError, match="effective owner"):
+        _verify(workspace=_workspace(owner_group_member=True))
+
+
+def test_rejects_effective_metastore_create_catalog_privilege() -> None:
+    with pytest.raises(RuntimeError, match="unexpected effective metastore.*CREATE CATALOG"):
+        _verify(workspace=_workspace(metastore_privilege=True))
+
+
+def test_rejects_privilege_on_empty_non_target_catalog() -> None:
+    with pytest.raises(RuntimeError, match="non-target catalog empty_catalog.*CREATE SCHEMA"):
+        _verify(workspace=_workspace(non_target_catalog_privilege=True))
+
+
+def test_rejects_privilege_on_empty_non_target_schema() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match=r"non-target schema empty_catalog\.empty_schema.*CREATE TABLE",
+    ):
+        _verify(workspace=_workspace(non_target_schema_privilege=True))
+
+
+def test_rejects_ownership_of_empty_non_target_schema_through_group() -> None:
+    with pytest.raises(RuntimeError, match=r"effective owner.*empty_catalog\.empty_schema"):
+        _verify(workspace=_workspace(non_target_owner=True))
+
+
+def test_rejects_target_table_modify_through_hidden_account_group() -> None:
+    with pytest.raises(RuntimeError, match="unexpected effective target table privilege: MODIFY"):
+        _verify(workspace=_workspace(hidden_group_table_modify=True))
+
+
+def test_requires_explicit_effective_select_on_every_visible_target_table() -> None:
+    with pytest.raises(RuntimeError, match="missing an explicit effective SELECT"):
+        _verify(workspace=_workspace(missing_target_table_select=True))
+
+
+@pytest.mark.parametrize(
+    ("statement_marker", "rows", "message"),
+    [
+        (
+            "system.information_schema.metastore_privileges",
+            [["metastore-id", "CREATE CATALOG", "hidden-group", "unknown"]],
+            "invalid boolean",
+        ),
+        (
+            "system.information_schema.catalog_privileges",
+            [["mip", "", "verifier-client-id", "false"]],
+            "catalog grants returned an empty value",
+        ),
+        (
+            "system.information_schema.schema_privileges",
+            [["mip", "", "USE SCHEMA", "verifier-client-id", "false"]],
+            "schema grants returned an empty value",
+        ),
+        (
+            "SELECT object_kind, catalog_name",
+            [["TABLE", "mip", "audit", "platform-owner", "false"]],
+            "ownership returned an invalid container",
+        ),
+        (
+            "SELECT object_kind, catalog_name",
+            [["CATALOG", "mip", "audit", "platform-owner", "false"]],
+            "ownership returned an invalid container",
+        ),
+        (
+            "SELECT object_kind, catalog_name",
+            [["SCHEMA", "mip", "audit", "", "false"]],
+            "ownership returned an invalid container",
+        ),
+    ],
+)
+def test_rejects_malformed_global_container_rows(
+    statement_marker: str,
+    rows: list[list[object]],
+    message: str,
+) -> None:
+    workspace = _workspace()
+    original_execute = workspace.statement_execution.execute_statement
+
+    def execute_statement(**kwargs: object):
+        if statement_marker in str(kwargs.get("statement") or ""):
+            return _sql_response("SUCCEEDED", rows=rows)
+        return original_execute(**kwargs)
+
+    workspace.statement_execution.execute_statement = execute_statement
+    with pytest.raises(RuntimeError, match=message):
+        _verify(workspace=workspace)
+
+
+def test_rejects_non_target_endpoint_metadata_access() -> None:
+    with pytest.raises(RuntimeError, match="non-target serving endpoint.*unexpectedly"):
+        _verify(workspace=_workspace(endpoint_extra_access=True))
+
+
+def test_rejects_non_target_warehouse_metadata_access() -> None:
+    with pytest.raises(RuntimeError, match="non-target warehouse.*unexpectedly"):
+        _verify(workspace=_workspace(warehouse_extra_access=True))
+
+
+def test_rejects_target_endpoint_permission_administration() -> None:
+    with pytest.raises(RuntimeError, match="target serving endpoint.*unexpectedly"):
+        _verify(workspace=_workspace(endpoint_target_admin=True))
+
+
+def test_rejects_target_warehouse_permission_administration() -> None:
+    with pytest.raises(RuntimeError, match="target SQL warehouse.*unexpectedly"):
+        _verify(workspace=_workspace(warehouse_target_admin=True))
+
+
+def test_rejects_actual_app_http_access() -> None:
+    with pytest.raises(RuntimeError, match="App HTTP denial probe.*status=200"):
+        _verify(http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
+
+
+def test_rejects_workspace_app_permission_administration() -> None:
+    with pytest.raises(RuntimeError, match="App permission-administration.*unexpectedly"):
+        _verify(workspace=_workspace(app_permissions_denied=False))

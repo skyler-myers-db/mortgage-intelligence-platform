@@ -225,14 +225,41 @@ describe('Ask Genie conversation continuity', () => {
 
     mount();
     await waitUntil(() => window.localStorage.getItem('mip.genie.conversationId') === 'conv-bootstrap');
+    const resetListener = vi.fn();
+    window.addEventListener('mip:genie-conversation-reset', resetListener);
     act(() => button(/^New thread$/).click());
     expect(window.localStorage.getItem('mip.genie.conversationId')).toBeNull();
+    expect(resetListener).toHaveBeenCalledOnce();
+    window.removeEventListener('mip:genie-conversation-reset', resetListener);
 
     act(() => setTextAreaValue(questionInput(), 'Break this down by state'));
     act(() => button(/^Ask Genie$/).click());
     await waitUntil(() => genie.mock.calls.length === 1);
     expect(genie).toHaveBeenCalledWith(
       'Break this down by state',
+      null,
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('does not restore a late bootstrap response after New thread', async () => {
+    let resolveStart: ((value: GenieStartResult) => void) | undefined;
+    genieStart.mockReturnValue(new Promise((resolve) => { resolveStart = resolve; }));
+    genie.mockResolvedValueOnce(answer());
+
+    mount();
+    act(() => button(/^New thread$/).click());
+    await act(async () => {
+      resolveStart?.({ ...START, conversation_id: 'conv-late-bootstrap' });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(window.localStorage.getItem('mip.genie.conversationId')).toBeNull();
+
+    act(() => setTextAreaValue(questionInput(), 'Start from the full portfolio'));
+    act(() => button(/^Ask Genie$/).click());
+    await waitUntil(() => genie.mock.calls.length === 1);
+    expect(genie).toHaveBeenCalledWith(
+      'Start from the full portfolio',
       null,
       expect.any(AbortSignal),
     );

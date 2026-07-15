@@ -1,33 +1,10 @@
-"""Role-based access control for the admin surface.
+"""Fail-closed admin and approver authorization.
 
-Module-0 governance requirement: the /api/admin/* endpoints read the
-active rules vocabulary, the data-source readiness grid, and the
-workspace settings summary. None of those are appropriate for rank-and-
-file users. The posture is fail-closed -- we only admit callers whose
-Databricks-forwarded group membership includes the configured admin
-group (default ``mip-admin``).
-
-Databricks Apps forwards workspace identity via two headers at the app
-edge:
-
-* ``X-Forwarded-Email``  - the authenticated user email (used by
-  ``backend.services.audit_store.resolve_actor`` for audit attribution).
-* ``X-Forwarded-Groups`` - comma-separated workspace group names the
-  user is a member of.
-
-This module provides a tiny FastAPI dependency, ``require_admin``, that
-reads ``X-Forwarded-Groups``, tokenises the comma-separated list, and
-403s with ``{"detail": "forbidden"}`` when the configured admin group
-(or the hard-coded fallback ``"admins"``) is not present. On success it
-returns the actor email (via ``resolve_actor``) so routers can pass it
-straight into the audit ledger without plumbing the ``Request`` twice.
-
-No bypass flag. Local dev/test flows set ``X-Forwarded-Groups:
-mip-admin`` on every request -- documented in ``docs/runbook.md``. An
-``app_env == "local"`` auto-admit was considered and rejected: flags
-like that rot into production the first time someone forgets to strip
-them, and the failure mode (silently opening admin to unauthenticated
-callers) is exactly the posture governance does not want.
+Deployed automation is authorized by exact server-configured identities matched
+against the actor resolved from ``X-Forwarded-Email`` / ``X-Forwarded-User``.
+Email allowlists are additive for governed human access. Because the Databricks
+Apps identity contract does not document ``X-Forwarded-Groups``, group matching
+is compatibility-only and is never authoritative outside local/test execution.
 """
 from __future__ import annotations
 
@@ -51,13 +28,7 @@ _FALLBACK_ADMIN_GROUP: str = "admins"
 
 
 def _parse_groups(raw: str | None) -> set[str]:
-    """Split ``X-Forwarded-Groups`` into a set of group names.
-
-    The header is a comma-separated list per the Databricks Apps edge
-    contract. We lower-case the comparison set because workspace group
-    naming is case-insensitive in practice and mixed case would be a
-    silent-deny footgun.
-    """
+    """Split an optional local/test compatibility group header."""
     if not raw:
         return set()
     return {tok.strip().lower() for tok in raw.split(",") if tok.strip()}
@@ -74,7 +45,10 @@ def _parse_admin_emails(raw: str | None) -> set[str]:
 def _admin_access(request: Request) -> tuple[bool, str, set[str]]:
     """Resolve the single admin-access decision used by UI and enforcement."""
     actor = resolve_actor(request)
-    if settings.trust_forwarded_headers:
+    compatibility_groups_enabled = (
+        settings.trust_forwarded_headers and settings.app_env in {"local", "test"}
+    )
+    if compatibility_groups_enabled:
         groups = _parse_groups(request.headers.get("X-Forwarded-Groups"))
         allowed_groups = {settings.admin_group_name.lower(), _FALLBACK_ADMIN_GROUP}
         if groups & allowed_groups:
@@ -84,8 +58,10 @@ def _admin_access(request: Request) -> tuple[bool, str, set[str]]:
         # forensics below.
         groups = set()
 
-    admin_emails = _parse_admin_emails(getattr(settings, "admin_emails", None))
-    return bool(actor and actor.lower() in admin_emails), actor, groups
+    admin_identities = _parse_admin_emails(getattr(settings, "admin_emails", None)) | (
+        _parse_admin_emails(getattr(settings, "admin_identities", None))
+    )
+    return bool(actor and actor.lower() in admin_identities), actor, groups
 
 
 def can_access_admin(request: Request) -> bool:
@@ -94,39 +70,31 @@ def can_access_admin(request: Request) -> bool:
     return allowed
 
 
+def _approver_access(request: Request) -> tuple[bool, str, set[str]]:
+    """Resolve the fail-closed approver decision shared by UI and enforcement."""
+
+    is_admin, actor, groups = _admin_access(request)
+    if is_admin:
+        return True, actor, groups
+    if settings.trust_forwarded_headers:
+        approver_group = settings.approver_group_name.strip().lower()
+        if approver_group and approver_group in groups:
+            return True, actor, groups
+    approver_identities = _parse_admin_emails(getattr(settings, "approver_emails", None)) | (
+        _parse_admin_emails(getattr(settings, "approver_identities", None))
+    )
+    return bool(actor and actor.lower() in approver_identities), actor, groups
+
+
+def can_access_approver(request: Request) -> bool:
+    """Return the same fail-closed decision enforced by ``require_approver``."""
+
+    allowed, _actor, _groups = _approver_access(request)
+    return allowed
+
+
 def require_admin(request: Request) -> str:
-    """FastAPI dependency: admit admins, reject everyone else.
-
-    Two recognition paths (either admits):
-
-    1. **Group membership** — comma-separated ``X-Forwarded-Groups``
-       includes ``settings.admin_group_name`` or the hard-coded
-       ``"admins"`` fallback. Databricks Apps may or may not forward a
-       workspace group header; path 2 is the belt-and-suspenders when
-       the edge doesn't inject groups.
-    2. **Email allowlist** — the caller's ``X-Forwarded-Email`` matches
-       one of the addresses in ``settings.admin_emails`` (comma-separated
-       env var). Lets a customer SE land admin access at first deploy
-       without pre-provisioning a workspace group. Empty allowlist by
-       default; must be explicitly opted into.
-
-    On success, returns the actor email (from ``resolve_actor``) so
-    routers can thread it into audit writes without re-reading the
-    ``Request`` headers. On failure, raises ``HTTPException(403,
-    detail="forbidden")`` — the exact body string is load-bearing for
-    the frontend's admin 403 banner copy.
-
-    R5-09 trust boundary: when ``settings.trust_forwarded_headers`` is
-    False, path 1 is disabled -- we DO NOT read ``X-Forwarded-Groups``
-    at all, because an untrusted edge means a caller could inject any
-    group string into the header. Path 2 (email allowlist) is still
-    honoured because the allowlist is a server-side secret (env var),
-    not a caller-supplied value; the email comparison is against the
-    forwarded email only when ``resolve_actor`` returns a real address,
-    which with trust disabled it does not -- so the overall posture
-    with trust disabled is fail-closed: nobody admitted via header,
-    only explicit server-side configuration paths work.
-    """
+    """Admit exact configured identities/emails; otherwise return the shared 403."""
     allowed, actor, groups = _admin_access(request)
     if allowed:
         return actor
@@ -153,38 +121,21 @@ AdminDep = Annotated[str, Depends(require_admin)]
 def require_approver(request: Request) -> str:
     """Fail-closed approver gate for human-decision endpoints.
 
-    Local development keeps the low-friction authenticated-user posture when
-    no roster is configured. Every deployed environment fails closed: an empty
-    approver roster falls back to the admin gate instead of admitting every
-    authenticated workspace user. Once ``MIP_APPROVER_EMAILS`` is non-empty:
-
-    * listed emails are admitted;
-    * admins (``require_admin``: group or admin-email path) are admitted
-      too, so the deploying operator can never lock themselves out of
-      the decision surface they administer (lesson from the 2026-06-11
-      empty-admin-allowlist incident);
-    * everyone else gets the same ``403 {"detail": "forbidden"}`` body
-      the admin surface uses (frontend banner copy is shared).
+    Admission is limited to exact configured identities/emails or the admin
+    rule. Group matching is a local/test-only compatibility path.
     """
-    approver_emails = _parse_admin_emails(getattr(settings, "approver_emails", None))
-    actor = resolve_actor(request)
-    if not approver_emails:
-        if settings.app_env.strip().lower() in {"local", "test"}:
-            return actor
-        return require_admin(request)
-    if actor and actor.lower() in approver_emails:
+    allowed, actor, groups = _approver_access(request)
+    if allowed:
         return actor
-    try:
-        return require_admin(request)
-    except HTTPException:
-        emit(
-            log,
-            "approver_access_denied",
-            outcome="denied",
-            actor_present=bool(actor),
-            allowlist_size=len(approver_emails),
-        )
-        raise HTTPException(status_code=403, detail="forbidden") from None
+    emit(
+        log,
+        "approver_access_denied",
+        outcome="denied",
+        actor_present=bool(actor),
+        groups_present=len(groups),
+        approver_group=settings.approver_group_name,
+    )
+    raise HTTPException(status_code=403, detail="forbidden")
 
 
 # ``ApproverDep`` evaluates to ``str`` (the admitted decision-maker email).

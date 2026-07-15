@@ -2,15 +2,19 @@
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import ModuleType
 from typing import Any
 
-from backend.schemas.common import validate_public_borrower_id
 from backend.schemas.lead import LeadSummary
-from backend.schemas.portfolio import PortfolioCriteria
+from backend.schemas.portfolio import (
+    CAMPAIGN_BUILD_LIMIT,
+    CAMPAIGN_TREATMENT_ALGORITHM_VERSION,
+    PortfolioCriteria,
+)
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.growth_agent_handoff import (
@@ -35,17 +39,24 @@ from backend.services.growth_agent_handoff import (
     verify_growth_agent_handoff as verify_growth_agent_handoff,
 )
 from backend.services.pii_redaction import redact_lead_row
+from backend.services.repositories.databricks_campaign_treatment_preflight import (
+    CampaignTreatmentBuildRejected,
+    campaign_treatment_preflight,
+    campaign_treatment_source_parts,
+)
+from backend.services.repositories.databricks_campaign_treatment_preflight import (
+    is_campaign_treatment_member as exact_campaign_treatment_member,
+)
+from backend.services.repositories.databricks_lead_cohort_support import (
+    LeadCohortQuerySupport,
+)
 from backend.services.repositories.databricks_portfolio import build_preview_predicates
 from backend.services.repositories.databricks_shared import (
     _LEAD_POPULATION_SELECT_FROM_B360,
     _LEAD_POPULATION_SELECT_FROM_LP,
 )
-from backend.services.scoring import HIGH_OPPORTUNITY_THRESHOLD
-from backend.services.segment_predicates import (
-    compose_segment_predicate,
-    normalise_segment_codes,
-)
-from backend.services.state_footprint import get_state_footprint_resolver
+
+MAX_CAMPAIGN_TREATMENT_MEMBERS = CAMPAIGN_BUILD_LIMIT
 
 
 @dataclass(frozen=True)
@@ -65,6 +76,8 @@ class LeadCohortFilters:
     target_lender_ref: str | None = None
     funnel_stage: str | None = None
     portfolio_criteria: PortfolioCriteria | None = None
+    min_rate_spread_bps: float | None = None
+    min_heloc_propensity_score: float | None = None
     approval_status: str | None = None
     outreach_status: str | None = None
     aged_days: int | None = None
@@ -74,7 +87,7 @@ class LeadCohortFilters:
         return bool(self.approval_status or self.outreach_status or self.aged_days is not None)
 
 
-class LeadCohortQueries:
+class LeadCohortQueries(LeadCohortQuerySupport):
     """Compose matched cohorts and bind their rows to one source snapshot."""
 
     _COUNT_BASE_SQL = (
@@ -147,6 +160,391 @@ CROSS JOIN snapshot_validation
             aggregate_select=self._identity_aggregate_select("{alias}"),
         )
         return self._parse_identity(row)
+
+    def campaign_treatment_preflight(
+        self,
+        filters: LeadCohortFilters,
+        *,
+        frequency_cap_days: int,
+        household_dedup_enabled: bool,
+    ) -> dict[str, Any]:
+        return campaign_treatment_preflight(
+            self,
+            filters,
+            frequency_cap_days=frequency_cap_days,
+            household_dedup_enabled=household_dedup_enabled,
+        )
+
+    def materialize_campaign_treatment(
+        self,
+        filters: LeadCohortFilters,
+        *,
+        campaign_id: str,
+        materialization_id: str,
+        request_payload_hash: str,
+        contract_fingerprint: str,
+        frequency_cap_days: int,
+        holdout_basis_points: int,
+        household_dedup_enabled: bool,
+    ) -> dict[str, Any]:
+        """Materialize one immutable T0 assignment set and return its manifest."""
+
+        if not 0 <= holdout_basis_points <= 5_000:
+            raise ValueError("campaign holdout must be between 0 and 5000 basis points")
+
+        matched_sql, params, snapshot_ctes, eligible_candidates_cte = (
+            campaign_treatment_source_parts(
+                self,
+                filters,
+                frequency_cap_days=frequency_cap_days,
+                household_dedup_enabled=household_dedup_enabled,
+            )
+        )
+        preflight = self.campaign_treatment_preflight(
+            filters,
+            frequency_cap_days=frequency_cap_days,
+            household_dedup_enabled=household_dedup_enabled,
+        )
+        params = {
+            **params,
+            "campaign_id": campaign_id,
+            "materialization_id": materialization_id,
+            "request_payload_hash": request_payload_hash,
+            "contract_fingerprint": contract_fingerprint,
+            "campaign_holdout_basis_points": holdout_basis_points,
+        }
+        table = qualify("audit", "campaign_treatment_snapshot")
+        selected_primary_count = int(preflight.get("selected_primary_count") or 0)
+        if selected_primary_count > MAX_CAMPAIGN_TREATMENT_MEMBERS:
+            raise CampaignTreatmentBuildRejected(
+                "Campaign treatment exceeds the 10,000-member synchronous build limit; "
+                "refine the reviewed cohort before creating the campaign."
+            )
+        preflight_source_snapshot_id = str(preflight["source_snapshot_id"])
+        params["campaign_member_limit"] = MAX_CAMPAIGN_TREATMENT_MEMBERS
+        params["preflight_source_snapshot_id"] = preflight_source_snapshot_id
+        statement = f"""
+WITH matched AS (
+  {matched_sql}
+),
+{snapshot_ctes},
+{eligible_candidates_cte},
+ranked AS (
+  SELECT
+    borrower_id,
+    household_id,
+    household_derivation_method,
+    snapshot_id,
+    source_refreshed_at,
+    ROW_NUMBER() OVER (
+      PARTITION BY household_id
+      ORDER BY opportunity_score DESC, borrower_id ASC
+    ) AS campaign_household_rank
+  FROM eligible_candidates
+),
+treatment_units AS (
+  SELECT
+    borrower_id,
+    household_id,
+    household_derivation_method,
+    snapshot_id,
+    source_refreshed_at,
+    CASE
+      WHEN {str(household_dedup_enabled).upper()} THEN household_id
+      ELSE borrower_id
+    END AS treatment_unit_id
+  FROM ranked
+  WHERE NOT {str(household_dedup_enabled).upper()}
+     OR campaign_household_rank = 1
+),
+assigned AS (
+  SELECT
+    *,
+    CASE
+      WHEN pmod(
+             xxhash64(CONCAT(:campaign_id, ':', treatment_unit_id)),
+             10000
+           ) < :campaign_holdout_basis_points
+      THEN 'holdout'
+      ELSE 'treatment'
+    END AS assignment
+  FROM treatment_units
+),
+assignment_stats AS (
+  SELECT
+    COUNT(*) AS selected_primary_count,
+    COALESCE(SUM(CASE WHEN assignment = 'treatment' THEN 1 ELSE 0 END), 0)
+      AS treatment_count,
+    COALESCE(SUM(CASE WHEN assignment = 'holdout' THEN 1 ELSE 0 END), 0)
+      AS holdout_count,
+    COALESCE(
+      sha2(CONCAT_WS('|', SORT_ARRAY(COLLECT_LIST(
+        sha2(CONCAT(borrower_id, ':', assignment), 256)
+      ))), 256),
+      sha2('', 256)
+    ) AS assignment_digest,
+    COUNT(DISTINCT household_id) AS household_count,
+    COUNT(DISTINCT CASE WHEN household_derivation_method = 'owner_link' THEN household_id END)
+      AS owner_link_household_count,
+    COUNT(DISTINCT CASE WHEN household_derivation_method = 'mailing_address' THEN household_id END)
+      AS mailing_address_household_count,
+    COUNT(DISTINCT CASE WHEN household_derivation_method = 'singleton' THEN household_id END)
+      AS singleton_household_count
+  FROM assigned
+),
+candidate_stats AS (
+  SELECT COUNT(*) AS candidate_count FROM eligible_candidates
+),
+build_guard AS (
+  SELECT assignment_stats.selected_primary_count
+  FROM assignment_stats
+  CROSS JOIN snapshot_validation
+  WHERE assignment_stats.selected_primary_count <= :campaign_member_limit
+    AND snapshot_validation.snapshot_id = :preflight_source_snapshot_id
+),
+manifest_values AS (
+  SELECT
+    :campaign_id AS campaign_id,
+    :materialization_id AS materialization_id,
+    snapshot_validation.snapshot_id,
+    snapshot_validation.source_refreshed_at,
+    candidate_stats.candidate_count,
+    assignment_stats.*,
+    sha2(
+      CONCAT(
+        '{CAMPAIGN_TREATMENT_ALGORITHM_VERSION}:', :campaign_id, ':', :contract_fingerprint, ':',
+        snapshot_validation.snapshot_id, ':', assignment_stats.assignment_digest, ':',
+        CAST(candidate_stats.candidate_count AS STRING), ':',
+        CAST(assignment_stats.selected_primary_count AS STRING), ':',
+        CAST(assignment_stats.treatment_count AS STRING), ':',
+        CAST(assignment_stats.holdout_count AS STRING)
+      ),
+      256
+    ) AS treatment_fingerprint
+  FROM snapshot_validation
+  CROSS JOIN candidate_stats
+  CROSS JOIN assignment_stats
+  CROSS JOIN build_guard
+  WHERE snapshot_validation.snapshot_id IS NOT NULL
+),
+source_rows AS (
+  SELECT
+    :campaign_id AS campaign_id,
+    :materialization_id AS materialization_id,
+    'member' AS row_kind,
+    assigned.borrower_id AS record_key,
+    assigned.borrower_id,
+    assigned.assignment,
+    sha2(CONCAT(:campaign_id, ':', assigned.treatment_unit_id), 256) AS treatment_unit_token,
+    '{CAMPAIGN_TREATMENT_ALGORITHM_VERSION}' AS treatment_algorithm_version,
+    :contract_fingerprint AS contract_fingerprint,
+    :request_payload_hash AS request_payload_hash,
+    assigned.snapshot_id AS source_snapshot_id,
+    assigned.source_refreshed_at,
+    CAST(NULL AS BIGINT) AS candidate_count,
+    CAST(NULL AS BIGINT) AS selected_primary_count,
+    CAST(NULL AS BIGINT) AS treatment_count,
+    CAST(NULL AS BIGINT) AS holdout_count,
+    CAST(NULL AS STRING) AS assignment_digest,
+    manifest_values.treatment_fingerprint,
+    CAST(NULL AS BIGINT) AS household_count,
+    CAST(NULL AS BIGINT) AS owner_link_household_count,
+    CAST(NULL AS BIGINT) AS mailing_address_household_count,
+    CAST(NULL AS BIGINT) AS singleton_household_count,
+    CURRENT_TIMESTAMP() AS materialized_at
+  FROM assigned
+  CROSS JOIN manifest_values
+  UNION ALL
+  SELECT
+    campaign_id,
+    materialization_id,
+    'manifest',
+    '__manifest__',
+    CAST(NULL AS STRING),
+    CAST(NULL AS STRING),
+    CAST(NULL AS STRING),
+    '{CAMPAIGN_TREATMENT_ALGORITHM_VERSION}',
+    :contract_fingerprint,
+    :request_payload_hash,
+    snapshot_id,
+    source_refreshed_at,
+    candidate_count,
+    selected_primary_count,
+    treatment_count,
+    holdout_count,
+    assignment_digest,
+    treatment_fingerprint,
+    household_count,
+    owner_link_household_count,
+    mailing_address_household_count,
+    singleton_household_count,
+    CURRENT_TIMESTAMP()
+  FROM manifest_values
+)
+MERGE INTO {table} AS target
+USING source_rows AS source
+ON target.campaign_id = source.campaign_id
+ AND target.materialization_id = source.materialization_id
+ AND target.row_kind = source.row_kind
+ AND target.record_key = source.record_key
+WHEN NOT MATCHED THEN INSERT *
+"""
+        self._client.execute(statement, params)
+        history = self._client.execute_one(f"DESCRIBE HISTORY {table} LIMIT 1") or {}
+        try:
+            delta_version = int(history["version"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError(
+                "campaign treatment materialization did not return a Delta version"
+            ) from exc
+        manifest_sql = f"""
+SELECT
+  COUNT(CASE WHEN row_kind = 'manifest' THEN 1 END) AS manifest_rows,
+  COUNT(CASE WHEN row_kind = 'member' THEN 1 END) AS member_rows,
+  COUNT(DISTINCT CASE WHEN row_kind = 'member' THEN record_key END) AS distinct_member_rows,
+  MAX(candidate_count) AS candidate_count,
+  MAX(selected_primary_count) AS selected_primary_count,
+  MAX(treatment_count) AS treatment_count,
+  MAX(holdout_count) AS holdout_count,
+  MAX(assignment_digest) AS assignment_digest,
+  MAX(treatment_fingerprint) AS treatment_fingerprint,
+  MAX(source_snapshot_id) AS source_snapshot_id,
+  MAX(source_refreshed_at) AS source_refreshed_at,
+  MAX(materialized_at) AS materialized_at,
+  MAX(household_count) AS household_count,
+  MAX(owner_link_household_count) AS owner_link_household_count,
+  MAX(mailing_address_household_count) AS mailing_address_household_count,
+  MAX(singleton_household_count) AS singleton_household_count
+FROM {table} VERSION AS OF {delta_version}
+WHERE campaign_id = :campaign_id
+  AND materialization_id = :materialization_id
+  AND contract_fingerprint = :contract_fingerprint
+  AND request_payload_hash = :request_payload_hash
+"""
+        manifest = self._client.execute_one(manifest_sql, params) or {}
+        return self._validated_campaign_treatment_manifest(
+            manifest,
+            delta_version=delta_version,
+        )
+
+    def load_campaign_treatment_manifest(
+        self,
+        *,
+        campaign_id: str,
+        materialization_id: str,
+        request_payload_hash: str,
+        contract_fingerprint: str,
+    ) -> dict[str, Any] | None:
+        """Recover a complete append-only manifest after an ambiguous response loss."""
+
+        table = qualify("audit", "campaign_treatment_snapshot")
+        history = self._client.execute_one(f"DESCRIBE HISTORY {table} LIMIT 1") or {}
+        try:
+            delta_version = int(history["version"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise ValueError("campaign treatment recovery returned no Delta version") from exc
+        params = {
+            "campaign_id": campaign_id,
+            "materialization_id": materialization_id,
+            "request_payload_hash": request_payload_hash,
+            "contract_fingerprint": contract_fingerprint,
+        }
+        manifest = (
+            self._client.execute_one(
+                f"""
+SELECT
+  COUNT(CASE WHEN row_kind = 'manifest' THEN 1 END) AS manifest_rows,
+  COUNT(CASE WHEN row_kind = 'member' THEN 1 END) AS member_rows,
+  COUNT(DISTINCT CASE WHEN row_kind = 'member' THEN record_key END) AS distinct_member_rows,
+  MAX(candidate_count) AS candidate_count,
+  MAX(selected_primary_count) AS selected_primary_count,
+  MAX(treatment_count) AS treatment_count,
+  MAX(holdout_count) AS holdout_count,
+  MAX(assignment_digest) AS assignment_digest,
+  MAX(treatment_fingerprint) AS treatment_fingerprint,
+  MAX(source_snapshot_id) AS source_snapshot_id,
+  MAX(source_refreshed_at) AS source_refreshed_at,
+  MAX(materialized_at) AS materialized_at,
+  MAX(household_count) AS household_count,
+  MAX(owner_link_household_count) AS owner_link_household_count,
+  MAX(mailing_address_household_count) AS mailing_address_household_count,
+  MAX(singleton_household_count) AS singleton_household_count
+FROM {table} VERSION AS OF {delta_version}
+WHERE campaign_id = :campaign_id
+  AND materialization_id = :materialization_id
+  AND contract_fingerprint = :contract_fingerprint
+  AND request_payload_hash = :request_payload_hash
+""",
+                params,
+            )
+            or {}
+        )
+        if int(manifest.get("manifest_rows") or 0) == 0:
+            return None
+        return self._validated_campaign_treatment_manifest(
+            manifest,
+            delta_version=delta_version,
+        )
+
+    @staticmethod
+    def _validated_campaign_treatment_manifest(
+        manifest: dict[str, Any],
+        *,
+        delta_version: int,
+    ) -> dict[str, Any]:
+        if int(manifest.get("manifest_rows") or 0) != 1:
+            raise ValueError("campaign treatment materialization must contain exactly one manifest")
+        member_rows = int(manifest.get("member_rows") or 0)
+        if member_rows != int(manifest.get("distinct_member_rows") or 0):
+            raise ValueError("campaign treatment materialization contains duplicate members")
+        candidate_count = int(manifest.get("candidate_count") or 0)
+        expected_members = int(manifest.get("selected_primary_count") or 0)
+        if (
+            candidate_count < 0
+            or expected_members < 0
+            or expected_members > candidate_count
+            or expected_members > MAX_CAMPAIGN_TREATMENT_MEMBERS
+        ):
+            raise ValueError("campaign treatment manifest counts are invalid")
+        if member_rows != expected_members:
+            raise ValueError("campaign treatment manifest count does not match its members")
+        treatment_count = int(manifest.get("treatment_count") or 0)
+        holdout_count = int(manifest.get("holdout_count") or 0)
+        if (
+            treatment_count < 0
+            or holdout_count < 0
+            or expected_members != treatment_count + holdout_count
+        ):
+            raise ValueError("campaign treatment manifest assignments do not match its members")
+        for field_name in (
+            "assignment_digest",
+            "treatment_fingerprint",
+            "source_snapshot_id",
+        ):
+            if re.fullmatch(r"[0-9a-f]{64}", str(manifest.get(field_name) or "")) is None:
+                raise ValueError(f"campaign treatment manifest {field_name} is invalid")
+        manifest["delta_version"] = delta_version
+        return manifest
+
+    def is_campaign_treatment_member(
+        self,
+        *,
+        borrower_id: str,
+        campaign_id: str,
+        materialization_id: str,
+        delta_version: int,
+        treatment_fingerprint: str,
+        frequency_cap_days: int,
+    ) -> bool:
+        return exact_campaign_treatment_member(
+            self,
+            borrower_id=borrower_id,
+            campaign_id=campaign_id,
+            materialization_id=materialization_id,
+            delta_version=delta_version,
+            treatment_fingerprint=treatment_fingerprint,
+            frequency_cap_days=frequency_cap_days,
+        )
 
     def list_with_identity(
         self,
@@ -247,6 +645,19 @@ LEFT JOIN ranked ON TRUE
         portfolio_clause = (
             "AND " + portfolio_where.removeprefix("WHERE ").strip() if portfolio_where else ""
         )
+        replay_clauses: list[str] = []
+        replay_params: dict[str, object] = {}
+        if filters.min_rate_spread_bps is not None:
+            replay_clauses.append("b.rate_spread_bps >= :campaign_min_rate_spread_bps")
+            replay_params["campaign_min_rate_spread_bps"] = filters.min_rate_spread_bps
+        if filters.min_heloc_propensity_score is not None:
+            replay_clauses.append(
+                "b.heloc_propensity_score >= :campaign_min_heloc_propensity_score"
+            )
+            replay_params["campaign_min_heloc_propensity_score"] = (
+                filters.min_heloc_propensity_score
+            )
+        replay_clause = " ".join(f"AND {clause}" for clause in replay_clauses)
         if "target_lender_ref" in portfolio_params:
             lender_clause = ""
             lender_params = {}
@@ -270,10 +681,12 @@ LEFT JOIN ranked ON TRUE
             or filters.funnel_stage
             or lender_clause
             or portfolio_clause
+            or replay_clause
         ):
             params: dict[str, object] = dict(segment_params)
             params.update(lender_params)
             params.update(portfolio_params)
+            params.update(replay_params)
             params.update(lifecycle_params_geo)
             sql = self._COUNT_BY_GEO_SQL_TEMPLATE.format(
                 aggregate_select=geo_projection,
@@ -304,7 +717,7 @@ LEFT JOIN ranked ON TRUE
                 segment_clause=f"AND {segment_clause}" if segment_clause else "",
                 funnel_stage_clause=funnel_stage_clause,
                 lender_clause=lender_clause,
-                portfolio_clause=portfolio_clause,
+                portfolio_clause=f"{portfolio_clause} {replay_clause}".strip(),
                 lifecycle_clause=lifecycle_clause_geo,
                 freshness_clause=freshness_clause,
             )
@@ -334,294 +747,6 @@ LEFT JOIN ranked ON TRUE
             lifecycle_params,
             True,
         )
-
-    @staticmethod
-    def state_sets() -> dict[str, list[str]]:
-        """Build the active geography-label mapping used by portfolio criteria."""
-
-        resolver = get_state_footprint_resolver()
-        footprint_codes = resolver.state_codes()
-        state_name_map = resolver.state_name_to_codes()
-        all_key = f"all {len(footprint_codes)} states"
-        return {
-            **state_name_map,
-            all_key: list(footprint_codes),
-        }
-
-    @staticmethod
-    def normalise_states(
-        state: str | None,
-        state_codes: list[str] | None,
-    ) -> list[str]:
-        raw = ([state] if state else []) + (state_codes or [])
-        out: list[str] = []
-        for value in raw:
-            code = str(value or "").upper()[:2]
-            if len(code) == 2 and code.isalpha() and code not in out:
-                out.append(code)
-        return out
-
-    @staticmethod
-    def normalise_zips(
-        zip_code: str | None,
-        zip_codes: list[str] | None,
-    ) -> list[str]:
-        raw = ([zip_code] if zip_code else []) + (zip_codes or [])
-        out: list[str] = []
-        for value in raw:
-            code = str(value or "").strip()[:5]
-            if len(code) == 5 and code.isdigit() and code not in out:
-                out.append(code)
-        return out
-
-    @staticmethod
-    def normalise_county_fips(
-        county_fips: str | None,
-        county_fipses: list[str] | None = None,
-    ) -> list[str]:
-        raw = ([county_fips] if county_fips else []) + (county_fipses or [])
-        out: list[str] = []
-        for value in raw:
-            code = str(value or "").strip()[:5]
-            if len(code) == 5 and code.isdigit() and code not in out:
-                out.append(code)
-        return out
-
-    @staticmethod
-    def normalise_borrower_ids(borrower_ids: list[str] | None) -> list[str]:
-        out: list[str] = []
-        for value in borrower_ids or []:
-            try:
-                borrower_id = validate_public_borrower_id(str(value or ""))
-            except ValueError:
-                continue
-            if borrower_id not in out:
-                out.append(borrower_id)
-        return out
-
-    @staticmethod
-    def lifecycle_filter_clause(
-        *,
-        source_alias: str,
-        approval_status: str | None,
-        outreach_status: str | None,
-        aged_days: int | None,
-    ) -> tuple[str, dict[str, object]]:
-        clauses: list[str] = []
-        params: dict[str, object] = {}
-        if approval_status:
-            clauses.append(
-                f"COALESCE(ls.approval_status, {source_alias}.approval_status, 'pending') = :approval_status"
-            )
-            params["approval_status"] = approval_status
-        if outreach_status:
-            clauses.append("COALESCE(ls.outreach_status, 'none') = :outreach_status")
-            params["outreach_status"] = outreach_status
-        if aged_days is not None:
-            bounded_days = max(1, min(int(aged_days), 90))
-            clauses.append(
-                f"COALESCE(ls.approval_status, {source_alias}.approval_status, 'pending') = 'approved'"
-            )
-            clauses.append(
-                "ls.approved_at <= current_timestamp() - INTERVAL " f"{bounded_days} DAYS"
-            )
-            clauses.append("ls.outreach_at IS NULL")
-        if not clauses:
-            return "", {}
-        return "AND " + " AND ".join(clauses), params
-
-    @staticmethod
-    def funnel_stage_filter_clause(funnel_stage: str | None) -> str:
-        """Return the exact gold-funnel predicate used by analytics drilldowns."""
-
-        stage = str(funnel_stage or "").strip().lower()
-        if not stage or stage == "addressable":
-            return ""
-        if stage == "in_the_money":
-            return "AND b.in_the_money = TRUE"
-        if stage == "high_opportunity":
-            return f"AND b.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}"
-        if stage == "offer_recommended":
-            return (
-                "AND b.recommended_offer_code IS NOT NULL "
-                "AND b.recommended_offer_code <> 'nurture'"
-            )
-        if stage == "approved":
-            return "AND COALESCE(ls.approval_status, 'pending') = 'approved'"
-        if stage == "actioned":
-            return "AND COALESCE(ls.outreach_status, 'none') = 'actioned'"
-        raise ValueError(f"unsupported funnel_stage: {funnel_stage}")
-
-    @staticmethod
-    def in_clause(
-        *,
-        column: str,
-        prefix: str,
-        values: list[str],
-        params: dict[str, object],
-    ) -> str:
-        if not values:
-            return ""
-        placeholders: list[str] = []
-        for i, value in enumerate(values):
-            key = f"{prefix}_{i}"
-            params[key] = value
-            placeholders.append(f":{key}")
-        if len(placeholders) == 1:
-            return f"AND {column} = {placeholders[0]}"
-        return f"AND {column} IN ({', '.join(placeholders)})"
-
-    @staticmethod
-    def segment_filter_clause(
-        *,
-        segment: str | None,
-        segment_codes: list[str] | None,
-        segment_mode: str,
-    ) -> tuple[str, dict[str, object]]:
-        # S8: delegate to the canonical composer so the Lead Queue ranks the
-        # exact cohort the Segment Intelligence cards previewed.
-        return compose_segment_predicate(
-            LeadCohortQueries.normalise_segment_codes(segment, segment_codes),
-            mode=segment_mode,
-        )
-
-    @staticmethod
-    def normalise_segment_codes(
-        segment: str | None,
-        segment_codes: list[str] | None,
-    ) -> list[str]:
-        raw = segment_codes if segment_codes else ([segment] if segment else [])
-        return normalise_segment_codes(raw)
-
-    def freshness_clause(self) -> str:
-        """Bound warehouse result-cache reuse for interactive drilldowns.
-
-        Drilldowns read ``gold.borrower_360`` joined to the lifecycle mirror,
-        which can change during deploy-time syncs while query text stays
-        otherwise identical. An app-generated no-op literal predicate prevents
-        Databricks SQL from serving a stale exact-query result; the app's
-        short ``TTLCache`` remains the bounded reuse layer.
-
-        2026-06-11 audit P1-6 refinement (staleness wording corrected per
-        re-audit): the marker is bucketed to the repository cache TTL
-        instead of nanosecond-unique, so sibling app processes/workers
-        (each with their own in-process TTLCache) can reuse the warehouse
-        result cache instead of re-scanning borrower_360 (5.16M rows,
-        3.6-6.6s measured live). Staleness bound: the LAYERS COMPOUND — a
-        warehouse result computed at the start of a marker window can be
-        stored into the app cache at the end of it, so worst-case data age
-        is ~2x ``cache_ttl_s`` (~10 min at the 300s default), not 1x. That
-        remains far below the gold-refresh cadence, which is the actual
-        data-change rate. With app caching disabled (ttl <= 0) the marker
-        stays nanosecond-unique, preserving the original always-fresh
-        behaviour.
-        """
-
-        if self._cache_ttl_s <= 0:
-            marker: int = self._clock.time_ns()
-        else:
-            marker = int(self._clock.time() // self._cache_ttl_s)
-        return f"AND {marker} = {marker}"
-
-    @staticmethod
-    def _identity_aggregate_select(alias: str) -> str:
-        return (
-            f"COUNT(DISTINCT {alias}.borrower_id) AS n, "
-            "sha2(concat_ws('|', sort_array(collect_set(CAST("
-            f"{alias}.borrower_id AS STRING)))), 256) AS cohort_digest, "
-            f"{LeadCohortQueries._legacy_snapshot_select()}"
-        )
-
-    @staticmethod
-    def _legacy_snapshot_select() -> str:
-        return (
-            "(SELECT CAST(MAX(snapshot_src.refreshed_at) AS STRING) "
-            f"FROM {qualify('gold', 'borrower_360')} snapshot_src) AS snapshot_id"
-        )
-
-    @staticmethod
-    def _snapshot_ctes(*, uses_lead_population: bool, needs_lifecycle_snapshot: bool) -> str:
-        version_columns = [
-            f"(SELECT MAX(refreshed_at) FROM {qualify('gold', 'borrower_360')}) "
-            "AS borrower_360_at"
-        ]
-        if uses_lead_population:
-            version_columns.append(
-                f"(SELECT MAX(refreshed_at) FROM {qualify('gold', 'lead_population')}) "
-                "AS lead_population_at"
-            )
-        if needs_lifecycle_snapshot:
-            version_columns.append(
-                f"(SELECT MAX(refreshed_at) FROM {qualify('gold', 'borrower_lifecycle_state')}) "
-                "AS lifecycle_at"
-            )
-        rendered_version_columns = ",\n    ".join(version_columns)
-        lead_check = (
-            "AND versions.lead_population_at = anchor.refresh_at" if uses_lead_population else ""
-        )
-        lifecycle_check = (
-            "AND versions.lifecycle_at IS NOT NULL" if needs_lifecycle_snapshot else ""
-        )
-        lifecycle_token = (
-            ", '|lifecycle:', CAST(versions.lifecycle_at AS STRING)"
-            if needs_lifecycle_snapshot
-            else ""
-        )
-        return f"""
-refresh_anchor AS (
-  SELECT run_id, refresh_at, captured_at, source
-  FROM {qualify('ref', 'refresh_run_state')}
-  ORDER BY captured_at DESC
-  LIMIT 1
-),
-source_versions AS (
-  SELECT
-    {rendered_version_columns}
-),
-snapshot_validation AS (
-  SELECT CASE
-    WHEN anchor.refresh_at IS NOT NULL
-      AND anchor.captured_at IS NOT NULL
-      AND anchor.source IN ('mip_refresh_scores', 'ad_hoc', 'backfill')
-      AND versions.borrower_360_at = anchor.refresh_at
-      {lead_check}
-      {lifecycle_check}
-    THEN sha2(
-      concat(
-        'gold-refresh:',
-        COALESCE(
-          NULLIF(TRIM(CAST(anchor.run_id AS STRING)), ''),
-          concat(anchor.source, ':', CAST(anchor.captured_at AS STRING))
-        ),
-        '|',
-        CAST(anchor.refresh_at AS STRING){lifecycle_token}
-      ),
-      256
-    )
-    ELSE NULL
-  END AS snapshot_id
-  FROM refresh_anchor anchor
-  CROSS JOIN source_versions versions
-)"""
-
-    @staticmethod
-    def _parse_identity(
-        row: dict[str, Any],
-        *,
-        total_key: str = "n",
-        digest_key: str = "cohort_digest",
-        snapshot_key: str = "snapshot_id",
-    ) -> dict[str, str | int]:
-        digest = str(row.get(digest_key) or "").strip().lower()
-        snapshot_id = str(row.get(snapshot_key) or "").strip()
-        if len(digest) != 64 or not snapshot_id:
-            raise ValueError("Lead Queue cohort identity proof is incomplete")
-        return {
-            "total": int(row.get(total_key) or 0),
-            "cohort_digest": digest,
-            "snapshot_id": snapshot_id,
-        }
-
 
 def normalise_growth_agent_handoff_filters(
     criteria: Mapping[str, object],

@@ -4,6 +4,7 @@ Skipped unless explicitly enabled against a dev/sandbox deployment. This test
 proves the real Lakebase transaction, idempotent replay, Admin audit filters,
 and circuit-breaker behavior that in-memory repositories cannot establish.
 """
+
 from __future__ import annotations
 
 import json
@@ -86,13 +87,45 @@ def _assert_lakebase_breaker_closed() -> None:
     assert breakers.get("lakebase") == "closed"
 
 
+def _tiny_reviewed_campaign_criteria() -> dict[str, object]:
+    for state in ("IL", "CA", "FL", "WA"):
+        criteria: dict[str, object] = {
+            "states": [state],
+            "min_equity_pct": 99.9,
+            "occupancy": "Owner-occupied",
+            "recency": "Untouched 30d",
+        }
+        preview_status, preview = _request(
+            "POST",
+            "/api/portfolio/preview",
+            {"criteria": criteria, "campaign_build_config": {}},
+        )
+        if (
+            preview_status != 200
+            or not isinstance(preview, dict)
+            or preview.get("campaign_build_eligible") is not True
+            or not isinstance(preview.get("campaign_build_contact_count"), int)
+            or int(preview["campaign_build_contact_count"]) <= 0
+        ):
+            continue
+        status, leads = _request(
+            "GET",
+            f"/api/leads?states={state}&min_equity_pct=99.9&occupancy=Owner-occupied"
+            "&recency=Untouched%2030d&limit=1",
+        )
+        if status == 200 and isinstance(leads, list) and leads:
+            return criteria
+    pytest.fail("No lead exists for the bounded live campaign audit fixture")
+
+
 def test_live_campaign_replay_and_admin_audit_filters_agree() -> None:
     _assert_dev_mutation_target()
     idempotency_key = f"live-campaign-{uuid4()}"
+    criteria = _tiny_reviewed_campaign_criteria()
     status, recommendation = _request(
         "POST",
         "/api/portfolio/campaign-recommendation",
-        {"criteria": {}},
+        {"criteria": criteria},
     )
     assert status == 200
     assert isinstance(recommendation, dict)
@@ -102,7 +135,7 @@ def test_live_campaign_replay_and_admin_audit_filters_agree() -> None:
     generator_label = recommendation.get("generator_label")
     payload: dict[str, object] = {
         "name": "Live campaign audit contract",
-        "criteria": {},
+        "criteria": criteria,
         "suppression_policy": {"marketing_eligibility": "Eligible only"},
         "message_variants": [
             {
