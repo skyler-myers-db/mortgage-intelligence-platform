@@ -96,6 +96,27 @@ def test_workspace_drafts_are_persisted_and_pii_scrubbed() -> None:
     assert client.get("/api/workspace", headers=_headers(actor)).json()["saved_drafts"] == []
 
 
+def test_workspace_draft_rejects_human_name_without_echo_or_persistence() -> None:
+    borrower_id = "B-48291"
+    actor = f"lo-{uuid4().hex[:8]}@example.com"
+    unsafe_body = "Hello Jane Smith, review your refinance options."
+
+    response = client.put(
+        f"/api/workspace/drafts/{borrower_id}",
+        json={
+            "borrower_id": borrower_id,
+            "offer_code": "refi",
+            "channel": "email",
+            "body": unsafe_body,
+        },
+        headers=_headers(actor),
+    )
+
+    assert response.status_code == 422
+    assert "Jane Smith" not in response.text
+    assert client.get("/api/workspace", headers=_headers(actor)).json()["saved_drafts"] == []
+
+
 def test_workspace_path_body_mismatch_is_rejected() -> None:
     res = client.put(
         "/api/workspace/leads/B-ONE",

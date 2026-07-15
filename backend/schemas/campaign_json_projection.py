@@ -20,6 +20,7 @@ from backend.schemas.campaign_json_inputs import (
     normalize_suppression_policy,
     require_exact_json_keys,
 )
+from backend.schemas.common import validate_public_campaign_label
 from backend.schemas.portfolio_campaign import (
     assert_public_campaign_text,
 )
@@ -85,6 +86,7 @@ _GENIE_SEGMENT_CODES = frozenset({"itm", "listed", "permit", "investor", "equity
 _GENIE_VISUALIZATION_KINDS = frozenset({"bar", "line", "metric", "pie", "scatter", "table"})
 _GENIE_OPAQUE_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,255}")
 _PUBLIC_CAMPAIGN_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9 &(),./:+\-\u2014]{0,79}")
+_PUBLIC_SSN_SEPARATOR_PATTERN = re.compile(r"\b\d{3}[-.\s]\d{2}[-.\s]\d{4}\b")
 _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
     {
         "a",
@@ -106,11 +108,13 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "daily",
         "deployment",
         "distinct",
+        "draft",
         "equity",
         "former",
         "fall",
         "forged",
         "generated",
+        "genie",
         "governed",
         "growth",
         "heloc",
@@ -166,6 +170,7 @@ _PUBLIC_CAMPAIGN_NAME_WORDS = frozenset(
         "saved",
         "segment",
         "supervisor",
+        "strategy",
         "spring",
         "summer",
         "summit",
@@ -195,8 +200,10 @@ _PUBLIC_CAMPAIGN_REQUIRED_WORDS = frozenset(
         "cohort",
         "compatibility",
         "contract",
+        "draft",
         "equity",
         "growth",
+        "genie",
         "heloc",
         "household",
         "idempotency",
@@ -244,15 +251,17 @@ _PUBLIC_CAMPAIGN_MONTH_WORDS = frozenset(
 
 
 def project_public_campaign_name(value: object) -> str:
-    """Return an exact public campaign label or reject unreviewed free text.
+    """Return an exact public campaign label or reject unsafe free text.
 
-    Human names and campaign labels share the same free-text shape. A denylist
-    cannot distinguish uncommon lower-case names from harmless prose, so this
-    boundary only admits reviewed campaign, geography, date, and tenant-label
-    vocabulary.
+    Campaign names may contain operator-authored descriptors, but they must
+    include reviewed campaign context. Human-name checks run only against the
+    remaining free-text words so labels such as ``Other owner campaign`` do
+    not become false positives while ``John Smith campaign`` still fails.
     """
 
     name = re.sub(r"\s+", " ", str(value or "").strip())
+    if _PUBLIC_SSN_SEPARATOR_PATTERN.search(name):
+        raise ValueError("campaign name must not contain PII-shaped text")
     # The reviewed vocabulary below, not title casing, decides whether a name
     # is public-safe. Run the shared policy scan case-insensitively so ordinary
     # title-case campaign phrases such as "Distinct Illinois" are not mistaken
@@ -266,17 +275,27 @@ def project_public_campaign_name(value: object) -> str:
         phrase = trusted_phrase.strip()
         if phrase:
             name_scan = re.sub(re.escape(phrase), " ", name_scan, flags=re.IGNORECASE)
-    allowed_words = (
+    reviewed_words = (
         _PUBLIC_CAMPAIGN_NAME_WORDS
         | _PUBLIC_CAMPAIGN_GEOGRAPHY_WORDS
         | _PUBLIC_CAMPAIGN_MONTH_WORDS
         | {state.casefold() for state in USPS_STATE_CODES}
     )
+    policy_name = name_scan.replace("\u2014", "-")
+    for word in reviewed_words:
+        policy_name = re.sub(
+            rf"\b{re.escape(word)}\b",
+            " ",
+            policy_name,
+            flags=re.IGNORECASE,
+        )
+    policy_name = re.sub(r"[\s\-]+", " ", policy_name).strip(" ,./:+()")
+    if policy_name:
+        validate_public_campaign_label(policy_name, field_name="campaign name")
     words = re.findall(r"[A-Za-z]+", name_scan)
     normalized_words = {word.casefold() for word in words}
     if (
         not words
-        or any(word.casefold() not in allowed_words for word in words)
         or normalized_words.isdisjoint(_PUBLIC_CAMPAIGN_REQUIRED_WORDS)
     ):
         raise ValueError("campaign name must use the public-safe campaign taxonomy")

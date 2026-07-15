@@ -226,6 +226,29 @@ def validate_public_free_comment(
     return text
 
 
+def validate_no_human_name_shape(value: str, *, field_name: str) -> str:
+    """Reject human-name-shaped text while preserving later redaction inputs.
+
+    Saved workspace drafts retain the existing defense-in-depth redaction of
+    phone, email, SSN, and address text. Names cannot be reliably redacted, so
+    they are rejected before the draft reaches that persistence layer.
+    """
+
+    text = str(value).strip()
+    name_scan = text
+    for pattern in (_EMAIL_PATTERN, _SSN_PATTERN, _PHONE_PATTERN, _STREET_ADDRESS_PATTERN):
+        name_scan = pattern.sub(" [redacted] ", name_scan)
+    name_scan = _UNRESOLVED_PLACEHOLDER_PATTERN.sub(" [redacted] ", name_scan)
+    for phrase in (*_PUBLIC_CAMPAIGN_LABEL_PHRASE_ALLOWLIST, configured_public_lender_name()):
+        name_scan = name_scan.replace(phrase, "")
+    if _HUMAN_NAME_SHAPE_PATTERN.search(name_scan) or contains_human_name_shape(
+        name_scan,
+        include_titlecase=False,
+    ):
+        raise ValueError(f"{field_name} must not contain human-name-shaped text")
+    return text
+
+
 def validate_public_audit_text(value: str, *, field_name: str = "value") -> str:
     """Validate short top-level audit identifiers such as entity labels.
 

@@ -923,7 +923,7 @@ def test_existing_verifier_lakebase_role_rejects_non_service_principal_identity_
 
 
 @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
-def test_cli_rejects_noncanonical_github_repo_before_provisioning(
+def test_cli_rejects_github_repo_that_differs_from_reviewed_secret_sink(
     dry_run: bool,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -933,7 +933,7 @@ def test_cli_rejects_noncanonical_github_repo_before_provisioning(
 
     with (
         patch.object(pmo, "_load_app_name_from_bundle") as load_app,
-        patch.object(pmo, "_infer_gh_repo") as infer_repo,
+        patch.object(pmo, "_infer_gh_repo", return_value=_CANONICAL_GH_REPO) as infer_repo,
         patch.object(pmo, "_gh_available") as gh_available,
         patch.object(pmo, "provision") as mock_provision,
         pytest.raises(SystemExit) as exc,
@@ -941,34 +941,52 @@ def test_cli_rejects_noncanonical_github_repo_before_provisioning(
         pmo.main(argv)
 
     assert exc.value.code == 2
-    assert _CANONICAL_GH_REPO in capsys.readouterr().err
-    load_app.assert_not_called()
-    infer_repo.assert_not_called()
+    assert "reviewed credential sink" in capsys.readouterr().err
+    load_app.assert_called_once()
+    infer_repo.assert_called_once()
     gh_available.assert_not_called()
     mock_provision.assert_not_called()
 
 
-def test_cli_rejects_noncanonical_inferred_origin_before_provisioning() -> None:
+def test_cli_accepts_customer_fork_as_its_reviewed_origin() -> None:
     with (
         patch.object(pmo, "_load_app_name_from_bundle", return_value="mip-app"),
-        patch.object(pmo, "_infer_gh_repo", return_value="attacker/unreviewed-repo"),
-        patch.object(pmo, "_gh_available") as gh_available,
+        patch.object(pmo, "_infer_gh_repo", return_value="acme-bank/mip"),
         patch.object(pmo, "provision") as mock_provision,
-        pytest.raises(SystemExit) as exc,
     ):
-        pmo.main(["--dry-run"])
+        assert pmo.main(["--dry-run"]) == 0
 
-    assert exc.value.code == 2
-    gh_available.assert_not_called()
     mock_provision.assert_not_called()
 
 
-def test_direct_provision_rejects_noncanonical_github_repo_before_client_or_mint() -> None:
+def test_cli_allows_customer_repo_for_grant_only_reconciliation() -> None:
+    with (
+        patch.object(pmo, "_load_app_name_from_bundle", return_value="mip-app"),
+        patch.object(pmo, "_infer_gh_repo", return_value=_CANONICAL_GH_REPO),
+        patch.object(pmo, "provision") as mock_provision,
+    ):
+        assert (
+            pmo.main(
+                [
+                    "--gh-repo",
+                    "acme-bank/mip",
+                    "--no-mint-secret",
+                    "--dry-run",
+                ]
+            )
+            == 0
+        )
+
+    mock_provision.assert_not_called()
+
+
+def test_direct_provision_rejects_unreviewed_secret_sink_before_client_or_mint() -> None:
     client_factory = MagicMock()
     with (
+        patch.object(pmo, "_infer_gh_repo", return_value=_CANONICAL_GH_REPO),
         patch.object(pmo, "_gh_available") as gh_available,
         patch.object(pmo, "_set_gh_secret") as set_secret,
-        pytest.raises(SystemExit, match="canonical repository"),
+        pytest.raises(SystemExit, match="reviewed credential sink"),
     ):
         pmo.provision(
             sp_name="mip-nightly-ci-sp",

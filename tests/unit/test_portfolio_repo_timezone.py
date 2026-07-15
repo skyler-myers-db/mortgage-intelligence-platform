@@ -593,6 +593,7 @@ def test_campaign_summary_round_trips_all_reviewed_genie_proof_fields() -> None:
             "name": "Reviewed campaign",
             "owner_email": "skyler@entrada.ai",
             "status": "draft",
+            "json_contract_version": 1,
             "criteria": json.dumps(criteria),
             "suppression_policy": {},
             "normalized_message_variants": [],
@@ -604,6 +605,8 @@ def test_campaign_summary_round_trips_all_reviewed_genie_proof_fields() -> None:
     )
 
     assert summary.criteria == criteria
+    assert summary.actionable is True
+    assert summary.actionability_issue is None
 
 
 def test_campaign_summary_replaces_unsafe_legacy_titlecase_name_without_echo(
@@ -617,6 +620,7 @@ def test_campaign_summary_replaces_unsafe_legacy_titlecase_name_without_echo(
             "name": unsafe_name,
             "owner_email": "skyler@entrada.ai",
             "status": "draft",
+            "json_contract_version": 1,
             "criteria": {},
             "suppression_policy": {},
             "normalized_message_variants": [],
@@ -627,7 +631,9 @@ def test_campaign_summary_replaces_unsafe_legacy_titlecase_name_without_echo(
         }
     )
 
-    assert summary.name == "Campaign"
+    assert summary.name == "Campaign unavailable"
+    assert summary.actionable is False
+    assert summary.actionability_issue == "invalid_name"
     assert unsafe_name not in caplog.text
     warning = next(
         record
@@ -636,6 +642,29 @@ def test_campaign_summary_replaces_unsafe_legacy_titlecase_name_without_echo(
     )
     assert warning.mip_outcome == "replaced"
     assert warning.mip_extras == {"reason": "invalid_public_name"}
+
+
+def test_campaign_summary_quarantines_rejected_legacy_criteria_instead_of_broadening() -> None:
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Legacy campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "json_contract_version": 0,
+            "criteria": {"borrower_name": "must never become an empty cohort"},
+            "suppression_policy": {},
+            "normalized_message_variants": [],
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+    )
+
+    assert summary.criteria == {}
+    assert summary.actionable is False
+    assert summary.actionability_issue == "legacy_contract"
 
 
 def test_campaign_summary_relational_variants_are_authoritative_and_verified_from_proof() -> None:

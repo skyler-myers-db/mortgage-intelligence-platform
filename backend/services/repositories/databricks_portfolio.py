@@ -483,7 +483,8 @@ class DatabricksPortfolioRepository:
     # Saved Campaigns panel show only real builds after dev detritus
     # (load-test + Genie-draft rows) is archived.
     _CAMPAIGN_LIST_SQL = f"""
-    SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.criteria,
+    SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.json_contract_version,
+           c.criteria,
            c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
            c.channel_cascade, c.send_window, c.holdout, c.roi_assumptions,
@@ -501,7 +502,8 @@ class DatabricksPortfolioRepository:
     """
 
     _CAMPAIGN_GET_SQL = f"""
-    SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.criteria,
+    SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.json_contract_version,
+           c.criteria,
            c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
            c.channel_cascade, c.send_window, c.holdout, c.roi_assumptions,
@@ -517,7 +519,7 @@ class DatabricksPortfolioRepository:
       SET status = %(status)s, updated_at = %(transition_at)s::timestamptz
       WHERE campaign_id = %(campaign_id)s::uuid
         AND status = %(current_status)s
-      RETURNING campaign_id::text, name, owner_email, status, criteria,
+      RETURNING campaign_id::text, name, owner_email, status, json_contract_version, criteria,
                 suppression_policy, message_variants AS legacy_message_variants,
                 channel_cascade, send_window,
                 holdout, roi_assumptions, household_dedup, household_summary, created_at, updated_at
@@ -548,7 +550,7 @@ class DatabricksPortfolioRepository:
     """
 
     _CAMPAIGN_STATUS_IDEMPOTENCY_LOOKUP_SQL = f"""
-    SELECT c.campaign_id::text, c.name, c.owner_email,
+    SELECT c.campaign_id::text, c.name, c.owner_email, c.json_contract_version,
            COALESCE(NULLIF(a.metadata->>'status', ''), c.status) AS status,
            c.criteria,
            c.suppression_policy, c.message_variants AS legacy_message_variants,
@@ -1738,9 +1740,22 @@ def _project_campaign_json_or_default(
     field_name: CampaignPublicJsonField,
     fallback: dict[str, object] | list[dict[str, object]] | None,
 ) -> dict[str, object] | list[dict[str, object]] | None:
+    return _project_campaign_json_with_status(
+        raw_value,
+        field_name=field_name,
+        fallback=fallback,
+    )[0]
+
+
+def _project_campaign_json_with_status(
+    raw_value: Any,
+    *,
+    field_name: CampaignPublicJsonField,
+    fallback: dict[str, object] | list[dict[str, object]] | None,
+) -> tuple[dict[str, object] | list[dict[str, object]] | None, bool]:
     try:
         value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
-        return project_public_campaign_json_field(field_name, value)
+        return project_public_campaign_json_field(field_name, value), True
     except (TypeError, ValueError):
         emit(
             log,
@@ -1750,12 +1765,16 @@ def _project_campaign_json_or_default(
             field=field_name,
             reason="invalid_public_payload",
         )
-        return fallback
+        return fallback, False
 
 
 def _project_campaign_name_or_default(raw_value: Any) -> str:
+    return _project_campaign_name_with_status(raw_value)[0]
+
+
+def _project_campaign_name_with_status(raw_value: Any) -> tuple[str, bool]:
     try:
-        return project_public_campaign_name(raw_value)
+        return project_public_campaign_name(raw_value), True
     except (TypeError, ValueError):
         emit(
             log,
@@ -1764,25 +1783,27 @@ def _project_campaign_name_or_default(raw_value: Any) -> str:
             outcome="replaced",
             reason="invalid_public_name",
         )
-        return "Campaign"
+        return "Campaign unavailable", False
 
 
 def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
+    criteria_projected, criteria_valid = _project_campaign_json_with_status(
+        row.get("criteria"),
+        field_name="criteria",
+        fallback={},
+    )
     criteria_value = cast(
         dict[str, object],
-        _project_campaign_json_or_default(
-            row.get("criteria"),
-            field_name="criteria",
-            fallback={},
-        ),
+        criteria_projected,
+    )
+    suppression_projected, suppression_valid = _project_campaign_json_with_status(
+        row.get("suppression_policy"),
+        field_name="suppression_policy",
+        fallback={},
     )
     suppression_policy = cast(
         dict[str, object],
-        _project_campaign_json_or_default(
-            row.get("suppression_policy"),
-            field_name="suppression_policy",
-            fallback={},
-        ),
+        suppression_projected,
     )
     normalized_raw = row.get("normalized_message_variants")
     relational_variants_are_authoritative = normalized_raw is not None
@@ -1791,15 +1812,18 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
         if relational_variants_are_authoritative
         else row.get("legacy_message_variants", row.get("message_variants"))
     )
+    variants_valid = True
     try:
         variants_value = json.loads(variants_raw) if isinstance(variants_raw, str) else variants_raw
     except (TypeError, ValueError):
         variants_value = []
+        variants_valid = False
     criteria_fingerprint = campaign_criteria_fingerprint(criteria_value)
     message_variants: list[dict[str, object]] = []
     if isinstance(variants_value, list):
         for variant in variants_value:
             if not isinstance(variant, dict):
+                variants_valid = False
                 continue
             public_variant = _public_campaign_variant(
                 variant,
@@ -1808,45 +1832,74 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
             )
             if public_variant is not None:
                 message_variants.append(public_variant)
+            else:
+                variants_valid = False
+    elif variants_value is not None:
+        variants_valid = False
+    channel_projected, channel_valid = _project_campaign_json_with_status(
+        row.get("channel_cascade"),
+        field_name="channel_cascade",
+        fallback=[],
+    )
     channel_cascade = cast(
         list[dict[str, object]],
-        _project_campaign_json_or_default(
-            row.get("channel_cascade"),
-            field_name="channel_cascade",
-            fallback=[],
-        ),
+        channel_projected,
+    )
+    send_projected, send_valid = _project_campaign_json_with_status(
+        row.get("send_window"),
+        field_name="send_window",
+        fallback={},
     )
     send_window = cast(
         dict[str, object],
-        _project_campaign_json_or_default(
-            row.get("send_window"),
-            field_name="send_window",
-            fallback={},
-        ),
+        send_projected,
+    )
+    holdout_projected, holdout_valid = _project_campaign_json_with_status(
+        row.get("holdout"),
+        field_name="holdout",
+        fallback=None,
     )
     holdout = cast(
         dict[str, object] | None,
-        _project_campaign_json_or_default(
-            row.get("holdout"),
-            field_name="holdout",
-            fallback=None,
-        ),
+        holdout_projected,
+    )
+    roi_projected, roi_valid = _project_campaign_json_with_status(
+        row.get("roi_assumptions"),
+        field_name="roi_assumptions",
+        fallback=None,
     )
     roi_assumptions = cast(
         dict[str, object] | None,
-        _project_campaign_json_or_default(
-            row.get("roi_assumptions"),
-            field_name="roi_assumptions",
-            fallback=None,
-        ),
+        roi_projected,
     )
+    campaign_name, name_valid = _project_campaign_name_with_status(row.get("name"))
+    contract_raw = row.get("json_contract_version")
+    try:
+        current_contract = contract_raw is not None and int(contract_raw) == 1
+    except (TypeError, ValueError):
+        current_contract = False
+    issue: str | None = None
+    if not current_contract:
+        issue = "legacy_contract"
+    elif not name_valid:
+        issue = "invalid_name"
+    elif not criteria_valid:
+        issue = "invalid_criteria"
+    elif not suppression_valid:
+        issue = "invalid_policy"
+    elif not all((channel_valid, send_valid, holdout_valid, roi_valid)):
+        issue = "invalid_configuration"
+    elif not variants_valid:
+        issue = "invalid_message_variants"
     household_dedup = json_value(row.get("household_dedup"), {})
     household_summary = json_value(row.get("household_summary"), {})
     return CampaignSummary(
         campaign_id=str(row.get("campaign_id")),
-        name=_project_campaign_name_or_default(row.get("name")),
+        name=campaign_name,
         owner_email=str(row.get("owner_email") or "unknown"),
         status=str(row.get("status") or "draft"),  # type: ignore[arg-type]
+        actionable=issue is None,
+        actionability_issue=issue,  # type: ignore[arg-type]
         criteria=criteria_value,
         suppression_policy=suppression_policy,
         message_variants=message_variants,

@@ -34,6 +34,7 @@ from backend.schemas.offer import (
     OutreachRejectRequest,
     OutreachRejectResponse,
 )
+from backend.schemas.portfolio import project_public_campaign_json_field
 from backend.schemas.portfolio_campaign import (
     assert_borrower_campaign_copy,
     assert_public_campaign_text,
@@ -50,6 +51,7 @@ from backend.services.audit_store import (
     get_audit_store,
     resolve_actor,
 )
+from backend.services.campaign_targeting import campaign_contains_borrower
 from backend.services.disclosures import (
     MissingTenantDisclosureError,
     disclosure_audit_payload,
@@ -78,12 +80,18 @@ from backend.services.outreach_intelligence import (
 )
 from backend.services.pii_redaction import scrub_free_text
 from backend.services.rbac import require_admin, require_approver
-from backend.services.repositories import OutreachRepository, get_outreach_repository
+from backend.services.repositories import (
+    LeadRepository,
+    OutreachRepository,
+    get_lead_repository,
+    get_outreach_repository,
+)
 from backend.services.sales_state import clear_sales_state_cache
 
 router = APIRouter(prefix="/outreach", tags=["outreach"])
 
 RepoDep = Annotated[OutreachRepository, Depends(get_outreach_repository)]
+LeadRepoDep = Annotated[LeadRepository, Depends(get_lead_repository)]
 AuditDep = Annotated[AuditStore, Depends(get_audit_store)]
 LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
@@ -181,7 +189,8 @@ LIMIT 1
 """
 
 _CAMPAIGN_ACCESS_LOOKUP = """
-SELECT campaign_id::text, owner_email
+SELECT campaign_id::text, owner_email, json_contract_version, criteria,
+       suppression_policy
 FROM mip_app.campaigns
 WHERE campaign_id = %(campaign_id)s::uuid
 LIMIT 1
@@ -293,6 +302,8 @@ def _resolve_governed_campaign_variant(
     campaign_id: str | None,
     variant_name: str | None,
     channel: str,
+    borrower_id: str,
+    lead_repo: LeadRepository,
 ) -> GovernedCampaignVariant | None:
     """Authorize and load the exact normalized campaign variant."""
 
@@ -313,6 +324,42 @@ def _resolve_governed_campaign_variant(
             require_admin(request)
         except HTTPException:
             raise HTTPException(status_code=404, detail="campaign not found") from None
+    contract_raw = campaign.get("json_contract_version")
+    try:
+        contract_version = int(contract_raw) if contract_raw is not None else 0
+    except (TypeError, ValueError):
+        contract_version = 0
+    if contract_version != 1:
+        raise HTTPException(
+            status_code=409,
+            detail="Campaign must be rebuilt before it can be used for outreach.",
+        )
+    try:
+        projected_criteria = project_public_campaign_json_field(
+            "criteria",
+            campaign.get("criteria"),
+        )
+        project_public_campaign_json_field(
+            "suppression_policy",
+            campaign.get("suppression_policy"),
+        )
+        if not isinstance(projected_criteria, dict):
+            raise ValueError("campaign criteria are invalid")
+        is_member = campaign_contains_borrower(
+            lead_repo,
+            borrower_id=borrower_id,
+            criteria=projected_criteria,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Campaign targeting contract is invalid; rebuild the campaign.",
+        ) from exc
+    if not is_member:
+        raise HTTPException(
+            status_code=409,
+            detail="Borrower is not in the saved campaign cohort.",
+        )
 
     row = lakebase.fetchone(
         _CAMPAIGN_VARIANT_LOOKUP,
@@ -1207,6 +1254,7 @@ def draft_outreach(
     payload: OutreachDraftRequest,
     request: Request,
     repo: RepoDep,
+    lead_repo: LeadRepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
     _: Annotated[None, Depends(require_json_content_type)],
@@ -1220,6 +1268,8 @@ def draft_outreach(
             campaign_id=payload.campaign_id,
             variant_name=payload.variant_name,
             channel=payload.channel,
+            borrower_id=payload.borrower_id,
+            lead_repo=lead_repo,
         )
     except HTTPException:
         raise
@@ -1296,6 +1346,7 @@ def approve_outreach(
     request: Request,
     background: BackgroundTasks,
     repo: RepoDep,
+    lead_repo: LeadRepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
     _: Annotated[None, Depends(require_json_content_type)],
@@ -1384,6 +1435,21 @@ def approve_outreach(
     )
     if existing is not None:
         return OutreachApproveResponse.model_validate(existing)
+    try:
+        _resolve_governed_campaign_variant(
+            lakebase,
+            request=request,
+            actor=actor,
+            campaign_id=payload.campaign_id,
+            variant_name=payload.variant_name,
+            channel=payload.channel,
+            borrower_id=payload.borrower_id,
+            lead_repo=lead_repo,
+        )
+    except HTTPException:
+        raise
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     _enforce_contact_eligibility(
         borrower,
         audit=audit,
@@ -1587,6 +1653,7 @@ def reject_outreach(
     request: Request,
     background: BackgroundTasks,
     repo: RepoDep,
+    lead_repo: LeadRepoDep,
     audit: AuditDep,
     lakebase: LakebaseDep,
     _: Annotated[None, Depends(require_json_content_type)],
@@ -1650,6 +1717,8 @@ def reject_outreach(
             campaign_id=payload.campaign_id,
             variant_name=payload.variant_name,
             channel=payload.channel,
+            borrower_id=payload.borrower_id,
+            lead_repo=lead_repo,
         )
     except HTTPException:
         raise

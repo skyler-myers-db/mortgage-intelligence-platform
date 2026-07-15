@@ -9,6 +9,7 @@ claim. These tests pin that behaviour against the real probe logic.
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,6 +23,10 @@ import backend.services.capabilities as capabilities_module
 import backend.services.capability_request as capability_request_module
 from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S, Settings
 from backend.main import app
+from backend.services.ai_gateway_proof_attestation import (
+    derive_gateway_proof_verify_key,
+    sign_gateway_proof,
+)
 from backend.services.ai_gateway_proof_ledger import AI_GATEWAY_PROOF_CLOCK_SKEW_S
 from backend.services.capabilities import (
     CapabilityStatus,
@@ -39,6 +44,8 @@ from backend.services.resilience import TTLCache
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _TEST_GIT_SHA = "69ff206fa7667589a28498c6554779f7f6c18c08"
 _OTHER_GIT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+_TEST_SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
+_TEST_VERIFY_KEY = derive_gateway_proof_verify_key(_TEST_SIGNING_KEY)
 
 
 def _settings(**overrides: object) -> Settings:
@@ -48,6 +55,7 @@ def _settings(**overrides: object) -> Settings:
         "genie_space_id": "space-abc",
         "lakebase_host": "lb-test",
         "lakebase_user": "mip_app",
+        "mip_ai_gateway_proof_verify_key": _TEST_VERIFY_KEY,
     }
     base.update(overrides)
     return Settings(**base)
@@ -160,22 +168,40 @@ class _LiveLakebase:
         verified_at: datetime | None = None,
         status: str = "verified",
     ) -> _LiveLakebase:
-        sent = datetime.now(UTC) - timedelta(minutes=5)
         verified = verified_at or datetime.now(UTC) - timedelta(minutes=1)
+        sent = verified - timedelta(minutes=4)
+        row: dict[str, object] = {
+            "proof_id": "11111111-1111-4111-8111-111111111111",
+            "git_sha": git_sha,
+            "client_request_id": f"mip-capability-{git_sha}-abcdef1234567890",
+            "endpoint_name": endpoint_name,
+            "inference_table": inference_table,
+            "sent_at": sent,
+            "verified_at": verified,
+            "verify_latency_s": 240.0,
+            "status": status,
+            "attestation_alg": None,
+            "attestation_key_id": None,
+            "attestation_signature": None,
+        }
+        if status == "verified":
+            alg, key_id, signature = sign_gateway_proof(
+                signing_key=_TEST_SIGNING_KEY,
+                proof_id=str(row["proof_id"]),
+                git_sha=git_sha,
+                client_request_id=str(row["client_request_id"]),
+                endpoint_name=endpoint_name,
+                inference_table=inference_table,
+                sent_at=sent,
+                verified_at=verified,
+            )
+            row.update(
+                attestation_alg=alg,
+                attestation_key_id=key_id,
+                attestation_signature=signature,
+            )
         return cls(
-            [
-                {
-                    "proof_id": "11111111-1111-4111-8111-111111111111",
-                    "git_sha": git_sha,
-                    "client_request_id": f"mip-capability-{git_sha}-abcdef1234567890",
-                    "endpoint_name": endpoint_name,
-                    "inference_table": inference_table,
-                    "sent_at": sent,
-                    "verified_at": verified,
-                    "verify_latency_s": 240.0,
-                    "status": status,
-                }
-            ]
+            [row]
         )
 
     def fetchone(
@@ -200,6 +226,10 @@ class _LiveLakebase:
             if proof.get("endpoint_name") != endpoint_name:
                 continue
             if proof.get("inference_table") != inference_table:
+                continue
+            if proof.get("attestation_alg") != params.get("attestation_alg"):
+                continue
+            if proof.get("attestation_key_id") != params.get("attestation_key_id"):
                 continue
             verified_at = proof.get("verified_at")
             if (
@@ -989,6 +1019,56 @@ def test_ai_gateway_live_probe_requires_endpoint_query_and_verified_ledger_proof
         and params.get("prefix_1") == f"mip-agent-run-{_TEST_GIT_SHA}-%"
         for params in sql.parameters
     )
+
+
+@pytest.mark.parametrize(
+    ("mutation", "value"),
+    [
+        ("attestation_alg", None),
+        ("attestation_signature", None),
+        ("attestation_signature", "A" * 86),
+        ("client_request_id", f"mip-capability-{_TEST_GIT_SHA}-ffffffffffffffff"),
+    ],
+)
+def test_ai_gateway_capability_rejects_fabricated_or_tampered_ledger_proof(
+    mutation: str,
+    value: object,
+) -> None:
+    lakebase = _LiveLakebase.verified()
+    lakebase.proofs[0][mutation] = value
+
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=3),
+        lakebase=lakebase,
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "signature did not verify" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_capability_requires_runtime_public_verify_key() -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+            mip_ai_gateway_proof_verify_key=None,
+        ),
+        sql_client=_LiveSqlClient(count=3),
+        lakebase=_LiveLakebase.verified(),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "proof verification key" in statuses["ai_gateway"].detail
 
 
 def test_ai_gateway_live_probe_does_not_retry_or_write_ledger_at_runtime() -> None:

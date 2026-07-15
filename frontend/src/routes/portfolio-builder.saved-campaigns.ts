@@ -26,6 +26,7 @@ const SAVED_CAMPAIGN_ROUTE_KEYS = new Set([
 ]);
 
 export function savedCampaignVariants(campaign: CampaignSummary): SavedCampaignVariant[] {
+  if (campaign.actionable === false) return [];
   return (campaign.message_variants ?? []).flatMap((raw) => {
     const variantName = typeof raw.variant_name === 'string' ? raw.variant_name.trim() : '';
     if (!variantName) return [];

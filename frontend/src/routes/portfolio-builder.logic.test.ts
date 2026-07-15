@@ -289,6 +289,14 @@ describe('portfolio campaign config', () => {
     // "Eligible only" (criterion) and "eligible only" (policy) collapse to one.
     expect(summary.toLowerCase().match(/eligible only/g)?.length ?? 0).toBe(1);
   });
+
+  it('labels quarantined campaigns instead of presenting an empty cohort as eligible-only', () => {
+    expect(campaignCriteriaSummary({
+      actionable: false,
+      actionability_issue: 'invalid_criteria',
+      criteria: {},
+    } as never)).toBe('Needs review before use');
+  });
 });
 
 describe('groupSavedCampaigns', () => {

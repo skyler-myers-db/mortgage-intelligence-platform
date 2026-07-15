@@ -74,6 +74,12 @@ verified by the live smoke test.
 Live app validation uses three service principals and stores only their OAuth
 client credentials. No bearer token is a GitHub secret or `.env.local` value:
 
+One-shot OAuth secrets are written only to the repository detected from the
+current `origin`. Customer automation without a local git remote must set
+`MIP_M2M_GITHUB_REPOSITORY=owner/repository`; an explicit `--gh-repo` must
+match that reviewed sink. Grant-only reconciliation with `--no-mint-secret`
+does not require this binding and can run from a customer fork unchanged.
+
 | Role | Default service principal | GitHub Actions secrets |
 |---|---|---|
 | normal app user | `mip-nightly-ci-sp` | `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` |
@@ -139,6 +145,15 @@ fail if that exact proof has not landed yet. Proof and inference-row timestamps
 are bounded below by the request/freshness window and above by a five-minute
 clock tolerance. Future-dated evidence beyond that tolerance is rejected by the
 verifier, runtime lookup, and Lakebase write trigger.
+
+Exact-row proof also requires an Ed25519 attestation from the verifier. Store
+`MIP_AI_GATEWAY_PROOF_SIGNING_KEY` only in deploy/nightly automation. The deploy
+script derives `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` and injects only that public key
+into the App. Lakebase proof writers therefore cannot make AI Gateway claimable
+by inserting or editing a proof row; the runtime verifies the signature over
+the deployment SHA, request id, endpoint, inference table, and timestamps.
+Rotate the key by deploying the new public key and generating a fresh exact-row
+proof for that same SHA; rows signed by the prior key then fail closed.
 
 `MIP_COTALITY_ID_MASK_SECRET` and `MIP_GENIE_ACTION_SECRET_CURRENT` are
 mandatory for sandbox, staging, customer, and production app payloads. Only

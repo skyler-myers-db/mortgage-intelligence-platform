@@ -508,7 +508,7 @@ export default function PortfolioBuilder() {
                 className="form-input save-build-form__input"
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                maxLength={120}
+                maxLength={80}
                 autoFocus
                 data-testid="portfolio-save-name"
               />
@@ -741,10 +741,18 @@ export default function PortfolioBuilder() {
                 const latestSaved = grouped ? formatSavedCampaignDate(row.latestAt) : null;
                 return (
                   <div key={campaign.campaign_id} className="saved-workspace__item">
-                    <span className="status-dot status-dot--ok" aria-hidden="true" />
+                    <span
+                      className={`status-dot status-dot--${campaign.actionable === false ? 'warn' : 'ok'}`}
+                      aria-hidden="true"
+                    />
                     <div className="saved-workspace__body">
                       <span className="text-1">{campaign.name}</span>
                       <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
+                      {campaign.actionable === false && (
+                        <span className="chip chip--warning chip--compact">
+                          Rebuild this campaign before opening its cohort
+                        </span>
+                      )}
                       {(grouped || householdEnabled || selectedVariant) && (
                         <div className="saved-workspace__proof">
                           {grouped && (

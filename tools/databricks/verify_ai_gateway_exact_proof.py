@@ -32,6 +32,10 @@ from databricks.sdk.core import Config
 from pydantic import SecretStr
 
 from backend.config.settings import get_settings
+from backend.services.ai_gateway_proof_attestation import (
+    derive_gateway_proof_verify_key,
+    sign_gateway_proof,
+)
 from backend.services.ai_gateway_proof_ledger import (
     AI_GATEWAY_PROOF_CLOCK_SKEW_S,
     AiGatewayVerifiedProof,
@@ -89,6 +93,14 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable summary.")
     return parser
+
+
+def _attestation_signing_key() -> str:
+    signing_key = os.environ.get("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "").strip()
+    if not signing_key:
+        raise ValueError("MIP_AI_GATEWAY_PROOF_SIGNING_KEY is required")
+    derive_gateway_proof_verify_key(signing_key)
+    return signing_key
 
 
 def _workspace_client() -> Any:
@@ -190,6 +202,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("MIP_AI_GATEWAY_VERIFY_TIMEOUT_S must not exceed 3600 seconds")
     if args.interval_s <= 0:
         raise ValueError("MIP_AI_GATEWAY_VERIFY_INTERVAL_S must be positive")
+    attestation_verify_key = derive_gateway_proof_verify_key(_attestation_signing_key())
     ensure_lakebase_env()
     settings = get_settings()
     git_sha = _resolved_sha(args.git_sha or settings.mip_git_sha)
@@ -244,6 +257,7 @@ def main(argv: list[str] | None = None) -> int:
         endpoint_name=endpoint,
         inference_table=inference_table,
         freshness_s=max(1.0, float(settings.mip_ai_gateway_proof_freshness_s or args.expiry_s)),
+        attestation_verify_key=attestation_verify_key,
     )
     verified_current = [
         proof
@@ -668,12 +682,25 @@ def _mark_proof_verified_if_pending(
     if proof.sent_at > verified_at + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S):
         return None
     verify_latency_s = max(0.0, (verified_at - proof.sent_at).total_seconds())
+    attestation_alg, attestation_key_id, attestation_signature = sign_gateway_proof(
+        signing_key=_attestation_signing_key(),
+        proof_id=proof.proof_id,
+        git_sha=proof.git_sha,
+        client_request_id=proof.client_request_id,
+        endpoint_name=proof.endpoint_name,
+        inference_table=proof.inference_table,
+        sent_at=proof.sent_at,
+        verified_at=verified_at,
+    )
     row = lakebase.fetchone(
         """
         UPDATE mip_app.ai_gateway_proof_ledger
         SET status = 'verified',
             verified_at = %(verified_at)s,
-            verify_latency_s = %(verify_latency_s)s
+            verify_latency_s = %(verify_latency_s)s,
+            attestation_alg = %(attestation_alg)s,
+            attestation_key_id = %(attestation_key_id)s,
+            attestation_signature = %(attestation_signature)s
         WHERE proof_id = %(proof_id)s
           AND status = 'pending'
           AND sent_at <= %(sent_at_upper_bound)s
@@ -683,6 +710,9 @@ def _mark_proof_verified_if_pending(
             "proof_id": proof.proof_id,
             "verified_at": verified_at,
             "verify_latency_s": verify_latency_s,
+            "attestation_alg": attestation_alg,
+            "attestation_key_id": attestation_key_id,
+            "attestation_signature": attestation_signature,
             "sent_at_upper_bound": verified_at + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S),
         },
     )
@@ -698,6 +728,9 @@ def _mark_proof_verified_if_pending(
         verified_at=verified_at,
         verify_latency_s=verify_latency_s,
         status="verified",
+        attestation_alg=attestation_alg,
+        attestation_key_id=attestation_key_id,
+        attestation_signature=attestation_signature,
     )
 
 
@@ -710,7 +743,10 @@ def _mark_proof_failed_if_pending(
         UPDATE mip_app.ai_gateway_proof_ledger
         SET status = 'failed',
             verified_at = NULL,
-            verify_latency_s = NULL
+            verify_latency_s = NULL,
+            attestation_alg = NULL,
+            attestation_key_id = NULL,
+            attestation_signature = NULL
         WHERE proof_id = %(proof_id)s
           AND status = 'pending'
         RETURNING proof_id

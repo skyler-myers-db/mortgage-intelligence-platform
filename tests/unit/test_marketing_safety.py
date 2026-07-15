@@ -363,6 +363,59 @@ def test_outreach_campaign_metadata_ids_are_public_safe() -> None:
 
 
 @pytest.mark.parametrize(
+    "payload",
+    [
+        {"rationale": "Approved for Jane Smith"},
+        {"bulk_rationale": "Jane Smith requested this"},
+    ],
+)
+def test_approval_rationale_rejects_human_names(payload: dict[str, str]) -> None:
+    with pytest.raises(ValidationError, match="human-name-shaped"):
+        OutreachApproveRequest(borrower_id="B-48291", **payload)
+
+
+def test_rejection_rationale_rejects_human_names() -> None:
+    with pytest.raises(ValidationError, match="human-name-shaped"):
+        OutreachRejectRequest(
+            borrower_id="B-48291",
+            rationale_code="other_with_text",
+            rationale="Jane Smith requested this",
+        )
+
+
+@pytest.mark.parametrize(
+    ("route", "payload"),
+    [
+        (
+            "/api/outreach/approve",
+            {"borrower_id": "B-48291", "rationale": "Approved for Jane Smith"},
+        ),
+        (
+            "/api/outreach/reject",
+            {
+                "borrower_id": "B-48291",
+                "rationale_code": "other_with_text",
+                "rationale": "Jane Smith requested this",
+            },
+        ),
+    ],
+)
+def test_outreach_rationale_name_rejection_is_bodyless_and_write_free(
+    fake_lakebase_client,
+    route: str,
+    payload: dict[str, str],
+) -> None:
+    response = TestClient(app).post(route, json=payload)
+
+    assert response.status_code == 422
+    assert "Jane Smith" not in response.text
+    assert not any(
+        "INSERT INTO mip_app.approvals" in sql
+        for sql, _params in fake_lakebase_client.executes
+    )
+
+
+@pytest.mark.parametrize(
     "unsafe_name",
     [
         "john smith watch",
@@ -938,14 +991,27 @@ def test_campaign_name_rejects_uncommon_lowercase_person_names(person_name: str)
     "campaign_name",
     [
         "Booth build — Summit IL refi",
+        "Chicago refinance campaign",
+        "Conflicting live campaign payload",
         "Distinct Illinois refinance cohort",
         "Fall 2026 HELOC campaign launch",
+        "Genie strategy draft",
+        "Other owner campaign",
     ],
 )
 def test_campaign_name_accepts_portfolio_ui_and_marketing_labels(
     campaign_name: str,
 ) -> None:
     assert PortfolioCreateRequest(name=campaign_name).name == campaign_name
+
+
+@pytest.mark.parametrize(
+    "campaign_name",
+    ["Campaign 123 45 6789", "Campaign 123.45.6789", "John Smith campaign"],
+)
+def test_campaign_name_rejects_ssn_and_human_name_shapes(campaign_name: str) -> None:
+    with pytest.raises(ValidationError):
+        PortfolioCreateRequest(name=campaign_name)
 
 
 @pytest.mark.parametrize(

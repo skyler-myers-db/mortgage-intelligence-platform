@@ -49,4 +49,12 @@ describe('savedCampaignVariants', () => {
     expect(legacy.generatorLabel).toBe('Databricks Agent Responses');
     expect(unknown.generatorLabel).toBe('Custom tenant agent');
   });
+
+  it('does not expose variants from a quarantined campaign', () => {
+    const campaign = campaignWithVariant({ copy_verified_at_creation: true });
+    campaign.actionable = false;
+    campaign.actionability_issue = 'legacy_contract';
+
+    expect(savedCampaignVariants(campaign)).toEqual([]);
+  });
 });

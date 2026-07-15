@@ -21,20 +21,13 @@ What this tool does (in order):
    Secret names are role-owned constants so normal, admin, and verifier
    identities cannot overwrite one another's client credentials.
 
-5. Optionally rotate an existing SP's secret (``--rotate``). The old
-   secret stays valid until the admin revokes it in the Accounts Console
-   — same zero-downtime rotation cadence as the manual flow.
+5. Optionally rotate an existing SP's secret (``--rotate``); the old secret
+   remains valid until an admin revokes it.
 
-Safety invariants
------------------
-* The secret never touches the repo, a local file, stdout, or stderr. It is
-  passed only to the ``gh`` subprocess via stdin.
+Safety invariants: the secret never touches the repo, local files, stdout, or stderr; it is passed only to ``gh`` via stdin.
 * A ``--dry-run`` flag exercises every argument-parsing + SDK-surface
   check without touching the workspace, for CI-safe import coverage.
-* SDK failures that indicate "you are not a workspace admin" surface a
-  pointed message directing the reader to
-  ``docs/security/m2m-oauth-setup.md`` appendix (manual UI path) rather
-  than a stack trace.
+* Admin-permission failures point to ``docs/security/m2m-oauth-setup.md``.
 
 Usage
 -----
@@ -95,6 +88,7 @@ DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
 # so the workflow's deployed-path detection flips on in a single admin pass.
 DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
 CANONICAL_GH_REPO = "skyler-myers-db/mortgage-intelligence-platform"
+_GH_REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 _VERIFIER_APP_ACCESS_ERROR = (
     "--identity-role verifier forbids Databricks App CAN_USE; "
     "remove --grant-can-use before provisioning"
@@ -199,11 +193,26 @@ def _infer_gh_repo() -> str | None:
     return f"{match.group('owner')}/{match.group('repo')}"
 
 
-def _validate_gh_repo(gh_repo: str | None) -> None:
-    """Keep one-shot credentials bound to this repository's reviewed sink."""
-    if gh_repo is not None and gh_repo != CANONICAL_GH_REPO:
+def _reviewed_gh_repo() -> str | None:
+    configured = os.environ.get("MIP_M2M_GITHUB_REPOSITORY", "").strip()
+    return configured or _infer_gh_repo()
+
+
+def _validate_gh_repo(gh_repo: str | None, *, bind_secret_sink: bool = False) -> None:
+    """Validate a GitHub target and bind one-shot secrets to the reviewed origin."""
+    if gh_repo is not None and not _GH_REPO_PATTERN.fullmatch(gh_repo):
+        raise ValueError("--gh-repo must be a valid GitHub owner/repository target")
+    if not bind_secret_sink:
+        return
+    reviewed_repo = _reviewed_gh_repo()
+    if reviewed_repo is None or not _GH_REPO_PATTERN.fullmatch(reviewed_repo):
         raise ValueError(
-            f"--gh-repo must be the canonical repository {CANONICAL_GH_REPO!r}; "
+            "Secret minting requires a reviewed GitHub repository from the git origin "
+            "or MIP_M2M_GITHUB_REPOSITORY"
+        )
+    if gh_repo != reviewed_repo:
+        raise ValueError(
+            f"--gh-repo must match the reviewed credential sink {reviewed_repo!r}; "
             f"refusing target {gh_repo!r}"
         )
 
@@ -455,7 +464,7 @@ def provision(
         raise SystemExit(str(exc)) from exc
 
     try:
-        _validate_gh_repo(gh_repo)
+        _validate_gh_repo(gh_repo, bind_secret_sink=mint_secret)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -736,8 +745,8 @@ def _build_parser() -> argparse.ArgumentParser:
         "--gh-repo",
         default=None,
         help=(
-            f"Canonical GitHub repo owner/name ({CANONICAL_GH_REPO}); "
-            "default inferred from `git remote get-url origin` and verified exactly."
+            "GitHub repo owner/name; defaults to `git remote get-url origin`. "
+            "Secret minting binds it to that origin or MIP_M2M_GITHUB_REPOSITORY."
         ),
     )
     parser.add_argument(
@@ -833,7 +842,7 @@ def main(argv: list[str] | None = None) -> int:
     app_name = args.app_name or _load_app_name_from_bundle()
     gh_repo = args.gh_repo or _infer_gh_repo()
     try:
-        _validate_gh_repo(gh_repo)
+        _validate_gh_repo(gh_repo, bind_secret_sink=args.mint_secret)
     except ValueError as exc:
         parser.error(str(exc))
 

@@ -2014,6 +2014,9 @@ CREATE TABLE IF NOT EXISTS mip_app.ai_gateway_proof_ledger (
     verified_at         TIMESTAMPTZ,
     verify_latency_s    DOUBLE PRECISION CHECK (verify_latency_s IS NULL OR verify_latency_s >= 0),
     status              TEXT NOT NULL CHECK (status IN ('pending','verified','failed','expired')),
+    attestation_alg     TEXT,
+    attestation_key_id  TEXT,
+    attestation_signature TEXT,
     CONSTRAINT ck_ai_gateway_proof_verified_fields
       CHECK (
         (status = 'verified' AND verified_at IS NOT NULL AND verify_latency_s IS NOT NULL)
@@ -2021,6 +2024,40 @@ CREATE TABLE IF NOT EXISTS mip_app.ai_gateway_proof_ledger (
         (status <> 'verified')
       )
 );
+ALTER TABLE mip_app.ai_gateway_proof_ledger
+    ADD COLUMN IF NOT EXISTS attestation_alg TEXT,
+    ADD COLUMN IF NOT EXISTS attestation_key_id TEXT,
+    ADD COLUMN IF NOT EXISTS attestation_signature TEXT;
+
+-- Pre-attestation verified rows are intentionally retired. Their exact-row
+-- evidence may have been valid, but a Lakebase writer alone could manufacture
+-- the same shape. Only newly signed verifier evidence is claimable.
+UPDATE mip_app.ai_gateway_proof_ledger
+SET status = 'expired',
+    verified_at = NULL,
+    verify_latency_s = NULL
+WHERE status = 'verified'
+  AND attestation_signature IS NULL;
+
+ALTER TABLE mip_app.ai_gateway_proof_ledger
+    DROP CONSTRAINT IF EXISTS ck_ai_gateway_proof_attestation;
+ALTER TABLE mip_app.ai_gateway_proof_ledger
+    ADD CONSTRAINT ck_ai_gateway_proof_attestation
+    CHECK (
+      (
+        status = 'verified'
+        AND attestation_alg = 'ed25519-v1'
+        AND attestation_key_id ~ '^[0-9a-f]{16}$'
+        AND attestation_signature ~ '^[A-Za-z0-9_-]{86}$'
+      )
+      OR
+      (
+        status <> 'verified'
+        AND attestation_alg IS NULL
+        AND attestation_key_id IS NULL
+        AND attestation_signature IS NULL
+      )
+    );
 CREATE INDEX IF NOT EXISTS idx_ai_gateway_proof_sha_status
     ON mip_app.ai_gateway_proof_ledger (git_sha, status, verified_at DESC);
 CREATE INDEX IF NOT EXISTS idx_ai_gateway_proof_pending
@@ -2038,6 +2075,18 @@ DECLARE
     observed_now TIMESTAMPTZ := clock_timestamp();
     clock_tolerance CONSTANT INTERVAL := INTERVAL '5 minutes';
 BEGIN
+    IF TG_OP = 'INSERT' AND NEW.status = 'verified' THEN
+        RAISE EXCEPTION
+            'AI Gateway proof must be inserted as pending before verification'
+            USING ERRCODE = '42501';
+    END IF;
+    IF TG_OP = 'UPDATE'
+       AND NEW.status = 'verified'
+       AND OLD.status <> 'pending' THEN
+        RAISE EXCEPTION
+            'AI Gateway proof can only transition from pending to verified'
+            USING ERRCODE = '42501';
+    END IF;
     IF NEW.status IN ('pending', 'verified')
        AND NEW.sent_at > observed_now + clock_tolerance THEN
         RAISE EXCEPTION
@@ -2080,6 +2129,13 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_15_ai_gateway_proof_timestamp_bounds',
     'Reject AI Gateway proof timestamps beyond a five-minute positive clock tolerance'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_ai_gateway_proof_ed25519_attestation',
+    'Require independently signed verifier evidence for claimable AI Gateway proofs'
 )
 ON CONFLICT (version) DO NOTHING;
 

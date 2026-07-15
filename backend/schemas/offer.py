@@ -16,6 +16,7 @@ from pydantic import (
 
 from backend.schemas.common import (
     validate_internal_staff_email,
+    validate_no_human_name_shape,
     validate_public_borrower_id,
     validate_public_campaign_label,
     validate_public_opaque_id,
@@ -380,6 +381,16 @@ class OutreachApproveRequest(BaseModel):
             return value
         return validate_internal_staff_email(value)
 
+    @field_validator("rationale", "bulk_rationale")
+    @classmethod
+    def _rationale_is_public_safe(cls, value: str | None, info) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return validate_no_human_name_shape(
+            value,
+            field_name=str(info.field_name).replace("_", " "),
+        )
+
     @field_validator("bulk_id", "request_id", "draft_generation_id")
     @classmethod
     def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
@@ -474,6 +485,16 @@ class OutreachRejectRequest(BaseModel):
         if value is None:
             return value
         return validate_public_opaque_id(value)
+
+    @field_validator("rationale")
+    @classmethod
+    def _rationale_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None or not value.strip():
+            return None
+        return validate_no_human_name_shape(
+            value,
+            field_name="rationale",
+        )
 
     @field_validator("campaign_id")
     @classmethod

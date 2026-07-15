@@ -40,6 +40,12 @@ def probe_ai_gateway(
         return make_status(
             False, "Lakebase proof ledger is required to verify AI Gateway exact rows."
         )
+    verify_key = (settings.mip_ai_gateway_proof_verify_key or "").strip()
+    if not verify_key:
+        return make_status(
+            False,
+            "AI Gateway proof verification key is not configured for this deployment.",
+        )
     try:
         details = workspace_client.serving_endpoints.get(endpoint)
         state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
@@ -102,6 +108,7 @@ def probe_ai_gateway(
             freshness_s=bounded_gateway_proof_freshness_s(
                 settings.mip_ai_gateway_proof_freshness_s
             ),
+            attestation_verify_key=verify_key,
         )
         current_sha_rows = count_inference_log_rows_by_prefixes(
             sql_client,
@@ -115,8 +122,9 @@ def probe_ai_gateway(
             return make_status(
                 True,
                 (
-                    "Live AI Gateway endpoint accepted a bounded query now; exact inference-row "
-                    f"round-trip verified for deployment {sha} at {proof.verified_at.isoformat()} "
+                    "Live AI Gateway endpoint accepted a bounded query now; independently signed "
+                    "exact inference-row round-trip verified for deployment "
+                    f"{sha} at {proof.verified_at.isoformat()} "
                     f"(delivery {proof.verify_latency_s:.1f}s). Current deployment inference rows "
                     f"visible: {current_sha_rows}."
                 ),
@@ -126,7 +134,8 @@ def probe_ai_gateway(
             (
                 "Live AI Gateway endpoint accepted a bounded query now and inference logging "
                 f"is enabled/queryable at {actual}; no fresh ledger-verified exact row exists "
-                f"for deployment {sha}, so this capability is not claimable yet. Current "
+                f"for deployment {sha}, or its signature did not verify, so this capability is "
+                "not claimable yet. Current "
                 f"deployment inference rows visible: {current_sha_rows}."
             ),
         )

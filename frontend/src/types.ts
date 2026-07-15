@@ -515,6 +515,8 @@ export interface CampaignSummary {
   name: string;
   owner_email: string;
   status: 'draft' | 'pending_review' | 'approved' | 'live' | 'active' | 'rejected' | 'archived';
+  actionable?: boolean;
+  actionability_issue?: 'legacy_contract' | 'invalid_name' | 'invalid_criteria' | 'invalid_policy' | 'invalid_configuration' | 'invalid_message_variants' | null;
   criteria: Record<string, unknown>;
   suppression_policy?: Record<string, unknown>;
   message_variants?: Record<string, unknown>[];

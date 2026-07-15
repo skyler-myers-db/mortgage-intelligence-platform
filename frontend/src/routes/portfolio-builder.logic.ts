@@ -268,6 +268,7 @@ export function buildSegmentIntelligenceUrlFromFilters(
 }
 
 export function campaignCriteriaSummary(campaign: CampaignSummary): string {
+  if (campaign.actionable === false) return 'Needs review before use';
   const criteria = campaign.criteria ?? {};
   const parts: string[] = [];
   const states = Array.isArray(criteria.states) ? criteria.states.map(String).filter(Boolean) : [];

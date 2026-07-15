@@ -389,7 +389,7 @@ def test_ai_gateway_proof_timestamp_trigger_rejects_unclaimable_clock_skew(
             )
         assert future_error.value.sqlstate == "22007"
 
-        with pytest.raises(psycopg.Error) as chronology_error:
+        with pytest.raises(psycopg.Error) as direct_verified_error:
             cur.execute(
                 """
                 INSERT INTO mip_app.ai_gateway_proof_ledger (
@@ -398,12 +398,38 @@ def test_ai_gateway_proof_timestamp_trigger_rejects_unclaimable_clock_skew(
                     verify_latency_s, status
                 ) VALUES (
                     %s, %s, 'mip-supervisor', %s,
-                    clock_timestamp(),
-                    clock_timestamp() - INTERVAL '6 minutes',
-                    0, 'verified'
+                    clock_timestamp(), clock_timestamp(), 0, 'verified'
                 )
                 """,
                 (sha, f"mip-capability-{sha}-{'2' * 16}", inference_table),
+            )
+        assert direct_verified_error.value.sqlstate == "42501"
+
+        chronology_request_id = f"mip-capability-{sha}-{'4' * 16}"
+        cur.execute(
+            """
+            INSERT INTO mip_app.ai_gateway_proof_ledger (
+                git_sha, client_request_id, endpoint_name,
+                inference_table, sent_at, status
+            ) VALUES (
+                %s, %s, 'mip-supervisor', %s, clock_timestamp(), 'pending'
+            )
+            """,
+            (sha, chronology_request_id, inference_table),
+        )
+        with pytest.raises(psycopg.Error) as chronology_error:
+            cur.execute(
+                """
+                UPDATE mip_app.ai_gateway_proof_ledger
+                SET verified_at = sent_at - INTERVAL '6 minutes',
+                    verify_latency_s = 0,
+                    status = 'verified',
+                    attestation_alg = 'ed25519-v1',
+                    attestation_key_id = '0123456789abcdef',
+                    attestation_signature = repeat('A', 86)
+                WHERE client_request_id = %s
+                """,
+                (chronology_request_id,),
             )
         assert chronology_error.value.sqlstate == "22007"
 

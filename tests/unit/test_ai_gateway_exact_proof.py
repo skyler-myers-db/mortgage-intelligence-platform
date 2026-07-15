@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import subprocess
 import sys
@@ -10,6 +11,10 @@ from typing import Any
 import pytest
 
 from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S
+from backend.services.ai_gateway_proof_attestation import (
+    derive_gateway_proof_verify_key,
+    sign_gateway_proof,
+)
 from backend.services.ai_gateway_proof_ledger import (
     AI_GATEWAY_PROOF_CLOCK_SKEW_S,
     insert_pending_proof,
@@ -24,6 +29,10 @@ _OTHER_GIT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 _ENDPOINT = "mip-supervisor-endpoint"
 _INFERENCE_TABLE = "mip.audit.mip_agent_gateway_llama"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
+_TEST_SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
+_TEST_VERIFY_KEY = derive_gateway_proof_verify_key(_TEST_SIGNING_KEY)
+_OTHER_SIGNING_KEY = base64.urlsafe_b64encode(bytes(reversed(range(32)))).decode().rstrip("=")
+_OTHER_VERIFY_KEY = derive_gateway_proof_verify_key(_OTHER_SIGNING_KEY)
 
 
 @pytest.fixture(autouse=True)
@@ -38,6 +47,7 @@ def _hermetic_lakebase_env(monkeypatch):
     monkeypatch.setenv("LAKEBASE_HOST", "unit-test-lakebase.database.example")
     monkeypatch.setenv("LAKEBASE_USER", "unit-test@example.com")
     monkeypatch.setenv("LAKEBASE_PASSWORD", "unit-test-token")
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", _TEST_SIGNING_KEY)
 
 
 class _ProofLakebase:
@@ -59,6 +69,9 @@ class _ProofLakebase:
                 "verified_at": None,
                 "verify_latency_s": None,
                 "status": "pending",
+                "attestation_alg": None,
+                "attestation_key_id": None,
+                "attestation_signature": None,
             }
             self.rows.append(row)
             return dict(row)
@@ -69,6 +82,9 @@ class _ProofLakebase:
                     row["status"] = "failed"
                     row["verified_at"] = None
                     row["verify_latency_s"] = None
+                    row["attestation_alg"] = None
+                    row["attestation_key_id"] = None
+                    row["attestation_signature"] = None
                     return dict(row)
             return None
         if "UPDATE mip_app.ai_gateway_proof_ledger" in sql and "SET status = 'verified'" in sql:
@@ -78,6 +94,9 @@ class _ProofLakebase:
                     row["status"] = "verified"
                     row["verified_at"] = params["verified_at"]
                     row["verify_latency_s"] = params["verify_latency_s"]
+                    row["attestation_alg"] = params["attestation_alg"]
+                    row["attestation_key_id"] = params["attestation_key_id"]
+                    row["attestation_signature"] = params["attestation_signature"]
                     return dict(row)
             return None
         if "WITH updated AS" in sql:
@@ -92,6 +111,12 @@ class _ProofLakebase:
                 row["status"] = "expired"
                 count += 1
             return {"row_count": count}
+        if "FROM mip_app.ai_gateway_proof_ledger" in sql and "status = 'pending'" in sql:
+            proof_id = str(params.get("proof_id") or "")
+            for row in self.rows:
+                if str(row["proof_id"]) == proof_id and row["status"] == "pending":
+                    return dict(row)
+            return None
         if "FROM mip_app.ai_gateway_proof_ledger" in sql and "status = 'verified'" in sql:
             git_sha = params["git_sha"]
             endpoint_name = params["endpoint_name"]
@@ -106,6 +131,8 @@ class _ProofLakebase:
                 and row["endpoint_name"] == endpoint_name
                 and row["inference_table"] == inference_table
                 and row["status"] == "verified"
+                and row.get("attestation_alg") == params["attestation_alg"]
+                and row.get("attestation_key_id") == params["attestation_key_id"]
                 and row["verified_at"] is not None
                 and row["verified_at"] >= cutoff
                 and row["verified_at"] <= future_cutoff
@@ -308,7 +335,7 @@ def test_workspace_client_disables_sdk_transport_retries(monkeypatch) -> None:
 
 def _verified_row(*, git_sha: str, verified_at: datetime) -> dict[str, Any]:
     sent_at = verified_at - timedelta(minutes=4)
-    return {
+    row = {
         "proof_id": "11111111-1111-4111-8111-111111111111",
         "git_sha": git_sha,
         "client_request_id": f"mip-capability-{git_sha}-0123456789abcdef",
@@ -319,6 +346,22 @@ def _verified_row(*, git_sha: str, verified_at: datetime) -> dict[str, Any]:
         "verify_latency_s": 240.0,
         "status": "verified",
     }
+    alg, key_id, signature = sign_gateway_proof(
+        signing_key=_TEST_SIGNING_KEY,
+        proof_id=row["proof_id"],
+        git_sha=row["git_sha"],
+        client_request_id=row["client_request_id"],
+        endpoint_name=row["endpoint_name"],
+        inference_table=row["inference_table"],
+        sent_at=row["sent_at"],
+        verified_at=row["verified_at"],
+    )
+    row.update(
+        attestation_alg=alg,
+        attestation_key_id=key_id,
+        attestation_signature=signature,
+    )
+    return row
 
 
 def test_latest_verified_proof_requires_current_sha_and_freshness() -> None:
@@ -337,12 +380,87 @@ def test_latest_verified_proof_requires_current_sha_and_freshness() -> None:
         endpoint_name=_ENDPOINT,
         inference_table=_INFERENCE_TABLE,
         freshness_s=26 * 60 * 60,
+        attestation_verify_key=_TEST_VERIFY_KEY,
         now=now,
     )
 
     assert proof is not None
     assert proof.git_sha == _TEST_GIT_SHA
     assert proof.verified_at == now - timedelta(minutes=5)
+
+
+@pytest.mark.parametrize(
+    ("field", "replacement"),
+    [
+        ("git_sha", _OTHER_GIT_SHA),
+        ("client_request_id", f"mip-capability-{_TEST_GIT_SHA}-ffffffffffffffff"),
+        ("endpoint_name", "tampered-endpoint"),
+        ("inference_table", "mip.audit.tampered_gateway_table"),
+    ],
+)
+def test_latest_verified_proof_rejects_tampered_signed_coordinates(
+    field: str,
+    replacement: str,
+) -> None:
+    now = datetime.now(UTC)
+    row = _verified_row(git_sha=_TEST_GIT_SHA, verified_at=now - timedelta(minutes=1))
+    row[field] = replacement
+    query_sha = str(row["git_sha"])
+    query_endpoint = str(row["endpoint_name"])
+    query_table = str(row["inference_table"])
+
+    proof = latest_verified_proof(
+        _ProofLakebase([row]),
+        git_sha=query_sha,
+        endpoint_name=query_endpoint,
+        inference_table=query_table,
+        freshness_s=60,
+        attestation_verify_key=_TEST_VERIFY_KEY,
+        now=now,
+    )
+
+    assert proof is None
+
+
+def test_latest_verified_proof_rejects_unsigned_or_wrongly_signed_writer_rows() -> None:
+    now = datetime.now(UTC)
+    unsigned = _verified_row(git_sha=_TEST_GIT_SHA, verified_at=now - timedelta(minutes=1))
+    unsigned.update(
+        attestation_alg=None,
+        attestation_key_id=None,
+        attestation_signature=None,
+    )
+    wrong_key = _verified_row(git_sha=_TEST_GIT_SHA, verified_at=now - timedelta(minutes=1))
+    alg, key_id, signature = sign_gateway_proof(
+        signing_key=_OTHER_SIGNING_KEY,
+        proof_id=str(wrong_key["proof_id"]),
+        git_sha=str(wrong_key["git_sha"]),
+        client_request_id=str(wrong_key["client_request_id"]),
+        endpoint_name=str(wrong_key["endpoint_name"]),
+        inference_table=str(wrong_key["inference_table"]),
+        sent_at=wrong_key["sent_at"],
+        verified_at=wrong_key["verified_at"],
+    )
+    wrong_key.update(
+        attestation_alg=alg,
+        attestation_key_id=key_id,
+        attestation_signature=signature,
+    )
+
+    for row in (unsigned, wrong_key):
+        assert (
+            latest_verified_proof(
+                _ProofLakebase([row]),
+                git_sha=_TEST_GIT_SHA,
+                endpoint_name=_ENDPOINT,
+                inference_table=_INFERENCE_TABLE,
+                freshness_s=60,
+                attestation_verify_key=_TEST_VERIFY_KEY,
+                now=now,
+            )
+            is None
+        )
+    assert _OTHER_VERIFY_KEY != _TEST_VERIFY_KEY
 
 
 def test_latest_verified_proof_requires_matching_endpoint_and_table() -> None:
@@ -355,6 +473,7 @@ def test_latest_verified_proof_requires_matching_endpoint_and_table() -> None:
         endpoint_name="different-endpoint",
         inference_table=_INFERENCE_TABLE,
         freshness_s=60,
+        attestation_verify_key=_TEST_VERIFY_KEY,
         now=now,
     )
     wrong_table = latest_verified_proof(
@@ -363,6 +482,7 @@ def test_latest_verified_proof_requires_matching_endpoint_and_table() -> None:
         endpoint_name=_ENDPOINT,
         inference_table="mip.audit.different_gateway_table",
         freshness_s=60,
+        attestation_verify_key=_TEST_VERIFY_KEY,
         now=now,
     )
 
@@ -382,6 +502,7 @@ def test_latest_verified_proof_caps_defensive_callers_at_26_hours() -> None:
         endpoint_name=_ENDPOINT,
         inference_table=_INFERENCE_TABLE,
         freshness_s=7 * 24 * 60 * 60,
+        attestation_verify_key=_TEST_VERIFY_KEY,
         now=now,
     )
 
@@ -407,6 +528,7 @@ def test_latest_verified_proof_rejects_future_timestamp_beyond_clock_tolerance()
         endpoint_name=_ENDPOINT,
         inference_table=_INFERENCE_TABLE,
         freshness_s=60,
+        attestation_verify_key=_TEST_VERIFY_KEY,
         now=now,
     )
 
@@ -449,6 +571,7 @@ def test_verified_proof_write_rejects_future_verified_at_before_lakebase_update(
             lakebase,
             proof_id=proof.proof_id,
             sent_at=proof.sent_at,
+            attestation_signing_key=_TEST_SIGNING_KEY,
             verified_at=datetime.now(UTC) + timedelta(seconds=AI_GATEWAY_PROOF_CLOCK_SKEW_S + 10),
         )
 
@@ -471,6 +594,7 @@ def test_pending_proof_verification_and_expiry() -> None:
         lakebase,
         proof_id=proof.proof_id,
         sent_at=proof.sent_at,
+        attestation_signing_key=_TEST_SIGNING_KEY,
         verified_at=old_sent_at + timedelta(minutes=3),
     )
     expired = mark_expired_pending_proofs(
@@ -998,6 +1122,7 @@ def test_proof_summary_redacts_coordinates() -> None:
         lakebase,
         proof_id=pending.proof_id,
         sent_at=pending.sent_at,
+        attestation_signing_key=_TEST_SIGNING_KEY,
     )
     payload = verify_ai_gateway_exact_proof._proof_json(proof)
     encoded = json.dumps(payload)

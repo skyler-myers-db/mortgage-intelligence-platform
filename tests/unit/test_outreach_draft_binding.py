@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from backend.config.settings import settings
 from backend.main import app
-from backend.services.repositories import get_outreach_repository
+from backend.services.repositories import get_lead_repository, get_outreach_repository
 
 client = TestClient(app)
 BORROWER_EVIDENCE_IDS = ["ev-001", "ev-002", "ev-003"]
@@ -59,7 +59,13 @@ def _approval(draft: dict[str, object], **updates: object) -> dict[str, object]:
     return payload
 
 
-def _install_campaign_rows(monkeypatch, lakebase) -> None:
+def _install_campaign_rows(
+    monkeypatch,
+    lakebase,
+    *,
+    contract_version: int = 1,
+    criteria: dict[str, object] | None = None,
+) -> None:
     original_fetchone = lakebase.fetchone
     campaign_owners = {
         CAMPAIGN_A: OWNER,
@@ -109,7 +115,13 @@ def _install_campaign_rows(monkeypatch, lakebase) -> None:
             owner = campaign_owners.get(campaign_id)
             if owner is None:
                 return None
-            return {"campaign_id": campaign_id, "owner_email": owner}
+            return {
+                "campaign_id": campaign_id,
+                "owner_email": owner,
+                "json_contract_version": contract_version,
+                "criteria": criteria or {"marketing_eligibility": "Eligible only"},
+                "suppression_policy": {"default": "eligible_only"},
+            }
         if "FROM mip_app.generated_outreach_drafts" in sql:
             row = original_fetchone(sql, values)
             if row is None:
@@ -210,6 +222,120 @@ def test_campaign_bound_draft_uses_exact_governed_variant(
     assert draft["variant_name"] == "Primary"
     assert "governed primary campaign message" in str(draft["body"]).lower()
     assert "alternate campaign message" not in str(draft["body"]).lower()
+
+
+def test_campaign_bound_draft_quarantines_legacy_contract_before_writing(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client, contract_version=0)
+
+    response = client.post(
+        "/api/outreach/draft",
+        json={
+            "borrower_id": "B-48291",
+            "channel": "email",
+            "campaign_id": CAMPAIGN_A,
+            "variant_name": "Primary",
+        },
+        headers={"X-Forwarded-Email": OWNER},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Campaign must be rebuilt before it can be used for outreach."
+    )
+    assert fake_lakebase_client.generated_outreach_drafts == []
+
+
+def test_campaign_bound_draft_rejects_borrower_outside_saved_cohort(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    previous = app.dependency_overrides[get_lead_repository]
+    outside_repo = MagicMock()
+    outside_repo.count.return_value = 0
+    app.dependency_overrides[get_lead_repository] = lambda: outside_repo
+    try:
+        response = client.post(
+            "/api/outreach/draft",
+            json={
+                "borrower_id": "B-48291",
+                "channel": "email",
+                "campaign_id": CAMPAIGN_A,
+                "variant_name": "Primary",
+            },
+            headers={"X-Forwarded-Email": OWNER},
+        )
+    finally:
+        app.dependency_overrides[get_lead_repository] = previous
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Borrower is not in the saved campaign cohort."
+    assert fake_lakebase_client.generated_outreach_drafts == []
+
+
+def test_campaign_approval_rechecks_membership_after_draft(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    draft = _draft(
+        campaign_id=CAMPAIGN_A,
+        variant_name="Primary",
+        headers={"X-Forwarded-Email": OWNER},
+    )
+    previous = app.dependency_overrides[get_lead_repository]
+    outside_repo = MagicMock()
+    outside_repo.count.return_value = 0
+    app.dependency_overrides[get_lead_repository] = lambda: outside_repo
+    monkeypatch.setattr(settings, "app_env", "production")
+    try:
+        response = client.post(
+            "/api/outreach/approve",
+            json=_approval(draft),
+            headers={"X-Forwarded-Email": OWNER},
+        )
+    finally:
+        app.dependency_overrides[get_lead_repository] = previous
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Borrower is not in the saved campaign cohort."
+    assert not any(
+        "INSERT INTO mip_app.approvals" in sql for sql, _params in fake_lakebase_client.executes
+    )
+
+
+def test_campaign_rejection_rechecks_saved_cohort_membership(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    _install_campaign_rows(monkeypatch, fake_lakebase_client)
+    previous = app.dependency_overrides[get_lead_repository]
+    outside_repo = MagicMock()
+    outside_repo.count.return_value = 0
+    app.dependency_overrides[get_lead_repository] = lambda: outside_repo
+    try:
+        response = client.post(
+            "/api/outreach/reject",
+            json={
+                "borrower_id": "B-48291",
+                "campaign_id": CAMPAIGN_A,
+                "variant_name": "Primary",
+                "channel": "email",
+                "rationale_code": "low_intent",
+            },
+            headers={"X-Forwarded-Email": OWNER},
+        )
+    finally:
+        app.dependency_overrides[get_lead_repository] = previous
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == "Borrower is not in the saved campaign cohort."
+    assert not any(
+        "INSERT INTO mip_app.approvals" in sql for sql, _params in fake_lakebase_client.executes
+    )
 
 
 @pytest.mark.parametrize(

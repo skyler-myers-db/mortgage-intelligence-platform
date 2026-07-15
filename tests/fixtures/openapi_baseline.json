@@ -3560,6 +3560,30 @@
       },
       "CampaignSummary": {
         "properties": {
+          "actionability_issue": {
+            "anyOf": [
+              {
+                "enum": [
+                  "legacy_contract",
+                  "invalid_name",
+                  "invalid_criteria",
+                  "invalid_policy",
+                  "invalid_configuration",
+                  "invalid_message_variants"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionability Issue"
+          },
+          "actionable": {
+            "default": true,
+            "title": "Actionable",
+            "type": "boolean"
+          },
           "campaign_id": {
             "title": "Campaign Id",
             "type": "string"

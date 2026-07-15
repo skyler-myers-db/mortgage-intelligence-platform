@@ -744,6 +744,15 @@ class CampaignSummary(BaseModel):
     name: str
     owner_email: str
     status: CampaignStatus
+    actionable: bool = True
+    actionability_issue: Literal[
+        "legacy_contract",
+        "invalid_name",
+        "invalid_criteria",
+        "invalid_policy",
+        "invalid_configuration",
+        "invalid_message_variants",
+    ] | None = None
     criteria: dict[str, object]
     suppression_policy: dict[str, object] = Field(default_factory=dict)
     message_variants: list[dict[str, object]] = Field(default_factory=list)

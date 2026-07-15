@@ -171,12 +171,14 @@ jobs:
           MIP_GIT_SHA: ${{ github.sha }}
           MIP_AI_GATEWAY_ENDPOINT: ${{ secrets.MIP_AI_GATEWAY_ENDPOINT }}
           MIP_AI_GATEWAY_INFERENCE_TABLE: ${{ secrets.MIP_AI_GATEWAY_INFERENCE_TABLE }}
+          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
         run: |
           set -euo pipefail
           unset DATABRICKS_TOKEN
           missing=""
           for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
-                   MIP_AI_GATEWAY_ENDPOINT MIP_AI_GATEWAY_INFERENCE_TABLE; do
+                   MIP_AI_GATEWAY_ENDPOINT MIP_AI_GATEWAY_INFERENCE_TABLE \
+                   MIP_AI_GATEWAY_PROOF_SIGNING_KEY; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi

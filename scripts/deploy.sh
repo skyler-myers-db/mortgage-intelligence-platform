@@ -468,6 +468,35 @@ if [[ -n "$_ID_MASK_RESOLVED" ]]; then
   export MIP_COTALITY_ID_MASK_SECRET="$_ID_MASK_RESOLVED"
 fi
 
+# Exact AI Gateway proof rows use verifier-only Ed25519 signatures. The App
+# receives only the derived public key, so the Lakebase proof-writer credential
+# cannot manufacture a claimable row by itself.
+_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
+if [[ -z "$_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED" ]]; then
+  _AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED="$(dotenv_value MIP_AI_GATEWAY_PROOF_SIGNING_KEY)"
+fi
+if [[ -z "$_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED" ]]; then
+  if [[ "$APP_RUNTIME_ENV" != "local" && "$APP_RUNTIME_ENV" != "test" ]]; then
+    echo "${RED}[deploy] ERROR: MIP_AI_GATEWAY_PROOF_SIGNING_KEY is required for target '$TARGET' (APP_ENV=${APP_RUNTIME_ENV}).${RST}" >&2
+    echo "${RED}  AI Gateway exact-row proof requires a verifier-only Ed25519 key.${RST}" >&2
+    exit 1
+  fi
+else
+  export MIP_AI_GATEWAY_PROOF_SIGNING_KEY="$_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED"
+  if ! MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$($PYTHON - <<'PYEOF'
+import os
+from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
+
+print(derive_gateway_proof_verify_key(os.environ["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"]))
+PYEOF
+)"; then
+    echo "${RED}[deploy] ERROR: MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid.${RST}" >&2
+    exit 1
+  fi
+  export MIP_AI_GATEWAY_PROOF_VERIFY_KEY
+  echo "  AI Gateway proof attestation: verifier private key / runtime public key configured"
+fi
+
 # App-facing automation uses three long-lived client credentials but no stored
 # bearer tokens. Normal/admin tokens are minted per run and reminted before
 # evaluation; the verifier client is used only for deployment-side Gateway

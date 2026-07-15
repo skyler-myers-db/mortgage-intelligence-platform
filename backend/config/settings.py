@@ -185,6 +185,9 @@ class Settings(BaseSettings):
     mip_agent_serving_endpoint: str | None = None
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
+    # Public Ed25519 key for exact inference-row proof attestations. The
+    # verifier-only private key is never injected into the App runtime.
+    mip_ai_gateway_proof_verify_key: str | None = None
     mip_ai_gateway_proof_freshness_s: float = Field(
         default=AI_GATEWAY_PROOF_FRESHNESS_MAX_S,
         gt=0,
