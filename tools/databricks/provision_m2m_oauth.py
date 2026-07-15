@@ -290,12 +290,7 @@ def _ensure_group_membership(
         _diag(f"service principal is already a member of group={group_name!r}")
         return False
 
-    from databricks.sdk.service.iam import (  # type: ignore
-        ComplexValue,
-        Patch,
-        PatchOp,
-        PatchSchema,
-    )
+    from databricks.sdk.service.iam import Patch, PatchOp, PatchSchema  # type: ignore
 
     _diag(f"adding service principal id={sp_id} to group={group_name!r}")
     try:
@@ -304,7 +299,10 @@ def _ensure_group_membership(
             operations=[
                 Patch(
                     op=PatchOp.ADD,
-                    value={"members": [ComplexValue(value=sp_id)]},
+                    # Patch.value is typed as Any. Nested SDK model instances
+                    # are not recursively serialized by Patch.as_dict(), so
+                    # keep the SCIM member payload JSON-native.
+                    value={"members": [{"value": sp_id}]},
                 )
             ],
             schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],

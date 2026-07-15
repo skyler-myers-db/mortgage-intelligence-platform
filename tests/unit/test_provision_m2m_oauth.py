@@ -266,7 +266,11 @@ def test_admin_create_group_then_adds_membership() -> None:
     client.groups.patch.assert_called_once()
     patch_kwargs = client.groups.patch.call_args.kwargs
     assert patch_kwargs["id"] == "group-1"
-    assert patch_kwargs["operations"][0].value["members"][0].value == "admin-scim-id"
+    operation = patch_kwargs["operations"][0]
+    assert operation.value["members"][0]["value"] == "admin-scim-id"
+    assert operation.as_dict()["value"] == {
+        "members": [{"value": "admin-scim-id"}],
+    }
     assert result.added_to_group is True
 
 
