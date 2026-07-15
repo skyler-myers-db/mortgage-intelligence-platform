@@ -138,6 +138,8 @@ export interface OutreachDraftResult {
   response_hash: string;
   source_refreshed_at: string;
   borrower_id: string;
+  campaign_id?: string | null;
+  variant_name?: string | null;
   offer_code: string;
   channel: 'email' | 'sms' | 'direct_mail';
   subject?: string | null;
@@ -205,6 +207,18 @@ export interface AuditEventPage {
   next_cursor: string | null;
 }
 
+export interface ActorAuditEventSummary {
+  event_type: string;
+  entity_type: string;
+  subject_id: string | null;
+  created_at: string;
+}
+
+export interface ActorAuditEventPage {
+  items: ActorAuditEventSummary[];
+  next_cursor: string | null;
+}
+
 /**
  * Segment multi-select semantics forwarded to /api/leads and geo rollups.
  * `any` = de-duplicated OR, `all` = AND intersection. Segment Intelligence
@@ -234,6 +248,21 @@ export interface LeadQueryOptions {
   assignedTo?: string | null;
   agedDays?: number | null;
   limit?: number;
+  growthAgentProof?: GrowthAgentCohortProof | null;
+}
+
+export interface GrowthAgentCohortProof {
+  actionableTotal: number;
+  cohortFingerprint: string;
+  snapshotId: string;
+  toolResultHash: string;
+}
+
+export interface GrowthAgentCohortVerification {
+  status: 'verified';
+  total: number;
+  cohortFingerprint: string;
+  snapshotId: string;
 }
 
 export interface AnalyticsQueryOptions {
@@ -263,6 +292,7 @@ export interface LeadsPageResult {
   totalMatching: number | null;
   returnedRows: number | null;
   truncatedAt: number | null;
+  growthAgentVerification: GrowthAgentCohortVerification | null;
 }
 
 export type GeoQueryCriteria = Record<string, string | number | readonly string[] | null | undefined>;
@@ -501,6 +531,113 @@ function _newRequestId(): string {
     const n = ch === 'x' ? Math.floor(Math.random() * 16) : 8 + Math.floor(Math.random() * 4);
     return n.toString(16);
   });
+}
+
+const SHA256_HEX_RE = /^[0-9a-f]{64}$/;
+const GROWTH_AGENT_PROOF_QUERY_KEYS = {
+  actionableTotal: 'actionable_total',
+  cohortFingerprint: 'actionable_cohort_fingerprint',
+  snapshotId: 'actionable_snapshot_id',
+  toolResultHash: 'tool_result_hash',
+} as const;
+
+function _growthAgentProofError(message: string): ApiError {
+  return new ApiError(message, {
+    path: apiPath('/api/leads'),
+    status: 409,
+    retryable: false,
+  });
+}
+
+function _growthAgentProofFromLocation(): GrowthAgentCohortProof | null {
+  if (typeof window === 'undefined') return null;
+  const params = new URLSearchParams(window.location.search);
+  const rawTotal = params.get(GROWTH_AGENT_PROOF_QUERY_KEYS.actionableTotal)?.trim() ?? '';
+  const cohortFingerprint = params.get(GROWTH_AGENT_PROOF_QUERY_KEYS.cohortFingerprint)?.trim().toLowerCase() ?? '';
+  const snapshotId = params.get(GROWTH_AGENT_PROOF_QUERY_KEYS.snapshotId)?.trim() ?? '';
+  const toolResultHash = params.get(GROWTH_AGENT_PROOF_QUERY_KEYS.toolResultHash)?.trim().toLowerCase() ?? '';
+  if (!rawTotal && !cohortFingerprint && !snapshotId && !toolResultHash) return null;
+
+  const actionableTotal = Number(rawTotal);
+  if (
+    !rawTotal
+    || !Number.isSafeInteger(actionableTotal)
+    || actionableTotal < 0
+    || !SHA256_HEX_RE.test(cohortFingerprint)
+    || !snapshotId
+    || !SHA256_HEX_RE.test(toolResultHash)
+  ) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort proof is incomplete. Run the workflow again before reviewing leads.',
+    );
+  }
+  return { actionableTotal, cohortFingerprint, snapshotId, toolResultHash };
+}
+
+export async function growthAgentCohortFingerprint(
+  cohortDigest: string,
+  toolResultHash: string,
+): Promise<string> {
+  const normalizedDigest = cohortDigest.trim().toLowerCase();
+  const normalizedToolHash = toolResultHash.trim().toLowerCase();
+  if (!SHA256_HEX_RE.test(normalizedDigest) || !SHA256_HEX_RE.test(normalizedToolHash)) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort proof is incomplete. Run the workflow again before reviewing leads.',
+    );
+  }
+  const subtle = globalThis.crypto?.subtle;
+  if (!subtle) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort proof cannot be verified in this browser.',
+    );
+  }
+  const canonical = JSON.stringify({
+    cohort_digest: normalizedDigest,
+    tool_result_hash: normalizedToolHash,
+    version: 1,
+  });
+  const digest = await subtle.digest('SHA-256', new TextEncoder().encode(canonical));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+
+async function _verifyGrowthAgentCohort(
+  headers: Headers,
+  proof: GrowthAgentCohortProof,
+): Promise<GrowthAgentCohortVerification> {
+  const rawTotal = headers.get('X-Total-Matching');
+  const cohortDigest = headers.get('X-Cohort-Digest')?.trim().toLowerCase() ?? '';
+  const snapshotId = headers.get('X-Cohort-Snapshot-ID')?.trim() ?? '';
+  const total = Number(rawTotal);
+  if (
+    rawTotal === null
+    || !Number.isSafeInteger(total)
+    || total < 0
+    || !SHA256_HEX_RE.test(cohortDigest)
+    || !snapshotId
+  ) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
+    );
+  }
+  const destinationFingerprint = await growthAgentCohortFingerprint(
+    cohortDigest,
+    proof.toolResultHash,
+  );
+  if (
+    total !== proof.actionableTotal
+    || destinationFingerprint !== proof.cohortFingerprint
+    || snapshotId !== proof.snapshotId
+  ) {
+    throw _growthAgentProofError(
+      'Growth Agent cohort is stale. Run the workflow again before reviewing or approving leads.',
+    );
+  }
+  return {
+    status: 'verified',
+    total,
+    cohortFingerprint: destinationFingerprint,
+    snapshotId,
+  };
 }
 
 export interface Retryable503Parsed {
@@ -1019,6 +1156,9 @@ export const api = {
     // returned 0 rows because the unfiltered top-500 from
     // lead_population didn't include the geo's borrowers.
     const params = new URLSearchParams();
+    const growthAgentProof = opts.growthAgentProof === undefined
+      ? _growthAgentProofFromLocation()
+      : opts.growthAgentProof;
     if (segment) params.set('segment', segment);
     if (opts.segmentCodes && opts.segmentCodes.length > 0) {
       params.set('segment_codes', opts.segmentCodes.join(','));
@@ -1039,6 +1179,7 @@ export const api = {
     if (opts.outreachStatus && opts.outreachStatus !== 'any') params.set('outreach_status', opts.outreachStatus);
     if (opts.assignedTo) params.set('assigned_to', opts.assignedTo);
     if (opts.agedDays) params.set('aged_days', String(opts.agedDays));
+    if (growthAgentProof) params.set('include_identity_proof', 'true');
     if (opts.portfolioCriteria) {
       for (const [key, value] of Object.entries(opts.portfolioCriteria)) {
         if (value !== null && value !== undefined && String(value).length > 0) {
@@ -1050,11 +1191,14 @@ export const api = {
     return getJsonWithHeaders<LeadSummary[]>(
       qs ? `/api/leads?${qs}` : '/api/leads',
       signal,
-    ).then(({ data, headers }) => ({
+    ).then(async ({ data, headers }) => ({
       leads: data,
       totalMatching: headers.get('X-Total-Matching') ? Number(headers.get('X-Total-Matching')) : null,
       returnedRows: headers.get('X-Returned-Rows') ? Number(headers.get('X-Returned-Rows')) : null,
       truncatedAt: headers.get('X-Truncated-At') ? Number(headers.get('X-Truncated-At')) : null,
+      growthAgentVerification: growthAgentProof
+        ? await _verifyGrowthAgentCohort(headers, growthAgentProof)
+        : null,
     }));
   },
 
@@ -1232,10 +1376,21 @@ export const api = {
     borrower_id: string,
     channel: 'email' | 'sms' | 'direct_mail' = 'email',
     signal?: AbortSignal,
+    campaign?: { campaign_id: string; variant_name: string },
   ) =>
-    postJson<OutreachDraftResult, { borrower_id: string; channel: 'email' | 'sms' | 'direct_mail' }>(
+    postJson<OutreachDraftResult, {
+      borrower_id: string;
+      channel: 'email' | 'sms' | 'direct_mail';
+      campaign_id: string | null;
+      variant_name: string | null;
+    }>(
       '/api/outreach/draft',
-      { borrower_id, channel },
+      {
+        borrower_id,
+        channel,
+        campaign_id: campaign?.campaign_id ?? null,
+        variant_name: campaign?.variant_name ?? null,
+      },
       signal,
     ),
 
@@ -1750,6 +1905,13 @@ export const api = {
       }
     });
     return getJson<AuditEventPage>(`/api/audit/events/page?${params.toString()}`, signal);
+  },
+
+  myAuditEvents: (limit = 8, signal?: AbortSignal, cursor?: string | null) => {
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (cursor) params.set('cursor', cursor);
+    return getJson<ActorAuditEventPage>(`/api/audit/my-events?${params.toString()}`, signal);
   },
 
   auditRollups: (period: 'day' | 'week' | 'month' = 'week', signal?: AbortSignal) =>

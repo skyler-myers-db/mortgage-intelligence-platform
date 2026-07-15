@@ -48,4 +48,20 @@ describe('audit API client', () => {
     expect(url.searchParams.get('borrower_id')).toBe('B-ABC123');
     expect(url.searchParams.get('action')).toBe('outreach.approve');
   });
+
+  it('calls the actor-scoped feed without exposing an actor filter', async () => {
+    const calls: Array<{ path: string; init?: RequestInit }> = [];
+    vi.stubGlobal('fetch', async (path: string, init?: RequestInit) => {
+      calls.push({ path, init });
+      return jsonResponse(200, { items: [], next_cursor: null });
+    });
+
+    await api.myAuditEvents(8, undefined, 'signed-cursor');
+
+    const url = new URL(calls[0].path, 'http://localhost');
+    expect(url.pathname).toBe('/api/v1/audit/my-events');
+    expect(url.searchParams.get('limit')).toBe('8');
+    expect(url.searchParams.get('cursor')).toBe('signed-cursor');
+    expect(url.searchParams.has('actor')).toBe(false);
+  });
 });

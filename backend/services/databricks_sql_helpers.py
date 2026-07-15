@@ -63,6 +63,7 @@ _ALLOWED_RELATIONS: frozenset[tuple[str, str]] = frozenset(
         ("gold", "zip_rollup"),
         ("ref", "lender_dictionary"),
         ("ref", "offer_rules_config"),
+        ("ref", "refresh_run_state"),
         ("ref", "state_footprint"),
         ("semantics", "borrower_opportunity_metric_view"),
         ("semantics", "certified_borrower_opportunity_metric_view"),

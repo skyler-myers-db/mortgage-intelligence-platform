@@ -34,6 +34,7 @@ const DRAFT = {
   borrower_id: 'B-AAAAAAAAAAAA1',
   offer_code: 'refi',
   channel: 'email',
+  subject: 'Your governed mortgage review',
   body: 'draft',
   status: 'draft',
 };
@@ -94,7 +95,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     vi.clearAllMocks();
     approvalsFixture = {};
     draftOutreach.mockResolvedValue(DRAFT);
-    approve.mockResolvedValue({ status: 'approved' });
+    approve.mockResolvedValue({ approved: true });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -105,14 +106,14 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     container.remove();
   });
 
-  function mount() {
+  function mount(initialEntry = '/lead-queue') {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } },
     });
     act(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <LeadTable leads={[lead('B-AAAAAAAAAAAA1')]} />
           </MemoryRouter>
         </QueryClientProvider>,
@@ -156,6 +157,7 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     expect(approve).toHaveBeenCalledWith(
       'B-AAAAAAAAAAAA1',
       expect.objectContaining({
+        draft_subject: DRAFT.subject,
         draft_body: DRAFT.body,
         draft_generation_id: DRAFT.generation_id,
         draft_response_hash: DRAFT.response_hash,
@@ -163,6 +165,95 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       }),
       undefined,
     );
+  });
+
+  it('forwards the governed email subject through the bulk approval API contract', async () => {
+    mount();
+    const checkbox = container.querySelector<HTMLInputElement>(
+      '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
+    );
+    if (!checkbox) throw new Error('lead checkbox not rendered');
+    act(() => checkbox.click());
+
+    const bulkApprove = container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-bulk-approve"]',
+    );
+    if (!bulkApprove) throw new Error('bulk approve button not rendered');
+    act(() => bulkApprove.click());
+    await flush();
+    await flush();
+
+    expect(approve).toHaveBeenCalledWith(
+      'B-AAAAAAAAAAAA1',
+      expect.objectContaining({
+        channel: 'email',
+        draft_subject: DRAFT.subject,
+        draft_body: DRAFT.body,
+        draft_generation_id: DRAFT.generation_id,
+        draft_response_hash: DRAFT.response_hash,
+        draft_source_refreshed_at: DRAFT.source_refreshed_at,
+      }),
+      expect.any(AbortSignal),
+    );
+  });
+
+  it('preserves a saved campaign variant through draft, approval, and the Offer handoff', async () => {
+    const campaignId = '11111111-1111-4111-8111-111111111111';
+    draftOutreach.mockResolvedValue({
+      ...DRAFT,
+      campaign_id: campaignId,
+      variant_name: 'B',
+    });
+    mount(`/lead-queue?campaign_id=${campaignId}&variant_name=B`);
+    const checkbox = container.querySelector<HTMLInputElement>(
+      '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
+    );
+    if (!checkbox) throw new Error('lead checkbox not rendered');
+    act(() => checkbox.click());
+
+    const bulkApprove = container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-bulk-approve"]',
+    );
+    if (!bulkApprove) throw new Error('bulk approve button not rendered');
+    act(() => bulkApprove.click());
+    await flush();
+    await flush();
+
+    expect(draftOutreach).toHaveBeenCalledWith(
+      'B-AAAAAAAAAAAA1',
+      'email',
+      expect.any(AbortSignal),
+      { campaign_id: campaignId, variant_name: 'B' },
+    );
+    expect(approve).toHaveBeenCalledWith(
+      'B-AAAAAAAAAAAA1',
+      expect.objectContaining({ campaign_id: campaignId, variant_name: 'B' }),
+      expect.any(AbortSignal),
+    );
+    expect(container.querySelector('[data-testid="campaign-operational-provenance"]')?.textContent)
+      .toContain('variant B');
+
+    const borrower = container.querySelector<HTMLButtonElement>('.lead-table__borrower-btn');
+    if (!borrower) throw new Error('borrower row button not rendered');
+    act(() => borrower.click());
+    const offer = container.querySelector<HTMLAnchorElement>('a[href*="/offer-orchestrator/"]');
+    if (!offer) throw new Error('bound Offer action not rendered');
+    const offerUrl = new URL(offer.href, 'https://mortgage-intelligence.local');
+    expect(offerUrl.searchParams.get('campaign_id')).toBe(campaignId);
+    expect(offerUrl.searchParams.get('variant_name')).toBe('B');
+  });
+
+  it('shows verified Growth Agent cohort provenance from a proof-bound route', () => {
+    mount(
+      `/lead-queue?actionable_total=5394&actionable_cohort_fingerprint=${'b'.repeat(64)}`
+      + '&actionable_snapshot_id=2026-07-14+12%3A00%3A00',
+    );
+
+    const proof = container.querySelector('[data-testid="growth-agent-cohort-proof"]');
+    expect(proof?.textContent).toContain('Verified Growth Agent cohort');
+    expect(proof?.textContent).toContain('5,394 borrowers');
+    expect(proof?.textContent).toContain('proof bbbbbbbbbbbb');
+    expect(proof?.textContent).toContain('snapshot 2026-07-14 12:00:00');
   });
 
   it("no-ops 'a' on an already-approved row, and the preview SAYS approved", async () => {

@@ -7,9 +7,10 @@ import json
 import logging
 import sys
 import time
-import uuid
 from datetime import UTC, datetime
 from typing import Any
+
+from fastapi import HTTPException
 
 from backend.schemas.campaign_status import validate_campaign_status_transition
 from backend.schemas.portfolio import (
@@ -47,6 +48,7 @@ log = logging.getLogger(__name__)
 
 _CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS = 3
 _CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
+_CAMPAIGN_STATUS_LOOKUP_ATTEMPTS = 3
 
 
 def _get_lakebase_client():
@@ -104,6 +106,27 @@ class DatabricksPortfolioRepository:
     # `is_high_opportunity` indicator); no score-threshold literal may
     # appear here (tests/unit/test_score_threshold_guard.py enforces).
     _PREVIEW_SQL_TEMPLATE = (
+        "WITH preview_population AS ("
+        "  SELECT "
+        "    headline.borrower_id, headline.state, headline.opportunity_score, "
+        "    headline.in_the_money, headline.is_high_opportunity, headline.score_band, "
+        "    headline.offer_available, headline.offer_recommended, "
+        "    headline.recommended_offer_code, headline.is_owner_occupied, "
+        "    headline.current_lien_balance, headline.second_pos_amount, "
+        "    headline.related_property_count, headline.listed_for_sale, "
+        "    headline.has_heloc_propensity_trigger, headline.is_current_customer, "
+        "    headline.is_former_customer, headline.is_competitor_lien, "
+        "    headline.current_lender_ref, headline.loan_product_type, "
+        "    headline.origination_channel, headline.equity_pct, "
+        "    headline.marketing_eligible, headline.consent_status, "
+        "    headline.suppression_reason, headline.dnc, "
+        "    headline.eligible_recontact_at, headline.last_touch_at, "
+        "    headline.has_unresolved_owner, headline.refreshed_at, "
+        "    borrower.rate_spread_bps AS preview_rate_spread_bps "
+        f"  FROM {qualify('semantics', 'portfolio_headline_metric_view')} AS headline "
+        f"  LEFT JOIN {qualify('gold', 'borrower_360')} AS borrower "
+        "    ON borrower.borrower_id = headline.borrower_id"
+        ") "
         "SELECT "
         "  COUNT(*)                                                    AS marketable_population, "
         "  SUM(CASE WHEN in_the_money THEN 1 ELSE 0 END)               AS high_intent_leads, "
@@ -116,7 +139,7 @@ class DatabricksPortfolioRepository:
         "    AS avg_high_intent_lien_balance_usd, "
         "  CAST(ROUND(SUM(current_lien_balance)) AS BIGINT)            AS total_current_lien_balance_usd, "
         "  ROUND(AVG(equity_pct), 1)                                   AS avg_equity_pct, "
-        "  ROUND(AVG(rate_spread_bps), 1)                              AS avg_rate_spread_bps, "
+        "  ROUND(AVG(preview_rate_spread_bps), 1)                      AS avg_rate_spread_bps, "
         "  MAX(refreshed_at)                                            AS data_refreshed_at, "
         "  SUM(CASE WHEN recommended_offer_code = 'purchase' THEN 1 ELSE 0 END) AS offer_purchase, "
         "  SUM(CASE WHEN recommended_offer_code = 'refi_plus_heloc' THEN 1 ELSE 0 END) AS offer_refi_plus_heloc, "
@@ -126,7 +149,7 @@ class DatabricksPortfolioRepository:
         "  SUM(CASE WHEN recommended_offer_code = 'investor' THEN 1 ELSE 0 END) AS offer_investor, "
         "  SUM(CASE WHEN recommended_offer_code = 'retention' THEN 1 ELSE 0 END) AS offer_retention, "
         "  SUM(CASE WHEN recommended_offer_code = 'nurture' THEN 1 ELSE 0 END) AS offer_nurture "
-        f"FROM {qualify('semantics', 'portfolio_headline_metric_view')} "
+        "FROM preview_population "
         "{where}"
     )
 
@@ -393,7 +416,7 @@ class DatabricksPortfolioRepository:
         WHERE a.entity_type = 'campaign'
           AND a.entity_id = c.campaign_id::text
           AND a.event_type = 'PORTFOLIO_CREATE'
-        ORDER BY a.occurred_at ASC
+        ORDER BY a.event_at ASC
         LIMIT 1
       ) AS audit_id
     FROM mip_app.campaigns c
@@ -438,7 +461,7 @@ class DatabricksPortfolioRepository:
     _CAMPAIGN_PATCH_SQL = """
     WITH updated_campaign AS (
       UPDATE mip_app.campaigns
-      SET status = %(status)s, updated_at = now()
+      SET status = %(status)s, updated_at = %(transition_at)s::timestamptz
       WHERE campaign_id = %(campaign_id)s::uuid
         AND status = %(current_status)s
       RETURNING campaign_id::text, name, owner_email, status, criteria,
@@ -448,7 +471,7 @@ class DatabricksPortfolioRepository:
     inserted_audit AS (
       INSERT INTO mip_app.action_audit (
         event_type, actor_email, entity_type, entity_id,
-        request_id, correlation_id, evidence_ids, metadata
+        request_id, correlation_id, evidence_ids, metadata, event_at
       )
       SELECT
         'CAMPAIGN_STATUS_UPDATE',
@@ -458,13 +481,34 @@ class DatabricksPortfolioRepository:
         %(request_id)s,
         %(correlation_id)s,
         %(evidence_ids)s::TEXT[],
-        %(metadata)s::jsonb
+        %(metadata)s::jsonb,
+        %(transition_at)s::timestamptz
       FROM updated_campaign
       RETURNING audit_id
     )
     SELECT updated_campaign.*, inserted_audit.audit_id
     FROM updated_campaign
     LEFT JOIN inserted_audit ON TRUE
+    """
+
+    _CAMPAIGN_STATUS_IDEMPOTENCY_LOOKUP_SQL = """
+    SELECT c.campaign_id::text, c.name, c.owner_email,
+           COALESCE(NULLIF(a.metadata->>'status', ''), c.status) AS status,
+           c.criteria,
+           c.suppression_policy, c.message_variants, c.channel_cascade,
+           c.send_window, c.holdout, c.roi_assumptions, c.household_dedup,
+           c.household_summary, c.created_at, a.event_at AS updated_at,
+           a.audit_id, a.metadata AS audit_metadata
+    FROM mip_app.campaigns c
+    JOIN mip_app.action_audit a
+      ON a.entity_type = 'campaign'
+     AND a.entity_id = c.campaign_id::text
+    WHERE c.campaign_id = %(campaign_id)s::uuid
+      AND a.actor_email = %(actor)s
+      AND a.request_id = %(request_id)s
+      AND a.event_type = 'CAMPAIGN_STATUS_UPDATE'
+    ORDER BY a.event_at ASC
+    LIMIT 1
     """
 
     @staticmethod
@@ -1074,6 +1118,81 @@ class DatabricksPortfolioRepository:
             return {}
         return self._campaign_from_row(row).model_dump()
 
+    @staticmethod
+    def _campaign_status_request_id(
+        portfolio_id: str,
+        payload: CampaignStatusPatchRequest,
+        *,
+        actor: str,
+        caller_request_id: str | None = None,
+        source_status: str | None = None,
+        source_updated_at: Any = None,
+    ) -> str:
+        source_timestamp = coerce_utc_datetime(source_updated_at)
+        transition_instance = {
+            "source_status": source_status,
+            "source_updated_at": (
+                source_timestamp.isoformat()
+                if source_timestamp is not None
+                else str(source_updated_at or "")
+            ),
+        }
+        canonical = json.dumps(
+            {
+                "actor": actor.strip().lower(),
+                "campaign_id": portfolio_id,
+                "request_identity": (
+                    {"caller_request_id": caller_request_id}
+                    if caller_request_id
+                    else {
+                        **transition_instance,
+                        "rationale": payload.rationale,
+                        "status": payload.status,
+                    }
+                ),
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+        return f"campaign-status-{digest}"
+
+    def _campaign_status_replay(
+        self,
+        lakebase: Any,
+        *,
+        portfolio_id: str,
+        actor: str,
+        request_id: str,
+        target_status: str,
+        rationale: str | None,
+        attempts: int = 1,
+    ) -> CampaignSummary | None:
+        params = {
+            "campaign_id": portfolio_id,
+            "actor": actor,
+            "request_id": request_id,
+        }
+        for attempt in range(max(1, attempts)):
+            if attempt:
+                time.sleep(_CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S * attempt)
+            row = lakebase.fetchone(self._CAMPAIGN_STATUS_IDEMPOTENCY_LOOKUP_SQL, params)
+            if row is None:
+                continue
+            if not row.get("audit_id"):
+                raise LakebaseError("campaign status idempotency row is missing audit_id")
+            audit_metadata = self._json_value(row.get("audit_metadata"), {})
+            audited_rationale = (
+                audit_metadata.get("rationale") if isinstance(audit_metadata, dict) else None
+            )
+            if str(row.get("status") or "") != target_status or audited_rationale != rationale:
+                raise HTTPException(
+                    status_code=409,
+                    detail="campaign status idempotency key belongs to a different transition",
+                )
+            return self._campaign_from_row(row)
+        return None
+
     def patch_status(
         self,
         portfolio_id: str,
@@ -1081,14 +1200,42 @@ class DatabricksPortfolioRepository:
         *,
         actor: str | None = None,
     ) -> CampaignSummary:
-        existing = _get_lakebase_client().fetchone(
+        lakebase = _get_lakebase_client()
+        existing = lakebase.fetchone(
             self._CAMPAIGN_GET_SQL,
             {"campaign_id": portfolio_id},
         )
         if existing is None:
             raise LakebaseError("campaign status update returned no row")
         actor_email = actor or "unknown"
+        # The request middleware accepts and echoes X-Correlation-ID. A caller
+        # preserves that ID for lost-response replay and uses a new one for a
+        # later lifecycle transition instance.
+        correlation_id = get_correlation_id()
         current_status = str(existing.get("status") or "")
+        request_id = self._campaign_status_request_id(
+            portfolio_id,
+            payload,
+            actor=actor_email,
+            caller_request_id=correlation_id,
+            source_status=current_status,
+            source_updated_at=existing.get("updated_at"),
+        )
+        replay = self._campaign_status_replay(
+            lakebase,
+            portfolio_id=portfolio_id,
+            actor=actor_email,
+            request_id=request_id,
+            target_status=payload.status,
+            rationale=payload.rationale,
+        )
+        if replay is not None:
+            return replay
+        if current_status == payload.status:
+            raise HTTPException(
+                status_code=409,
+                detail="campaign status was already changed by a different request",
+            )
         transition_evidence = validate_campaign_status_transition(
             payload,
             campaign_id=portfolio_id,
@@ -1128,15 +1275,16 @@ class DatabricksPortfolioRepository:
                 }
             )
             evidence_ids.append(transition_evidence.approval_id)
-        row = _get_lakebase_client().fetchone(
+        row = lakebase.fetchone(
             self._CAMPAIGN_PATCH_SQL,
             {
                 "campaign_id": portfolio_id,
                 "current_status": current_status,
                 "status": payload.status,
                 "actor": actor_email,
-                "request_id": f"campaign-status-{uuid.uuid4()}",
-                "correlation_id": get_correlation_id(),
+                "request_id": request_id,
+                "correlation_id": correlation_id,
+                "transition_at": datetime.now(UTC),
                 "evidence_ids": evidence_ids,
                 "metadata": json.dumps(
                     build_safe_audit_metadata(
@@ -1148,9 +1296,24 @@ class DatabricksPortfolioRepository:
             },
         )
         if row is None:
-            raise LakebaseError("campaign status update returned no row")
-        campaign = self._campaign_from_row(row)
-        return campaign
+            replay = self._campaign_status_replay(
+                lakebase,
+                portfolio_id=portfolio_id,
+                actor=actor_email,
+                request_id=request_id,
+                target_status=payload.status,
+                rationale=payload.rationale,
+                attempts=_CAMPAIGN_STATUS_LOOKUP_ATTEMPTS,
+            )
+            if replay is not None:
+                return replay
+            raise HTTPException(
+                status_code=409,
+                detail="campaign status changed concurrently; refresh before retrying",
+            )
+        if not row.get("audit_id"):
+            raise LakebaseError("campaign status update returned no audit row")
+        return self._campaign_from_row(row)
 
 
 def build_preview_predicates(

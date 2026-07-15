@@ -17,6 +17,7 @@ import hashlib
 import json
 import re
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
 from uuid import uuid4
@@ -71,9 +72,12 @@ from backend.services.lakebase_bootstrap import (
     ensure_approval_idempotency_column,
 )
 from backend.services.outreach_copy import _safe_offer_code
-from backend.services.outreach_intelligence import compose_intelligent_outreach
+from backend.services.outreach_intelligence import (
+    GovernedCampaignVariant,
+    compose_intelligent_outreach,
+)
 from backend.services.pii_redaction import scrub_free_text
-from backend.services.rbac import require_approver
+from backend.services.rbac import require_admin, require_approver
 from backend.services.repositories import OutreachRepository, get_outreach_repository
 from backend.services.sales_state import clear_sales_state_cache
 
@@ -86,11 +90,12 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 
 _APPROVAL_INSERT = """
 INSERT INTO mip_app.approvals (
-    approval_id, campaign_id, borrower_id, offer_code, action,
+    approval_id, campaign_id, variant_name, channel, borrower_id, offer_code, action,
     actor_email, rationale, request_id, assigned_to_email, follow_up_at,
     decision_intent, decision_payload_hash
 ) VALUES (
-    %(approval_id)s, %(campaign_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
+    %(approval_id)s, %(campaign_id)s, %(variant_name)s, %(channel)s,
+    %(borrower_id)s, %(offer_code)s, %(action)s,
     %(actor_email)s, %(rationale)s, %(request_id)s, %(assigned_to_email)s, %(follow_up_at)s,
     %(decision_intent)s, %(decision_payload_hash)s
 )
@@ -100,11 +105,12 @@ ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 
 _APPROVAL_INSERT_RETURNING = """
 INSERT INTO mip_app.approvals (
-    approval_id, campaign_id, borrower_id, offer_code, action,
+    approval_id, campaign_id, variant_name, channel, borrower_id, offer_code, action,
     actor_email, rationale, request_id, assigned_to_email, follow_up_at,
     decision_intent, decision_payload_hash
 ) VALUES (
-    %(approval_id)s, %(campaign_id)s, %(borrower_id)s, %(offer_code)s, %(action)s,
+    %(approval_id)s, %(campaign_id)s, %(variant_name)s, %(channel)s,
+    %(borrower_id)s, %(offer_code)s, %(action)s,
     %(actor_email)s, %(rationale)s, %(request_id)s, %(assigned_to_email)s, %(follow_up_at)s,
     %(decision_intent)s, %(decision_payload_hash)s
 )
@@ -115,7 +121,8 @@ RETURNING approval_id
 
 _APPROVAL_LOOKUP_BY_REQUEST_ID = """
 SELECT approval_id, borrower_id, action, actor_email, decision_intent,
-       decision_payload_hash, decision_response, audit_event_id
+       decision_payload_hash, decision_response, audit_event_id,
+       campaign_id, variant_name, channel
 FROM mip_app.approvals
 WHERE request_id = %(request_id)s
 LIMIT 1
@@ -162,12 +169,31 @@ FROM persisted
 """
 
 _GENERATED_OUTREACH_DRAFT_LOOKUP = """
-SELECT generation_id, audit_event_id, actor_email, borrower_id, channel,
-       offer_code, generation_mode, response_hash, response_json
+SELECT generation_id, audit_event_id, actor_email, borrower_id, campaign_id,
+       variant_name, channel, offer_code, generation_mode, response_hash, response_json
 FROM mip_app.generated_outreach_drafts
 WHERE generation_id = %(generation_id)s
   AND actor_email = %(actor_email)s
   AND borrower_id = %(borrower_id)s
+  AND campaign_id IS NOT DISTINCT FROM %(campaign_id)s
+  AND variant_name IS NOT DISTINCT FROM %(variant_name)s
+LIMIT 1
+"""
+
+_CAMPAIGN_ACCESS_LOOKUP = """
+SELECT campaign_id::text, owner_email
+FROM mip_app.campaigns
+WHERE campaign_id = %(campaign_id)s::uuid
+LIMIT 1
+"""
+
+_CAMPAIGN_VARIANT_LOOKUP = """
+SELECT campaign_id::text, variant_name, channel, subject, body,
+       generation_mode, generator_label
+FROM mip_app.campaign_message_variants
+WHERE campaign_id = %(campaign_id)s::uuid
+  AND variant_name = %(variant_name)s
+  AND channel = %(channel)s
 LIMIT 1
 """
 
@@ -184,7 +210,163 @@ def _intent_hash(intent: str) -> str:
 
 def _outreach_draft_response_hash(response: OutreachDraft) -> str:
     payload = response.model_dump(mode="json", exclude={"response_hash"})
+    if response.campaign_id is None and response.variant_name is None:
+        # Preserve verification of campaign-less proofs emitted before these
+        # fields existed. Bound drafts always retain both fields in the hash.
+        payload.pop("campaign_id", None)
+        payload.pop("variant_name", None)
     return _intent_hash(_canonical_intent(payload))
+
+
+def _approval_decision_intent(
+    payload: OutreachApproveRequest,
+    *,
+    actor: str,
+    offer_code: str,
+    evidence_ids: list[str],
+    safe_rationale: str | None,
+    safe_bulk_rationale: str | None,
+) -> str:
+    return _canonical_intent(
+        {
+            "action": "approve",
+            "actor": actor,
+            "borrower_id": payload.borrower_id,
+            "offer_code": offer_code,
+            "offer_code_supplied": payload.offer_code is not None,
+            "channel": payload.channel,
+            "campaign_id": payload.campaign_id,
+            "variant_name": payload.variant_name,
+            "evidence_ids": evidence_ids,
+            "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
+            "rationale": safe_rationale,
+            "bulk_id": payload.bulk_id,
+            "bulk_rationale": safe_bulk_rationale,
+            "draft_body": (payload.draft_body or "").strip(),
+            "draft_subject": (payload.draft_subject or "").strip() or None,
+            "draft_generation_id": payload.draft_generation_id,
+            "draft_response_hash": payload.draft_response_hash,
+            "draft_source_refreshed_at": payload.draft_source_refreshed_at,
+            "assigned_to_email": payload.assigned_to_email,
+            "follow_up_in_days": payload.follow_up_in_days,
+        }
+    )
+
+
+def _normalized_payload_evidence_ids(evidence_ids: list[str]) -> list[str]:
+    return list(dict.fromkeys(str(value).strip() for value in evidence_ids if str(value).strip()))
+
+
+def _reject_decision_intent(
+    payload: OutreachRejectRequest,
+    *,
+    actor: str,
+    offer_code: str,
+    evidence_ids: list[str],
+    safe_rationale: str,
+    campaign_id: str | None,
+    variant_name: str | None,
+) -> str:
+    return _canonical_intent(
+        {
+            "action": "reject",
+            "actor": actor,
+            "borrower_id": payload.borrower_id,
+            "offer_code": offer_code,
+            "offer_code_supplied": payload.offer_code is not None,
+            "channel": payload.channel,
+            "campaign_id": campaign_id,
+            "variant_name": variant_name,
+            "evidence_ids": evidence_ids,
+            "evidence_ids_supplied": bool(_normalized_payload_evidence_ids(payload.evidence_ids)),
+            "rationale_code": payload.rationale_code,
+            "rationale": safe_rationale,
+        }
+    )
+
+
+def _resolve_governed_campaign_variant(
+    lakebase: LakebaseClient,
+    *,
+    request: Request,
+    actor: str,
+    campaign_id: str | None,
+    variant_name: str | None,
+    channel: str,
+) -> GovernedCampaignVariant | None:
+    """Authorize and load the exact normalized campaign variant."""
+
+    if campaign_id is None and variant_name is None:
+        return None
+    if campaign_id is None or variant_name is None:
+        raise HTTPException(
+            status_code=422,
+            detail="campaign_id and variant_name must be supplied together",
+        )
+
+    campaign = lakebase.fetchone(_CAMPAIGN_ACCESS_LOOKUP, {"campaign_id": campaign_id})
+    if campaign is None:
+        raise HTTPException(status_code=404, detail="campaign not found")
+    owner_email = str(campaign.get("owner_email") or "").strip().lower()
+    if owner_email != actor.lower():
+        try:
+            require_admin(request)
+        except HTTPException:
+            raise HTTPException(status_code=404, detail="campaign not found") from None
+
+    row = lakebase.fetchone(
+        _CAMPAIGN_VARIANT_LOOKUP,
+        {
+            "campaign_id": campaign_id,
+            "variant_name": variant_name,
+            "channel": channel,
+        },
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="campaign variant not found")
+
+    row_campaign_id = str(row.get("campaign_id") or "").strip()
+    row_variant_name = str(row.get("variant_name") or "").strip()
+    row_channel = str(row.get("channel") or "").strip()
+    if row_campaign_id != campaign_id or row_variant_name != variant_name or row_channel != channel:
+        raise HTTPException(status_code=409, detail="campaign variant binding is invalid")
+    try:
+        subject_value = row.get("subject")
+        subject = (
+            assert_public_campaign_text(
+                subject_value,
+                field_name="campaign variant subject",
+                max_length=120,
+            )
+            if subject_value is not None
+            else None
+        )
+        body = assert_public_campaign_text(
+            row.get("body") or "",
+            field_name="campaign variant body",
+            max_length=5000,
+        )
+        if subject:
+            assert_borrower_campaign_copy(subject, field_name="campaign variant subject")
+        assert_borrower_campaign_copy(body, field_name="campaign variant body")
+        generator_label = assert_public_campaign_text(
+            row.get("generator_label") or "Governed campaign variant",
+            field_name="campaign variant generator label",
+            max_length=80,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail="campaign variant content is invalid") from exc
+    if not body:
+        raise HTTPException(status_code=409, detail="campaign variant content is invalid")
+    return GovernedCampaignVariant(
+        campaign_id=campaign_id,
+        variant_name=variant_name,
+        channel=channel,
+        subject=subject,
+        body=body,
+        generation_mode=str(row.get("generation_mode") or "operator"),
+        generator_label=generator_label,
+    )
 
 
 def _refresh_timestamp(value: Any) -> datetime | None:
@@ -224,6 +406,8 @@ def _verified_generated_draft(
             "generation_id": generation_id,
             "actor_email": actor,
             "borrower_id": payload.borrower_id,
+            "campaign_id": payload.campaign_id,
+            "variant_name": payload.variant_name,
         },
     )
     if row is None:
@@ -260,6 +444,12 @@ def _verified_generated_draft(
         str(row.get("generation_id") or "") == generated.generation_id == generation_id
         and str(row.get("actor_email") or "") == actor
         and str(row.get("borrower_id") or "") == payload.borrower_id == generated.borrower_id
+        and (str(row.get("campaign_id")) if row.get("campaign_id") is not None else None)
+        == payload.campaign_id
+        == generated.campaign_id
+        and (str(row.get("variant_name")) if row.get("variant_name") is not None else None)
+        == payload.variant_name
+        == generated.variant_name
         and str(row.get("channel") or "") == payload.channel == generated.channel
         and str(row.get("offer_code") or "") == offer_code == generated.offer_code
         and stored_hash == generated.response_hash == payload.draft_response_hash == expected_hash
@@ -361,6 +551,171 @@ def _lookup_existing_approval(
     )
 
 
+def _stored_decision_intent(row: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    stored_intent = str(row.get("decision_intent") or "")
+    stored_hash = str(row.get("decision_payload_hash") or "")
+    if not stored_intent or stored_hash != _intent_hash(stored_intent):
+        raise HTTPException(
+            status_code=409,
+            detail="prior outreach decision cannot be reconstructed safely",
+        )
+    try:
+        parsed = json.loads(stored_intent)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="prior outreach decision cannot be reconstructed safely",
+        ) from exc
+    if not isinstance(parsed, dict) or _canonical_intent(parsed) != stored_intent:
+        raise HTTPException(
+            status_code=409,
+            detail="prior outreach decision cannot be reconstructed safely",
+        )
+    return parsed, stored_intent
+
+
+def _source_marker_matches(
+    intent: dict[str, Any],
+    *,
+    marker: str,
+    supplied: bool,
+) -> bool:
+    if marker not in intent:
+        # Legacy intents did not record whether a borrower-derived value was
+        # omitted by the caller. Only an explicit retry value can prove a
+        # match without consulting mutable UC state.
+        return supplied
+    value = intent.get(marker)
+    return isinstance(value, bool) and value is supplied
+
+
+def _intent_evidence_matches(intent: dict[str, Any], payload_ids: list[str]) -> bool:
+    normalized = _normalized_payload_evidence_ids(payload_ids)
+    supplied = bool(normalized)
+    if not _source_marker_matches(
+        intent,
+        marker="evidence_ids_supplied",
+        supplied=supplied,
+    ):
+        return False
+    if not supplied:
+        return True
+    stored = intent.get("evidence_ids")
+    if not isinstance(stored, list):
+        return False
+    stored_ids = _normalized_payload_evidence_ids([str(value) for value in stored])
+    return len(stored_ids) == len(normalized) and set(stored_ids) == set(normalized)
+
+
+def _intent_offer_matches(
+    intent: dict[str, Any],
+    payload_offer_code: str | None,
+) -> bool:
+    supplied = payload_offer_code is not None
+    if not _source_marker_matches(
+        intent,
+        marker="offer_code_supplied",
+        supplied=supplied,
+    ):
+        return False
+    return not supplied or intent.get("offer_code") == payload_offer_code
+
+
+def _approve_intent_matches_payload(
+    intent: dict[str, Any],
+    *,
+    payload: OutreachApproveRequest,
+    actor: str,
+    safe_rationale: str | None,
+    safe_bulk_rationale: str | None,
+) -> bool:
+    expected = {
+        "action": "approve",
+        "actor": actor,
+        "borrower_id": payload.borrower_id,
+        "channel": payload.channel,
+        "campaign_id": payload.campaign_id,
+        "variant_name": payload.variant_name,
+        "rationale": safe_rationale,
+        "bulk_id": payload.bulk_id,
+        "bulk_rationale": safe_bulk_rationale,
+        "draft_body": (payload.draft_body or "").strip(),
+        "draft_subject": (payload.draft_subject or "").strip() or None,
+        "draft_generation_id": payload.draft_generation_id,
+        "draft_response_hash": payload.draft_response_hash,
+        "draft_source_refreshed_at": payload.draft_source_refreshed_at,
+        "assigned_to_email": payload.assigned_to_email,
+        "follow_up_in_days": payload.follow_up_in_days,
+    }
+    return (
+        all(intent.get(key) == value for key, value in expected.items())
+        and _intent_offer_matches(intent, payload.offer_code)
+        and _intent_evidence_matches(intent, payload.evidence_ids)
+    )
+
+
+def _reject_intent_matches_payload(
+    intent: dict[str, Any],
+    *,
+    payload: OutreachRejectRequest,
+    actor: str,
+    safe_rationale: str,
+) -> bool:
+    expected = {
+        "action": "reject",
+        "actor": actor,
+        "borrower_id": payload.borrower_id,
+        "channel": payload.channel,
+        "campaign_id": payload.campaign_id,
+        "variant_name": payload.variant_name,
+        "rationale_code": payload.rationale_code,
+        "rationale": safe_rationale,
+    }
+    return (
+        all(intent.get(key) == value for key, value in expected.items())
+        and _intent_offer_matches(intent, payload.offer_code)
+        and _intent_evidence_matches(intent, payload.evidence_ids)
+    )
+
+
+def _lookup_persisted_decision_replay(
+    lakebase: LakebaseClient,
+    request_id: str,
+    *,
+    actor: str,
+    borrower_id: str,
+    action: str,
+    intent_matches_payload: Callable[[dict[str, Any]], bool],
+) -> dict[str, Any] | None:
+    """Reconstruct an exact persisted retry before any mutable source reads."""
+
+    row = lakebase.fetchone(_APPROVAL_LOOKUP_BY_REQUEST_ID, {"request_id": request_id})
+    if row is None:
+        return None
+    if (
+        str(row.get("actor_email") or "") != actor
+        or str(row.get("borrower_id") or "") != borrower_id
+        or str(row.get("action") or "") != action
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail="request_id already belongs to a different outreach decision",
+        )
+    intent, stored_intent = _stored_decision_intent(row)
+    if not intent_matches_payload(intent):
+        raise HTTPException(
+            status_code=409,
+            detail="request_id already belongs to a different outreach decision",
+        )
+    return _existing_approval_response_or_conflict(
+        row,
+        actor=actor,
+        borrower_id=borrower_id,
+        action=action,
+        expected_intent=stored_intent,
+    )
+
+
 def _existing_approval_response_or_conflict(
     row: dict[str, Any] | None,
     *,
@@ -422,6 +777,8 @@ def _commit_outreach_decision_atomic(
     action: str,
     borrower_id: str,
     campaign_id: str | None,
+    variant_name: str | None,
+    channel: str,
     offer_code: str | None,
     rationale: str | None,
     request_id: str,
@@ -444,6 +801,8 @@ def _commit_outreach_decision_atomic(
                 {
                     "approval_id": approval_id,
                     "campaign_id": campaign_id,
+                    "variant_name": variant_name,
+                    "channel": channel,
                     "borrower_id": borrower_id,
                     "offer_code": offer_code,
                     "action": action,
@@ -792,8 +1151,8 @@ def _persist_generated_outreach_draft(
         payload_json={
             "channel": payload.channel,
             "offer_code": response.offer_code,
-            "campaign_id": payload.campaign_id,
-            "variant_name": payload.variant_name,
+            "campaign_id": response.campaign_id,
+            "variant_name": response.variant_name,
             "generation_mode": response.generation_mode,
             **_marketing_audit_payload(borrower),
             "disclosure_version": response.disclosure_version,
@@ -809,8 +1168,8 @@ def _persist_generated_outreach_draft(
             "audit_id": audit_id,
             "generation_id": generation_id,
             "borrower_id": response.borrower_id,
-            "campaign_id": payload.campaign_id,
-            "variant_name": payload.variant_name,
+            "campaign_id": response.campaign_id,
+            "variant_name": response.variant_name,
             "channel": response.channel,
             "offer_code": response.offer_code,
             "generation_mode": response.generation_mode,
@@ -836,6 +1195,8 @@ def _persist_generated_outreach_draft(
         or reconstructed.response_hash != response_hash
         or _outreach_draft_response_hash(reconstructed) != response_hash
         or _canonical_intent(reconstructed.model_dump(mode="json")) != response_json
+        or reconstructed.campaign_id != payload.campaign_id
+        or reconstructed.variant_name != payload.variant_name
     ):
         raise LakebaseError("generated outreach draft proof does not match its response")
     return reconstructed
@@ -851,6 +1212,19 @@ def draft_outreach(
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> OutreachDraft:
     actor = resolve_actor(request)
+    try:
+        campaign_variant = _resolve_governed_campaign_variant(
+            lakebase,
+            request=request,
+            actor=actor,
+            campaign_id=payload.campaign_id,
+            variant_name=payload.variant_name,
+            channel=payload.channel,
+        )
+    except HTTPException:
+        raise
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
     b = repo.find_borrower(payload.borrower_id)
     if b is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -868,16 +1242,22 @@ def draft_outreach(
             status_code=409,
             detail="Borrower source freshness is unavailable; refresh before generating outreach.",
         )
-    draft = compose_intelligent_outreach(
-        borrower=b,
-        channel=payload.channel,
-        disclosure=disclosure,
-    )
+    try:
+        draft = compose_intelligent_outreach(
+            borrower=b,
+            channel=payload.channel,
+            disclosure=disclosure,
+            campaign_variant=campaign_variant,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     response = OutreachDraft(
         generation_id=str(uuid4()),
         response_hash="0" * 64,
         source_refreshed_at=source_refreshed_at,
         borrower_id=b.borrower_id,
+        campaign_id=payload.campaign_id,
+        variant_name=payload.variant_name,
         offer_code=offer_code,
         channel=payload.channel,
         subject=draft.subject if payload.channel in {"email", "direct_mail"} else None,
@@ -934,6 +1314,34 @@ def approve_outreach(
     # allowlist it admits every authenticated workspace user (documented
     # Module 0 demo posture) and returns the same edge-resolved actor.
     actor = require_approver(request)
+    safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
+    safe_bulk_rationale = (
+        scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
+    )
+    if payload.request_id:
+        try:
+            replay = _lookup_persisted_decision_replay(
+                lakebase,
+                payload.request_id,
+                actor=actor,
+                borrower_id=payload.borrower_id,
+                action="approve",
+                intent_matches_payload=lambda intent: _approve_intent_matches_payload(
+                    intent,
+                    payload=payload,
+                    actor=actor,
+                    safe_rationale=safe_rationale,
+                    safe_bulk_rationale=safe_bulk_rationale,
+                ),
+            )
+        except LakebaseError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=safe_dependency_detail("lakebase"),
+            ) from exc
+        if replay is not None:
+            return OutreachApproveResponse.model_validate(replay)
+
     borrower = repo.find_borrower(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -947,39 +1355,19 @@ def approve_outreach(
         borrower,
         action_label="Approval",
     )
-    normalized_draft_body = (payload.draft_body or "").strip()
-    normalized_draft_subject = (payload.draft_subject or "").strip() or None
     assigned_to_email = payload.assigned_to_email
-    safe_rationale = scrub_free_text(payload.rationale) if payload.rationale else None
-    safe_bulk_rationale = (
-        scrub_free_text(payload.bulk_rationale) if payload.bulk_rationale else None
-    )
     approval_rationale = (
         safe_rationale
         or safe_bulk_rationale
         or "Approved with governed recommendation and human review."
     )
-    decision_intent = _canonical_intent(
-        {
-            "action": "approve",
-            "actor": actor,
-            "borrower_id": payload.borrower_id,
-            "offer_code": offer_code,
-            "channel": payload.channel,
-            "campaign_id": payload.campaign_id,
-            "variant_name": payload.variant_name,
-            "evidence_ids": audit_evidence_ids,
-            "rationale": safe_rationale,
-            "bulk_id": payload.bulk_id,
-            "bulk_rationale": safe_bulk_rationale,
-            "draft_body": normalized_draft_body,
-            "draft_subject": normalized_draft_subject,
-            "draft_generation_id": payload.draft_generation_id,
-            "draft_response_hash": payload.draft_response_hash,
-            "draft_source_refreshed_at": payload.draft_source_refreshed_at,
-            "assigned_to_email": assigned_to_email,
-            "follow_up_in_days": payload.follow_up_in_days,
-        }
+    decision_intent = _approval_decision_intent(
+        payload,
+        actor=actor,
+        offer_code=offer_code,
+        evidence_ids=audit_evidence_ids,
+        safe_rationale=safe_rationale,
+        safe_bulk_rationale=safe_bulk_rationale,
     )
     effective_request_id = payload.request_id or _derive_fallback_request_id(
         actor=actor,
@@ -1017,6 +1405,13 @@ def approve_outreach(
             status_code=503,
             detail=safe_dependency_detail("lakebase"),
         ) from exc
+    if generated_draft is None and payload.campaign_id is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Campaign-bound approval requires matching generated draft proof.",
+        )
+    proof_campaign_id = generated_draft.campaign_id if generated_draft is not None else None
+    proof_variant_name = generated_draft.variant_name if generated_draft is not None else None
     approved_draft_body = _assert_disclosure_backed_draft_body(
         draft_body=payload.draft_body,
         disclosure=disclosure,
@@ -1045,8 +1440,8 @@ def approve_outreach(
         "offer_code": offer_code,
         "borrower_id": payload.borrower_id,
         "channel": payload.channel,
-        "campaign_id": payload.campaign_id,
-        "variant_name": payload.variant_name,
+        "campaign_id": proof_campaign_id,
+        "variant_name": proof_variant_name,
         "decision_inputs": decision_inputs_from_borrower(borrower),
         **_marketing_audit_payload(borrower),
         **disclosure_audit_payload(disclosure),
@@ -1096,7 +1491,9 @@ def approve_outreach(
                 actor=actor,
                 action="approve",
                 borrower_id=payload.borrower_id,
-                campaign_id=payload.campaign_id,
+                campaign_id=proof_campaign_id,
+                variant_name=proof_variant_name,
+                channel=payload.channel,
                 offer_code=offer_code,
                 rationale=approval_rationale,
                 request_id=effective_request_id,
@@ -1116,7 +1513,9 @@ def approve_outreach(
                 _APPROVAL_INSERT,
                 {
                     "approval_id": approval_id,
-                    "campaign_id": payload.campaign_id,
+                    "campaign_id": proof_campaign_id,
+                    "variant_name": proof_variant_name,
+                    "channel": payload.channel,
                     "borrower_id": payload.borrower_id,
                     "offer_code": offer_code,
                     "action": "approve",
@@ -1220,6 +1619,44 @@ def reject_outreach(
     # Body ``payload.actor`` is retained for backcompat but ignored.
     # 2026-06-11 audit P2-5: optional approver allowlist, same as /approve.
     actor = require_approver(request)
+    safe_rationale = _compose_reject_rationale(payload.rationale_code, payload.rationale)
+    if payload.request_id:
+        try:
+            replay = _lookup_persisted_decision_replay(
+                lakebase,
+                payload.request_id,
+                actor=actor,
+                borrower_id=payload.borrower_id,
+                action="reject",
+                intent_matches_payload=lambda intent: _reject_intent_matches_payload(
+                    intent,
+                    payload=payload,
+                    actor=actor,
+                    safe_rationale=safe_rationale,
+                ),
+            )
+        except LakebaseError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=safe_dependency_detail("lakebase"),
+            ) from exc
+        if replay is not None:
+            return OutreachRejectResponse.model_validate(replay)
+    try:
+        campaign_variant = _resolve_governed_campaign_variant(
+            lakebase,
+            request=request,
+            actor=actor,
+            campaign_id=payload.campaign_id,
+            variant_name=payload.variant_name,
+            channel=payload.channel,
+        )
+    except HTTPException:
+        raise
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    verified_campaign_id = campaign_variant.campaign_id if campaign_variant else None
+    verified_variant_name = campaign_variant.variant_name if campaign_variant else None
     borrower = repo.find_borrower(payload.borrower_id)
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {payload.borrower_id} not found")
@@ -1227,25 +1664,19 @@ def reject_outreach(
         getattr(borrower, "recommended_offer_code", None)
     )
     ensure_approval_idempotency_column(lakebase)
-    safe_rationale = _compose_reject_rationale(payload.rationale_code, payload.rationale)
     audit_evidence_ids = _decision_evidence_ids(
         payload.evidence_ids,
         borrower,
         action_label="Rejection",
     )
-    decision_intent = _canonical_intent(
-        {
-            "action": "reject",
-            "actor": actor,
-            "borrower_id": payload.borrower_id,
-            "offer_code": offer_code,
-            "channel": payload.channel,
-            "campaign_id": payload.campaign_id,
-            "variant_name": payload.variant_name,
-            "evidence_ids": audit_evidence_ids,
-            "rationale_code": payload.rationale_code,
-            "rationale": safe_rationale,
-        }
+    decision_intent = _reject_decision_intent(
+        payload,
+        actor=actor,
+        offer_code=offer_code,
+        evidence_ids=audit_evidence_ids,
+        safe_rationale=safe_rationale,
+        campaign_id=verified_campaign_id,
+        variant_name=verified_variant_name,
     )
     effective_request_id = payload.request_id or _derive_fallback_request_id(
         actor=actor,
@@ -1268,8 +1699,8 @@ def reject_outreach(
         "offer_code": offer_code,
         "borrower_id": payload.borrower_id,
         "channel": payload.channel,
-        "campaign_id": payload.campaign_id,
-        "variant_name": payload.variant_name,
+        "campaign_id": verified_campaign_id,
+        "variant_name": verified_variant_name,
         "rationale_code": payload.rationale_code,
         **_marketing_audit_payload(borrower),
     }
@@ -1289,7 +1720,9 @@ def reject_outreach(
                 actor=actor,
                 action="reject",
                 borrower_id=payload.borrower_id,
-                campaign_id=payload.campaign_id,
+                campaign_id=verified_campaign_id,
+                variant_name=verified_variant_name,
+                channel=payload.channel,
                 offer_code=offer_code,
                 rationale=safe_rationale,
                 request_id=effective_request_id,
@@ -1307,7 +1740,9 @@ def reject_outreach(
                 _APPROVAL_INSERT,
                 {
                     "approval_id": approval_id,
-                    "campaign_id": payload.campaign_id,
+                    "campaign_id": verified_campaign_id,
+                    "variant_name": verified_variant_name,
+                    "channel": payload.channel,
                     "borrower_id": payload.borrower_id,
                     "offer_code": offer_code,
                     "action": "reject",

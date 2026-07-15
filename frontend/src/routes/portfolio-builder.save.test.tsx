@@ -358,6 +358,67 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(saveButton().textContent).toContain('Build saved');
   });
 
+  it('launches a saved Supervisor campaign with its selected variant and provenance', async () => {
+    portfolioPreview.mockResolvedValue(PREVIEW);
+    const campaignId = '11111111-1111-4111-8111-111111111111';
+    campaigns.mockResolvedValue({
+      campaigns: [
+        {
+          campaign_id: campaignId,
+          name: 'Supervisor IL refinance campaign',
+          owner_email: 'growth@summit.example',
+          status: 'draft',
+          criteria: { states: ['IL'], marketing_eligibility: 'Eligible only' },
+          message_variants: [
+            {
+              variant_name: 'A',
+              channel: 'email',
+              subject: 'A',
+              body: 'A body',
+              generation_mode: 'supervisor',
+              generator_label: 'Mortgage Growth Supervisor',
+              provenance_token: 'signed-variant-proof-token-0000000000001',
+            },
+            {
+              variant_name: 'B',
+              channel: 'email',
+              subject: 'B',
+              body: 'B body',
+              generation_mode: 'supervisor',
+              generator_label: 'Mortgage Growth Supervisor',
+              provenance_token: 'signed-variant-proof-token-0000000000002',
+            },
+          ],
+        },
+      ],
+    });
+    mount();
+    await waitUntil(() => container.textContent?.includes('Supervisor IL refinance campaign') === true);
+
+    expect(container.textContent).toContain('Mortgage Growth Supervisor');
+    expect(container.textContent).toContain('Provenance attached');
+    const variant = container.querySelector<HTMLSelectElement>(
+      'select[aria-label="Message variant for Supervisor IL refinance campaign"]',
+    )!;
+    const action = () => container.querySelector<HTMLAnchorElement>(
+      'a[aria-label="Open Supervisor IL refinance campaign variant B in Lead Queue"]',
+    );
+
+    act(() => {
+      const setter = Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')!.set!;
+      setter.call(variant, 'B');
+      variant.dispatchEvent(new Event('change', { bubbles: true }));
+    });
+
+    await waitUntil(() => action() !== null);
+    const url = new URL(action()!.href, 'https://mortgage-intelligence.local');
+    expect(url.pathname).toBe('/lead-queue');
+    expect(url.searchParams.get('states')).toBe('IL');
+    expect(url.searchParams.get('marketing_eligibility')).toBe('Eligible only');
+    expect(url.searchParams.get('campaign_id')).toBe(campaignId);
+    expect(url.searchParams.get('variant_name')).toBe('B');
+  });
+
   it('keeps the production source free of window.prompt', () => {
     // Belt-and-suspenders source pin: the route module must not reference
     // the blocking dialog API at all (catches a regression that the

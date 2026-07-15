@@ -203,11 +203,18 @@ describe('OfferOrchestrator route behavior', () => {
     apiMocks.recommendOffer.mockReset().mockResolvedValue(RECOMMENDATION);
     apiMocks.borrowerLifecycle.mockReset().mockResolvedValue(LIFECYCLE);
     apiMocks.draftOutreach.mockReset().mockImplementation(
-      async (_borrowerId: string, channel: 'email' | 'sms' | 'direct_mail') => ({
+      async (
+        _borrowerId: string,
+        channel: 'email' | 'sms' | 'direct_mail',
+        _signal?: AbortSignal,
+        campaign?: { campaign_id: string; variant_name: string },
+      ) => ({
         ...DRAFT,
         channel,
         subject: channel === 'sms' ? null : `${channel} subject`,
         body: `${channel} governed body`,
+        campaign_id: campaign?.campaign_id ?? null,
+        variant_name: campaign?.variant_name ?? null,
       }),
     );
     apiMocks.salesTeam.mockReset().mockResolvedValue([]);
@@ -237,11 +244,11 @@ describe('OfferOrchestrator route behavior', () => {
     vi.useRealTimers();
   });
 
-  function mount() {
+  function mount(initialEntry = `/offer-orchestrator/${BORROWER_ID}`) {
     act(() => {
       root.render(
         <QueryClientProvider client={queryClient}>
-          <MemoryRouter initialEntries={[`/offer-orchestrator/${BORROWER_ID}`]}>
+          <MemoryRouter initialEntries={[initialEntry]}>
             <Routes>
               <Route path="/offer-orchestrator/:id" element={<OfferOrchestrator />} />
             </Routes>
@@ -317,6 +324,67 @@ describe('OfferOrchestrator route behavior', () => {
     expect(container.textContent).toContain('audit: audit-1');
     expect(container.textContent).toContain('approval: approval-1');
   }, 12_000);
+
+  it('keeps saved campaign provenance attached through draft and approval', async () => {
+    const campaignId = '7e373ef5-d4b6-4fea-b555-0cb925987a72';
+    const variantName = 'Supervisor B';
+    mount(
+      `/offer-orchestrator/${BORROWER_ID}?campaign_id=${campaignId}`
+      + `&variant_name=${encodeURIComponent(variantName)}`,
+    );
+
+    await waitUntil(() => (
+      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
+      === false
+    ));
+    const provenance = container.querySelector('[data-testid="offer-campaign-provenance"]');
+    expect(provenance?.textContent).toContain('Campaign-bound draft');
+    expect(provenance?.textContent).toContain('campaign 7e373ef5-d4b');
+    expect(provenance?.textContent).toContain(`variant ${variantName}`);
+    expect(provenance?.textContent).toContain('Mortgage Growth Supervisor');
+    expect(provenance?.textContent).toContain('draft proof aaaaaaaaaaaa');
+    expect(apiMocks.draftOutreach).toHaveBeenCalledWith(
+      BORROWER_ID,
+      'email',
+      expect.any(AbortSignal),
+      { campaign_id: campaignId, variant_name: variantName },
+    );
+
+    await act(async () => {
+      container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    await waitUntil(() => apiMocks.approve.mock.calls.length === 1);
+    expect(apiMocks.approve.mock.calls[0][1]).toMatchObject({
+      campaign_id: campaignId,
+      variant_name: variantName,
+    });
+  });
+
+  it('keeps saved campaign provenance attached through rejection', async () => {
+    const campaignId = '7e373ef5-d4b6-4fea-b555-0cb925987a72';
+    const variantName = 'Supervisor A';
+    mount(
+      `/offer-orchestrator/${BORROWER_ID}?campaign_id=${campaignId}`
+      + `&variant_name=${encodeURIComponent(variantName)}`,
+    );
+    await waitUntil(() => (
+      container.querySelector<HTMLTextAreaElement>('[data-testid="outreach-draft"]')?.disabled
+      === false
+    ));
+
+    act(() => button('Reject').click());
+    await waitUntil(() => [...container.querySelectorAll('button')].some(
+      (candidate) => candidate.textContent?.trim() === 'Confirm reject',
+    ));
+    act(() => button('Confirm reject').click());
+
+    await waitUntil(() => apiMocks.reject.mock.calls.length === 1);
+    expect(apiMocks.reject.mock.calls[0][1]).toMatchObject({
+      campaign_id: campaignId,
+      variant_name: variantName,
+    });
+  });
 
   it('hydrates a saved draft over backend copy and marks it saved', async () => {
     appMocks.savedDrafts[`${BORROWER_ID}::email`] = {

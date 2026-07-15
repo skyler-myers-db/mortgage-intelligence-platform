@@ -272,6 +272,57 @@ else:
 PY
 }
 
+resolve_m2m_credential() {
+  local name="$1" value
+  value="${!name:-}"
+  if [[ -z "$value" ]]; then
+    value="$(dotenv_value "$name")"
+  fi
+  printf -v "$name" '%s' "$value"
+  export "${name?}"
+}
+
+mint_m2m_token() {
+  local output_name="$1" client_id_env="$2" client_secret_env="$3"
+  local token_file token
+  token_file="$(mktemp -t mip-m2m-token.XXXXXX)"
+  chmod 600 "$token_file"
+  echo "${DIM}\$ $PYTHON tools/oauth_m2m_mint.py --client-id-env $client_id_env --client-secret-env $client_secret_env --output-file [secure-temp]${RST}"
+  if ! "$PYTHON" tools/oauth_m2m_mint.py \
+    --client-id-env "$client_id_env" \
+    --client-secret-env "$client_secret_env" \
+    --output-file "$token_file"; then
+    rm -f "$token_file"
+    return 1
+  fi
+  if ! IFS= read -r token < "$token_file" || [[ -z "$token" ]]; then
+    rm -f "$token_file"
+    echo "${RED}[deploy] M2M mint returned an empty bearer for $client_id_env.${RST}" >&2
+    return 1
+  fi
+  rm -f "$token_file"
+  printf -v "$output_name" '%s' "$token"
+  export "${output_name?}"
+}
+
+run_as_m2m_identity() {
+  local label="$1" client_id_env="$2" client_secret_env="$3"
+  shift 3
+  echo "${DIM}\$ $* (${label} M2M identity)${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  (
+    # Intentionally scope these credentials to the child process.
+    # shellcheck disable=SC2030
+    export DATABRICKS_CLIENT_ID="${!client_id_env}"
+    export DATABRICKS_CLIENT_SECRET="${!client_secret_env}"
+    export DATABRICKS_AUTH_TYPE="oauth-m2m"
+    unset DATABRICKS_TOKEN DATABRICKS_CONFIG_PROFILE
+    "$@"
+  )
+}
+
 # -----------------------------------------------------------------------------
 # Step 0: preflight
 # -----------------------------------------------------------------------------
@@ -296,7 +347,7 @@ echo "  target:     ${TARGET}"
 echo "  dry-run:    ${DRY_RUN}"
 
 if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
-  read -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
+  read -r -p "About to DEPLOY to the ${TARGET} target. Continue? [y/N] " ans
   if [[ "$ans" != "y" && "$ans" != "Y" ]]; then
     echo "aborted."
     exit 1
@@ -417,6 +468,47 @@ if [[ -n "$_ID_MASK_RESOLVED" ]]; then
   export MIP_COTALITY_ID_MASK_SECRET="$_ID_MASK_RESOLVED"
 fi
 
+# App-facing automation uses three long-lived client credentials but no stored
+# bearer tokens. Normal/admin tokens are minted per run and reminted before
+# evaluation; the verifier client is used only for deployment-side Gateway
+# proof writes. The verifier is intentionally not a member of mip-admin.
+for _M2M_NAME in \
+  DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+  DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+  DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET; do
+  resolve_m2m_credential "$_M2M_NAME"
+done
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  _M2M_MISSING=""
+  for _M2M_NAME in \
+    DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+    DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET; do
+    if [[ -z "${!_M2M_NAME:-}" ]]; then
+      _M2M_MISSING="${_M2M_MISSING} ${_M2M_NAME}"
+    fi
+  done
+  if [[ -n "$_M2M_MISSING" ]]; then
+    echo "${RED}[deploy] ERROR: missing required per-run M2M credential(s):${_M2M_MISSING}.${RST}" >&2
+    exit 1
+  fi
+  # run_as_m2m_identity changes DATABRICKS_CLIENT_ID only in a subshell.
+  # shellcheck disable=SC2031
+  if [[ "$DATABRICKS_CLIENT_ID" == "$DATABRICKS_ADMIN_CLIENT_ID" || \
+        "$DATABRICKS_CLIENT_ID" == "$DATABRICKS_VERIFIER_CLIENT_ID" || \
+        "$DATABRICKS_ADMIN_CLIENT_ID" == "$DATABRICKS_VERIFIER_CLIENT_ID" ]]; then
+    echo "${RED}[deploy] ERROR: normal, admin, and verifier M2M client IDs must be distinct.${RST}" >&2
+    exit 1
+  fi
+  export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
+  mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+  mint_m2m_token MIP_ADMIN_BEARER_TOKEN \
+    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+  echo "  app automation: distinct per-run normal/admin Bearers minted"
+else
+  echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
+fi
+
 # Provision runtime HMAC values directly into Databricks Secrets before the
 # bundle validates its app resource bindings. The later Apps deploy payload
 # carries only value_from resource names, never raw secret values.
@@ -449,7 +541,8 @@ if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
       echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
       exit 2
     fi
-    export GENIE_SPACE_ID="$(< genie/space_id.txt)"
+    GENIE_SPACE_ID="$(< genie/space_id.txt)"
+    export GENIE_SPACE_ID
   fi
 else
   export GENIE_SPACE_ID="$GENIE_SPACE_ID_FROM_ENV"
@@ -796,13 +889,27 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   mkdir -p .databricks
   cp "$AGENTIC_ENV_FILE" "$AGENTIC_ENV_CACHE"
   if [[ -n "${MIP_AI_GATEWAY_INFERENCE_TABLE:-}" && -n "${MIP_AI_GATEWAY_ENDPOINT:-}" ]]; then
+    step "converge dedicated AI Gateway verifier identity and Lakebase OAuth role"
+    run "$PYTHON" tools/databricks/provision_m2m_oauth.py \
+      --identity-role verifier \
+      --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --no-mint-secret
+    step "reconcile runtime read-only and verifier-only Lakebase proof-ledger grants"
+    run "$PYTHON" jobs/lakebase_migrate.py
     step "grant least-privilege AI Gateway inference-table access to the app service principal"
     run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
       --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
       --principal "$APP_SP_CLIENT_ID"
-    step "verify AI Gateway exact inference-row proof"
+    step "grant read-only AI Gateway inference-table access to the verifier service principal"
+    run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+      --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --principal "$DATABRICKS_VERIFIER_CLIENT_ID"
+    step "verify AI Gateway exact inference-row proof with dedicated verifier identity"
     AI_GATEWAY_PROOF_ARGS=(
       tools/databricks/verify_ai_gateway_exact_proof.py
       send
@@ -814,7 +921,11 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     if [[ "${MIP_REQUIRE_AI_GATEWAY_CLAIMABLE:-0}" == "1" ]]; then
       AI_GATEWAY_PROOF_ARGS+=(--require-verified)
     fi
-    run "$PYTHON" "${AI_GATEWAY_PROOF_ARGS[@]}"
+    run_as_m2m_identity \
+      verifier \
+      DATABRICKS_VERIFIER_CLIENT_ID \
+      DATABRICKS_VERIFIER_CLIENT_SECRET \
+      "$PYTHON" "${AI_GATEWAY_PROOF_ARGS[@]}"
   fi
 fi
 
@@ -826,11 +937,13 @@ deploy_app_snapshot "deploy Databricks App snapshot with agentic resource env"
 # -----------------------------------------------------------------------------
 # Step 10c: run live Agent Evaluation, then redeploy with the eval run id
 # -----------------------------------------------------------------------------
-if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" && -z "${MIP_BEARER_TOKEN:-}" ]]; then
-  AUTH_HOST="${DATABRICKS_HOST:-$(dotenv_value DATABRICKS_HOST)}"
-  if [[ -n "$AUTH_HOST" ]]; then
-    export MIP_BEARER_TOKEN="$(databricks auth token --host "$AUTH_HOST" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
-  fi
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  # A full deploy can exceed the workspace OAuth TTL before eval starts.
+  # Remint both identities immediately before the proof and never substitute
+  # the deployment PAT for either app-facing role.
+  mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+  mint_m2m_token MIP_ADMIN_BEARER_TOKEN \
+    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
 fi
 step "run live Agent Evaluation — golden Growth Agent workflows"
 mkdir -p dist
@@ -865,10 +978,7 @@ else
     # TTL, and smoke 401'd on geo rollups after passing nine checks). The
     # smoke sweep always deserves a fresh full-lifetime bearer.
     if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" ]]; then
-      AUTH_HOST="${DATABRICKS_HOST:-$(dotenv_value DATABRICKS_HOST)}"
-      if [[ -n "$AUTH_HOST" ]]; then
-        export MIP_BEARER_TOKEN="$(databricks auth token --host "$AUTH_HOST" | "$PYTHON" -c 'import json,sys; print(json.load(sys.stdin).get("access_token",""))')"
-      fi
+      mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
     fi
     step "live smoke — scripts/smoke_live.sh against the deployed app"
     export MIP_EXPECT_AGENTIC_CAPABILITIES="${MIP_EXPECT_AGENTIC_CAPABILITIES:-1}"

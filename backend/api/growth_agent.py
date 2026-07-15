@@ -24,16 +24,13 @@ from backend.schemas.growth_agent import (
     GrowthAgentCustomRunRequest,
     GrowthAgentDueMonitorRunRequest,
     GrowthAgentDueMonitorRunResponse,
-    GrowthAgentGovernanceChip,
     GrowthAgentHomeResponse,
     GrowthAgentMonitor,
     GrowthAgentMonitorDraftRequest,
     GrowthAgentNotificationDraft,
-    GrowthAgentPolicyCheck,
     GrowthAgentPromptRunRequest,
     GrowthAgentRunRequest,
     GrowthAgentRunResponse,
-    GrowthAgentToolStep,
     GrowthAgentWorkflowId,
 )
 from backend.services.audit_lakebase_store import write_audit_event_in_transaction
@@ -81,6 +78,18 @@ from backend.services.growth_agent_monitors import (
     stored_monitor_name,
     workflow_from_monitor,
 )
+from backend.services.growth_agent_response import (
+    run_response_from_row as _run_response_from_row,
+)
+from backend.services.growth_agent_row_parsing import (
+    json_object as _json_object,
+)
+from backend.services.growth_agent_row_parsing import (
+    source_assets as _source_assets_from_row,
+)
+from backend.services.growth_agent_runtime import (
+    cohort_fingerprint as _cohort_fingerprint,
+)
 from backend.services.growth_agent_runtime import (
     criteria_for as _criteria_for,
 )
@@ -114,6 +123,9 @@ from backend.services.growth_agent_workflows import (
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.rbac import require_admin
+from backend.services.repositories.databricks_lead_cohorts import (
+    normalise_growth_agent_handoff_filters,
+)
 
 router = APIRouter(prefix="/growth-agent", tags=["growth-agent"])
 
@@ -545,6 +557,7 @@ def _run_workflow(
                         workflow=workflow,
                         run_row=existing_row,
                         monitor_row=replay_monitor_row,
+                        actor=actor,
                     )
         except HTTPException:
             raise
@@ -554,6 +567,33 @@ def _run_workflow(
     metrics = load_growth_agent_metrics(sql_client, workflow=workflow, states=effective_states)
     trace_id = f"agent-trace-{uuid4()}"
     tool_result_hash = _tool_result_hash(workflow=workflow, metrics=metrics, criteria=criteria, route=route)
+    actionable_cohort_fingerprint: str | None = None
+    actionable_cohort_digest = str(metrics.get("actionable_cohort_digest") or "")
+    actionable_snapshot_id = str(metrics.get("actionable_snapshot_id") or "")
+    normalized_handoff_filters: dict[str, object] | None = None
+    if workflow.route_path == "/lead-queue":
+        if not actionable_snapshot_id:
+            raise HTTPException(
+                status_code=503,
+                detail="Growth Agent cohort snapshot proof is unavailable",
+            )
+        try:
+            actionable_cohort_fingerprint = _cohort_fingerprint(
+                cohort_digest=actionable_cohort_digest,
+                tool_result_hash=tool_result_hash,
+            )
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Growth Agent cohort identity proof is unavailable",
+            ) from exc
+        try:
+            normalized_handoff_filters = normalise_growth_agent_handoff_filters(criteria)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Growth Agent handoff filters are unavailable",
+            ) from exc
     tool_steps = _tool_steps(
         workflow,
         metrics,
@@ -599,7 +639,19 @@ def _run_workflow(
                     "trace_id": trace_id,
                     "tool_result_hash": tool_result_hash,
                     "specialist_agent": workflow.specialist_agent,
-                    "agent_evidence": json.dumps(copilot_evidence.criteria_json()),
+                    "agent_evidence": json.dumps(
+                        {
+                            **copilot_evidence.criteria_json(),
+                            **(
+                                {
+                                    "actionable_cohort_fingerprint": actionable_cohort_fingerprint,
+                                    "actionable_snapshot_id": actionable_snapshot_id,
+                                }
+                                if actionable_cohort_fingerprint
+                                else {}
+                            ),
+                        }
+                    ),
                     "governance_chips": json.dumps([chip.model_dump() for chip in governance_chips]),
                 },
             )
@@ -626,9 +678,28 @@ def _run_workflow(
                     workflow=workflow,
                     run_row=existing_row,
                     monitor_row=replay_monitor_row,
+                    actor=actor,
                 )
             _assert_run_matches(run_row, workflow=workflow, criteria=criteria)
             if run_row.get("audit_event_id") is None:
+                result_filters_value = criteria.get("lead_queue_filters")
+                result_filters = (
+                    dict(result_filters_value)
+                    if isinstance(result_filters_value, dict)
+                    else {}
+                )
+                audit_governance_chips = [chip.model_dump() for chip in governance_chips]
+                if actionable_cohort_fingerprint and normalized_handoff_filters is not None:
+                    audit_governance_chips.append(
+                        {
+                            "label": "Growth Agent Lead Queue",
+                            "status": "passed",
+                            "detail": "Cohort fingerprint and source snapshot bound.",
+                            "evidence_ref": actionable_cohort_fingerprint,
+                            "result_hash": actionable_snapshot_id,
+                            "cohort_total": int(metrics["actionable_total"]),
+                        }
+                    )
                 audit_event = write_audit_event_in_transaction(
                     conn,
                     actor=actor,
@@ -642,14 +713,14 @@ def _run_workflow(
                         "broad_total": metrics["broad_total"],
                         "actionable_total": metrics["actionable_total"],
                         "route": route,
-                        "result_filters": criteria["lead_queue_filters"],
+                        "result_filters": result_filters,
                         "source_assets": source_assets,
                         "trace_id": trace_id,
                         "tool_result_hash": tool_result_hash,
                         "specialist_agent": workflow.specialist_agent,
                         "tool_steps": [step.model_dump() for step in tool_steps],
                         "policy_checks": [check.model_dump() for check in policy_checks],
-                        "governance_chips": [chip.model_dump() for chip in governance_chips],
+                        "governance_chips": audit_governance_chips,
                     },
                     event_type="GROWTH_AGENT_RUN",
                     request_id=request_id,
@@ -687,6 +758,7 @@ def _run_workflow(
         workflow=workflow,
         run_row=run_row,
         monitor_row=monitor_row,
+        actor=actor,
         monitor=monitor,
         interpreted_intent=interpreted_intent,
     )
@@ -738,70 +810,6 @@ def _assert_run_matches(
         )
 
 
-def _run_response_from_row(
-    *,
-    workflow: _WorkflowDef,
-    run_row: dict[str, Any],
-    monitor_row: dict[str, Any] | None,
-    monitor: GrowthAgentMonitor | None = None,
-    interpreted_intent: str | None = None,
-) -> GrowthAgentRunResponse:
-    criteria = _json_object(run_row.get("criteria"))
-    tool_steps = [
-        GrowthAgentToolStep(**item)
-        for item in _json_list(run_row.get("tool_steps"))
-        if isinstance(item, dict)
-    ]
-    policy_checks = [
-        GrowthAgentPolicyCheck(**item)
-        for item in _json_list(run_row.get("policy_checks"))
-        if isinstance(item, dict)
-    ]
-    governance_chips = [
-        GrowthAgentGovernanceChip(**item)
-        for item in _json_list(run_row.get("governance_chips"))
-        if isinstance(item, dict)
-    ]
-    agent_evidence = _json_object(run_row.get("agent_evidence"))
-    if monitor is None:
-        monitor = monitor_from_row(monitor_row) if monitor_row is not None else None
-    return GrowthAgentRunResponse(
-        workflow=workflow.schema(),
-        run_id=str(run_row["run_id"]),
-        monitor=monitor,
-        specialist_agent=run_row.get("specialist_agent") or workflow.specialist_agent,
-        execution_mode=str(agent_evidence.get("execution_mode") or "deterministic"),  # type: ignore[arg-type]
-        trace_kind=str(agent_evidence.get("trace_kind") or "local_hash"),  # type: ignore[arg-type]
-        planner_label=str(agent_evidence.get("planner_label") or "Reviewed deterministic planner"),
-        trace_id=str(run_row.get("trace_id") or ""),
-        tool_result_hash=str(run_row.get("tool_result_hash") or ""),
-        broad_label=workflow.broad_label,
-        actionable_label=workflow.actionable_label,
-        broad_total=int(run_row.get("broad_total") or 0),
-        actionable_total=int(run_row.get("actionable_total") or 0),
-        broad_avg_score=_maybe_float(run_row.get("broad_avg_score")),
-        actionable_avg_score=_maybe_float(run_row.get("actionable_avg_score")),
-        avg_rate_spread_bps=_maybe_float(run_row.get("avg_rate_spread_bps")),
-        avg_equity_pct=_maybe_float(run_row.get("avg_equity_pct")),
-        route=str(run_row["route"]),
-        criteria=criteria,
-        source_assets=_source_assets_from_row(run_row),
-        tool_steps=tool_steps,
-        policy_checks=policy_checks,
-        governance_chips=governance_chips,
-        interpreted_intent=interpreted_intent or _maybe_str(agent_evidence.get("interpreted_intent")),
-        agent_reasoning=_maybe_str(agent_evidence.get("reasoning_summary")),
-        genie_conversation_id=_maybe_str(agent_evidence.get("conversation_id")),
-        genie_message_id=_maybe_str(agent_evidence.get("message_id")),
-        genie_question_hash=_maybe_str(agent_evidence.get("question_hash")),
-        genie_sql_hash=_maybe_str(agent_evidence.get("sql_hash")),
-        genie_row_count=_maybe_int(agent_evidence.get("row_count")),
-        genie_trusted_assets=_str_list(agent_evidence.get("trusted_assets")),
-        audit_event_id=str(run_row["audit_event_id"]) if run_row.get("audit_event_id") else None,
-        created_at=run_row.get("created_at"),
-    )
-
-
 def _txn_fetchone(conn: Any, sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
     execute = getattr(conn, "execute", None)
     if callable(execute):
@@ -815,68 +823,3 @@ def _txn_fetchone(conn: Any, sql: str, params: dict[str, Any]) -> dict[str, Any]
 
 def _json_equivalent(value: Any, expected: dict[str, object]) -> bool:
     return _json_object(value) == expected
-
-
-def _json_object(value: Any) -> dict[str, object]:
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _json_list(value: Any) -> list[Any]:
-    if isinstance(value, list):
-        return value
-    if isinstance(value, str):
-        try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
-            return []
-        return parsed if isinstance(parsed, list) else []
-    return []
-
-
-def _source_assets_from_row(row: dict[str, Any]) -> list[str]:
-    value = row.get("source_assets") or []
-    if isinstance(value, list):
-        return [str(item) for item in value]
-    if isinstance(value, tuple):
-        return [str(item) for item in value]
-    return []
-
-
-def _maybe_float(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
-
-
-def _maybe_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed >= 0 else None
-
-
-def _maybe_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    return text or None
-
-
-def _str_list(value: Any) -> list[str]:
-    if not isinstance(value, list):
-        return []
-    return [str(item) for item in value if str(item).strip()]

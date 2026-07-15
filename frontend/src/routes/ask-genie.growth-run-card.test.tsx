@@ -29,6 +29,8 @@ const RUN: GrowthAgentRunResponse = {
   planner_label: 'Databricks Supervisor Agent',
   trace_id: 'agent-trace-11111111-1111-4111-8111-111111111111',
   tool_result_hash: 'a'.repeat(64),
+  actionable_cohort_fingerprint: 'b'.repeat(64),
+  actionable_snapshot_id: '2026-07-14 12:00:00',
   broad_label: 'Broad opportunity',
   actionable_label: 'Eligible subset',
   broad_total: 117404,
@@ -200,5 +202,45 @@ describe('GrowthAgentRunCard', () => {
     expect(governanceChip?.textContent).toContain('Passed');
     expect(governanceChip?.querySelector('.chip--success')).not.toBeNull();
     expect(governanceChip?.querySelector('.chip--warning')).toBeNull();
+  });
+
+  it('carries the complete cohort proof into the Lead Queue action', () => {
+    renderRun(PASSED_RUN);
+
+    const open = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent?.includes('Open eligible refi subset'),
+    );
+    if (!open) throw new Error('Growth Agent action not rendered');
+    act(() => open.click());
+
+    const route = onOpenRoute.mock.calls[0][0] as string;
+    const url = new URL(route, 'https://mortgage-intelligence.local');
+    expect(url.pathname).toBe('/lead-queue');
+    expect(url.searchParams.get('growth_agent_run_id')).toBe(PASSED_RUN.run_id);
+    expect(url.searchParams.get('actionable_total')).toBe('5394');
+    expect(url.searchParams.get('tool_result_hash')).toBe(PASSED_RUN.tool_result_hash);
+    expect(url.searchParams.get('actionable_cohort_fingerprint'))
+      .toBe(PASSED_RUN.actionable_cohort_fingerprint);
+    expect(url.searchParams.get('actionable_snapshot_id')).toBe(PASSED_RUN.actionable_snapshot_id);
+    expect(container.textContent).toContain('Cohort proof bbbbbbbbbbbb');
+    expect(container.textContent).toContain('Snapshot 2026-07-14 12:00:00');
+  });
+
+  it('preserves the generic route when a non-proof response is replayed', () => {
+    const genericRun = {
+      ...PASSED_RUN,
+      actionable_cohort_fingerprint: null,
+      actionable_snapshot_id: null,
+    };
+    renderRun(genericRun);
+
+    const open = Array.from(container.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent?.includes('Open eligible refi subset'),
+    );
+    if (!open) throw new Error('Growth Agent action not rendered');
+    act(() => open.click());
+
+    expect(onOpenRoute).toHaveBeenCalledWith(genericRun.route);
+    expect(container.textContent).toContain('Cohort proof unavailable');
   });
 });

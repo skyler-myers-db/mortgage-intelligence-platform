@@ -36,6 +36,30 @@ function shortHash(value: string | null | undefined): string {
   return value.slice(0, 12);
 }
 
+function hasGrowthAgentCohortProof(run: GrowthAgentRunResponse): boolean {
+  return (
+    Number.isSafeInteger(run.actionable_total)
+    && run.actionable_total >= 0
+    && /^[0-9a-f]{64}$/.test(run.tool_result_hash)
+    && /^[0-9a-f]{64}$/.test(run.actionable_cohort_fingerprint ?? '')
+    && Boolean(run.actionable_snapshot_id?.trim())
+  );
+}
+
+export function growthAgentActionRoute(run: GrowthAgentRunResponse): string {
+  if (!hasGrowthAgentCohortProof(run)) return run.route;
+  const url = new URL(run.route, 'https://mortgage-intelligence.local');
+  if (url.origin !== 'https://mortgage-intelligence.local' || url.pathname !== '/lead-queue') {
+    return run.route;
+  }
+  url.searchParams.set('growth_agent_run_id', run.run_id);
+  url.searchParams.set('actionable_total', String(run.actionable_total));
+  url.searchParams.set('tool_result_hash', run.tool_result_hash);
+  url.searchParams.set('actionable_cohort_fingerprint', run.actionable_cohort_fingerprint!);
+  url.searchParams.set('actionable_snapshot_id', run.actionable_snapshot_id!);
+  return `${url.pathname}${url.search}${url.hash}`;
+}
+
 export function traceDisplay(value: string | null | undefined): string {
   if (!value) return 'not recorded';
   const normalized = value.startsWith('agent-trace-') ? value.slice('agent-trace-'.length) : value;
@@ -101,6 +125,7 @@ export function GrowthAgentRunCard({
   onOpenRoute,
   renderSourceAssetChip,
 }: GrowthAgentRunCardProps) {
+  const cohortProofAttached = hasGrowthAgentCohortProof(run);
   return (
     <section className="growth-agent-run" aria-label="Latest Growth Agent run">
       <div className="growth-agent-run__head">
@@ -111,7 +136,7 @@ export function GrowthAgentRunCard({
         <Button
           variant="success"
           icon="chevright"
-          onClick={() => onOpenRoute(run.route)}
+          onClick={() => onOpenRoute(growthAgentActionRoute(run))}
         >
           {run.workflow.action_label}
         </Button>
@@ -125,6 +150,20 @@ export function GrowthAgentRunCard({
         <Chip variant="neutral" icon="link" title={run.tool_result_hash ?? undefined}>
           Hash {shortHash(run.tool_result_hash)}
         </Chip>
+        <Chip
+          variant={cohortProofAttached ? 'success' : 'warning'}
+          icon="shield"
+          title={run.actionable_cohort_fingerprint ?? undefined}
+        >
+          {cohortProofAttached
+            ? `Cohort proof ${shortHash(run.actionable_cohort_fingerprint)}`
+            : 'Cohort proof unavailable'}
+        </Chip>
+        {run.actionable_snapshot_id && (
+          <Chip variant="neutral" icon="audit" title={run.actionable_snapshot_id}>
+            Snapshot {run.actionable_snapshot_id}
+          </Chip>
+        )}
         <Chip
           variant={run.audit_event_id ? 'success' : 'warning'}
           icon="audit"

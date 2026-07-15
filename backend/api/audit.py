@@ -8,15 +8,21 @@ is unchanged so the frontend Activity Log keeps working.
 from datetime import datetime
 from typing import Annotated, Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from pydantic import BaseModel, Field
 
+from backend.config.settings import settings
 from backend.schemas.audit import (
     AuditEvent,
     AuditEventCreateRequest,
     AuditEventPage,
     AuditRollupResponse,
 )
-from backend.schemas.common import validate_public_borrower_id
+from backend.schemas.common import (
+    validate_public_audit_entity_type,
+    validate_public_audit_event_type,
+    validate_public_borrower_id,
+)
 from backend.services.audit_pagination import (
     audit_filter_fingerprint,
     decode_audit_cursor,
@@ -49,6 +55,8 @@ LakebaseDep = Annotated[LakebaseClient, Depends(get_lakebase_client)]
 # (~50) so operator deep-dives still have headroom.
 DEFAULT_AUDIT_LIMIT: int = 50
 MAX_AUDIT_LIMIT: int = 500
+DEFAULT_MY_ACTIVITY_LIMIT: int = 8
+MAX_MY_ACTIVITY_LIMIT: int = 50
 _ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "APPROVE",
@@ -73,6 +81,20 @@ _ROUTER_OWNED_EVENT_TYPES: frozenset[str] = frozenset(
 )
 
 
+class ActorAuditEventSummary(BaseModel):
+    """PII-minimized event shape for an operator's own recovery feed."""
+
+    event_type: str
+    entity_type: str
+    subject_id: str | None = None
+    created_at: str
+
+
+class ActorAuditEventPage(BaseModel):
+    items: list[ActorAuditEventSummary] = Field(default_factory=list)
+    next_cursor: str | None = None
+
+
 def _event_type_for_payload(payload: AuditEventCreateRequest) -> str:
     return (payload.event_type or payload.action).replace(".", "_").replace("-", "_").upper()
 
@@ -81,6 +103,103 @@ def _validate_correlation_filter(value: str) -> str:
     if not is_safe_correlation_id(value):
         raise ValueError("correlation_id must be a non-PII request correlation id")
     return value
+
+
+def _authenticated_actor(request: Request) -> str:
+    """Resolve the current edge identity without admitting a fallback actor."""
+
+    if not settings.trust_forwarded_headers:
+        raise HTTPException(status_code=401, detail="audit identity required")
+    actor = request.headers.get("X-Forwarded-Email") or request.headers.get("X-Forwarded-User")
+    if not actor:
+        raise HTTPException(status_code=401, detail="audit identity required")
+    return actor
+
+
+def _actor_event_summary(event: AuditEvent) -> ActorAuditEventSummary:
+    event_type = event.event_type or event.action.replace(".", "_").replace("-", "_").upper()
+    try:
+        event_type = validate_public_audit_event_type(event_type)
+    except ValueError:
+        event_type = "ACTIVITY"
+    try:
+        entity_type = validate_public_audit_entity_type(event.entity_type)
+    except ValueError:
+        entity_type = "activity"
+    subject_id = None
+    # Approval and outreach audit rows use the decision/proof UUID as their
+    # entity id. The metadata's borrower_id is an explicitly governed masked
+    # identifier, so expose it only after the same strict validation used by
+    # public borrower routes. No other payload field crosses this boundary.
+    for candidate in (event.payload_json.get("borrower_id"), event.entity_id):
+        if candidate is None:
+            continue
+        try:
+            subject_id = validate_public_borrower_id(str(candidate))
+            break
+        except ValueError:
+            continue
+    return ActorAuditEventSummary(
+        event_type=event_type,
+        entity_type=entity_type,
+        subject_id=subject_id,
+        created_at=event.created_at,
+    )
+
+
+@router.get("/my-events", response_model=ActorAuditEventPage)
+def list_my_events(
+    request: Request,
+    response: Response,
+    store: StoreDep,
+    limit: Annotated[int, Query(ge=1, le=MAX_MY_ACTIVITY_LIMIT)] = DEFAULT_MY_ACTIVITY_LIMIT,
+    cursor: Annotated[str | None, Query(max_length=2048)] = None,
+) -> ActorAuditEventPage:
+    """Return a snapshot-stable, PII-minimized page for the current actor only."""
+
+    if "actor" in request.query_params:
+        raise HTTPException(status_code=422, detail="actor filter is not supported")
+    actor = _authenticated_actor(request)
+    response.headers["Cache-Control"] = "private, no-store"
+    fingerprint = audit_filter_fingerprint(
+        {
+            "scope": "my-events",
+            "actor": actor,
+            "limit": limit,
+        }
+    )
+    decoded = None
+    if cursor is not None:
+        try:
+            decoded = decode_audit_cursor(cursor, filter_fingerprint=fingerprint)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="invalid audit cursor") from exc
+    try:
+        rows = store.list(
+            limit=limit + 1,
+            after_sequence=decoded.after_sequence if decoded else None,
+            snapshot_sequence=decoded.snapshot_sequence if decoded else None,
+            snapshot_token=decoded.snapshot_token if decoded else None,
+            actor=actor,
+        )
+    except LakebaseError as exc:
+        raise HTTPException(status_code=503, detail=safe_dependency_detail("lakebase")) from exc
+    items = rows[:limit]
+    summaries = [_actor_event_summary(event) for event in items]
+    if len(rows) <= limit or not items:
+        return ActorAuditEventPage(items=summaries)
+    snapshot_sequence = items[0].audit_sequence if decoded is None else decoded.snapshot_sequence
+    after_sequence = items[-1].audit_sequence
+    snapshot_token = items[0].audit_snapshot if decoded is None else decoded.snapshot_token
+    if snapshot_sequence is None or after_sequence is None or snapshot_token is None:
+        raise HTTPException(status_code=503, detail="audit pagination unavailable")
+    next_cursor = encode_audit_cursor(
+        after_sequence=after_sequence,
+        snapshot_sequence=snapshot_sequence,
+        snapshot_token=snapshot_token,
+        filter_fingerprint=fingerprint,
+    )
+    return ActorAuditEventPage(items=summaries, next_cursor=next_cursor)
 
 
 @router.get("/events", response_model=list[AuditEvent])

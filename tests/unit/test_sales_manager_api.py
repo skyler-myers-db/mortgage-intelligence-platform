@@ -652,6 +652,9 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
     assert body["outcome"]["borrower_id"] == borrower_id
     assert body["outcome"]["outcome_type"] == "lost_to_competitor"
     assert body["outcome"]["audit_event_id"]
+    assert body["outcome"]["source_record_ref"].startswith("auto-")
+    assert "sf_case_123" not in recorded.text
+    assert all(row.get("source_record_ref") != "sf_case_123" for row in fake_lakebase_client.outcomes)
 
     replay = client.post(
         f"/api/leads/{borrower_id}/outcome",
@@ -667,6 +670,20 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
     )
     assert replay.status_code == 200
     assert replay.json()["outcome"]["outcome_id"] == body["outcome"]["outcome_id"]
+
+    replay_by_returned_token = client.post(
+        f"/api/leads/{borrower_id}/outcome",
+        json={
+            "outcome_type": "lost_to_competitor",
+            "source_system": "salesforce",
+            "source_record_ref": body["outcome"]["source_record_ref"],
+            "assigned_to_email": "lo01@summit.example",
+            "loan_amount": 425000,
+            "competitor_lender_label": "Competitor D",
+        },
+    )
+    assert replay_by_returned_token.status_code == 200
+    assert replay_by_returned_token.json()["outcome"]["outcome_id"] == body["outcome"]["outcome_id"]
 
     today = datetime.now(UTC).date().isoformat()
     summary = client.get(f"/api/sales/outcomes/summary?from={today}&to={today}")
@@ -712,6 +729,18 @@ def test_sales_closed_loop_outcomes_are_recorded_and_summarized(fake_lakebase_cl
         },
     )
     assert raw_brand.status_code == 422
+
+    for unsafe_ref in ("John-Smith", "Jane_Doe", "john.smith"):
+        response = client.post(
+            f"/api/leads/{borrower_id}/outcome",
+            json={
+                "outcome_type": "application_submitted",
+                "source_system": "manual_import",
+                "source_record_ref": unsafe_ref,
+            },
+        )
+        assert response.status_code == 422
+        assert unsafe_ref not in response.text
 
 
 def test_sales_outcome_rejects_unconfigured_customer_sources(fake_lakebase_client) -> None:
@@ -1078,7 +1107,7 @@ def test_sales_manager_outcome_stale_active_assignment_is_forbidden(
     assert not [
         row
         for row in fake_lakebase_client.outcomes
-        if str(row.get("source_record_ref") or "").startswith("manual_stale_assignment_")
+        if row.get("borrower_id") == borrower_id
     ]
 
 
@@ -1150,7 +1179,7 @@ def test_sales_manager_outcome_released_cached_assignment_is_forbidden(
     assert not [
         row
         for row in fake_lakebase_client.outcomes
-        if row.get("source_record_ref") == "manual_released_assignment_alpha"
+        if row.get("borrower_id") == borrower_id
     ]
 
 

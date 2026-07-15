@@ -69,18 +69,62 @@ itself with:
 The SHA printed by this gate is the value advertised as `MIP_GIT_SHA` and
 verified by the live smoke test.
 
+### Per-run M2M identities
+
+Live app validation uses three service principals and stores only their OAuth
+client credentials. No bearer token is a GitHub secret or `.env.local` value:
+
+| Role | Default service principal | GitHub Actions secrets |
+|---|---|---|
+| normal app user | `mip-nightly-ci-sp` | `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` |
+| app admin | `mip-nightly-admin-ci-sp` | `DATABRICKS_ADMIN_CLIENT_ID`, `DATABRICKS_ADMIN_CLIENT_SECRET` |
+| AI Gateway verifier | `mip-ai-gateway-verifier-ci-sp` | `DATABRICKS_VERIFIER_CLIENT_ID`, `DATABRICKS_VERIFIER_CLIENT_SECRET` |
+
+Run the provisioner once with workspace-admin credentials after the app and
+Lakebase instance exist. The live workspace does not initially contain
+`mip-admin`, so creating that group is a separately reviewed, explicit action:
+
+```bash
+python tools/databricks/provision_m2m_oauth.py \
+  --identity-role normal --set-gh-secrets --gh-repo <owner/repo>
+python tools/databricks/provision_m2m_oauth.py \
+  --identity-role admin --create-group \
+  --set-gh-secrets --gh-repo <owner/repo>
+python tools/databricks/provision_m2m_oauth.py \
+  --identity-role verifier \
+  --gateway-endpoint "${MIP_AI_GATEWAY_ENDPOINT}" \
+  --set-gh-secrets --gh-repo <owner/repo>
+```
+
+Without `--create-group`, admin provisioning fails closed when `mip-admin` is
+missing. Re-running is idempotent: existing principals, group membership, and
+the verifier Lakebase OAuth role are reused. Use
+`--client-id-secret-name` / `--client-secret-secret-name` when repository
+secret names differ. The verifier is never added to `mip-admin` and receives no
+Databricks App `CAN_USE` permission by default.
+For an existing principal whose prior client secret is unavailable or being
+replaced, add `--rotate`; without it, the existing secret remains unchanged.
+
+For local `scripts/deploy.sh`, provide the same six client credential variables
+through the process environment or `.env.local`. The script rejects reused
+client IDs, mints distinct normal/admin bearers at preflight, remints both
+immediately before Agent Evaluation, and remints the normal bearer again before
+the final smoke sweep. GitHub workflows use `tools/oauth_m2m_mint.py` to append
+fresh values directly to `$GITHUB_ENV`; minted values are not printed.
+
 The deploy script's live smoke now requires agentic capability proof by
-default (`MIP_EXPECT_AGENTIC_CAPABILITIES=1`). If the token minted during
-deploy is not app-admin readable, provide `MIP_ADMIN_BEARER_TOKEN` for an
-app-admin principal before running the script; otherwise the
-`/api/v1/admin/capabilities?live=1` probe fails closed on 403. Do not disable
-this gate for customer-release signoff. Only override it for an explicitly
-documented partial validation where agentic capabilities are out of scope.
+default (`MIP_EXPECT_AGENTIC_CAPABILITIES=1`). The admin proof uses the fresh
+admin M2M bearer; it never falls back to the normal identity or deployment PAT.
+Do not disable this gate for customer-release signoff. Only override it for an
+explicitly documented partial validation where agentic capabilities are out of
+scope.
 AI Gateway claimability is stricter than endpoint/table configuration: deploy
-runs `tools/databricks/verify_ai_gateway_exact_proof.py send --wait` after
-agentic provisioning, and the runtime capability row becomes available only
-when Lakebase contains a fresh `mip_app.ai_gateway_proof_ledger` row proving
-an exact inference-log row for the current `MIP_GIT_SHA`. Set
+runs `tools/databricks/verify_ai_gateway_exact_proof.py send --wait` under the
+dedicated verifier M2M identity after agentic provisioning. It first reconciles
+the verifier's Lakebase role and proof-ledger grants; the runtime app retains
+read-only proof-ledger access. The capability row becomes available only when
+Lakebase contains a fresh `mip_app.ai_gateway_proof_ledger` row proving an exact
+inference-log row for the current `MIP_GIT_SHA`. Set
 `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=1` for release signoff when the deploy must
 fail if that exact proof has not landed yet.
 
@@ -150,7 +194,11 @@ Databricks App resources expected by `app.yaml`:
 
 - `sql_warehouse`: SQL warehouse resource, `CAN_USE`.
 - `genie_space`: Genie space resource, `CAN_RUN`.
-- `database`: Lakebase database resource, `CAN_CONNECT_AND_CREATE`.
+- `database`: Lakebase database resource, `CAN_CONNECT_AND_CREATE` for binding
+  compatibility; `mip_lakebase_migrate` immediately revokes effective
+  database `CREATE` and fails unless postflight proves connect-only access plus
+  the exact reviewed `mip_app` table/sequence matrix in the internal security
+  grant runbook.
 
 ## Optional OTLP log export
 

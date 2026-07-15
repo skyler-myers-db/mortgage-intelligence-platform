@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import base64
 import json
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from threading import RLock
 from typing import Any
+from urllib.parse import parse_qs, urlencode, urlsplit, urlunsplit
 from uuid import uuid4
 
 import psycopg
@@ -31,6 +33,23 @@ from backend.services.lakebase import get_lakebase_client
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
 
+def _handoff_token(route: str) -> str:
+    values = parse_qs(urlsplit(route).query).get("growth_handoff", [])
+    assert len(values) == 1
+    return values[0]
+
+
+def _route_without_handoff(route: str) -> str:
+    parts = urlsplit(route)
+    query = [
+        (key, value)
+        for key, values in parse_qs(parts.query).items()
+        if key != "growth_handoff"
+        for value in values
+    ]
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+
 class _FakeSqlClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, dict[str, Any]]] = []
@@ -47,6 +66,8 @@ class _FakeSqlClient:
             "actionable_avg_score": 73.1,
             "avg_rate_spread_bps": 187.9,
             "avg_equity_pct": 42.4,
+            "actionable_cohort_digest": "1" * 64,
+            "actionable_snapshot_id": "e" * 64,
         }
 
 
@@ -115,6 +136,8 @@ class _ImpossibleReconciliationSqlClient(_FakeSqlClient):
             "actionable_avg_score": 74.0,
             "avg_rate_spread_bps": 110.0,
             "avg_equity_pct": 45.0,
+            "actionable_cohort_digest": "2" * 64,
+            "actionable_snapshot_id": "e" * 64,
         }
 
 
@@ -588,7 +611,7 @@ def test_custom_segment_workflow_uses_reviewed_any_semantics_and_writes_audit() 
     assert body["workflow"]["title"] == "Custom Segment Workflow"
     assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["investor", "listed"]
     assert body["criteria"]["lead_queue_filters"]["segment_mode"] == "any"
-    assert body["route"] == (
+    assert _route_without_handoff(body["route"]) == (
         "/lead-queue?segment_codes=investor%2Clisted&segment_mode=any"
         "&marketing_eligibility=Eligible+only&states=IL%2CTX"
     )
@@ -1042,20 +1065,29 @@ def test_growth_agent_due_monitor_run_refreshes_and_writes_review_drafts() -> No
     assert {draft["status"] for draft in body["drafts"]} == {"draft"}
     drafts_by_channel = {draft["channel"]: draft for draft in body["drafts"]}
     assert drafts_by_channel["slack"]["title"] == "IL Refi Watch: 5,394 eligible"
-    assert drafts_by_channel["slack"]["body"] == (
+    slack_summary, slack_route = drafts_by_channel["slack"]["body"].rsplit("Review: ", 1)
+    assert slack_summary == (
         "5,394 eligible borrowers in IL Refi Watch. "
-        "The refinance-economics queue refreshed for loan-officer triage. Review: "
+        "The refinance-economics queue refreshed for loan-officer triage. "
+    )
+    assert _route_without_handoff(slack_route) == (
         "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
     )
+    _handoff_token(slack_route)
     assert drafts_by_channel["teams"]["title"] == "Operations brief: IL Refi Watch"
-    assert drafts_by_channel["teams"]["body"].splitlines() == [
+    teams_lines = drafts_by_channel["teams"]["body"].splitlines()
+    assert teams_lines[:5] == [
         "Operations brief",
         "Watchlist: IL Refi Watch",
         "Summary: The refinance watchlist is ready for rate-spread prioritization and ownership review.",
         "Eligible population: 5,394 borrowers",
         "Operator action: Review the strongest refinance economics and assign the next owner.",
-        "MIP route: /lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL",
     ]
+    teams_route = teams_lines[5].removeprefix("MIP route: ")
+    assert _route_without_handoff(teams_route) == (
+        "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    )
+    _handoff_token(teams_route)
     assert drafts_by_channel["slack"]["body"] != drafts_by_channel["teams"]["body"]
     assert all("No borrower identities" not in draft["body"] for draft in body["drafts"])
     assert len({draft["request_id"] for draft in lakebase.notification_drafts}) == 2
@@ -1695,7 +1727,9 @@ def test_prompt_agent_infers_state_scope_from_full_state_name() -> None:
     assert body["criteria"]["states"] == ["IL"]
     assert body["criteria"]["lead_queue_filters"]["states"] == ["IL"]
     assert body["criteria"]["lead_queue_filters"]["portfolio_criteria"]["states"] == ["IL"]
-    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    assert _route_without_handoff(body["route"]) == (
+        "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    )
     statement, params = sql.calls[0]
     assert "UPPER(b.state) IN (:state_0)" in statement
     assert params == {"state_0": "IL"}
@@ -1718,7 +1752,9 @@ def test_prompt_agent_infers_state_scope_from_lowercase_state_code() -> None:
     body = response.json()
     assert body["workflow"]["id"] == "daily_refi_brief"
     assert body["criteria"]["states"] == ["IL"]
-    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    assert _route_without_handoff(body["route"]) == (
+        "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    )
 
 
 def test_prompt_agent_custom_segments_use_reviewed_all_semantics() -> None:
@@ -1829,7 +1865,7 @@ def test_prompt_agent_routes_dossier_story_to_borrower_dossier_specialist() -> N
     assert body["specialist_agent"] == "borrower_dossier_agent"
     assert body["criteria"]["lead_queue_filters"]["funnel_stage"] == "high_opportunity"
     assert (
-        body["route"]
+        _route_without_handoff(body["route"])
         == "/lead-queue?funnel_stage=high_opportunity&marketing_eligibility=Eligible+only"
     )
     dossier_steps = [
@@ -2008,6 +2044,8 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert body["specialist_agent"] == "structured_data_agent"
     assert body["trace_id"].startswith("agent-trace-")
     assert len(body["tool_result_hash"]) == 64
+    assert len(body["actionable_cohort_fingerprint"]) == 64
+    assert body["actionable_snapshot_id"] == "e" * 64
     assert body["governance_chips"]
     assert body["execution_mode"] == "deterministic"
     assert body["trace_kind"] == "local_hash"
@@ -2025,9 +2063,20 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
         "states": ["IL", "TX"],
     }
     assert (
-        body["route"]
+        _route_without_handoff(body["route"])
         == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL%2CTX"
     )
+    token = _handoff_token(body["route"])
+    encoded_claims = token.split(".", 1)[0]
+    claims = json.loads(
+        base64.urlsafe_b64decode(encoded_claims + "=" * (-len(encoded_claims) % 4))
+    )
+    assert claims["run_id"] == body["run_id"]
+    assert claims["cohort_fingerprint"] == body["actionable_cohort_fingerprint"]
+    assert claims["total"] == body["actionable_total"]
+    assert claims["source_snapshot"] == body["actionable_snapshot_id"]
+    assert "operator@example.com" not in token
+    assert "borrower" not in json.dumps(claims).lower()
     reconciliation = next(
         check
         for check in body["policy_checks"]
@@ -2038,7 +2087,8 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert "Masked references only" not in {chip["label"] for chip in body["governance_chips"]}
 
     statement, params = sql.calls[0]
-    assert statement.count("COUNT(DISTINCT b.clip)") == 2
+    assert statement.count("COUNT(DISTINCT b.clip)") == 1
+    assert statement.count("COUNT(DISTINCT b.borrower_id)") == 1
     assert params == {"state_0": "IL", "state_1": "TX"}
 
     assert len(lakebase.audit_events) == 1
@@ -2052,6 +2102,14 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert metadata["tool_result_hash"] == body["tool_result_hash"]
     assert metadata["specialist_agent"] == "structured_data_agent"
     assert metadata["governance_chips"][0]["label"] == "Human approval required"
+    assert (
+        metadata["governance_chips"][-1]["evidence_ref"]
+        == body["actionable_cohort_fingerprint"]
+    )
+    assert metadata["governance_chips"][-1]["result_hash"] == body["actionable_snapshot_id"]
+    assert metadata["governance_chips"][-1]["detail"] == (
+        "Cohort fingerprint and source snapshot bound."
+    )
     assert "Masked references only" not in {chip["label"] for chip in metadata["governance_chips"]}
     assert "Multi-agent framework" in json.dumps(metadata["governance_chips"])
     assert metadata["result_filters"]["segment_codes"] == ["itm"]
@@ -2121,13 +2179,22 @@ def test_workflow_metric_sql_uses_live_predicates_and_actionability_gates() -> N
         assert "b.equity_pct >= 35" not in statement
         for snippet in snippets:
             assert snippet in statement
+        if workflow_id != "source_freshness_sentinel":
+            assert "FROM mip.ref.refresh_run_state" in statement
+            assert "CAST(anchor.run_id AS STRING)" in statement
+            assert "versions.borrower_360_at = anchor.refresh_at" in statement
         if workflow_id == "borrower_dossier_review":
+            assert "(SELECT MAX(refreshed_at) FROM mip.gold.borrower_dossier)" in statement
+            assert "versions.primary_at = anchor.refresh_at" in statement
             assert "d.marketing_eligible = TRUE" in statement
             assert "d.consent_status = 'opt_in'" in statement
             assert "d.suppression_reason IS NULL" in statement
             assert "UPPER(d.state) IN (:state_0)" in statement
             assert params == {"state_0": "IL"}
         elif workflow_id != "source_freshness_sentinel":
+            if workflow_id == "branch_capacity_review":
+                assert "versions.lifecycle_at IS NOT NULL" in statement
+                assert "'|lifecycle:', CAST(versions.lifecycle_at AS STRING)" in statement
             assert "b.marketing_eligible = TRUE" in statement
             assert "b.consent_status = 'opt_in'" in statement
             assert "b.suppression_reason IS NULL" in statement
@@ -2297,7 +2364,7 @@ def test_competitor_workflow_keeps_relationship_filter_in_portfolio_criteria() -
         "marketing_eligibility": "Eligible only",
         "lender_relationship": "Competitor customer",
     }
-    assert response.json()["route"] == (
+    assert _route_without_handoff(response.json()["route"]) == (
         "/lead-queue?lender_relationship=Competitor+customer&marketing_eligibility=Eligible+only"
     )
 
@@ -2384,11 +2451,45 @@ def test_growth_agent_request_id_replays_existing_run_without_duplicate_audit() 
     assert replay.status_code == 200, replay.text
     assert replay.json()["run_id"] == first.json()["run_id"]
     assert replay.json()["audit_event_id"] == first.json()["audit_event_id"]
+    assert replay.json()["actionable_cohort_fingerprint"] == first.json()[
+        "actionable_cohort_fingerprint"
+    ]
+    assert replay.json()["actionable_snapshot_id"] == "e" * 64
     assert len(lakebase.runs) == 1
     assert len(lakebase.audit_events) == 1
     assert lakebase.runs[0]["request_id"] == lakebase.audit_events[0]["request_id"]
     assert lakebase.runs[0]["request_id"] == request_id
     assert len(sql.calls) == 1
+
+
+def test_growth_agent_lead_queue_workflow_requires_snapshot_proof() -> None:
+    class _MissingSnapshotSqlClient(_FakeSqlClient):
+        def execute_one(
+            self,
+            statement: str,
+            parameters: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            row = super().execute_one(statement, parameters)
+            row.pop("actionable_snapshot_id")
+            return row
+
+    sql = _MissingSnapshotSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/workflows/daily_refi_brief/run",
+            json={"states": ["IL"]},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 503
+    assert response.json() == {
+        "detail": "Growth Agent cohort snapshot proof is unavailable"
+    }
+    assert lakebase.runs == []
 
 
 def test_same_growth_agent_criteria_with_new_request_id_writes_fresh_audit() -> None:

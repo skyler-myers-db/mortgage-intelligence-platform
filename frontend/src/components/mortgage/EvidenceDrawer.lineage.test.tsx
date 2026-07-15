@@ -14,6 +14,7 @@ import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { EvidenceDrawer } from './EvidenceDrawer';
 import type { DrawerSource } from '../AppContext';
+import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import type { LineageLayer, LineageManifestResponse } from '../../types';
 
 declare const process: { cwd(): string };
@@ -357,6 +358,25 @@ describe('EvidenceDrawer lineage tab', () => {
     );
     expect(operationalLink?.getAttribute('href')).toBe('/portfolio-builder');
     expect(document.querySelector('a[href*="/explore/data/"]')).toBeNull();
+    expect(apiMocks.lineageManifest).not.toHaveBeenCalled();
+    expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
+  });
+
+  it('renders campaign-performance Lakebase drawers with non-admin Sales Ops destinations', async () => {
+    for (const source of [DRAWER_SOURCES.callDispositions, DRAWER_SOURCES.leadOutcomes]) {
+      appMocks.drawer = source;
+      await render();
+      await openLineageTab();
+
+      expect(document.body.textContent).toContain('Lakebase operational records');
+      expect(document.body.textContent).toContain(source.assetPath);
+      const operationalLink = Array.from(document.querySelectorAll<HTMLAnchorElement>('a')).find(
+        (link) => link.textContent?.includes('Open sales operations'),
+      );
+      expect(operationalLink?.getAttribute('href')).toBe('/analytics?view=sales-ops');
+      expect(document.querySelector('a[href^="/admin-config"]')).toBeNull();
+      expect(document.querySelector('a[href*="/explore/data/"]')).toBeNull();
+    }
     expect(apiMocks.lineageManifest).not.toHaveBeenCalled();
     expect(apiMocks.assetMetadata).not.toHaveBeenCalled();
   });

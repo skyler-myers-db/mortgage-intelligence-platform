@@ -214,6 +214,29 @@ describe('descriptorFor', () => {
     expect(assetKeyForSource('other.gold.lead_population')).toBeNull();
   });
 
+  it('routes campaign-performance Lakebase assets to non-admin Sales Ops analytics', () => {
+    const cases = [
+      ['mip_app.call_dispositions', DRAWER_SOURCES.callDispositions],
+      ['mip_app.lead_outcomes', DRAWER_SOURCES.leadOutcomes],
+    ] as const;
+
+    for (const [assetPath, expectedSource] of cases) {
+      const source = drawerForAsset(assetPath);
+      expect(source).toBe(expectedSource);
+      expect(source?.assetPath).toBe(assetPath);
+      expect(assetHrefForSource(assetPath)).toBeNull();
+
+      const destination = evidenceDestinationFor(source);
+      expect(destination.kind).toBe('lakebase');
+      if (destination.kind === 'lakebase') {
+        expect(destination.objectPaths).toEqual([assetPath]);
+        expect(destination.href).toBe('/analytics?view=sales-ops');
+        expect(destination.href).not.toContain('/admin-config');
+        expect(destination.actionLabel).toBe('Open sales operations');
+      }
+    }
+  });
+
   it('classifies every curated drawer and maps every visible UC object to the registry', () => {
     for (const [key, source] of Object.entries(DRAWER_SOURCES)) {
       const destination = evidenceDestinationFor(source);
@@ -250,7 +273,12 @@ describe('descriptorFor', () => {
       expect(permit.objectPaths.some((path) => path.includes('permit'))).toBe(false);
     }
 
-    for (const source of [DRAWER_SOURCES.assignmentOverlay, DRAWER_SOURCES.config]) {
+    for (const source of [
+      DRAWER_SOURCES.assignmentOverlay,
+      DRAWER_SOURCES.callDispositions,
+      DRAWER_SOURCES.leadOutcomes,
+      DRAWER_SOURCES.config,
+    ]) {
       const destination = evidenceDestinationFor(source);
       expect(destination.kind).toBe('lakebase');
       if (destination.kind === 'lakebase') {

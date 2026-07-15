@@ -6,7 +6,11 @@ test.skip(!LIVE, 'Set E2E_LIVE=1 to run live hardening regression checks.');
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
 const API_URL = process.env.MIP_API_URL || APP_URL.replace(':5173', ':8000');
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
+const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
 const AUTH_HEADERS: Record<string, string> = BEARER ? { Authorization: `Bearer ${BEARER}` } : {};
+const ADMIN_AUTH_HEADERS: Record<string, string> = ADMIN_BEARER
+  ? { Authorization: `Bearer ${ADMIN_BEARER}` }
+  : {};
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
@@ -57,6 +61,21 @@ type GenieActionResult = {
   action_type: string;
   route?: string | null;
   message?: string;
+};
+
+type SessionResponse = {
+  can_access_admin: boolean;
+};
+
+type ActorActivityPage = {
+  items: Array<{
+    event_type: string;
+    entity_type: string;
+    subject_id?: string | null;
+    created_at: string;
+    [key: string]: unknown;
+  }>;
+  next_cursor?: string | null;
 };
 
 const STATE_NAMES: Record<string, string> = {
@@ -197,6 +216,100 @@ async function expectClearFiltersState(page: Page, disabled: boolean): Promise<v
   }
 }
 
+test('admin and non-admin identities enforce navigation and activity boundaries', async ({
+  browser,
+  page,
+  request,
+}) => {
+  test.setTimeout(180_000);
+  expect(BEARER, 'live role proof requires the non-admin M2M bearer').not.toBe('');
+  expect(ADMIN_BEARER, 'live role proof requires a distinct admin bearer').not.toBe('');
+  expect(ADMIN_BEARER, 'admin and non-admin proofs must not reuse one identity').not.toBe(BEARER);
+
+  const nonAdminSessionResponse = await request.get(`${API_URL}/api/session`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(nonAdminSessionResponse.status(), 'non-admin session lookup').toBe(200);
+  const nonAdminSession = await nonAdminSessionResponse.json() as SessionResponse;
+  expect(nonAdminSession.can_access_admin).toBe(false);
+
+  const ownActivityResponse = await request.get(`${API_URL}/api/audit/my-events?limit=8`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(ownActivityResponse.status(), 'non-admin actor-scoped activity lookup').toBe(200);
+  expect(ownActivityResponse.headers()['cache-control']).toContain('private');
+  expect(ownActivityResponse.headers()['cache-control']).toContain('no-store');
+  const ownActivity = await ownActivityResponse.json() as ActorActivityPage;
+  expect(Array.isArray(ownActivity.items)).toBe(true);
+  for (const item of ownActivity.items) {
+    expect(item.event_type.trim()).not.toBe('');
+    expect(item.entity_type.trim()).not.toBe('');
+    expect(item.created_at.trim()).not.toBe('');
+    expect(item).not.toHaveProperty('actor');
+    expect(item).not.toHaveProperty('payload_json');
+    expect(item).not.toHaveProperty('evidence_ids');
+  }
+
+  const actorOverrideResponse = await request.get(
+    `${API_URL}/api/audit/my-events?limit=8&actor=another-user%40example.com`,
+    { headers: AUTH_HEADERS },
+  );
+  expect(actorOverrideResponse.status(), 'actor-scoped feed must reject actor overrides').toBe(422);
+
+  const deniedGlobalActivity = await request.get(`${API_URL}/api/audit/events?limit=1`, {
+    headers: AUTH_HEADERS,
+  });
+  expect(deniedGlobalActivity.status(), 'non-admin global activity lookup must fail closed').toBe(403);
+
+  await gotoApp(page, '/');
+  const nonAdminNavigation = page.getByRole('navigation', { name: 'Main navigation' });
+  await expect(nonAdminNavigation.getByRole('link', { name: 'Admin', exact: true })).toHaveCount(0);
+  await page.getByRole('banner').getByRole('button', { name: 'Toggle console' }).click();
+  const consolePanel = page.getByRole('complementary', { name: 'Workspace console' });
+  await expect(consolePanel.getByText('My recent activity', { exact: true })).toBeVisible();
+  await expect(consolePanel.getByText('Loading recent activity…')).toBeHidden({ timeout: 30_000 });
+
+  await page.goto('/admin-config', { waitUntil: 'domcontentloaded', timeout: 60_000 });
+  await expect.poll(() => new URL(page.url()).pathname, { timeout: 30_000 }).toBe('/');
+
+  const adminSessionResponse = await request.get(`${API_URL}/api/session`, {
+    headers: ADMIN_AUTH_HEADERS,
+  });
+  expect(adminSessionResponse.status(), 'admin session lookup').toBe(200);
+  const adminSession = await adminSessionResponse.json() as SessionResponse;
+  expect(adminSession.can_access_admin).toBe(true);
+
+  const adminGlobalActivity = await request.get(`${API_URL}/api/audit/events?limit=1`, {
+    headers: ADMIN_AUTH_HEADERS,
+  });
+  expect(adminGlobalActivity.status(), 'admin global activity lookup').toBe(200);
+  expect(Array.isArray(await adminGlobalActivity.json())).toBe(true);
+
+  const adminContext = await browser.newContext({
+    baseURL: APP_URL,
+    extraHTTPHeaders: ADMIN_AUTH_HEADERS,
+  });
+  const adminPage = await adminContext.newPage();
+  try {
+    await gotoApp(adminPage, '/admin-config');
+    await expect(adminPage).toHaveURL(/\/admin-config$/);
+    await expect(
+      adminPage
+        .getByRole('navigation', { name: 'Main navigation' })
+        .getByRole('link', { name: 'Admin', exact: true }),
+    ).toBeVisible();
+    await expect(
+      adminPage.getByRole('heading', { name: 'Rules, data sources, and audit' }),
+    ).toBeVisible();
+    const auditTrail = adminPage.locator('.surface', { hasText: 'Audit trail' }).first();
+    await expect(auditTrail).toBeVisible();
+    await expect(auditTrail.getByText('Probing Lakebase…')).toBeHidden({ timeout: 30_000 });
+    await expect(auditTrail).toContainText(/Last event|No events yet/);
+  } finally {
+    await adminContext.close();
+  }
+});
+
 test('Clear filters is visible, disabled when clean, and clears active filters on core routes', async ({ page }) => {
   await gotoApp(page, '/lead-queue');
   await expectClearFiltersState(page, true);
@@ -285,7 +398,21 @@ test('segment any/all API counts are de-duplicated and intersection-safe', async
   expect(anyMode, 'OR count must equal A + B - overlap; summed duplicate memberships would fail this').toBe(itm + equity - allMode);
   expect(anyMode, 'OR count should include at least the larger individual segment').toBeGreaterThanOrEqual(Math.max(itm, equity));
   expect(allMode, 'AND count must be no larger than either individual segment').toBeLessThanOrEqual(Math.min(itm, equity));
-  expect(allMode, 'intersection count should be non-negative').toBeGreaterThanOrEqual(0);
+  expect(allMode, 'live proof requires a nonempty ITM/equity intersection').toBeGreaterThan(0);
+
+  const anyPageResponse = await request.get(
+    `${API_URL}/api/leads?limit=100&segment_codes=itm,equity&segment_mode=any`,
+    { headers: AUTH_HEADERS },
+  );
+  expect(anyPageResponse.status(), 'de-duplicated OR page').toBe(200);
+  const anyRows = await anyPageResponse.json() as Array<{ borrower_id?: string }>;
+  const borrowerIds = anyRows.map((row) => row.borrower_id ?? '');
+  expect(borrowerIds.length, 'OR page should contain live borrowers').toBeGreaterThan(0);
+  expect(borrowerIds.every(Boolean), 'every OR row must carry a public borrower id').toBe(true);
+  expect(
+    new Set(borrowerIds).size,
+    'a borrower matching both segments must appear only once in the any-mode page',
+  ).toBe(borrowerIds.length);
 });
 
 test('county drilldown distinguishes loading counties from loaded positive and empty counties', async ({ page, request }) => {

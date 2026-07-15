@@ -28,6 +28,13 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from tests.eval.scorers import count_reconciles, load_cases, score_batch  # noqa: E402
+from tools.databricks import agent_eval_destination_proof as _destination_proof  # noqa: E402
+
+_cohort_fingerprint = _destination_proof.cohort_fingerprint
+_destination_total = _destination_proof.destination_total
+_lead_queue_destination_url = _destination_proof.lead_queue_destination_url
+_snapshot_id = _destination_proof.snapshot_id
+_with_destination_total = _destination_proof.with_destination_total
 
 
 def _run(args: list[str], *, input_json: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -54,7 +61,9 @@ def _experiment_id(name: str) -> str:
         existing = _run(["experiments", "get-by-name", name])
     except RuntimeError:
         created = _run(["experiments", "create-experiment", name])
-        return str(created.get("experiment_id") or created.get("experiment", {}).get("experiment_id") or "")
+        return str(
+            created.get("experiment_id") or created.get("experiment", {}).get("experiment_id") or ""
+        )
     experiment = existing.get("experiment") or existing
     return str(experiment.get("experiment_id") or "")
 
@@ -74,6 +83,7 @@ def _call_growth_agent(
     *,
     app_url: str,
     token: str,
+    admin_token: str,
     case: dict[str, Any],
     timeout_s: float,
     max_attempts: int = 8,
@@ -97,7 +107,9 @@ def _call_growth_agent(
                 response = client.post(url, headers=headers, json=payload)
             except httpx.HTTPError as exc:
                 if attempt < attempts:
-                    print(f"[agent-eval] transient request error ({exc}); retrying {attempt}/{attempts - 1}")
+                    print(
+                        f"[agent-eval] transient request error ({exc}); retrying {attempt}/{attempts - 1}"
+                    )
                     time.sleep(retry_delay_s)
                     continue
                 return {"error": f"request failed after {attempts} attempts: {exc}"}
@@ -120,7 +132,13 @@ def _call_growth_agent(
                 return {"error": str(body)}
             if not isinstance(body, dict):
                 return {"error": f"expected JSON object, got {type(body).__name__}"}
-            return body
+            return _with_destination_total(
+                client=client,
+                app_url=app_url,
+                admin_token=admin_token,
+                actor_token=token,
+                response=body,
+            )
     return {"error": "growth-agent request loop exited unexpectedly"}
 
 
@@ -231,7 +249,12 @@ def _log_eval_run(
         input_json={
             "metrics": [
                 {"key": "score", "value": float(summary["score"]), "timestamp": now_ms, "step": 0},
-                {"key": "passed", "value": float(summary["passed"]), "timestamp": now_ms, "step": 0},
+                {
+                    "key": "passed",
+                    "value": float(summary["passed"]),
+                    "timestamp": now_ms,
+                    "step": 0,
+                },
                 {"key": "total", "value": float(summary["total"]), "timestamp": now_ms, "step": 0},
                 {
                     "key": "count_reconciles_passed",
@@ -283,7 +306,9 @@ def _log_eval_run(
                 },
                 {
                     "key": "mip_mlflow_genai_databricks_run_verified",
-                    "value": "true" if genai_evaluate.get("verified_databricks_run") is True else "false",
+                    "value": "true"
+                    if genai_evaluate.get("verified_databricks_run") is True
+                    else "false",
                 },
             ],
         },
@@ -291,9 +316,27 @@ def _log_eval_run(
     # Keep the full payload local and concise in MLflow. The app capability
     # probe only needs the metrics and params above to prove the latest run.
     failures = [row for row in summary["results"] if not row["passed"]]
-    _run_no_output(["experiments", "set-tag", "mip_eval_failures", json.dumps(failures)[:250], "--run-id", run_id])
     _run_no_output(
-        ["experiments", "update-run", "--run-id", run_id, "--status", "FINISHED", "--end-time", str(int(time.time() * 1000))],
+        [
+            "experiments",
+            "set-tag",
+            "mip_eval_failures",
+            json.dumps(failures)[:250],
+            "--run-id",
+            run_id,
+        ]
+    )
+    _run_no_output(
+        [
+            "experiments",
+            "update-run",
+            "--run-id",
+            run_id,
+            "--status",
+            "FINISHED",
+            "--end-time",
+            str(int(time.time() * 1000)),
+        ],
     )
     _ = responses_by_case_id
     return run_id
@@ -358,29 +401,35 @@ def _is_databricks_tracking_uri(uri: str) -> bool:
 
 
 def _metric_value_from_run_payload(payload: dict[str, Any], metric_key: str) -> float | None:
-    metrics = (((payload.get("run") or {}).get("data") or {}).get("metrics") or [])
+    metrics = ((payload.get("run") or {}).get("data") or {}).get("metrics") or []
     for metric in metrics:
         if not isinstance(metric, dict):
             continue
         if str(metric.get("key") or "").strip() != metric_key:
             continue
+        value = metric.get("value")
+        if value is None:
+            return None
         try:
-            return float(metric.get("value"))
+            return float(value)
         except (TypeError, ValueError):
             return None
     return None
 
 
 def _count_reconciles_metric_from_payload(payload: dict[str, Any]) -> float | None:
-    metrics = (((payload.get("run") or {}).get("data") or {}).get("metrics") or [])
+    metrics = ((payload.get("run") or {}).get("data") or {}).get("metrics") or []
     for metric in metrics:
         if not isinstance(metric, dict):
             continue
         key = str(metric.get("key") or "").strip().lower()
         if "count_reconciles" not in key or "error" in key:
             continue
+        value = metric.get("value")
+        if value is None:
+            continue
         try:
-            return float(metric.get("value"))
+            return float(value)
         except (TypeError, ValueError):
             continue
     return None
@@ -448,11 +497,13 @@ def _run_mlflow_genai_evaluate(
     """Run MLflow GenAI Evaluation with the reviewed custom scorer if present."""
 
     try:
-        import mlflow  # type: ignore[import-untyped]
-        from mlflow.genai.scorers import scorer  # type: ignore[import-untyped]
+        import mlflow
+        from mlflow.genai.scorers import scorer
     except Exception as exc:  # noqa: BLE001 - absence is reflected honestly.
         if require:
-            raise RuntimeError("mlflow.genai.evaluate is required but mlflow is unavailable") from exc
+            raise RuntimeError(
+                "mlflow.genai.evaluate is required but mlflow is unavailable"
+            ) from exc
         return {"used": False, "reason": f"mlflow unavailable: {type(exc).__name__}"}
 
     evaluate = getattr(getattr(mlflow, "genai", None), "evaluate", None)
@@ -461,14 +512,18 @@ def _run_mlflow_genai_evaluate(
             raise RuntimeError("mlflow.genai.evaluate is required but not available")
         return {"used": False, "reason": "mlflow.genai.evaluate unavailable"}
 
-    desired_tracking_uri = (tracking_uri or os.environ.get("MLFLOW_TRACKING_URI") or "databricks").strip()
+    desired_tracking_uri = (
+        tracking_uri or os.environ.get("MLFLOW_TRACKING_URI") or "databricks"
+    ).strip()
     if hasattr(mlflow, "set_tracking_uri"):
         mlflow.set_tracking_uri(desired_tracking_uri)
     actual_tracking_uri = str(
         mlflow.get_tracking_uri() if hasattr(mlflow, "get_tracking_uri") else desired_tracking_uri
     )
     if not _is_databricks_tracking_uri(actual_tracking_uri):
-        message = f"mlflow.genai.evaluate tracking URI must be Databricks, got {actual_tracking_uri!r}"
+        message = (
+            f"mlflow.genai.evaluate tracking URI must be Databricks, got {actual_tracking_uri!r}"
+        )
         if require:
             raise RuntimeError(message)
         return {
@@ -560,8 +615,21 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--app-url", default=os.environ.get("MIP_APP_URL", ""))
     parser.add_argument("--token", default=os.environ.get("MIP_BEARER_TOKEN", ""))
-    parser.add_argument("--experiment", default=os.environ.get("MIP_AGENT_EVAL_EXPERIMENT", "/Shared/mip-agent-eval"))
-    parser.add_argument("--cases", type=Path, default=REPO / "tests" / "eval" / "golden_agent_cases.jsonl")
+    parser.add_argument(
+        "--admin-token",
+        default=os.environ.get("MIP_ADMIN_BEARER_TOKEN", ""),
+        help=(
+            "Admin-only bearer for legacy Lead Queue identity proof when a deployed "
+            "Growth Agent response does not yet carry a signed user handoff."
+        ),
+    )
+    parser.add_argument(
+        "--experiment",
+        default=os.environ.get("MIP_AGENT_EVAL_EXPERIMENT", "/Shared/mip-agent-eval"),
+    )
+    parser.add_argument(
+        "--cases", type=Path, default=REPO / "tests" / "eval" / "golden_agent_cases.jsonl"
+    )
     parser.add_argument("--timeout-s", type=float, default=60.0)
     parser.add_argument("--max-attempts", type=int, default=8)
     parser.add_argument("--retry-delay-s", type=float, default=10.0)
@@ -579,7 +647,9 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--out-env", type=Path)
     parser.add_argument("--out-json", type=Path)
-    parser.add_argument("--mlflow-tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI", "databricks"))
+    parser.add_argument(
+        "--mlflow-tracking-uri", default=os.environ.get("MLFLOW_TRACKING_URI", "databricks")
+    )
     parser.add_argument(
         "--require-mlflow-genai-evaluate",
         action="store_true",
@@ -590,8 +660,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--live-invocation-case",
         action="store_true",
-        default=os.environ.get("MIP_LIVE_INVOCATION_CASE", "").lower()
-        in {"1", "true", "yes"},
+        default=os.environ.get("MIP_LIVE_INVOCATION_CASE", "").lower() in {"1", "true", "yes"},
         help=(
             "Append ONE extra case that is scored from a fresh, second live "
             "invocation of /agent/run at scoring time (not a replay of the first "
@@ -622,6 +691,11 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("--app-url or MIP_APP_URL is required")
     if not args.token:
         raise ValueError("--token or MIP_BEARER_TOKEN is required")
+    if not args.admin_token:
+        raise ValueError(
+            "--admin-token or MIP_ADMIN_BEARER_TOKEN is required for "
+            "admin-only Lead Queue identity proof; MIP_BEARER_TOKEN is not a fallback"
+        )
     _wait_for_app_health(
         app_url=args.app_url,
         token=args.token,
@@ -641,6 +715,7 @@ def main(argv: list[str] | None = None) -> int:
         responses[case_id] = _call_growth_agent(
             app_url=args.app_url,
             token=args.token,
+            admin_token=args.admin_token,
             case=case,
             timeout_s=args.timeout_s,
             max_attempts=args.max_attempts,
@@ -686,7 +761,9 @@ def main(argv: list[str] | None = None) -> int:
     }
     print(json.dumps(result, indent=2, sort_keys=True))
     if args.out_json:
-        args.out_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        args.out_json.write_text(
+            json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+        )
     if args.out_env:
         _write_env(args.out_env, experiment_name=args.experiment, run_id=run_id)
     if summary["passed"] != summary["total"]:

@@ -31,7 +31,6 @@
 # Env:
 #   MIP_APP_URL      Override target URL. Default: http://127.0.0.1:8000.
 #   MIP_API_PREFIX   API prefix. Default: /api/v1.
-#   MIP_FRONTEND_URL Frontend URL. Default: http://127.0.0.1:5173.
 #   MIP_BEARER_TOKEN Optional Databricks Apps OAuth bearer for deployed URLs.
 #   MIP_ADMIN_BEARER_TOKEN Optional app-admin OAuth bearer for admin-only probes.
 #   MIP_EXPECT_GIT_SHA When set, require authenticated health to report this
@@ -42,6 +41,12 @@
 #      ledger-verified exact inference-row proof after a live endpoint probe.
 #   MIP_REQUIRE_AI_GATEWAY_CLAIMABLE When 1, fail unless AI Gateway is available
 #      with ledger-verified exact inference-row proof.
+#   MIP_SMOKE_CONNECT_TIMEOUT_S Per-request curl connect timeout. Default: 10.
+#   MIP_SMOKE_REQUEST_TIMEOUT_S Per-request curl total timeout. Default: 75.
+#   MIP_SMOKE_PROBE_ATTEMPTS Maximum attempts for retry-eligible probes. Default: 4.
+#   MIP_SMOKE_PROBE_RETRY_DELAY_S Delay between probe attempts. Default: 20.
+#   MIP_SMOKE_PROBE_RETRY_BUDGET_S Total wall-clock budget for one retrying
+#      probe, including requests and sleeps. Default: 300.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
@@ -49,11 +54,15 @@ APP_URL="${MIP_APP_URL:-http://127.0.0.1:8000}"
 API_PREFIX="${MIP_API_PREFIX:-/api/v1}"
 API_PREFIX="/${API_PREFIX#/}"
 API_PREFIX="${API_PREFIX%/}"
-FRONTEND_URL="${MIP_FRONTEND_URL:-http://127.0.0.1:5173}"
 AUTH_TOKEN="${MIP_BEARER_TOKEN:-}"
 ADMIN_AUTH_TOKEN="${MIP_ADMIN_BEARER_TOKEN:-}"
 BOOT_TIMEOUT=20
 REMOTE_BOOT_TIMEOUT="${MIP_REMOTE_BOOT_TIMEOUT:-240}"
+PROBE_ATTEMPTS="${MIP_SMOKE_PROBE_ATTEMPTS:-4}"
+PROBE_RETRY_DELAY="${MIP_SMOKE_PROBE_RETRY_DELAY_S:-20}"
+PROBE_RETRY_BUDGET="${MIP_SMOKE_PROBE_RETRY_BUDGET_S:-300}"
+CURL_CONNECT_TIMEOUT="${MIP_SMOKE_CONNECT_TIMEOUT_S:-10}"
+CURL_MAX_TIME="${MIP_SMOKE_REQUEST_TIMEOUT_S:-75}"
 SKIP_GENIE=0
 SKIP_CAPABILITIES=0
 EXPECT_AGENTIC_CAPABILITIES="${MIP_EXPECT_AGENTIC_CAPABILITIES:-0}"
@@ -86,6 +95,43 @@ done
 command -v curl >/dev/null || { echo "curl required" >&2; exit 2; }
 command -v jq   >/dev/null || { echo "jq required"   >&2; exit 2; }
 
+require_positive_integer() {
+  local name="$1" value="$2"
+  if [[ ! "$value" =~ ^[1-9][0-9]*$ ]]; then
+    echo "$name must be a positive integer (got: $value)" >&2
+    exit 2
+  fi
+}
+
+require_nonnegative_integer() {
+  local name="$1" value="$2"
+  if [[ ! "$value" =~ ^[0-9]+$ ]]; then
+    echo "$name must be a non-negative integer (got: $value)" >&2
+    exit 2
+  fi
+}
+
+require_positive_integer "boot timeout" "$BOOT_TIMEOUT"
+require_positive_integer "remote boot timeout" "$REMOTE_BOOT_TIMEOUT"
+require_positive_integer "probe attempts" "$PROBE_ATTEMPTS"
+require_nonnegative_integer "probe retry delay" "$PROBE_RETRY_DELAY"
+require_positive_integer "probe retry budget" "$PROBE_RETRY_BUDGET"
+require_positive_integer "curl connect timeout" "$CURL_CONNECT_TIMEOUT"
+require_positive_integer "curl request timeout" "$CURL_MAX_TIME"
+
+curl_with_timeout() {
+  local max_time="$1"
+  shift
+  command curl \
+    --connect-timeout "$CURL_CONNECT_TIMEOUT" \
+    --max-time "$max_time" \
+    "$@"
+}
+
+curl_bounded() {
+  curl_with_timeout "$CURL_MAX_TIME" "$@"
+}
+
 new_request_id() {
   if command -v uuidgen >/dev/null; then
     uuidgen | tr '[:upper:]' '[:lower:]'
@@ -110,6 +156,7 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
 # --- Teardown -------------------------------------------------------------
+# shellcheck disable=SC2329  # Invoked indirectly by the EXIT/INT/TERM trap.
 cleanup() {
   local rc=$?
   if [[ -n "$BACKEND_PID" ]] && kill -0 "$BACKEND_PID" 2>/dev/null; then
@@ -137,32 +184,32 @@ if [[ "$APP_URL" == http://127.0.0.1:* ]] || [[ "$APP_URL" == http://localhost:*
   npm --prefix "$REPO_ROOT/frontend" run dev > /tmp/mip-smoke-frontend.log 2>&1 &
   FRONTEND_PID=$!
 
-  # Poll health until green or timeout.
-  waited=0
-  until curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health" > /dev/null 2>&1; do
-    sleep 1
-    waited=$((waited + 1))
-    if (( waited >= BOOT_TIMEOUT )); then
+  # Poll health until green without allowing a hung request to exceed the
+  # operator's total boot budget.
+  boot_started=$SECONDS
+  boot_deadline=$((boot_started + BOOT_TIMEOUT))
+  until curl_with_timeout 2 -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health" > /dev/null 2>&1; do
+    if (( SECONDS >= boot_deadline )); then
       echo "[smoke] backend never came up within ${BOOT_TIMEOUT}s" >&2
       echo "--- backend log (tail) ---" >&2
       tail -n 40 /tmp/mip-smoke-backend.log >&2 || true
       exit 1
     fi
+    sleep 1
   done
+  waited=$((SECONDS - boot_started))
   echo "[smoke] local servers up after ${waited}s"
 fi
 
 # --- Health --------------------------------------------------------------
 echo "[smoke] GET $API_PREFIX/health"
 if [[ "$BOOT_LOCAL" == "0" ]]; then
-  waited=0
+  health_started=$SECONDS
+  health_deadline=$((health_started + REMOTE_BOOT_TIMEOUT))
   last_code="000"
-  until last_code="$(curl -sS "${CURL_AUTH_ARGS[@]}" -o /tmp/mip-smoke-health.json -w '%{http_code}' "$APP_URL$API_PREFIX/health" 2>/tmp/mip-smoke-health.err)" \
-    && [[ "$last_code" == "200" ]] \
-    && health_ready /tmp/mip-smoke-health.json; do
-    sleep 5
-    waited=$((waited + 5))
-    if (( waited >= REMOTE_BOOT_TIMEOUT )); then
+  while true; do
+    health_remaining=$((health_deadline - SECONDS))
+    if (( health_remaining <= 0 )); then
       echo "[smoke] deployed app health was not ready within ${REMOTE_BOOT_TIMEOUT}s" >&2
       echo "[smoke] last health HTTP status: ${last_code:-unknown}" >&2
       if [[ -s /tmp/mip-smoke-health.json ]]; then
@@ -173,11 +220,31 @@ if [[ "$BOOT_LOCAL" == "0" ]]; then
       fi
       exit 1
     fi
+    health_request_timeout="$CURL_MAX_TIME"
+    if (( health_request_timeout > health_remaining )); then
+      health_request_timeout="$health_remaining"
+    fi
+    if last_code="$(curl_with_timeout "$health_request_timeout" -sS \
+      "${CURL_AUTH_ARGS[@]}" -o /tmp/mip-smoke-health.json -w '%{http_code}' \
+      "$APP_URL$API_PREFIX/health" 2>/tmp/mip-smoke-health.err)" \
+      && [[ "$last_code" == "200" ]] \
+      && health_ready /tmp/mip-smoke-health.json; then
+      break
+    fi
+    health_remaining=$((health_deadline - SECONDS))
+    if (( health_remaining > 0 )); then
+      health_sleep=5
+      if (( health_sleep > health_remaining )); then
+        health_sleep="$health_remaining"
+      fi
+      sleep "$health_sleep"
+    fi
   done
+  waited=$((SECONDS - health_started))
   echo "[smoke] deployed app health ready after ${waited}s"
   HEALTH="$(cat /tmp/mip-smoke-health.json)"
 else
-  HEALTH="$(curl -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health")" || {
+  HEALTH="$(curl_bounded -sf "${CURL_AUTH_ARGS[@]}" "$APP_URL$API_PREFIX/health")" || {
     echo "[smoke] $API_PREFIX/health failed" >&2; exit 1;
   }
 fi
@@ -215,19 +282,119 @@ done
 echo "[smoke] health ok · warehouse/lakebase/genie all up · breaker states present"
 
 # --- Five canonical API calls -------------------------------------------
-probe() {
-  local label="$1"; local path="$2"; local method="${3:-GET}"; local body="${4:-}"
-  local code
-  if [[ "$method" == "POST" ]]; then
-    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
-      "${CURL_AUTH_ARGS[@]}" \
-      -X POST -H 'content-type: application/json' --data "$body" "$APP_URL$path")
-  else
-    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
-      "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
+REQUEST_HTTP_CODE="000"
+REQUEST_CURL_RC=0
+REQUEST_ATTEMPTS=0
+
+request_with_retry() {
+  local label="$1" path="$2" method="${3:-GET}" body="${4:-}"
+  local retry_policy="${5:-never}" idempotency_key="${6:-}" auth_scope="${7:-user}"
+  local max_attempts=1 retry_deadline=0 attempt attempt_timeout retry_remaining retry_sleep
+  local -a auth_args request_args
+
+  case "$retry_policy" in
+    never|safe_read|idempotent_mutation) ;;
+    *)
+      echo "[smoke] invalid retry policy for $label: $retry_policy" >&2
+      exit 2
+      ;;
+  esac
+  if [[ "$method" == "GET" || "$method" == "HEAD" \
+    || "$retry_policy" == "safe_read" || "$retry_policy" == "idempotent_mutation" ]]; then
+    max_attempts="$PROBE_ATTEMPTS"
+    retry_deadline=$((SECONDS + PROBE_RETRY_BUDGET))
   fi
-  if [[ "$code" != "200" ]]; then
-    echo "[smoke] $label ($path) returned $code" >&2
+  if [[ "$retry_policy" == "idempotent_mutation" ]]; then
+    if [[ -z "$idempotency_key" ]] \
+      || ! jq -e --arg key "$idempotency_key" '.request_id == $key' <<<"$body" >/dev/null; then
+      echo "[smoke] $label cannot retry without a stable request_id idempotency key" >&2
+      exit 2
+    fi
+  fi
+
+  if [[ "$auth_scope" == "admin" ]]; then
+    auth_args=("${CURL_ADMIN_AUTH_ARGS[@]}")
+  else
+    auth_args=("${CURL_AUTH_ARGS[@]}")
+  fi
+
+  REQUEST_HTTP_CODE="000"
+  REQUEST_CURL_RC=0
+  REQUEST_ATTEMPTS=0
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    attempt_timeout="$CURL_MAX_TIME"
+    if (( max_attempts > 1 )); then
+      retry_remaining=$((retry_deadline - SECONDS))
+      if (( retry_remaining <= 0 )); then
+        break
+      fi
+      if (( attempt_timeout > retry_remaining )); then
+        attempt_timeout="$retry_remaining"
+      fi
+    fi
+
+    REQUEST_ATTEMPTS="$attempt"
+    : > /tmp/mip-smoke-curl.err
+    request_args=(-sS -o /tmp/mip-smoke-out.json -w '%{http_code}')
+    if [[ "$method" != "GET" ]]; then
+      request_args+=(-X "$method")
+    fi
+    if [[ -n "$body" ]]; then
+      request_args+=(-H 'content-type: application/json' --data "$body")
+    fi
+    if [[ -n "$idempotency_key" ]]; then
+      request_args+=(-H "Idempotency-Key: $idempotency_key")
+    fi
+
+    if REQUEST_HTTP_CODE="$(curl_with_timeout "$attempt_timeout" \
+      "${auth_args[@]}" "${request_args[@]}" "$APP_URL$path" \
+      2>/tmp/mip-smoke-curl.err)"; then
+      REQUEST_CURL_RC=0
+    else
+      REQUEST_CURL_RC=$?
+      REQUEST_HTTP_CODE="${REQUEST_HTTP_CODE:-000}"
+    fi
+
+    if (( REQUEST_CURL_RC == 0 )) \
+      && [[ "$REQUEST_HTTP_CODE" != "502" && "$REQUEST_HTTP_CODE" != "503" \
+        && "$REQUEST_HTTP_CODE" != "504" ]]; then
+      break
+    fi
+    if (( attempt >= max_attempts )); then
+      break
+    fi
+
+    retry_remaining=$((retry_deadline - SECONDS))
+    if (( retry_remaining <= 0 )); then
+      break
+    fi
+    retry_sleep="$PROBE_RETRY_DELAY"
+    if (( retry_sleep > retry_remaining )); then
+      retry_sleep="$retry_remaining"
+    fi
+    if (( REQUEST_CURL_RC != 0 )); then
+      echo "[smoke] $label curl transport failure rc=$REQUEST_CURL_RC — retrying in ${retry_sleep}s"
+    else
+      echo "[smoke] $label returned $REQUEST_HTTP_CODE during dependency warm-up — retrying in ${retry_sleep}s"
+    fi
+    if (( retry_sleep > 0 )); then
+      sleep "$retry_sleep"
+    fi
+  done
+}
+
+probe() {
+  local label="$1" path="$2" method="${3:-GET}" body="${4:-}"
+  local retry_policy="${5:-never}" idempotency_key="${6:-}"
+  request_with_retry \
+    "$label" "$path" "$method" "$body" "$retry_policy" "$idempotency_key" user
+  if (( REQUEST_CURL_RC != 0 )); then
+    echo "[smoke] $label ($path) transport failed after $REQUEST_ATTEMPTS attempt(s) (curl rc=$REQUEST_CURL_RC)" >&2
+    cat /tmp/mip-smoke-curl.err >&2 || true
+    exit 1
+  fi
+  if [[ "$REQUEST_HTTP_CODE" != "200" ]]; then
+    echo "[smoke] $label ($path) returned $REQUEST_HTTP_CODE" >&2
     cat /tmp/mip-smoke-out.json >&2 || true
     exit 1
   fi
@@ -235,27 +402,25 @@ probe() {
 }
 
 probe_admin_or_forbidden() {
-  local label="$1"; local path="$2"
-  local code attempt
+  local label="$1" path="$2" auth_scope="user"
 
   # Cold-start grace (2026-07-07): the ?live=1 capability sweep runs real
   # probes (Genie turn, serving-endpoint query) and, seconds after an app
   # restart, can cross the Databricks Apps proxy 60s ceiling — observed as
   # a 504 (gw5) and a 502 (gw10) in deploy step 22 that warmed reruns passed cleanly. Only
-  # infrastructure-timeout codes (503/504) are retried; every content
-  # assertion stays strict.
+  # transport failures and infrastructure-timeout codes (502/503/504) are
+  # retried within one wall-clock budget; every content assertion stays strict.
+  if [[ -n "$ADMIN_AUTH_TOKEN" ]]; then
+    auth_scope="admin"
+  fi
+  request_with_retry "$label" "$path" GET "" safe_read "" "$auth_scope"
+  if (( REQUEST_CURL_RC != 0 )); then
+    echo "[smoke] $label ($path) transport failed after $REQUEST_ATTEMPTS attempt(s) (curl rc=$REQUEST_CURL_RC)" >&2
+    cat /tmp/mip-smoke-curl.err >&2 || true
+    exit 1
+  fi
+
   if [[ -z "$ADMIN_AUTH_TOKEN" ]]; then
-    for attempt in 1 2 3; do
-      code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
-        "${CURL_AUTH_ARGS[@]}" "$APP_URL$path")
-      if [[ "$code" != "502" && "$code" != "503" && "$code" != "504" ]]; then
-        break
-      fi
-      if [[ "$attempt" -lt 3 ]]; then
-        echo "[smoke] $label returned $code (likely cold start) — retrying in 20s"
-        sleep 20
-      fi
-    done
     # Posture-aware (2026-06-11): the default bearer's identity may or may
     # not be in the deployed MIP_ADMIN_EMAILS allowlist — both are valid
     # operator decisions. 403 proves the deny path; 200 means the deployer
@@ -263,39 +428,28 @@ probe_admin_or_forbidden() {
     # full governed-payload contract checks (stronger than skipping). Any
     # other status is a real failure. The deny path for non-admin
     # identities stays covered by the rbac unit suite.
-    if [[ "$code" == "403" ]]; then
+    if [[ "$REQUEST_HTTP_CODE" == "403" ]]; then
       echo "[smoke] ok · $label admin gate rejects non-admin bearer"
       return 10
     fi
-    if [[ "$code" == "200" ]]; then
+    if [[ "$REQUEST_HTTP_CODE" == "200" ]]; then
       echo "[smoke] ok · $label admin gate admits configured admin bearer"
       return 0
     fi
-    echo "[smoke] $label admin gate returned $code (expected 403 for non-admin or 200 for configured admin)" >&2
+    echo "[smoke] $label admin gate returned $REQUEST_HTTP_CODE (expected 403 for non-admin or 200 for configured admin)" >&2
     cat /tmp/mip-smoke-out.json >&2 || true
     exit 1
   fi
 
-  for attempt in 1 2 3; do
-    code=$(curl -s -o /tmp/mip-smoke-out.json -w '%{http_code}' \
-      "${CURL_ADMIN_AUTH_ARGS[@]}" "$APP_URL$path")
-    if [[ "$code" != "502" && "$code" != "503" && "$code" != "504" ]]; then
-      break
-    fi
-    if [[ "$attempt" -lt 3 ]]; then
-      echo "[smoke] $label returned $code (likely cold start) — retrying in 20s"
-      sleep 20
-    fi
-  done
-  if [[ "$code" != "200" ]]; then
-    echo "[smoke] $label ($path) returned $code with admin bearer" >&2
+  if [[ "$REQUEST_HTTP_CODE" != "200" ]]; then
+    echo "[smoke] $label ($path) returned $REQUEST_HTTP_CODE with admin bearer" >&2
     cat /tmp/mip-smoke-out.json >&2 || true
     exit 1
   fi
   echo "[smoke] ok · $label"
 }
 
-probe "portfolio preview" "$API_PREFIX/portfolio/preview" POST '{}'
+probe "portfolio preview" "$API_PREFIX/portfolio/preview" POST '{}' safe_read
 probe "ranked leads"      "$API_PREFIX/leads?limit=5"
 if ! jq -e 'all(.[]; (.clip // "" | test("^(clip_ref_|clip_demo_|$)")))' /tmp/mip-smoke-out.json >/dev/null; then
   echo "[smoke] ranked leads exposed an unmasked property ref" >&2
@@ -486,7 +640,7 @@ SMOKE_APPROVE_PAYLOAD="$(jq -n \
     draft_generation_id:$draft_generation_id, draft_response_hash:$draft_response_hash,
     draft_source_refreshed_at:$draft_source_refreshed_at, request_id:$request_id}')"
 probe "outreach approval audit write" "$API_PREFIX/outreach/approve" POST \
-  "$SMOKE_APPROVE_PAYLOAD"
+  "$SMOKE_APPROVE_PAYLOAD" idempotent_mutation "$SMOKE_REQUEST_ID"
 if ! jq -e --arg generation_id "$SMOKE_DRAFT_GENERATION_ID" \
   '.approved == true
     and (.audit_event_id // "" | length > 0)

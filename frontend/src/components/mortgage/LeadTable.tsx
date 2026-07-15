@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { CallDisposition, LeadSummary } from '../../types';
 import { Icon } from '../Icon';
-import { Button } from '../Primitives';
+import { Button, Chip } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api, ApiError, isAbortError } from '../../lib/api';
 import { invalidateOperationalQueries } from '../../lib/queryKeys';
@@ -66,6 +67,20 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   'use no memo';
 
   const queryClient = useQueryClient();
+  const [searchParams] = useSearchParams();
+  const campaignId = searchParams.get('campaign_id')?.trim() ?? '';
+  const variantName = searchParams.get('variant_name')?.trim() ?? '';
+  const campaignBinding = campaignId && variantName
+    ? { campaign_id: campaignId, variant_name: variantName }
+    : null;
+  const campaignBindingError = Boolean(campaignId || variantName) && !campaignBinding;
+  const growthAgentTotal = Number(searchParams.get('actionable_total'));
+  const growthAgentFingerprint = searchParams.get('actionable_cohort_fingerprint')?.trim() ?? '';
+  const growthAgentSnapshot = searchParams.get('actionable_snapshot_id')?.trim() ?? '';
+  const growthAgentProofVisible = Number.isSafeInteger(growthAgentTotal)
+    && growthAgentTotal >= 0
+    && /^[0-9a-f]{64}$/.test(growthAgentFingerprint)
+    && Boolean(growthAgentSnapshot);
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -90,7 +105,7 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   const [dispositionLo, setDispositionLo] = useState<string>('');
   const [dispositionCallbackAt, setDispositionCallbackAt] = useState('');
   const [dispositionNotes, setDispositionNotes] = useState('');
-  const { approvals, setApproval, setLastBorrowerId } = useApp();
+  const { approvals, setApproval, setLastBorrowerId, openConsoleRecentActivity } = useApp();
   const displayLeads = leads.map((lead) => ({ ...lead, ...(salesOverrides[lead.borrower_id] ?? {}) }));
   const leadsById = new Map(displayLeads.map((lead) => [lead.borrower_id, lead]));
   const sortedLeads = sortKey === 'rank'
@@ -158,7 +173,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   // committed the audit row. Server-side idempotency protects retries
   // that reuse the original request_id; this bulk UI does not persist
   // those per-row ids after unmount, so the honest operator guidance is
-  // still to check the audit log instead of blindly retrying. R5-21
+  // still to review their actor-scoped recent activity instead of blindly
+  // retrying. R5-21
   // (2026-04-23).
   const [bulkToast, setBulkToast] = useState<
     { ok: number; fail: number; network: number; aborted: number } | null
@@ -193,17 +209,37 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     // to true and produce a second audit row. The ref flips
     // immediately.
     if (rowInFlightRef.current[borrowerId]) return 'duplicate';
+    if (campaignBindingError) {
+      setApprovalError('Campaign handoff is incomplete. Reopen the saved campaign before approval.');
+      return 'backend';
+    }
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
     setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
     try {
       const lead = leadsById.get(borrowerId);
-      const draft = await api.draftOutreach(borrowerId, 'email', signal);
+      const draft = campaignBinding
+        ? await api.draftOutreach(borrowerId, 'email', signal, campaignBinding)
+        : await api.draftOutreach(borrowerId, 'email', signal);
+      if (
+        campaignBinding
+        && (
+          draft.campaign_id !== campaignBinding.campaign_id
+          || draft.variant_name !== campaignBinding.variant_name
+        )
+      ) {
+        throw new Error('Campaign variant proof is stale. Reopen the saved campaign before approval.');
+      }
+      const draftSubject = draft.subject?.trim();
+      if (!draftSubject) {
+        throw new Error('Governed email draft returned without a subject. Regenerate before approval.');
+      }
       const res = await api.approve(
         borrowerId,
         {
           evidence_ids: lead?.evidence_ids ?? [],
           offer_code: draft.offer_code ?? lead?.recommended_offer_code ?? null,
+          draft_subject: draftSubject,
           draft_body: draft.body,
           draft_generation_id: draft.generation_id,
           draft_response_hash: draft.response_hash,
@@ -212,6 +248,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           rationale: extras.rationale ?? null,
           bulk_id: extras.bulk_id ?? null,
           bulk_rationale: extras.bulk_rationale ?? null,
+          campaign_id: campaignBinding?.campaign_id ?? null,
+          variant_name: campaignBinding?.variant_name ?? null,
         },
         signal,
       );
@@ -258,6 +296,10 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
   ): Promise<boolean> {
     // R5-04: synchronous latch — see approveLead above.
     if (rowInFlightRef.current[borrowerId]) return false;
+    if (campaignBindingError) {
+      setApprovalError('Campaign handoff is incomplete. Reopen the saved campaign before rejection.');
+      return false;
+    }
     rowInFlightRef.current[borrowerId] = true;
     setApprovalError(null);
     setPendingApproval((p) => ({ ...p, [borrowerId]: true }));
@@ -270,6 +312,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           offer_code: lead?.recommended_offer_code ?? null,
           rationale_code: reasonCode,
           rationale,
+          campaign_id: campaignBinding?.campaign_id ?? null,
+          variant_name: campaignBinding?.variant_name ?? null,
         },
       );
       if (res.rejected) {
@@ -621,8 +665,8 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
       const aborted = parsed.aborted ?? 0;
       if (ok + aborted === 0) return;
       // R5-21: route unmounted mid-loop. Aborted ids are in ambiguous
-      // state (server may have committed). Surface a "check audit log"
-      // message rather than mixing them into the retryable `fail` count.
+      // state (server may have committed). Surface an actor-scoped recovery
+      // action rather than mixing them into the retryable `fail` count.
       setBulkToast({ ok, fail: 0, network: 0, aborted });
     } catch {
       // malformed payload — ignore
@@ -637,10 +681,10 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
     };
   }, []);
 
-  // Auto-dismiss the toast after 4s so it doesn't pile up next to the
-  // action bar.
+  // Auto-dismiss settled results after 4s. Ambiguous cancelled requests stay
+  // visible until the operator opens Recent activity to resolve them.
   useEffect(() => {
-    if (!bulkToast) return;
+    if (!bulkToast || bulkToast.aborted > 0) return;
     const t = window.setTimeout(() => setBulkToast(null), 4000);
     return () => window.clearTimeout(t);
   }, [bulkToast]);
@@ -811,6 +855,42 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
           </Button>
         </div>
       </div>
+      {growthAgentProofVisible && (
+        <div className="table-success chip-row" role="status" data-testid="growth-agent-cohort-proof">
+          <Chip variant="success" icon="shield">Verified Growth Agent cohort</Chip>
+          <span className="num">{growthAgentTotal.toLocaleString()} borrowers</span>
+          <span className="mono" title={growthAgentFingerprint}>
+            proof {growthAgentFingerprint.slice(0, 12)}
+          </span>
+          <span title={growthAgentSnapshot}>snapshot {growthAgentSnapshot}</span>
+        </div>
+      )}
+      {campaignBindingError && (
+        <div className="table-error" role="alert">
+          Campaign handoff is incomplete. Reopen the saved campaign and select a variant before taking action.
+        </div>
+      )}
+      {campaignBinding && (
+        <div className="table-success chip-row" role="status" data-testid="campaign-operational-provenance">
+          <Chip variant="success" icon="shield">Campaign-bound outreach</Chip>
+          <span className="mono" title={campaignBinding.campaign_id}>
+            campaign {campaignBinding.campaign_id.slice(0, 12)}
+          </span>
+          <span>variant {campaignBinding.variant_name}</span>
+          {expanded && (
+            <Link
+              className="btn btn--primary btn--sm"
+              to={`/offer-orchestrator/${encodeURIComponent(expanded)}?${new URLSearchParams({
+                campaign_id: campaignBinding.campaign_id,
+                variant_name: campaignBinding.variant_name,
+              }).toString()}`}
+            >
+              Open bound offer
+              <Icon name="chevright" size={12} />
+            </Link>
+          )}
+        </div>
+      )}
       {pendingReject && (
         <LeadRejectPanel
           borrowerId={pendingReject}
@@ -1014,35 +1094,6 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
                 </Button>
               </>
             )}
-            {bulkToast && (
-              <span
-                role="status"
-                aria-live="polite"
-                data-testid="lead-bulk-toast"
-                className={`bulk-actions__toast ${
-                  bulkToast.aborted > 0 || bulkToast.network > 0
-                    ? 'bulk-actions__toast--danger'
-                    : bulkToast.fail > 0
-                      ? 'bulk-actions__toast--warn'
-                      : 'bulk-actions__toast--ok'
-                }`}
-              >
-                {bulkToast.ok} approved
-                {bulkToast.fail > 0 ? `, ${bulkToast.fail} failed` : ''}
-                {bulkToast.network > 0
-                  ? ` (${bulkToast.network} network dropped — retry)`
-                  : ''}
-                {/*
-                  R5-21: aborted rows are in an ambiguous state. Server
-                  idempotency is safe only when the same request_id is
-                  reused; this bulk toast no longer owns those ids after
-                  unmount, so direct the user to the audit log instead.
-                */}
-                {bulkToast.aborted > 0
-                  ? ` · ${bulkToast.aborted} cancelled in flight — unknown state, check the audit log`
-                  : ''}
-              </span>
-            )}
             <Button
               variant="ghost"
               size="sm"
@@ -1065,6 +1116,42 @@ export function LeadTable({ leads, totalMatching = null, truncatedAt = null, exp
               {bulkApproving ? 'Approving…' : `Approve ${selectedApprovalEligibleCount} eligible`}
             </Button>
           </div>
+        </div>
+      )}
+      {bulkToast && (
+        <div className="bulk-actions" data-testid="lead-bulk-toast">
+          <span
+            role="status"
+            aria-live="polite"
+            className={`bulk-actions__toast ${
+              bulkToast.aborted > 0 || bulkToast.network > 0
+                ? 'bulk-actions__toast--danger'
+                : bulkToast.fail > 0
+                  ? 'bulk-actions__toast--warn'
+                  : 'bulk-actions__toast--ok'
+            }`}
+          >
+            {bulkToast.ok} approved
+            {bulkToast.fail > 0 ? `, ${bulkToast.fail} failed` : ''}
+            {bulkToast.network > 0
+              ? ` (${bulkToast.network} network dropped; retry)`
+              : ''}
+            {bulkToast.aborted > 0
+              ? ` · ${bulkToast.aborted} cancelled in flight. Confirm the outcome in Recent activity.`
+              : ''}
+          </span>
+          {bulkToast.aborted > 0 && (
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => {
+                openConsoleRecentActivity();
+                setBulkToast(null);
+              }}
+            >
+              Review recent activity
+            </button>
+          )}
         </div>
       )}
       {approvalError && (

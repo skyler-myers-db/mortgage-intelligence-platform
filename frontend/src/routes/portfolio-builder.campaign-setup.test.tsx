@@ -4,12 +4,14 @@
 
 import { act } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter, useLocation } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CampaignRecommendationResponse } from '../types';
 
+const appMocks = vi.hoisted(() => ({ setDrawer: vi.fn() }));
+
 vi.mock('../components/AppContext', () => ({
-  useApp: () => ({ setDrawer: vi.fn(), showEvidence: true }),
+  useApp: () => ({ setDrawer: appMocks.setDrawer, showEvidence: true }),
 }));
 
 import {
@@ -18,6 +20,7 @@ import {
   type CampaignNumericField,
 } from './portfolio-builder.logic';
 import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
+import { DRAWER_SOURCES } from '../lib/drawerSources';
 
 (globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -38,10 +41,16 @@ const CACHED_RECOMMENDATION: CampaignRecommendationResponse = {
   warnings: [],
 };
 
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}${location.hash}`}</output>;
+}
+
 describe('CampaignSetupPanel', () => {
   beforeEach(() => {
     document.body.innerHTML = '<div id="root"></div>';
     root = createRoot(document.getElementById('root') as HTMLElement);
+    appMocks.setDrawer.mockClear();
   });
 
   afterEach(() => {
@@ -81,7 +90,7 @@ describe('CampaignSetupPanel', () => {
     const apply = vi.fn();
     act(() => {
       root.render(
-        <MemoryRouter>
+        <MemoryRouter initialEntries={['/portfolio-builder']}>
           <CampaignSetupPanel
             setup={DEFAULT_CAMPAIGN_SETUP}
             recommendation={{
@@ -118,6 +127,11 @@ describe('CampaignSetupPanel', () => {
                   value: '84 in the last 90 days',
                   source_asset: 'mip_app.call_dispositions',
                 },
+                {
+                  label: 'Applications submitted',
+                  value: '12 in the last 90 days',
+                  source_asset: 'mip_app.lead_outcomes',
+                },
               ],
               warnings: [],
             }}
@@ -131,6 +145,7 @@ describe('CampaignSetupPanel', () => {
             onRegenerate={vi.fn()}
             onApply={apply}
           />
+          <LocationProbe />
         </MemoryRouter>,
       );
     });
@@ -153,12 +168,68 @@ describe('CampaignSetupPanel', () => {
     );
     expect(document.querySelector('[aria-labelledby="campaign-variant-hypotheses-title"]'))
       .not.toBeNull();
-    expect(document.querySelectorAll('.evidence-chip')).toHaveLength(2);
+    expect(document.querySelectorAll('.evidence-chip')).toHaveLength(3);
+    for (const [assetPath, source] of [
+      ['mip_app.call_dispositions', DRAWER_SOURCES.callDispositions],
+      ['mip_app.lead_outcomes', DRAWER_SOURCES.leadOutcomes],
+    ] as const) {
+      const evidenceButton = Array.from(document.querySelectorAll<HTMLButtonElement>('.evidence-chip'))
+        .find((button) => button.textContent?.includes(assetPath));
+      expect(evidenceButton).toBeTruthy();
+      act(() => evidenceButton?.click());
+      expect(appMocks.setDrawer).toHaveBeenLastCalledWith(source);
+      expect(document.querySelector('[data-testid="location"]')?.textContent)
+        .toBe('/portfolio-builder');
+    }
     const applyButton = [...document.querySelectorAll('button')].find((button) => (
       button.textContent?.includes('Apply variants')
     ));
     act(() => applyButton?.click());
     expect(apply).toHaveBeenCalledTimes(1);
+  });
+
+  it('never exposes admin recovery links to non-admin operators', () => {
+    const recommendation: CampaignRecommendationResponse = {
+      ...CACHED_RECOMMENDATION,
+      evidence: [
+        {
+          label: 'Unmapped campaign evidence',
+          value: 'Unavailable',
+          source_asset: 'mip_app.unmapped_campaign_asset',
+        },
+      ],
+    };
+    const renderPanel = (canAccessAdmin: boolean) => {
+      root.render(
+        <MemoryRouter initialEntries={['/portfolio-builder']}>
+          <CampaignSetupPanel
+            setup={DEFAULT_CAMPAIGN_SETUP}
+            recommendation={recommendation}
+            recommendationPending={false}
+            recommendationError={false}
+            recommendationFetching={false}
+            canRecommend
+            canAccessAdmin={canAccessAdmin}
+            onFieldChange={() => vi.fn()}
+            onNumericFieldCommit={vi.fn()}
+            onToggleHouseholdDedup={vi.fn()}
+            onRegenerate={vi.fn()}
+            onApply={vi.fn()}
+          />
+        </MemoryRouter>,
+      );
+    };
+
+    act(() => renderPanel(false));
+    expect(document.body.textContent).toContain('Contact an administrator to review refresh status');
+    expect(document.querySelectorAll('a[href^="/admin-config"]')).toHaveLength(0);
+    expect(document.querySelector('[aria-label="Unmapped campaign evidence: evidence destination unavailable"]')?.tagName)
+      .toBe('SPAN');
+
+    act(() => renderPanel(true));
+    expect(Array.from(document.querySelectorAll<HTMLAnchorElement>('a[href^="/admin-config"]'))
+      .map((link) => link.getAttribute('href')))
+      .toEqual(['/admin-config#data-operations']);
   });
 
   it('requires confirmation before replacing operator-edited campaign copy', () => {

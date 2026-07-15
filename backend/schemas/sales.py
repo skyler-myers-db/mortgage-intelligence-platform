@@ -8,7 +8,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from backend.schemas._validators import normalize_public_lender_ref
+from backend.schemas._validators import contains_human_name_shape, normalize_public_lender_ref
 from backend.schemas.common import (
     contains_pii_marker,
     validate_internal_staff_email,
@@ -284,6 +284,9 @@ class LeadOutcomeRequest(BaseModel):
             return None
         if contains_pii_marker(clean):
             raise ValueError("source_record_ref must not contain PII")
+        name_scan = re.sub(r"[._-]+", " ", clean)
+        if contains_human_name_shape(name_scan):
+            raise ValueError("source_record_ref must be an opaque machine identifier")
         return validate_public_audit_identifier_or_none(clean)
 
     @field_validator("assigned_to_email")

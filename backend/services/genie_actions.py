@@ -1,4 +1,5 @@
 """Governed Genie action confirmation and persistence helpers."""
+
 from __future__ import annotations
 
 import base64
@@ -67,6 +68,8 @@ _PLACEHOLDER_ACTION_SECRETS = frozenset(
 )
 _MAX_ACTION_FILTER_VALUES = 500
 _MAX_ACTION_STATE_VALUES = 56
+_CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS = 3
+_CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
 _LEAD_QUEUE_REPLAY_KEYS = frozenset(
     {
         "state",
@@ -115,23 +118,25 @@ _LEAD_QUEUE_PORTFOLIO_QUERY_KEYS = frozenset(
 )
 
 _CAMPAIGN_INSERT_SQL = """
-WITH existing_audit AS (
-  SELECT audit_id, entity_id, metadata
-  FROM mip_app.action_audit
-  WHERE actor_email = %(owner_email)s
-    AND request_id = %(request_id)s
-    AND event_type = 'GENIE_ACTION_CREATE_DRAFT_CAMPAIGN'
-  LIMIT 1
-),
-inserted_campaign AS (
-  INSERT INTO mip_app.campaigns (name, owner_email, status, criteria)
-  SELECT
+WITH upserted_campaign AS (
+  INSERT INTO mip_app.campaigns AS campaigns (
+    name, owner_email, status, criteria,
+    idempotency_key, request_payload_hash, updated_at
+  ) VALUES (
     %(name)s,
     %(owner_email)s,
     'draft',
-    %(criteria)s::jsonb
-  WHERE NOT EXISTS (SELECT 1 FROM existing_audit)
-  RETURNING campaign_id
+    %(criteria)s::jsonb,
+    %(request_id)s,
+    %(request_payload_hash)s,
+    now()
+  )
+  ON CONFLICT (owner_email, idempotency_key)
+    WHERE idempotency_key IS NOT NULL
+  DO UPDATE SET
+    request_payload_hash = campaigns.request_payload_hash
+  WHERE campaigns.request_payload_hash = EXCLUDED.request_payload_hash
+  RETURNING campaign_id, request_payload_hash
 ),
 inserted_audit AS (
   INSERT INTO mip_app.action_audit (
@@ -142,32 +147,49 @@ inserted_audit AS (
     'GENIE_ACTION_CREATE_DRAFT_CAMPAIGN',
     %(owner_email)s,
     'campaign',
-    inserted_campaign.campaign_id::text,
+    upserted_campaign.campaign_id::text,
     %(request_id)s,
     %(correlation_id)s,
     ARRAY[]::TEXT[],
     jsonb_set(
       %(metadata)s::jsonb,
       '{campaign_id}',
-      to_jsonb(inserted_campaign.campaign_id::text),
+      to_jsonb(upserted_campaign.campaign_id::text),
       true
     )
-  FROM inserted_campaign
+  FROM upserted_campaign
   ON CONFLICT (actor_email, request_id, event_type)
     WHERE request_id IS NOT NULL AND left(event_type, 13) = 'GENIE_ACTION_'
     DO NOTHING
-  RETURNING audit_id, entity_id, metadata
+  RETURNING audit_id
 )
 SELECT
-  COALESCE(
-    NULLIF((SELECT entity_id FROM inserted_audit), ''),
-    NULLIF((SELECT entity_id FROM existing_audit), ''),
-    NULLIF((SELECT metadata ->> 'campaign_id' FROM existing_audit), '')
-  ) AS campaign_id,
-  COALESCE(
-    (SELECT audit_id FROM inserted_audit),
-    (SELECT audit_id FROM existing_audit)
-  ) AS audit_id
+  upserted_campaign.campaign_id,
+  upserted_campaign.request_payload_hash,
+  inserted_audit.audit_id
+FROM upserted_campaign
+LEFT JOIN inserted_audit ON TRUE
+"""
+
+_CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL = """
+SELECT campaign_id, request_payload_hash
+FROM mip_app.campaigns
+WHERE owner_email = %(owner_email)s
+  AND idempotency_key = %(request_id)s
+LIMIT 1
+"""
+
+_CAMPAIGN_AUDIT_BY_REQUEST_ID_SQL = """
+SELECT audit_id
+FROM mip_app.action_audit
+WHERE request_id = %(request_id)s
+  AND actor_email = %(actor_email)s
+  AND event_type = 'GENIE_ACTION_CREATE_DRAFT_CAMPAIGN'
+  AND entity_type = 'campaign'
+  AND entity_id = %(campaign_id)s
+  AND metadata ->> 'action_type' = 'create_draft_campaign'
+ORDER BY event_at ASC
+LIMIT 1
 """
 
 _ACTION_AUDIT_BY_REQUEST_ID_SQL = """
@@ -297,8 +319,7 @@ def criteria_summary(criteria: dict[str, Any]) -> tuple[str, list[str], list[str
     source_assets = _validated_source_assets(criteria)
     criteria_keys = sorted(str(k) for k in criteria)
     canonical_payload = {
-        str(k): criteria[k]
-        for k in sorted(criteria, key=lambda value: str(value))
+        str(k): criteria[k] for k in sorted(criteria, key=lambda value: str(value))
     }
     canonical = json.dumps(
         canonical_payload,
@@ -590,9 +611,14 @@ def _lookup_existing_genie_action(
             metadata = {}
     if not isinstance(metadata, dict):
         metadata = {}
+    audit_event_id = str(row.get("audit_id") or "")
+    if not audit_event_id:
+        return None
     campaign_id = metadata.get("campaign_id")
     if not campaign_id and action_type == "create_draft_campaign":
         campaign_id = row.get("entity_id")
+    if action_type == "create_draft_campaign" and not campaign_id:
+        return None
     saved_count = metadata.get("saved_count")
     try:
         parsed_saved_count = int(saved_count or 0)
@@ -601,11 +627,110 @@ def _lookup_existing_genie_action(
     return GenieActionResponse(
         ok=True,
         action_type=action_type,
-        audit_event_id=str(row.get("audit_id") or ""),
+        audit_event_id=audit_event_id,
         route=str(metadata.get("route") or "") or None,
         saved_count=parsed_saved_count,
         campaign_id=str(campaign_id) if campaign_id else None,
         message="Genie action was already recorded for this request.",
+    )
+
+
+def _campaign_request_payload_hash(
+    payload: GenieActionRequest,
+    campaign_payload: dict[str, Any],
+) -> str:
+    canonical = json.dumps(
+        {
+            "action_type": payload.action_type,
+            "borrower_ids": borrower_ids(payload.borrower_ids),
+            "campaign_criteria": campaign_payload,
+            "conversation_id": payload.conversation_id,
+            "message_id": payload.message_id,
+            "question_hash": payload.question_hash,
+            "route": payload.route,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _campaign_identity(
+    row: dict[str, Any],
+    *,
+    expected_payload_hash: str,
+) -> str:
+    stored_hash = str(row.get("request_payload_hash") or "")
+    if stored_hash != expected_payload_hash:
+        raise HTTPException(
+            status_code=409,
+            detail="Genie campaign request id already belongs to a different payload",
+        )
+    campaign_id = str(row.get("campaign_id") or "")
+    if not campaign_id:
+        raise LakebaseError("Genie campaign idempotency row is missing campaign_id")
+    return campaign_id
+
+
+def _lookup_campaign_idempotency_row(
+    lakebase: LakebaseClient,
+    *,
+    actor: str,
+    request_id: str,
+    attempts: int = 1,
+) -> dict[str, Any] | None:
+    params = {"owner_email": actor, "request_id": request_id}
+    for attempt in range(max(1, attempts)):
+        if attempt:
+            time.sleep(_CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S * attempt)
+        row = lakebase.fetchone(_CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL, params)
+        if row is not None:
+            return row
+    return None
+
+
+def _lookup_campaign_audit_id(
+    lakebase: LakebaseClient,
+    *,
+    actor: str,
+    request_id: str,
+    campaign_id: str,
+) -> str:
+    params = {
+        "actor_email": actor,
+        "request_id": request_id,
+        "campaign_id": campaign_id,
+    }
+    for attempt in range(_CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS):
+        if attempt:
+            time.sleep(_CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S * attempt)
+        row = lakebase.fetchone(_CAMPAIGN_AUDIT_BY_REQUEST_ID_SQL, params)
+        if row is not None and row.get("audit_id"):
+            return str(row["audit_id"])
+    raise LakebaseError("Genie campaign audit winner was not visible after bounded lookup")
+
+
+def _campaign_action_response(
+    *,
+    payload: GenieActionRequest,
+    campaign_id: str,
+    audit_event_id: str,
+    replayed: bool,
+) -> GenieActionResponse:
+    if not campaign_id or not audit_event_id:
+        raise LakebaseError("Genie campaign confirmation is missing persisted identifiers")
+    return GenieActionResponse(
+        ok=True,
+        action_type=payload.action_type,
+        audit_event_id=audit_event_id,
+        route=payload.route or "/lead-queue",
+        campaign_id=campaign_id,
+        message=(
+            "Genie campaign creation was already recorded for this request."
+            if replayed
+            else "Created a Lakebase draft campaign from this Genie result."
+        ),
     )
 
 
@@ -647,14 +772,20 @@ def _validate_action_confirmation(payload: GenieActionRequest, *, actor: str) ->
     )
     for key, expected_value in expected_claims.items():
         if claims.get(key) != expected_value:
-            raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+            raise HTTPException(
+                status_code=400, detail="Genie action confirmation token is invalid"
+            )
     if claims.get("v") != 1 or not claims.get("nonce"):
         raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
     return claims
 
 
-def _audit_payload(payload: GenieActionRequest, *, saved_count: int = 0, campaign_id: str | None = None) -> dict[str, Any]:
-    criteria_hash, criteria_keys, source_assets, visualization_kind = criteria_summary(payload.criteria)
+def _audit_payload(
+    payload: GenieActionRequest, *, saved_count: int = 0, campaign_id: str | None = None
+) -> dict[str, Any]:
+    criteria_hash, criteria_keys, source_assets, visualization_kind = criteria_summary(
+        payload.criteria
+    )
     rendered_borrower_ids = borrower_ids(payload.borrower_ids)
     out: dict[str, Any] = {
         "action_type": payload.action_type,
@@ -683,7 +814,9 @@ def _audit_payload(payload: GenieActionRequest, *, saved_count: int = 0, campaig
 
 def _campaign_criteria(payload: GenieActionRequest) -> dict[str, Any]:
     payload_borrower_ids = borrower_ids(payload.borrower_ids)
-    criteria_hash, criteria_keys, source_assets, visualization_kind = criteria_summary(payload.criteria)
+    criteria_hash, criteria_keys, source_assets, visualization_kind = criteria_summary(
+        payload.criteria
+    )
     out: dict[str, Any] = {
         "source": str(payload.criteria.get("source") or "genie"),
         "borrower_ids": payload_borrower_ids,
@@ -739,7 +872,9 @@ def _list_filter(
     return out
 
 
-def _cohort_route_filters(payload: GenieActionRequest, payload_borrower_ids: list[str]) -> dict[str, Any]:
+def _cohort_route_filters(
+    payload: GenieActionRequest, payload_borrower_ids: list[str]
+) -> dict[str, Any]:
     """Return the reviewed, lead-queue-replayable filter subset."""
 
     filters_raw = payload.criteria.get("result_filters")
@@ -802,10 +937,13 @@ def _cohort_route_filters(payload: GenieActionRequest, payload_borrower_ids: lis
     target_lender_ref = str(filters.get("target_lender_ref") or "").strip()
     if target_lender_ref:
         try:
-            target_lender_ref = normalize_public_lender_ref(
-                target_lender_ref,
-                allow_all=True,
-            ) or ""
+            target_lender_ref = (
+                normalize_public_lender_ref(
+                    target_lender_ref,
+                    allow_all=True,
+                )
+                or ""
+            )
         except ValueError as exc:
             raise HTTPException(
                 status_code=400,
@@ -928,7 +1066,9 @@ def _materialize_genie_cohort(
             status_code=400,
             detail="Genie cohort action has no replayable lead filters",
         )
-    criteria_hash, _criteria_keys, source_assets, _visualization_kind = criteria_summary(payload.criteria)
+    criteria_hash, _criteria_keys, source_assets, _visualization_kind = criteria_summary(
+        payload.criteria
+    )
     _ = criteria_hash
     row = lakebase.fetchone(
         _GENIE_COHORT_INSERT_SQL,
@@ -975,14 +1115,15 @@ def handle_genie_action(
         raise HTTPException(status_code=400, detail="unsupported Genie action")
     claims = _validate_action_confirmation(payload, actor=actor)
     request_id = str(claims["request_id"])
-    existing = _lookup_existing_genie_action(
-        lakebase,
-        request_id=request_id,
-        actor=actor,
-        action_type=action_type,
-    )
-    if existing is not None:
-        return existing
+    if action_type != "create_draft_campaign":
+        existing = _lookup_existing_genie_action(
+            lakebase,
+            request_id=request_id,
+            actor=actor,
+            action_type=action_type,
+        )
+        if existing is not None:
+            return existing
 
     try:
         if action_type == "save_borrowers":
@@ -1045,10 +1186,35 @@ def handle_genie_action(
 
         if action_type == "create_draft_campaign":
             campaign_payload = _campaign_criteria(payload)
-            if not campaign_payload.get("borrower_ids") and not campaign_payload.get("result_filters"):
+            if not campaign_payload.get("borrower_ids") and not campaign_payload.get(
+                "result_filters"
+            ):
                 raise HTTPException(
                     status_code=400,
                     detail="Genie campaign action has no replayable lead filters",
+                )
+            request_payload_hash = _campaign_request_payload_hash(payload, campaign_payload)
+            existing_campaign = _lookup_campaign_idempotency_row(
+                lakebase,
+                actor=actor,
+                request_id=request_id,
+            )
+            if existing_campaign is not None:
+                campaign_id = _campaign_identity(
+                    existing_campaign,
+                    expected_payload_hash=request_payload_hash,
+                )
+                audit_event_id = _lookup_campaign_audit_id(
+                    lakebase,
+                    actor=actor,
+                    request_id=request_id,
+                    campaign_id=campaign_id,
+                )
+                return _campaign_action_response(
+                    payload=payload,
+                    campaign_id=campaign_id,
+                    audit_event_id=audit_event_id,
+                    replayed=True,
                 )
             metadata = {
                 **_audit_payload(payload),
@@ -1060,6 +1226,7 @@ def handle_genie_action(
                     "owner_email": actor,
                     "criteria": json.dumps(campaign_payload),
                     "request_id": request_id,
+                    "request_payload_hash": request_payload_hash,
                     "correlation_id": get_correlation_id(),
                     "metadata": _reviewed_audit_metadata(
                         "genie.create_draft_campaign",
@@ -1067,15 +1234,35 @@ def handle_genie_action(
                     ),
                 },
             )
-            if row is None:
-                raise LakebaseError("campaign insert returned no row")
-            return GenieActionResponse(
-                ok=True,
-                action_type=action_type,
-                audit_event_id=str(row.get("audit_id") or ""),
-                route=payload.route or "/lead-queue",
-                campaign_id=str(row.get("campaign_id") or ""),
-                message="Created a Lakebase draft campaign from this Genie result.",
+            replayed = row is None or not row.get("audit_id")
+            if row is None or not row.get("campaign_id"):
+                row = _lookup_campaign_idempotency_row(
+                    lakebase,
+                    actor=actor,
+                    request_id=request_id,
+                    attempts=_CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS,
+                )
+                if row is None:
+                    raise LakebaseError(
+                        "Genie campaign insert returned no row and idempotency lookup was empty"
+                    )
+            campaign_id = _campaign_identity(
+                row,
+                expected_payload_hash=request_payload_hash,
+            )
+            audit_event_id = str(row.get("audit_id") or "")
+            if not audit_event_id:
+                audit_event_id = _lookup_campaign_audit_id(
+                    lakebase,
+                    actor=actor,
+                    request_id=request_id,
+                    campaign_id=campaign_id,
+                )
+            return _campaign_action_response(
+                payload=payload,
+                campaign_id=campaign_id,
+                audit_event_id=audit_event_id,
+                replayed=replayed,
             )
 
         row = lakebase.fetchone(

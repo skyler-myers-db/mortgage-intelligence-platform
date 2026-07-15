@@ -41,6 +41,7 @@ from backend.services.audit_decision_inputs import DECISION_INPUT_KEYS
 from backend.services.audit_store import get_audit_store
 from backend.services.lakebase import LakebaseError, get_lakebase_client
 from backend.services.lakebase_bootstrap import _reset_bootstrap_for_tests
+from backend.services.repositories import get_outreach_repository
 from backend.services.resilience import _reset_breakers_for_tests
 from tests.fixtures.in_memory_audit_store import InMemoryAuditStore
 
@@ -1023,13 +1024,28 @@ def test_approve_idempotent_on_retry_with_same_request_id(
         "draft_body": APPROVAL_DRAFT_BODY,
     }
     first = client.post("/api/outreach/approve", json=body)
+    repo = app.dependency_overrides[get_outreach_repository]()
+    borrower_lookup = MagicMock(side_effect=AssertionError("replay queried mutable UC borrower"))
+    monkeypatch.setattr(repo, "find_borrower", borrower_lookup)
     second = client.post("/api/outreach/approve", json=body)
+    payload_conflict = client.post(
+        "/api/outreach/approve",
+        json={**body, "rationale": "A different reviewed decision"},
+    )
+    actor_conflict = client.post(
+        "/api/outreach/approve",
+        json=body,
+        headers={"X-Forwarded-Email": "other@example.com"},
+    )
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
+    assert payload_conflict.status_code == 409, payload_conflict.text
+    assert actor_conflict.status_code == 409, actor_conflict.text
     # Same approval_id returned on both calls -- the idempotency
     # contract's observable guarantee.
     assert first.json()["approval_id"] == second.json()["approval_id"]
+    borrower_lookup.assert_not_called()
 
     # Exactly one INSERT -- the second call short-circuited.
     approval_inserts = [
@@ -1084,11 +1100,23 @@ def test_reject_idempotent_on_retry_with_same_request_id(
         "request_id": "33333333-3333-4333-8333-333333333333",
     }
     first = client.post("/api/outreach/reject", json=body)
+    repo = app.dependency_overrides[get_outreach_repository]()
+    borrower_lookup = MagicMock(side_effect=AssertionError("replay queried mutable UC borrower"))
+    campaign_lookup = MagicMock(side_effect=AssertionError("replay queried mutable campaign state"))
+    monkeypatch.setattr(repo, "find_borrower", borrower_lookup)
+    monkeypatch.setattr(outreach_mod, "_resolve_governed_campaign_variant", campaign_lookup)
     second = client.post("/api/outreach/reject", json=body)
+    payload_conflict = client.post(
+        "/api/outreach/reject",
+        json={**body, "rationale_code": "data_quality"},
+    )
 
     assert first.status_code == 200, first.text
     assert second.status_code == 200, second.text
+    assert payload_conflict.status_code == 409, payload_conflict.text
     assert first.json()["approval_id"] == second.json()["approval_id"]
+    campaign_lookup.assert_not_called()
+    borrower_lookup.assert_not_called()
 
     approval_inserts = [
         call
@@ -1145,7 +1173,6 @@ def test_request_id_conflict_for_different_decision_is_rejected(
                 "borrower_id": "B-48291",
                 "offer_code": "heloc",
                 "channel": "email",
-                "variant_name": "Primary",
                 "rationale": "Reviewed by the operator",
                 "draft_subject": "Your mortgage review",
                 "draft_body": APPROVAL_DRAFT_BODY,
@@ -1161,7 +1188,6 @@ def test_request_id_conflict_for_different_decision_is_rejected(
                 "borrower_id": "B-48291",
                 "offer_code": "heloc",
                 "channel": "email",
-                "variant_name": "Primary",
                 "rationale_code": "low_intent",
                 "rationale": "Reviewed by the operator",
                 "request_id": "88888888-8888-4888-8888-888888888882",
@@ -1206,7 +1232,7 @@ def test_concurrent_decision_replay_returns_complete_winner_once(
 
     mismatch = dict(payload)
     if response_flag == "approved":
-        mismatch["variant_name"] = "Alternate"
+        mismatch["rationale"] = "A different reviewed decision"
     else:
         mismatch["rationale_code"] = "data_quality"
     conflict = TestClient(app).post(path, json=mismatch, headers=headers)

@@ -1,4 +1,4 @@
-"""Provision the nightly M2M OAuth service principal via the Databricks SDK.
+"""Provision distinct M2M identities for live Module 0 automation.
 
 Zero-click replacement for the manual Accounts-Console workflow
 documented in ``docs/security/m2m-oauth-setup.md``. The user's explicit
@@ -12,15 +12,10 @@ What this tool does (in order):
    is re-used rather than duplicated.
 2. Grant ``CAN USE`` on the deployed Databricks App resource
    (``--app-name``) so the SP can traverse the Apps OAuth proxy.
-3. Mint an OAuth client_id + client_secret for the SP. The secret is
-   returned ONCE by the API and cannot be retrieved later; the tool
-   therefore writes it to one of two sinks depending on ``--set-gh-secrets``:
-
-   - ``--set-gh-secrets`` (opt-in, requires ``gh`` CLI authenticated) →
-     the secret is piped into ``gh secret set DATABRICKS_CLIENT_SECRET``
-     and never printed to stdout.
-   - omitted → the secret is printed to stdout *once* with a loud
-     "save this now" banner. The admin pastes it into GitHub manually.
+3. Mint an OAuth client_id + client_secret for the SP. A live mint requires
+   ``--set-gh-secrets`` and pipes the one-shot secret directly to ``gh``.
+   Secret names are configurable so normal, admin, and verifier identities
+   never share one client credential.
 
 4. Optionally rotate an existing SP's secret (``--rotate``). The old
    secret stays valid until the admin revokes it in the Accounts Console
@@ -28,8 +23,8 @@ What this tool does (in order):
 
 Safety invariants
 -----------------
-* The secret never touches the repo. It is emitted to stdout or the
-  ``gh`` subprocess via stdin; never written to a file in the tree.
+* The secret never touches the repo, a local file, stdout, or stderr. It is
+  passed only to the ``gh`` subprocess via stdin.
 * A ``--dry-run`` flag exercises every argument-parsing + SDK-surface
   check without touching the workspace, for CI-safe import coverage.
 * SDK failures that indicate "you are not a workspace admin" surface a
@@ -45,7 +40,7 @@ SDK surface used (pinned to databricks-sdk shipped in requirements.txt)
   — mint the OAuth client_secret. Returns a
   ``CreateServicePrincipalSecretResponse`` whose ``.secret`` field is
   the one-shot value. The ``client_id`` is the SP's ``application_id``.
-* ``w.apps.set_permissions(app_name, access_control_list=[...])`` —
+* ``w.apps.update_permissions(app_name, access_control_list=[...])`` —
   grant ``CAN USE`` on the deployed App resource.
 
 Usage
@@ -74,15 +69,71 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
+
+_GH_SECRET_NAME_RE = _github_helpers.GH_SECRET_NAME_RE
+_gh_available = _github_helpers.gh_available
+_set_gh_secret = _github_helpers.set_gh_secret
+_which = _github_helpers.which
+
 DATABRICKS_YML = REPO_ROOT / "databricks.yml"
 DOCS_RUNBOOK = "docs/security/m2m-oauth-setup.md"
 
 # Deployed App URL. Written as a GitHub secret alongside the client id/secret
 # so the workflow's deployed-path detection flips on in a single admin pass.
 DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
+DEFAULT_ADMIN_GROUP = "mip-admin"
+DEFAULT_LAKEBASE_INSTANCE = "mip-app-state"
+
+IdentityRole = Literal["normal", "admin", "verifier"]
+
+
+@dataclass(frozen=True)
+class IdentityDefaults:
+    sp_name: str
+    client_id_secret_name: str
+    client_secret_secret_name: str
+    app_url_secret_name: str | None
+    group_name: str | None
+    grant_can_use: bool
+    lakebase_instance: str | None
+
+
+IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
+    "normal": IdentityDefaults(
+        sp_name="mip-nightly-ci-sp",
+        client_id_secret_name="DATABRICKS_CLIENT_ID",
+        client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
+        app_url_secret_name="MIP_APP_URL",
+        group_name=None,
+        grant_can_use=True,
+        lakebase_instance=None,
+    ),
+    "admin": IdentityDefaults(
+        sp_name="mip-nightly-admin-ci-sp",
+        client_id_secret_name="DATABRICKS_ADMIN_CLIENT_ID",
+        client_secret_secret_name="DATABRICKS_ADMIN_CLIENT_SECRET",
+        app_url_secret_name=None,
+        group_name=DEFAULT_ADMIN_GROUP,
+        grant_can_use=True,
+        lakebase_instance=None,
+    ),
+    "verifier": IdentityDefaults(
+        sp_name="mip-ai-gateway-verifier-ci-sp",
+        client_id_secret_name="DATABRICKS_VERIFIER_CLIENT_ID",
+        client_secret_secret_name="DATABRICKS_VERIFIER_CLIENT_SECRET",
+        app_url_secret_name=None,
+        group_name=None,
+        grant_can_use=False,
+        lakebase_instance=DEFAULT_LAKEBASE_INSTANCE,
+    ),
+}
 
 
 def _diag(msg: str) -> None:
@@ -150,8 +201,14 @@ class ProvisionResult:
     sp_display_name: str
     created_sp: bool
     granted_can_use: bool
+    group_name: str | None
+    added_to_group: bool
+    lakebase_instance: str | None
+    created_lakebase_role: bool
+    gateway_endpoint: str | None
+    granted_can_query: bool
     client_id: str
-    client_secret: str | None  # None when --rotate wasn't requested & SP existed
+    secret_minted: bool
     secret_written_to_gh: bool
     gh_repo: str | None
 
@@ -192,6 +249,105 @@ def _create_sp(client: Any, display_name: str) -> Any:
         raise _wrap_admin_error(exc, step="create service_principal") from exc
 
 
+def _find_group(client: Any, display_name: str) -> Any | None:
+    """Return the exact SCIM group match, never a prefix/similar group."""
+    try:
+        groups = list(client.groups.list(filter=f"displayName eq '{display_name}'"))
+    except Exception as exc:  # noqa: BLE001
+        raise _wrap_admin_error(exc, step="list groups") from exc
+    for group in groups:
+        if getattr(group, "display_name", None) == display_name:
+            return group
+    return None
+
+
+def _ensure_group_membership(
+    client: Any,
+    *,
+    group_name: str,
+    sp_id: str,
+    create_group: bool,
+) -> bool:
+    """Ensure the SP is a direct group member; return True only on mutation."""
+    group = _find_group(client, group_name)
+    if group is None:
+        if not create_group:
+            raise SystemExit(
+                f"Required admin group {group_name!r} does not exist. "
+                "Re-run with --create-group only after governance review."
+            )
+        _diag(f"creating group display_name={group_name!r} (--create-group)")
+        try:
+            group = client.groups.create(display_name=group_name)
+        except Exception as exc:  # noqa: BLE001
+            raise _wrap_admin_error(exc, step="create group") from exc
+
+    group_id = str(getattr(group, "id", "") or "").strip()
+    if not group_id:
+        raise SystemExit(f"Group {group_name!r} has no SCIM id")
+    members = getattr(group, "members", None) or []
+    if any(str(getattr(member, "value", "") or "") == sp_id for member in members):
+        _diag(f"service principal is already a member of group={group_name!r}")
+        return False
+
+    from databricks.sdk.service.iam import (  # type: ignore
+        ComplexValue,
+        Patch,
+        PatchOp,
+        PatchSchema,
+    )
+
+    _diag(f"adding service principal id={sp_id} to group={group_name!r}")
+    try:
+        client.groups.patch(
+            id=group_id,
+            operations=[
+                Patch(
+                    op=PatchOp.ADD,
+                    value={"members": [ComplexValue(value=sp_id)]},
+                )
+            ],
+            schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _wrap_admin_error(exc, step="add service_principal to group") from exc
+    return True
+
+
+def _ensure_lakebase_service_principal_role(
+    client: Any,
+    *,
+    instance_name: str,
+    application_id: str,
+) -> bool:
+    """Ensure a non-superuser Lakebase OAuth role exists for the verifier."""
+    try:
+        roles = list(client.database.list_database_instance_roles(instance_name))
+    except Exception as exc:  # noqa: BLE001
+        raise _wrap_admin_error(exc, step="list Lakebase roles") from exc
+    if any(str(getattr(role, "name", "") or "") == application_id for role in roles):
+        _diag(f"Lakebase service-principal role already exists on instance={instance_name!r}")
+        return False
+
+    from databricks.sdk.service.database import (  # type: ignore
+        DatabaseInstanceRole,
+        DatabaseInstanceRoleIdentityType,
+    )
+
+    _diag(f"creating Lakebase verifier role on instance={instance_name!r}")
+    try:
+        client.database.create_database_instance_role(
+            instance_name,
+            DatabaseInstanceRole(
+                name=application_id,
+                identity_type=DatabaseInstanceRoleIdentityType.SERVICE_PRINCIPAL,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _wrap_admin_error(exc, step="create Lakebase verifier role") from exc
+    return True
+
+
 def _grant_can_use_on_app(
     client: Any,
     app_name: str,
@@ -199,7 +355,8 @@ def _grant_can_use_on_app(
 ) -> None:
     """Grant CAN USE on the Databricks App to the SP.
 
-    Uses ``AppsAPI.set_permissions`` (POST
+    Uses ``AppsAPI.update_permissions`` so provisioning one role does not
+    replace another role's existing app ACL. The SDK sends the request to
     ``/api/2.0/preview/permissions/apps/{app_name}/accessControlList``
     under the hood). ``service_principal_name`` expects the SP's
     ``application_id`` (a.k.a. the OAuth client_id), NOT the SCIM ``id``.
@@ -211,7 +368,7 @@ def _grant_can_use_on_app(
 
     _diag(f"granting CAN_USE on app={app_name} to application_id={sp_application_id}")
     try:
-        client.apps.set_permissions(
+        client.apps.update_permissions(
             app_name=app_name,
             access_control_list=[
                 AppAccessControlRequest(
@@ -229,7 +386,33 @@ def _grant_can_use_on_app(
                 f"App {app_name!r} not found. Run `databricks bundle deploy -t dev` "
                 "first so the App resource exists, then re-run this provisioner."
             ) from exc
-        raise _wrap_admin_error(exc, step="set_permissions on app") from exc
+        raise _wrap_admin_error(exc, step="update_permissions on app") from exc
+
+
+def _grant_can_query_on_endpoint(
+    client: Any,
+    endpoint_name: str,
+    sp_application_id: str,
+) -> None:
+    """Add the verifier's CAN_QUERY grant without replacing other endpoint ACLs."""
+    from databricks.sdk.service.serving import (  # type: ignore
+        ServingEndpointAccessControlRequest,
+        ServingEndpointPermissionLevel,
+    )
+
+    _diag(f"granting CAN_QUERY on endpoint={endpoint_name!r} to verifier identity")
+    try:
+        client.serving_endpoints.update_permissions(
+            endpoint_name,
+            access_control_list=[
+                ServingEndpointAccessControlRequest(
+                    service_principal_name=sp_application_id,
+                    permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
+                )
+            ],
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _wrap_admin_error(exc, step="update serving endpoint permissions") from exc
 
 
 def _mint_oauth_secret(client: Any, sp_id: str) -> Any:
@@ -267,69 +450,6 @@ def _wrap_admin_error(exc: Exception, *, step: str) -> SystemExit:
 
 
 # ---------------------------------------------------------------------------
-# GitHub secret upload
-# ---------------------------------------------------------------------------
-
-
-def _gh_available() -> bool:
-    """True iff the GitHub CLI is installed AND authenticated."""
-    if not _which("gh"):
-        return False
-    try:
-        subprocess.run(
-            ["gh", "auth", "status"],
-            capture_output=True,
-            text=True,
-            check=True,
-            timeout=10,
-        )
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
-        return False
-    return True
-
-
-def _which(binary: str) -> str | None:
-    for path in os.environ.get("PATH", "").split(os.pathsep):
-        candidate = Path(path) / binary
-        if candidate.is_file() and os.access(candidate, os.X_OK):
-            return str(candidate)
-    return None
-
-
-def _set_gh_secret(repo: str, name: str, value: str) -> None:
-    """Pipe ``value`` into ``gh secret set NAME --repo repo`` via stdin.
-
-    Value is passed via stdin (not argv) so it never appears in process
-    listings. ``gh`` redacts the value server-side; the local process is
-    the only place it's ever in plaintext.
-    """
-    # Emit the GitHub Actions masking directive inside Actions only.
-    # Outside Actions the ``::add-mask::`` prefix has no effect, and
-    # writing the plaintext secret to stdout (even once) is a leak
-    # vector in local terminals / shell history (raised by Copilot
-    # 2026-04-22). ``GITHUB_ACTIONS == "true"`` is the canonical
-    # marker that a step is running on a GitHub-hosted runner.
-    if os.environ.get("GITHUB_ACTIONS") == "true":
-        print(f"::add-mask::{value}")
-    _diag(f"uploading gh secret {name!r} to {repo}")
-    try:
-        subprocess.run(
-            ["gh", "secret", "set", name, "--repo", repo],
-            input=value.encode("utf-8"),
-            check=True,
-            capture_output=True,
-            timeout=30,
-        )
-    except subprocess.CalledProcessError as exc:
-        stderr = exc.stderr.decode("utf-8", errors="replace") if exc.stderr else ""
-        raise SystemExit(
-            f"gh secret set {name} failed (exit={exc.returncode}): {stderr[:400]}"
-        ) from exc
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise SystemExit(f"gh secret set {name} raised {type(exc).__name__}: {exc}") from exc
-
-
-# ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
 
@@ -337,12 +457,21 @@ def _set_gh_secret(repo: str, name: str, value: str) -> None:
 def provision(
     *,
     sp_name: str,
+    expected_application_id: str | None,
     app_name: str,
     grant_can_use: bool,
+    group_name: str | None,
+    create_group: bool,
+    lakebase_instance: str | None,
+    gateway_endpoint: str | None,
     gh_repo: str | None,
     set_gh_secrets: bool,
+    mint_secret: bool,
     rotate: bool,
     app_url: str,
+    client_id_secret_name: str,
+    client_secret_secret_name: str,
+    app_url_secret_name: str | None,
     client_factory: Any | None = None,
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
@@ -358,7 +487,36 @@ def provision(
 
             return WorkspaceClient()
 
+    if create_group and not group_name:
+        raise SystemExit("--create-group requires an identity role with --group-name")
+    if mint_secret and (not set_gh_secrets or not gh_repo):
+        raise SystemExit(
+            "Secret minting requires --set-gh-secrets and --gh-repo; "
+            "this tool never prints or stores one-shot OAuth secrets locally."
+        )
+    if mint_secret and not _gh_available():
+        raise SystemExit(
+            "Secret minting requires an installed, authenticated gh CLI; "
+            "run `gh auth login` before retrying."
+        )
+    for name in (
+        client_id_secret_name,
+        client_secret_secret_name,
+        app_url_secret_name,
+    ):
+        if name is not None and not _GH_SECRET_NAME_RE.fullmatch(name):
+            raise SystemExit(f"Invalid GitHub Actions secret name: {name!r}")
+
     client = client_factory()
+
+    # A missing admin group is a governance decision, not an incidental SP
+    # bootstrap side effect. Fail before creating or mutating any identity
+    # unless the operator explicitly approved --create-group.
+    if group_name and not create_group and _find_group(client, group_name) is None:
+        raise SystemExit(
+            f"Required admin group {group_name!r} does not exist. "
+            "Re-run with --create-group only after governance review."
+        )
 
     sp = _find_existing_sp(client, sp_name)
     created_sp = False
@@ -368,6 +526,33 @@ def provision(
         _diag(f"created SP id={sp.id} application_id={sp.application_id}")
     else:
         _diag(f"reusing existing SP id={sp.id} application_id={sp.application_id}")
+    if expected_application_id and sp.application_id != expected_application_id:
+        raise SystemExit(
+            f"Service principal {sp_name!r} application id does not match the "
+            "configured client id; refusing to grant the wrong identity."
+        )
+
+    added_to_group = False
+    if group_name:
+        added_to_group = _ensure_group_membership(
+            client,
+            group_name=group_name,
+            sp_id=sp.id,
+            create_group=create_group,
+        )
+
+    created_lakebase_role = False
+    if lakebase_instance:
+        created_lakebase_role = _ensure_lakebase_service_principal_role(
+            client,
+            instance_name=lakebase_instance,
+            application_id=sp.application_id,
+        )
+
+    granted_can_query = False
+    if gateway_endpoint:
+        _grant_can_query_on_endpoint(client, gateway_endpoint, sp.application_id)
+        granted_can_query = True
 
     granted = False
     if grant_can_use:
@@ -376,13 +561,12 @@ def provision(
     else:
         _diag("skipping CAN_USE grant (--grant-can-use=false)")
 
-    # Secret minting rules:
-    #   - SP was freshly created → always mint (caller needs the secret)
-    #   - SP existed + --rotate → mint a new one
-    #   - SP existed + no --rotate → skip, we can't read the existing secret
+    # New identities and explicit rotations mint only when the caller enabled
+    # the secure GitHub sink. --no-mint-secret supports idempotent grant repair.
     secret_value: str | None = None
     client_id = sp.application_id
-    if created_sp or rotate:
+    should_mint = mint_secret and (created_sp or rotate)
+    if should_mint:
         resp = _mint_oauth_secret(client, sp.id)
         secret_value = getattr(resp, "secret", None)
         if not secret_value:
@@ -390,33 +574,23 @@ def provision(
                 "mint returned no .secret value; SDK contract violation. "
                 f"Response fields: {list(resp.__dict__.keys()) if hasattr(resp, '__dict__') else 'unknown'}"
             )
-    else:
+    elif mint_secret:
         _diag(
             "SP already exists and --rotate was not passed; skipping mint. "
             "Pass --rotate to generate a fresh secret."
         )
+    else:
+        _diag("skipping OAuth secret mint (--no-mint-secret)")
 
-    # GitHub secret push (only when we have a secret to push).
     wrote_secrets = False
-    if set_gh_secrets and secret_value is not None:
-        if not gh_repo:
-            raise SystemExit(
-                "--set-gh-secrets requires --gh-repo (or a git remote from which the "
-                "repo can be inferred)."
-            )
-        if not _gh_available():
-            _diag(
-                "WARNING: gh CLI unavailable or unauthenticated — skipping secret "
-                "upload. Run these manually after installing gh + `gh auth login`:"
-            )
-            _diag(f"  gh secret set DATABRICKS_CLIENT_ID --repo {gh_repo} --body '{client_id}'")
-            _diag(f"  gh secret set DATABRICKS_CLIENT_SECRET --repo {gh_repo}  # pipe secret via stdin")
-            _diag(f"  gh secret set MIP_APP_URL --repo {gh_repo} --body '{app_url}'")
-        else:
-            _set_gh_secret(gh_repo, "DATABRICKS_CLIENT_ID", client_id)
-            _set_gh_secret(gh_repo, "DATABRICKS_CLIENT_SECRET", secret_value)
-            _set_gh_secret(gh_repo, "MIP_APP_URL", app_url)
-            wrote_secrets = True
+    if secret_value is not None:
+        assert gh_repo is not None  # validated before any SDK mutation
+        _set_gh_secret(gh_repo, client_secret_secret_name, secret_value)
+        _set_gh_secret(gh_repo, client_id_secret_name, client_id)
+        if app_url_secret_name:
+            _set_gh_secret(gh_repo, app_url_secret_name, app_url)
+        wrote_secrets = True
+        secret_value = None
 
     return ProvisionResult(
         sp_id=sp.id,
@@ -424,15 +598,21 @@ def provision(
         sp_display_name=sp.display_name,
         created_sp=created_sp,
         granted_can_use=granted,
+        group_name=group_name,
+        added_to_group=added_to_group,
+        lakebase_instance=lakebase_instance,
+        created_lakebase_role=created_lakebase_role,
+        gateway_endpoint=gateway_endpoint,
+        granted_can_query=granted_can_query,
         client_id=client_id,
-        client_secret=secret_value,
+        secret_minted=should_mint,
         secret_written_to_gh=wrote_secrets,
         gh_repo=gh_repo,
     )
 
 
-def _print_summary(result: ProvisionResult, *, set_gh_secrets: bool) -> None:
-    """Human-readable summary on stderr; one-shot secret on stdout if needed."""
+def _print_summary(result: ProvisionResult) -> None:
+    """Human-readable, secret-free summary on stderr."""
     lines = [
         "",
         "=== M2M OAuth provisioning summary ===",
@@ -440,25 +620,20 @@ def _print_summary(result: ProvisionResult, *, set_gh_secrets: bool) -> None:
         f"  application_id (client_id): {result.client_id}",
         f"  created this run:         {result.created_sp}",
         f"  granted CAN_USE on app:   {result.granted_can_use}",
+        f"  admin group:              {result.group_name or '(none)'}",
+        f"  group membership added:   {result.added_to_group}",
+        f"  Lakebase instance:        {result.lakebase_instance or '(none)'}",
+        f"  Lakebase role created:    {result.created_lakebase_role}",
+        f"  Gateway endpoint:         {result.gateway_endpoint or '(none)'}",
+        f"  granted CAN_QUERY:        {result.granted_can_query}",
+        f"  OAuth secret minted:      {result.secret_minted}",
+        f"  GitHub secrets updated:   {result.secret_written_to_gh}",
     ]
-    if result.client_secret is None:
-        lines.append("  client_secret:            (not rotated; existing SP secret unchanged)")
-    elif result.secret_written_to_gh:
-        lines.append("  client_secret:            uploaded to GitHub Actions secrets")
+    if result.secret_written_to_gh:
         lines.append(f"  gh repo:                  {result.gh_repo}")
-    else:
-        lines.append("  client_secret:            written to stdout below -- SAVE NOW")
     lines.append("")
     for line in lines:
         _diag(line)
-
-    # One-shot stdout emission of the secret ONLY when caller didn't opt
-    # into gh upload. This is the same contract as oauth_m2m_mint.py:
-    # stdout carries exactly one payload, stderr carries diagnostics.
-    if result.client_secret is not None and not result.secret_written_to_gh:
-        print("### DATABRICKS_CLIENT_SECRET (save this now; it will not be shown again) ###")
-        print(result.client_secret)
-        print("### end secret ###")
 
 
 # ---------------------------------------------------------------------------
@@ -470,14 +645,25 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="provision_m2m_oauth",
         description=(
-            "Create the nightly M2M OAuth service principal + secret via the "
-            "Databricks SDK. Replaces the manual Accounts-Console workflow."
+            "Create or converge a normal, admin, or verifier M2M identity "
+            "without printing one-shot OAuth secrets."
         ),
     )
     parser.add_argument(
+        "--identity-role",
+        choices=tuple(IDENTITY_DEFAULTS),
+        default="normal",
+        help="Identity contract to provision (default: normal).",
+    )
+    parser.add_argument(
         "--sp-name",
-        default="mip-nightly-ci-sp",
-        help="Display name for the service principal (default: mip-nightly-ci-sp).",
+        default=None,
+        help="Override the role-specific service-principal display name.",
+    )
+    parser.add_argument(
+        "--expected-application-id",
+        default=None,
+        help="Fail closed unless the resolved SP has this OAuth application/client id.",
     )
     parser.add_argument(
         "--app-name",
@@ -496,14 +682,40 @@ def _build_parser() -> argparse.ArgumentParser:
         "--grant-can-use",
         dest="grant_can_use",
         action="store_true",
-        default=True,
-        help="Grant CAN_USE on the App to the SP (default: on).",
+        default=None,
+        help="Grant CAN_USE on the App to the SP.",
     )
     parser.add_argument(
         "--no-grant-can-use",
         dest="grant_can_use",
         action="store_false",
-        help="Skip the CAN_USE grant (use if an admin grants it separately).",
+        help="Skip the CAN_USE grant.",
+    )
+    parser.add_argument(
+        "--group-name",
+        default=None,
+        help=f"Admin group override (admin default: {DEFAULT_ADMIN_GROUP}).",
+    )
+    parser.add_argument(
+        "--create-group",
+        action="store_true",
+        help=(
+            "Create the configured admin group if absent. Without this explicit "
+            "flag, a missing group fails closed."
+        ),
+    )
+    parser.add_argument(
+        "--lakebase-instance",
+        default=None,
+        help=(
+            "Provision an OAuth role on this Lakebase instance "
+            f"(verifier default: {DEFAULT_LAKEBASE_INSTANCE})."
+        ),
+    )
+    parser.add_argument(
+        "--gateway-endpoint",
+        default=None,
+        help="Serving endpoint on which the verifier receives CAN_QUERY.",
     )
     parser.add_argument(
         "--gh-repo",
@@ -517,6 +729,33 @@ def _build_parser() -> argparse.ArgumentParser:
             "Write client_id / client_secret / MIP_APP_URL to the GitHub repo's "
             "Actions secrets via the `gh` CLI. Requires `gh auth login`."
         ),
+    )
+    parser.add_argument(
+        "--client-id-secret-name",
+        default=None,
+        help="GitHub Actions secret name for this identity's OAuth client id.",
+    )
+    parser.add_argument(
+        "--client-secret-secret-name",
+        default=None,
+        help="GitHub Actions secret name for this identity's OAuth client secret.",
+    )
+    parser.add_argument(
+        "--app-url-secret-name",
+        default=None,
+        help="GitHub Actions secret name for the app URL (normal default: MIP_APP_URL).",
+    )
+    parser.add_argument(
+        "--no-app-url-secret",
+        action="store_true",
+        help="Do not write an app URL secret for this identity.",
+    )
+    parser.add_argument(
+        "--no-mint-secret",
+        dest="mint_secret",
+        action="store_false",
+        default=True,
+        help="Converge grants/membership without minting or rotating an OAuth secret.",
     )
     parser.add_argument(
         "--rotate",
@@ -538,11 +777,34 @@ def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
 
+    role: IdentityRole = args.identity_role
+    defaults = IDENTITY_DEFAULTS[role]
     app_name = args.app_name or _load_app_name_from_bundle()
     gh_repo = args.gh_repo or _infer_gh_repo()
+    sp_name = args.sp_name or defaults.sp_name
+    grant_can_use = defaults.grant_can_use if args.grant_can_use is None else args.grant_can_use
+    group_name = args.group_name or defaults.group_name
+    lakebase_instance = args.lakebase_instance or defaults.lakebase_instance
+    client_id_secret_name = args.client_id_secret_name or defaults.client_id_secret_name
+    client_secret_secret_name = args.client_secret_secret_name or defaults.client_secret_secret_name
+    app_url_secret_name = args.app_url_secret_name or defaults.app_url_secret_name
+    if args.no_app_url_secret:
+        app_url_secret_name = None
+
+    if role != "admin" and group_name:
+        parser.error("only --identity-role admin may be assigned to an admin group")
+    if args.create_group and role != "admin":
+        parser.error("--create-group is valid only with --identity-role admin")
+    if role != "verifier" and (args.lakebase_instance or args.gateway_endpoint):
+        parser.error(
+            "--lakebase-instance and --gateway-endpoint are valid only with "
+            "--identity-role verifier"
+        )
 
     _diag(
-        f"provisioning plan: sp_name={args.sp_name!r} app_name={app_name!r} "
+        f"provisioning plan: identity_role={role!r} sp_name={sp_name!r} "
+        f"app_name={app_name!r} group_name={group_name!r} "
+        f"create_group={args.create_group} lakebase_instance={lakebase_instance!r} "
         f"gh_repo={gh_repo!r} set_gh_secrets={args.set_gh_secrets} rotate={args.rotate}"
     )
 
@@ -550,19 +812,30 @@ def main(argv: list[str] | None = None) -> int:
         _diag("--dry-run requested; no SDK calls will be made")
         if args.set_gh_secrets and not gh_repo:
             _diag("WARNING: --set-gh-secrets requires --gh-repo (or a detectable origin)")
+        if args.mint_secret and not args.set_gh_secrets:
+            _diag("NOTE: a real secret mint would require --set-gh-secrets")
         if args.set_gh_secrets and not _gh_available():
-            _diag("NOTE: gh CLI unavailable; a real run would skip secret upload")
+            _diag("NOTE: gh CLI unavailable; a real secret mint would fail closed")
         return 0
 
     try:
         result = provision(
-            sp_name=args.sp_name,
+            sp_name=sp_name,
+            expected_application_id=args.expected_application_id,
             app_name=app_name,
-            grant_can_use=args.grant_can_use,
+            grant_can_use=grant_can_use,
+            group_name=group_name,
+            create_group=args.create_group,
+            lakebase_instance=lakebase_instance,
+            gateway_endpoint=args.gateway_endpoint,
             gh_repo=gh_repo,
             set_gh_secrets=args.set_gh_secrets,
+            mint_secret=args.mint_secret,
             rotate=args.rotate,
             app_url=args.app_url,
+            client_id_secret_name=client_id_secret_name,
+            client_secret_secret_name=client_secret_secret_name,
+            app_url_secret_name=app_url_secret_name,
         )
     except SystemExit:
         raise
@@ -570,7 +843,7 @@ def main(argv: list[str] | None = None) -> int:
         _diag(f"ERROR unhandled {type(exc).__name__}: {exc}")
         return 1
 
-    _print_summary(result, set_gh_secrets=args.set_gh_secrets)
+    _print_summary(result)
     return 0
 
 

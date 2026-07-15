@@ -1,5 +1,5 @@
 import { useEffect, useState, type ChangeEvent } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
@@ -27,6 +27,7 @@ export function CampaignSetupPanel({
   recommendationError,
   recommendationFetching,
   canRecommend,
+  canAccessAdmin = false,
   onFieldChange,
   onNumericFieldCommit,
   onToggleHouseholdDedup,
@@ -39,6 +40,7 @@ export function CampaignSetupPanel({
   recommendationError: boolean;
   recommendationFetching: boolean;
   canRecommend: boolean;
+  canAccessAdmin?: boolean;
   onFieldChange: (
     key: CampaignField,
   ) => (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
@@ -47,7 +49,6 @@ export function CampaignSetupPanel({
   onRegenerate: () => void;
   onApply: () => void;
 }) {
-  const navigate = useNavigate();
   const [applyReviewOpen, setApplyReviewOpen] = useState(false);
   const recommendationActionable = Boolean(
     canRecommend
@@ -205,22 +206,35 @@ export function CampaignSetupPanel({
                 </dl>
               </section>
               <div className="campaign-recommendation__evidence" aria-label="Recommendation evidence">
-                {recommendation.evidence.map((row) => (
-                  <EvidenceChip
-                    key={`${row.source_asset}:${row.label}`}
-                    source={drawerForAsset(row.source_asset) ?? undefined}
-                    onClick={drawerForAsset(row.source_asset)
-                      ? undefined
-                      : () => navigate('/admin-config#audit')}
-                    title={`Inspect ${row.source_asset}`}
-                  >
+                {recommendation.evidence.map((row) => {
+                  const source = drawerForAsset(row.source_asset);
+                  const content = (
                     <span className="campaign-evidence">
-                    <span>{row.label}</span>
-                    <strong>{row.value}</strong>
-                    <code>{row.source_asset}</code>
+                      <span>{row.label}</span>
+                      <strong>{row.value}</strong>
+                      <code>{row.source_asset}</code>
                     </span>
-                  </EvidenceChip>
-                ))}
+                  );
+                  return source ? (
+                    <EvidenceChip
+                      key={`${row.source_asset}:${row.label}`}
+                      source={source}
+                      title={`Inspect ${row.source_asset}`}
+                    >
+                      {content}
+                    </EvidenceChip>
+                  ) : (
+                    <span
+                      key={`${row.source_asset}:${row.label}`}
+                      className="campaign-evidence"
+                      aria-label={`${row.label}: evidence destination unavailable`}
+                    >
+                      <span>{row.label}</span>
+                      <strong>{row.value}</strong>
+                      <code>{row.source_asset}</code>
+                    </span>
+                  );
+                })}
               </div>
               {recommendation.warnings.map((warning) => (
                 <div className="muted fs-12" key={warning}>{warning}</div>
@@ -261,7 +275,13 @@ export function CampaignSetupPanel({
         </div>
         <div className="campaign-setup__meta">
           <span>Email → SMS after 3 days → direct mail after 10 days</span>
-          <span><Link to="/admin-config#data-operations">Admin Data Operations</Link> shows refresh status.</span>
+          <span>
+            {canAccessAdmin ? (
+              <><Link to="/admin-config#data-operations">Admin Data Operations</Link> shows refresh status.</>
+            ) : (
+              <>Contact an administrator to review refresh status.</>
+            )}
+          </span>
           <span>Tue-Thu · borrower local time</span>
         </div>
       </div>

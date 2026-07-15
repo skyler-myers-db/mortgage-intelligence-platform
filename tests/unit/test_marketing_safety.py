@@ -294,14 +294,32 @@ def test_outreach_campaign_metadata_ids_are_public_safe() -> None:
     assert (
         OutreachDraftRequest(
             borrower_id="B-48291",
+            campaign_id="11111111-1111-4111-8111-111111111111",
             variant_name="Refi Pilot A",
         ).variant_name
         == "Refi Pilot A"
     )
-    with pytest.raises(ValidationError, match="id must not contain"):
+    with pytest.raises(ValidationError, match="valid UUID"):
         OutreachDraftRequest(
             borrower_id="B-48291",
             campaign_id="jane@example.com",
+            variant_name="Refi Pilot A",
+        )
+    with pytest.raises(ValidationError, match="supplied together"):
+        OutreachDraftRequest(
+            borrower_id="B-48291",
+            campaign_id="11111111-1111-4111-8111-111111111111",
+        )
+    with pytest.raises(ValidationError, match="supplied together"):
+        OutreachApproveRequest(
+            borrower_id="B-48291",
+            variant_name="Refi Pilot A",
+        )
+    with pytest.raises(ValidationError, match="supplied together"):
+        OutreachRejectRequest(
+            borrower_id="B-48291",
+            campaign_id="11111111-1111-4111-8111-111111111111",
+            rationale_code="low_intent",
         )
     with pytest.raises(ValidationError, match="variant_name"):
         OutreachDraftRequest(

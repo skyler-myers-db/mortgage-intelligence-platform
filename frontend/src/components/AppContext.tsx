@@ -68,6 +68,9 @@ interface AppCtxValue {
   setShowConfidence: (v: boolean) => void;
   consoleOpen: boolean;
   setConsoleOpen: (v: boolean) => void;
+  recentActivityFocusRequest: number;
+  openConsoleRecentActivity: () => void;
+  acknowledgeRecentActivityFocus: () => void;
   drawer: DrawerSource | null;
   setDrawer: (d: DrawerSource | null) => void;
   genieOpen: boolean;
@@ -176,6 +179,7 @@ export function AppProvider({ children }: PropsWithChildren) {
   const [consoleOpen, setConsoleOpenState] = useState<boolean>(() =>
     readStoredBool('mip.consoleOpen', false),
   );
+  const [recentActivityFocusRequest, setRecentActivityFocusRequest] = useState(0);
   const [drawer, setDrawer] = useState<DrawerSource | null>(null);
   const [genieOpen, setGenieOpen] = useState(false);
   const [approvals, setApprovals] = useState<Record<string, 'approved' | 'rejected'>>({});
@@ -190,9 +194,10 @@ export function AppProvider({ children }: PropsWithChildren) {
     queryFn: ({ signal }) => api.session(signal),
     retry: false,
   });
-  const canAccessAdmin = sessionQuery.isSuccess
-    && !sessionQuery.isFetching
-    && sessionQuery.data.can_access_admin === true;
+  // TanStack retains the last successful session payload during background
+  // refetches. Authorization-sensitive surfaces therefore fail closed on the
+  // first load without flickering away after access has been established.
+  const canAccessAdmin = sessionQuery.data?.can_access_admin === true;
   const workspaceQuery = useQuery({
     queryKey: [...queryKeys.workspace(), workspaceReloadToken],
     queryFn: ({ signal }) => api.workspace(signal),
@@ -272,6 +277,13 @@ export function AppProvider({ children }: PropsWithChildren) {
   const setAccent = useCallback((a: Accent) => setAccentState(a), []);
   const setDensity = useCallback((d: Density) => setDensityState(d), []);
   const setConsoleOpen = useCallback((v: boolean) => setConsoleOpenState(v), []);
+  const openConsoleRecentActivity = useCallback(() => {
+    setConsoleOpenState(true);
+    setRecentActivityFocusRequest((request) => request + 1);
+  }, []);
+  const acknowledgeRecentActivityFocus = useCallback(() => {
+    setRecentActivityFocusRequest(0);
+  }, []);
   const setApproval = useCallback((borrowerId: string, state: 'approved' | 'rejected') => {
     setApprovals((cur) => ({ ...cur, [borrowerId]: state }));
   }, []);
@@ -416,6 +428,7 @@ export function AppProvider({ children }: PropsWithChildren) {
       showEvidence, setShowEvidence,
       showConfidence, setShowConfidence,
       consoleOpen, setConsoleOpen,
+      recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
       drawer, setDrawer,
       genieOpen, setGenieOpen,
       approvals, setApproval,
@@ -436,6 +449,7 @@ export function AppProvider({ children }: PropsWithChildren) {
     [
       theme, setTheme, accent, setAccent, density, setDensity,
       lender, canAccessAdmin, showEvidence, showConfidence, consoleOpen, setConsoleOpen,
+      recentActivityFocusRequest, openConsoleRecentActivity, acknowledgeRecentActivityFocus,
       drawer, genieOpen, approvals, setApproval,
       lastBorrowerIdState, setLastBorrowerId, clearActorScopedState,
       savedLeads, saveLead, removeSavedLead, isLeadSaved,

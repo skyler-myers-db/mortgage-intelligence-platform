@@ -425,6 +425,32 @@ def mask_address_for_audit(normalized_address: str, zip5: str) -> str:
     return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
 
 
+def mask_source_record_ref(source_system: str, source_record_ref: str) -> str:
+    """Return a tenant-secret opaque token for an external outcome record id.
+
+    CRM/LOS record identifiers are client-supplied and therefore cannot be
+    trusted to remain free of borrower names or other PII.  The API hashes the
+    value before any repository, response, or audit boundary sees it.  The
+    source-system domain separator prevents the same upstream identifier from
+    correlating across connectors while preserving deterministic idempotency
+    within one connector.
+    """
+
+    secret = _id_mask_secret()
+    source = str(source_system or "").strip().lower()
+    record_ref = str(source_record_ref or "").strip()
+    if not source or not record_ref:
+        raise ValueError("source_system and source_record_ref are required")
+    if re.fullmatch(r"auto-[a-f0-9]{32}", record_ref):
+        return record_ref
+    digest = hmac.new(
+        secret.encode(),
+        f"outcome-ref:{source}:{record_ref}".encode(),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"auto-{digest[:32]}"
+
+
 def mask_cotality_id(kind: str, raw: Any) -> str:
     """Return a stable display-safe surrogate for a Cotality identifier.
 

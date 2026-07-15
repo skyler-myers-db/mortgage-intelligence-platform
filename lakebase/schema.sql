@@ -92,6 +92,13 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_campaigns_owner_idempotency
     ON mip_app.campaigns (owner_email, idempotency_key)
     WHERE idempotency_key IS NOT NULL;
 
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_campaign_idempotency',
+    'Add owner-scoped campaign idempotency keys and request payload hashes'
+)
+ON CONFLICT (version) DO NOTHING;
+
 CREATE TABLE IF NOT EXISTS mip_app.campaign_message_variants (
     campaign_id  UUID NOT NULL REFERENCES mip_app.campaigns(campaign_id) ON DELETE CASCADE,
     variant_name TEXT NOT NULL,
@@ -252,6 +259,13 @@ CREATE TABLE IF NOT EXISTS mip_app.call_dispositions (
     request_id     TEXT,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- Recurring schema application may need to install upgraded proof guards.
+-- PostgreSQL DDL is transactional, so a later failure restores the prior
+-- triggers together with the rest of the migration.
+DROP TRIGGER IF EXISTS trg_call_dispositions_finalize_only
+    ON mip_app.call_dispositions;
+DROP TRIGGER IF EXISTS trg_call_dispositions_no_remove
+    ON mip_app.call_dispositions;
 CREATE INDEX IF NOT EXISTS idx_call_dispositions_borrower
     ON mip_app.call_dispositions (borrower_id, occurred_at DESC);
 CREATE INDEX IF NOT EXISTS idx_call_dispositions_lo
@@ -266,7 +280,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_call_dispositions_request_id
 -- can swap to `clip_ref`. `action` is the approve / reject / hold verb.
 CREATE TABLE IF NOT EXISTS mip_app.approvals (
     approval_id   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    campaign_id   UUID REFERENCES mip_app.campaigns(campaign_id) ON DELETE SET NULL,
+    campaign_id   UUID,
+    variant_name  TEXT,
+    channel       TEXT CHECK (channel IN ('email','sms','direct_mail')),
     borrower_id   TEXT NOT NULL,
     offer_code    TEXT,
     action        TEXT NOT NULL CHECK (action IN ('approve','reject','hold')),
@@ -279,6 +295,11 @@ CREATE TABLE IF NOT EXISTS mip_app.approvals (
     audit_event_id UUID,
     decided_at    TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+-- The schema is reapplied transactionally. Drop the proof guards only so
+-- explicit compatibility backfills below can run; they are recreated before
+-- commit. Historical evidence is never deleted by a recurring deployment.
+DROP TRIGGER IF EXISTS trg_approvals_finalize_only ON mip_app.approvals;
+DROP TRIGGER IF EXISTS trg_approvals_no_remove ON mip_app.approvals;
 -- R5-01 idempotency key: when the backend retries an approve/reject after
 -- a lost 503 response, the re-POSTed ``request_id`` collides on this
 -- partial unique index so we don't write a duplicate decision row. The
@@ -295,6 +316,10 @@ ALTER TABLE mip_app.approvals
     ADD COLUMN IF NOT EXISTS decision_response JSONB;
 ALTER TABLE mip_app.approvals
     ADD COLUMN IF NOT EXISTS audit_event_id UUID;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS variant_name TEXT;
+ALTER TABLE mip_app.approvals
+    ADD COLUMN IF NOT EXISTS channel TEXT;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_approvals_request_id
     ON mip_app.approvals (request_id) WHERE request_id IS NOT NULL;
 -- Feature C (loan-officer assignment + follow-up reminder): persist the
@@ -529,6 +554,10 @@ CREATE TABLE IF NOT EXISTS mip_app.lead_outcomes (
         request_id IS NOT NULL OR source_record_ref IS NOT NULL
     )
 );
+DROP TRIGGER IF EXISTS trg_lead_outcomes_finalize_only
+    ON mip_app.lead_outcomes;
+DROP TRIGGER IF EXISTS trg_lead_outcomes_no_remove
+    ON mip_app.lead_outcomes;
 COMMENT ON TABLE mip_app.lead_outcomes IS
     'PII-safe closed-loop lead outcomes imported from customer CRM/LOS/POS/servicing systems.';
 COMMENT ON COLUMN mip_app.lead_outcomes.payload_json IS
@@ -553,6 +582,7 @@ BEGIN
             CHECK (request_id IS NOT NULL OR source_record_ref IS NOT NULL);
     END IF;
 END $$;
+
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -566,6 +596,22 @@ BEGIN
                 competitor_lender_label IS NULL
                 OR competitor_lender_label ~ '^Competitor ([A-Z]|Other)$'
             );
+    END IF;
+END $$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'ck_lead_outcomes_source_record_ref'
+          AND conrelid = 'mip_app.lead_outcomes'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_outcomes
+            ADD CONSTRAINT ck_lead_outcomes_source_record_ref
+            CHECK (
+                source_record_ref IS NULL
+                OR source_record_ref ~ '^auto-[a-f0-9]{32}$'
+            ) NOT VALID;
     END IF;
 END $$;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_lead_outcomes_request_id
@@ -681,9 +727,56 @@ $$;
 
 DROP TRIGGER IF EXISTS trg_action_audit_append_only ON mip_app.action_audit;
 CREATE TRIGGER trg_action_audit_append_only
-    BEFORE UPDATE OR DELETE ON mip_app.action_audit
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.action_audit
     FOR EACH STATEMENT
     EXECUTE FUNCTION mip_app.prevent_action_audit_mutation();
+
+-- Business outcome rows are immutable proof once inserted. Their writers use
+-- one narrow follow-up UPDATE in the same transaction to attach the audit row;
+-- the database permits only that NULL -> non-NULL audit_event_id transition.
+CREATE OR REPLACE FUNCTION mip_app.enforce_audit_event_finalize_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - 'audit_event_id')
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - 'audit_event_id')
+       OR OLD.audit_event_id IS NOT NULL
+       OR NEW.audit_event_id IS NULL THEN
+        RAISE EXCEPTION
+            '%.% is immutable except for one-time audit_event_id finalization',
+            TG_TABLE_SCHEMA, TG_TABLE_NAME
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'call_dispositions_audit_event_id_fkey'
+          AND conrelid = 'mip_app.call_dispositions'::regclass
+    ) THEN
+        ALTER TABLE mip_app.call_dispositions
+            ADD CONSTRAINT call_dispositions_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id)
+            NOT VALID;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'lead_outcomes_audit_event_id_fkey'
+          AND conrelid = 'mip_app.lead_outcomes'::regclass
+    ) THEN
+        ALTER TABLE mip_app.lead_outcomes
+            ADD CONSTRAINT lead_outcomes_audit_event_id_fkey
+            FOREIGN KEY (audit_event_id) REFERENCES mip_app.action_audit(audit_id)
+            NOT VALID;
+    END IF;
+END $$;
 
 DO $$
 BEGIN
@@ -707,7 +800,7 @@ CREATE TABLE IF NOT EXISTS mip_app.generated_outreach_drafts (
     audit_event_id UUID NOT NULL UNIQUE REFERENCES mip_app.action_audit(audit_id),
     actor_email    TEXT NOT NULL,
     borrower_id    TEXT NOT NULL,
-    campaign_id    TEXT,
+    campaign_id    UUID,
     variant_name   TEXT,
     channel        TEXT NOT NULL CHECK (channel IN ('email','sms','direct_mail')),
     offer_code     TEXT NOT NULL,
@@ -716,10 +809,115 @@ CREATE TABLE IF NOT EXISTS mip_app.generated_outreach_drafts (
     response_json  JSONB NOT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Existing immutable triggers are transactionally removed only after their
+-- table exists. The post-seed finalization block restores them before commit.
+DROP TRIGGER IF EXISTS trg_generated_outreach_drafts_immutable
+    ON mip_app.generated_outreach_drafts;
+
+-- Existing deployments stored campaign_id as nullable TEXT. Convert without
+-- losing evidence: NULL remains NULL, while malformed or orphaned non-NULL
+-- values stop the migration before any type change. The exclusive lock closes
+-- the validation/ALTER race with a still-running app process.
+DO $$
+DECLARE
+    campaign_id_type REGTYPE;
+BEGIN
+    SELECT a.atttypid::regtype
+    INTO campaign_id_type
+    FROM pg_attribute a
+    WHERE a.attrelid = 'mip_app.generated_outreach_drafts'::regclass
+      AND a.attname = 'campaign_id'
+      AND NOT a.attisdropped;
+
+    IF campaign_id_type IS DISTINCT FROM 'uuid'::regtype THEN
+        IF campaign_id_type NOT IN ('text'::regtype, 'character varying'::regtype) THEN
+            RAISE EXCEPTION
+                'Unsupported generated_outreach_drafts.campaign_id type: %',
+                campaign_id_type;
+        END IF;
+
+        LOCK TABLE mip_app.generated_outreach_drafts IN ACCESS EXCLUSIVE MODE;
+
+        IF EXISTS (
+            SELECT 1
+            FROM mip_app.generated_outreach_drafts
+            WHERE campaign_id IS NOT NULL
+              AND campaign_id !~* '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+        ) THEN
+            RAISE EXCEPTION
+                'Cannot migrate generated_outreach_drafts.campaign_id: malformed UUID value';
+        END IF;
+
+        IF EXISTS (
+            SELECT 1
+            FROM mip_app.generated_outreach_drafts d
+            LEFT JOIN mip_app.campaigns c
+              ON c.campaign_id = d.campaign_id::uuid
+            WHERE d.campaign_id IS NOT NULL
+              AND c.campaign_id IS NULL
+        ) THEN
+            RAISE EXCEPTION
+                'Cannot migrate generated_outreach_drafts.campaign_id: orphaned campaign reference';
+        END IF;
+
+        ALTER TABLE mip_app.generated_outreach_drafts
+            ALTER COLUMN campaign_id TYPE UUID USING campaign_id::uuid;
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint
+        WHERE conname = 'generated_outreach_drafts_campaign_id_fkey'
+          AND conrelid = 'mip_app.generated_outreach_drafts'::regclass
+          AND confrelid = 'mip_app.campaigns'::regclass
+          AND contype = 'f'
+    ) THEN
+        ALTER TABLE mip_app.generated_outreach_drafts
+            ADD CONSTRAINT generated_outreach_drafts_campaign_id_fkey
+            FOREIGN KEY (campaign_id) REFERENCES mip_app.campaigns(campaign_id);
+    END IF;
+END $$;
+
+-- Remove legacy/simple and previously installed proof constraints inside the
+-- migration transaction. ALTER TABLE locks remain held until commit; the
+-- post-seed suffix recreates and validates the exact constraint set after all
+-- deterministic compatibility updates have completed.
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_campaign_id_fkey;
+ALTER TABLE mip_app.generated_outreach_drafts
+    DROP CONSTRAINT IF EXISTS generated_outreach_drafts_campaign_id_fkey;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_channel_chk;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_channel_required_chk;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_campaign_variant_pair_chk;
+ALTER TABLE mip_app.approvals
+    DROP CONSTRAINT IF EXISTS approvals_campaign_variant_channel_fkey;
+ALTER TABLE mip_app.generated_outreach_drafts
+    DROP CONSTRAINT IF EXISTS generated_outreach_campaign_variant_pair_chk;
+ALTER TABLE mip_app.generated_outreach_drafts
+    DROP CONSTRAINT IF EXISTS generated_outreach_campaign_variant_channel_fkey;
+
 CREATE INDEX IF NOT EXISTS idx_generated_outreach_drafts_actor_created
     ON mip_app.generated_outreach_drafts (actor_email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_generated_outreach_drafts_borrower_created
     ON mip_app.generated_outreach_drafts (borrower_id, created_at DESC);
+
+-- Generated copy and campaign variants are evidence records, not mutable
+-- workspace drafts. The trigger is a second control behind SELECT+INSERT-only
+-- runtime grants and still blocks an owner or accidentally elevated role.
+CREATE OR REPLACE FUNCTION mip_app.prevent_outreach_evidence_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION '%.% is immutable; % is not allowed',
+        TG_TABLE_SCHEMA, TG_TABLE_NAME, TG_OP
+        USING ERRCODE = '42501';
+END;
+$$;
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
@@ -865,6 +1063,10 @@ CREATE TABLE IF NOT EXISTS mip_app.growth_agent_runs (
     audit_event_id   UUID REFERENCES mip_app.action_audit(audit_id),
     created_at       TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+DROP TRIGGER IF EXISTS trg_growth_agent_runs_finalize_only
+    ON mip_app.growth_agent_runs;
+DROP TRIGGER IF EXISTS trg_growth_agent_runs_no_remove
+    ON mip_app.growth_agent_runs;
 ALTER TABLE mip_app.growth_agent_runs
     ADD COLUMN IF NOT EXISTS request_id TEXT;
 ALTER TABLE mip_app.growth_agent_runs
@@ -1096,19 +1298,12 @@ VALUES (
 ON CONFLICT (version) DO NOTHING;
 
 -- ---------------------------------------------------------------------
--- 2026-06-11 audit P1-5: narrative seed used legacy 5-digit borrower IDs
--- (B-48291..B-48295) that violate the B-[0-9A-Z]{13} contract and join
--- to no gold.borrower_360 row — orphaning the "three high-value borrower
--- examples" the Module 0 spec requires and skewing approval-rate
--- metrics. Delete the malformed seed rows (the re-run of
--- seed_campaigns.sql re-inserts the same approval_ids with REAL gold
--- IDs), then enforce the format so malformed IDs can never seed again.
--- The borrower-pattern guard makes the DELETE a no-op on every run after
--- the new seed lands (same approval_ids, but 13-char borrower IDs).
+-- 2026-06-11 audit P1-5: narrative seed used five known 5-digit borrower IDs
+-- that violate the B-[0-9A-Z]{13} contract. Preserve those approval rows and
+-- map only the exact stable approval-id/legacy-id pairs to the reviewed gold
+-- borrower ids. Any other malformed historical row makes validation fail and
+-- rolls back the whole deployment; recurring schema apply never deletes it.
 -- ---------------------------------------------------------------------
-DELETE FROM mip_app.approvals
-WHERE borrower_id ~ '^B-[0-9]{5}$';
-
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -1116,71 +1311,49 @@ BEGIN
         WHERE conname = 'approvals_borrower_id_format_chk'
           AND conrelid = 'mip_app.approvals'::regclass
     ) THEN
-        -- NOT VALID: enforce the format on every NEW write immediately,
-        -- without letting one unexpected legacy row fail the whole
-        -- migrate job (deploy step 4b). The block below upgrades to a
-        -- fully-validated constraint once the table is clean.
+        -- NOT VALID enforces the format on new writes while the deterministic
+        -- compatibility update below repairs the five reviewed seed rows.
         ALTER TABLE mip_app.approvals
             ADD CONSTRAINT approvals_borrower_id_format_chk
             CHECK (borrower_id ~ '^B-[0-9A-Z]{13}$') NOT VALID;
     END IF;
 END $$;
 
-DO $$
-BEGIN
-    ALTER TABLE mip_app.approvals
-        VALIDATE CONSTRAINT approvals_borrower_id_format_chk;
-EXCEPTION WHEN OTHERS THEN
-    RAISE NOTICE 'approvals_borrower_id_format_chk left NOT VALID (new writes still enforced): %', SQLERRM;
-END $$;
+WITH legacy_seed_approval_map (approval_id, legacy_borrower_id, borrower_id) AS (
+    VALUES
+        ('44444444-4444-4444-8444-444444444441'::uuid, 'B-48291', 'B-0CPWBTJMAPFY2'),
+        ('44444444-4444-4444-8444-444444444442'::uuid, 'B-48294', 'B-1IB0UGBTFYM20'),
+        ('44444444-4444-4444-8444-444444444443'::uuid, 'B-48295', 'B-102FL7THC6Q3L'),
+        ('44444444-4444-4444-8444-444444444444'::uuid, 'B-48292', 'B-1BCZXFQYCX715'),
+        ('44444444-4444-4444-8444-444444444445'::uuid, 'B-48293', 'B-1VU4FO4XBQPC4')
+)
+UPDATE mip_app.approvals AS approval
+SET borrower_id = mapping.borrower_id
+FROM legacy_seed_approval_map AS mapping
+WHERE approval.approval_id = mapping.approval_id
+  AND approval.borrower_id = mapping.legacy_borrower_id;
+
+ALTER TABLE mip_app.approvals
+    VALIDATE CONSTRAINT approvals_borrower_id_format_chk;
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_06_11_narrative_seed_real_ids',
-    'Audit P1-5: purge legacy 5-digit seed approvals; CHECK borrower_id ~ ^B-[0-9A-Z]{13}$; seed re-inserts canonical trio with real gold borrower_360 IDs'
+    'Audit P1-5: deterministically map five legacy seed borrower ids and validate borrower_id ~ ^B-[0-9A-Z]{13}$ without deleting approvals'
 )
 ON CONFLICT (version) DO NOTHING;
 
 -- ---------------------------------------------------------------------
--- Re-audit #3 P3 (2026-06-12): ~28 approvals accumulated from April/May
--- dev sessions (50d/30d old at audit time) surfaced in the stale-approved
--- queue as "aging" rows — test detritus reading as operational neglect at
--- the booth. Purge operational STATE older than the demo-prep era
--- (2026-06-01), keeping the five canonical narrative approvals from
--- seed_campaigns.sql. The immutable mip_app.action_audit event log is
--- deliberately untouched — history stays reconstructable; this clears
--- workflow state only. activation_outbox rows referencing purged
--- approvals go first (FK activation_outbox_approval_fk). Naturally
--- idempotent: re-runs match zero rows, and post-purge approvals all
--- carry decided_at >= the cutoff.
+-- Re-audit #3 P3 (2026-06-12) originally purged pre-demo approvals here.
+-- That behavior is intentionally retired: age and fixed identifiers cannot
+-- distinguish test data from a legitimate customer decision. Operational
+-- cleanup must be an explicit, separately authorized retention workflow.
 -- ---------------------------------------------------------------------
-DELETE FROM mip_app.activation_outbox
-WHERE approval_id IN (
-    SELECT approval_id FROM mip_app.approvals
-    WHERE decided_at < TIMESTAMPTZ '2026-06-01 00:00:00+00'
-      AND approval_id NOT IN (
-        '44444444-4444-4444-8444-444444444441',
-        '44444444-4444-4444-8444-444444444442',
-        '44444444-4444-4444-8444-444444444443',
-        '44444444-4444-4444-8444-444444444444',
-        '44444444-4444-4444-8444-444444444445'
-      )
-);
-
-DELETE FROM mip_app.approvals
-WHERE decided_at < TIMESTAMPTZ '2026-06-01 00:00:00+00'
-  AND approval_id NOT IN (
-    '44444444-4444-4444-8444-444444444441',
-    '44444444-4444-4444-8444-444444444442',
-    '44444444-4444-4444-8444-444444444443',
-    '44444444-4444-4444-8444-444444444444',
-    '44444444-4444-4444-8444-444444444445'
-  );
 
 INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_06_12_purge_dev_session_approvals',
-    'Re-audit #3 P3: purge pre-2026-06-01 dev-session approvals (and their activation_outbox rows) so the stale-approved queue shows demo-era state only; canonical narrative five kept; action_audit untouched'
+    'Retired unsafe age-based approval/outbox purge; recurring schema apply preserves all workflow and proof rows'
 )
 ON CONFLICT (version) DO NOTHING;
 
@@ -1433,5 +1606,257 @@ INSERT INTO mip_app.schema_migrations (version, description)
 VALUES (
     '2026_07_13_native_genie_feedback',
     'Durable actor/message-owned native Genie feedback intents with replay-safe request ids and audited delivery state'
+)
+ON CONFLICT (version) DO NOTHING;
+
+-- MIP_LAKEBASE_POST_SEED_BEGIN
+-- jobs/lakebase_migrate.py executes the deterministic seed immediately before
+-- this suffix, in the same transaction. That ordering makes reviewed campaign
+-- variants available for legacy proof backfills before hard validation.
+
+-- Upgrade historical campaign evidence only when the missing value has one
+-- possible immutable variant. Ambiguous or orphaned history remains unchanged
+-- and fails the explicit proof check below before the deployment can commit.
+WITH unique_campaign_variant AS (
+    SELECT campaign_id, MIN(variant_name) AS variant_name, MIN(channel) AS channel
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.approvals AS approval
+SET variant_name = variant.variant_name,
+    channel = variant.channel
+FROM unique_campaign_variant AS variant
+WHERE approval.campaign_id = variant.campaign_id
+  AND approval.variant_name IS NULL
+  AND approval.channel IS NULL;
+
+WITH unique_named_variant AS (
+    SELECT campaign_id, variant_name, MIN(channel) AS channel
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id, variant_name
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.approvals AS approval
+SET channel = variant.channel
+FROM unique_named_variant AS variant
+WHERE approval.campaign_id = variant.campaign_id
+  AND approval.variant_name = variant.variant_name
+  AND approval.channel IS NULL;
+
+WITH unique_channel_variant AS (
+    SELECT campaign_id, channel, MIN(variant_name) AS variant_name
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id, channel
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.approvals AS approval
+SET variant_name = variant.variant_name
+FROM unique_channel_variant AS variant
+WHERE approval.campaign_id = variant.campaign_id
+  AND approval.channel = variant.channel
+  AND approval.variant_name IS NULL;
+
+WITH unique_channel_variant AS (
+    SELECT campaign_id, channel, MIN(variant_name) AS variant_name
+    FROM mip_app.campaign_message_variants
+    GROUP BY campaign_id, channel
+    HAVING COUNT(*) = 1
+)
+UPDATE mip_app.generated_outreach_drafts AS draft
+SET variant_name = variant.variant_name
+FROM unique_channel_variant AS variant
+WHERE draft.campaign_id = variant.campaign_id
+  AND draft.channel = variant.channel
+  AND draft.variant_name IS NULL;
+
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_channel_chk
+    CHECK (channel IN ('email','sms','direct_mail')) NOT VALID;
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_channel_required_chk
+    CHECK (campaign_id IS NULL OR channel IS NOT NULL) NOT VALID;
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_campaign_variant_pair_chk
+    CHECK ((campaign_id IS NULL) = (variant_name IS NULL)) NOT VALID;
+ALTER TABLE mip_app.generated_outreach_drafts
+    ADD CONSTRAINT generated_outreach_campaign_variant_pair_chk
+    CHECK ((campaign_id IS NULL) = (variant_name IS NULL)) NOT VALID;
+ALTER TABLE mip_app.approvals
+    ADD CONSTRAINT approvals_campaign_variant_channel_fkey
+    FOREIGN KEY (campaign_id, variant_name, channel)
+    REFERENCES mip_app.campaign_message_variants(campaign_id, variant_name, channel)
+    NOT VALID;
+ALTER TABLE mip_app.generated_outreach_drafts
+    ADD CONSTRAINT generated_outreach_campaign_variant_channel_fkey
+    FOREIGN KEY (campaign_id, variant_name, channel)
+    REFERENCES mip_app.campaign_message_variants(campaign_id, variant_name, channel)
+    NOT VALID;
+
+DO $$
+BEGIN
+    IF EXISTS (
+        SELECT 1
+        FROM mip_app.approvals AS approval
+        WHERE (approval.campaign_id IS NULL) <> (approval.variant_name IS NULL)
+           OR (approval.campaign_id IS NOT NULL AND approval.channel IS NULL)
+           OR (
+               approval.campaign_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM mip_app.campaign_message_variants AS variant
+                   WHERE variant.campaign_id = approval.campaign_id
+                     AND variant.variant_name = approval.variant_name
+                     AND variant.channel = approval.channel
+               )
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot validate approval proof binding: legacy rows are ambiguous or orphaned';
+    END IF;
+
+    IF EXISTS (
+        SELECT 1
+        FROM mip_app.generated_outreach_drafts AS draft
+        WHERE (draft.campaign_id IS NULL) <> (draft.variant_name IS NULL)
+           OR (
+               draft.campaign_id IS NOT NULL
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM mip_app.campaign_message_variants AS variant
+                   WHERE variant.campaign_id = draft.campaign_id
+                     AND variant.variant_name = draft.variant_name
+                     AND variant.channel = draft.channel
+               )
+           )
+    ) THEN
+        RAISE EXCEPTION
+            'Cannot validate generated outreach binding: legacy rows are ambiguous or orphaned';
+    END IF;
+
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_channel_chk;
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_channel_required_chk;
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_campaign_variant_pair_chk;
+    ALTER TABLE mip_app.approvals VALIDATE CONSTRAINT approvals_campaign_variant_channel_fkey;
+    ALTER TABLE mip_app.call_dispositions
+        VALIDATE CONSTRAINT call_dispositions_audit_event_id_fkey;
+    ALTER TABLE mip_app.lead_outcomes
+        VALIDATE CONSTRAINT lead_outcomes_audit_event_id_fkey;
+    ALTER TABLE mip_app.generated_outreach_drafts
+        VALIDATE CONSTRAINT generated_outreach_campaign_variant_pair_chk;
+    ALTER TABLE mip_app.generated_outreach_drafts
+        VALIDATE CONSTRAINT generated_outreach_campaign_variant_channel_fkey;
+END $$;
+
+CREATE TRIGGER trg_generated_outreach_drafts_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.generated_outreach_drafts
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+DROP TRIGGER IF EXISTS trg_campaign_message_variants_immutable
+    ON mip_app.campaign_message_variants;
+CREATE TRIGGER trg_campaign_message_variants_immutable
+    BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.campaign_message_variants
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+-- Approval decisions are evidence. The app needs one narrowly-scoped UPDATE
+-- to atomically attach the response and audit row after the idempotent INSERT;
+-- every business/proof-binding column is immutable, and removal is forbidden.
+CREATE OR REPLACE FUNCTION mip_app.enforce_approval_finalize_only()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    IF (to_jsonb(NEW) - ARRAY['decision_response', 'audit_event_id'])
+       IS DISTINCT FROM
+       (to_jsonb(OLD) - ARRAY['decision_response', 'audit_event_id'])
+       OR OLD.decision_response IS NOT NULL
+       OR OLD.audit_event_id IS NOT NULL
+       OR NEW.decision_response IS NULL
+       OR NEW.audit_event_id IS NULL THEN
+        RAISE EXCEPTION
+            'mip_app.approvals is immutable except for its one-time audit finalization'
+            USING ERRCODE = '42501';
+    END IF;
+    RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER trg_approvals_finalize_only
+    BEFORE UPDATE ON mip_app.approvals
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_approval_finalize_only();
+
+CREATE TRIGGER trg_approvals_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.approvals
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+CREATE TRIGGER trg_call_dispositions_finalize_only
+    BEFORE UPDATE ON mip_app.call_dispositions
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_audit_event_finalize_only();
+
+CREATE TRIGGER trg_call_dispositions_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.call_dispositions
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+CREATE TRIGGER trg_lead_outcomes_finalize_only
+    BEFORE UPDATE ON mip_app.lead_outcomes
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_audit_event_finalize_only();
+
+CREATE TRIGGER trg_lead_outcomes_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.lead_outcomes
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+-- Growth-agent runs are born terminal in the current contract. Preserve every
+-- completed/failed result and its evidence, allowing only the same one-time
+-- audit attachment used by the runtime transaction.
+CREATE TRIGGER trg_growth_agent_runs_finalize_only
+    BEFORE UPDATE ON mip_app.growth_agent_runs
+    FOR EACH ROW
+    EXECUTE FUNCTION mip_app.enforce_audit_event_finalize_only();
+
+CREATE TRIGGER trg_growth_agent_runs_no_remove
+    BEFORE DELETE OR TRUNCATE ON mip_app.growth_agent_runs
+    FOR EACH STATEMENT
+    EXECUTE FUNCTION mip_app.prevent_outreach_evidence_mutation();
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_outreach_evidence_immutability',
+    'Convert generated draft campaign ids to governed UUID foreign keys and make generated drafts and campaign variants immutable'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_outreach_variant_binding',
+    'Deterministically bind legacy outreach proof to one exact variant and validate every proof constraint'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_approval_proof_guards',
+    'Require channels for campaign-bound approvals, preserve campaign-less legacy proof, allow only one-time audit finalization, and block proof removal'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_outcome_and_agent_run_immutability',
+    'Make call dispositions, lead outcomes, and terminal growth-agent runs immutable except for one-time audit linkage'
+)
+ON CONFLICT (version) DO NOTHING;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_14_hmac_outcome_source_reference',
+    'Enforce HMAC-derived auto-<32 lowercase hex> lead outcome source references on new and updated rows while preserving legacy history'
 )
 ON CONFLICT (version) DO NOTHING;

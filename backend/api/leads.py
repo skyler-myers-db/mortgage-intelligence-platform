@@ -16,14 +16,47 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
 
 from backend.schemas._validators import normalize_public_lender_ref
-from backend.schemas.common import validate_internal_staff_email, validate_public_borrower_id
+from backend.schemas.common import validate_internal_staff_email
 from backend.schemas.lead import SEGMENT_CODE_VALUES, LeadSummary
 from backend.schemas.portfolio import PortfolioCriteria
 from backend.services.audit_store import AuditStore, get_audit_store, resolve_actor
 from backend.services.lakebase import LakebaseError, get_lakebase_client
+from backend.services.lead_query_helpers import (
+    cohort_list as _cohort_list,
+)
+from backend.services.lead_query_helpers import (
+    cohort_segment_mode as _cohort_segment_mode,
+)
+from backend.services.lead_query_helpers import (
+    parse_borrower_ids as _parse_borrower_ids,
+)
+from backend.services.lead_query_helpers import (
+    parse_csv_filter as _parse_csv_filter,
+)
+from backend.services.lead_query_helpers import (
+    parse_segment_codes as _parse_segment_codes,
+)
+from backend.services.lead_query_helpers import (
+    parse_segment_mode as _parse_segment_mode,
+)
+from backend.services.lead_query_helpers import (
+    portfolio_criteria_from_query as _portfolio_criteria_from_query,
+)
+from backend.services.lead_query_helpers import (
+    requires_marketing_override_admin as _requires_marketing_override_admin,
+)
 from backend.services.observability import emit
 from backend.services.rbac import require_admin
 from backend.services.repositories import LeadRepository, get_lead_repository
+from backend.services.repositories.databricks_lead_cohorts import (
+    GrowthAgentHandoffInvalid,
+    GrowthAgentHandoffProof,
+    GrowthAgentHandoffStale,
+    LeadCohortFilters,
+    normalise_lead_queue_handoff_filters,
+    validate_growth_agent_handoff_identity,
+    verify_growth_agent_handoff,
+)
 from backend.services.sales_state import (
     SalesStateStore,
     get_sales_state_store,
@@ -86,127 +119,6 @@ def _safe_audit_write(store: AuditStore, **kwargs: object) -> None:
         )
 
 
-def _parse_csv_filter(
-    raw: str | None,
-    *,
-    width: int,
-    label: str,
-    numeric: bool = False,
-) -> list[str] | None:
-    if raw is None:
-        return None
-    values = [part.strip().upper() for part in raw.split(",") if part.strip()]
-    if not values:
-        return None
-    seen: set[str] = set()
-    out: list[str] = []
-    for value in values:
-        valid_chars = value.isdigit() if numeric else value.isalpha()
-        if len(value) != width or not valid_chars:
-            raise HTTPException(
-                status_code=422,
-                detail=f"{label} must be comma-separated {width}-character values",
-            )
-        if value not in seen:
-            seen.add(value)
-            out.append(value)
-    return out
-
-
-def _parse_segment_codes(raw: str | None) -> list[str] | None:
-    if raw is None:
-        return None
-    out: list[str] = []
-    for part in raw.split(","):
-        code = part.strip().lower()
-        if not code:
-            continue
-        if code not in _ALLOWED_SEGMENT_CODES:
-            raise HTTPException(status_code=422, detail="segment_codes contains an unknown segment")
-        if code not in out:
-            out.append(code)
-    return out or None
-
-
-def _parse_segment_mode(raw: str) -> Literal["any", "all"]:
-    mode = raw.strip().lower()
-    if mode not in {"any", "all"}:
-        raise HTTPException(status_code=422, detail="segment_mode must be any or all")
-    return mode
-
-
-def _parse_borrower_ids(raw: str | None) -> list[str] | None:
-    if raw is None:
-        return None
-    out: list[str] = []
-    for value in raw.split(","):
-        borrower_id = value.strip()
-        if not borrower_id:
-            continue
-        try:
-            borrower_id = validate_public_borrower_id(borrower_id)
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=422,
-                detail="borrower_ids must be comma-separated synthetic B-* ids",
-            ) from exc
-        if borrower_id not in out:
-            out.append(borrower_id)
-    return out or None
-
-
-def _cohort_list(
-    filters: dict[str, object],
-    key: str,
-    *,
-    width: int | None = None,
-    numeric: bool = False,
-    borrower_ids: bool = False,
-) -> list[str] | None:
-    raw = filters.get(key)
-    if raw is None:
-        return None
-    if not isinstance(raw, list):
-        raise HTTPException(status_code=422, detail=f"cohort {key} filter is invalid")
-    out: list[str] = []
-    for value in raw:
-        text = str(value).strip()
-        if not text:
-            continue
-        if borrower_ids:
-            try:
-                normalized = validate_public_borrower_id(text)
-            except ValueError as exc:
-                raise HTTPException(
-                    status_code=422,
-                    detail="cohort borrower_ids filter is invalid",
-                ) from exc
-        else:
-            normalized = text.upper()
-            if width is not None:
-                valid_chars = normalized.isdigit() if numeric else normalized.isalpha()
-                if len(normalized) != width or not valid_chars:
-                    raise HTTPException(
-                        status_code=422,
-                        detail=f"cohort {key} filter is invalid",
-                    )
-        if normalized not in out:
-            out.append(normalized)
-    return out or None
-
-
-def _cohort_segment_mode(filters: dict[str, object]) -> str:
-    raw = filters.get("segment_mode")
-    if raw is None:
-        return "any"
-    if not isinstance(raw, str):
-        raise HTTPException(status_code=422, detail="cohort segment_mode filter is invalid")
-    normalized = raw.strip().lower()
-    if normalized not in {"any", "all"}:
-        raise HTTPException(status_code=422, detail="cohort segment_mode filter is invalid")
-    return normalized
-
-
 def _load_cohort_filters(cohort_id: str, *, actor: str) -> dict[str, object]:
     try:
         row = get_lakebase_client().fetchone(
@@ -226,80 +138,6 @@ def _load_cohort_filters(cohort_id: str, *, actor: str) -> dict[str, object]:
     if not isinstance(filters_raw, dict):
         raise HTTPException(status_code=422, detail="cohort route filters are invalid")
     return filters_raw
-
-
-def _portfolio_criteria_from_query(
-    *,
-    geography: str | None,
-    occupancy: str | None,
-    lien_status: str | None,
-    lender_relationship: str | None,
-    product: str | None,
-    target_lender_ref: str | None,
-    loan_product: str | None = None,
-    origination_channel: str | None = None,
-    min_equity_pct_label: str | None,
-    min_equity_pct: float | None,
-    owner_link: str | None = None,
-    purchase_intent: str | None = None,
-    marketing_eligibility: str | None = None,
-    consent_status: str | None = None,
-    recency: str | None = None,
-) -> PortfolioCriteria | None:
-    fields: dict[str, object] = {}
-    if geography:
-        fields["geography"] = geography
-    if occupancy:
-        fields["occupancy"] = occupancy
-    if lien_status:
-        fields["lien_status"] = lien_status
-    if lender_relationship:
-        fields["lender_relationship"] = lender_relationship
-    if product:
-        fields["product"] = product
-    if loan_product:
-        fields["loan_product"] = loan_product
-    if origination_channel:
-        fields["origination_channel"] = origination_channel
-    if target_lender_ref:
-        fields["target_lender_ref"] = target_lender_ref
-    if min_equity_pct_label:
-        fields["min_equity_pct_label"] = min_equity_pct_label
-    if min_equity_pct is not None:
-        fields["min_equity_pct"] = min_equity_pct
-    if owner_link:
-        fields["owner_link"] = owner_link
-    if purchase_intent:
-        fields["purchase_intent"] = purchase_intent
-    if marketing_eligibility:
-        fields["marketing_eligibility"] = marketing_eligibility
-    if consent_status:
-        fields["consent_status"] = consent_status
-    if recency:
-        fields["recency"] = recency
-    if not fields:
-        return None
-    return PortfolioCriteria(**fields)
-
-
-def _requires_marketing_override_admin(
-    *,
-    marketing_eligibility: str | None,
-    consent_status: str | None,
-    include_suppressed_for_analytics: bool = False,
-) -> bool:
-    """Return true when a lead-list request may expose suppressed rows."""
-
-    def normalize(value: str | None) -> str:
-        return (value or "").strip().lower().replace("_", " ").replace("-", " ")
-
-    if include_suppressed_for_analytics:
-        return True
-    normalized_marketing = normalize(marketing_eligibility or "Eligible only")
-    normalized_consent = normalize(consent_status)
-    if normalized_marketing and normalized_marketing not in {"eligible only", "eligible"}:
-        return True
-    return normalized_consent in {"opt out", "unknown"}
 
 
 @router.get("/leads", response_model=list[LeadSummary])
@@ -538,6 +376,16 @@ def list_leads(
             ),
         ),
     ] = False,
+    include_identity_proof: Annotated[
+        bool,
+        Query(
+            alias="include_identity_proof",
+            description=(
+                "Admin/evaluation-only complete-cohort digest and snapshot headers. "
+                "Disabled by default because it performs an aggregate proof query."
+            ),
+        ),
+    ] = False,
     approval_status: Annotated[
         Literal["pending", "approved", "rejected", "hold", "any"],
         Query(alias="approval_status", description="Sales workflow approval state filter."),
@@ -605,6 +453,12 @@ def list_leads(
         segment = segment.strip().lower()
         if segment not in _ALLOWED_SEGMENT_CODES:
             raise HTTPException(status_code=422, detail="segment contains an unknown segment")
+    handoff_values = request.query_params.getlist("growth_handoff")
+    if len(handoff_values) > 1:
+        raise HTTPException(status_code=422, detail="Growth Agent handoff proof is invalid")
+    growth_handoff = handoff_values[0].strip() if handoff_values else None
+    if growth_handoff and len(growth_handoff) > 4096:
+        raise HTTPException(status_code=422, detail="Growth Agent handoff proof is invalid")
     effective_marketing_eligibility = marketing_eligibility
     if include_suppressed_for_analytics:
         effective_marketing_eligibility = None
@@ -612,11 +466,18 @@ def list_leads(
     if funnel_stage and funnel_stage not in _ALLOWED_FUNNEL_STAGES:
         raise HTTPException(status_code=422, detail="funnel_stage contains an unknown stage")
 
-    if _requires_marketing_override_admin(
+    if growth_handoff and cohort_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Growth Agent handoff cannot be combined with a persisted cohort",
+        )
+    if not growth_handoff and _requires_marketing_override_admin(
         marketing_eligibility=effective_marketing_eligibility,
         consent_status=consent_status,
         include_suppressed_for_analytics=include_suppressed_for_analytics,
     ):
+        require_admin(request)
+    if include_identity_proof and not growth_handoff:
         require_admin(request)
     actor = resolve_actor(request)
     parsed_segments = _parse_segment_codes(segment_codes)
@@ -624,6 +485,11 @@ def list_leads(
     parsed_zips = _parse_csv_filter(zips, width=5, label="zips", numeric=True)
     parsed_counties = _parse_csv_filter(counties, width=5, label="counties", numeric=True)
     parsed_borrower_ids = _parse_borrower_ids(borrower_ids)
+    if growth_handoff and (assigned_to or parsed_borrower_ids):
+        raise HTTPException(
+            status_code=422,
+            detail="Growth Agent handoff cannot contain borrower or assignee filters",
+        )
     assignment_filter_ids: list[str] | None = None
     if assigned_to:
         try:
@@ -779,59 +645,104 @@ def list_leads(
             detail="cohort has no replayable lead filters",
         )
 
-    leads = repo.list(
-        segment=segment,
-        portfolio_id=portfolio_id,
-        limit=limit,
-        state=state,
-        zip_code=zip_code,
-        county_fips=county,
-        state_codes=parsed_states,
-        zip_codes=parsed_zips,
-        borrower_ids=parsed_borrower_ids,
-        segment_codes=parsed_segments,
-        segment_mode=segment_mode,
-        target_lender_ref=target_lender_ref,
-        cohort_id=cohort_id,
-        funnel_stage=funnel_stage,
-        approval_status=None if approval_status == "any" else approval_status,
-        outreach_status=None if outreach_status == "any" else outreach_status,
-        aged_days=aged_days,
+    repository_args: dict[str, object] = {
+        "segment": segment,
+        "portfolio_id": portfolio_id,
+        "state": state,
+        "zip_code": zip_code,
+        "county_fips": county,
+        "state_codes": parsed_states,
+        "zip_codes": parsed_zips,
+        "borrower_ids": parsed_borrower_ids,
+        "segment_codes": parsed_segments,
+        "segment_mode": segment_mode,
+        "target_lender_ref": target_lender_ref,
+        "cohort_id": cohort_id,
+        "funnel_stage": funnel_stage,
+        "approval_status": None if approval_status == "any" else approval_status,
+        "outreach_status": None if outreach_status == "any" else outreach_status,
+        "aged_days": aged_days,
         **repo_kwargs,
-    )
+    }
+    handoff_proof: GrowthAgentHandoffProof | None = None
+    normalized_handoff_filters: dict[str, object] | None = None
+    if growth_handoff:
+        try:
+            normalized_handoff_filters = normalise_lead_queue_handoff_filters(
+                LeadCohortFilters(
+                    segment=segment,
+                    state=state,
+                    zip_code=zip_code,
+                    county_fips=county,
+                    county_fipses=parsed_counties,
+                    state_codes=parsed_states,
+                    zip_codes=parsed_zips,
+                    borrower_ids=parsed_borrower_ids,
+                    segment_codes=parsed_segments,
+                    segment_mode=segment_mode,
+                    target_lender_ref=target_lender_ref,
+                    funnel_stage=funnel_stage,
+                    portfolio_criteria=portfolio_criteria,
+                    approval_status=None if approval_status == "any" else approval_status,
+                    outreach_status=None if outreach_status == "any" else outreach_status,
+                    aged_days=aged_days,
+                )
+            )
+            handoff_proof = verify_growth_agent_handoff(
+                growth_handoff,
+                actor=actor,
+                normalized_filters=normalized_handoff_filters,
+            )
+        except GrowthAgentHandoffStale as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except (GrowthAgentHandoffInvalid, ValueError) as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except RuntimeError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Growth Agent handoff verification is unavailable",
+            ) from exc
+    identity: dict[str, str | int] | None = None
+    if include_identity_proof or handoff_proof is not None:
+        list_with_identity = getattr(repo, "list_with_identity", None)
+        if not callable(list_with_identity):
+            raise HTTPException(
+                status_code=503,
+                detail="Lead Queue cohort identity proof is unavailable",
+            )
+        try:
+            leads, identity = list_with_identity(limit=limit, **repository_args)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail="Lead Queue cohort identity proof is incomplete",
+            ) from exc
+        if handoff_proof is not None:
+            try:
+                validate_growth_agent_handoff_identity(handoff_proof, identity)
+            except GrowthAgentHandoffStale as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+        total_matching = int(identity.get("total") or 0)
+    else:
+        leads = repo.list(limit=limit, **repository_args)
+        count_fn = getattr(repo, "count", None)
+        # Test-local repositories and external connectors may implement only
+        # the list contract. Production reports the complete cohort count.
+        total_matching = count_fn(**repository_args) if callable(count_fn) else len(leads)
+
     try:
         leads = hydrate_leads_with_sales_state(leads, sales_state, actor=actor)
     except LakebaseError as exc:
         raise HTTPException(status_code=503, detail="Lakebase temporarily unavailable") from exc
-    count_fn = getattr(repo, "count", None)
-    if callable(count_fn):
-        total_matching = count_fn(
-            segment=segment,
-            portfolio_id=portfolio_id,
-            state=state,
-            zip_code=zip_code,
-            county_fips=county,
-            state_codes=parsed_states,
-            zip_codes=parsed_zips,
-            borrower_ids=parsed_borrower_ids,
-            segment_codes=parsed_segments,
-            segment_mode=segment_mode,
-            target_lender_ref=target_lender_ref,
-            cohort_id=cohort_id,
-            funnel_stage=funnel_stage,
-            approval_status=None if approval_status == "any" else approval_status,
-            outreach_status=None if outreach_status == "any" else outreach_status,
-            aged_days=aged_days,
-            **repo_kwargs,
-        )
-    else:
-        # Test-local repositories and external connectors may implement only
-        # the list contract. The production Databricks repository implements
-        # count; use the returned row count as a lower-bound only when the
-        # dependency cannot report a cohort total.
-        total_matching = len(leads)
     response.headers["X-Total-Matching"] = str(total_matching)
     response.headers["X-Returned-Rows"] = str(len(leads))
+    if identity is not None:
+        response.headers["X-Cohort-Snapshot-ID"] = str(identity["snapshot_id"])
+        if include_identity_proof:
+            response.headers["X-Cohort-Digest"] = str(identity["cohort_digest"])
+    if handoff_proof is not None:
+        response.headers["X-Cohort-Fingerprint"] = handoff_proof.cohort_fingerprint
+        response.headers["X-Growth-Agent-Run-ID"] = handoff_proof.run_id
     # When the result set hit the requested cap, advertise the truncation
     # explicitly so the frontend can tell "exactly N" vs "N and there's
     # more you didn't see". We can't distinguish at this layer between
@@ -879,7 +790,6 @@ def list_leads(
     portfolio_payload = portfolio_criteria.model_dump(exclude_none=True) if portfolio_criteria else {}
     if portfolio_payload:
         audit_payload["portfolio_criteria"] = portfolio_payload
-
     background.add_task(
         _safe_audit_write,
         audit,

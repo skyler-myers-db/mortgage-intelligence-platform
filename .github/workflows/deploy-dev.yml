@@ -95,38 +95,46 @@ jobs:
             fi
           } > .env.local
           chmod 600 .env.local
-      - name: Mint deployed app bearer for smoke
-        if: ${{ inputs.skip_smoke == false }}
+      - name: Mint initial per-run app Bearers
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
-          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET; do
+          for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+                   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET; do
             if [ -z "${!v:-}" ]; then
               missing="$missing $v"
             fi
           done
           if [ -n "$missing" ]; then
-            echo "::error::Missing required M2M OAuth secret(s) for deployed smoke:$missing"
+            echo "::error::Missing required per-run M2M OAuth secret(s):$missing"
             exit 1
           fi
-          bearer="$(python tools/oauth_m2m_mint.py)"
-          if [ -z "$bearer" ]; then
-            echo "::error::M2M bearer token was empty"
+          if [ "$DATABRICKS_CLIENT_ID" = "$DATABRICKS_ADMIN_CLIENT_ID" ]; then
+            echo "::error::Normal and admin M2M client IDs must be distinct."
             exit 1
           fi
-          echo "::add-mask::$bearer"
-          echo "MIP_BEARER_TOKEN=$bearer" >> "$GITHUB_ENV"
+          python tools/oauth_m2m_mint.py --github-env MIP_BEARER_TOKEN
+          python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_ADMIN_CLIENT_ID \
+            --client-secret-env DATABRICKS_ADMIN_CLIENT_SECRET \
+            --github-env MIP_ADMIN_BEARER_TOKEN
       - name: Deploy dev Databricks App
         env:
           DATABRICKS_AUTH_TYPE: pat
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
-          MIP_ADMIN_BEARER_TOKEN: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
+          DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
+          DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
           MIP_COTALITY_ID_MASK_SECRET: ${{ secrets.MIP_COTALITY_ID_MASK_SECRET }}
           MIP_GENIE_ACTION_SECRET_CURRENT: ${{ secrets.MIP_GENIE_ACTION_SECRET_CURRENT }}
           MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}

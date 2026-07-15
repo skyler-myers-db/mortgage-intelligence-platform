@@ -22,6 +22,7 @@ from backend.services.pii_redaction import (
     _reset_lender_resolver_for_tests,
     generalize_lender,
     mask_cotality_id,
+    mask_source_record_ref,
     redact_borrower_row,
     redact_evidence_row,
     redact_lead_row,
@@ -208,6 +209,23 @@ def test_redact_borrower_row_falls_back_to_public_ids_when_raw_ids_missing() -> 
 def test_mask_cotality_id_preserves_synthetic_demo_refs() -> None:
     assert mask_cotality_id("clip", "clip_demo_48291") == "clip_demo_48291"
     assert mask_cotality_id("owner_link", "ol_demo_48291") == "ol_demo_48291"
+
+
+def test_source_record_ref_mask_is_deterministic_and_source_scoped(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_COTALITY_ID_MASK_SECRET", "test-source-ref-secret")
+    monkeypatch.setattr(settings, "app_env", "test")
+
+    first = mask_source_record_ref("salesforce", "sf_case_123")
+    replay = mask_source_record_ref("salesforce", "sf_case_123")
+    other_source = mask_source_record_ref("los_pos", "sf_case_123")
+
+    assert re.fullmatch(r"auto-[a-f0-9]{32}", first)
+    assert first == replay
+    assert mask_source_record_ref("salesforce", first) == first
+    assert first != other_source
+    assert "sf_case_123" not in first
 
 
 def test_mask_cotality_id_ignores_legacy_raw_id_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:

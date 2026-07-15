@@ -3,6 +3,7 @@
 import re
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
+from uuid import UUID
 
 from pydantic import (
     BaseModel,
@@ -87,6 +88,26 @@ def validate_offer_source_refreshed_at(value: object) -> str:
     if parsed.astimezone(UTC) > datetime.now(UTC) + _MAX_SOURCE_REFRESHED_AT_FUTURE_SKEW:
         raise ValueError("offer source_refreshed_at cannot be materially in the future")
     return timestamp
+
+
+def validate_campaign_uuid(value: str) -> str:
+    """Return the canonical UUID used by Lakebase campaign foreign keys."""
+
+    campaign_id = str(value).strip()
+    try:
+        return str(UUID(campaign_id))
+    except (AttributeError, ValueError) as exc:
+        raise ValueError("campaign_id must be a valid UUID") from exc
+
+
+def validate_complete_campaign_binding(
+    campaign_id: str | None,
+    variant_name: str | None,
+) -> None:
+    """Prevent campaign ids and variant labels from travelling independently."""
+
+    if (campaign_id is None) != (variant_name is None):
+        raise ValueError("campaign_id and variant_name must be supplied together")
 
 
 class GovernedOfferInputs(BaseModel):
@@ -227,6 +248,8 @@ class OutreachDraft(BaseModel):
     response_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
     source_refreshed_at: str = Field(min_length=1, max_length=64)
     borrower_id: str
+    campaign_id: str | None = Field(default=None, max_length=64)
+    variant_name: str | None = Field(default=None, max_length=64)
     offer_code: str
     channel: OutreachChannel
     subject: str | None = None
@@ -240,6 +263,25 @@ class OutreachDraft(BaseModel):
     strategy_summary: str = Field(min_length=1, max_length=500)
     evidence_summary: list[str] = Field(min_length=1, max_length=5)
     evidence_assets: list[str] = Field(min_length=1, max_length=5)
+
+    @field_validator("campaign_id")
+    @classmethod
+    def _campaign_id_is_uuid(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_campaign_uuid(value)
+
+    @field_validator("variant_name")
+    @classmethod
+    def _variant_name_is_public_safe(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_public_campaign_label(value)
+
+    @model_validator(mode="after")
+    def _campaign_binding_is_complete(self) -> "OutreachDraft":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
+        return self
 
 
 class OutreachDraftRequest(BaseModel):
@@ -258,7 +300,7 @@ class OutreachDraftRequest(BaseModel):
     def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        return validate_public_opaque_id(value)
+        return validate_campaign_uuid(value)
 
     @field_validator("variant_name")
     @classmethod
@@ -266,6 +308,11 @@ class OutreachDraftRequest(BaseModel):
         if value is None:
             return value
         return validate_public_campaign_label(value)
+
+    @model_validator(mode="after")
+    def _campaign_binding_is_complete(self) -> "OutreachDraftRequest":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
+        return self
 
 
 class OutreachApproveRequest(BaseModel):
@@ -345,7 +392,7 @@ class OutreachApproveRequest(BaseModel):
     def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        return validate_public_opaque_id(value)
+        return validate_campaign_uuid(value)
 
     @field_validator("variant_name")
     @classmethod
@@ -356,6 +403,7 @@ class OutreachApproveRequest(BaseModel):
 
     @model_validator(mode="after")
     def _draft_proof_is_complete(self) -> "OutreachApproveRequest":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
         proof = (
             self.draft_generation_id,
             self.draft_response_hash,
@@ -432,7 +480,7 @@ class OutreachRejectRequest(BaseModel):
     def _campaign_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:
             return value
-        return validate_public_opaque_id(value)
+        return validate_campaign_uuid(value)
 
     @field_validator("variant_name")
     @classmethod
@@ -443,6 +491,7 @@ class OutreachRejectRequest(BaseModel):
 
     @model_validator(mode="after")
     def _other_requires_text(self) -> "OutreachRejectRequest":
+        validate_complete_campaign_binding(self.campaign_id, self.variant_name)
         if self.rationale_code == "other_with_text" and not (self.rationale or "").strip():
             raise ValueError("other_with_text requires a rationale")
         return self

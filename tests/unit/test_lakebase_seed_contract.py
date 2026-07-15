@@ -7,9 +7,8 @@ the ``B-[0-9A-Z]{13}`` masked-ID contract and joined to no real
 ``gold.borrower_360`` row. These guards keep that bug class dead:
 
 * every borrower_id literal in the seed matches the masked-ID format;
-* the schema migration that purges the legacy rows and adds the CHECK
-  constraint stays present (deploy step 4b applies schema.sql on every
-  run, so deleting the block would silently re-open the hole);
+* the schema migration preserves and deterministically maps only the five
+  reviewed legacy rows before validating the CHECK constraint;
 * the re-selection helper the seed comment points at actually exists.
 """
 
@@ -37,12 +36,16 @@ def test_every_seed_borrower_id_matches_masked_format() -> None:
     )
 
 
-def test_schema_migration_purges_legacy_ids_and_adds_check() -> None:
+def test_schema_migration_maps_legacy_ids_without_deleting_approvals() -> None:
     text = SCHEMA.read_text(encoding="utf-8")
     assert "2026_06_11_narrative_seed_real_ids" in text
-    assert re.search(r"DELETE FROM mip_app\.approvals\s+WHERE borrower_id ~ '\^B-\[0-9\]\{5\}\$'", text)
+    assert "WITH legacy_seed_approval_map" in text
+    assert "UPDATE mip_app.approvals AS approval" in text
+    assert "approval.borrower_id = mapping.legacy_borrower_id" in text
+    assert not re.search(r"DELETE\s+FROM\s+mip_app\.approvals", text, re.IGNORECASE)
     assert "approvals_borrower_id_format_chk" in text
     assert "CHECK (borrower_id ~ '^B-[0-9A-Z]{13}$')" in text
+    assert "VALIDATE CONSTRAINT approvals_borrower_id_format_chk" in text
 
 
 def test_reselection_helper_exists_and_covers_all_slots() -> None:

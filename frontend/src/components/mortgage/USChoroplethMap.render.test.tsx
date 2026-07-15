@@ -170,8 +170,12 @@ describe('USChoroplethMap county visual states', () => {
       await new Promise((resolve) => window.setTimeout(resolve, 5));
     }
     expect(illinois?.classList.contains('has-data')).toBe(true);
+    const currentIllinois =
+      document.querySelector<SVGPathElement>('path[aria-label="Illinois"]')
+      ?? document.querySelector<SVGPathElement>('path[aria-label="IL"]');
+    expect(currentIllinois).toBeTruthy();
     await act(async () => {
-      illinois?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      currentIllinois?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
     });
     const cookLoading = await waitForSelector<SVGPathElement>('path[aria-label="Cook County"]');
     expect(cookLoading).toBeTruthy();

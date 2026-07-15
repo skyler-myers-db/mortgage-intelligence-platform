@@ -429,6 +429,31 @@ def tool_result_hash(
     return hashlib.sha256(raw).hexdigest()
 
 
+def cohort_fingerprint(*, cohort_digest: str, tool_result_hash: str) -> str:
+    """Bind a complete borrower-set digest to one reviewed tool result.
+
+    The warehouse computes ``cohort_digest`` from the sorted, de-duplicated
+    borrower identifiers. Binding that digest to the tool-result hash prevents
+    a valid cohort proof from being replayed against a different agent run.
+    """
+
+    normalized_digest = cohort_digest.strip().lower()
+    normalized_tool_hash = tool_result_hash.strip().lower()
+    for label, value in (
+        ("cohort_digest", normalized_digest),
+        ("tool_result_hash", normalized_tool_hash),
+    ):
+        if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+            raise ValueError(f"{label} must be a lowercase SHA-256 digest")
+    payload = {
+        "cohort_digest": normalized_digest,
+        "tool_result_hash": normalized_tool_hash,
+        "version": 1,
+    }
+    raw = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _reviewed_tool_step(
     workflow: GrowthAgentWorkflowDef,
     tool_name: str,

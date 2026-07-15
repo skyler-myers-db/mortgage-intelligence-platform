@@ -345,6 +345,65 @@
         "title": "ActivationSummary",
         "type": "object"
       },
+      "ActorAuditEventPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ActorAuditEventSummary"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "title": "ActorAuditEventPage",
+        "type": "object"
+      },
+      "ActorAuditEventSummary": {
+        "description": "PII-minimized event shape for an operator's own recovery feed.",
+        "properties": {
+          "created_at": {
+            "title": "Created At",
+            "type": "string"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "event_type": {
+            "title": "Event Type",
+            "type": "string"
+          },
+          "subject_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Id"
+          }
+        },
+        "required": [
+          "event_type",
+          "entity_type",
+          "created_at"
+        ],
+        "title": "ActorAuditEventSummary",
+        "type": "object"
+      },
       "AdminCapabilitiesResponse": {
         "properties": {
           "capabilities": {
@@ -6919,10 +6978,32 @@
             ],
             "title": "Actionable Avg Score"
           },
+          "actionable_cohort_fingerprint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Cohort Fingerprint"
+          },
           "actionable_label": {
             "default": "Eligible subset",
             "title": "Actionable Label",
             "type": "string"
+          },
+          "actionable_snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actionable Snapshot Id"
           },
           "actionable_total": {
             "minimum": 0.0,
@@ -9589,6 +9670,18 @@
             "title": "Borrower Id",
             "type": "string"
           },
+          "campaign_id": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Campaign Id"
+          },
           "channel": {
             "enum": [
               "email",
@@ -9685,6 +9778,18 @@
               }
             ],
             "title": "Subject"
+          },
+          "variant_name": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Variant Name"
           }
         },
         "required": [
@@ -15113,6 +15218,70 @@
         ]
       }
     },
+    "/api/audit/my-events": {
+      "get": {
+        "deprecated": true,
+        "description": "Return a snapshot-stable, PII-minimized page for the current actor only.",
+        "operationId": "get_api_audit_my_events_list_my_events",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAuditEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/audit/rollups": {
       "get": {
         "deprecated": true,
@@ -17880,6 +18049,18 @@
               "default": false,
               "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
               "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
               "type": "boolean"
             }
           },
@@ -22220,6 +22401,69 @@
         ]
       }
     },
+    "/api/v1/audit/my-events": {
+      "get": {
+        "description": "Return a snapshot-stable, PII-minimized page for the current actor only.",
+        "operationId": "get_api_v1_audit_my_events_list_my_events",
+        "parameters": [
+          {
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "default": 8,
+              "maximum": 50,
+              "minimum": 1,
+              "title": "Limit",
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "cursor",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "maxLength": 2048,
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ActorAuditEventPage"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List My Events",
+        "tags": [
+          "audit"
+        ]
+      }
+    },
     "/api/v1/audit/rollups": {
       "get": {
         "description": "Approval/rejection counts by period for committee review.\n\nThe endpoint reads the governed Lakebase audit ledger directly and\nreturns only aggregate counts. It does not invent outreach state or\npull borrower PII into the response.",
@@ -24954,6 +25198,18 @@
               "default": false,
               "description": "Admin-only analytics override. When true, clears the default Eligible only marketing gate so suppressed/non-opt-in rows can be counted or inspected without making them campaign-actionable.",
               "title": "Include Suppressed For Analytics",
+              "type": "boolean"
+            }
+          },
+          {
+            "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+            "in": "query",
+            "name": "include_identity_proof",
+            "required": false,
+            "schema": {
+              "default": false,
+              "description": "Admin/evaluation-only complete-cohort digest and snapshot headers. Disabled by default because it performs an aggregate proof query.",
+              "title": "Include Identity Proof",
               "type": "boolean"
             }
           },

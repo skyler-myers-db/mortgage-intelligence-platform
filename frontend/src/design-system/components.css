@@ -3727,7 +3727,7 @@ a.lineage-node__chip:focus-visible {
    TWEAKS / CONSOLE PANEL
    ============================================================ */
 .tweaks {
-  position: fixed; top: 72px; right: var(--sp-4);
+  position: fixed; inset: 72px var(--sp-4) var(--sp-4) auto;
   width: 300px;
   background: var(--bg-1);
   border: 1px solid var(--line-2);
@@ -3735,8 +3735,9 @@ a.lineage-node__chip:focus-visible {
   box-shadow: var(--shadow-lg);
   z-index: 50;
   display: none;
+  flex-flow: column;
 }
-.tweaks.is-open { display: block; }
+.tweaks.is-open { display: flex; }
 .tweaks__hdr {
   padding: var(--sp-3) var(--sp-4);
   border-bottom: 1px solid var(--line-1);
@@ -3744,7 +3745,10 @@ a.lineage-node__chip:focus-visible {
 }
 .tweaks__hdr-icon { color: var(--accent-ink); }
 .tweaks__title { font-size: var(--fs-13); font-weight: 600; }
-.tweaks__body { padding: var(--sp-4); display: flex; flex-direction: column; gap: var(--sp-4); }
+.tweaks__body {
+  padding: var(--sp-4); display: grid; gap: var(--sp-4);
+  flex: 1; overflow: auto;
+}
 .tweak-row label { font-size: 11px; color: var(--text-3); text-transform: uppercase; letter-spacing: 0.06em; display: block; margin-bottom: 6px; }
 .tweak-row .swatches { display: flex; gap: 6px; }
 .tweak-row .sw {
@@ -4920,11 +4924,9 @@ a.lineage-node__chip:focus-visible {
     right: 0;
     left: 0;
     bottom: 0;
-    width: 100vw;
+    width: auto;
     max-height: 50vh;
     border-radius: var(--r-lg) var(--r-lg) 0 0;
-    border-bottom: 0;
-    overflow-y: auto;
   }
   [data-console="open"] .main {
     padding-right: var(--sp-6);

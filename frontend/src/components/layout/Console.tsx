@@ -1,9 +1,13 @@
+import { useEffect } from 'react';
+import { useInfiniteQuery } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { useApp, type Accent, type Density, type Theme } from '../AppContext';
-import { Icon } from '../Icon';
+import { Icon, type IconName } from '../Icon';
 import { Chip } from '../Primitives';
 import { PropertyLookupPanel } from '../mortgage/PropertyLookupPanel';
+import { api, type ActorAuditEventSummary } from '../../lib/api';
 import { offerDisplayLabel } from '../../lib/offerLanguage';
+import { formatTimeOfDay, formatTimestamp } from '../../lib/time';
 
 /**
  * Console — the right-side tweaks panel from the prototype. Theme, accent,
@@ -13,6 +17,59 @@ import { offerDisplayLabel } from '../../lib/offerLanguage';
  */
 
 const ACCENT_SWATCHES: Accent[] = ['bright', 'teal', 'navy', 'red'];
+const RECENT_ACTIVITY_PAGE_SIZE = 8;
+
+const ACTIVITY_LABELS: Record<string, string> = {
+  APPROVE: 'Outreach approved',
+  OUTREACH_APPROVE: 'Outreach approved',
+  OUTREACH_REJECT: 'Outreach rejected',
+  REJECT: 'Outreach rejected',
+  DRAFT_OUTREACH: 'Outreach draft created',
+  SAVE_DRAFT: 'Outreach draft saved',
+  DELETE_DRAFT: 'Outreach draft removed',
+  SAVE_LEAD: 'Lead saved',
+  UNSAVE_LEAD: 'Lead removed',
+  LEAD_ASSIGN: 'Lead assigned',
+  LEAD_DISTRIBUTE: 'Leads distributed',
+  CALL_DISPOSITION: 'Call disposition recorded',
+  LEAD_OUTCOME: 'Lead outcome recorded',
+  LEAD_OUTCOME_RECORDED: 'Lead outcome recorded',
+  PORTFOLIO_CREATE: 'Portfolio created',
+  RECOMMEND_OFFER: 'Offer recommended',
+  RUN_GENIE: 'Genie analysis run',
+  VIEW_BORROWER: 'Borrower reviewed',
+  VIEW_LEADS: 'Lead queue reviewed',
+};
+
+export function recentActivityPresentation(event: ActorAuditEventSummary): {
+  label: string;
+  icon: IconName;
+  tone: string;
+  context: string;
+} {
+  const fallback = event.event_type
+    .toLowerCase()
+    .split('_')
+    .filter(Boolean)
+    .map((word, index) => index === 0 ? `${word.charAt(0).toUpperCase()}${word.slice(1)}` : word)
+    .join(' ');
+  const rejected = event.event_type.includes('REJECT');
+  const approved = event.event_type.includes('APPROVE');
+  const icon: IconName = rejected
+    ? 'cross'
+    : approved
+      ? 'check'
+      : event.event_type.includes('GENIE')
+        ? 'sparkle'
+        : 'audit';
+  const entity = event.entity_type.replace(/_/g, ' ');
+  return {
+    label: ACTIVITY_LABELS[event.event_type] ?? (fallback || 'Activity recorded'),
+    icon,
+    tone: rejected ? 'red' : approved ? 'green' : '',
+    context: event.subject_id ?? entity,
+  };
+}
 
 export function Console() {
   const {
@@ -29,7 +86,32 @@ export function Console() {
     workspaceStatus,
     workspaceError,
     refreshWorkspace,
+    recentActivityFocusRequest,
+    acknowledgeRecentActivityFocus,
   } = useApp();
+  const activityQuery = useInfiniteQuery({
+    queryKey: ['audit', 'my-events', RECENT_ACTIVITY_PAGE_SIZE],
+    queryFn: ({ signal, pageParam }) => (
+      api.myAuditEvents(RECENT_ACTIVITY_PAGE_SIZE, signal, pageParam)
+    ),
+    initialPageParam: null as string | null,
+    getNextPageParam: (page) => page.next_cursor ?? undefined,
+    enabled: consoleOpen,
+    retry: false,
+    refetchOnMount: 'always',
+    gcTime: 0,
+  });
+  const recentActivity = activityQuery.data?.pages.flatMap((page) => page.items) ?? [];
+
+  useEffect(() => {
+    if (!consoleOpen || recentActivityFocusRequest < 1) return;
+    const section = document.getElementById('console-recent-activity');
+    if (!section) return;
+    section.focus();
+    section.scrollIntoView?.({ block: 'nearest' });
+    acknowledgeRecentActivityFocus();
+  }, [acknowledgeRecentActivityFocus, consoleOpen, recentActivityFocusRequest]);
+
   const savedLeadItems = Object.values(savedLeads)
     .sort((a, b) => b.updated_at.localeCompare(a.updated_at))
     .slice(0, 4);
@@ -111,6 +193,86 @@ export function Console() {
         <div className="tweak-row">
           <label>Property lookup</label>
           <PropertyLookupPanel compact onNavigate={() => setConsoleOpen(false)} />
+        </div>
+        <div
+          id="console-recent-activity"
+          className="tweak-row"
+          tabIndex={-1}
+        >
+          <label>Recent activity</label>
+          <div className="surface">
+            <div className="surface__hdr">
+              <Icon name="audit" size={14} className="tweaks__hdr-icon" />
+              <div className="h-4">My recent activity</div>
+              <div className="topbar__spacer" />
+              <button
+                type="button"
+                className="btn btn--ghost btn--sm"
+                onClick={() => void activityQuery.refetch()}
+                disabled={activityQuery.isFetching}
+              >
+                Refresh
+              </button>
+            </div>
+            <div className="audit-panel" aria-live="polite">
+              {activityQuery.isPending && (
+                <div className="audit-panel__pad audit-panel__message">Loading recent activity…</div>
+              )}
+              {activityQuery.isError && (
+                <div className="audit-panel__pad stack-sm">
+                  <div className="audit-panel__message audit-panel__message--danger">
+                    Recent activity is unavailable.
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn--sm"
+                    onClick={() => void activityQuery.refetch()}
+                  >
+                    Retry
+                  </button>
+                </div>
+              )}
+              {activityQuery.isSuccess && recentActivity.length === 0 && (
+                <div className="audit-panel__pad audit-panel__message">No recent activity yet.</div>
+              )}
+              {recentActivity.map((event, index) => {
+                const presentation = recentActivityPresentation(event);
+                return (
+                  <div
+                    className="audit"
+                    key={`${event.created_at}-${event.event_type}-${index}`}
+                  >
+                    <time
+                      className="audit__time mono"
+                      dateTime={event.created_at}
+                      title={formatTimestamp(event.created_at, { withSeconds: true })}
+                    >
+                      {formatTimeOfDay(event.created_at)}
+                    </time>
+                    <div className={`audit__ico ${presentation.tone}`}>
+                      <Icon name={presentation.icon} size={11} />
+                    </div>
+                    <div className="audit__body">
+                      <div className="audit__what">{presentation.label}</div>
+                      <div className="audit__who">{presentation.context}</div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            {activityQuery.hasNextPage && (
+              <div className="surface__ft">
+                <button
+                  type="button"
+                  className="btn btn--ghost btn--sm"
+                  onClick={() => void activityQuery.fetchNextPage()}
+                  disabled={activityQuery.isFetchingNextPage}
+                >
+                  {activityQuery.isFetchingNextPage ? 'Loading…' : 'Load older'}
+                </button>
+              </div>
+            )}
+          </div>
         </div>
         <div className="tweak-row">
           <label>Configured tenant</label>

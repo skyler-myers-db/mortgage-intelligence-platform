@@ -139,6 +139,8 @@ export function descriptorFor(rawSource: string): DrawerSource {
 export function drawerForAsset(rawSource: string): DrawerSource | null {
   const key = rawSource.toLowerCase();
 
+  if (key === 'mip_app.call_dispositions') return DRAWER_SOURCES.callDispositions;
+  if (key === 'mip_app.lead_outcomes') return DRAWER_SOURCES.leadOutcomes;
   if (key.includes('equity_spread_points')) return enrichAsset(DRAWER_SOURCES.equitySpreadPoints);
   if (key.includes('fn_rate_spread')) return enrichAsset(DRAWER_SOURCES.marketRate);
   if (key.includes('fn_estimated_upb_confidence_band')) return enrichAsset(DRAWER_SOURCES.lien);
@@ -337,6 +339,24 @@ const DESTINATION_BY_SOURCE = {
     description:
       'Assignment and loan-officer rows are operational Postgres state queried through the sales-operations APIs, not Unity Catalog assets.',
     objectPaths: ['mip_app.lead_assignments', 'mip_app.loan_officers'],
+    href: '/analytics?view=sales-ops',
+    actionLabel: 'Open sales operations',
+  },
+  callDispositions: {
+    kind: 'lakebase',
+    label: 'Lakebase operational records',
+    description:
+      'Contact dispositions are operational Postgres rows queried through the non-admin Sales Ops analytics surface.',
+    objectPaths: ['mip_app.call_dispositions'],
+    href: '/analytics?view=sales-ops',
+    actionLabel: 'Open sales operations',
+  },
+  leadOutcomes: {
+    kind: 'lakebase',
+    label: 'Lakebase operational records',
+    description:
+      'Closed-loop lead outcomes are PII-safe operational Postgres rows queried through the non-admin Sales Ops analytics surface.',
+    objectPaths: ['mip_app.lead_outcomes'],
     href: '/analytics?view=sales-ops',
     actionLabel: 'Open sales operations',
   },

@@ -61,21 +61,31 @@ WITH broad AS (
 ),
     actionable AS (
       SELECT
-        COUNT(DISTINCT b.clip) AS actionable_total,
-        ROUND(AVG(CAST(b.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score
+        COUNT(DISTINCT b.borrower_id) AS actionable_total,
+        ROUND(AVG(CAST(b.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score,
+        sha2(
+          concat_ws(
+            '|',
+            sort_array(collect_set(CAST(b.borrower_id AS STRING)))
+          ),
+          256
+        ) AS actionable_cohort_digest
       FROM {BORROWER_360} b
       WHERE {workflow.actionable_predicate}
         AND {_B_ELIGIBLE}
         {actionable_state_clause}
-    )
+    ),
+{_snapshot_validation_ctes(primary_table=BORROWER_360)}
 SELECT
   broad.broad_total,
   actionable.actionable_total,
+  actionable.actionable_cohort_digest,
+  source_snapshot.actionable_snapshot_id,
   broad.broad_avg_score,
   actionable.actionable_avg_score,
   broad.avg_rate_spread_bps,
   broad.avg_equity_pct
-FROM broad CROSS JOIN actionable
+FROM broad CROSS JOIN actionable CROSS JOIN snapshot_validation source_snapshot
 """
     try:
         row = sql_client.execute_one(statement, params) or {}
@@ -108,22 +118,32 @@ WITH broad AS (
 ),
 actionable AS (
   SELECT
-    COUNT(DISTINCT d.clip) AS actionable_total,
-    ROUND(AVG(CAST(d.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score
+    COUNT(DISTINCT d.borrower_id) AS actionable_total,
+    ROUND(AVG(CAST(d.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score,
+    sha2(
+      concat_ws(
+        '|',
+        sort_array(collect_set(CAST(d.borrower_id AS STRING)))
+      ),
+      256
+    ) AS actionable_cohort_digest
   FROM {BORROWER_DOSSIER} d
   WHERE d.opportunity_score >= {HIGH_OPPORTUNITY_THRESHOLD}
     AND {_D_ELIGIBLE}
     {actionable_state_clause}
-)
+),
+{_snapshot_validation_ctes(primary_table=BORROWER_DOSSIER)}
 SELECT
   broad.broad_total,
   actionable.actionable_total,
+  actionable.actionable_cohort_digest,
+  source_snapshot.actionable_snapshot_id,
   broad.broad_avg_score,
   actionable.actionable_avg_score,
   broad.avg_rate_spread_bps,
   broad.avg_equity_pct,
   broad.evidence_backed_total
-FROM broad CROSS JOIN actionable
+FROM broad CROSS JOIN actionable CROSS JOIN snapshot_validation source_snapshot
 """
     try:
         row = sql_client.execute_one(statement, params) or {}
@@ -142,14 +162,24 @@ def _load_branch_capacity_metrics(
     params: dict[str, Any] = {}
     state_clause = _state_clause("b", states, params)
     statement = f"""
+WITH {_snapshot_validation_ctes(primary_table=BORROWER_360, include_lifecycle=True)}
 SELECT
   COUNT(DISTINCT b.clip) AS broad_total,
-  COUNT(DISTINCT b.clip) AS actionable_total,
+  COUNT(DISTINCT b.borrower_id) AS actionable_total,
+  sha2(
+    concat_ws(
+      '|',
+      sort_array(collect_set(CAST(b.borrower_id AS STRING)))
+    ),
+    256
+  ) AS actionable_cohort_digest,
+  MAX(source_snapshot.actionable_snapshot_id) AS actionable_snapshot_id,
   ROUND(AVG(CAST(b.opportunity_score AS DOUBLE)), 1) AS broad_avg_score,
   ROUND(AVG(CAST(b.opportunity_score AS DOUBLE)), 1) AS actionable_avg_score,
   ROUND(AVG(CAST(b.rate_spread_bps AS DOUBLE)), 1) AS avg_rate_spread_bps,
   ROUND(AVG(CAST(b.equity_pct AS DOUBLE)), 1) AS avg_equity_pct
 FROM {BORROWER_360} b
+CROSS JOIN snapshot_validation source_snapshot
 LEFT JOIN {qualify("gold", "borrower_lifecycle_state")} ls
   ON ls.borrower_id = b.borrower_id
 WHERE {_B_ELIGIBLE}
@@ -195,8 +225,59 @@ def _state_clause(alias: str, states: list[str], params: dict[str, Any]) -> str:
     return f"AND UPPER({alias}.state) IN ({', '.join(names)})"
 
 
+def _snapshot_validation_ctes(
+    *,
+    primary_table: str,
+    include_lifecycle: bool = False,
+) -> str:
+    """Build a fail-closed refresh identity over every table used by a workflow."""
+
+    lifecycle_table = qualify("gold", "borrower_lifecycle_state")
+    lifecycle_version = (
+        f"(SELECT MAX(refreshed_at) FROM {lifecycle_table})"
+        if include_lifecycle
+        else "CAST(NULL AS TIMESTAMP)"
+    )
+    lifecycle_check = "AND versions.lifecycle_at IS NOT NULL" if include_lifecycle else ""
+    lifecycle_token = (
+        ", '|lifecycle:', CAST(versions.lifecycle_at AS STRING)" if include_lifecycle else ""
+    )
+    return f"""
+refresh_anchor AS (
+  SELECT run_id, refresh_at
+  FROM {qualify('ref', 'refresh_run_state')}
+  ORDER BY captured_at DESC
+  LIMIT 1
+),
+source_versions AS (
+  SELECT
+    (SELECT MAX(refreshed_at) FROM {BORROWER_360}) AS borrower_360_at,
+    (SELECT MAX(refreshed_at) FROM {primary_table}) AS primary_at,
+    {lifecycle_version} AS lifecycle_at
+),
+snapshot_validation AS (
+  SELECT CASE
+    WHEN anchor.run_id IS NOT NULL
+      AND anchor.refresh_at IS NOT NULL
+      AND versions.borrower_360_at = anchor.refresh_at
+      AND versions.primary_at = anchor.refresh_at
+      {lifecycle_check}
+    THEN sha2(
+      concat(
+        'gold-refresh:', CAST(anchor.run_id AS STRING), '|',
+        CAST(anchor.refresh_at AS STRING){lifecycle_token}
+      ),
+      256
+    )
+    ELSE NULL
+  END AS actionable_snapshot_id
+  FROM refresh_anchor anchor
+  CROSS JOIN source_versions versions
+)"""
+
+
 def _metric_row(row: dict[str, Any]) -> dict[str, Any]:
-    return {
+    metrics: dict[str, Any] = {
         "broad_total": int(row.get("broad_total") or 0),
         "actionable_total": int(row.get("actionable_total") or 0),
         "broad_avg_score": _maybe_float(row.get("broad_avg_score")),
@@ -204,6 +285,13 @@ def _metric_row(row: dict[str, Any]) -> dict[str, Any]:
         "avg_rate_spread_bps": _maybe_float(row.get("avg_rate_spread_bps")),
         "avg_equity_pct": _maybe_float(row.get("avg_equity_pct")),
     }
+    cohort_digest = str(row.get("actionable_cohort_digest") or "").strip().lower()
+    snapshot_id = str(row.get("actionable_snapshot_id") or "").strip()
+    if cohort_digest:
+        metrics["actionable_cohort_digest"] = cohort_digest
+    if snapshot_id:
+        metrics["actionable_snapshot_id"] = snapshot_id
+    return metrics
 
 
 def _maybe_float(value: Any) -> float | None:

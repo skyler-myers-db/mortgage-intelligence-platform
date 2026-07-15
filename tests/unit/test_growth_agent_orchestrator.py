@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
 import pytest
@@ -16,6 +17,21 @@ from tests.unit.test_growth_agent_api import (
 )
 
 _TEST_GATEWAY_SHA = "75ea6680b7f04bbaa6d0bbf38d7676218ae6c1cc"
+
+
+def _assert_signed_lead_queue_route(
+    route: str,
+    *,
+    expected_query: dict[str, list[str]],
+) -> None:
+    parsed = urlsplit(route)
+    assert parsed.path == "/lead-queue"
+    query = parse_qs(parsed.query)
+    handoff = query.pop("growth_handoff", None)
+    assert handoff is not None and len(handoff) == 1
+    assert handoff[0].count(".") == 1
+    assert 100 < len(handoff[0]) <= 4096
+    assert query == expected_query
 
 
 class _ReadyWorkspace:
@@ -139,7 +155,14 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert body["trace_kind"] == "agent_framework"
     assert body["planner_label"] == "Databricks Agent Responses endpoint"
     assert body["workflow"]["id"] == "listing_watch"
-    assert body["route"] == "/lead-queue?segment=listed&marketing_eligibility=Eligible+only&states=IL"
+    _assert_signed_lead_queue_route(
+        body["route"],
+        expected_query={
+            "segment": ["listed"],
+            "marketing_eligibility": ["Eligible only"],
+            "states": ["IL"],
+        },
+    )
     assert "Agent Responses endpoint selected reviewed workflow" in body["interpreted_intent"]
     assert "deterministic fallback candidate" in body["interpreted_intent"]
     assert "Daily Refi Opportunity Brief" in body["agent_reasoning"]
@@ -304,7 +327,14 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
     assert selection_check["status"] == "passed"
     assert "agreed on daily_refi_brief" in selection_check["detail"]
     assert body["criteria"]["states"] == ["IL"]
-    assert body["route"] == "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
+    _assert_signed_lead_queue_route(
+        body["route"],
+        expected_query={
+            "segment": ["itm"],
+            "marketing_eligibility": ["Eligible only"],
+            "states": ["IL"],
+        },
+    )
 
 
 def test_prompt_agent_rejects_unreviewed_supervisor_workflow_choice(
@@ -429,9 +459,14 @@ def test_prompt_agent_does_not_let_supervisor_override_explicit_custom_segments(
     assert body["workflow"]["id"] == "custom_segment_watch"
     assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["itm", "listed"]
     assert body["criteria"]["lead_queue_filters"]["segment_mode"] == "all"
-    assert body["route"] == (
-        "/lead-queue?segment_codes=itm%2Clisted&segment_mode=all&"
-        "marketing_eligibility=Eligible+only&states=IL"
+    _assert_signed_lead_queue_route(
+        body["route"],
+        expected_query={
+            "segment_codes": ["itm,listed"],
+            "segment_mode": ["all"],
+            "marketing_eligibility": ["Eligible only"],
+            "states": ["IL"],
+        },
     )
 
 

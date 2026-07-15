@@ -62,6 +62,21 @@ def test_deploy_script_shell_is_syntactically_valid() -> None:
     assert result.returncode == 0, result.stderr
 
 
+def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert "dotenv_value MIP_ADMIN_BEARER_TOKEN" not in text
+    assert "databricks auth token" not in text
+    assert "DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in text
+    assert "normal, admin, and verifier M2M client IDs must be distinct" in text
+    assert text.count(
+        "mint_m2m_token MIP_ADMIN_BEARER_TOKEN"
+    ) >= 2  # initial per-run mint + immediate pre-eval remint
+    remint_pos = text.index("A full deploy can exceed the workspace OAuth TTL")
+    eval_pos = text.index("tools/databricks/run_agent_eval.py")
+    assert remint_pos < eval_pos
+
+
 def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
     text = DEPLOY_DEV.read_text(encoding="utf-8")
 
@@ -109,7 +124,7 @@ def test_deploy_dev_has_cost_and_permission_guards() -> None:
     assert "cancel-in-progress: false" in text
 
 
-def test_deploy_dev_requires_explicit_admin_rbac_and_mints_app_bearer() -> None:
+def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers() -> None:
     text = DEPLOY_DEV.read_text(encoding="utf-8")
 
     assert "MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}" in text
@@ -117,9 +132,32 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_app_bearer() -> None:
     assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" in text
     assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}" in text
     assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in text
-    assert "MIP_ADMIN_BEARER_TOKEN: ${{ secrets.MIP_ADMIN_BEARER_TOKEN }}" in text
+    assert "DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}" in text
+    assert (
+        "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
+    )
+    assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in text
     assert "python tools/oauth_m2m_mint.py" in text
-    assert "MIP_BEARER_TOKEN=$bearer" in text
+    assert "--github-env MIP_BEARER_TOKEN" in text
+    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in text
+    assert "Normal and admin M2M client IDs must be distinct" in text
+
+
+def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
+    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    for secret in (
+        "DATABRICKS_VERIFIER_CLIENT_ID",
+        "DATABRICKS_VERIFIER_CLIENT_SECRET",
+    ):
+        assert f"{secret}: ${{{{ secrets.{secret} }}}}" in workflow
+        assert secret in script
+    assert "--identity-role verifier" in script
+    assert '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in script
+    assert "run_as_m2m_identity" in script
+    assert "jobs/lakebase_migrate.py" in script
+    assert 'export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"' in script
 
 
 def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_path: Path) -> None:

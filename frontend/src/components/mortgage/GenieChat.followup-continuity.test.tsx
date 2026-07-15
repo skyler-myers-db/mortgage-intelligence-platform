@@ -85,6 +85,13 @@ function installLocalStorage() {
   });
 }
 
+function setViewport(width: number, height: number) {
+  Object.defineProperties(window, {
+    innerWidth: { configurable: true, value: width },
+    innerHeight: { configurable: true, value: height },
+  });
+}
+
 describe('floating Genie conversation continuity', () => {
   let container: HTMLDivElement;
   let root: Root;
@@ -92,6 +99,7 @@ describe('floating Genie conversation continuity', () => {
   beforeEach(() => {
     Object.values(mocks).forEach((mock) => mock.mockReset());
     installLocalStorage();
+    setViewport(1_440, 900);
     mocks.genieStart.mockResolvedValue(START);
     mocks.genieFeedback.mockResolvedValue({ accepted: true });
     container = document.createElement('div');
@@ -140,6 +148,39 @@ describe('floating Genie conversation continuity', () => {
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
   }
+
+  it('preserves the non-modal window controls and fits restored geometry to the viewport', async () => {
+    setViewport(390, 600);
+    window.localStorage.setItem(
+      'mip-genie-chat-size-v1',
+      JSON.stringify({ w: 900, h: 900 }),
+    );
+    window.localStorage.setItem(
+      'mip-genie-chat-pos-v1',
+      JSON.stringify({ pos: { x: 1_000, y: 1_000 } }),
+    );
+
+    mount();
+
+    const dialog = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Genie chat"]');
+    expect(dialog).not.toBeNull();
+    expect(dialog?.getAttribute('aria-modal')).toBeNull();
+    expect(dialog?.getAttribute('aria-hidden')).toBe('false');
+    expect(dialog?.classList.contains('is-undocked')).toBe(true);
+    expect(dialog?.style.width).toBe('358px');
+    expect(dialog?.style.height).toBe('568px');
+    expect(dialog?.style.left).toBe('16px');
+    expect(dialog?.style.top).toBe('16px');
+
+    expect(button(
+      'Resize Genie panel (currently 358 by 568 pixels). Drag any edge or corner, or use arrow keys.',
+    )).toBeTruthy();
+    expect(button('Re-dock Genie panel to bottom-right')).toBeTruthy();
+    expect(button('Start a new Genie thread')).toBeTruthy();
+    expect(button('Close Genie')).toBeTruthy();
+    expect(container.querySelectorAll('.genie__resize-edge')).toHaveLength(7);
+    await waitUntil(() => document.activeElement === input());
+  });
 
   it('continues restored, sample, and typed turns until New thread explicitly resets', async () => {
     window.localStorage.setItem('mip.genie.conversationId', 'conv-restored');

@@ -12,10 +12,13 @@ audit-readable MATRIX, no longer a required manual runbook:
   post-agentic AI Gateway table-grant step (resolves the SP client id
   from `databricks apps get`, executes via the deploy warehouse, fails
   the deploy loudly when the deploying identity lacks GRANT authority).
-* §Lakebase app-role grants are applied by `jobs/lakebase_migrate.py`
-  after schema + seed (role discovered from `pg_roles`; `action_audit`
-  stays append-only via REVOKE; missing role warns and converges on the
-  next deploy).
+* §Lakebase app/verifier-role grants are applied by `jobs/lakebase_migrate.py`
+  after schema + seed. The job resolves exactly
+  `databricks apps.get(name).service_principal_client_id`, waits only for
+  that Postgres role plus the explicit
+  `MIP_AI_GATEWAY_VERIFIER_CLIENT_ID`, revokes prior privileges, applies the
+  reviewed per-table matrices, and fails the deploy on lookup, role,
+  inventory, or postflight errors.
 * §provider/§silver (ETL identity) grants still require a metastore admin
   when the deploying identity does not own the share — the deploy step's
   failure message points here.
@@ -32,11 +35,15 @@ Lakebase instance, and the UC catalog `mip` all exist. The grants below
 bind the app's workspace identity to the UC objects it already owns
 logically but cannot yet read.
 
-**Identity.** Databricks Apps runs as the workspace-bound service
-principal named after the app (`mip-app`). Every `GRANT ... TO `
-`mip-app`` below targets that SCIM principal name. If your workspace
-renames the SP (some customers prefix with tenant code), substitute the
-real SP name in every block.
+**Identity.** Unity Catalog grants target the workspace-bound service
+principal associated with the app (shown as `mip-app` in the UC examples).
+The Lakebase Postgres role is different: it is exactly the app resource's
+`service_principal_client_id` returned by `databricks apps get mip-app` /
+`WorkspaceClient().apps.get("mip-app")`. App names, service-principal display
+names, and numeric ids are not accepted as Lakebase role substitutes.
+Live automation has separate normal, admin, and AI Gateway verifier service
+principals. Only the admin principal is a member of `mip-admin`; the verifier is
+not app-admin and uses its OAuth application/client id as its Lakebase role.
 
 **Companion docs.** [`docs/se-onboarding.md`](../se-onboarding.md) is the
 end-to-end walkthrough; this file is the "grants reference" it links
@@ -158,14 +165,19 @@ GRANT USE SCHEMA ON SCHEMA mip.audit TO `mip-app`;
 -- provisioner value is mip.audit.mip_agent_gateway_llama, which usually
 -- materializes at least mip.audit.mip_agent_gateway_llama_payload.
 GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload TO `mip-app`;
+GRANT USE SCHEMA ON SCHEMA mip.audit TO `verifier-client-id`;
+GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_llama_payload TO `verifier-client-id`;
 ```
 
 **Objects covered.** Only the MIP-owned AI Gateway inference-log tables
 whose names match the configured prefix `MIP_AI_GATEWAY_INFERENCE_TABLE`
 (default prefix `mip.audit.mip_agent_gateway_llama`). `scripts/deploy.sh`
 runs `tools/databricks/grant_ai_gateway_inference_table.py` after AI
-Gateway provisioning to discover the concrete prefixed table names and
-grant `SELECT` on those tables only.
+Gateway provisioning to discover the concrete prefixed table names and grant
+`SELECT` on those tables only to both the runtime app and dedicated verifier.
+`tools/databricks/provision_m2m_oauth.py --identity-role verifier` separately
+converges `CAN_QUERY` on the configured serving endpoint. Neither identity gets
+schema-wide table reads.
 
 **What breaks if missing.** The AI Gateway capability row remains
 `configured` / non-claimable because the deployment verifier cannot mark a
@@ -174,10 +186,11 @@ fresh `mip_app.ai_gateway_proof_ledger` row as verified for the current
 Gateway traffic. This does not break the rest of the app; it prevents
 claiming AI Gateway governance live.
 
-**What not to grant.** Do not grant `SELECT ON SCHEMA mip.audit` to the
-running app service principal. That would expose every current and future
-audit table in the schema. The app needs `USE SCHEMA` plus `SELECT` on
-the MIP Gateway prefix tables only.
+**What not to grant.** Do not grant `SELECT ON SCHEMA mip.audit` to either the
+runtime app or verifier service principal. That would expose every current and
+future audit table in the schema. Each needs `USE SCHEMA` plus `SELECT` on the
+MIP Gateway prefix tables only. The verifier must not join `mip-admin` and the
+runtime app must not write the Lakebase proof ledger.
 
 ---
 
@@ -220,47 +233,153 @@ GRANT USE SCHEMA, SELECT ON SCHEMA mip_app_state.public TO `mip-app`;
 **5b. Lakebase Postgres role (primary write path).** The `mip-app`
 binding declared in [`databricks.yml`](../../databricks.yml) lines
 126–131 with `permission: CAN_CONNECT_AND_CREATE` provisions the Postgres
-role. The `mip_lakebase_migrate` job then idempotently applies
-`lakebase/schema.sql` + `lakebase/seed_campaigns.sql` and the runtime grants
-below using workspace-identity short-lived credentials. Missing roles or a
-failed grant postflight fail the migration rather than leaving a read-healthy
-app whose audited writes return 503. For an externally managed Lakebase,
-apply the same matrix to its app role. The audit ledger is append-only:
-`mip-app` gets `SELECT, INSERT` there and must not receive `UPDATE` or
-`DELETE`. `lakebase/schema.sql` also installs
+role. The `mip_lakebase_migrate` job then applies the pre-seed portion of
+`lakebase/schema.sql`, `lakebase/seed_campaigns.sql`, and the post-seed schema
+finalizer in one transaction using workspace-identity short-lived credentials.
+The finalizer maps only the five exact legacy narrative approval ids, infers a
+missing proof binding only when one immutable campaign variant is possible, and
+hard-validates every proof constraint. Unknown malformed, ambiguous, or orphaned
+history aborts before commit. It never deletes approvals, generated drafts, or
+activation outbox rows.
+
+Before that transaction commits, a rollback-only PostgreSQL probe on the same
+connection verifies exact campaign/variant/channel binding, validated proof
+constraints, one-time approval finalization, append-only audit evidence,
+immutable message proof, approval removal protection, TRUNCATE-trigger coverage,
+and zero probe residue. Missing roles, a failed integrity probe, or a failed grant
+postflight fail the migration rather than leaving a read-healthy app whose audited
+writes return 503. The resource permission initially carries database-level
+`CREATE`; migration revokes that privilege and postflight requires effective
+`CONNECT=true` and `CREATE=false`. Schema+seed and ACL reconciliation each run as
+rollback-capable transactions. For an externally managed Lakebase, apply the same
+matrix to its app role. The audit ledger is append-only:
+`action_audit`, `generated_outreach_drafts`, and
+`campaign_message_variants` get `SELECT, INSERT` only and must not receive
+`UPDATE`, `DELETE`, or `TRUNCATE`. `approvals` retains table `UPDATE` only for
+its one-time response/audit finalization; a row trigger rejects changes to
+borrower, actor, campaign, variant, channel, or any other decision field.
+`lakebase/schema.sql` also installs
 `trg_action_audit_append_only`, a statement-level trigger that rejects
-`UPDATE` / `DELETE` even if an identity later receives broader grants.
+`UPDATE` / `DELETE` / `TRUNCATE` even if an identity later receives broader grants, plus
+equivalent immutable triggers on the two outreach-evidence tables.
+
+AI Gateway proof is a deployment-verifier boundary, not a runtime write path.
+The app role receives `SELECT` only on `ai_gateway_proof_ledger`. The separate
+OAuth service-principal role named by `MIP_AI_GATEWAY_VERIFIER_CLIENT_ID`
+receives `SELECT, INSERT, UPDATE` on that table and no privilege on any other
+`mip_app` table or sequence. Migration rejects identical app/verifier roles and
+postflights both matrices.
+
+The SQL below uses `"service-principal-client-id"` as a placeholder. Replace
+it with the exact `service_principal_client_id`; retain double quotes so UUIDs
+and other non-identifier characters are handled as one Postgres role name.
 
 ```sql
 -- Applied automatically by mip_lakebase_migrate for bundle-provisioned
 -- Lakebase; apply this matrix directly for an externally managed instance.
-GRANT USAGE ON SCHEMA mip_app TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.campaigns TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.approvals TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.saved_leads TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.outreach_drafts TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_sessions TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_messages TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohorts TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.genie_cohort_members TO "mip-app";
-GRANT SELECT, INSERT ON TABLE mip_app.action_audit TO "mip-app";
-GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app TO "mip-app";
-ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app GRANT USAGE ON SEQUENCES TO "mip-app";
-REVOKE UPDATE, DELETE ON TABLE mip_app.action_audit FROM "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.agent_sessions TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.feedback TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_runs TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors TO "mip-app";
-GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_notification_drafts TO "mip-app";
+-- Revoke every reviewed object first. A newly added table is absent from this
+-- list and therefore makes the automated inventory postflight fail closed.
+REVOKE CREATE ON DATABASE mip_app_state FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON SCHEMA mip_app FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.schema_migrations FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.campaigns FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.campaign_message_variants FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.tenant_disclosures FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.sales_team FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.lead_assignments FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.call_dispositions FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.approvals FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.saved_leads FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.outreach_drafts FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.activation_destinations FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.activation_outbox FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.lead_outcomes FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.action_audit FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.action_audit_archive_runs FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.generated_outreach_drafts FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.genie_sessions FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.genie_messages FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.genie_cohorts FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.genie_cohort_members FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.agent_sessions FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.growth_agent_runs FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.growth_agent_monitors FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.growth_agent_notification_drafts FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.ai_gateway_proof_ledger FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.feedback FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.loan_officers FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.kpi_snapshots FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.user_visits FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON TABLE mip_app.genie_feedback_requests FROM "service-principal-client-id";
+REVOKE ALL PRIVILEGES ON SEQUENCE mip_app.action_audit_audit_sequence_seq FROM "service-principal-client-id";
+ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM "service-principal-client-id";
+
+GRANT USAGE ON SCHEMA mip_app TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.campaigns TO "service-principal-client-id";
+GRANT SELECT, INSERT ON TABLE mip_app.campaign_message_variants TO "service-principal-client-id";
+GRANT SELECT ON TABLE mip_app.tenant_disclosures TO "service-principal-client-id";
+GRANT SELECT ON TABLE mip_app.sales_team TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.lead_assignments TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.call_dispositions TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.approvals TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.saved_leads TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.outreach_drafts TO "service-principal-client-id";
+GRANT SELECT ON TABLE mip_app.activation_destinations TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.activation_outbox TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.lead_outcomes TO "service-principal-client-id";
+GRANT SELECT, INSERT ON TABLE mip_app.action_audit TO "service-principal-client-id";
+GRANT SELECT, INSERT ON TABLE mip_app.generated_outreach_drafts TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.genie_sessions TO "service-principal-client-id";
+GRANT SELECT, INSERT ON TABLE mip_app.genie_messages TO "service-principal-client-id";
+GRANT SELECT, INSERT ON TABLE mip_app.genie_cohorts TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.genie_cohort_members TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.growth_agent_runs TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.growth_agent_monitors TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.growth_agent_notification_drafts TO "service-principal-client-id";
+GRANT SELECT ON TABLE mip_app.ai_gateway_proof_ledger TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.feedback TO "service-principal-client-id";
+GRANT SELECT ON TABLE mip_app.loan_officers TO "service-principal-client-id";
+GRANT SELECT ON TABLE mip_app.kpi_snapshots TO "service-principal-client-id";
+GRANT SELECT, INSERT ON TABLE mip_app.user_visits TO "service-principal-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.genie_feedback_requests TO "service-principal-client-id";
+GRANT USAGE ON SEQUENCE mip_app.action_audit_audit_sequence_seq TO "service-principal-client-id";
+
+-- Dedicated deployment verifier. Replace "verifier-client-id" with the
+-- DATABRICKS_VERIFIER_CLIENT_ID / MIP_AI_GATEWAY_VERIFIER_CLIENT_ID value.
+REVOKE CREATE ON DATABASE mip_app_state FROM "verifier-client-id";
+REVOKE ALL PRIVILEGES ON SCHEMA mip_app FROM "verifier-client-id";
+REVOKE ALL PRIVILEGES ON ALL TABLES IN SCHEMA mip_app FROM "verifier-client-id";
+REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA mip_app FROM "verifier-client-id";
+ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app
+  REVOKE ALL PRIVILEGES ON TABLES FROM "verifier-client-id";
+ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app
+  REVOKE ALL PRIVILEGES ON SEQUENCES FROM "verifier-client-id";
+GRANT USAGE ON SCHEMA mip_app TO "verifier-client-id";
+GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.ai_gateway_proof_ledger
+  TO "verifier-client-id";
 ```
+
+**LeadOutcome source/audit boundary.** The outcome API rejects name-shaped
+`source_record_ref` input. Accepted external references are domain-separated
+with `source_system` and HMACed using `MIP_COTALITY_ID_MASK_SECRET` into the
+form `auto-<32 lowercase hex>` before repository writes, API responses, or
+audit emission. Lakebase also rejects an unhashed source reference, so direct
+or bypassed writes fail closed.
 
 `USAGE` on sequences is required for defaults such as
 `action_audit.audit_sequence BIGSERIAL`. Table `INSERT` alone does not grant
 permission to call the backing sequence's `nextval()`. `SELECT`, `UPDATE`, and
-ownership on sequences are intentionally not granted. The default-privilege
-statement applies only to sequences created later by the migration identity;
-it prevents an additive `SERIAL`/identity column from silently breaking every
-audited write after a future deploy.
+ownership on sequences are intentionally not granted. Future-sequence default
+privileges are explicitly revoked. Any new table or sequence must be added to
+the code and this matrix after reviewing its runtime statements; otherwise the
+migration postflight rejects the deployment. `schema_migrations`,
+`action_audit_archive_runs`, and `agent_sessions` intentionally receive no app
+privileges. Postflight also rejects effective database `CREATE`, schema
+`CREATE`, any unreviewed table/sequence, and any privilege outside the exact
+matrix above. The verifier postflight independently rejects access to every
+table except `ai_gateway_proof_ledger`, all sequence access, and any future
+default privilege.
 
 **What breaks if missing.** `/api/audit/events` returns 503. Approval
 writes (POST `/api/outreach/approve`) fail with `LakebaseError`. The
@@ -482,8 +601,14 @@ assumption in your runbook.
   object that may later land in the schema.
 - **`CAN_MANAGE`** on the app resource. That belongs to the Entrada
   delivery team's admin group, not the app identity itself.
-- **Direct Postgres `SUPERUSER`** on the Lakebase role. The default
-  `CAN_CONNECT_AND_CREATE` is sufficient; elevation is an over-grant.
+- **Direct Postgres `SUPERUSER` or database `CREATE`** on the Lakebase role.
+  The Apps binding currently provisions `CAN_CONNECT_AND_CREATE`; migration
+  immediately removes database `CREATE` and proves the runtime role is
+  connect-only outside the reviewed `mip_app` object matrix.
+- **Proof-ledger writes on the runtime app role, or broad Lakebase access on
+  the verifier role.** Runtime is `SELECT` only on
+  `ai_gateway_proof_ledger`; verifier is `SELECT, INSERT, UPDATE` there and has
+  no privileges on other app tables, sequences, or the `mip-admin` group.
 
 ---
 

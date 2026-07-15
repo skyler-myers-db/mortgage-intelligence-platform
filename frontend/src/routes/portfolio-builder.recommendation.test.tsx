@@ -15,6 +15,7 @@ const portfolioCreate = vi.fn();
 const campaignRecommendation = vi.fn();
 const campaigns = vi.fn();
 const salesCampaignPerformance = vi.fn();
+const appContextMocks = vi.hoisted(() => ({ canAccessAdmin: false }));
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -51,6 +52,7 @@ vi.mock('../components/AppContext', () => ({
     setDrawer: vi.fn(),
     showEvidence: true,
     showConfidence: true,
+    canAccessAdmin: appContextMocks.canAccessAdmin,
   }),
 }));
 
@@ -116,6 +118,7 @@ describe('PortfolioBuilder recommendation ownership', () => {
     campaignRecommendation.mockReset();
     campaigns.mockReset();
     salesCampaignPerformance.mockReset();
+    appContextMocks.canAccessAdmin = false;
     campaigns.mockResolvedValue({ campaigns: [] });
     portfolioPreview.mockResolvedValue(PREVIEW);
     portfolioCreate.mockResolvedValue({ campaign_id: 'campaign-generated' });
@@ -211,6 +214,22 @@ describe('PortfolioBuilder recommendation ownership', () => {
     });
     await waitUntil(() => portfolioCreate.mock.calls.length === 1);
   }
+
+  it('does not expose Admin Data Operations when a non-admin portfolio is at day zero', async () => {
+    portfolioPreview.mockResolvedValue({
+      ...PREVIEW,
+      day_zero: true,
+      marketable_population: 0,
+      top_tier_opportunities: 0,
+      offers_recommended: 0,
+      high_intent_leads: 0,
+    });
+    mount();
+    await waitUntil(() => container.textContent?.includes('First data refresh pending') === true);
+
+    expect(container.textContent).toContain('Contact an administrator');
+    expect(container.querySelector('a[href^="/admin-config"]')).toBeNull();
+  });
 
   it('does not let a deferred recommendation overwrite operator edits before explicit Apply', async () => {
     const recommendation = deferred<CampaignRecommendationResponse>();

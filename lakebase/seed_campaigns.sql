@@ -111,6 +111,48 @@ DO UPDATE SET
     send_window = EXCLUDED.send_window,
     updated_at = now();
 
+-- Campaign message variants -------------------------------------------
+-- Approval proof must bind to the exact immutable campaign copy and
+-- channel reviewed by the operator. Seeds are insert-only because these
+-- rows become evidence once referenced; changing copy requires a new
+-- variant name instead of mutating historical proof.
+INSERT INTO mip_app.campaign_message_variants (
+    campaign_id, variant_name, channel, subject, body, weight_pct,
+    generation_mode, generator_label
+)
+VALUES
+    (
+        '11111111-1111-4111-8111-111111111111',
+        'Benefit-led',
+        'email',
+        'See whether today''s rates could improve your mortgage',
+        'A licensed Summit Mortgage loan officer can review your current rate, estimated equity, and available refinance options with you. There is no obligation to proceed.',
+        100,
+        'operator',
+        'Reviewed seed copy'
+    ),
+    (
+        '22222222-2222-4222-8222-222222222222',
+        'Benefit-led',
+        'email',
+        'Explore ways your home equity could support your plans',
+        'A licensed Summit Mortgage loan officer can review cash-out refinance options based on your goals, available equity, and current mortgage terms. There is no obligation to proceed.',
+        100,
+        'operator',
+        'Reviewed seed copy'
+    ),
+    (
+        '33333333-3333-4333-8333-333333333333',
+        'Benefit-led',
+        'email',
+        'Review flexible ways to use your home equity',
+        'A licensed Summit Mortgage loan officer can compare home-equity and refinance options based on your goals and current mortgage terms. There is no obligation to proceed.',
+        100,
+        'operator',
+        'Reviewed seed copy'
+    )
+ON CONFLICT (campaign_id, variant_name, channel) DO NOTHING;
+
 -- Approvals (5 sample rows) -------------------------------------------
 -- 2026-06-11 audit P1-5: these are REAL mip.gold.borrower_360 borrower
 -- IDs (CLIP-hash derived, masked, stable across refreshes while the
@@ -119,18 +161,22 @@ DO UPDATE SET
 -- every stat in the rationale matches the proof drawer. The previous
 -- 5-digit placeholders (B-48291..B-48295) violated the B-[0-9A-Z]{13}
 -- contract, joined to nothing, and skewed approval-rate metrics; the
--- schema.sql migration 2026_06_11_narrative_seed_real_ids deletes them
--- and adds a CHECK so malformed IDs can never seed again. If a future
+-- schema.sql migration 2026_06_11_narrative_seed_real_ids maps only the
+-- five exact legacy seed rows and fails on any other malformed history.
+-- No approval is deleted by recurring schema apply. If a future
 -- share refresh drops one of these CLIPs, re-select with
 -- tools/select_narrative_borrowers.sql and update BOTH the IDs and the
 -- rationale stats together.
 INSERT INTO mip_app.approvals (
-    approval_id, campaign_id, borrower_id, offer_code, action, actor_email, rationale, decided_at
+    approval_id, campaign_id, variant_name, channel, borrower_id,
+    offer_code, action, actor_email, rationale, decided_at
 )
 VALUES
     (
         '44444444-4444-4444-8444-444444444441',
         '11111111-1111-4111-8111-111111111111',
+        'Benefit-led',
+        'email',
         'B-0CPWBTJMAPFY2',
         'refi',
         'approve',
@@ -141,6 +187,8 @@ VALUES
     (
         '44444444-4444-4444-8444-444444444442',
         '22222222-2222-4222-8222-222222222222',
+        'Benefit-led',
+        'email',
         'B-1IB0UGBTFYM20',
         'cash_out',
         'approve',
@@ -151,6 +199,8 @@ VALUES
     (
         '44444444-4444-4444-8444-444444444443',
         '33333333-3333-4333-8333-333333333333',
+        'Benefit-led',
+        'email',
         'B-102FL7THC6Q3L',
         'refi_plus_heloc',
         'approve',
@@ -161,6 +211,8 @@ VALUES
     (
         '44444444-4444-4444-8444-444444444444',
         '11111111-1111-4111-8111-111111111111',
+        'Benefit-led',
+        'email',
         'B-1BCZXFQYCX715',
         'refi',
         'hold',
@@ -171,6 +223,8 @@ VALUES
     (
         '44444444-4444-4444-8444-444444444445',
         '22222222-2222-4222-8222-222222222222',
+        'Benefit-led',
+        'email',
         'B-1VU4FO4XBQPC4',
         'cash_out',
         'reject',

@@ -114,7 +114,7 @@ def test_write_issues_insert_with_named_params() -> None:
 
 
 def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
-    """The ledger must reject UPDATE/DELETE even if the runtime role owns the table."""
+    """The ledger rejects UPDATE/DELETE/TRUNCATE even with broad table rights."""
 
     schema_sql = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 
@@ -122,7 +122,7 @@ def test_action_audit_schema_has_statement_level_append_only_trigger() -> None:
     assert "RAISE EXCEPTION 'mip_app.action_audit is append-only" in schema_sql
     assert "USING ERRCODE = '42501'" in schema_sql
     assert "CREATE TRIGGER trg_action_audit_append_only" in schema_sql
-    assert "BEFORE UPDATE OR DELETE ON mip_app.action_audit" in schema_sql
+    assert "BEFORE UPDATE OR DELETE OR TRUNCATE ON mip_app.action_audit" in schema_sql
     assert "FOR EACH STATEMENT" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS correlation_id TEXT" in schema_sql
     assert "ADD COLUMN IF NOT EXISTS audit_sequence BIGSERIAL" in schema_sql
@@ -590,37 +590,47 @@ def test_custom_growth_agent_lakebase_schema_contract_is_migrated() -> None:
 
 
 def test_lakebase_grants_reference_covers_growth_agent_tables() -> None:
+    from jobs import lakebase_migrate
+
     grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
 
-    assert "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_runs" in grants_doc
-    assert (
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.growth_agent_monitors" in grants_doc
-    )
-    assert (
-        "GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE " "mip_app.growth_agent_notification_drafts"
-    ) in grants_doc
+    for table_name in (
+        "growth_agent_runs",
+        "growth_agent_monitors",
+        "growth_agent_notification_drafts",
+    ):
+        assert lakebase_migrate._APP_ROLE_TABLE_PRIVILEGES[table_name] == (
+            "SELECT",
+            "INSERT",
+            "UPDATE",
+        )
+        assert (
+            f"GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.{table_name} "
+            'TO "service-principal-client-id";'
+        ) in grants_doc
+        assert f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.{table_name}" not in grants_doc
 
 
-def test_lakebase_app_role_grants_can_advance_current_and_future_sequences() -> None:
-    """Table INSERT does not imply nextval() permission on BIGSERIAL columns."""
+def test_lakebase_app_role_grants_only_the_required_current_sequence() -> None:
+    """The app may call nextval only on the reviewed BIGSERIAL sequence."""
 
     from jobs import lakebase_migrate
 
-    templates = "\n".join(lakebase_migrate._APP_ROLE_GRANT_TEMPLATES)
     grants_doc = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
 
-    current_sequence_grant = "GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app TO {role}"
-    future_sequence_grant = (
-        "ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app GRANT USAGE ON SEQUENCES TO {role}"
-    )
-    assert current_sequence_grant in templates
-    assert future_sequence_grant in templates
-    assert current_sequence_grant.format(role='"mip-app"') in grants_doc
-    assert future_sequence_grant.format(role='"mip-app"') in grants_doc
-
-    # The runtime needs nextval(), not sequence inspection or mutation.
-    sequence_lines = [line for line in templates.splitlines() if "SEQUENCE" in line]
-    assert all("SELECT" not in line and "UPDATE" not in line for line in sequence_lines)
+    assert lakebase_migrate._APP_ROLE_SEQUENCE_PRIVILEGES == {
+        "action_audit_audit_sequence_seq": ("USAGE",),
+    }
+    assert (
+        "GRANT USAGE ON SEQUENCE mip_app.action_audit_audit_sequence_seq "
+        'TO "service-principal-client-id";'
+    ) in grants_doc
+    assert "GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app" not in grants_doc
+    assert "GRANT USAGE ON SEQUENCES TO" not in grants_doc
+    assert (
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app\n"
+        '  REVOKE ALL PRIVILEGES ON SEQUENCES FROM "service-principal-client-id";'
+    ) in grants_doc
 
 
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:

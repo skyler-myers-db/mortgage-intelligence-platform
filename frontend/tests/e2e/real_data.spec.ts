@@ -98,6 +98,140 @@ type AuditRow = {
   };
 };
 
+type LiveGeniePayload = {
+  answer?: string | null;
+  source?: string | null;
+  trusted_assets?: string[];
+  conversation_id?: string | null;
+  message_id?: string | null;
+  genie_status?: string | null;
+  sql_query?: string | null;
+  follow_up_questions?: string[];
+  reasoning_trace?: Array<{ kind?: string | null; content?: string | null }>;
+  proof?: {
+    trusted?: boolean | null;
+    source_assets?: string[];
+    sql_query?: string | null;
+    conversation_id?: string | null;
+    message_id?: string | null;
+    reasoning_trace?: Array<{ kind?: string | null; content?: string | null }>;
+  } | null;
+};
+
+type CapabilityRow = {
+  key: string;
+  status: string;
+  claimable: boolean;
+};
+
+type CampaignRecommendationPayload = {
+  generation_mode: 'supervisor' | 'reviewed_fallback';
+  generator_label: string;
+  performance_status: 'qualified' | 'insufficient_sample' | 'unavailable';
+  audience_summary: string;
+  strategy: string;
+  variants: Array<{
+    variant_name: string;
+    subject: string;
+    body: string;
+    hypothesis: string;
+    provenance_token?: string | null;
+  }>;
+  holdout_pct: number;
+  evidence: Array<{ label: string; value: string; source_asset: string }>;
+  warnings: string[];
+};
+
+const NATIVE_GENIE_CONVERSATION_QUESTION =
+  'Using mip.gold.borrower_360, return borrower count and average modeled equity percentage grouped by first position loan type, ordered by borrower count descending.';
+
+function expectGovernedGeniePayload(payload: LiveGeniePayload, label: string): void {
+  expect(
+    ['genie', 'trusted_sql'],
+    `${label}: answer source must be a governed Genie or verified-SQL tier`,
+  ).toContain(payload.source);
+  expect(payload.answer?.trim().length ?? 0, `${label}: API answer must be nonempty`).toBeGreaterThan(20);
+  expect(
+    payload.trusted_assets?.length ?? 0,
+    `${label}: API answer must name at least one governed source asset`,
+  ).toBeGreaterThan(0);
+  expect(payload.proof, `${label}: API answer must include governed proof`).toBeTruthy();
+  expect(payload.proof?.trusted, `${label}: governed proof must be trusted`).toBe(true);
+  expect(
+    payload.proof?.source_assets?.length ?? 0,
+    `${label}: proof must name at least one governed source asset`,
+  ).toBeGreaterThan(0);
+  expect(
+    (payload.sql_query ?? payload.proof?.sql_query ?? '').trim().length,
+    `${label}: governed proof must include verified SQL`,
+  ).toBeGreaterThan(0);
+}
+
+function expectLiveGenieTurn(payload: LiveGeniePayload, label: string): void {
+  expectGovernedGeniePayload(payload, label);
+  expect(payload.conversation_id?.trim(), `${label}: live turn must include conversation_id`).toBeTruthy();
+  expect(payload.message_id?.trim(), `${label}: live turn must include message_id`).toBeTruthy();
+  expect(payload.genie_status, `${label}: live turn must complete before the API responds`).toBe('COMPLETED');
+  const reasoningSteps = payload.reasoning_trace ?? [];
+  expect(
+    reasoningSteps.length,
+    `${label}: completed native turn must expose public API reasoning summaries`,
+  ).toBeGreaterThan(0);
+  for (let index = 0; index < reasoningSteps.length; index += 1) {
+    expect(reasoningSteps[index].kind?.trim(), `${label}: reasoning step ${index + 1} kind`).toBeTruthy();
+    expect(reasoningSteps[index].content?.trim(), `${label}: reasoning step ${index + 1} text`).toBeTruthy();
+  }
+  expect(
+    payload.proof?.reasoning_trace,
+    `${label}: proof must preserve the same public reasoning summaries`,
+  ).toEqual(reasoningSteps);
+
+  const followUps = payload.follow_up_questions ?? [];
+  expect(
+    followUps.length,
+    `${label}: completed native turn must expose follow-up suggestions`,
+  ).toBeGreaterThan(0);
+  for (let index = 0; index < followUps.length; index += 1) {
+    expect(followUps[index].trim(), `${label}: follow-up ${index + 1} must be nonempty`).not.toBe('');
+  }
+}
+
+async function expectLiveGenieUi(
+  root: Locator,
+  payload: LiveGeniePayload,
+  label: string,
+): Promise<void> {
+  await expect(root, `${label}: answer surface must render`).toBeVisible({ timeout: 90_000 });
+  await expect(root.locator('.genie-proof-toggle').getByText('trusted', { exact: true })).toBeVisible();
+  await expect(root.getByLabel('Answer source: Databricks Genie Conversation API')).toBeVisible();
+  await expect(root.getByTestId('genie-feedback-up')).toBeVisible();
+  await expect(root.getByTestId('genie-feedback-down')).toBeVisible();
+
+  const reasoningSteps = payload.reasoning_trace ?? [];
+  const reasoning = root.locator('.genie-answer__reasoning');
+  await expect(reasoning, `${label}: Public Preview reasoning returned by the API must render`).toBeVisible();
+  await expect(reasoning).not.toHaveAttribute('open', '');
+  await reasoning.locator('summary').click();
+  for (let index = 0; index < reasoningSteps.length; index += 1) {
+    const step = reasoningSteps[index];
+    expect(step.kind?.trim(), `${label}: reasoning step ${index + 1} must include a public kind`).toBeTruthy();
+    expect(step.content?.trim(), `${label}: reasoning step ${index + 1} must include public text`).toBeTruthy();
+    await expect(reasoning.locator('.genie-answer__reasoning-step').nth(index)).toContainText(
+      step.content!.trim(),
+    );
+  }
+
+  const followUps = payload.follow_up_questions ?? [];
+  const renderedFollowUps = root.locator('.genie-answer__followups .filter--question');
+  await expect(
+    renderedFollowUps,
+    `${label}: API follow-up suggestions must render as actions`,
+  ).toHaveCount(Math.min(followUps.length, 5));
+  for (let index = 0; index < Math.min(followUps.length, 5); index += 1) {
+    await expect(renderedFollowUps.nth(index)).toContainText(followUps[index].trim());
+  }
+}
+
 type MapDrillTarget = {
   state: string;
   stateName: string;
@@ -334,7 +468,9 @@ async function discoverMapDrillTarget(
   }
   expect(county, 'county rollups should expose at least one populated county').toBeTruthy();
   if (!county) throw new Error('No populated county with ZIP rollups was found');
-  const rawCountyName = String(county.county_name || county.fips_5);
+  const countyFips = String(county.fips_5 ?? '').trim();
+  expect(countyFips, 'populated county rollup must include a FIPS code').not.toBe('');
+  const rawCountyName = String(county.county_name || countyFips);
   const countyName = rawCountyName.toLowerCase().endsWith('county')
     ? rawCountyName
     : `${rawCountyName} County`;
@@ -342,7 +478,7 @@ async function discoverMapDrillTarget(
   return {
     state: stateRollup.state,
     stateName,
-    countyFips: county.fips_5,
+    countyFips,
     countyName,
   };
 }
@@ -823,6 +959,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('genie FAB returns a non-empty answer and source chip opens lineage', async ({ page }) => {
+    test.setTimeout(120_000);
     await gotoApp(page, '/');
 
     await openGeniePanel(page);
@@ -839,17 +976,24 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await panel.getByRole('button', { name: /Ask/i }).click();
     const canonicalResponse = await canonicalResponsePromise;
     expect(canonicalResponse.status(), 'canonical Genie message returned non-200').toBe(200);
-    const canonicalPayload = await canonicalResponse.json() as {
-      conversation_id?: string | null;
-      message_id?: string | null;
-      reasoning_trace?: Array<{ kind?: string; content?: string }>;
-    };
-    expect(canonicalPayload.conversation_id, 'canonical answer must retain its live conversation id').toBeTruthy();
-    expect(canonicalPayload.message_id, 'canonical answer must retain its live message id').toBeTruthy();
+    const canonicalPayload = await canonicalResponse.json() as LiveGeniePayload;
+    expectGovernedGeniePayload(canonicalPayload, 'canonical FAB answer');
     expect(
-      canonicalPayload.reasoning_trace?.length ?? 0,
-      'the live Genie Conversation API turn should expose at least one bounded reasoning summary',
-    ).toBeGreaterThan(0);
+      canonicalPayload.source,
+      'the canonical count must use the deterministic governed SQL tier',
+    ).toBe('trusted_sql');
+    expect(
+      canonicalPayload.reasoning_trace ?? [],
+      'deterministic trusted_sql must not expose native Genie reasoning summaries',
+    ).toEqual([]);
+    expect(
+      canonicalPayload.proof?.reasoning_trace ?? [],
+      'deterministic trusted_sql proof must not fabricate native reasoning summaries',
+    ).toEqual([]);
+    expect(
+      canonicalPayload.follow_up_questions ?? [],
+      'deterministic trusted_sql must not claim Genie-authored follow-up suggestions',
+    ).toEqual([]);
 
     // Cold Genie space = 10-15s; allow 40s (a cold warehouse + Genie
     // compilation can push past 20s on the first question of a session).
@@ -863,13 +1007,13 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect
       .poll(async () => (await answer.innerText()).trim().length, { timeout: 40_000 })
       .toBeGreaterThan(20);
+    await expect(aiMessage.locator('.genie-proof-toggle').getByText('trusted', { exact: true })).toBeVisible();
     await expect(aiMessage.getByTestId('genie-feedback-up')).toBeVisible();
     await expect(aiMessage.getByTestId('genie-feedback-down')).toBeVisible();
-    const reasoning = aiMessage.locator('.genie-answer__reasoning');
-    await expect(reasoning).toBeVisible();
-    await expect(reasoning).not.toHaveAttribute('open', '');
-    await reasoning.locator('summary').click();
-    await expect(reasoning.locator('.genie-answer__reasoning-step').first()).toBeVisible();
+    await expect(
+      aiMessage.locator('.genie-answer__reasoning'),
+      'trusted_sql UI must not render a native reasoning disclosure',
+    ).toHaveCount(0);
     const feedbackResponsePromise = page.waitForResponse((response) => (
       response.request().method() === 'POST'
       && /\/api\/(?:v1\/)?genie\/feedback$/.test(response.url())
@@ -900,6 +1044,27 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       'Every governed Overview asset must deep-link to Catalog Explorer.',
     ).toBe(true);
 
+    const catalogAsset = overviewAssets.first();
+    const catalogHref = await catalogAsset.getAttribute('href');
+    expect(catalogHref, 'lineage asset must expose a Catalog Explorer destination').toMatch(
+      /^https:\/\/[^/]+\/explore\/data\//,
+    );
+    const destinationRequestPromise = page.context().waitForEvent('request', {
+      predicate: (request) => request.isNavigationRequest() && request.url() === catalogHref,
+      timeout: 30_000,
+    });
+    const popupPromise = page.waitForEvent('popup', { timeout: 30_000 });
+    await catalogAsset.click();
+    const [catalogPopup, destinationRequest] = await Promise.all([
+      popupPromise,
+      destinationRequestPromise,
+    ]);
+    expect(
+      destinationRequest.url(),
+      'clicking a lineage asset must open its exact Catalog Explorer destination',
+    ).toBe(catalogHref);
+    await catalogPopup.close();
+
     await drawer.getByRole('tab', { name: 'Lineage' }).click();
     await expect(drawer.getByText(/Ordered semantics: arrows follow/i)).toBeVisible();
     const lineageAssets = drawer.locator('#drawer-panel-lineage .lineage-node > .lineage-node__chip');
@@ -914,6 +1079,69 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       'Every governed Lineage asset must deep-link to Catalog Explorer.',
     ).toBe(true);
     await drawer.getByRole('button', { name: /Close drawer/i }).click();
+  });
+
+  test('Growth Agent actionable total matches the destination Lead Queue total', async ({ page }) => {
+    test.setTimeout(120_000);
+    await gotoApp(page, '/ask-genie');
+
+    const workflowCard = page.locator('.growth-agent-card', {
+      hasText: 'Daily Refi Opportunity Brief',
+    }).first();
+    await expect(workflowCard).toBeVisible({ timeout: 45_000 });
+    const runResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && /\/api\/(?:v1\/)?growth-agent\/workflows\/daily_refi_brief\/run$/.test(
+        new URL(response.url()).pathname,
+      )
+    ), { timeout: 90_000 });
+    await workflowCard.getByRole('button', { name: 'Run', exact: true }).click();
+    const runResponse = await runResponsePromise;
+    expect(runResponse.status(), 'Growth Agent daily refi run returned non-200').toBe(200);
+    const run = await runResponse.json() as {
+      workflow: { title: string; action_label: string };
+      broad_label: string;
+      actionable_label: string;
+      broad_total: number;
+      actionable_total: number;
+      route: string;
+    };
+    expect(run.broad_total).toBeGreaterThanOrEqual(run.actionable_total);
+    expect(run.actionable_total).toBeGreaterThanOrEqual(0);
+    expect(run.route).toContain('/lead-queue?');
+
+    const latestRun = page.getByLabel('Latest Growth Agent run');
+    await expect(latestRun).toBeVisible({ timeout: 45_000 });
+    const broadMetric = latestRun.locator('.growth-agent-run__metrics > div', {
+      hasText: run.broad_label,
+    });
+    const actionableMetric = latestRun.locator('.growth-agent-run__metrics > div', {
+      hasText: run.actionable_label,
+    });
+    await expect(broadMetric.locator('strong')).toHaveText(run.broad_total.toLocaleString('en-US'));
+    await expect(actionableMetric.locator('strong')).toHaveText(
+      run.actionable_total.toLocaleString('en-US'),
+    );
+
+    const destinationResponsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'GET'
+      && urlIncludesApiPath(response.url(), '/api/leads')
+      && response.status() === 200
+    ), { timeout: 60_000 });
+    await latestRun.getByRole('button', { name: run.workflow.action_label, exact: true }).click();
+    await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 30_000 });
+    const destinationResponse = await destinationResponsePromise;
+    expect(
+      Number(destinationResponse.headers()['x-total-matching'] ?? -1),
+      'destination /api/leads total must match the Growth Agent actionable total',
+    ).toBe(run.actionable_total);
+
+    const footer = page.locator('.stable-refresh-region--table .surface__ft');
+    await expect(footer).toBeVisible({ timeout: 45_000 });
+    const footerText = await footer.innerText();
+    const footerMatch = footerText.match(/of ([\d,]+) total matching filters/);
+    expect(footerMatch, `Lead Queue footer did not expose its destination total: ${footerText}`).toBeTruthy();
+    expect(Number(footerMatch![1].replace(/,/g, ''))).toBe(run.actionable_total);
   });
 
   test('brand favicon and Genie dock chrome do not regress', async ({ page, request }) => {
@@ -1095,8 +1323,71 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   //     that hit UC use timeouts of 30-45 s. Subsequent calls are
   //     warm and fast (p95 ~1300 ms for /api/leads).
 
-  test('portfolio-builder: filters + CTA + KPIs come from /api/portfolio/preview', async ({ page }) => {
+  test('portfolio-builder: filters + CTA + KPIs come from /api/portfolio/preview', async ({ browser, page, request }) => {
+    test.setTimeout(300_000);
+    expect(
+      ADMIN_BEARER,
+      'live campaign capability proof requires the distinct admin bearer provisioned by nightly',
+    ).not.toBe('');
+    const capabilitiesResponse = await request.get(
+      `${API_URL}/api/v1/admin/capabilities?live=1`,
+      { headers: { Authorization: `Bearer ${ADMIN_BEARER}` }, timeout: 120_000 },
+    );
+    expect(capabilitiesResponse.status(), 'live capability probe returned non-200').toBe(200);
+    const capabilitiesBody = await capabilitiesResponse.json() as
+      | CapabilityRow[]
+      | { capabilities?: CapabilityRow[] };
+    const capabilities = Array.isArray(capabilitiesBody)
+      ? capabilitiesBody
+      : capabilitiesBody.capabilities ?? [];
+    const supervisorCapability = capabilities.find((row) => row.key === 'agent_orchestrator');
+    expect(supervisorCapability, 'capability matrix must include the Supervisor agent row').toBeTruthy();
+
+    const campaignRecommendationResponse = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && urlIncludesApiPath(response.url(), '/api/portfolio/campaign-recommendation')
+    ), { timeout: 120_000 });
     await gotoApp(page, '/portfolio-builder');
+    const campaignResponse = await campaignRecommendationResponse;
+    expect(campaignResponse.status(), 'live campaign recommendation returned non-200').toBe(200);
+    const recommendation = await campaignResponse.json() as CampaignRecommendationPayload;
+    const supervisorClaimable = Boolean(
+      supervisorCapability?.claimable && supervisorCapability.status === 'available',
+    );
+    if (supervisorClaimable) {
+      expect(
+        recommendation.generation_mode,
+        'a claimable Supervisor capability must produce the AI campaign recommendation',
+      ).toBe('supervisor');
+      expect(recommendation.generator_label).toBe('Agent endpoint-generated recommendation');
+      expect(recommendation.warnings).toEqual([]);
+    }
+    expect(['supervisor', 'reviewed_fallback']).toContain(recommendation.generation_mode);
+    expect(recommendation.audience_summary.trim().length).toBeGreaterThan(20);
+    expect(recommendation.strategy.trim().length).toBeGreaterThan(20);
+    expect(['qualified', 'insufficient_sample', 'unavailable']).toContain(
+      recommendation.performance_status,
+    );
+    expect(recommendation.holdout_pct).toBeGreaterThanOrEqual(5);
+    expect(recommendation.holdout_pct).toBeLessThanOrEqual(30);
+    expect(recommendation.variants).toHaveLength(2);
+    for (const variant of recommendation.variants) {
+      expect(variant.hypothesis.trim().length, `${variant.variant_name} hypothesis`).toBeGreaterThan(20);
+      expect(variant.provenance_token?.trim(), `${variant.variant_name} provenance`).toBeTruthy();
+    }
+    expect(recommendation.evidence.length, 'campaign response must carry governed evidence').toBeGreaterThan(0);
+    for (const row of recommendation.evidence) {
+      expect(row.label.trim(), 'campaign evidence label').not.toBe('');
+      expect(row.value.trim(), `campaign evidence value for ${row.label}`).not.toBe('');
+      expect(row.source_asset, `campaign evidence source for ${row.label}`).toMatch(
+        /^(mip\.|mip_app\.)/,
+      );
+    }
+    if (recommendation.performance_status === 'qualified') {
+      expect(recommendation.evidence.map((row) => row.source_asset)).toEqual(
+        expect.arrayContaining(['mip_app.call_dispositions', 'mip_app.lead_outcomes']),
+      );
+    }
 
     // Unique-to-route: the lender-conversation filter set renders with the
     // prototype BEM, including Owner Link and purchase-intent overlays.
@@ -1117,15 +1408,22 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText(/staged cadence only/i)).toBeVisible();
     const dataOperationsLink = page.getByRole('link', { name: /Admin Data Operations/i });
     await expect(dataOperationsLink).toBeVisible();
-    test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for the Admin Data Operations handoff.');
-    await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
-    await dataOperationsLink.click();
-    await expect(page).toHaveURL(/\/admin-config#data-operations$/);
-    await expect(page.getByRole('heading', { name: 'Rules, data sources, and audit' })).toBeVisible();
-    await expect(page.locator('#data-operations')).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByLabel('Data freshness snapshot')).toBeVisible({ timeout: 30_000 });
-    await expect(page.getByText('Latest refresh')).toBeVisible();
-    await gotoApp(page, '/portfolio-builder');
+    const adminContext = await browser.newContext({
+      baseURL: APP_URL,
+      extraHTTPHeaders: { Authorization: `Bearer ${ADMIN_BEARER}` },
+    });
+    const adminPage = await adminContext.newPage();
+    try {
+      await gotoApp(adminPage, '/portfolio-builder');
+      await adminPage.getByRole('link', { name: /Admin Data Operations/i }).click();
+      await expect(adminPage).toHaveURL(/\/admin-config#data-operations$/);
+      await expect(adminPage.getByRole('heading', { name: 'Rules, data sources, and audit' })).toBeVisible();
+      await expect(adminPage.locator('#data-operations')).toBeVisible({ timeout: 10_000 });
+      await expect(adminPage.getByLabel('Data freshness snapshot')).toBeVisible({ timeout: 30_000 });
+      await expect(adminPage.getByText('Latest refresh')).toBeVisible();
+    } finally {
+      await adminContext.close();
+    }
 
     // Primary CTA per prototype (design_files/Module 0 Prototype.html line
     // 1780): the "Run build" button in the filter row. Not a forward-nav;
@@ -1166,8 +1464,16 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(campaign.locator('[aria-label$=" hypothesis"]')).toHaveCount(2);
     await expect(campaign.locator('[aria-label="Recommendation evidence"] .evidence-chip').first())
       .toBeVisible();
+    await expect(campaign).toContainText(recommendation.generator_label);
     await expect(campaign).toContainText(
-      /Agent endpoint-generated recommendation|Reviewed campaign framework/,
+      recommendation.performance_status === 'qualified'
+        ? 'Qualified team performance'
+        : recommendation.performance_status === 'insufficient_sample'
+          ? 'Cohort data only · sample too small'
+          : 'Cohort data only · operations unavailable',
+    );
+    await expect(campaign.locator('.campaign-recommendation__strategy')).toHaveText(
+      recommendation.strategy,
     );
     await expect(campaign).not.toContainText(
       /No borrower identities, contact data, or outbound messages are included/i,
@@ -1533,8 +1839,8 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     }
   });
 
-  test('ask-genie: standalone page (not the FAB) renders + primary CTA works', async ({ page }) => {
-    test.setTimeout(120_000);
+  test('ask-genie: native Conversation API turn renders governed proof and feedback', async ({ page }) => {
+    test.setTimeout(150_000);
 
     await gotoApp(page, '/ask-genie');
 
@@ -1546,30 +1852,47 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(page.getByText(/gold\.lead_population/)).toBeVisible();
     await expect(page.getByText(/semantics\.lead_generation_metric_view/)).toBeVisible();
 
-    // Real data: the presenter/user types the question explicitly. The
-    // page should not depend on a prefilled canned prompt before it can ask
-    // Genie.
-    await page
-      .locator('textarea[aria-label="Ask Genie — question"]')
-      .fill('Which ZIPs have the most in-the-money refinance candidates?');
+    // This multi-metric grouping is intentionally outside the reviewed
+    // deterministic question catalog. In live-first mode it must exercise a
+    // native Databricks Genie Conversation API turn rather than a canned SQL
+    // answer. A disconnected or deterministic-only deployment therefore
+    // fails this gate instead of satisfying it with an answer-shaped fallback.
+    await page.locator('textarea[aria-label="Ask Genie — question"]').fill(
+      NATIVE_GENIE_CONVERSATION_QUESTION,
+    );
     const askButton = page.getByRole('button', { name: /^Ask Genie$/i }).first();
     await expect(askButton).toBeVisible();
+    const responsePromise = page.waitForResponse((response) => (
+      response.request().method() === 'POST'
+      && /\/api\/(?:v1\/)?genie\/message$/.test(response.url())
+    ), { timeout: 120_000 });
     await askButton.click();
+    const response = await responsePromise;
+    expect(response.status(), 'native Genie message returned non-200').toBe(200);
+    const payload = await response.json() as LiveGeniePayload;
+    expect(payload.source, 'native aggregation must use the Genie answer tier').toBe('genie');
+    expectLiveGenieTurn(payload, 'standalone native Genie answer');
 
-    // Downstream: the answer surface (inline `.surface` within the
-    // body) renders with a Genie answer. GenieAnswer owns the content;
-    // we assert by presence of a source chip (every answer has one).
-    const answerSurface = page.locator('.surface', { hasText: /Source:/i }).first();
-    await expect(answerSurface).toBeVisible({ timeout: 90_000 });
-    const chartTitle = answerSurface.locator('.genie-chart__title').first();
-    await expect(chartTitle).toContainText(/borrowers.*by.*zip/i, { timeout: 10_000 });
-    await expect(chartTitle).not.toContainText(/zip.*by.*state/i);
-    await assertSourceDrawer(
-      page,
-      answerSurface,
-      /gold\.borrower_360|gold\.lead_population/,
-      /Borrower 360 feature set|Ranked lead population/,
+    const sourceDisclosure = page.getByLabel(
+      'Answer source: Databricks Genie Conversation API',
     );
+    const answerSurface = page.locator('.surface.surface--inset', {
+      has: sourceDisclosure,
+    }).first();
+    await expectLiveGenieUi(answerSurface, payload, 'standalone native Genie answer');
+    await expect(sourceDisclosure).toHaveText('Databricks Genie Conversation API');
+    await expect(answerSurface.locator('.sources .evidence-chip').first()).toBeVisible();
+    await expect(answerSurface.locator('.genie-answer__table tbody tr').first()).toBeVisible({
+      timeout: 10_000,
+    });
+
+    await answerSurface.getByRole('button', { name: /Show proof/i }).click();
+    const proofDrawer = page.getByRole('dialog', { name: /Genie answer proof/i });
+    await expect(proofDrawer).toBeVisible();
+    await expect(proofDrawer.getByText(/Trusted SELECT on curated assets/i)).toBeVisible();
+    await expect(proofDrawer.locator('.evidence-chip').first()).toBeVisible();
+    await expect(proofDrawer.locator('pre.genie-proof__sql')).toContainText(/borrower_360/i);
+    await proofDrawer.getByRole('button', { name: /Close Genie proof/i }).click();
   });
 
   test('ask-genie: listed days-on-market prompt returns trusted app proof', async ({ page }) => {

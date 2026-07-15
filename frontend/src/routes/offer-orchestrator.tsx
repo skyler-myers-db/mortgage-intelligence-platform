@@ -1,17 +1,15 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Link, Navigate, useParams } from 'react-router-dom';
+import { Navigate, useParams } from 'react-router-dom';
 import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation } from '../types';
 import { PageShell } from '../components/layout/PageShell';
 import { ApprovalBanner } from '../components/mortgage/ApprovalBanner';
 import { BorrowerOfferPreviewMock } from '../components/mortgage/BorrowerOfferPreviewMock';
-import { TopLeadsQuickPick } from '../components/mortgage/TopLeadsQuickPick';
 import { ScoreBadge } from '../components/mortgage/ScoreBadge';
 import { ConfidenceMeter } from '../components/mortgage/ConfidenceMeter';
 import { Button, Chip } from '../components/Primitives';
-import { WarmingUpBlock } from '../components/ui/WarmingUpBlock';
 import { useApp } from '../components/AppContext';
 import { ActivationLoopPanel } from '../components/activation/ActivationLoopPanel';
 import { invalidateOperationalQueries } from '../lib/queryKeys';
@@ -21,42 +19,34 @@ import { DEFAULT_REJECT_REASON, type OutreachChannel, type RejectReasonCode } fr
 import { useOfferSalesTeam } from './offer-orchestrator.sales-team';
 import {
   OfferDetailsRows,
-  OfferOrchestratorEmptyHero,
-  OfferOrchestratorEmptyState,
   OfferReviewGrid,
   RejectRationalePanel,
 } from './offer-orchestrator.panels';
 import { draftProofMatchesSnapshot, offerSnapshotMatches, resolveOfferApprovalStatus } from './offer-orchestrator.snapshot';
 import { OfferSnapshotReconciliation } from './offer-orchestrator.snapshot-status';
+import {
+  OfferLoadErrorRoute,
+  OfferOrchestratorEmptyRoute,
+  OfferWarmingRoute,
+  useOfferCampaignBinding,
+} from './offer-orchestrator.route-ui';
 
 export default function OfferOrchestrator() {
   const { id } = useParams();
+  const { campaignBinding, campaignBindingError } = useOfferCampaignBinding();
   const queryClient = useQueryClient();
   const [b, setB] = useState<Borrower360Type | null>(null);
   const [rec, setRec] = useState<OfferRecommendation | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [loadErrorStatus, setLoadErrorStatus] = useState<number | null>(null);
-  // Cold-start warming-up state for the borrower + recommend fetch pair.
-  // Shape matches WarmingUpBlock's contract. Non-null means we're in a
-  // 503 retry loop and the UI should show "Warehouse warming up
-  // (attempt N of 6)…" instead of the red error banner.
   const [warmingUp, setWarmingUp] = useState<WarmingUpState | null>(null);
   const [snapshotReconciling, setSnapshotReconciling] = useState(false);
   const [approveError, setApproveError] = useState<string | null>(null);
   const [auditId, setAuditId] = useState<string | null>(null);
   const [approvalId, setApprovalId] = useState<string | null>(null);
   const [lifecycle, setLifecycle] = useState<BorrowerLifecycle | null>(null);
-  // R5-11 (2026-04-23): in-flight flag forwarded to ApprovalBanner so
-  // the buttons disable while a POST is pending. Prevents a double
-  // click from writing two audit rows.
   const [approving, setApproving] = useState<boolean>(false);
-  // Reload token re-runs the borrower + recommend + draft fetches.
-  // Hole-finder finding #1, 2026-04-23.
   const [reloadToken, setReloadToken] = useState<number>(0);
-  // 2026-04-22: the draft textarea is controlled and hydrated from
-  // /api/outreach/draft so edits persist through approve.
-  // 2026-05-08: fail closed if the backend draft endpoint is unavailable;
-  // the UI must not generate or approve local outreach copy.
   const [draftBody, setDraftBody] = useState<string>('');
   const [draftSubject, setDraftSubject] = useState<string>('');
   const [draftChannel, setDraftChannel] = useState<OutreachChannel>('email');
@@ -79,21 +69,13 @@ export default function OfferOrchestrator() {
     responseHash: string;
     sourceRefreshedAt: string;
   } | null>(null);
-  // Cold-start warming-up state for the draftOutreach fetch. Non-null =
-  // the draft endpoint is in a 503 retry loop (mirrors the borrower +
-  // recommend loop). When present, the Draft outreach tile shows the
-  // WarmingUpBlock; after retries exhaust the approval path remains
-  // disabled until a governed draft loads.
   const [draftWarming, setDraftWarming] = useState<WarmingUpState | null>(null);
   const [rejectReviewOpen, setRejectReviewOpen] = useState(false);
   const [rejectReasonCode, setRejectReasonCode] = useState<RejectReasonCode>(DEFAULT_REJECT_REASON);
-  // Feature C: optional loan-officer assignment + follow-up reminder captured
-  // at approval time and persisted on the approval row.
   const salesTeam = useOfferSalesTeam();
   const [assignedTo, setAssignedTo] = useState<string>('');
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
   const [routingConfirm, setRoutingConfirm] = useState<{ email: string | null; followUpAt: string | null } | null>(null);
-  // Auto-offer Module 1 (prototype): preview the borrower-facing offer experience.
   const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
 
   const [rejectRationale, setRejectRationale] = useState('');
@@ -111,8 +93,12 @@ export default function OfferOrchestrator() {
   } = useApp();
   const approval = id ? approvals[id] : undefined;
   const savedDraftKey = id ? `${id}::${draftChannel}` : null;
-  const savedDraftBody = savedDraftKey ? savedDrafts[savedDraftKey]?.body : undefined;
-  const savedDraftSubject = savedDraftKey ? savedDrafts[savedDraftKey]?.subject : undefined;
+  const savedDraftBody = savedDraftKey && !campaignBinding
+    ? savedDrafts[savedDraftKey]?.body
+    : undefined;
+  const savedDraftSubject = savedDraftKey && !campaignBinding
+    ? savedDrafts[savedDraftKey]?.subject
+    : undefined;
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
@@ -120,21 +106,12 @@ export default function OfferOrchestrator() {
 
   useEffect(() => {
     if (!id) return;
-    // AbortController cancels all per-borrower fetches when the id
-    // changes or the route unmounts. Round-2 hole-finder #10/#11,
-    // 2026-04-23. Warming-up handling (2026-04-23 UX fix) retries the
-    // borrower + recommend pair up to 6 times at 5s intervals when the
-    // warehouse is cold-starting; non-retryable errors fall through to
-    // the loadError path.
     const ctrl = new AbortController();
     let cancelled = false;
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
     const MAX_ATTEMPTS = 6;
     const INTERVAL_MS = 5000;
 
-    // SWR: if we have a cached snapshot that's still fresh, hydrate
-    // from it immediately so navigating back to a borrower is instant.
-    // We still refetch in the background so the data stays live.
     const cached = readBorrowerCache(id);
     if (
       cached
@@ -144,13 +121,13 @@ export default function OfferOrchestrator() {
       const cachedDraftBody =
         savedDraftBody && savedDraftBody.trim().length > 0
           ? savedDraftBody
-          : cached.draftChannel === draftChannel
+          : !campaignBinding && cached.draftChannel === draftChannel
             ? cached.draftBody
             : null;
       const cachedDraftSubject =
         savedDraftSubject && savedDraftSubject.trim().length > 0
           ? savedDraftSubject
-          : cached.draftChannel === draftChannel
+          : !campaignBinding && cached.draftChannel === draftChannel
             ? cached.draftSubject
             : null;
       setB(cached.borrower);
@@ -233,9 +210,9 @@ export default function OfferOrchestrator() {
         BORROWER_CACHE.set(id, {
           borrower,
           recommendation,
-          draftSubject: prev?.draftChannel === draftChannel ? (prev?.draftSubject ?? null) : null,
-          draftBody: prev?.draftChannel === draftChannel ? (prev?.draftBody ?? null) : null,
-          draftChannel: prev?.draftChannel === draftChannel ? draftChannel : null,
+          draftSubject: !campaignBinding && prev?.draftChannel === draftChannel ? (prev?.draftSubject ?? null) : null,
+          draftBody: !campaignBinding && prev?.draftChannel === draftChannel ? (prev?.draftBody ?? null) : null,
+          draftChannel: !campaignBinding && prev?.draftChannel === draftChannel ? draftChannel : null,
           fetched: Date.now(),
         });
       } catch (err: unknown) {
@@ -268,21 +245,36 @@ export default function OfferOrchestrator() {
 
     void runAttempt(1);
 
-    // Fetch the backend-generated draft in parallel via a mirror of
-    // the main borrower+recommend retry loop. On a 503 retryable
-    // (warehouse warming), show WarmingUpBlock inside the Draft
-    // outreach tile and auto-retry up to MAX_ATTEMPTS. If the retry
-    // budget exhausts, approval stays blocked; there is no local
-    // outreach copy fallback.
     let draftTimeoutId: ReturnType<typeof setTimeout> | null = null;
     setDraftWarming(null);
     setDraftError(null);
 
     const runDraftAttempt = async (attempt: number): Promise<void> => {
       if (cancelled) return;
+      if (campaignBindingError) {
+        setDraftLoaded(false);
+        setDraftPending(false);
+        setDraftError(
+          'Campaign handoff is incomplete. Reopen the saved campaign and select a variant.',
+        );
+        return;
+      }
       try {
-        const draft = await api.draftOutreach(id, draftChannel, ctrl.signal);
+        const draft = campaignBinding
+          ? await api.draftOutreach(id, draftChannel, ctrl.signal, campaignBinding)
+          : await api.draftOutreach(id, draftChannel, ctrl.signal);
         if (cancelled) return;
+        if (
+          campaignBinding
+          && (
+            draft.campaign_id !== campaignBinding.campaign_id
+            || draft.variant_name !== campaignBinding.variant_name
+          )
+        ) {
+          throw new Error(
+            'Campaign variant proof is stale. Reopen the saved campaign before approval.',
+          );
+        }
         setDraftWarming(null);
         if (draft?.body && draft.body.trim().length > 0) {
           const body =
@@ -312,7 +304,7 @@ export default function OfferOrchestrator() {
           setDraftEvidence(draft.evidence_summary);
           setDraftEvidenceAssets(draft.evidence_assets);
           const prev = BORROWER_CACHE.get(id);
-          if (prev) {
+          if (prev && !campaignBinding) {
             BORROWER_CACHE.set(id, {
               ...prev,
               draftSubject: subject || null,
@@ -377,27 +369,22 @@ export default function OfferOrchestrator() {
       if (draftTimeoutId !== null) clearTimeout(draftTimeoutId);
       ctrl.abort();
     };
-  }, [draftChannel, id, reloadToken, savedDraftBody, savedDraftSubject]);
+  }, [
+    campaignBinding,
+    campaignBindingError,
+    draftChannel,
+    id,
+    reloadToken,
+    savedDraftBody,
+    savedDraftSubject,
+  ]);
 
-  // Offer Orchestrator is a per-borrower action page; without an id
-  // render an empty-state landing page so the tab click isn't a silent
-  // redirect. 2026-04-23 UX fix.
   if (!id && lastBorrowerId) {
     return <Navigate to={`/offer-orchestrator/${lastBorrowerId}`} replace />;
   }
 
   if (!id) {
-    return (
-      <PageShell
-        eyebrow="Offer Orchestrator"
-        title="Choose a borrower to compose an offer"
-        lede="Offer Orchestrator explains the selected offer path, considered alternatives, and borrower-facing draft before any outreach can be approved. Pick a borrower to begin."
-        heroRight={<OfferOrchestratorEmptyHero to="/lead-queue" />}
-      >
-        <OfferOrchestratorEmptyState />
-        <TopLeadsQuickPick basePath="/offer-orchestrator" />
-      </PageShell>
-    );
+    return <OfferOrchestratorEmptyRoute />;
   }
 
   const productLabel = offerDisplayLabel(
@@ -509,16 +496,16 @@ export default function OfferOrchestrator() {
   const onApprove = async () => {
     if (approving || snapshotReconciling) return;
     setApproveError(null);
+    if (campaignBindingError) {
+      setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before approval.');
+      return;
+    }
     if (!draftReady) {
       setApproveError('Approval is disabled until the audited outreach draft loads from the backend.');
       return;
     }
     setApproving(true);
     try {
-      // Forward the chosen offer_code + evidence_ids so the audit row
-      // captures what the approver actually saw — not just the borrower
-      // id. Falls back to the borrower's recommended_offer when the
-      // recommendation hasn't hydrated yet.
       const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
       const draft_body = draftText;
@@ -534,6 +521,8 @@ export default function OfferOrchestrator() {
         channel: draftChannel,
         assigned_to_email: assignedTo || null,
         follow_up_in_days: followUpDays > 0 ? followUpDays : null,
+        campaign_id: campaignBinding?.campaign_id ?? null,
+        variant_name: campaignBinding?.variant_name ?? null,
       });
       if (res.approved) {
         setApproval(id, 'approved');
@@ -561,6 +550,10 @@ export default function OfferOrchestrator() {
 
   const onReject = async () => {
     if (approving || snapshotReconciling) return;
+    if (campaignBindingError) {
+      setApproveError('Campaign handoff is incomplete. Reopen the saved campaign before rejection.');
+      return;
+    }
     if (!rejectReviewOpen) {
       setRejectReviewOpen(true);
       return;
@@ -572,13 +565,6 @@ export default function OfferOrchestrator() {
     setApproveError(null);
     setApproving(true);
     try {
-      // Audit finding 2026-04-22: reject used to be a local-state-only
-      // mutation. Now it writes the same governed pair of rows the
-      // approve path does (mip_app.approvals action='reject' +
-      // mip_app.action_audit event_type='OUTREACH_REJECT') and fires
-      // the same lifecycle-sync trigger so the funnel view reflects
-      // the drop. Failures surface as a banner; state flips only on
-      // confirmed success.
       const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
       const res = await api.reject(id, {
@@ -587,6 +573,8 @@ export default function OfferOrchestrator() {
         channel: draftChannel,
         rationale_code: rejectReasonCode,
         rationale: rejectRationale.trim() || null,
+        campaign_id: campaignBinding?.campaign_id ?? null,
+        variant_name: campaignBinding?.variant_name ?? null,
       });
       if (res.rejected) {
         setApproval(id, 'rejected');
@@ -611,46 +599,17 @@ export default function OfferOrchestrator() {
   };
 
   if (warmingUp) {
-    return (
-      <PageShell
-        eyebrow={warmingUp.label}
-        title={`Loading ${id}…`}
-        lede="Databricks SQL warehouses auto-suspend when idle. It takes ~30 seconds to warm up. Retrying automatically…"
-      >
-        <WarmingUpBlock state={warmingUp} title={`Loading offer for ${id}`} />
-      </PageShell>
-    );
+    return <OfferWarmingRoute borrowerId={id} warmingUp={warmingUp} />;
   }
 
   if (loadError) {
-    const notFound = loadErrorStatus === 404;
     return (
-      <PageShell
-        eyebrow="Offer & Outreach"
-        title={notFound ? `Borrower ${id} not found` : `Couldn't load ${id}`}
-        lede={notFound ? `Borrower ${id} was not found. Check the ID, use search, or return to the lead queue.` : loadError}
-      >
-        <div className="surface">
-          <div className="surface__body surface__body--inline">
-            <Chip variant={notFound ? 'warning' : 'danger'} icon={notFound ? 'search' : 'cross'}>
-              {notFound ? 'Not found' : 'Backend unavailable'}
-            </Chip>
-            {!notFound && (
-              <button
-                type="button"
-                className="btn"
-                onClick={() => setReloadToken((n) => n + 1)}
-                aria-label="Retry loading borrower and offer"
-              >
-                Retry
-              </button>
-            )}
-            <Link className="btn" to="/lead-queue">
-              Back to lead queue
-            </Link>
-          </div>
-        </div>
-      </PageShell>
+      <OfferLoadErrorRoute
+        borrowerId={id}
+        loadError={loadError}
+        notFound={loadErrorStatus === 404}
+        onRetry={() => setReloadToken((n) => n + 1)}
+      />
     );
   }
 
@@ -703,6 +662,31 @@ export default function OfferOrchestrator() {
     >
       {snapshotReconciling && (
         <OfferSnapshotReconciliation borrowerId={id} inline />
+      )}
+      {campaignBindingError && (
+        <div className="status-callout status-callout--danger mb-grid" role="alert">
+          Campaign handoff is incomplete. Reopen the saved campaign and select a variant before taking action.
+        </div>
+      )}
+      {campaignBinding && (
+        <div
+          className="status-callout status-callout--info mb-grid chip-row"
+          role="status"
+          data-testid="offer-campaign-provenance"
+        >
+          <Chip variant="success" icon="shield">Campaign-bound draft</Chip>
+          <span className="mono" title={campaignBinding.campaign_id}>
+            campaign {campaignBinding.campaign_id.slice(0, 12)}
+          </span>
+          <span>variant {campaignBinding.variant_name}</span>
+          {draftGeneratorLabel && <span>{draftGeneratorLabel}</span>}
+          {draftGenerationMode && <span>{draftGenerationMode.replace(/_/g, ' ')}</span>}
+          {draftProof && (
+            <span className="mono" title={draftProof.responseHash}>
+              draft proof {draftProof.responseHash.slice(0, 12)}
+            </span>
+          )}
+        </div>
       )}
       {borrowerPreviewOpen && b && (
         <BorrowerOfferPreviewMock borrower={b} onClose={() => setBorrowerPreviewOpen(false)} />
@@ -790,9 +774,6 @@ export default function OfferOrchestrator() {
 
       {effectiveApproval !== 'approved' && effectiveApproval !== 'rejected' && (
         <>
-          {/* Feature C: optional routing captured at approval time — which loan
-              officer owns this outreach and when to follow up. Persisted on the
-              approval row; approval never depends on it. */}
           <div className="outreach-routing mt-grid" data-testid="outreach-routing">
             <div className="outreach-routing__field">
               <label htmlFor="lo-assign" className="outreach-routing__label">Assign to loan officer</label>

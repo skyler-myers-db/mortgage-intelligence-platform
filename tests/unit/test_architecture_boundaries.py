@@ -42,6 +42,7 @@ ROUTE_TEST_MANIFEST: dict[tuple[str, str], str] = {
     ("POST", "/api/audit/event"): "tests/unit/test_api_routes.py",
     ("GET", "/api/audit/events"): "tests/unit/test_api_routes.py",
     ("GET", "/api/audit/events/page"): "tests/unit/test_api_boundaries.py",
+    ("GET", "/api/audit/my-events"): "tests/unit/test_audit_my_events.py",
     ("GET", "/api/audit/rollups"): "tests/unit/test_sales_manager_api.py",
     ("GET", "/api/borrowers/search"): "tests/unit/test_borrowers_router.py",
     ("GET", "/api/borrowers/{borrower_id}"): "tests/unit/test_borrowers_router.py",

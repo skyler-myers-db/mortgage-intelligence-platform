@@ -89,7 +89,14 @@ const budgets = {
   // documented ~5% headroom for
   // both aggregate dimensions; the initial, lazy-chunk, CSS, and font gates
   // remain unchanged.
-  totalJsBytes: 1104 * KiB, // actual 1050.03
+  // Re-baselined 2026-07-15 for the signed Growth Agent cohort handoff and
+  // campaign-variant approval provenance. The UI now carries and verifies the
+  // opaque handoff proof, exposes stale-proof recovery, and preserves the
+  // selected governed campaign variant through draft/approval/rejection.
+  // Measured: total JS 1113.49 KiB / gzip 357.56 KiB across 41 chunks. Raw JS
+  // receives the documented ~5% headroom; the existing gzip gate remains
+  // intentionally tighter because compressed output still fits it.
+  totalJsBytes: 1170 * KiB, // actual 1113.49
   totalJsGzipBytes: 358 * KiB, // actual 340.53
   maxLazyJsBytes: 104 * KiB, // actual 98.40 (was 160 -- tightened)
   maxLazyJsGzipBytes: 34 * KiB, // actual 32.06 (was 60 -- tightened)

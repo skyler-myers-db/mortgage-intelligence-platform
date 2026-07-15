@@ -297,12 +297,19 @@ def record_lead_outcome(
             borrower_id=borrower_id,
             assigned_to_email=payload.assigned_to_email,
         )
+        from backend.services.pii_redaction import mask_source_record_ref
+
+        source_record_ref = (
+            mask_source_record_ref(payload.source_system, payload.source_record_ref)
+            if payload.source_record_ref
+            else None
+        )
         outcome, audit_event_id = store.record_outcome(
             borrower_id=borrower_id,
             actor=actor,
             outcome_type=payload.outcome_type,
             source_system=payload.source_system,
-            source_record_ref=payload.source_record_ref,
+            source_record_ref=source_record_ref,
             assigned_to_email=payload.assigned_to_email
             or (scoped_assignee.email if scoped_assignee is not None else None),
             campaign_id=payload.campaign_id,

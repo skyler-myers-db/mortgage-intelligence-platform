@@ -535,6 +535,8 @@ class GrowthAgentRunResponse(BaseModel):
     planner_label: str = "Reviewed deterministic planner"
     trace_id: str
     tool_result_hash: str
+    actionable_cohort_fingerprint: str | None = None
+    actionable_snapshot_id: str | None = None
     broad_label: str = "Broad opportunity"
     actionable_label: str = "Eligible subset"
     broad_total: int = Field(ge=0)

@@ -793,6 +793,50 @@ export const DRAWER_SOURCES = defineDrawerSources({
     ],
   },
 
+  callDispositions: {
+    title: 'Campaign contact dispositions',
+    short: 'call_dispositions',
+    assetPath: 'mip_app.call_dispositions',
+    description:
+      'Lakebase contact-attempt records used to qualify campaign-performance evidence without exposing borrower contact details.',
+    lineage: [
+      {
+        layer: 'LAKEBASE',
+        name: 'mip_app.call_dispositions',
+        meta: 'Operational Postgres state queried through Sales Ops analytics',
+      },
+    ],
+    signals: [
+      { label: 'Contact result', source: 'call_dispositions.outcome', value: 'reviewed disposition' },
+      { label: 'Attempt order', source: 'call_dispositions.attempt_number', value: 'positive integer' },
+      { label: 'Event time', source: 'call_dispositions.occurred_at', value: 'timestamp' },
+      { label: 'Owner', source: 'call_dispositions.lo_email', value: 'sales-team identity' },
+    ],
+    usedIn: ['Campaign performance qualification', 'Sales Ops analytics'],
+  },
+
+  leadOutcomes: {
+    title: 'Closed-loop lead outcomes',
+    short: 'lead_outcomes',
+    assetPath: 'mip_app.lead_outcomes',
+    description:
+      'PII-safe Lakebase conversion outcomes imported from reviewed CRM, LOS, POS, servicing, webhook, or manual sources.',
+    lineage: [
+      {
+        layer: 'LAKEBASE',
+        name: 'mip_app.lead_outcomes',
+        meta: 'Operational Postgres state queried through Sales Ops analytics',
+      },
+    ],
+    signals: [
+      { label: 'Outcome', source: 'lead_outcomes.outcome_type', value: 'application through funded/lost' },
+      { label: 'Origin', source: 'lead_outcomes.source_system', value: 'reviewed system enum' },
+      { label: 'Campaign', source: 'lead_outcomes.campaign_id', value: 'optional campaign link' },
+      { label: 'Event time', source: 'lead_outcomes.occurred_at', value: 'timestamp' },
+    ],
+    usedIn: ['Campaign conversion evidence', 'Sales Ops analytics'],
+  },
+
   config: {
     title: 'Campaign assumptions',
     short: 'config',

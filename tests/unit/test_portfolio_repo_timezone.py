@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from fastapi import HTTPException
 
 from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.portfolio import (
@@ -229,8 +230,13 @@ class _CampaignPatchLakebase:
 
     def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         self.calls.append({"sql": sql, "params": params or {}})
+        if "JOIN mip_app.action_audit" in sql:
+            return None  # type: ignore[return-value]
         if "UPDATE mip_app.campaigns" in sql:
-            return self._row(status=str((params or {}).get("status") or "pending_review"))  # type: ignore[return-value]
+            return {
+                **self._row(status=str((params or {}).get("status") or "pending_review")),
+                "audit_id": "22222222-2222-4222-8222-222222222222",
+            }  # type: ignore[return-value]
         return self._row(status=self.current_status)  # type: ignore[return-value]
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
@@ -286,6 +292,28 @@ def _trend_row(
         "approved_count": 0,
         "in_outreach_count": 0,
     }
+
+
+def test_preview_sql_projects_every_aggregate_input() -> None:
+    template = DatabricksPortfolioRepository._PREVIEW_SQL_TEMPLATE
+    projection, aggregate = template.split(") SELECT ", maxsplit=1)
+
+    for column in (
+        "in_the_money",
+        "is_high_opportunity",
+        "offer_recommended",
+        "offer_available",
+        "opportunity_score",
+        "current_lien_balance",
+        "equity_pct",
+        "refreshed_at",
+        "recommended_offer_code",
+    ):
+        assert f"headline.{column}" in projection
+    assert "borrower.rate_spread_bps AS preview_rate_spread_bps" in projection
+    assert "AVG(preview_rate_spread_bps)" in aggregate
+    assert "AVG(rate_spread_bps)" not in aggregate
+    assert "FROM preview_population" in aggregate
 
 
 def test_naive_datetime_is_stamped_as_utc():
@@ -1013,6 +1041,324 @@ def test_create_bounds_empty_post_conflict_idempotency_lookup(monkeypatch):
 
     assert lakebase.insert_calls == 1
     assert lakebase.lookup_calls == 4
+
+
+def test_campaign_create_audit_lookup_uses_action_audit_event_at() -> None:
+    sql = DatabricksPortfolioRepository._CAMPAIGN_IDEMPOTENCY_LOOKUP_SQL
+
+    assert "ORDER BY a.event_at ASC" in sql
+    assert "a.occurred_at" not in sql
+
+
+def test_campaign_status_request_id_is_stable_and_payload_bound() -> None:
+    campaign_id = "11111111-1111-4111-8111-111111111111"
+    payload = CampaignStatusPatchRequest(status="pending_review", rationale="Reviewed cohort")
+
+    first = DatabricksPortfolioRepository._campaign_status_request_id(
+        campaign_id,
+        payload,
+        actor="Manager@Example.com",
+    )
+    second = DatabricksPortfolioRepository._campaign_status_request_id(
+        campaign_id,
+        payload,
+        actor="manager@example.com",
+    )
+    changed = DatabricksPortfolioRepository._campaign_status_request_id(
+        campaign_id,
+        CampaignStatusPatchRequest(status="pending_review", rationale="Different review"),
+        actor="manager@example.com",
+    )
+    next_cycle = DatabricksPortfolioRepository._campaign_status_request_id(
+        campaign_id,
+        payload,
+        actor="manager@example.com",
+        source_status="draft",
+        source_updated_at="2026-07-14T12:05:00+00:00",
+    )
+    prior_cycle = DatabricksPortfolioRepository._campaign_status_request_id(
+        campaign_id,
+        payload,
+        actor="manager@example.com",
+        source_status="draft",
+        source_updated_at="2026-07-14T12:00:00+00:00",
+    )
+    explicit_replay = DatabricksPortfolioRepository._campaign_status_request_id(
+        campaign_id,
+        CampaignStatusPatchRequest(status="draft", rationale="A later payload"),
+        actor="manager@example.com",
+        caller_request_id="campaign-cycle-request-1",
+        source_status="pending_review",
+        source_updated_at="2026-07-14T12:10:00+00:00",
+    )
+    explicit_original = DatabricksPortfolioRepository._campaign_status_request_id(
+        campaign_id,
+        payload,
+        actor="manager@example.com",
+        caller_request_id="campaign-cycle-request-1",
+        source_status="draft",
+        source_updated_at="2026-07-14T12:00:00+00:00",
+    )
+
+    assert first == second
+    assert first.startswith("campaign-status-")
+    assert len(first.removeprefix("campaign-status-")) == 64
+    assert changed != first
+    assert next_cycle != prior_cycle
+    assert explicit_replay == explicit_original
+
+
+def test_campaign_status_sql_binds_campaign_and_audit_to_one_transition_instance() -> None:
+    patch_sql = DatabricksPortfolioRepository._CAMPAIGN_PATCH_SQL
+    replay_sql = DatabricksPortfolioRepository._CAMPAIGN_STATUS_IDEMPOTENCY_LOOKUP_SQL
+
+    assert "updated_at = %(transition_at)s::timestamptz" in patch_sql
+    assert "metadata, event_at" in patch_sql
+    assert "%(transition_at)s::timestamptz" in patch_sql
+    assert "a.event_at AS updated_at" in replay_sql
+    assert "a.metadata->>'status'" in replay_sql
+
+
+def test_campaign_status_retry_replays_one_audited_transition(monkeypatch):
+    class _ReplayStatusLakebase(_CampaignPatchLakebase):
+        def __init__(self) -> None:
+            super().__init__(suppression_policy={"default": "eligible_only"})
+            self.audit_id = "22222222-2222-4222-8222-222222222222"
+            self.request_id: str | None = None
+            self.patch_count = 0
+            self.audit_count = 0
+
+        def fetchone(
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            values = params or {}
+            self.calls.append({"sql": sql, "params": values})
+            if "JOIN mip_app.action_audit" in sql:
+                if self.request_id == values.get("request_id"):
+                    return {
+                        **self._row(status=self.current_status),
+                        "audit_id": self.audit_id,
+                    }
+                return None
+            if "UPDATE mip_app.campaigns" in sql:
+                self.patch_count += 1
+                if self.current_status != values.get("current_status"):
+                    return None
+                self.current_status = str(values["status"])
+                self.request_id = str(values["request_id"])
+                self.audit_count += 1
+                return {
+                    **self._row(status=self.current_status),
+                    "audit_id": self.audit_id,
+                }
+            return self._row(status=self.current_status)  # type: ignore[return-value]
+
+    lakebase = _ReplayStatusLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        lambda: "campaign-status-request-1",
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    payload = CampaignStatusPatchRequest(status="pending_review")
+
+    first = repo.patch_status(
+        "11111111-1111-4111-8111-111111111111",
+        payload,
+        actor="manager@example.com",
+    )
+    second = repo.patch_status(
+        "11111111-1111-4111-8111-111111111111",
+        payload,
+        actor="manager@example.com",
+    )
+
+    assert first == second
+    assert lakebase.patch_count == 1
+    assert lakebase.audit_count == 1
+
+
+def test_campaign_status_allows_repeated_lifecycle_cycle_and_stable_old_replay(monkeypatch):
+    class _LifecycleLakebase(_CampaignPatchLakebase):
+        def __init__(self) -> None:
+            super().__init__(
+                suppression_policy={"default": "eligible_only"},
+                current_status="draft",
+            )
+            self.updated_at = datetime(2026, 7, 14, 12, 0, tzinfo=UTC)
+            self.audits: dict[str, dict[str, Any]] = {}
+
+        def _current_row(self) -> dict[str, Any]:
+            return {
+                **self._row(status=self.current_status),
+                "created_at": datetime(2026, 7, 14, 11, 0, tzinfo=UTC),
+                "updated_at": self.updated_at,
+            }
+
+        def fetchone(
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            values = params or {}
+            self.calls.append({"sql": sql, "params": values})
+            if "JOIN mip_app.action_audit" in sql:
+                return self.audits.get(str(values.get("request_id") or ""))
+            if "UPDATE mip_app.campaigns" not in sql:
+                return self._current_row()
+            if self.current_status != values.get("current_status"):
+                return None
+            self.current_status = str(values["status"])
+            self.updated_at = values["transition_at"]
+            request_id = str(values["request_id"])
+            audit_row = {
+                **self._current_row(),
+                "audit_id": f"audit-{len(self.audits) + 1}",
+                "audit_metadata": json.loads(str(values["metadata"])),
+            }
+            self.audits[request_id] = audit_row
+            return audit_row
+
+    request_ids = iter(
+        [
+            "campaign-cycle-pending-1",
+            "campaign-cycle-pending-1",
+            "campaign-cycle-draft-1",
+            "campaign-cycle-pending-2",
+            "campaign-cycle-pending-1",
+        ]
+    )
+    lakebase = _LifecycleLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        lambda: next(request_ids),
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+    campaign_id = "11111111-1111-4111-8111-111111111111"
+
+    first_pending = repo.patch_status(
+        campaign_id,
+        CampaignStatusPatchRequest(status="pending_review"),
+        actor="manager@example.com",
+    )
+    lost_response_replay = repo.patch_status(
+        campaign_id,
+        CampaignStatusPatchRequest(status="pending_review"),
+        actor="manager@example.com",
+    )
+    repo.patch_status(
+        campaign_id,
+        CampaignStatusPatchRequest(status="draft"),
+        actor="manager@example.com",
+    )
+    second_pending = repo.patch_status(
+        campaign_id,
+        CampaignStatusPatchRequest(status="pending_review"),
+        actor="manager@example.com",
+    )
+    old_replay_after_later_cycle = repo.patch_status(
+        campaign_id,
+        CampaignStatusPatchRequest(status="pending_review"),
+        actor="manager@example.com",
+    )
+
+    assert first_pending == lost_response_replay == old_replay_after_later_cycle
+    assert second_pending.status == "pending_review"
+    assert second_pending.updated_at != first_pending.updated_at
+    assert len(lakebase.audits) == 3
+    pending_request_ids = [
+        request_id
+        for request_id, row in lakebase.audits.items()
+        if row["status"] == "pending_review"
+    ]
+    assert len(pending_request_ids) == 2
+    assert pending_request_ids[0] != pending_request_ids[1]
+
+
+def test_campaign_status_request_identity_payload_mismatch_is_conflict(monkeypatch):
+    class _ReplayMismatchLakebase(_CampaignPatchLakebase):
+        def fetchone(
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            if "JOIN mip_app.action_audit" in sql:
+                return {
+                    **self._row(status="pending_review"),
+                    "audit_id": "22222222-2222-4222-8222-222222222222",
+                    "audit_metadata": {"status": "pending_review", "rationale": "Original"},
+                }
+            return self._row(status="pending_review")
+
+    lakebase = _ReplayMismatchLakebase(suppression_policy={"default": "eligible_only"})
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.get_correlation_id",
+        lambda: "campaign-status-request-mismatch",
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    with pytest.raises(HTTPException) as exc_info:
+        repo.patch_status(
+            "11111111-1111-4111-8111-111111111111",
+            CampaignStatusPatchRequest(status="pending_review", rationale="Changed"),
+            actor="manager@example.com",
+        )
+
+    assert exc_info.value.status_code == 409
+
+
+def test_campaign_status_lost_update_maps_to_conflict(monkeypatch):
+    class _LostUpdateLakebase(_CampaignPatchLakebase):
+        def __init__(self) -> None:
+            super().__init__(suppression_policy={"default": "eligible_only"})
+            self.replay_lookups = 0
+
+        def fetchone(
+            self,
+            sql: str,
+            params: dict[str, Any] | None = None,
+        ) -> dict[str, Any] | None:
+            self.calls.append({"sql": sql, "params": params or {}})
+            if "JOIN mip_app.action_audit" in sql:
+                self.replay_lookups += 1
+                return None
+            if "UPDATE mip_app.campaigns" in sql:
+                return None
+            return self._row(status="draft")  # type: ignore[return-value]
+
+    lakebase = _LostUpdateLakebase()
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_portfolio.time.sleep",
+        lambda _delay: None,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    with pytest.raises(HTTPException) as exc_info:
+        repo.patch_status(
+            "11111111-1111-4111-8111-111111111111",
+            CampaignStatusPatchRequest(status="pending_review"),
+            actor="manager@example.com",
+        )
+
+    assert exc_info.value.status_code == 409
+    assert lakebase.replay_lookups == 4
 
 
 @pytest.mark.parametrize(

@@ -27,6 +27,10 @@ import { queryKeys } from '../lib/queryKeys';
 import { RoiProjector, StateMultiSelect } from './portfolio-builder.components';
 import { CampaignSetupPanel } from './portfolio-builder.campaign-setup';
 import {
+  savedCampaignLeadQueueUrl,
+  savedCampaignVariants,
+} from './portfolio-builder.saved-campaigns';
+import {
   BASE_DEFAULT_FILTERS,
   DEFAULT_CAMPAIGN_SETUP,
   NON_GEO_FILTER_GROUPS,
@@ -71,7 +75,7 @@ function isoDateDaysAgo(days: number): string {
 
 export default function PortfolioBuilder() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const { setDrawer } = useApp();
+  const { setDrawer, canAccessAdmin } = useApp();
   const footprint = useFootprint();
   // S9 geo → campaign handoff: a `prefill_source=geo-drilldown` link seeds a
   // draft context banner. The state predicate itself applies through the
@@ -141,6 +145,7 @@ export default function PortfolioBuilder() {
   const [saveName, setSaveName] = useState('');
   const [saveValidationError, setSaveValidationError] = useState<string | null>(null);
   const [campaignSetup, setCampaignSetup] = useState<CampaignSetupState>(DEFAULT_CAMPAIGN_SETUP);
+  const [selectedCampaignVariants, setSelectedCampaignVariants] = useState<Record<string, string>>({});
   const {
     data: campaignsData,
     isPending: campaignsLoading,
@@ -587,9 +592,15 @@ export default function PortfolioBuilder() {
               className="status-callout status-callout--day-zero mt-4"
             >
               <strong>First data refresh pending.</strong>{' '}
-              Unity Catalog gold tables are empty. Open{' '}
-              <Link to="/admin-config#data-operations">Admin Data Operations</Link>
-              {' '}and run the governed scoring refresh after the source-feature refresh completes.
+              Unity Catalog gold tables are empty.{' '}
+              {canAccessAdmin ? (
+                <>
+                  Open <Link to="/admin-config#data-operations">Admin Data Operations</Link>
+                  {' '}and run the governed scoring refresh after the source-feature refresh completes.
+                </>
+              ) : (
+                <>Contact an administrator to run the governed scoring refresh after the source-feature refresh completes.</>
+              )}
             </div>
           )}
           {!isDayZero(preview) && preview?.trend_note && (
@@ -670,6 +681,7 @@ export default function PortfolioBuilder() {
         recommendationError={recommendationQuery.isError}
         recommendationFetching={recommendationQuery.isFetching}
         canRecommend={Boolean(preview && preview.marketable_population > 0)}
+        canAccessAdmin={canAccessAdmin}
         onFieldChange={setCampaignField}
         onNumericFieldCommit={(key, value) => setCampaignSetup((current) => ({
           ...current,
@@ -716,6 +728,13 @@ export default function PortfolioBuilder() {
               </div>
               {groupSavedCampaigns(campaigns).slice(0, 8).map((row) => {
                 const campaign = row.campaign;
+                const variants = savedCampaignVariants(campaign);
+                const selectedVariantName = selectedCampaignVariants[campaign.campaign_id]
+                  ?? variants[0]?.variantName
+                  ?? '';
+                const selectedVariant = variants.find(
+                  (variant) => variant.variantName === selectedVariantName,
+                );
                 const householdEnabled = campaign.household_dedup?.enabled === true;
                 const suppressedCount = campaign.household_summary?.suppressed_co_owner_count ?? 0;
                 const grouped = row.draftCount > 1;
@@ -726,7 +745,7 @@ export default function PortfolioBuilder() {
                     <div className="saved-workspace__body">
                       <span className="text-1">{campaign.name}</span>
                       <span>{campaign.status.replace(/_/g, ' ')} · {campaignCriteriaSummary(campaign)}</span>
-                      {(grouped || householdEnabled) && (
+                      {(grouped || householdEnabled || selectedVariant) && (
                         <div className="saved-workspace__proof">
                           {grouped && (
                             <span className="chip chip--neutral chip--compact">×{row.draftCount} drafts</span>
@@ -748,6 +767,44 @@ export default function PortfolioBuilder() {
                                 <Icon name="link" size={9} className="e-ico" />
                                 <span className="evidence-chip__label">household_rollup</span>
                               </button>
+                            </>
+                          )}
+                          {selectedVariant && (
+                            <>
+                              <span
+                                className={`chip ${selectedVariant.generationMode === 'supervisor' ? 'chip--success' : 'chip--neutral'} chip--compact`}
+                              >
+                                {selectedVariant.generatorLabel}
+                              </span>
+                              <span className="mono muted fs-11" title={campaign.campaign_id}>
+                                campaign {campaign.campaign_id.slice(0, 12)}
+                              </span>
+                              <span className={`chip ${selectedVariant.provenanceAttached ? 'chip--success' : 'chip--warning'} chip--compact`}>
+                                {selectedVariant.provenanceAttached ? 'Provenance attached' : 'Saved provenance only'}
+                              </span>
+                              <select
+                                className="outreach-routing__select"
+                                value={selectedVariantName}
+                                onChange={(event) => setSelectedCampaignVariants((current) => ({
+                                  ...current,
+                                  [campaign.campaign_id]: event.target.value,
+                                }))}
+                                aria-label={`Message variant for ${campaign.name}`}
+                              >
+                                {variants.map((variant) => (
+                                  <option key={variant.variantName} value={variant.variantName}>
+                                    Variant {variant.variantName}
+                                  </option>
+                                ))}
+                              </select>
+                              <Link
+                                to={savedCampaignLeadQueueUrl(campaign, selectedVariant.variantName)}
+                                className="btn btn--primary btn--sm"
+                                aria-label={`Open ${campaign.name} variant ${selectedVariant.variantName} in Lead Queue`}
+                              >
+                                Open lead queue
+                                <Icon name="chevright" size={12} />
+                              </Link>
                             </>
                           )}
                         </div>
