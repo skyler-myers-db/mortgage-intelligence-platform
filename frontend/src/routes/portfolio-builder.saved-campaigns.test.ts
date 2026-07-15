@@ -37,4 +37,16 @@ describe('savedCampaignVariants', () => {
 
     expect(variant.verifiedAtCreation).toBe(false);
   });
+
+  it('normalizes legacy server labels without broad substring rewriting', () => {
+    const [legacy] = savedCampaignVariants(campaignWithVariant({
+      generator_label: 'Agent endpoint-generated recommendation',
+    }));
+    const [unknown] = savedCampaignVariants(campaignWithVariant({
+      generator_label: 'Custom tenant agent',
+    }));
+
+    expect(legacy.generatorLabel).toBe('Databricks Agent Responses');
+    expect(unknown.generatorLabel).toBe('Custom tenant agent');
+  });
 });

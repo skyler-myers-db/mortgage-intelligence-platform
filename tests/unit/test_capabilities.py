@@ -251,6 +251,7 @@ class _FakeWorkspaceClient:
         inference_schema: str = "mip_sync",
         inference_table_prefix: str = "mip_agent_inference",
         responses_api_error: Exception | None = None,
+        serving_response_status: str = "completed",
         eval_total: int = 5,
         eval_passed: int | None = None,
         eval_score: float = 1.0,
@@ -277,6 +278,7 @@ class _FakeWorkspaceClient:
             supervisor_id=supervisor_metadata_id,
             supervisor_endpoint=supervisor_metadata_endpoint,
             supervisor_error=supervisor_metadata_error,
+            serving_response_status=serving_response_status,
         )
         self.serving_endpoints = _FakeServingEndpoints(
             ready=serving_ready,
@@ -362,12 +364,14 @@ class _FakeApiClient:
         supervisor_id: str = "supervisor-1",
         supervisor_endpoint: str = "mip-supervisor-endpoint",
         supervisor_error: Exception | None = None,
+        serving_response_status: str = "completed",
     ) -> None:
         self.empty_response = empty_response
         self.error = error
         self.supervisor_id = supervisor_id
         self.supervisor_endpoint = supervisor_endpoint
         self.supervisor_error = supervisor_error
+        self.serving_response_status = serving_response_status
         self.requests: list[tuple[str, str, dict[str, object] | None]] = []
 
     def do(self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object) -> object:
@@ -384,7 +388,7 @@ class _FakeApiClient:
         if self.empty_response:
             return {}
         return {
-            "status": "completed",
+            "status": self.serving_response_status,
             "output": [{"content": [{"text": "ready"}]}],
         }
 
@@ -969,6 +973,46 @@ def test_ai_gateway_live_probe_does_not_retry_or_write_ledger_at_runtime() -> No
     assert statuses["ai_gateway"].available is True
     assert len(workspace.api_client.requests) == 1
     assert len(lakebase.fetchone_calls) == 1
+
+
+@pytest.mark.parametrize(
+    ("workspace", "expected_path"),
+    [
+        (
+            _FakeWorkspaceClient(serving_task="llm/v1/chat"),
+            "/serving-endpoints/mip-agent-gateway/invocations",
+        ),
+        (
+            _FakeWorkspaceClient(empty_serving_response=True),
+            "/serving-endpoints/responses",
+        ),
+        (
+            _FakeWorkspaceClient(serving_response_status="in_progress"),
+            "/serving-endpoints/responses",
+        ),
+    ],
+    ids=["generic-payload", "no-payload", "nonterminal"],
+)
+def test_ai_gateway_live_probe_requires_terminal_responses_execution(
+    workspace: _FakeWorkspaceClient,
+    expected_path: str,
+) -> None:
+    statuses = collect_live_capability_statuses(
+        settings=_settings(
+            mip_git_sha=_TEST_GIT_SHA,
+            mip_ai_gateway=True,
+            mip_ai_gateway_endpoint="mip-agent-gateway",
+            mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+        ),
+        sql_client=_LiveSqlClient(count=1),
+        lakebase=_LiveLakebase.verified(),
+        workspace_client=workspace,
+    )
+
+    assert statuses["ai_gateway"].available is False
+    assert "terminal completed Responses payload" in statuses["ai_gateway"].detail
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.api_client.requests[0][1] == expected_path
 
 
 def test_ai_gateway_live_probe_rejects_prefix_rows_without_verified_ledger() -> None:

@@ -520,7 +520,7 @@ class SalesStateStore:
                        occurred_at, callback_at, notes, audit_event_id
                 FROM mip_app.call_dispositions
                 WHERE borrower_id = %(borrower_id)s
-                ORDER BY occurred_at DESC, created_at DESC
+                ORDER BY occurred_at DESC, created_at DESC, disposition_id::text DESC
                 LIMIT 1
                 """,
                 {"borrower_id": borrower_id},
@@ -723,7 +723,8 @@ class SalesStateStore:
                    occurred_at, callback_at, notes, audit_event_id
             FROM mip_app.call_dispositions
             WHERE borrower_id = ANY(%(borrower_ids)s)
-            ORDER BY borrower_id, occurred_at DESC, created_at DESC
+            ORDER BY borrower_id, occurred_at DESC, created_at DESC,
+                     disposition_id::text DESC
             """,
             {"borrower_ids": normalized},
             limit=max(len(normalized), 1),
@@ -1286,14 +1287,14 @@ class SalesStateStore:
                 SELECT approval_id, action, offer_code, decided_at
                 FROM mip_app.approvals
                 WHERE borrower_id = %(borrower_id)s
-                ORDER BY decided_at DESC
+                ORDER BY decided_at DESC, approval_id::text DESC
                 LIMIT 1
             ),
             latest_disposition AS (
                 SELECT occurred_at AS disposition_at
                 FROM mip_app.call_dispositions
                 WHERE borrower_id = %(borrower_id)s
-                ORDER BY occurred_at DESC, created_at DESC
+                ORDER BY occurred_at DESC, created_at DESC, disposition_id::text DESC
                 LIMIT 1
             )
             SELECT
@@ -1341,13 +1342,14 @@ class SalesStateStore:
                 SELECT DISTINCT ON (borrower_id)
                        borrower_id, action, decided_at
                 FROM mip_app.approvals
-                ORDER BY borrower_id, decided_at DESC
+                ORDER BY borrower_id, decided_at DESC, approval_id::text DESC
             ),
             latest_disposition AS (
                 SELECT DISTINCT ON (borrower_id)
                        borrower_id, outcome, occurred_at
                 FROM mip_app.call_dispositions
-                ORDER BY borrower_id, occurred_at DESC, created_at DESC
+                ORDER BY borrower_id, occurred_at DESC, created_at DESC,
+                         disposition_id::text DESC
             )
             SELECT a.borrower_id,
                    'approved' AS approval_status,

@@ -265,6 +265,30 @@ describe('AskGenie Growth Agent route panel', () => {
     await waitUntil(() => growthAgent.mock.calls.length >= 2);
   });
 
+  it('shows a save-specific pending label while saving a standard watchlist', async () => {
+    let resolveRun: ((value: GrowthAgentRunResponse) => void) | undefined;
+    runGrowthAgentWorkflow.mockReturnValueOnce(
+      new Promise<GrowthAgentRunResponse>((resolve) => {
+        resolveRun = resolve;
+      }),
+    );
+    mount();
+    await waitUntil(() => container.textContent?.includes('Daily Refi Opportunity Brief') ?? false);
+
+    act(() => button(/^Save watchlist$/).click());
+
+    await waitUntil(() => container.textContent?.includes('Saving…') ?? false);
+    expect(button(/^Run$/).disabled).toBe(true);
+    expect(button(/^Saving…$/).disabled).toBe(true);
+    expect(container.textContent).not.toContain('Running…');
+
+    await act(async () => {
+      resolveRun?.(RUN);
+      await Promise.resolve();
+    });
+    await waitUntil(() => runGrowthAgentWorkflow.mock.calls.length === 1);
+  });
+
   it('runs custom reviewed segment workflows with any mode by default', async () => {
     mount();
     await waitUntil(() => container.textContent?.includes('Build a custom segment workflow') ?? false);

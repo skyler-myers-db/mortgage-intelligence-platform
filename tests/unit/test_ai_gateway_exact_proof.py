@@ -58,10 +58,19 @@ class _ProofLakebase:
             }
             self.rows.append(row)
             return dict(row)
+        if "UPDATE mip_app.ai_gateway_proof_ledger" in sql and "SET status = 'failed'" in sql:
+            proof_id = str(params["proof_id"])
+            for row in self.rows:
+                if str(row["proof_id"]) == proof_id and row["status"] == "pending":
+                    row["status"] = "failed"
+                    row["verified_at"] = None
+                    row["verify_latency_s"] = None
+                    return dict(row)
+            return None
         if "UPDATE mip_app.ai_gateway_proof_ledger" in sql and "SET status = 'verified'" in sql:
             proof_id = str(params["proof_id"])
             for row in self.rows:
-                if str(row["proof_id"]) == proof_id:
+                if str(row["proof_id"]) == proof_id and row["status"] == "pending":
                     row["status"] = "verified"
                     row["verified_at"] = params["verified_at"]
                     row["verify_latency_s"] = params["verify_latency_s"]
@@ -120,35 +129,64 @@ class _ProofLakebase:
 
 class _ProofSql:
     table_names = ["mip_agent_gateway_llama_payload"]
-    column_names = ["client_request_id", "request", "databricks_request_id"]
+    valid_row = {
+        "status_code": 200,
+        "response": json.dumps(
+            {
+                "status": "completed",
+                "output": [{"content": [{"text": "Gateway logging acknowledged."}]}],
+            }
+        ),
+    }
 
     def __init__(
         self,
         *,
         exact_count: int = 0,
         counts_by_request_id: dict[str, int] | None = None,
+        rows_by_request_id: dict[str, list[dict[str, Any]]] | None = None,
+        column_names: list[str] | None = None,
     ) -> None:
         self.exact_count = exact_count
         self.counts_by_request_id = counts_by_request_id
+        self.rows_by_request_id = rows_by_request_id
+        self.column_names = column_names or [
+            "client_request_id",
+            "request",
+            "databricks_request_id",
+            "status_code",
+            "response",
+        ]
 
     def execute(self, statement: str, parameters: object | None = None) -> list[dict[str, Any]]:
         if "system.information_schema.columns" in statement:
             return [{"column_name": column_name} for column_name in self.column_names]
         if "system.information_schema.tables" in statement:
             return [{"table_name": table_name} for table_name in self.table_names]
+        request_id = self._request_id(parameters)
+        if "SELECT status_code, response" in statement:
+            if self.rows_by_request_id is not None:
+                return [dict(row) for row in self.rows_by_request_id.get(request_id, [])]
+            return [dict(self.valid_row) for _ in range(self._count(request_id))]
         if "COUNT(*) AS row_count" in statement:
-            if self.counts_by_request_id is not None:
-                if not isinstance(parameters, dict):
-                    return [{"row_count": 0}]
-                return [
-                    {
-                        "row_count": self.counts_by_request_id.get(
-                            str(parameters.get("client_request_id")), 0
-                        )
-                    }
-                ]
-            return [{"row_count": self.exact_count}]
+            return [{"row_count": self._count(request_id)}]
         raise AssertionError(f"unexpected SQL: {statement}")
+
+    def _count(self, request_id: str) -> int:
+        if self.rows_by_request_id is not None:
+            return len(self.rows_by_request_id.get(request_id, []))
+        if self.counts_by_request_id is not None:
+            return self.counts_by_request_id.get(request_id, 0)
+        return self.exact_count
+
+    @staticmethod
+    def _request_id(parameters: object | None) -> str:
+        if not isinstance(parameters, dict):
+            return ""
+        request_id = str(
+            parameters.get("client_request_id") or parameters.get("client_request_marker") or ""
+        )
+        return request_id.strip("%")
 
 
 class _Workspace:
@@ -180,7 +218,27 @@ class _NoPayloadWorkspace(_Workspace):
         self.api_client = type(
             "ApiClient",
             (),
-            {"do": lambda _self, *_args, **_kwargs: {}},
+            {
+                "do": lambda _self, *_args, **_kwargs: {
+                    "status": "completed",
+                    "output": [],
+                }
+            },
+        )()
+
+
+class _NonTerminalWorkspace(_Workspace):
+    def __init__(self) -> None:
+        super().__init__()
+        self.api_client = type(
+            "ApiClient",
+            (),
+            {
+                "do": lambda _self, *_args, **_kwargs: {
+                    "status": "in_progress",
+                    "output": [{"content": [{"text": "not terminal"}]}],
+                }
+            },
         )()
 
 
@@ -523,7 +581,7 @@ def test_verify_pending_rejects_duplicate_exact_rows() -> None:
     )
 
     assert verified == []
-    assert lakebase.rows[0]["status"] == "pending"
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 def test_wait_for_exact_row_rejects_duplicate_exact_rows() -> None:
@@ -546,7 +604,80 @@ def test_wait_for_exact_row_rejects_duplicate_exact_rows() -> None:
     )
 
     assert verified == []
+    assert lakebase.rows[0]["status"] == "failed"
+
+
+def test_verify_pending_fails_closed_when_schema_cannot_substantiate_success() -> None:
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-abababababababab",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+    )
+
+    verified = verify_ai_gateway_exact_proof.verify_pending(
+        lakebase=lakebase,
+        sql_client=_ProofSql(
+            counts_by_request_id={proof.client_request_id: 1},
+            column_names=["client_request_id", "request", "databricks_request_id"],
+        ),
+        git_sha=_TEST_GIT_SHA,
+        endpoint=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        limit=100,
+    )
+
+    assert verified == []
     assert lakebase.rows[0]["status"] == "pending"
+
+
+@pytest.mark.parametrize(
+    "logged_row",
+    [
+        {
+            "status_code": 500,
+            "response": json.dumps(
+                {"status": "completed", "output": [{"content": [{"text": "bad"}]}]}
+            ),
+        },
+        {
+            "status_code": 200,
+            "response": json.dumps(
+                {"status": "in_progress", "output": [{"content": [{"text": "later"}]}]}
+            ),
+        },
+        {
+            "status_code": 200,
+            "response": json.dumps({"status": "completed", "output": []}),
+        },
+    ],
+    ids=["non-2xx", "nonterminal", "completed-no-payload"],
+)
+def test_verify_pending_rejects_unsuccessful_or_nonterminal_row(
+    logged_row: dict[str, Any],
+) -> None:
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-cdcdcdcdcdcdcdcd",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+    )
+
+    verified = verify_ai_gateway_exact_proof.verify_pending(
+        lakebase=lakebase,
+        sql_client=_ProofSql(rows_by_request_id={proof.client_request_id: [logged_row]}),
+        git_sha=_TEST_GIT_SHA,
+        endpoint=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        limit=100,
+    )
+
+    assert verified == []
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 @pytest.mark.parametrize(
@@ -663,13 +794,16 @@ def test_proof_summary_redacts_coordinates() -> None:
     assert proof.inference_table not in encoded
 
 
-def test_non_completed_responses_payload_error_redacts_endpoint_name() -> None:
+@pytest.mark.parametrize("workspace", [_NoPayloadWorkspace(), _NonTerminalWorkspace()])
+def test_rejected_send_is_failed_and_later_row_cannot_promote(
+    workspace: _Workspace,
+) -> None:
     lakebase = _ProofLakebase()
 
     with pytest.raises(RuntimeError) as exc:
         verify_ai_gateway_exact_proof.send_probe(
             lakebase=lakebase,
-            workspace=_NoPayloadWorkspace(),
+            workspace=workspace,
             endpoint=_ENDPOINT,
             inference_table=_INFERENCE_TABLE,
             git_sha=_TEST_GIT_SHA,
@@ -680,7 +814,19 @@ def test_non_completed_responses_payload_error_redacts_endpoint_name() -> None:
     assert _ENDPOINT not in message
     assert _INFERENCE_TABLE not in message
     assert len(lakebase.rows) == 1
-    assert lakebase.rows[0]["status"] == "pending"
+    assert lakebase.rows[0]["status"] == "failed"
+
+    verified = verify_ai_gateway_exact_proof.verify_pending(
+        lakebase=lakebase,
+        sql_client=_ProofSql(exact_count=1),
+        git_sha=_TEST_GIT_SHA,
+        endpoint=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        limit=100,
+    )
+
+    assert verified == []
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 def test_verifier_script_path_help_runs_without_pythonpath() -> None:

@@ -1,4 +1,5 @@
 import type { CampaignSummary } from '../types';
+import { publicAgentResponsesText } from '../lib/agentLabels';
 import { URL_FILTER_KEYS } from './portfolio-builder.logic';
 
 export interface SavedCampaignVariant {
@@ -34,7 +35,7 @@ export function savedCampaignVariants(campaign: CampaignSummary): SavedCampaignV
         ? raw.generation_mode.trim()
         : 'operator',
       generatorLabel: typeof raw.generator_label === 'string' && raw.generator_label.trim()
-        ? raw.generator_label.trim()
+        ? publicAgentResponsesText(raw.generator_label)
         : 'Operator edited',
       verifiedAtCreation: raw.copy_verified_at_creation === true,
     }];

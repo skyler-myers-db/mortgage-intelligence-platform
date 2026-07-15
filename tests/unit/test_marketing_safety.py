@@ -536,7 +536,7 @@ def test_campaign_public_preview_rejects_internal_or_secret_summaries(
     ):
         CampaignRecommendationResponse(
             generation_mode="supervisor",
-            generator_label="Agent endpoint-generated recommendation",
+            generator_label="Databricks Agent Responses",
             performance_status="unavailable",
             audience_summary=unsafe_summary,
             strategy=(
@@ -950,6 +950,42 @@ def test_campaign_name_rejects_protected_class_and_instruction_injection(
 def test_campaign_create_rejects_name_bearing_metadata(kwargs: dict[str, object]) -> None:
     with pytest.raises(ValidationError, match="PII|human-name-shaped"):
         PortfolioCreateRequest(name="Q3 CA recapture", **kwargs)
+
+
+def test_campaign_create_accepts_canonical_databricks_generator_label() -> None:
+    payload = PortfolioCreateRequest(
+        name="Governed campaign review",
+        message_variants=[
+            {
+                "variant_name": "Primary",
+                "channel": "email",
+                "subject": "Review your mortgage options",
+                "body": "Contact a loan officer to review the available mortgage options.",
+                "generation_mode": "supervisor",
+                "generator_label": "Databricks Agent Responses",
+            }
+        ],
+    )
+
+    assert payload.message_variants[0]["generator_label"] == "Databricks Agent Responses"
+
+
+@pytest.mark.parametrize("person_name", ["Jane Smith", "Jordan Lee"])
+def test_campaign_create_rejects_person_shaped_generator_labels(person_name: str) -> None:
+    with pytest.raises(ValidationError, match="human-name-shaped"):
+        PortfolioCreateRequest(
+            name="Governed campaign review",
+            message_variants=[
+                {
+                    "variant_name": "Primary",
+                    "channel": "email",
+                    "subject": "Review your mortgage options",
+                    "body": "Contact a loan officer to review the available mortgage options.",
+                    "generation_mode": "supervisor",
+                    "generator_label": person_name,
+                }
+            ],
+        )
 
 
 def test_campaign_create_accepts_marketing_controls() -> None:

@@ -1,5 +1,22 @@
-import type { LeadSummary } from '../../types';
+import type { CampaignSummary, LeadSummary } from '../../types';
 import type { SortKey } from './LeadTable.types';
+
+export interface CampaignBinding {
+  campaign_id: string;
+  variant_name: string;
+}
+
+/** Accept a URL binding only when the server returned the same campaign and email variant. */
+export function verifiedCampaignBinding(
+  campaign: CampaignSummary | null | undefined,
+  requested: CampaignBinding | null,
+): CampaignBinding | null {
+  if (!campaign || !requested || campaign.campaign_id !== requested.campaign_id) return null;
+  const variantMatches = (campaign.message_variants ?? []).some((raw) => (
+    raw.variant_name === requested.variant_name && raw.channel === 'email'
+  ));
+  return variantMatches ? requested : null;
+}
 
 /**
  * Return true when `el` is an editable element that the window-level

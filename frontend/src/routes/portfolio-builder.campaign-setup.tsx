@@ -4,6 +4,7 @@ import { Icon } from '../components/Icon';
 import { Button, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';
 import type { CampaignRecommendationResponse } from '../types';
+import { publicAgentResponsesText } from '../lib/agentLabels';
 import {
   CAMPAIGN_NUMERIC_BOUNDS,
   normalizeCampaignNumericValue,
@@ -102,7 +103,7 @@ export function CampaignSetupPanel({
             <div className="campaign-recommendation__actions">
               {recommendation && (
                 <span className={`chip ${recommendation.generation_mode === 'supervisor' ? 'chip--success' : 'chip--neutral'}`}>
-                  {recommendation.generator_label}
+                  {publicAgentResponsesText(recommendation.generator_label)}
                 </span>
               )}
               {recommendation && (

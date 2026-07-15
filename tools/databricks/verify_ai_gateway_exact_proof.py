@@ -16,9 +16,10 @@ import json
 import os
 import sys
 import time
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 from uuid import uuid4
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -36,14 +37,16 @@ from backend.services.ai_gateway_proof_ledger import (
     latest_verified_proof,
     list_pending_proofs,
     mark_expired_pending_proofs,
-    mark_proof_verified,
     normalize_gateway_sha,
 )
 from backend.services.capability_serving_probes import (
-    count_inference_log_rows,
+    _inference_table_columns,
+    _split_three_part_relation,
+    inference_log_table_names,
     query_serving_endpoint,
     query_serving_endpoint_with_proof,
     serving_response_has_payload,
+    serving_response_is_terminal_completed,
 )
 from backend.services.databricks_sql import get_sql_client
 from backend.services.lakebase import get_lakebase_client
@@ -377,22 +380,20 @@ def send_probe(
             client_request_id=client_request_id,
         )
     except Exception as exc:  # noqa: BLE001 - timeout/503 is an ambiguous submission result
-        if not _is_cold_start_error(exc):
-            raise
-        print(
-            "[ai-gateway-proof] exact probe submission unresolved after one request; "
-            f"left pending proof_id={proof.proof_id}"
-        )
-        return proof
+        if _is_cold_start_error(exc):
+            print(
+                "[ai-gateway-proof] exact probe submission unresolved after one request; "
+                f"left pending proof_id={proof.proof_id}"
+            )
+            return proof
+        _mark_proof_failed_if_pending(lakebase, proof)
+        raise
 
-    if execution.transport == "responses_api" and not execution.proves_agent_response:
+    if not execution.proves_agent_response:
+        _mark_proof_failed_if_pending(lakebase, proof)
         raise RuntimeError(
             "Configured AI Gateway Responses endpoint did not return a terminal completed payload"
         )
-    if execution.transport != "responses_api" and not serving_response_has_payload(
-        execution.response
-    ):
-        raise RuntimeError("Configured AI Gateway endpoint returned no response payload")
     print(f"[ai-gateway-proof] sent probe proof_id={proof.proof_id}")
     return proof
 
@@ -410,17 +411,22 @@ def verify_pending(
     for proof in list_pending_proofs(lakebase, git_sha=git_sha, limit=limit):
         if proof.endpoint_name != endpoint or proof.inference_table != inference_table:
             continue
-        if _exact_row_count(sql_client, proof) == 1:
-            updated = mark_proof_verified(
-                lakebase,
-                proof_id=proof.proof_id,
-                sent_at=proof.sent_at,
-            )
+        check = _check_exact_inference_row(sql_client, proof)
+        if check.outcome == "verified":
+            updated = _mark_proof_verified_if_pending(lakebase, proof)
+            if updated is None:
+                continue
             print(
                 "[ai-gateway-proof] verified pending "
                 f"proof_id={updated.proof_id} latency_s={updated.verify_latency_s:.1f}"
             )
             verified.append(updated)
+        elif check.outcome == "failed":
+            if _mark_proof_failed_if_pending(lakebase, proof):
+                print(
+                    "[ai-gateway-proof] rejected deterministic inference evidence; "
+                    f"marked failed proof_id={proof.proof_id} reason={check.reason}"
+                )
     return verified
 
 
@@ -434,22 +440,21 @@ def wait_for_exact_row(
 ) -> list[AiGatewayVerifiedProof]:
     deadline = time.monotonic() + timeout_s
     while True:
-        exact_row_count = _exact_row_count(sql_client, proof)
-        if exact_row_count == 1:
-            updated = mark_proof_verified(
-                lakebase,
-                proof_id=proof.proof_id,
-                sent_at=proof.sent_at,
-            )
+        check = _check_exact_inference_row(sql_client, proof)
+        if check.outcome == "verified":
+            updated = _mark_proof_verified_if_pending(lakebase, proof)
+            if updated is None:
+                return []
             print(
                 "[ai-gateway-proof] verified sent "
                 f"proof_id={updated.proof_id} latency_s={updated.verify_latency_s:.1f}"
             )
             return [updated]
-        if exact_row_count > 1:
+        if check.outcome == "failed":
+            _mark_proof_failed_if_pending(lakebase, proof)
             print(
-                "[ai-gateway-proof] exact request matched multiple inference rows; "
-                f"left pending proof_id={proof.proof_id}"
+                "[ai-gateway-proof] rejected deterministic inference evidence; "
+                f"marked failed proof_id={proof.proof_id} reason={check.reason}"
             )
             return []
         if time.monotonic() >= deadline:
@@ -461,12 +466,178 @@ def wait_for_exact_row(
         time.sleep(interval_s)
 
 
-def _exact_row_count(sql_client: Any, proof: AiGatewayVerifiedProof) -> int:
-    return count_inference_log_rows(
-        sql_client,
-        proof.inference_table,
-        client_request_id=proof.client_request_id,
+_ExactRowOutcome = Literal["pending", "verified", "failed"]
+_ExactRowReason = Literal[
+    "not_visible",
+    "schema_unsubstantiated",
+    "duplicate_rows",
+    "non_success_status",
+    "nonterminal_response",
+    "verified",
+]
+
+
+@dataclass(frozen=True)
+class _ExactRowCheck:
+    outcome: _ExactRowOutcome
+    reason: _ExactRowReason
+
+
+def _check_exact_inference_row(
+    sql_client: Any,
+    proof: AiGatewayVerifiedProof,
+) -> _ExactRowCheck:
+    """Require one successful, terminal Responses row for the exact proof id."""
+
+    catalog, schema, _table_prefix = _split_three_part_relation(proof.inference_table)
+    substantiated_rows: list[dict[str, Any]] = []
+    unsubstantiated_matches = 0
+    for table_name in inference_log_table_names(sql_client, proof.inference_table):
+        columns = _inference_table_columns(sql_client, catalog, schema, table_name)
+        predicate_and_params = _exact_row_predicate(columns, proof.client_request_id)
+        if predicate_and_params is None:
+            continue
+        predicate, params = predicate_and_params
+        if not {"status_code", "response"}.issubset(columns):
+            unsubstantiated_matches += _count_matching_rows(
+                sql_client,
+                relation=f"{catalog}.{schema}.{table_name}",
+                predicate=predicate,
+                params=params,
+            )
+            continue
+        substantiated_rows.extend(
+            sql_client.execute(
+                f"""
+                SELECT status_code, response
+                FROM {catalog}.{schema}.{table_name}
+                WHERE {predicate}
+                """,
+                params,
+            )
+        )
+
+    match_count = len(substantiated_rows) + unsubstantiated_matches
+    if match_count == 0:
+        return _ExactRowCheck("pending", "not_visible")
+    if match_count > 1:
+        return _ExactRowCheck("failed", "duplicate_rows")
+    if unsubstantiated_matches:
+        return _ExactRowCheck("pending", "schema_unsubstantiated")
+
+    row = substantiated_rows[0]
+    if not _successful_status_code(row.get("status_code")):
+        return _ExactRowCheck("failed", "non_success_status")
+    response = _logged_response(row.get("response"))
+    if not (
+        serving_response_is_terminal_completed(response) and serving_response_has_payload(response)
+    ):
+        return _ExactRowCheck("failed", "nonterminal_response")
+    return _ExactRowCheck("verified", "verified")
+
+
+def _exact_row_predicate(
+    columns: set[str],
+    client_request_id: str,
+) -> tuple[str, dict[str, str]] | None:
+    if "client_request_id" in columns:
+        return "client_request_id = :client_request_id", {"client_request_id": client_request_id}
+    if "request" in columns:
+        return "request LIKE :client_request_marker", {
+            "client_request_marker": f"%{client_request_id}%"
+        }
+    return None
+
+
+def _count_matching_rows(
+    sql_client: Any,
+    *,
+    relation: str,
+    predicate: str,
+    params: dict[str, str],
+) -> int:
+    rows = sql_client.execute(
+        f"SELECT COUNT(*) AS row_count FROM {relation} WHERE {predicate}",
+        params,
     )
+    if not rows:
+        return 0
+    return int(rows[0].get("row_count") or rows[0].get("n") or 0)
+
+
+def _successful_status_code(value: Any) -> bool:
+    if isinstance(value, bool):
+        return False
+    try:
+        status_code = int(value)
+    except (TypeError, ValueError):
+        return False
+    return 200 <= status_code < 300
+
+
+def _logged_response(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _mark_proof_verified_if_pending(
+    lakebase: Any,
+    proof: AiGatewayVerifiedProof,
+) -> AiGatewayVerifiedProof | None:
+    verified_at = datetime.now(UTC)
+    verify_latency_s = max(0.0, (verified_at - proof.sent_at).total_seconds())
+    row = lakebase.fetchone(
+        """
+        UPDATE mip_app.ai_gateway_proof_ledger
+        SET status = 'verified',
+            verified_at = %(verified_at)s,
+            verify_latency_s = %(verify_latency_s)s
+        WHERE proof_id = %(proof_id)s
+          AND status = 'pending'
+        RETURNING proof_id
+        """,
+        {
+            "proof_id": proof.proof_id,
+            "verified_at": verified_at,
+            "verify_latency_s": verify_latency_s,
+        },
+    )
+    if not row:
+        return None
+    return AiGatewayVerifiedProof(
+        proof_id=proof.proof_id,
+        git_sha=proof.git_sha,
+        client_request_id=proof.client_request_id,
+        endpoint_name=proof.endpoint_name,
+        inference_table=proof.inference_table,
+        sent_at=proof.sent_at,
+        verified_at=verified_at,
+        verify_latency_s=verify_latency_s,
+        status="verified",
+    )
+
+
+def _mark_proof_failed_if_pending(
+    lakebase: Any,
+    proof: AiGatewayVerifiedProof,
+) -> bool:
+    row = lakebase.fetchone(
+        """
+        UPDATE mip_app.ai_gateway_proof_ledger
+        SET status = 'failed',
+            verified_at = NULL,
+            verify_latency_s = NULL
+        WHERE proof_id = %(proof_id)s
+          AND status = 'pending'
+        RETURNING proof_id
+        """,
+        {"proof_id": proof.proof_id},
+    )
+    return row is not None
 
 
 def _resolved_sha(raw: str | None) -> str:

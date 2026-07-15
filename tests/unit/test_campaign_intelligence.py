@@ -265,7 +265,7 @@ def test_supervisor_copy_is_validated_while_evidence_remains_server_derived() ->
 
     assert result.generation_mode == "supervisor"
     assert result.holdout_pct == 12
-    assert result.generator_label == "Agent endpoint-generated recommendation"
+    assert result.generator_label == "Databricks Agent Responses"
     assert all(variant.provenance_token for variant in result.variants)
     assert result.evidence[0].value == "2,119 borrowers"
     assert result.warnings == []

@@ -14,8 +14,7 @@ from backend.services.ai_gateway_proof_ledger import (
 from backend.services.capability_serving_probes import (
     count_inference_log_rows_by_prefixes,
     inference_log_table_names,
-    query_serving_endpoint,
-    serving_response_has_payload,
+    query_serving_endpoint_with_proof,
 )
 
 
@@ -73,7 +72,7 @@ def probe_ai_gateway(
             )
         _ = exact_log_wait_s, exact_log_attempts
         live_request_id = f"{request_prefix}{sha}-{uuid4().hex[:16]}"
-        response = query_serving_endpoint(
+        execution = query_serving_endpoint_with_proof(
             workspace_client,
             endpoint,
             task=str(task or ""),
@@ -83,8 +82,11 @@ def probe_ai_gateway(
             ),
             client_request_id=live_request_id,
         )
-        if not serving_response_has_payload(response):
-            return make_status(False, f"Gateway endpoint {endpoint} returned no response payload.")
+        if not execution.proves_agent_response:
+            return make_status(
+                False,
+                f"Gateway endpoint {endpoint} did not return a terminal completed Responses payload.",
+            )
         proof = latest_verified_proof(
             lakebase,
             git_sha=sha,

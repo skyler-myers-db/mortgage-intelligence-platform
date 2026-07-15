@@ -10,17 +10,18 @@ What this tool does (in order):
 1. Create (or reuse) a workspace service principal with the requested
    ``--sp-name``. Idempotent: an SP whose ``displayName`` already matches
    is re-used rather than duplicated.
-2. Grant ``CAN USE`` on the deployed Databricks App resource
-   (``--app-name``) so the SP can traverse the Apps OAuth proxy.
+2. For normal app-access and admin identities, grant ``CAN USE`` on the
+   deployed Databricks App resource (``--app-name``). The verifier role
+   rejects this grant even when ``--grant-can-use`` is supplied explicitly.
 3. For the verifier identity, grant ``CAN USE`` on the exact SQL warehouse
    used to validate AI Gateway inference rows. The verifier still receives no
    Databricks App access and is never an admin-group member.
-5. Mint an OAuth client_id + client_secret for the SP. A live mint requires
+4. Mint an OAuth client_id + client_secret for the SP. A live mint requires
    ``--set-gh-secrets`` and pipes the one-shot secret directly to ``gh``.
    Secret names are configurable so normal, admin, and verifier identities
    never share one client credential.
 
-6. Optionally rotate an existing SP's secret (``--rotate``). The old
+5. Optionally rotate an existing SP's secret (``--rotate``). The old
    secret stays valid until the admin revokes it in the Accounts Console
    — same zero-downtime rotation cadence as the manual flow.
 
@@ -92,11 +93,21 @@ DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
 # Deployed App URL. Written as a GitHub secret alongside the client id/secret
 # so the workflow's deployed-path detection flips on in a single admin pass.
 DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
+_VERIFIER_APP_ACCESS_ERROR = (
+    "--identity-role verifier forbids Databricks App CAN_USE; "
+    "remove --grant-can-use before provisioning"
+)
 
 
 def _diag(msg: str) -> None:
     """Stderr diagnostic. Keeps stdout clean for scripted consumers."""
     print(f"[mip-m2m-provision] {msg}", file=sys.stderr)
+
+
+def _validate_app_access_contract(*, identity_role: IdentityRole, grant_can_use: bool) -> None:
+    """Reject verifier App access before any workspace or secret side effect."""
+    if identity_role == "verifier" and grant_can_use:
+        raise ValueError(_VERIFIER_APP_ACCESS_ERROR)
 
 
 def _load_app_name_from_bundle(path: Path = DATABRICKS_YML) -> str:
@@ -355,6 +366,14 @@ def provision(
     real ``WorkspaceClient`` via the SDK's standard auth chain (env
     vars → ``~/.databrickscfg`` → workspace identity).
     """
+    try:
+        _validate_app_access_contract(
+            identity_role=identity_role,
+            grant_can_use=grant_can_use,
+        )
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
     if client_factory is None:
 
         def client_factory() -> Any:
@@ -690,10 +709,18 @@ def main(argv: list[str] | None = None) -> int:
 
     role: IdentityRole = args.identity_role
     defaults = IDENTITY_DEFAULTS[role]
+    grant_can_use = defaults.grant_can_use if args.grant_can_use is None else args.grant_can_use
+    try:
+        _validate_app_access_contract(
+            identity_role=role,
+            grant_can_use=grant_can_use,
+        )
+    except ValueError as exc:
+        parser.error(str(exc))
+
     app_name = args.app_name or _load_app_name_from_bundle()
     gh_repo = args.gh_repo or _infer_gh_repo()
     sp_name = args.sp_name or defaults.sp_name
-    grant_can_use = defaults.grant_can_use if args.grant_can_use is None else args.grant_can_use
     group_name = args.group_name or defaults.group_name
     lakebase_instance = args.lakebase_instance or defaults.lakebase_instance
     client_id_secret_name = args.client_id_secret_name or defaults.client_id_secret_name

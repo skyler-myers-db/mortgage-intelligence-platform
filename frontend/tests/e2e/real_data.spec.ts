@@ -1359,7 +1359,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
         recommendation.generation_mode,
         'a claimable Supervisor capability must produce the AI campaign recommendation',
       ).toBe('supervisor');
-      expect(recommendation.generator_label).toBe('Agent endpoint-generated recommendation');
+      expect(recommendation.generator_label).toBe('Databricks Agent Responses');
       expect(recommendation.warnings).toEqual([]);
     }
     expect(['supervisor', 'reviewed_fallback']).toContain(recommendation.generation_mode);

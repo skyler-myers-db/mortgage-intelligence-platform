@@ -27,6 +27,11 @@ vi.mock('../AppContext', () => ({
     approvals: {},
     setApproval: vi.fn(),
     setLastBorrowerId: vi.fn(),
+    saveLead: vi.fn(),
+    isLeadSaved: () => false,
+    setDrawer: vi.fn(),
+    showEvidence: true,
+    showConfidence: true,
   }),
 }));
 
@@ -115,5 +120,41 @@ describe('LeadTable aria-sort columnheaders', () => {
     expect(others.map((th) => th.getAttribute('aria-sort'))).toEqual(
       Array(6).fill('none'),
     );
+  });
+
+  it('counts the expanded preview row and shifts later row indices', () => {
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } },
+    });
+    act(() => {
+      root.render(
+        <QueryClientProvider client={queryClient}>
+          <MemoryRouter>
+            <LeadTable leads={[
+              lead('B-AAAAAAAAAAAA1', 90),
+              lead('B-AAAAAAAAAAAA2', 80),
+              lead('B-AAAAAAAAAAAA3', 70),
+            ]} />
+          </MemoryRouter>
+        </QueryClientProvider>,
+      );
+    });
+
+    const table = container.querySelector('table');
+    expect(table?.getAttribute('aria-rowcount')).toBe('4');
+    expect(Array.from(container.querySelectorAll('tbody tr[aria-rowindex]')).map(
+      (row) => row.getAttribute('aria-rowindex'),
+    )).toEqual(['2', '3', '4']);
+
+    const borrowerButtons = container.querySelectorAll<HTMLButtonElement>(
+      '.lead-table__borrower-btn',
+    );
+    act(() => borrowerButtons[1].click());
+
+    expect(table?.getAttribute('aria-rowcount')).toBe('5');
+    expect(Array.from(container.querySelectorAll('tbody tr[aria-rowindex]')).map(
+      (row) => row.getAttribute('aria-rowindex'),
+    )).toEqual(['2', '3', '4', '5']);
+    expect(container.querySelector('.tbl__expand')?.getAttribute('aria-rowindex')).toBe('4');
   });
 });

@@ -193,7 +193,7 @@ class _CampaignListLakebase:
                 "status": "draft",
                 "criteria": {},
                 "suppression_policy": {},
-                "message_variants": [],
+                "normalized_message_variants": [],
                 "channel_cascade": [],
                 "send_window": {},
                 "holdout": None,
@@ -223,7 +223,7 @@ class _CampaignPatchLakebase:
             "status": status,
             "criteria": {"marketing_eligibility": "Eligible only"},
             "suppression_policy": self.suppression_policy,
-            "message_variants": [],
+            "normalized_message_variants": [],
             "channel_cascade": [],
             "send_window": {},
             "holdout": None,
@@ -262,7 +262,7 @@ def _server_provenance(
     *,
     criteria: PortfolioCriteria | None = None,
 ) -> dict[str, str]:
-    label = "Agent endpoint-generated recommendation"
+    label = "Databricks Agent Responses"
     return {
         "generation_mode": "supervisor",
         "generator_label": label,
@@ -546,6 +546,7 @@ def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
 def test_campaign_summary_derives_creation_verification_from_durable_proof() -> None:
     generated = {
         "variant_name": "A",
+        "channel": "email",
         "generation_mode": "supervisor",
         "generator_label": "Databricks Agent Responses",
         "provenance_key_id": "v1",
@@ -558,9 +559,15 @@ def test_campaign_summary_derives_creation_verification_from_durable_proof() -> 
         "provenance_criteria_fingerprint": campaign_criteria_fingerprint({}),
         "provenance_issued_at": "2026-07-14T00:00:00Z",
         "provenance_expires_at": "2026-07-15T00:00:00Z",
+        "provenance_token_digest": "d" * 64,
+        "internal_proof_note": "must not serialize",
     }
     operator = {
         "variant_name": "B",
+        "channel": "email",
+        "subject": "Review another option",
+        "body": "A loan officer can review another option.",
+        "weight_pct": 50,
         "generation_mode": "operator",
         "generator_label": "Operator edited",
     }
@@ -572,13 +579,100 @@ def test_campaign_summary_derives_creation_verification_from_durable_proof() -> 
             "owner_email": "skyler@entrada.ai",
             "status": "draft",
             "criteria": {},
-            "message_variants": [generated, operator],
+            "message_variants": [
+                {
+                    **generated,
+                    "body": "Mutable duplicate copy must not be trusted.",
+                    "copy_verified_at_creation": True,
+                }
+            ],
+            "normalized_message_variants": [generated, operator],
         }
     )
 
     assert summary.message_variants[0]["copy_verified_at_creation"] is True
     assert summary.message_variants[1]["copy_verified_at_creation"] is False
+    assert summary.message_variants[0]["body"] == generated["body"]
+    assert set(summary.message_variants[0]) == {
+        "variant_name",
+        "channel",
+        "subject",
+        "body",
+        "weight_pct",
+        "generation_mode",
+        "generator_label",
+        "copy_verified_at_creation",
+    }
+    assert "provenance_key_id" not in summary.message_variants[0]
+    assert "internal_proof_note" not in summary.message_variants[0]
+
+
+def test_campaign_summary_does_not_trust_duplicate_json_verification_claim() -> None:
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Unverified campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": {},
+            "message_variants": [
+                {
+                    "variant_name": "A",
+                    "copy_verified_at_creation": True,
+                    "provenance_token": "client-controlled-duplicate",
+                }
+            ],
+            "normalized_message_variants": [
+                {
+                    "variant_name": "A",
+                    "channel": "email",
+                    "subject": "Review your options",
+                    "body": "A loan officer can review the available options.",
+                    "weight_pct": 100,
+                    "generation_mode": "supervisor",
+                    "generator_label": "Databricks Agent Responses",
+                }
+            ],
+        }
+    )
+
+    assert summary.message_variants[0]["copy_verified_at_creation"] is False
     assert "provenance_token" not in summary.message_variants[0]
+
+
+def test_campaign_summary_omits_poisoned_legacy_variant_without_echoing_values(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Legacy campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": {},
+            "normalized_message_variants": [
+                {
+                    "variant_name": "A",
+                    "channel": "email",
+                    "subject": "Jane Smith mortgage review",
+                    "body": "Call Jane Smith to review the available options.",
+                    "generation_mode": "operator",
+                    "generator_label": "Jane Smith",
+                }
+            ],
+        }
+    )
+
+    assert summary.message_variants == []
+    assert "Jane Smith" not in caplog.text
+    warning = next(
+        record
+        for record in caplog.records
+        if getattr(record, "mip_event", None)
+        == "campaign_variant_public_projection_rejected"
+    )
+    assert warning.mip_outcome == "omitted"
+    assert warning.mip_extras == {"reason": "invalid_public_payload"}
 
 
 def test_campaign_list_excludes_archived_by_default(monkeypatch):
@@ -602,6 +696,8 @@ def test_campaign_list_excludes_archived_by_default(monkeypatch):
     # The default (status=None) branch hides archived; the SQL carries the
     # exclusion so the regression can't be silently removed.
     assert "status <> 'archived'" in default_sql
+    assert "FROM mip_app.campaign_message_variants AS variant" in default_sql
+    assert "c.message_variants" not in default_sql
     assert lakebase.calls[-1]["params"]["status"] is None
 
     repo.list_campaigns(owner_email="skyler@entrada.ai", status="archived")
@@ -813,9 +909,7 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     variants = json.loads(str(params["variant_rows"]))
     assert [variant["variant_name"] for variant in variants] == ["A", "B"]
     assert {variant["generation_mode"] for variant in variants} == {"supervisor"}
-    assert {variant["generator_label"] for variant in variants} == {
-        "Agent endpoint-generated recommendation"
-    }
+    assert {variant["generator_label"] for variant in variants} == {"Databricks Agent Responses"}
     assert all(variant["provenance_key_id"] == "v1" for variant in variants)
     assert all(len(variant["provenance_copy_hash"]) == 64 for variant in variants)
     assert all(len(variant["provenance_criteria_fingerprint"]) == 64 for variant in variants)
@@ -825,7 +919,7 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     assert all(variant["provenance_expires_at"] for variant in variants)
     metadata = json.loads(str(params["metadata"]))
     assert metadata["campaign_generation_mode"] == "supervisor"
-    assert metadata["generator_label"] == "Agent endpoint-generated recommendation"
+    assert metadata["generator_label"] == "Databricks Agent Responses"
 
 
 def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
@@ -869,7 +963,7 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
     assert metadata["generator_label"] == "Multiple generators"
     generated, operator = metadata["variant_provenance"]
     assert generated["generation_mode"] == "supervisor"
-    assert generated["generator_label"] == "Agent endpoint-generated recommendation"
+    assert generated["generator_label"] == "Databricks Agent Responses"
     assert generated["variant_name"] == "A"
     assert generated["provenance_key_id"] == "v1"
     assert len(generated["provenance_copy_hash"]) == 64
@@ -922,7 +1016,7 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
                         "subject": subject,
                         "body": original_body,
                         "generation_mode": "supervisor",
-                        "generator_label": "Agent endpoint-generated recommendation",
+                        "generator_label": "Databricks Agent Responses",
                     }
                 ],
             ),

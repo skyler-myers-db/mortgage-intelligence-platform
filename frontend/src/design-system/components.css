@@ -1379,18 +1379,16 @@ kbd {
 .bulk-actions__toast--ok { color: var(--signal-success); }
 .bulk-actions__toast--warn { color: var(--signal-warning); }
 .bulk-actions__toast--danger { color: var(--signal-danger); }
-.table-error {
+.table-error,
+.table-success,
+.table-neutral {
   padding: var(--sp-2) var(--sp-4);
-  color: var(--signal-danger);
   font-size: var(--fs-12);
   border-top: 1px solid var(--line-1);
 }
-.table-success {
-  padding: var(--sp-2) var(--sp-4);
-  color: var(--signal-success);
-  font-size: var(--fs-12);
-  border-top: 1px solid var(--line-1);
-}
+.table-error { color: var(--signal-danger); }
+.table-success { color: var(--signal-success); }
+.table-neutral { color: var(--text-2); }
 .sales-ops-grid {
   display: grid;
   /* 2x2 for the four snapshot cards so none floats alone in a 3-col row. */

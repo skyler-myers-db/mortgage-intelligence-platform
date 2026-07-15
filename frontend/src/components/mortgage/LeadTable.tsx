@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from 'react';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { Link, useSearchParams } from 'react-router-dom';
 import type { CallDisposition, LeadSummary } from '../../types';
@@ -7,7 +7,7 @@ import { Icon } from '../Icon';
 import { Button, Chip } from '../Primitives';
 import { useApp } from '../AppContext';
 import { api, ApiError, isAbortError } from '../../lib/api';
-import { invalidateOperationalQueries } from '../../lib/queryKeys';
+import { invalidateOperationalQueries, queryKeys } from '../../lib/queryKeys';
 import { buildLeadCsv } from './LeadTable.csv';
 import {
   BULK_APPROVE_CONCURRENCY,
@@ -26,6 +26,7 @@ import {
   isLeadSelectableForSalesOps,
   isTerminalApproval,
   sortValue,
+  verifiedCampaignBinding,
 } from './LeadTable.logic';
 import { LeadTableRow } from './LeadTableRow';
 import { LeadDispositionPanel, LeadRejectPanel } from './LeadTableDecisionPanels';
@@ -77,10 +78,31 @@ export function LeadTable({
   const [searchParams] = useSearchParams();
   const campaignId = searchParams.get('campaign_id')?.trim() ?? '';
   const variantName = searchParams.get('variant_name')?.trim() ?? '';
-  const campaignBinding = campaignId && variantName
+  const hasCampaignBindingRequest = Boolean(campaignId || variantName);
+  const requestedCampaignBinding = campaignId && variantName
     ? { campaign_id: campaignId, variant_name: variantName }
     : null;
-  const campaignBindingError = Boolean(campaignId || variantName) && !campaignBinding;
+  const campaignBindingQuery = useQuery({
+    queryKey: queryKeys.campaign(campaignId),
+    queryFn: ({ signal }) => api.campaign(campaignId, signal),
+    enabled: requestedCampaignBinding !== null,
+    retry: false,
+    staleTime: 60_000,
+  });
+  const campaignBinding = verifiedCampaignBinding(
+    campaignBindingQuery.data,
+    requestedCampaignBinding,
+  );
+  const campaignBindingState = !hasCampaignBindingRequest
+    ? 'absent'
+    : requestedCampaignBinding === null
+      ? 'invalid'
+      : campaignBinding
+        ? 'verified'
+        : campaignBindingQuery.isPending || campaignBindingQuery.isFetching
+          ? 'validating'
+          : 'invalid';
+  const campaignBindingBlocked = hasCampaignBindingRequest && campaignBinding === null;
   const tableWrapRef = useRef<HTMLDivElement | null>(null);
   // A11y: the bulk-approve button is the launch point for the bulk flow.
   // After the action settles we restore focus deterministically — to this
@@ -119,6 +141,10 @@ export function LeadTable({
         }
         return String(av).localeCompare(String(bv)) * direction;
       });
+  const expandedRowIndex = expanded
+    ? sortedLeads.findIndex((lead) => lead.borrower_id === expanded)
+    : -1;
+  const hasExpandedRow = expandedRowIndex >= 0;
   const shouldVirtualize = sortedLeads.length > LEAD_VIRTUALIZATION_THRESHOLD;
   // TanStack Virtual returns imperative instance methods tied to the scroll
   // element. The hook stays local to this table and its methods are not passed
@@ -209,8 +235,12 @@ export function LeadTable({
     // to true and produce a second audit row. The ref flips
     // immediately.
     if (rowInFlightRef.current[borrowerId]) return 'duplicate';
-    if (campaignBindingError) {
-      setApprovalError('Campaign handoff is incomplete. Reopen the saved campaign before approval.');
+    if (campaignBindingBlocked) {
+      setApprovalError(
+        campaignBindingState === 'validating'
+          ? 'Campaign binding is still being validated. Wait before approval.'
+          : 'Campaign binding is invalid. Reopen the saved campaign before approval.',
+      );
       return 'backend';
     }
     rowInFlightRef.current[borrowerId] = true;
@@ -296,8 +326,12 @@ export function LeadTable({
   ): Promise<boolean> {
     // R5-04: synchronous latch — see approveLead above.
     if (rowInFlightRef.current[borrowerId]) return false;
-    if (campaignBindingError) {
-      setApprovalError('Campaign handoff is incomplete. Reopen the saved campaign before rejection.');
+    if (campaignBindingBlocked) {
+      setApprovalError(
+        campaignBindingState === 'validating'
+          ? 'Campaign binding is still being validated. Wait before rejection.'
+          : 'Campaign binding is invalid. Reopen the saved campaign before rejection.',
+      );
       return false;
     }
     rowInFlightRef.current[borrowerId] = true;
@@ -870,9 +904,19 @@ export function LeadTable({
           </span>
         </div>
       )}
-      {campaignBindingError && (
-        <div className="table-error" role="alert">
-          Campaign handoff is incomplete. Reopen the saved campaign and select a variant before taking action.
+      {campaignBindingState === 'validating' && requestedCampaignBinding && (
+        <div className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
+          <Chip variant="neutral" icon="shield">Validating campaign binding</Chip>
+          <span className="mono" title={requestedCampaignBinding.campaign_id}>
+            campaign {requestedCampaignBinding.campaign_id.slice(0, 12)}
+          </span>
+          <span>variant {requestedCampaignBinding.variant_name}</span>
+        </div>
+      )}
+      {campaignBindingState === 'invalid' && (
+        <div className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
+          <Chip variant="neutral" icon="shield">Campaign binding invalid</Chip>
+          <span>Reopen the saved campaign and select a verified variant before taking action.</span>
         </div>
       )}
       {campaignBinding && (
@@ -940,7 +984,10 @@ export function LeadTable({
         tabIndex={0}
         aria-label="Ranked borrowers table scroll region"
       >
-        <table className="tbl lead-table__table" aria-rowcount={sortedLeads.length + 1}>
+        <table
+          className="tbl lead-table__table"
+          aria-rowcount={sortedLeads.length + 1 + (hasExpandedRow ? 1 : 0)}
+        >
           <colgroup>
             <col className="lead-table__col-select" />
             <col className="lead-table__col-expand" />
@@ -1015,6 +1062,9 @@ export function LeadTable({
                   key={lead.borrower_id}
                   lead={lead}
                   virtualIndex={virtualIndex}
+                  ariaRowIndex={virtualIndex + 2 + (
+                    hasExpandedRow && virtualIndex > expandedRowIndex ? 1 : 0
+                  )}
                   isOpen={isOpen}
                   approval={approval}
                   isSelected={isSelected}

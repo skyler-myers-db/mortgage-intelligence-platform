@@ -92,7 +92,7 @@ Flags of note:
 | `--gh-repo`             | inferred from `git remote get-url origin`        | Target GitHub repo for secret upload.                                                             |
 | `--set-gh-secrets`      | off (explicit opt-in)                            | Required for secret upload. Without it, the tool prints the client_secret to stdout once.         |
 | `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
-| `--no-grant-can-use`    | grant is on                                      | Skip the CAN_USE grant (use when an admin grants it separately).                                  |
+| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control the App grant for normal/admin identities. The verifier role always forbids App `CAN_USE` and rejects `--grant-can-use`, including under `--dry-run`. |
 | `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
 
 Rotation (replaces the "Rotation cadence" section below when you use
@@ -342,6 +342,11 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
   SQL-warehouse `CAN USE`; it must have no direct, inherited, or effective
   app permission and no direct or nested membership in `mip-admin` or an
   app-authorized group.
+- `--identity-role verifier --grant-can-use` is an invalid request. Both the
+  CLI (including `--dry-run`) and direct `provision()` calls reject it before
+  creating a workspace client, mutating Lakebase/serving/warehouse/App
+  permissions, or minting an OAuth secret. Normal app-access and admin roles
+  retain their App `CAN_USE` behavior.
 - Verifier provisioning hydrates the workspace group graph and app ACL before
   granting resources or minting a secret. Any group or permission resolution
   error fails closed and requires an administrator to repair visibility before

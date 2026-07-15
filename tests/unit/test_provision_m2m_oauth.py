@@ -153,6 +153,40 @@ def test_dry_run_does_not_touch_sdk() -> None:
     mock_provision.assert_not_called()
 
 
+@pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
+def test_cli_rejects_verifier_app_can_use_before_provision(
+    dry_run: bool,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    argv = ["--identity-role", "verifier", "--grant-can-use"]
+    if dry_run:
+        argv.append("--dry-run")
+
+    with (
+        patch.object(pmo, "provision") as mock_provision,
+        pytest.raises(SystemExit) as exc,
+    ):
+        pmo.main(argv)
+
+    assert exc.value.code == 2
+    assert "verifier forbids Databricks App CAN_USE" in capsys.readouterr().err
+    mock_provision.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("role", "role_args"),
+    [
+        pytest.param("normal", [], id="app-runtime"),
+        pytest.param("admin", ["--create-group"], id="admin"),
+    ],
+)
+def test_cli_allows_app_can_use_for_app_runtime_and_admin_roles(
+    role: str,
+    role_args: list[str],
+) -> None:
+    assert pmo.main(["--identity-role", role, "--grant-can-use", "--dry-run", *role_args]) == 0
+
+
 @pytest.mark.parametrize("option", ["--lakebase-instance", "--gateway-endpoint", "--warehouse-id"])
 def test_verifier_grant_options_are_rejected_for_other_roles(option: str) -> None:
     with pytest.raises(SystemExit) as exc:
@@ -371,6 +405,35 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
     assert result.granted_warehouse_can_use is True
 
 
+def test_provision_rejects_verifier_app_can_use_before_client_or_any_mutation() -> None:
+    client_factory = MagicMock()
+
+    with pytest.raises(SystemExit, match="verifier forbids Databricks App CAN_USE"):
+        pmo.provision(
+            sp_name="mip-ai-gateway-verifier-ci-sp",
+            expected_application_id=None,
+            app_name="mip-app",
+            grant_can_use=True,
+            group_name=None,
+            create_group=False,
+            lakebase_instance="mip-app-state",
+            gateway_endpoint="mip-agent-gateway",
+            warehouse_id="warehouse-123",
+            gh_repo="acme/repo",
+            set_gh_secrets=True,
+            mint_secret=True,
+            rotate=True,
+            app_url="https://mip-app-test.aws.databricksapps.com",
+            client_id_secret_name="DATABRICKS_VERIFIER_CLIENT_ID",
+            client_secret_secret_name="DATABRICKS_VERIFIER_CLIENT_SECRET",
+            app_url_secret_name=None,
+            identity_role="verifier",
+            client_factory=client_factory,
+        )
+
+    client_factory.assert_not_called()
+
+
 def test_expected_application_id_fails_before_creating_missing_principal() -> None:
     client = _make_client(create_returns=_sp(application_id="unexpected-id"))
 
@@ -506,18 +569,29 @@ def test_verifier_fails_closed_on_nested_group_app_permission() -> None:
         ]
     )
 
-    with pytest.raises(SystemExit, match="through group 'mip-app-users'"):
+    with (
+        patch.object(pmo, "_set_gh_secret") as set_secret,
+        pytest.raises(SystemExit, match="through group 'mip-app-users'"),
+    ):
         _provision(
             client,
             sp_name=verifier.display_name,
             identity_role="verifier",
             grant_can_use=False,
-            mint_secret=False,
-            set_gh_secrets=False,
-            gh_repo=None,
+            lakebase_instance="mip-app-state",
+            gateway_endpoint="mip-agent-gateway",
+            warehouse_id="warehouse-123",
+            mint_secret=True,
+            rotate=True,
         )
 
     client.database.create_database_instance_role.assert_not_called()
+    client.serving_endpoints.get.assert_not_called()
+    client.serving_endpoints.update_permissions.assert_not_called()
+    client.warehouses.update_permissions.assert_not_called()
+    client.apps.update_permissions.assert_not_called()
+    client.service_principal_secrets_proxy.create.assert_not_called()
+    set_secret.assert_not_called()
 
 
 def test_non_admin_identity_fails_closed_on_admin_group_membership() -> None:

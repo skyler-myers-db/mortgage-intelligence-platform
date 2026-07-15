@@ -26,6 +26,7 @@ import type { LeadSummary } from '../../types';
 
 const draftOutreach = vi.fn();
 const approve = vi.fn();
+const campaign = vi.fn();
 
 const DRAFT = {
   generation_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -58,6 +59,7 @@ vi.mock('../../lib/api', () => ({
   api: {
     draftOutreach: (...args: unknown[]) => draftOutreach(...args),
     approve: (...args: unknown[]) => approve(...args),
+    campaign: (...args: unknown[]) => campaign(...args),
     salesTeam: () => Promise.resolve({ members: [] }),
   },
   ApiError: class extends Error {},
@@ -96,6 +98,19 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
     approvalsFixture = {};
     draftOutreach.mockResolvedValue(DRAFT);
     approve.mockResolvedValue({ approved: true });
+    campaign.mockResolvedValue({
+      campaign_id: '11111111-1111-4111-8111-111111111111',
+      name: 'Saved campaign',
+      owner_email: 'growth@summit.example',
+      status: 'draft',
+      criteria: {},
+      message_variants: [{
+        variant_name: 'B',
+        channel: 'email',
+        subject: 'Your governed mortgage review',
+        body: 'Reply to review your options.',
+      }],
+    });
     container = document.createElement('div');
     document.body.appendChild(container);
     root = createRoot(container);
@@ -211,6 +226,8 @@ describe('LeadTable A/R hotkeys from row-internal focus', () => {
       variant_name: 'B',
     });
     mount(`/lead-queue?campaign_id=${campaignId}&variant_name=B`);
+    await flush();
+    await flush();
     const checkbox = container.querySelector<HTMLInputElement>(
       '[data-testid="lead-select-B-AAAAAAAAAAAA1"]',
     );

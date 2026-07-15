@@ -78,6 +78,7 @@ export default function AskGenie() {
   const [promptAgentPending, setPromptAgentPending] = useState(false);
   const [promptAgentPendingAction, setPromptAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [growthAgentPending, setGrowthAgentPending] = useState<GrowthAgentWorkflowId | null>(null);
+  const [growthAgentPendingAction, setGrowthAgentPendingAction] = useState<'run' | 'save' | null>(null);
   const [monitorPending, setMonitorPending] = useState<string | null>(null);
   const [monitorDraftPending, setMonitorDraftPending] = useState<string | null>(null);
   const [customAgentPendingAction, setCustomAgentPendingAction] = useState<'run' | 'save' | null>(null);
@@ -229,6 +230,7 @@ export default function AskGenie() {
       return;
     }
     setGrowthAgentPending(workflow.id);
+    setGrowthAgentPendingAction(saveMonitor ? 'save' : 'run');
     setLatestGrowthRun(null);
     setGrowthAgentError(null);
     try {
@@ -247,6 +249,7 @@ export default function AskGenie() {
       setGrowthAgentError(err instanceof Error ? err.message : 'Growth Agent workflow failed.');
     } finally {
       setGrowthAgentPending(null);
+      setGrowthAgentPendingAction(null);
     }
   }
 
@@ -600,7 +603,7 @@ export default function AskGenie() {
                       onClick={() => runGrowthAgentWorkflow(workflow, false)}
                       disabled={agentBusy || stateParsePreview.invalid.length > 0}
                     >
-                      {pending ? 'Running…' : 'Run'}
+                      {pending && growthAgentPendingAction === 'run' ? 'Running…' : 'Run'}
                     </Button>
                     <Button
                       variant="ghost"
@@ -609,7 +612,7 @@ export default function AskGenie() {
                       onClick={() => runGrowthAgentWorkflow(workflow, true)}
                       disabled={agentBusy || stateParsePreview.invalid.length > 0}
                     >
-                      Save watchlist
+                      {pending && growthAgentPendingAction === 'save' ? 'Saving…' : 'Save watchlist'}
                     </Button>
                   </div>
                 </article>

@@ -1662,7 +1662,7 @@ export const api = {
     getJson<CampaignListResponse>('/api/campaigns', signal),
 
   campaign: (campaignId: string, signal?: AbortSignal) =>
-    getJson<CampaignSummary>(`/api/campaigns/${campaignId}`, signal),
+    getJson<CampaignSummary>(`/api/campaigns/${encodeURIComponent(campaignId)}`, signal),
 
   campaignStatus: (
     campaignId: string,
@@ -1671,7 +1671,7 @@ export const api = {
     signal?: AbortSignal,
   ) =>
     patchJson<CampaignSummary, { status: CampaignSummary['status']; rationale?: string | null }>(
-      `/api/campaigns/${campaignId}`,
+      `/api/campaigns/${encodeURIComponent(campaignId)}`,
       { status, rationale: rationale ?? null },
       signal,
     ),

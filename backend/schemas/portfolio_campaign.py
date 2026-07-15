@@ -47,6 +47,7 @@ _PUBLIC_TITLECASE_PHRASE_ALLOWLIST: tuple[str, ...] = (
     "West Virginia",
     "United States",
 )
+_CANONICAL_PUBLIC_PLATFORM_LABELS = frozenset({"Databricks Agent Responses"})
 _BORROWER_COPY_UNSUPPORTED_CLAIM_RE = re.compile(
     r"(?:\$|\b\d+(?:\.\d+)?\s*(?:%|percent|bps|basis points?|dollars?)\b|"
     r"\b(?:guarantee(?:d|s)?|pre[- ]?approved|lowest rate|best rate|save money|"
@@ -100,7 +101,10 @@ def assert_public_campaign_text(value: object, *, field_name: str, max_length: i
     if contains_prompt_injection_text(text):
         raise ValueError(f"{field_name} cannot contain instruction-override language")
     assert_no_protected_class_marketing_text(text, field_name=field_name)
-    if (
+    is_canonical_platform_label = (
+        field_name.endswith("generator_label") and text in _CANONICAL_PUBLIC_PLATFORM_LABELS
+    )
+    if not is_canonical_platform_label and (
         _HUMAN_NAME_SHAPE_RE.search(name_scan_text)
         or contains_contextual_human_name(name_scan_text)
         or contains_human_name_shape(name_scan_text)

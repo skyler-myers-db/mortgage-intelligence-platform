@@ -1,6 +1,10 @@
 import type { ReactNode } from 'react';
 import { Button, Chip } from '../components/Primitives';
 import { Icon } from '../components/Icon';
+import {
+  DATABRICKS_AGENT_RESPONSES_LABEL,
+  publicAgentResponsesText,
+} from '../lib/agentLabels';
 import type {
   GrowthAgentGovernanceChip,
   GrowthAgentPolicyCheck,
@@ -8,24 +12,7 @@ import type {
   GrowthAgentToolStep,
 } from '../types';
 
-export const DATABRICKS_AGENT_RESPONSES_LABEL = 'Databricks Agent Responses';
-
-export function publicAgentResponsesText(value: string | null | undefined): string {
-  if (!value) return '';
-  switch (value.trim()) {
-    case 'Supervisor-composed notification':
-    case 'Databricks Agent Responses endpoint':
-    case 'Agent Responses endpoint':
-    case 'Databricks Supervisor Agent':
-    case 'Supervisor Agent':
-    case 'Multi-agent framework':
-    case 'Agent framework':
-    case 'agent_framework_supervisor':
-      return DATABRICKS_AGENT_RESPONSES_LABEL;
-    default:
-      return value;
-  }
-}
+export { DATABRICKS_AGENT_RESPONSES_LABEL, publicAgentResponsesText };
 
 function publicToolName(value: string | null | undefined): string | null {
   if (!value) return null;

@@ -76,7 +76,7 @@ _PLACEHOLDER_PROVENANCE_SECRETS = frozenset(
     }
 )
 _GENERATOR_LABELS: dict[str, str] = {
-    "supervisor": "Agent endpoint-generated recommendation",
+    "supervisor": "Databricks Agent Responses",
     "reviewed_fallback": "Reviewed campaign framework",
 }
 
