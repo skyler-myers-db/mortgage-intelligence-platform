@@ -61,6 +61,10 @@ def _make_client(
     group_values = groups or []
     client.groups.list.side_effect = lambda **_kwargs: iter(group_values)
     client.database.list_database_instance_roles.return_value = iter(lakebase_roles or [])
+    client.serving_endpoints.get.return_value = SimpleNamespace(
+        id="mip-gateway-endpoint-id",
+        name="mip-agent-gateway",
+    )
     return client
 
 
@@ -326,17 +330,35 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
     assert role.name == "verifier-application-id"
     assert getattr(role.identity_type, "value", role.identity_type) == "SERVICE_PRINCIPAL"
     client.serving_endpoints.update_permissions.assert_called_once()
-    endpoint_name, = client.serving_endpoints.update_permissions.call_args.args
+    client.serving_endpoints.get.assert_called_once_with("mip-agent-gateway")
+    endpoint_id, = client.serving_endpoints.update_permissions.call_args.args
     endpoint_acl = client.serving_endpoints.update_permissions.call_args.kwargs[
         "access_control_list"
     ]
-    assert endpoint_name == "mip-agent-gateway"
+    assert endpoint_id == "mip-gateway-endpoint-id"
     assert endpoint_acl[0].service_principal_name == "verifier-application-id"
     assert getattr(endpoint_acl[0].permission_level, "value", endpoint_acl[0].permission_level) == (
         "CAN_QUERY"
     )
     assert result.created_lakebase_role is True
     assert result.granted_can_query is True
+
+
+def test_verifier_gateway_grant_fails_closed_without_endpoint_id() -> None:
+    client = _make_client()
+    client.serving_endpoints.get.return_value = SimpleNamespace(
+        id=None,
+        name="mip-agent-gateway",
+    )
+
+    with pytest.raises(SystemExit, match="has no immutable id"):
+        pmo._grant_can_query_on_endpoint(
+            client,
+            "mip-agent-gateway",
+            "verifier-application-id",
+        )
+
+    client.serving_endpoints.update_permissions.assert_not_called()
 
 
 def test_existing_verifier_lakebase_role_is_idempotent() -> None:

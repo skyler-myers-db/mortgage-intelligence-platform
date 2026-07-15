@@ -398,10 +398,15 @@ def _grant_can_query_on_endpoint(
         ServingEndpointPermissionLevel,
     )
 
-    _diag(f"granting CAN_QUERY on endpoint={endpoint_name!r} to verifier identity")
+    _diag(f"resolving serving endpoint id for endpoint={endpoint_name!r}")
     try:
+        endpoint = client.serving_endpoints.get(endpoint_name)
+        endpoint_id = str(getattr(endpoint, "id", "") or "").strip()
+        if not endpoint_id:
+            raise ValueError(f"serving endpoint {endpoint_name!r} has no immutable id")
+        _diag(f"granting CAN_QUERY on endpoint={endpoint_name!r} to verifier identity")
         client.serving_endpoints.update_permissions(
-            endpoint_name,
+            endpoint_id,
             access_control_list=[
                 ServingEndpointAccessControlRequest(
                     service_principal_name=sp_application_id,
