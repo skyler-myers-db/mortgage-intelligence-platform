@@ -236,6 +236,24 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
     assert "--warehouse-id" not in bootstrap_block
 
 
+def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    bundle = (REPO / "databricks.yml").read_text(encoding="utf-8")
+
+    migration = script.index(
+        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
+    )
+    uc_init = script.index(
+        'run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"'
+    )
+    table_grants = script.index('step "apply UC grants to the app service principal')
+    skip_silver_branch = script.index('if [[ "$SKIP_SILVER" -eq 1 ]]')
+
+    assert migration < uc_init < table_grants < skip_silver_branch
+    assert "mip_init_catalog_schemas:" in bundle
+    assert "path: sql/_rendered/ddl/001_catalogs_schemas.sql" in bundle
+
+
 def test_deploy_dev_wires_required_gateway_proof_signing_key() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
 

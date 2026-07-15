@@ -666,6 +666,13 @@ run "$PYTHON" tools/databricks/provision_m2m_oauth.py \
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
 
+# The governed treatment Delta table is declared in 001_catalogs_schemas.sql.
+# Run its dedicated, idempotent bootstrap before table-level grants. The
+# silver/FRED jobs also include this DDL, but they execute later and may be
+# intentionally skipped; grant ordering must not depend on refresh policy.
+step "initialize UC catalog schemas and governed treatment table (idempotent)"
+run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"
+
 # -----------------------------------------------------------------------------
 # Step 4c: UC grants for the app service principal (audit P1-3, zero-click)
 # -----------------------------------------------------------------------------

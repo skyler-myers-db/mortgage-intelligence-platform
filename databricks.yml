@@ -339,6 +339,25 @@ resources:
       auto_stop_mins: 10
 
   jobs:
+    # Dedicated first-install bootstrap. Deploy runs this single idempotent
+    # task before applying table grants, so --skip-silver deployments do not
+    # depend on a later refresh job to create governed audit relations.
+    mip_init_catalog_schemas:
+      name: mip_init_catalog_schemas
+      tags:
+        solution: mortgage-intelligence-platform
+        module: module0
+        owner: entrada
+        slice: module0-bootstrap
+      max_concurrent_runs: 1
+      tasks:
+        - task_key: init_catalog_schemas
+          description: "Idempotent CREATE CATALOG/SCHEMA and governed first-install tables."
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/001_catalogs_schemas.sql
+
     # Slice 2 real-data migration: refresh silver by running the Lakeflow
     # (DLT) feature pipeline. Step 1 applies the idempotent DDL (catalog +
     # schemas) via SQL task against the serverless warehouse; Step 2 kicks
