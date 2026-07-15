@@ -245,7 +245,7 @@ jobs:
       - name: Install Chromium
         working-directory: frontend
         run: npx playwright install --with-deps chromium
-      - name: Execute governed handoff fixture
+      - name: Execute governed handoff and virtualization fixtures
         working-directory: frontend
         env:
           MIP_APP_URL: http://127.0.0.1:4173
@@ -264,6 +264,8 @@ jobs:
             sleep 1
           done
           npx playwright test tests/e2e/growth_agent_handoff_fixture.spec.ts
+          E2E_LAYOUT_MOCK=1 npx playwright test tests/e2e/layout-stability.spec.ts \
+            --grep "expanded virtual-row geometry" --workers=1
 
   security-scan:
     # SAST + secret-scan gate. This job is credential-free like the rest

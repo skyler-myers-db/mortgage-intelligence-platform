@@ -54,6 +54,8 @@ _PLACEHOLDER_HOSTS = {
     "example.cloud.databricks.com",
 }
 
+AI_GATEWAY_PROOF_FRESHNESS_MAX_S = 26 * 60 * 60
+
 
 def _has_angle_bracket_placeholder(value: str | None) -> bool:
     text = (value or "").strip()
@@ -184,7 +186,9 @@ class Settings(BaseSettings):
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
     mip_ai_gateway_proof_freshness_s: float = Field(
-        default=26 * 60 * 60,
+        default=AI_GATEWAY_PROOF_FRESHNESS_MAX_S,
+        gt=0,
+        le=AI_GATEWAY_PROOF_FRESHNESS_MAX_S,
         validation_alias=AliasChoices(
             "MIP_AI_GATEWAY_PROOF_FRESHNESS_S",
             "AI_GATEWAY_PROOF_FRESHNESS_S",
@@ -514,7 +518,11 @@ class Settings(BaseSettings):
         """
         host = self.databricks_host
         warehouse = self.databricks_warehouse_id
-        if not host or not warehouse or is_placeholder_databricks_config(host=host, warehouse_id=warehouse):
+        if (
+            not host
+            or not warehouse
+            or is_placeholder_databricks_config(host=host, warehouse_id=warehouse)
+        ):
             raise RuntimeError(_MISSING_CREDS_MSG)
         # Normalise host shape: strip trailing slash, ensure scheme.
         if not host.startswith("http"):

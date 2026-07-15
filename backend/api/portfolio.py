@@ -222,12 +222,17 @@ def get_portfolio(portfolio_id: str, request: Request, repo: RepoDep) -> dict[st
     return result
 
 
-@router.patch("/{portfolio_id}", response_model=CampaignSummary)
+@router.patch(
+    "/{portfolio_id}",
+    response_model=CampaignSummary,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def patch_portfolio(
     portfolio_id: str,
     payload: CampaignStatusPatchRequest,
     request: Request,
     repo: RepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> CampaignSummary:
     try:
         validate_public_opaque_id(portfolio_id)

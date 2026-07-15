@@ -489,10 +489,12 @@ def _check_exact_inference_row(
 ) -> _ExactRowCheck:
     """Require one successful, terminal Responses row for the exact proof id."""
 
-    catalog, schema, _table_prefix = _split_three_part_relation(proof.inference_table)
+    catalog, schema, table_prefix = _split_three_part_relation(proof.inference_table)
     substantiated_rows: list[dict[str, Any]] = []
     unsubstantiated_matches = 0
     for table_name in inference_log_table_names(sql_client, proof.inference_table):
+        if not table_name.startswith(table_prefix):
+            continue
         columns = _inference_table_columns(sql_client, catalog, schema, table_name)
         predicate_and_params = _exact_row_predicate(columns, proof.client_request_id)
         if predicate_and_params is None:

@@ -4,7 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from backend.services.capability_serving_probes import query_serving_endpoint_with_proof
+from backend.services.capability_serving_probes import (
+    inference_log_table_names,
+    query_serving_endpoint_with_proof,
+)
 
 
 class _ApiClient:
@@ -100,3 +103,25 @@ def test_agent_responses_completed_without_output_is_not_proof() -> None:
     )
 
     assert execution.proves_agent_response is False
+
+
+def test_inference_table_discovery_escapes_literal_prefix_and_filters_decoys() -> None:
+    class _SqlClient:
+        def __init__(self) -> None:
+            self.statement = ""
+            self.parameters: dict[str, str] = {}
+
+        def execute(self, statement: str, parameters: dict[str, str]) -> list[dict[str, str]]:
+            self.statement = statement
+            self.parameters = parameters
+            return [
+                {"table_name": "mipXagentXgatewayXllama_payload"},
+                {"table_name": "mip_agent_gateway_llama_payload"},
+            ]
+
+    sql = _SqlClient()
+    names = inference_log_table_names(sql, "mip.audit.mip_agent_gateway_llama")
+
+    assert names == ["mip_agent_gateway_llama_payload"]
+    assert "LIKE :prefix_like ESCAPE '\\\\'" in sql.statement
+    assert sql.parameters["prefix_like"] == r"mip\_agent\_gateway\_llama%"

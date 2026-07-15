@@ -10,6 +10,8 @@ from backend.services.databricks_sql_helpers import _validate_identifier
 
 ServingTransport = Literal["responses_api", "endpoint_invocation"]
 
+_LIKE_ESCAPE = "\\"
+
 
 @dataclass(frozen=True)
 class ServingEndpointExecution:
@@ -271,20 +273,21 @@ def count_inference_log_rows_by_prefixes(
 
 def inference_log_table_names(sql_client: Any, expected_table_prefix: str) -> list[str]:
     catalog, schema, table_prefix = _split_three_part_relation(expected_table_prefix)
+    escaped_table_prefix = _escape_like_literal(table_prefix)
     table_rows = sql_client.execute(
         """
         SELECT table_name
         FROM system.information_schema.tables
         WHERE table_catalog = :catalog
           AND table_schema = :schema
-          AND (table_name = :prefix OR table_name LIKE :prefix_like)
+          AND (table_name = :prefix OR table_name LIKE :prefix_like ESCAPE '\\\\')
         ORDER BY table_name
         """,
         {
             "catalog": catalog,
             "schema": schema,
             "prefix": table_prefix,
-            "prefix_like": f"{table_prefix}%",
+            "prefix_like": f"{escaped_table_prefix}%",
         },
     )
     names: list[str] = []
@@ -292,9 +295,19 @@ def inference_log_table_names(sql_client: Any, expected_table_prefix: str) -> li
         table_name = str(row.get("table_name") or "").strip()
         if not table_name:
             continue
+        if not table_name.startswith(table_prefix):
+            continue
         _validate_identifier("table", table_name)
         names.append(table_name)
     return names
+
+
+def _escape_like_literal(value: str) -> str:
+    return (
+        value.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
 
 
 def wait_for_inference_log_increment(

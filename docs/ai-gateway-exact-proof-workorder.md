@@ -80,8 +80,10 @@ Claimable = ALL of the following (single path, no alternatives):
    valid proof for this run (and strictly stronger), but it must NOT be required.
 3. **A `verified` ledger row exists for the CURRENT deployment SHA with
    `verified_at >= now() - FRESHNESS`.** `FRESHNESS` = `MIP_AI_GATEWAY_PROOF_FRESHNESS_S`,
-   default 26 hours (covers a nightly re-verify cadence + lag; see §1d). A verified proof from a
-   different SHA, a `pending`/`failed`/`expired` row, or a stale `verified_at` → NOT claimable.
+   default and hard maximum 26 hours (covers a nightly re-verify cadence + lag; see §1d). Settings
+   validation rejects larger values, and ledger/probe callers defensively cap mutated or direct
+   values. A verified proof from a different SHA, a `pending`/`failed`/`expired` row, or a stale
+   `verified_at` → NOT claimable.
 
 **Remove the trailing-2h `count_recent_inference_log_rows` fallback from the claimable path
 entirely.** It may remain only as detail enrichment on the `configured` branch (e.g. "recent
@@ -216,8 +218,8 @@ numbers/ids (redact per the existing evidence-redaction caveat before external s
 
 - The ONLY claimable path is the ledger-verified exact row (§1c). No prefix-count fallback, no
   "enabled/queryable" path, no recent-window path may yield `available=True`.
-- Do not widen `FRESHNESS` beyond 26h or the verify ceiling beyond 3600s without product-owner
-  signoff recorded in the commit message.
+- `FRESHNESS` must not exceed the code-enforced 26h maximum. Changing that ceiling or the 3600s
+  verify ceiling requires product-owner signoff recorded with the change.
 - No test may be inverted/renamed to accept weaker proof. Replacing the async-acceptance test
   with a rejection is required and must be called out explicitly in the commit message.
 - If a gate fails, report the failure. A summary claiming PASS while any gate is red, or

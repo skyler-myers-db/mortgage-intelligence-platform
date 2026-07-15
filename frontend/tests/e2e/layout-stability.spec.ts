@@ -101,7 +101,19 @@ function filteredLeadCount(url: URL): number {
   return 3;
 }
 
-async function installMockApi(page: Page): Promise<string[]> {
+function virtualizationFixtureLeads(count: number) {
+  return Array.from({ length: count }, (_, index) => ({
+    ...mockBorrowers[0],
+    borrower_id: `B-${String(index + 1).padStart(13, '0')}`,
+    clip: `clip_${String(index + 1).padStart(13, '0')}`,
+    approval_status: 'pending',
+  }));
+}
+
+async function installMockApi(
+  page: Page,
+  options: { leadCount?: number } = {},
+): Promise<string[]> {
   const unhandled: string[] = [];
 
   await page.route('**/api/**', async (route) => {
@@ -187,8 +199,11 @@ async function installMockApi(page: Page): Promise<string[]> {
       return;
     }
     if (path === '/api/leads') {
-      const count = filteredLeadCount(url);
-      await fulfillJson(route, mockBorrowers.slice(0, count), {
+      const count = options.leadCount ?? filteredLeadCount(url);
+      const rows = options.leadCount
+        ? virtualizationFixtureLeads(options.leadCount)
+        : mockBorrowers.slice(0, count);
+      await fulfillJson(route, rows, {
         'X-Total-Matching': String(count),
         'X-Returned-Rows': String(count),
       });
@@ -706,6 +721,58 @@ test('Lead Queue keeps controls and retained rows anchored while a state transit
   if (MOCK) await expect(region.locator('.surface__ft')).toContainText('of 2 total matching filters');
   await expect(page).toHaveURL(/state=IL/);
   await expectObservedClsBelow(page, 'Lead Queue state filter');
+  expect(unhandled).toEqual([]);
+});
+
+test('Lead Queue preserves expanded virtual-row geometry outside overscan @desktop', async ({ page }) => {
+  test.skip(!MOCK, 'Deterministic 200-row geometry fixture.');
+  const unhandled = await installMockApi(page, { leadCount: 200 });
+
+  await page.goto('/lead-queue', { waitUntil: 'domcontentloaded' });
+  const scrollRegion = page.getByRole('region', { name: 'Ranked borrowers table scroll region' });
+  await expect(scrollRegion).toBeVisible();
+  await expect(page.locator('.surface__ft')).toContainText('of 200 total matching filters');
+  await page.waitForTimeout(350);
+
+  const firstBorrower = scrollRegion.locator('.lead-table__borrower-btn').first();
+  const borrowerId = await firstBorrower.locator('.lead-table__borrower').innerText();
+  await scrollRegion.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await page.waitForTimeout(250);
+  const baselineBottom = await scrollRegion.evaluate((element) => element.scrollHeight);
+  await scrollRegion.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(scrollRegion.locator('.lead-table__borrower-btn').first()).toContainText(borrowerId);
+  const baselineRestored = await scrollRegion.evaluate((element) => element.scrollHeight);
+
+  await firstBorrower.click();
+  await expect(scrollRegion.locator('.tbl__expand')).toBeVisible();
+  await page.waitForTimeout(350);
+
+  const expandedHeight = await scrollRegion.evaluate((element) => element.scrollHeight);
+  const expansionDeltaAtTop = expandedHeight - baselineRestored;
+  expect(expansionDeltaAtTop).toBeGreaterThan(250);
+  await scrollRegion.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  await expect(scrollRegion.locator(`text=${borrowerId}`)).toHaveCount(0);
+  await page.waitForTimeout(250);
+  const offscreenHeight = await scrollRegion.evaluate((element) => element.scrollHeight);
+  const expansionDeltaOffscreen = offscreenHeight - baselineBottom;
+  expect(
+    Math.abs(expansionDeltaOffscreen - expansionDeltaAtTop),
+    JSON.stringify({ baselineBottom, baselineRestored, expandedHeight, offscreenHeight }),
+  ).toBeLessThanOrEqual(4);
+
+  await scrollRegion.evaluate((element) => {
+    element.scrollTop = 0;
+  });
+  await expect(scrollRegion.locator('.lead-table__borrower-btn').first()).toContainText(borrowerId);
+  await expect(scrollRegion.locator('.tbl__expand')).toBeVisible();
+  const restoredHeight = await scrollRegion.evaluate((element) => element.scrollHeight);
+  expect(Math.abs(restoredHeight - expandedHeight)).toBeLessThanOrEqual(4);
   expect(unhandled).toEqual([]);
 });
 

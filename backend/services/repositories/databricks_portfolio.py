@@ -9,13 +9,14 @@ import math
 import sys
 import time
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 from fastapi import HTTPException
 
 from backend.schemas.campaign_status import validate_campaign_status_transition
 from backend.schemas.portfolio import (
     CampaignListResponse,
+    CampaignPublicJsonField,
     CampaignStatusPatchRequest,
     CampaignSummary,
     HouseholdDedupConfig,
@@ -27,9 +28,11 @@ from backend.schemas.portfolio import (
     PortfolioOfferMixRow,
     PortfolioPreview,
     PortfolioPreviewRequest,
+    project_public_campaign_json_field,
 )
 from backend.schemas.portfolio_campaign import (
     assert_borrower_campaign_copy,
+    assert_public_campaign_json,
     assert_public_campaign_text,
 )
 from backend.services.audit_store import build_safe_audit_metadata
@@ -57,31 +60,28 @@ _CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
 _CAMPAIGN_STATUS_LOOKUP_ATTEMPTS = 3
 
 _NORMALIZED_CAMPAIGN_VARIANTS_SQL = """
-COALESCE(
-  (
-    SELECT jsonb_agg(
-      jsonb_build_object(
-        'variant_name', variant.variant_name,
-        'channel', variant.channel,
-        'subject', variant.subject,
-        'body', variant.body,
-        'weight_pct', variant.weight_pct,
-        'generation_mode', variant.generation_mode,
-        'generator_label', variant.generator_label,
-        'provenance_key_id', variant.provenance_key_id,
-        'provenance_issued_at', variant.provenance_issued_at,
-        'provenance_expires_at', variant.provenance_expires_at,
-        'provenance_copy_hash', variant.provenance_copy_hash,
-        'provenance_criteria_fingerprint', variant.provenance_criteria_fingerprint,
-        'provenance_performance_fingerprint', variant.provenance_performance_fingerprint,
-        'provenance_token_digest', variant.provenance_token_digest
-      )
-      ORDER BY variant.variant_name, variant.channel
+(
+  SELECT jsonb_agg(
+    jsonb_build_object(
+      'variant_name', variant.variant_name,
+      'channel', variant.channel,
+      'subject', variant.subject,
+      'body', variant.body,
+      'weight_pct', variant.weight_pct,
+      'generation_mode', variant.generation_mode,
+      'generator_label', variant.generator_label,
+      'provenance_key_id', variant.provenance_key_id,
+      'provenance_issued_at', variant.provenance_issued_at,
+      'provenance_expires_at', variant.provenance_expires_at,
+      'provenance_copy_hash', variant.provenance_copy_hash,
+      'provenance_criteria_fingerprint', variant.provenance_criteria_fingerprint,
+      'provenance_performance_fingerprint', variant.provenance_performance_fingerprint,
+      'provenance_token_digest', variant.provenance_token_digest
     )
-    FROM mip_app.campaign_message_variants AS variant
-    WHERE variant.campaign_id = {campaign_id_ref}
-  ),
-  '[]'::jsonb
+    ORDER BY variant.variant_name, variant.channel
+  )
+  FROM mip_app.campaign_message_variants AS variant
+  WHERE variant.campaign_id = {campaign_id_ref}
 ) AS normalized_message_variants
 """
 
@@ -483,7 +483,7 @@ class DatabricksPortfolioRepository:
     # (load-test + Genie-draft rows) is archived.
     _CAMPAIGN_LIST_SQL = f"""
     SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.criteria,
-           c.suppression_policy,
+           c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
            c.channel_cascade, c.send_window, c.holdout, c.roi_assumptions,
            c.household_dedup, c.household_summary, c.created_at, c.updated_at
@@ -501,7 +501,7 @@ class DatabricksPortfolioRepository:
 
     _CAMPAIGN_GET_SQL = f"""
     SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.criteria,
-           c.suppression_policy,
+           c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
            c.channel_cascade, c.send_window, c.holdout, c.roi_assumptions,
            c.household_dedup, c.household_summary, c.created_at, c.updated_at
@@ -517,7 +517,8 @@ class DatabricksPortfolioRepository:
       WHERE campaign_id = %(campaign_id)s::uuid
         AND status = %(current_status)s
       RETURNING campaign_id::text, name, owner_email, status, criteria,
-                suppression_policy, channel_cascade, send_window,
+                suppression_policy, message_variants AS legacy_message_variants,
+                channel_cascade, send_window,
                 holdout, roi_assumptions, household_dedup, household_summary, created_at, updated_at
     ),
     inserted_audit AS (
@@ -549,7 +550,7 @@ class DatabricksPortfolioRepository:
     SELECT c.campaign_id::text, c.name, c.owner_email,
            COALESCE(NULLIF(a.metadata->>'status', ''), c.status) AS status,
            c.criteria,
-           c.suppression_policy,
+           c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
            c.channel_cascade,
            c.send_window, c.holdout, c.roi_assumptions, c.household_dedup,
@@ -1617,15 +1618,31 @@ def _public_campaign_variant(
     variant: dict[str, Any],
     *,
     criteria_fingerprint: str,
+    allow_durable_verification: bool,
 ) -> dict[str, object] | None:
     try:
+        if not allow_durable_verification:
+            for key, item in variant.items():
+                if key not in _PUBLIC_CAMPAIGN_VARIANT_FIELDS:
+                    assert_public_campaign_json(
+                        item,
+                        field_name="legacy campaign variant metadata",
+                    )
+        if not isinstance(variant.get("variant_name"), str):
+            raise ValueError("campaign variant_name must be text")
         variant_name = assert_public_campaign_text(
             variant.get("variant_name"), field_name="variant_name", max_length=64
         )
+        if not variant_name:
+            raise ValueError("campaign variant_name must be nonblank")
+        if not isinstance(variant.get("channel"), str):
+            raise ValueError("campaign variant channel must be text")
         channel = str(variant.get("channel") or "").strip()
         if channel not in {"email", "sms", "direct_mail"}:
             raise ValueError("unsupported campaign channel")
         subject_raw = variant.get("subject")
+        if subject_raw is not None and not isinstance(subject_raw, str):
+            raise ValueError("campaign variant subject must be text or null")
         subject = (
             assert_borrower_campaign_copy(
                 assert_public_campaign_text(
@@ -1636,17 +1653,29 @@ def _public_campaign_variant(
             if subject_raw is not None
             else None
         )
+        if channel == "email" and not subject:
+            raise ValueError("email campaign variants require a subject")
+        if not isinstance(variant.get("body"), str):
+            raise ValueError("campaign variant body must be text")
         body = assert_borrower_campaign_copy(
             assert_public_campaign_text(
                 variant.get("body"), field_name="variant body", max_length=1000
             ),
             field_name="variant body",
         )
-        generation_mode = str(variant.get("generation_mode") or "operator").strip()
+        if not body:
+            raise ValueError("campaign variant body must be nonblank")
+        generation_mode_raw = variant.get("generation_mode")
+        if generation_mode_raw is not None and not isinstance(generation_mode_raw, str):
+            raise ValueError("campaign variant generation_mode must be text")
+        generation_mode = str(generation_mode_raw or "operator").strip()
         if generation_mode not in {"operator", "supervisor", "reviewed_fallback"}:
             raise ValueError("unsupported generation mode")
+        generator_label_raw = variant.get("generator_label")
+        if generator_label_raw is not None and not isinstance(generator_label_raw, str):
+            raise ValueError("campaign variant generator_label must be text")
         generator_label = assert_public_campaign_text(
-            variant.get("generator_label") or "Operator edited",
+            generator_label_raw or "Operator edited",
             field_name="variant generator_label",
             max_length=80,
         )
@@ -1675,7 +1704,8 @@ def _public_campaign_variant(
 
     token_digest = str(variant.get("provenance_token_digest") or "").strip()
     copy_verified_at_creation = bool(
-        generation_mode in {"supervisor", "reviewed_fallback"}
+        allow_durable_verification
+        and generation_mode in {"supervisor", "reviewed_fallback"}
         and str(variant.get("provenance_key_id") or "").strip()
         and str(variant.get("provenance_copy_hash") or "").strip()
         == campaign_copy_hash(variant.get("subject"), variant.get("body"))
@@ -1701,27 +1731,100 @@ def _public_campaign_variant(
     return public_variant
 
 
+def _project_campaign_json_or_default(
+    raw_value: Any,
+    *,
+    field_name: CampaignPublicJsonField,
+    fallback: dict[str, object] | list[dict[str, object]] | None,
+) -> dict[str, object] | list[dict[str, object]] | None:
+    try:
+        value = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+        return project_public_campaign_json_field(field_name, value)
+    except (TypeError, ValueError):
+        emit(
+            log,
+            "campaign_json_public_projection_rejected",
+            level=logging.WARNING,
+            outcome="omitted",
+            field=field_name,
+            reason="invalid_public_payload",
+        )
+        return fallback
+
+
 def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
-    criteria = json_value(row.get("criteria"), {})
-    suppression_policy = json_value(row.get("suppression_policy"), {})
-    normalized_message_variants = json_value(row.get("normalized_message_variants"), [])
-    criteria_value = criteria if isinstance(criteria, dict) else {}
+    criteria_value = cast(
+        dict[str, object],
+        _project_campaign_json_or_default(
+            row.get("criteria"),
+            field_name="criteria",
+            fallback={},
+        ),
+    )
+    suppression_policy = cast(
+        dict[str, object],
+        _project_campaign_json_or_default(
+            row.get("suppression_policy"),
+            field_name="suppression_policy",
+            fallback={},
+        ),
+    )
+    normalized_raw = row.get("normalized_message_variants")
+    relational_variants_are_authoritative = normalized_raw is not None
+    variants_raw = (
+        normalized_raw
+        if relational_variants_are_authoritative
+        else row.get("legacy_message_variants", row.get("message_variants"))
+    )
+    try:
+        variants_value = json.loads(variants_raw) if isinstance(variants_raw, str) else variants_raw
+    except (TypeError, ValueError):
+        variants_value = []
     criteria_fingerprint = campaign_criteria_fingerprint(criteria_value)
     message_variants: list[dict[str, object]] = []
-    if isinstance(normalized_message_variants, list):
-        for variant in normalized_message_variants:
+    if isinstance(variants_value, list):
+        for variant in variants_value:
             if not isinstance(variant, dict):
                 continue
             public_variant = _public_campaign_variant(
                 variant,
                 criteria_fingerprint=criteria_fingerprint,
+                allow_durable_verification=relational_variants_are_authoritative,
             )
             if public_variant is not None:
                 message_variants.append(public_variant)
-    channel_cascade = json_value(row.get("channel_cascade"), [])
-    send_window = json_value(row.get("send_window"), {})
-    holdout = json_value(row.get("holdout"), None)
-    roi_assumptions = json_value(row.get("roi_assumptions"), None)
+    channel_cascade = cast(
+        list[dict[str, object]],
+        _project_campaign_json_or_default(
+            row.get("channel_cascade"),
+            field_name="channel_cascade",
+            fallback=[],
+        ),
+    )
+    send_window = cast(
+        dict[str, object],
+        _project_campaign_json_or_default(
+            row.get("send_window"),
+            field_name="send_window",
+            fallback={},
+        ),
+    )
+    holdout = cast(
+        dict[str, object] | None,
+        _project_campaign_json_or_default(
+            row.get("holdout"),
+            field_name="holdout",
+            fallback=None,
+        ),
+    )
+    roi_assumptions = cast(
+        dict[str, object] | None,
+        _project_campaign_json_or_default(
+            row.get("roi_assumptions"),
+            field_name="roi_assumptions",
+            fallback=None,
+        ),
+    )
     household_dedup = json_value(row.get("household_dedup"), {})
     household_summary = json_value(row.get("household_summary"), {})
     return CampaignSummary(
@@ -1730,16 +1833,12 @@ def campaign_summary_from_row(row: dict[str, Any]) -> CampaignSummary:
         owner_email=str(row.get("owner_email") or "unknown"),
         status=str(row.get("status") or "draft"),  # type: ignore[arg-type]
         criteria=criteria_value,
-        suppression_policy=suppression_policy if isinstance(suppression_policy, dict) else {},
+        suppression_policy=suppression_policy,
         message_variants=message_variants,
-        channel_cascade=channel_cascade if isinstance(channel_cascade, list) else [],
-        send_window=send_window if isinstance(send_window, dict) else {},
-        holdout=holdout if isinstance(holdout, dict) or holdout is None else None,
-        roi_assumptions=(
-            roi_assumptions
-            if isinstance(roi_assumptions, dict) or roi_assumptions is None
-            else None
-        ),
+        channel_cascade=channel_cascade,
+        send_window=send_window,
+        holdout=holdout,
+        roi_assumptions=roi_assumptions,
         household_dedup=household_dedup_config_from_value(household_dedup),
         household_summary=household_dedup_summary_from_value(household_summary),
         created_at=coerce_utc_datetime(row.get("created_at")),

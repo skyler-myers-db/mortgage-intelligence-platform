@@ -17,9 +17,10 @@ from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 
+import backend.services.ai_gateway_capability_probe as ai_gateway_probe_module
 import backend.services.capabilities as capabilities_module
 import backend.services.capability_request as capability_request_module
-from backend.config.settings import Settings
+from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S, Settings
 from backend.main import app
 from backend.services.capabilities import (
     CapabilityStatus,
@@ -65,13 +66,15 @@ class _LiveSqlClient:
         count_by_request_id: dict[str, int] | None = None,
         table_names: list[str] | None = None,
         column_names: list[str] | None = None,
-        ) -> None:
+    ) -> None:
         self.fail = fail
         self.count = count
         self.count_sequence = list(count_sequence or [])
         self.count_by_request_id = dict(count_by_request_id or {})
         self.use_request_id_counts = count_by_request_id is not None
-        self.table_names = ["mip_agent_inference_payload"] if table_names is None else list(table_names)
+        self.table_names = (
+            ["mip_agent_inference_payload"] if table_names is None else list(table_names)
+        )
         self.column_names = (
             ["client_request_id", "request", "databricks_request_id"]
             if column_names is None
@@ -196,10 +199,16 @@ class _LiveLakebase:
             if proof.get("inference_table") != inference_table:
                 continue
             verified_at = proof.get("verified_at")
-            if isinstance(cutoff, datetime) and isinstance(verified_at, datetime) and verified_at < cutoff:
+            if (
+                isinstance(cutoff, datetime)
+                and isinstance(verified_at, datetime)
+                and verified_at < cutoff
+            ):
                 continue
             matches.append(dict(proof))
-        matches.sort(key=lambda row: row.get("verified_at") or datetime.min.replace(tzinfo=UTC), reverse=True)
+        matches.sort(
+            key=lambda row: row.get("verified_at") or datetime.min.replace(tzinfo=UTC), reverse=True
+        )
         return matches[0] if matches else None
 
 
@@ -227,6 +236,7 @@ class _FakeDatabaseApi:
         if self.metadata_error is not None:
             raise self.metadata_error
         if self.permission_denied:
+
             class PermissionDenied(Exception):
                 pass
 
@@ -374,7 +384,9 @@ class _FakeApiClient:
         self.serving_response_status = serving_response_status
         self.requests: list[tuple[str, str, dict[str, object] | None]] = []
 
-    def do(self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object) -> object:
+    def do(
+        self, method: str, path: str, *, body: dict[str, object] | None = None, **_kwargs: object
+    ) -> object:
         self.requests.append((method, path, body))
         if method == "GET" and path.startswith("/api/2.1/supervisor-agents/"):
             if self.supervisor_error is not None:
@@ -421,7 +433,9 @@ class _FakeExperiments:
             info=SimpleNamespace(experiment_id=genai_run_experiment_id or experiment_id),
             data=SimpleNamespace(
                 metrics=[
-                    SimpleNamespace(key="count_reconciles/mean", value=genai_count_reconciles_score),
+                    SimpleNamespace(
+                        key="count_reconciles/mean", value=genai_count_reconciles_score
+                    ),
                 ],
                 params=[],
                 tags=[],
@@ -435,7 +449,10 @@ class _FakeExperiments:
                     SimpleNamespace(key="passed", value=passed),
                     SimpleNamespace(key="total", value=total),
                     SimpleNamespace(key="count_reconciles_passed", value=count_reconciles_passed),
-                    SimpleNamespace(key="mlflow_genai_count_reconciles_score", value=genai_count_reconciles_score),
+                    SimpleNamespace(
+                        key="mlflow_genai_count_reconciles_score",
+                        value=genai_count_reconciles_score,
+                    ),
                 ],
                 params=[
                     SimpleNamespace(key="git_sha", value=sha),
@@ -453,7 +470,7 @@ class _FakeExperiments:
                         value="true" if genai_run_verified else "false",
                     ),
                 ],
-            )
+            ),
         )
 
     def get_by_name(self, name: str) -> object:
@@ -836,9 +853,7 @@ def test_agent_orchestrator_fails_closed_when_supervisor_metadata_is_unavailable
     class PermissionDenied(Exception):
         pass
 
-    workspace = _FakeWorkspaceClient(
-        supervisor_metadata_error=PermissionDenied("metadata denied")
-    )
+    workspace = _FakeWorkspaceClient(supervisor_metadata_error=PermissionDenied("metadata denied"))
     statuses = collect_live_capability_statuses(
         settings=_settings(
             mip_agent_orchestrator=True,
@@ -1055,7 +1070,9 @@ def test_ai_gateway_live_probe_rejects_verified_ledger_row_for_different_sha() -
     assert "no fresh ledger-verified exact row" in statuses["ai_gateway"].detail
 
 
-def test_ai_gateway_live_probe_rejects_verified_ledger_row_for_different_endpoint_or_table() -> None:
+def test_ai_gateway_live_probe_rejects_verified_ledger_row_for_different_endpoint_or_table() -> (
+    None
+):
     base_settings = _settings(
         mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
@@ -1098,6 +1115,38 @@ def test_ai_gateway_live_probe_rejects_stale_verified_ledger_row() -> None:
 
     assert statuses["ai_gateway"].available is False
     assert "no fresh ledger-verified exact row" in statuses["ai_gateway"].detail
+
+
+def test_ai_gateway_probe_caps_mutated_freshness_before_ledger_lookup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = _settings(
+        mip_git_sha=_TEST_GIT_SHA,
+        mip_ai_gateway=True,
+        mip_ai_gateway_endpoint="mip-agent-gateway",
+        mip_ai_gateway_inference_table="mip_app_state.mip_sync.mip_agent_inference",
+    )
+    settings.mip_ai_gateway_proof_freshness_s = 7 * 24 * 60 * 60
+    captured: dict[str, float] = {}
+
+    def _latest_verified_proof(*_args: object, freshness_s: float, **_kwargs: object) -> None:
+        captured["freshness_s"] = freshness_s
+        return None
+
+    monkeypatch.setattr(
+        ai_gateway_probe_module,
+        "latest_verified_proof",
+        _latest_verified_proof,
+    )
+
+    collect_live_capability_statuses(
+        settings=settings,
+        sql_client=_LiveSqlClient(count=0),
+        lakebase=_LiveLakebase(),
+        workspace_client=_FakeWorkspaceClient(),
+    )
+
+    assert captured["freshness_s"] == AI_GATEWAY_PROOF_FRESHNESS_MAX_S
 
 
 def test_ai_gateway_live_probe_rejects_without_deployed_sha() -> None:
@@ -1662,7 +1711,9 @@ def test_capabilities_live_probe_cache_expires(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     now = [0.0]
-    monkeypatch.setattr(capability_request_module, "_LIVE_CAPABILITY_CACHE", TTLCache(now=lambda: now[0]))
+    monkeypatch.setattr(
+        capability_request_module, "_LIVE_CAPABILITY_CACHE", TTLCache(now=lambda: now[0])
+    )
     settings = _settings(
         mip_git_sha=_TEST_GIT_SHA,
         mip_ai_gateway=True,
@@ -1886,7 +1937,9 @@ def test_count_inference_log_rows_content_matches_when_no_client_request_id_colu
     count_statement = next(s for s in sql.statements if "COUNT(*)" in s)
     assert "request LIKE :client_request_marker" in count_statement
     assert "client_request_id =" not in count_statement
-    count_params = next(p for p in sql.parameters if isinstance(p, dict) and "client_request_marker" in p)
+    count_params = next(
+        p for p in sql.parameters if isinstance(p, dict) and "client_request_marker" in p
+    )
     assert count_params["client_request_marker"] == "%mip-capability-abc123%"
 
 

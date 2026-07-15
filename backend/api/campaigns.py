@@ -20,6 +20,7 @@ from backend.schemas.portfolio import (
 )
 from backend.services.audit_store import resolve_actor
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError
 from backend.services.rbac import require_admin, require_approver
 from backend.services.repositories import PortfolioRepository, get_portfolio_repository
@@ -79,12 +80,17 @@ def get_campaign(campaign_id: str, request: Request, repo: RepoDep) -> CampaignS
     return CampaignSummary(**result)
 
 
-@router.patch("/{campaign_id}", response_model=CampaignSummary)
+@router.patch(
+    "/{campaign_id}",
+    response_model=CampaignSummary,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def patch_campaign(
     campaign_id: str,
     payload: CampaignStatusPatchRequest,
     request: Request,
     repo: RepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> CampaignSummary:
     try:
         validate_public_opaque_id(campaign_id)

@@ -18,6 +18,14 @@ pytestmark = pytest.mark.integration
 
 _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
+_CAMPAIGN_JSON_SHAPE_CONSTRAINTS = (
+    "campaigns_criteria_reviewed_shape_chk",
+    "campaigns_suppression_policy_reviewed_shape_chk",
+    "campaigns_channel_cascade_reviewed_shape_chk",
+    "campaigns_send_window_reviewed_shape_chk",
+    "campaigns_holdout_reviewed_shape_chk",
+    "campaigns_roi_assumptions_reviewed_shape_chk",
+)
 
 
 @pytest.fixture
@@ -234,6 +242,71 @@ def test_fresh_upgrade_and_recurring_apply_preserve_proof(
     upgraded_rows = _proof_rows(postgres_kwargs)
     _apply_migration(postgres_kwargs)
     assert _proof_rows(postgres_kwargs) == upgraded_rows
+
+
+def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(
+    postgres_kwargs: dict[str, str],
+) -> None:
+    _apply_migration(postgres_kwargs)
+    legacy_campaign_id = uuid4()
+    poisoned_fields = (
+        '{"legacy_unreviewed":"preserved"}',
+        '{"legacy_unreviewed":true}',
+        '[{"legacy_unreviewed":true}]',
+        '{"legacy_unreviewed":"preserved"}',
+        '{"legacy_unreviewed":true}',
+        '{"legacy_unreviewed":true}',
+    )
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        for constraint in _CAMPAIGN_JSON_SHAPE_CONSTRAINTS:
+            cur.execute(f"ALTER TABLE mip_app.campaigns DROP CONSTRAINT {constraint}")
+        cur.execute(
+            """
+            INSERT INTO mip_app.campaigns (
+                campaign_id, name, owner_email, criteria, suppression_policy,
+                channel_cascade, send_window, holdout, roi_assumptions
+            ) VALUES (%s, 'Legacy JSON compatibility', 'legacy-upgrade@test.example',
+                      %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb)
+            """,
+            (legacy_campaign_id, *poisoned_fields),
+        )
+
+    _apply_migration(postgres_kwargs)
+
+    with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT conname, convalidated
+            FROM pg_constraint
+            WHERE conrelid = 'mip_app.campaigns'::regclass
+              AND conname = ANY(%s::text[])
+            ORDER BY conname
+            """,
+            (list(_CAMPAIGN_JSON_SHAPE_CONSTRAINTS),),
+        )
+        assert dict(cur.fetchall()) == {
+            constraint: False for constraint in _CAMPAIGN_JSON_SHAPE_CONSTRAINTS
+        }
+        cur.execute(
+            "SELECT criteria->>'legacy_unreviewed' FROM mip_app.campaigns "
+            "WHERE campaign_id = %s",
+            (legacy_campaign_id,),
+        )
+        assert cur.fetchone() == ("preserved",)
+        with pytest.raises(psycopg.errors.CheckViolation):
+            cur.execute(
+                """
+                INSERT INTO mip_app.campaigns (
+                    name, owner_email, criteria, suppression_policy,
+                    channel_cascade, send_window, holdout, roi_assumptions
+                ) VALUES (
+                    'New poisoned JSON', 'new-poison@test.example',
+                    %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb
+                )
+                """,
+                poisoned_fields,
+            )
+        conn.rollback()
 
 
 def test_unmapped_legacy_approval_fails_without_deleting_state(

@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import uuid4
+
+from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S
 
 ProofStatus = Literal["pending", "verified", "failed", "expired"]
 
@@ -41,7 +44,9 @@ def latest_verified_proof(
     freshness_s: float,
     now: datetime | None = None,
 ) -> AiGatewayVerifiedProof | None:
-    cutoff = (now or datetime.now(UTC)) - timedelta(seconds=max(0.0, freshness_s))
+    cutoff = (now or datetime.now(UTC)) - timedelta(
+        seconds=bounded_gateway_proof_freshness_s(freshness_s)
+    )
     row = lakebase.fetchone(
         """
         SELECT proof_id, git_sha, client_request_id, endpoint_name, inference_table,
@@ -64,6 +69,17 @@ def latest_verified_proof(
         },
     )
     return _proof_from_row(row) if row else None
+
+
+def bounded_gateway_proof_freshness_s(value: Any) -> float:
+    """Bound defensive callers to the documented 26-hour proof window."""
+    try:
+        freshness_s = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if not math.isfinite(freshness_s) or freshness_s <= 0:
+        return 0.0
+    return min(freshness_s, float(AI_GATEWAY_PROOF_FRESHNESS_MAX_S))
 
 
 def insert_pending_proof(

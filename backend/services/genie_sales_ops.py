@@ -214,14 +214,14 @@ LIMIT 10
         )
         sql_query = f"""
 WITH latest_approval AS (
-  SELECT DISTINCT ON (borrower_id) borrower_id, action, decided_at
+  SELECT DISTINCT ON (borrower_id) borrower_id, approval_id, action, decided_at
   FROM mip_app.approvals
-  ORDER BY borrower_id, decided_at DESC
+  ORDER BY borrower_id, decided_at DESC, approval_id::text DESC
 ),
 latest_disposition AS (
-  SELECT DISTINCT ON (borrower_id) borrower_id, occurred_at
+  SELECT DISTINCT ON (borrower_id) borrower_id, disposition_id, occurred_at
   FROM mip_app.call_dispositions
-  ORDER BY borrower_id, occurred_at DESC, created_at DESC
+  ORDER BY borrower_id, occurred_at DESC, created_at DESC, disposition_id::text DESC
 )
 SELECT a.borrower_id,
        FLOOR(EXTRACT(EPOCH FROM (now() - a.decided_at)) / 86400)::int AS age_days

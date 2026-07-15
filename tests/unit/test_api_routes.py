@@ -150,26 +150,45 @@ def test_portfolio_create_generates_optional_idempotency_key_and_preserves_provi
     assert repo.idempotency_keys[1] == provided
 
 
-def test_structured_post_routes_require_and_document_json_content_type():
+def test_structured_mutation_routes_require_and_document_json_content_type():
     schema = app.openapi()
     missing: list[str] = []
     for route in app.routes:
         methods = getattr(route, "methods", set()) or set()
         path = str(getattr(route, "path", ""))
-        if "POST" not in methods or not path.startswith("/api/"):
+        structured_methods = sorted({"POST", "PATCH", "PUT"}.intersection(methods))
+        if not structured_methods or not path.startswith("/api/"):
             continue
         dependant = getattr(route, "dependant", None)
+        if dependant is None or not dependant.body_params:
+            continue
         dependency_names = (
-            []
-            if dependant is None
-            else [
+            [
                 getattr(dependency.call, "__name__", str(dependency.call))
                 for dependency in dependant.dependencies
             ]
         )
-        route_schema = schema["paths"].get(getattr(route, "path_format", path), {}).get("post", {})
-        responses = route_schema.get("responses", {})
-        if "require_json_content_type" not in dependency_names or "415" not in responses:
-            missing.append(path)
+        schema_path = schema["paths"].get(getattr(route, "path_format", path), {})
+        for method in structured_methods:
+            responses = schema_path.get(method.lower(), {}).get("responses", {})
+            if "require_json_content_type" not in dependency_names or "415" not in responses:
+                missing.append(f"{method} {path}")
 
     assert missing == []
+
+
+def test_structured_patch_and_put_routes_reject_non_json_before_binding() -> None:
+    probes = [
+        ("patch", "/api/campaigns/11111111-1111-4111-8111-111111111111"),
+        ("patch", "/api/portfolio/11111111-1111-4111-8111-111111111111"),
+        ("put", "/api/workspace/leads/B-48291"),
+        ("put", "/api/workspace/drafts/B-48291"),
+    ]
+    for method, path in probes:
+        response = getattr(client, method)(
+            path,
+            content='{"status":"pending_review"}',
+            headers={"Content-Type": "text/plain"},
+        )
+        assert response.status_code == 415, f"{method.upper()} {path}: {response.text}"
+        assert response.json() == {"detail": "Unsupported content type"}

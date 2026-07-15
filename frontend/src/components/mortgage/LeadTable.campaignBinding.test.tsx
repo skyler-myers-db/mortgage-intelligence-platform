@@ -9,6 +9,8 @@ import { createMemoryRouter, RouterProvider } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CampaignSummary, LeadSummary } from '../../types';
 
+(globalThis as unknown as { IS_REACT_ACT_ENVIRONMENT: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
+
 const campaign = vi.fn();
 const draftOutreach = vi.fn();
 const approve = vi.fn();
@@ -147,6 +149,13 @@ describe('LeadTable campaign binding verification', () => {
       '[data-testid="lead-approve-B-AAAAAAAAAAAA1"]',
     );
     if (!approveButton) throw new Error('approve button not rendered');
+    const rejectButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-reject-B-AAAAAAAAAAAA1"]',
+    );
+    if (!rejectButton) throw new Error('reject button not rendered');
+    expect(approveButton.disabled).toBe(true);
+    expect(rejectButton.disabled).toBe(true);
+    expect(approveButton.getAttribute('aria-describedby')).toBe('campaign-binding-status');
     act(() => approveButton.click());
     await flush();
     expect(draftOutreach).not.toHaveBeenCalled();
@@ -155,6 +164,8 @@ describe('LeadTable campaign binding verification', () => {
       expect(container.querySelector('[data-testid="campaign-binding-status"]')?.textContent)
         .toContain('Campaign binding invalid');
     });
+    expect(approveButton.disabled).toBe(true);
+    expect(rejectButton.disabled).toBe(true);
     const borrowerButton = container.querySelector<HTMLButtonElement>(
       '.lead-table__borrower-btn',
     );
@@ -177,6 +188,28 @@ describe('LeadTable campaign binding verification', () => {
         .toContain('Campaign binding invalid');
     });
     expectNoOperationalBinding();
+    expect(container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-approve-B-AAAAAAAAAAAA1"]',
+    )?.disabled).toBe(true);
+  });
+
+  it('enables campaign-bound approval only after the exact campaign and variant verify', async () => {
+    const pending = deferred<CampaignSummary>();
+    campaign.mockReturnValue(pending.promise);
+    mount(`/lead-queue?campaign_id=${CAMPAIGN_A}&variant_name=A`);
+
+    const approveButton = container.querySelector<HTMLButtonElement>(
+      '[data-testid="lead-approve-B-AAAAAAAAAAAA1"]',
+    );
+    if (!approveButton) throw new Error('approve button not rendered');
+    expect(approveButton.disabled).toBe(true);
+
+    await act(async () => {
+      pending.resolve(campaignSummary(CAMPAIGN_A, 'A'));
+      await pending.promise;
+    });
+    await vi.waitFor(() => expect(approveButton.disabled).toBe(false));
+    expect(approveButton.getAttribute('aria-describedby')).toBeNull();
   });
 
   it('does not replay an earlier campaign response against a changed URL', async () => {

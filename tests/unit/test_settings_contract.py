@@ -8,9 +8,9 @@ from types import UnionType
 from typing import Any, Union, get_args, get_origin
 
 import pytest
-from pydantic import AliasChoices, SecretStr
+from pydantic import AliasChoices, SecretStr, ValidationError
 
-from backend.config.settings import Settings
+from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S, Settings
 
 ROOT = Path(__file__).resolve().parents[2]
 ENV_EXAMPLE = ROOT / ".env.example"
@@ -137,6 +137,20 @@ def test_security_sensitive_defaults_are_fail_closed() -> None:
     assert settings.admin_emails == ""
     assert "entrada.ai" not in settings.admin_emails
     assert settings.mip_rum_enabled is False
+
+
+def test_ai_gateway_proof_freshness_has_a_hard_26_hour_ceiling() -> None:
+    settings = Settings(
+        _env_file=None,
+        mip_ai_gateway_proof_freshness_s=AI_GATEWAY_PROOF_FRESHNESS_MAX_S,
+    )
+    assert settings.mip_ai_gateway_proof_freshness_s == AI_GATEWAY_PROOF_FRESHNESS_MAX_S
+
+    with pytest.raises(ValidationError, match="less than or equal"):
+        Settings(
+            _env_file=None,
+            mip_ai_gateway_proof_freshness_s=AI_GATEWAY_PROOF_FRESHNESS_MAX_S + 1,
+        )
 
 
 @pytest.mark.parametrize(

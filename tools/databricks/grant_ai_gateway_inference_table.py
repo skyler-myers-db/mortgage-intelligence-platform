@@ -21,6 +21,7 @@ from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MIP_GATEWAY_PREFIX_RE = re.compile(r"^mip_agent_gateway_[A-Za-z0-9_]{3,}$")
+_LIKE_ESCAPE = "\\"
 
 
 def _validate_identifier(label: str, value: str) -> str:
@@ -80,15 +81,26 @@ def _execute_sql(workspace: WorkspaceClient, *, warehouse_id: str, statement: st
     return response
 
 
-def _table_names(response: object) -> list[str]:
+def _table_names(response: object, *, prefix: str) -> list[str]:
     result = getattr(response, "result", None)
     rows = getattr(result, "data_array", None) or []
     names: list[str] = []
     for row in rows:
         if not row:
             continue
-        names.append(_validate_identifier("table", str(row[0])))
+        table_name = str(row[0]).strip()
+        if not table_name.startswith(prefix):
+            continue
+        names.append(_validate_identifier("table", table_name))
     return names
+
+
+def _escape_like_literal(value: str) -> str:
+    return (
+        value.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2)
+        .replace("%", f"{_LIKE_ESCAPE}%")
+        .replace("_", f"{_LIKE_ESCAPE}_")
+    )
 
 
 def _list_prefixed_tables(
@@ -99,6 +111,7 @@ def _list_prefixed_tables(
     schema: str,
     prefix: str,
 ) -> list[str]:
+    escaped_prefix = _escape_like_literal(prefix)
     response = _execute_sql(
         workspace,
         warehouse_id=warehouse_id,
@@ -107,11 +120,11 @@ def _list_prefixed_tables(
         FROM system.information_schema.tables
         WHERE table_catalog = '{catalog}'
           AND table_schema = '{schema}'
-          AND (table_name = '{prefix}' OR table_name LIKE '{prefix}%')
+          AND (table_name = '{prefix}' OR table_name LIKE '{escaped_prefix}%' ESCAPE '\\\\')
         ORDER BY table_name
         """,
     )
-    return _table_names(response)
+    return _table_names(response, prefix=prefix)
 
 
 def _bootstrap_gateway_table(workspace: WorkspaceClient, *, endpoint: str) -> None:

@@ -61,7 +61,7 @@ three secrets to the GitHub repo — runs from a single Python tool:
 #      deployed App resource (`mip-app`) in the workspace.
 
 python tools/databricks/provision_m2m_oauth.py \
-    --sp-name mip-nightly-ci-sp \
+    --identity-role normal \
     --app-name mip-app \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
@@ -87,10 +87,13 @@ Flags of note:
 
 | Flag                    | Default                                          | Purpose                                                                                           |
 | ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
-| `--sp-name`             | `mip-nightly-ci-sp`                              | SCIM `displayName` for the SP.                                                                    |
+| `--identity-role`       | `normal`                                         | Selects the reserved principal, client ID, grants, and GitHub sinks as one governance contract.   |
+| `--sp-name`             | role-specific reserved name                      | Optional assertion only; a different or cross-role name is rejected before external calls.        |
+| `--expected-application-id` | role-owned configured client ID, when present | Optional assertion; cross-role and duplicate configured client IDs fail before external calls.    |
+| client ID/secret sink flags | role-owned names                            | Optional assertions only; custom or cross-role GitHub secret destinations are rejected.            |
 | `--app-name`            | resolved from `databricks.yml`                   | Deployed App to grant on.                                                                         |
 | `--gh-repo`             | inferred from `git remote get-url origin`        | Target GitHub repo for secret upload.                                                             |
-| `--set-gh-secrets`      | off (explicit opt-in)                            | Required for secret upload. Without it, the tool prints the client_secret to stdout once.         |
+| `--set-gh-secrets`      | off (explicit opt-in)                            | Required for minting and upload; the tool never prints or stores the one-shot client secret.       |
 | `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
 | `--grant-can-use` / `--no-grant-can-use` | role-specific | Control the App grant for normal/admin identities. The verifier role always forbids App `CAN_USE` and rejects `--grant-can-use`, including under `--dry-run`. |
 | `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
@@ -123,8 +126,8 @@ through the workspace admin console.
 From the workspace admin console:
 
 1. **Settings → Identity and access → Service principals → Add service principal**.
-2. Name: `mip-nightly-ci-sp` (or your house convention — whatever you pick
-   here will show up in the Apps audit log as the caller).
+2. Name: `mip-nightly-ci-sp`. This is the reserved normal-role identity name
+   used by the scripted contract and the Apps audit log.
 3. No workspace entitlements beyond the defaults are needed. Do **not**
    grant `Workspace access` on the sidebar if it's off by default; the
    SP only needs to traverse the Apps OAuth proxy, nothing else.
@@ -347,6 +350,12 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
   creating a workspace client, mutating Lakebase/serving/warehouse/App
   permissions, or minting an OAuth secret. Normal app-access and admin roles
   retain their App `CAN_USE` behavior.
+- Each role is bound to its reserved service-principal name, its configured
+  client ID (when present), and its exact GitHub client ID/client-secret sinks.
+  Custom names, another role's reserved name or client ID, duplicate configured
+  IDs, and cross-role secret destinations fail before repository inference,
+  `gh` checks, workspace-client construction, or mutation. Dry-run enforces the
+  same binding.
 - Verifier provisioning hydrates the workspace group graph and app ACL before
   granting resources or minting a secret. Any group or permission resolution
   error fails closed and requires an administrator to repair visibility before

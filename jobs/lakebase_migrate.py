@@ -276,6 +276,49 @@ def _run_outreach_integrity_probe(
                 """,
                 (campaign_id, "Integrity proof", "Rollback-only deployment proof"),
             )
+            for savepoint, column, poisoned_json in (
+                (
+                    "probe_campaign_criteria_shape",
+                    "criteria",
+                    '{"unreviewed_filter":"blocked"}',
+                ),
+                (
+                    "probe_campaign_suppression_shape",
+                    "suppression_policy",
+                    '{"unreviewed_policy":"blocked"}',
+                ),
+                (
+                    "probe_campaign_cascade_shape",
+                    "channel_cascade",
+                    '[{"channel":"email","step":1,"unreviewed":"blocked"}]',
+                ),
+                (
+                    "probe_campaign_send_window_shape",
+                    "send_window",
+                    '{"days":["Tuesday"],"timezone":"server_local",'
+                    '"start_local":"09:00","end_local":"16:00"}',
+                ),
+                (
+                    "probe_campaign_holdout_shape",
+                    "holdout",
+                    '{"method":"random","size_pct":10}',
+                ),
+                (
+                    "probe_campaign_roi_shape",
+                    "roi_assumptions",
+                    '{"unreviewed_assumption":1}',
+                ),
+            ):
+                _expect_database_rejection(
+                    cur,
+                    savepoint=savepoint,
+                    statement=(
+                        f"UPDATE mip_app.campaigns SET {column} = %s::jsonb "
+                        "WHERE campaign_id = %s"
+                    ),
+                    params=(poisoned_json, campaign_id),
+                    expected_sqlstates=("23514",),
+                )
             cur.execute(
                 """
                 INSERT INTO mip_app.action_audit (
@@ -640,6 +683,33 @@ def _run_outreach_integrity_probe(
                 raise RuntimeError(
                     "Lakebase integrity probe found missing or unvalidated proof "
                     f"constraints: {constraint_state}"
+                )
+
+            reviewed_shape_constraints = (
+                "campaigns_criteria_reviewed_shape_chk",
+                "campaigns_suppression_policy_reviewed_shape_chk",
+                "campaigns_channel_cascade_reviewed_shape_chk",
+                "campaigns_send_window_reviewed_shape_chk",
+                "campaigns_holdout_reviewed_shape_chk",
+                "campaigns_roi_assumptions_reviewed_shape_chk",
+            )
+            cur.execute(
+                """
+                SELECT conname, convalidated
+                FROM pg_constraint
+                WHERE conrelid = 'mip_app.campaigns'::regclass
+                  AND conname = ANY(%s::text[])
+                ORDER BY conname
+                """,
+                (list(reviewed_shape_constraints),),
+            )
+            reviewed_shape_state = dict(cur.fetchall())
+            if reviewed_shape_state != {
+                name: False for name in reviewed_shape_constraints
+            }:
+                raise RuntimeError(
+                    "Lakebase integrity probe found missing or prematurely validated "
+                    f"campaign JSON shape constraints: {reviewed_shape_state}"
                 )
 
             cur.execute(

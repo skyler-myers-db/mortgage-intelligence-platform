@@ -58,6 +58,7 @@ def test_grant_gateway_table_access_grants_only_concrete_app_owned_prefix(
 ) -> None:
     workspace = _FakeWorkspace(
         [
+            ["mipXagentXgatewayXllama_payload"],
             ["mip_agent_gateway_llama_payload"],
             ["mip_agent_gateway_llama_assessment"],
         ]
@@ -78,7 +79,14 @@ def test_grant_gateway_table_access_grants_only_concrete_app_owned_prefix(
     assert "GRANT USE SCHEMA ON SCHEMA `mip`.`audit` TO `app-sp-1`" in statements
     assert "GRANT SELECT ON TABLE `mip`.`audit`.`mip_agent_gateway_llama_payload`" in statements
     assert "GRANT SELECT ON SCHEMA" not in statements
-    assert "mip_other_table" not in statements
+    assert "mipXagentXgatewayXllama_payload" not in statements
+    discovery = next(
+        statement
+        for statement in workspace.statement_execution.statements
+        if "system.information_schema.tables" in statement
+    )
+    assert "mip\\_agent\\_gateway\\_llama%" in discovery
+    assert "ESCAPE '\\\\'" in discovery
 
 
 @pytest.mark.parametrize(

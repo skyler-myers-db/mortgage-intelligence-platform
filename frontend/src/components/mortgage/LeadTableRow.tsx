@@ -30,6 +30,7 @@ interface LeadTableRowProps {
   isSelected: boolean;
   isSelectable: boolean;
   isApprovalEligible: boolean;
+  approvalActionsDisabled?: boolean;
   bulkApproving: boolean;
   salesBusy: boolean;
   salesTeamCount: number;
@@ -51,6 +52,7 @@ export function LeadTableRow({
   isSelected,
   isSelectable,
   isApprovalEligible,
+  approvalActionsDisabled = false,
   bulkApproving,
   salesBusy,
   salesTeamCount,
@@ -249,7 +251,8 @@ export function LeadTableRow({
                 variant="primary"
                 size="sm"
                 icon="check"
-                disabled={pendingApproval}
+                disabled={approvalActionsDisabled || pendingApproval}
+                aria-describedby={approvalActionsDisabled ? 'campaign-binding-status' : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onApprove(lead.borrower_id);
@@ -264,7 +267,8 @@ export function LeadTableRow({
                 className="btn btn--sm lead-table__reject"
                 aria-label={`Reject ${lead.borrower_id}`}
                 title="Reject"
-                disabled={pendingApproval}
+                disabled={approvalActionsDisabled || pendingApproval}
+                aria-describedby={approvalActionsDisabled ? 'campaign-binding-status' : undefined}
                 onClick={(e) => {
                   e.stopPropagation();
                   onReject(lead.borrower_id);

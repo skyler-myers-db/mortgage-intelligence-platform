@@ -1,9 +1,8 @@
 """Portfolio criteria, preview, campaign, and saved-build contracts."""
 
-import math
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -11,6 +10,21 @@ from backend.schemas._validators import (
     normalize_public_lender_ref,
     reviewed_geography_labels,
     reviewed_state_codes,
+)
+from backend.schemas.campaign_json_inputs import (
+    OUTREACH_CHANNELS,
+    normalize_channel_cascade,
+    normalize_holdout,
+    normalize_roi_assumptions,
+    normalize_send_window,
+    normalize_suppression_policy,
+    require_exact_json_keys,
+)
+from backend.schemas.campaign_json_projection import (
+    CampaignPublicJsonField,
+)
+from backend.schemas.campaign_json_projection import (
+    project_public_campaign_json_field as _project_public_campaign_json_field,
 )
 from backend.schemas.campaign_status import (
     CampaignStatus,  # noqa: F401 - compatibility re-export
@@ -23,7 +37,6 @@ from backend.schemas.portfolio_campaign import (
     CampaignRecommendationVariant,  # noqa: F401 - compatibility re-export
     PortfolioOfferMixRow,
     assert_borrower_campaign_copy,
-    assert_public_campaign_json,
     assert_public_campaign_text,
     bind_portfolio_criteria,
 )
@@ -109,30 +122,7 @@ _RECENCY_ALIASES: dict[str, str] = {
     "90d": "Untouched 90d",
     "any": "Any",
 }
-_OUTREACH_CHANNELS: frozenset[str] = frozenset({"email", "sms", "direct_mail"})
-_SEND_WINDOW_DAYS: frozenset[str] = frozenset(
-    {"Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"}
-)
-_SEND_WINDOW_DAY_ALIASES: dict[str, str] = {
-    "mon": "Monday",
-    "monday": "Monday",
-    "tue": "Tuesday",
-    "tues": "Tuesday",
-    "tuesday": "Tuesday",
-    "wed": "Wednesday",
-    "weds": "Wednesday",
-    "wednesday": "Wednesday",
-    "thu": "Thursday",
-    "thur": "Thursday",
-    "thurs": "Thursday",
-    "thursday": "Thursday",
-    "fri": "Friday",
-    "friday": "Friday",
-    "sat": "Saturday",
-    "saturday": "Saturday",
-    "sun": "Sunday",
-    "sunday": "Sunday",
-}
+_OUTREACH_CHANNELS = OUTREACH_CHANNELS
 
 
 def _validate_optional_label(
@@ -681,81 +671,22 @@ class PortfolioCreateRequest(BaseModel):
         cls,
         value: list[dict[str, object]],
     ) -> list[dict[str, object]]:
-        if len(value) > 6:
-            raise ValueError("channel_cascade supports at most 6 steps")
-        seen_steps: set[int] = set()
-        normalized: list[dict[str, object]] = []
-        for raw in value:
-            channel = str(raw.get("channel") or "").strip()
-            if channel not in _OUTREACH_CHANNELS:
-                raise ValueError("channel cascade channel must be email, sms, or direct_mail")
-            try:
-                step = int(raw.get("step") or 0)
-                after_days = int(raw.get("after_days") or 0)
-            except (TypeError, ValueError) as exc:
-                raise ValueError("channel cascade step and after_days must be integers") from exc
-            if step <= 0 or step in seen_steps:
-                raise ValueError("channel cascade steps must be positive and unique")
-            if after_days < 0 or after_days > 365:
-                raise ValueError("channel cascade after_days must be between 0 and 365")
-            seen_steps.add(step)
-            normalized.append({"channel": channel, "step": step, "after_days": after_days})
-        return sorted(normalized, key=lambda item: int(item["step"]))
+        return normalize_channel_cascade(value)
 
     @field_validator("send_window")
     @classmethod
     def _validate_send_window(cls, value: dict[str, object]) -> dict[str, object]:
-        if not value:
-            return value
-        days_raw = value.get("days") or []
-        if not isinstance(days_raw, list):
-            raise ValueError("send_window.days must be a list")
-        days: list[str] = []
-        for raw_day in days_raw:
-            day = str(raw_day).strip()
-            if not day:
-                continue
-            days.append(_SEND_WINDOW_DAY_ALIASES.get(day.lower(), day))
-        if not days or any(day not in _SEND_WINDOW_DAYS for day in days):
-            raise ValueError("send_window.days must use reviewed day labels")
-        start = str(value.get("start_local") or value.get("start") or "").strip()
-        end = str(value.get("end_local") or value.get("end") or "").strip()
-        if not re.fullmatch(r"\d{2}:\d{2}", start) or not re.fullmatch(r"\d{2}:\d{2}", end):
-            raise ValueError("send_window start/end must be HH:MM")
-        if start >= end:
-            raise ValueError("send_window start_local must be before end_local")
-        timezone = str(value.get("timezone") or "borrower_local").strip()
-        assert_public_campaign_text(timezone, field_name="send_window timezone", max_length=64)
-        return {
-            "days": days,
-            "timezone": timezone,
-            "start_local": start,
-            "end_local": end,
-        }
+        return normalize_send_window(value)
 
     @field_validator("holdout")
     @classmethod
     def _validate_holdout(cls, value: dict[str, object] | None) -> dict[str, object] | None:
-        if value is None:
-            return None
-        method = str(value.get("method") or "hash_modulo").strip()
-        if method != "hash_modulo":
-            raise ValueError("holdout.method must be hash_modulo")
-        try:
-            size_pct = float(value.get("size_pct", 0))
-        except (TypeError, ValueError) as exc:
-            raise ValueError("holdout.size_pct must be numeric") from exc
-        if size_pct < 0 or size_pct > 50:
-            raise ValueError("holdout.size_pct must be between 0 and 50")
-        return {"method": method, "size_pct": size_pct}
+        return normalize_holdout(value)
 
     @field_validator("suppression_policy")
     @classmethod
-    def _validate_public_json(cls, value: dict[str, object] | None) -> dict[str, object] | None:
-        if value is None:
-            return None
-        assert_public_campaign_json(value, field_name="campaign metadata")
-        return value
+    def _validate_public_json(cls, value: dict[str, object]) -> dict[str, object]:
+        return normalize_suppression_policy(value)
 
     @field_validator("roi_assumptions")
     @classmethod
@@ -763,109 +694,34 @@ class PortfolioCreateRequest(BaseModel):
         cls,
         value: dict[str, object] | None,
     ) -> dict[str, object] | None:
-        if value is None:
-            return None
-        assert_public_campaign_json(value, field_name="campaign ROI assumptions")
+        return normalize_roi_assumptions(value)
 
-        def require_finite(number: float, *, field_name: str) -> float:
-            if not math.isfinite(number):
-                raise ValueError(f"{field_name} must be finite")
-            return number
 
-        def reject_non_finite_numbers(item: object, *, field_name: str) -> None:
-            if isinstance(item, dict):
-                for key, nested in item.items():
-                    reject_non_finite_numbers(
-                        nested,
-                        field_name=f"{field_name}.{key}",
-                    )
-            elif isinstance(item, list):
-                for index, nested in enumerate(item):
-                    reject_non_finite_numbers(
-                        nested,
-                        field_name=f"{field_name}[{index}]",
-                    )
-            elif isinstance(item, int | float) and not isinstance(item, bool):
-                require_finite(float(item), field_name=field_name)
+def _project_portfolio_criteria(value: dict[str, object]) -> dict[str, object]:
+    require_exact_json_keys(
+        value,
+        allowed=frozenset(PortfolioCriteria.model_fields),
+        field_name="criteria",
+    )
+    model = PortfolioCriteria.model_validate(value)
+    return cast(
+        dict[str, object],
+        model.model_dump(include=model.model_fields_set, exclude_none=True),
+    )
 
-        reject_non_finite_numbers(value, field_name="roi_assumptions")
-        numeric_keys = {
-            "budget_usd",
-            "expected_conversion_rate",
-            "expected_conversion_rate_pct",
-            "lo_capacity",
-        }
-        normalized = dict(value)
-        for key in numeric_keys & normalized.keys():
-            # Re-audit #3 follow-up (2026-06-12, observed live): the builder's
-            # Budget field is optional and the client sends budget_usd: null
-            # when it is left blank — float(None) raised TypeError and the
-            # whole save 422'd. An explicit null is "not provided", exactly
-            # like omitting the key; drop it instead of rejecting the save.
-            if normalized[key] is None:
-                normalized.pop(key)
-                continue
-            try:
-                numeric = require_finite(
-                    float(normalized[key]),
-                    field_name=f"roi_assumptions.{key}",
-                )
-            except (TypeError, ValueError) as exc:
-                if "must be finite" in str(exc):
-                    raise
-                raise ValueError(f"roi_assumptions.{key} must be numeric") from exc
-            if numeric < 0:
-                raise ValueError(f"roi_assumptions.{key} must be non-negative")
-            if (
-                key in {"expected_conversion_rate", "expected_conversion_rate_pct"}
-                and numeric > 100
-            ):
-                raise ValueError(f"roi_assumptions.{key} must be 100 or less")
-            normalized[key] = numeric
-        cost = normalized.get("cost_per_contact_usd")
-        if isinstance(cost, dict):
-            checked: dict[str, float] = {}
-            for channel, amount in cost.items():
-                channel_key = str(channel).strip()
-                if channel_key not in _OUTREACH_CHANNELS:
-                    raise ValueError("roi_assumptions.cost_per_contact_usd uses unknown channel")
-                if amount is None:
-                    continue
-                try:
-                    numeric = require_finite(
-                        float(amount),
-                        field_name=(
-                            "roi_assumptions.cost_per_contact_usd " f"value for {channel_key}"
-                        ),
-                    )
-                except (TypeError, ValueError) as exc:
-                    if "must be finite" in str(exc):
-                        raise
-                    raise ValueError(
-                        "roi_assumptions.cost_per_contact_usd values must be numeric"
-                    ) from exc
-                if numeric < 0:
-                    raise ValueError(
-                        "roi_assumptions.cost_per_contact_usd values must be non-negative"
-                    )
-                checked[channel_key] = numeric
-            normalized["cost_per_contact_usd"] = checked
-        elif cost is None:
-            normalized.pop("cost_per_contact_usd", None)
-        elif cost is not None:
-            try:
-                numeric_cost = require_finite(
-                    float(cost),
-                    field_name="roi_assumptions.cost_per_contact_usd",
-                )
-            except (TypeError, ValueError) as exc:
-                if "must be finite" in str(exc):
-                    raise
-                raise ValueError("roi_assumptions.cost_per_contact_usd must be numeric") from exc
-            if numeric_cost < 0:
-                raise ValueError("roi_assumptions.cost_per_contact_usd must be non-negative")
-            normalized["cost_per_contact_usd"] = numeric_cost
-        return normalized
+
+def project_public_campaign_json_field(
+    field_name: CampaignPublicJsonField,
+    value: object,
+) -> dict[str, object] | list[dict[str, object]] | None:
+    """Return the exact reviewed public projection for persisted campaign JSON."""
+
+    return _project_public_campaign_json_field(
+        field_name,
+        value,
+        portfolio_fields=frozenset(PortfolioCriteria.model_fields),
+        portfolio_projector=_project_portfolio_criteria,
+    )
 
 
 class PortfolioCreateResponse(BaseModel):

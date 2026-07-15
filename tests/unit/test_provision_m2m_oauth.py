@@ -28,6 +28,12 @@ sys.modules[_MINT_MODNAME] = mint
 _mint_spec.loader.exec_module(mint)  # type: ignore[union-attr]
 
 
+@pytest.fixture(autouse=True)
+def _clear_role_client_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    for defaults in pmo.IDENTITY_DEFAULTS.values():
+        monkeypatch.delenv(defaults.client_id_secret_name, raising=False)
+
+
 def _sp(
     display_name: str = "mip-nightly-ci-sp",
     *,
@@ -94,6 +100,15 @@ def _provision(client: MagicMock, **overrides: object):
         "client_factory": lambda: client,
     }
     kwargs.update(overrides)
+    role_defaults = pmo.IDENTITY_DEFAULTS[kwargs["identity_role"]]
+    if "sp_name" not in overrides:
+        kwargs["sp_name"] = role_defaults.sp_name
+    if "client_id_secret_name" not in overrides:
+        kwargs["client_id_secret_name"] = role_defaults.client_id_secret_name
+    if "client_secret_secret_name" not in overrides:
+        kwargs["client_secret_secret_name"] = role_defaults.client_secret_secret_name
+    if "app_url_secret_name" not in overrides:
+        kwargs["app_url_secret_name"] = role_defaults.app_url_secret_name
     with patch.object(pmo, "_gh_available", return_value=True):
         return pmo.provision(**kwargs)
 
@@ -226,17 +241,12 @@ def test_mint_can_write_same_token_to_multiple_github_env_names(
     ]
 
 
-def test_normal_happy_path_creates_grants_mints_and_uses_configurable_secret_names() -> None:
+def test_normal_happy_path_creates_grants_mints_and_uses_role_owned_secret_names() -> None:
     new_sp = _sp()
     client = _make_client(create_returns=new_sp)
 
     with patch.object(pmo, "_set_gh_secret") as set_secret:
-        result = _provision(
-            client,
-            client_id_secret_name="MIP_NORMAL_ID",
-            client_secret_secret_name="MIP_NORMAL_SECRET",
-            app_url_secret_name="MIP_DEV_APP_URL",
-        )
+        result = _provision(client)
 
     client.service_principals.create.assert_called_once_with(
         display_name="mip-nightly-ci-sp",
@@ -250,14 +260,113 @@ def test_normal_happy_path_creates_grants_mints_and_uses_configurable_secret_nam
         service_principal_id="1234"
     )
     assert set_secret.call_args_list == [
-        call("acme/repo", "MIP_NORMAL_SECRET", "dose_fake_secret_value"),
-        call("acme/repo", "MIP_NORMAL_ID", "app-id-abc"),
-        call("acme/repo", "MIP_DEV_APP_URL", "https://mip-app-test.aws.databricksapps.com"),
+        call("acme/repo", "DATABRICKS_CLIENT_SECRET", "dose_fake_secret_value"),
+        call("acme/repo", "DATABRICKS_CLIENT_ID", "app-id-abc"),
+        call("acme/repo", "MIP_APP_URL", "https://mip-app-test.aws.databricksapps.com"),
     ]
     assert result.created_sp is True
     assert result.secret_minted is True
     assert result.secret_written_to_gh is True
     assert not hasattr(result, "client_secret")
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--identity-role", "normal", "--sp-name", "mip-nightly-admin-ci-sp"],
+        [
+            "--identity-role",
+            "normal",
+            "--client-id-secret-name",
+            "DATABRICKS_ADMIN_CLIENT_ID",
+        ],
+        ["--identity-role", "normal", "--no-app-url-secret"],
+    ],
+    ids=["reserved-sp", "admin-secret-sink", "missing-owned-app-url-sink"],
+)
+def test_dry_run_rejects_cross_role_identity_binding_before_external_checks(
+    argv: list[str],
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with (
+        patch.object(pmo, "_load_app_name_from_bundle") as load_app,
+        patch.object(pmo, "_infer_gh_repo") as infer_repo,
+        patch.object(pmo, "_gh_available") as gh_available,
+        patch.object(pmo, "provision") as mock_provision,
+        pytest.raises(SystemExit) as exc,
+    ):
+        pmo.main([*argv, "--dry-run"])
+
+    error = capsys.readouterr().err
+    assert exc.value.code == 2
+    assert "bound to reserved service principal" in error or "role-owned" in error
+    load_app.assert_not_called()
+    infer_repo.assert_not_called()
+    gh_available.assert_not_called()
+    mock_provision.assert_not_called()
+
+
+def test_direct_provision_rejects_client_id_reserved_for_another_role_before_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_ADMIN_CLIENT_ID", "admin-client-id")
+    client_factory = MagicMock()
+
+    with pytest.raises(SystemExit, match="reserved for the admin identity role"):
+        pmo.provision(
+            sp_name="mip-nightly-ci-sp",
+            expected_application_id="admin-client-id",
+            app_name="mip-app",
+            grant_can_use=True,
+            group_name=None,
+            create_group=False,
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            gh_repo=None,
+            set_gh_secrets=False,
+            mint_secret=False,
+            rotate=False,
+            app_url="https://mip-app-test.aws.databricksapps.com",
+            client_id_secret_name="DATABRICKS_CLIENT_ID",
+            client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
+            app_url_secret_name="MIP_APP_URL",
+            identity_role="normal",
+            client_factory=client_factory,
+        )
+
+    client_factory.assert_not_called()
+
+
+def test_dry_run_rejects_cross_role_client_id_before_external_checks(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("DATABRICKS_ADMIN_CLIENT_ID", "admin-client-id")
+
+    with (
+        patch.object(pmo, "_load_app_name_from_bundle") as load_app,
+        patch.object(pmo, "_infer_gh_repo") as infer_repo,
+        patch.object(pmo, "_gh_available") as gh_available,
+        patch.object(pmo, "provision") as mock_provision,
+        pytest.raises(SystemExit) as exc,
+    ):
+        pmo.main(
+            [
+                "--identity-role",
+                "normal",
+                "--expected-application-id",
+                "admin-client-id",
+                "--dry-run",
+            ]
+        )
+
+    assert exc.value.code == 2
+    assert "reserved for the admin identity role" in capsys.readouterr().err
+    load_app.assert_not_called()
+    infer_repo.assert_not_called()
+    gh_available.assert_not_called()
+    mock_provision.assert_not_called()
 
 
 def test_admin_missing_group_fails_closed_without_create_group() -> None:
@@ -735,7 +844,10 @@ def test_verifier_gateway_grant_fails_closed_without_endpoint_id() -> None:
 
 
 def test_existing_verifier_lakebase_role_is_idempotent() -> None:
-    verifier = _sp(application_id="verifier-application-id")
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        application_id="verifier-application-id",
+    )
     client = _make_client(
         existing_sp=verifier,
         lakebase_roles=[SimpleNamespace(name="verifier-application-id")],

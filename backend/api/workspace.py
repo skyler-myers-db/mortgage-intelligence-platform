@@ -25,6 +25,7 @@ from backend.schemas.workspace import (
 from backend.services.audit_store import resolve_actor
 from backend.services.disclosures import MissingTenantDisclosureError, resolve_tenant_disclosure
 from backend.services.error_sanitizer import safe_dependency_detail
+from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
 from backend.services.repositories import (
     LeadRepository,
@@ -186,13 +187,18 @@ def read_workspace(
         raise _as_lakebase_503() from exc
 
 
-@router.put("/leads/{borrower_id}", response_model=SavedLead)
+@router.put(
+    "/leads/{borrower_id}",
+    response_model=SavedLead,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def save_lead(
     borrower_id: str,
     payload: SavedLeadInput,
     request: Request,
     store: WorkspaceDep,
     repo: LeadRepoDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> SavedLead:
     borrower_id = _path_borrower_id(borrower_id)
     if payload.borrower_id != borrower_id:
@@ -225,7 +231,11 @@ def delete_lead(
         raise _as_lakebase_503() from exc
 
 
-@router.put("/drafts/{borrower_id}", response_model=SavedDraft)
+@router.put(
+    "/drafts/{borrower_id}",
+    response_model=SavedDraft,
+    responses=JSON_CONTENT_TYPE_RESPONSE,
+)
 def save_draft(
     borrower_id: str,
     payload: SavedDraftInput,
@@ -233,6 +243,7 @@ def save_draft(
     store: WorkspaceDep,
     repo: OutreachRepoDep,
     lakebase: LakebaseDep,
+    _: Annotated[None, Depends(require_json_content_type)],
 ) -> SavedDraft:
     borrower_id = _path_borrower_id(borrower_id)
     if payload.borrower_id != borrower_id:

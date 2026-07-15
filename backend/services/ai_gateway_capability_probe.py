@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from backend.config.settings import Settings
 from backend.services.ai_gateway_proof_ledger import (
+    bounded_gateway_proof_freshness_s,
     latest_verified_proof,
     normalize_gateway_sha,
 )
@@ -36,7 +37,9 @@ def probe_ai_gateway(
     if sql_client is None:
         return make_status(False, "SQL client is required to verify AI Gateway inference log rows.")
     if lakebase is None:
-        return make_status(False, "Lakebase proof ledger is required to verify AI Gateway exact rows.")
+        return make_status(
+            False, "Lakebase proof ledger is required to verify AI Gateway exact rows."
+        )
     try:
         details = workspace_client.serving_endpoints.get(endpoint)
         state = _enum_value(getattr(getattr(details, "state", None), "ready", None))
@@ -46,7 +49,9 @@ def probe_ai_gateway(
         if state != "READY":
             return make_status(False, f"Gateway endpoint {endpoint} is not READY ({state}).")
         if not bool(getattr(inference, "enabled", False)):
-            return make_status(False, f"Gateway endpoint {endpoint} inference table is not enabled.")
+            return make_status(
+                False, f"Gateway endpoint {endpoint} inference table is not enabled."
+            )
         actual = ".".join(
             part
             for part in (
@@ -57,7 +62,9 @@ def probe_ai_gateway(
             if part
         )
         if expected_table and actual != expected_table:
-            return make_status(False, f"Gateway inference table is {actual}, expected {expected_table}.")
+            return make_status(
+                False, f"Gateway inference table is {actual}, expected {expected_table}."
+            )
         table_names = inference_log_table_names(sql_client, expected_table)
         if not table_names:
             return make_status(
@@ -92,7 +99,9 @@ def probe_ai_gateway(
             git_sha=sha,
             endpoint_name=endpoint,
             inference_table=expected_table,
-            freshness_s=float(settings.mip_ai_gateway_proof_freshness_s or 0),
+            freshness_s=bounded_gateway_proof_freshness_s(
+                settings.mip_ai_gateway_proof_freshness_s
+            ),
         )
         current_sha_rows = count_inference_log_rows_by_prefixes(
             sql_client,

@@ -1450,6 +1450,12 @@ def test_genie_sales_aging_omits_approval_rows_without_live_borrower() -> None:
     ]
     assert aging_queries
     assert "LIMIT 100" in aging_queries[-1]
+    compact_sql = " ".join(aging_queries[-1].split())
+    assert "ORDER BY borrower_id, decided_at DESC, approval_id::text DESC" in compact_sql
+    assert (
+        "ORDER BY borrower_id, occurred_at DESC, created_at DESC, "
+        "disposition_id::text DESC"
+    ) in compact_sql
 
 
 def test_sales_routes_enforce_actor_scope_and_assignment_eligibility() -> None:

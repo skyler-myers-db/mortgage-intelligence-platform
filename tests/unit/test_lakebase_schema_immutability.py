@@ -75,6 +75,47 @@ def test_seed_precedes_legacy_proof_backfill_and_hard_validation() -> None:
     assert "CREATE TRIGGER trg_generated_outreach_drafts_immutable" in post_seed
 
 
+def test_campaign_json_shape_checks_are_post_seed_not_valid_and_deploy_probed() -> None:
+    from jobs import lakebase_migrate
+
+    pre_seed, post_seed = lakebase_migrate._split_schema_sql(_SCHEMA)
+    migrate_source = Path("jobs/lakebase_migrate.py").read_text(encoding="utf-8")
+    constraints = {
+        "campaigns_criteria_reviewed_shape_chk": "campaign_criteria_is_reviewed",
+        "campaigns_suppression_policy_reviewed_shape_chk": (
+            "campaign_suppression_policy_is_reviewed"
+        ),
+        "campaigns_channel_cascade_reviewed_shape_chk": ("campaign_channel_cascade_is_reviewed"),
+        "campaigns_send_window_reviewed_shape_chk": "campaign_send_window_is_reviewed",
+        "campaigns_holdout_reviewed_shape_chk": "campaign_holdout_is_reviewed",
+        "campaigns_roi_assumptions_reviewed_shape_chk": ("campaign_roi_assumptions_is_reviewed"),
+    }
+
+    for constraint, function_name in constraints.items():
+        assert f"DROP CONSTRAINT IF EXISTS {constraint};" in pre_seed
+        assert re.search(
+            rf"ADD CONSTRAINT {constraint}\s+CHECK \(.*?"
+            rf"mip_app\.{function_name}\(.*?\) IS TRUE.*?\)\s+NOT VALID;",
+            post_seed,
+            flags=re.DOTALL,
+        )
+        assert f'"{constraint}"' in migrate_source
+    assert "VALIDATE CONSTRAINT campaigns_" not in post_seed
+    assert "2026_07_15_campaign_json_reviewed_shapes" in post_seed
+    assert "document->>'route' = '/lead-queue'" in pre_seed
+    assert "document->>'route' LIKE '/lead-queue?%'" in pre_seed
+    assert "document->>'route' LIKE '/lead-queue%'" not in pre_seed
+    for savepoint in (
+        "probe_campaign_criteria_shape",
+        "probe_campaign_suppression_shape",
+        "probe_campaign_cascade_shape",
+        "probe_campaign_send_window_shape",
+        "probe_campaign_holdout_shape",
+        "probe_campaign_roi_shape",
+    ):
+        assert savepoint in migrate_source
+
+
 def test_recurring_apply_has_no_destructive_proof_or_outbox_dml() -> None:
     destructive_dml = re.compile(
         r"^\s*(?:DELETE\s+FROM|TRUNCATE(?:\s+TABLE)?)\s+"

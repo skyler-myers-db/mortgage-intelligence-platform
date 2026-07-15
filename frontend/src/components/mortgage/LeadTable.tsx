@@ -11,6 +11,7 @@ import { invalidateOperationalQueries, queryKeys } from '../../lib/queryKeys';
 import { buildLeadCsv } from './LeadTable.csv';
 import {
   BULK_APPROVE_CONCURRENCY,
+  LEAD_EXPANDED_PREVIEW_ESTIMATE_PX,
   LEAD_ROW_ESTIMATE_PX,
   LEAD_ROW_OVERSCAN,
   LEAD_TABLE_COL_COUNT,
@@ -153,7 +154,10 @@ export function LeadTable({
   const rowVirtualizer = useVirtualizer({
     count: sortedLeads.length,
     enabled: shouldVirtualize,
-    estimateSize: () => LEAD_ROW_ESTIMATE_PX,
+    estimateSize: (index) => LEAD_ROW_ESTIMATE_PX + (
+      index === expandedRowIndex ? LEAD_EXPANDED_PREVIEW_ESTIMATE_PX : 0
+    ),
+    getItemKey: (index) => sortedLeads[index]?.borrower_id ?? index,
     getScrollElement: () => tableWrapRef.current,
     overscan: LEAD_ROW_OVERSCAN,
   });
@@ -580,6 +584,14 @@ export function LeadTable({
     // schedules — producing two parallel loops with the same selection
     // and two audit rows per borrower. Flip the ref before any await.
     if (bulkInFlightRef.current || bulkApproving) return;
+    if (campaignBindingBlocked) {
+      setApprovalError(
+        campaignBindingState === 'validating'
+          ? 'Campaign binding is still being validated. Wait before approval.'
+          : 'Campaign binding is invalid. Reopen the saved campaign before approval.',
+      );
+      return;
+    }
     bulkInFlightRef.current = true;
     // Snapshot which ids to run: skip already-decided rows silently.
     const eligibleForApproval = new Set(approvalEligibleIds);
@@ -750,6 +762,7 @@ export function LeadTable({
     if (isEditableTarget(document.activeElement)) return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const key = e.key.toLowerCase();
+    if (campaignBindingBlocked && (key === 'a' || key === 'r')) return;
     // Shift+A: bulk approve. Takes precedence over single-row A when
     // any row is selected.
     if (key === 'a' && e.shiftKey) {
@@ -905,7 +918,7 @@ export function LeadTable({
         </div>
       )}
       {campaignBindingState === 'validating' && requestedCampaignBinding && (
-        <div className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
+        <div id="campaign-binding-status" className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
           <Chip variant="neutral" icon="shield">Validating campaign binding</Chip>
           <span className="mono" title={requestedCampaignBinding.campaign_id}>
             campaign {requestedCampaignBinding.campaign_id.slice(0, 12)}
@@ -914,7 +927,7 @@ export function LeadTable({
         </div>
       )}
       {campaignBindingState === 'invalid' && (
-        <div className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
+        <div id="campaign-binding-status" className="table-neutral chip-row" role="status" aria-live="polite" data-testid="campaign-binding-status">
           <Chip variant="neutral" icon="shield">Campaign binding invalid</Chip>
           <span>Reopen the saved campaign and select a verified variant before taking action.</span>
         </div>
@@ -1037,12 +1050,13 @@ export function LeadTable({
               <th className="tbl-cell--approval lead-table__approval-header">Approval</th>
             </tr>
           </thead>
-          <tbody>
-            {shouldVirtualize && topSpacerHeight > 0 && (
+          {shouldVirtualize && topSpacerHeight > 0 && (
+            <tbody aria-hidden="true">
               <tr aria-hidden="true" className="lead-table__virtual-spacer">
                 <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: topSpacerHeight }} />
               </tr>
-            )}
+            </tbody>
+          )}
             {visibleRows.map(({ lead, virtualIndex }) => {
               const isOpen = expanded === lead.borrower_id;
               // Prefer in-session AppContext override (set optimistically on
@@ -1058,40 +1072,47 @@ export function LeadTable({
               const isSelectable = isLeadSelectableForSalesOps(serverStatus, approval, lead);
               const isApprovalEligible = isLeadApprovalEligible(serverStatus, approval, lead);
               return (
-                <LeadTableRow
+                <tbody
                   key={lead.borrower_id}
-                  lead={lead}
-                  virtualIndex={virtualIndex}
-                  ariaRowIndex={virtualIndex + 2 + (
-                    hasExpandedRow && virtualIndex > expandedRowIndex ? 1 : 0
-                  )}
-                  isOpen={isOpen}
-                  approval={approval}
-                  isSelected={isSelected}
-                  isSelectable={isSelectable}
-                  isApprovalEligible={isApprovalEligible}
-                  bulkApproving={bulkApproving}
-                  salesBusy={salesBusy}
-                  salesTeamCount={salesTeam.length}
-                  pendingApproval={Boolean(pendingApproval[lead.borrower_id])}
-                  onToggleRow={(row, open) => {
-                    setLastBorrowerId(row.borrower_id);
-                    setExpanded(open ? null : row.borrower_id);
-                  }}
-                  onToggleSelect={toggleSelect}
-                  onApprove={(borrowerId) => void approveLead(borrowerId)}
-                  onReject={setPendingReject}
-                  onOpenDisposition={openDisposition}
-                  onAssignmentUpdate={applyLeadUpdate}
-                />
+                  data-index={shouldVirtualize ? virtualIndex : undefined}
+                  ref={shouldVirtualize ? rowVirtualizer.measureElement : undefined}
+                >
+                  <LeadTableRow
+                    lead={lead}
+                    virtualIndex={virtualIndex}
+                    ariaRowIndex={virtualIndex + 2 + (
+                      hasExpandedRow && virtualIndex > expandedRowIndex ? 1 : 0
+                    )}
+                    isOpen={isOpen}
+                    approval={approval}
+                    isSelected={isSelected}
+                    isSelectable={isSelectable}
+                    isApprovalEligible={isApprovalEligible}
+                    approvalActionsDisabled={campaignBindingBlocked}
+                    bulkApproving={bulkApproving}
+                    salesBusy={salesBusy}
+                    salesTeamCount={salesTeam.length}
+                    pendingApproval={Boolean(pendingApproval[lead.borrower_id])}
+                    onToggleRow={(row, open) => {
+                      setLastBorrowerId(row.borrower_id);
+                      setExpanded(open ? null : row.borrower_id);
+                    }}
+                    onToggleSelect={toggleSelect}
+                    onApprove={(borrowerId) => void approveLead(borrowerId)}
+                    onReject={setPendingReject}
+                    onOpenDisposition={openDisposition}
+                    onAssignmentUpdate={applyLeadUpdate}
+                  />
+                </tbody>
               );
             })}
             {shouldVirtualize && bottomSpacerHeight > 0 && (
+              <tbody aria-hidden="true">
               <tr aria-hidden="true" className="lead-table__virtual-spacer">
                 <td colSpan={LEAD_TABLE_COL_COUNT} style={{ height: bottomSpacerHeight }} />
               </tr>
+              </tbody>
             )}
-          </tbody>
         </table>
       </div>
       {selectionCount > 0 && (
@@ -1170,7 +1191,8 @@ export function LeadTable({
               size="sm"
               icon={bulkApproving ? undefined : 'check'}
               onClick={() => void bulkApprove()}
-              disabled={bulkApproving || selectedApprovalEligibleCount === 0}
+              disabled={campaignBindingBlocked || bulkApproving || selectedApprovalEligibleCount === 0}
+              aria-describedby={campaignBindingBlocked ? 'campaign-binding-status' : undefined}
               data-testid="lead-bulk-approve"
               aria-label={`Approve ${selectedApprovalEligibleCount} eligible leads`}
             >

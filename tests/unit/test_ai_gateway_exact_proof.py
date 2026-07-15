@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S
 from backend.services.ai_gateway_proof_ledger import (
     insert_pending_proof,
     latest_verified_proof,
@@ -41,9 +42,11 @@ def _hermetic_lakebase_env(monkeypatch):
 class _ProofLakebase:
     def __init__(self, rows: list[dict[str, Any]] | None = None) -> None:
         self.rows = list(rows or [])
+        self.fetchone_calls: list[tuple[str, dict[str, Any]]] = []
 
     def fetchone(self, sql: str, params: dict[str, Any] | None = None) -> dict[str, Any] | None:
         params = params or {}
+        self.fetchone_calls.append((sql, params))
         if "INSERT INTO mip_app.ai_gateway_proof_ledger" in sql:
             row = {
                 "proof_id": str(params["proof_id"]),
@@ -157,8 +160,10 @@ class _ProofSql:
             "status_code",
             "response",
         ]
+        self.statements: list[str] = []
 
     def execute(self, statement: str, parameters: object | None = None) -> list[dict[str, Any]]:
+        self.statements.append(statement)
         if "system.information_schema.columns" in statement:
             return [{"column_name": column_name} for column_name in self.column_names]
         if "system.information_schema.tables" in statement:
@@ -327,6 +332,26 @@ def test_latest_verified_proof_requires_matching_endpoint_and_table() -> None:
 
     assert wrong_endpoint is None
     assert wrong_table is None
+
+
+def test_latest_verified_proof_caps_defensive_callers_at_26_hours() -> None:
+    now = datetime.now(UTC)
+    lakebase = _ProofLakebase(
+        [_verified_row(git_sha=_TEST_GIT_SHA, verified_at=now - timedelta(hours=27))]
+    )
+
+    proof = latest_verified_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+        freshness_s=7 * 24 * 60 * 60,
+        now=now,
+    )
+
+    assert proof is None
+    _sql, params = lakebase.fetchone_calls[-1]
+    assert params["cutoff"] == now - timedelta(seconds=AI_GATEWAY_PROOF_FRESHNESS_MAX_S)
 
 
 def test_pending_proof_verification_and_expiry() -> None:
@@ -535,6 +560,33 @@ def test_wait_for_exact_row_ignores_row_under_a_different_request_id() -> None:
     assert verified == []
     assert lakebase.rows[0]["proof_id"] == proof.proof_id
     assert lakebase.rows[0]["status"] == "pending"
+
+
+def test_exact_row_check_defensively_ignores_nonliteral_prefix_table(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lakebase = _ProofLakebase()
+    proof = insert_pending_proof(
+        lakebase,
+        git_sha=_TEST_GIT_SHA,
+        client_request_id=f"mip-capability-{_TEST_GIT_SHA}-1212121212121212",
+        endpoint_name=_ENDPOINT,
+        inference_table=_INFERENCE_TABLE,
+    )
+    sql = _ProofSql(exact_count=1)
+    monkeypatch.setattr(
+        verify_ai_gateway_exact_proof,
+        "inference_log_table_names",
+        lambda *_args: [
+            "mipXagentXgatewayXllama_payload",
+            "mip_agent_gateway_llama_payload",
+        ],
+    )
+
+    check = verify_ai_gateway_exact_proof._check_exact_inference_row(sql, proof)
+
+    assert check.outcome == "verified"
+    assert all("mipXagentXgatewayXllama_payload" not in statement for statement in sql.statements)
 
 
 def test_wait_for_exact_row_timeout_leaves_pending() -> None:

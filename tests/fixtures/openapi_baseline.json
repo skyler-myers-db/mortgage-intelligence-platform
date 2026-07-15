@@ -15789,6 +15789,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -19394,6 +19404,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -22962,6 +22982,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -26522,6 +26552,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -27403,6 +27443,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -27494,6 +27544,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {
@@ -27626,6 +27686,16 @@
             },
             "description": "Successful Response"
           },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
+          },
           "422": {
             "content": {
               "application/json": {
@@ -27719,6 +27789,16 @@
               }
             },
             "description": "Successful Response"
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "detail": "Unsupported content type"
+                }
+              }
+            },
+            "description": "Unsupported content type"
           },
           "422": {
             "content": {

@@ -84,6 +84,668 @@ ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS creation_response JSONB;
 ALTER TABLE mip_app.campaigns
     ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
+
+-- Campaign JSON is a compatibility store, not an untyped API surface. These
+-- immutable helpers back deploy-safe CHECK constraints added after the seed.
+CREATE OR REPLACE FUNCTION mip_app.campaign_jsonb_has_only_keys(
+    document JSONB,
+    allowed_keys TEXT[]
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT jsonb_typeof(document) = 'object'
+       AND NOT EXISTS (
+           SELECT 1
+           FROM jsonb_object_keys(document) AS keys(key_name)
+           WHERE NOT (key_name = ANY(allowed_keys))
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_jsonb_text_array_is_reviewed(
+    document JSONB,
+    value_pattern TEXT,
+    max_items INTEGER
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT jsonb_typeof(document) = 'array'
+       AND jsonb_array_length(document) <= max_items
+       AND NOT EXISTS (
+           SELECT 1
+           FROM jsonb_array_elements(document) AS items(item)
+           WHERE jsonb_typeof(item) <> 'string'
+              OR item #>> '{}' !~ value_pattern
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_portfolio_criteria_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'geography','states','occupancy','lien_status',
+                   'lender_relationship','product','loan_product',
+                   'origination_channel','target_lender_ref','min_equity_pct',
+                   'owner_link','purchase_intent','marketing_eligibility',
+                   'consent_status','recency','min_equity_pct_label'
+               ]::TEXT[]
+           )
+       AND (
+           NOT document ? 'geography'
+           OR (
+               jsonb_typeof(document->'geography') = 'string'
+               AND length(document->>'geography') BETWEEN 1 AND 160
+           )
+       )
+       AND (
+           NOT document ? 'states'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'states', '^[A-Z]{2}$', 56
+           )
+       )
+       AND (
+           NOT document ? 'occupancy'
+           OR document->>'occupancy' = ANY(
+               ARRAY['Owner-occupied','Non-owner-occupied','All']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'lien_status'
+           OR document->>'lien_status' = ANY(
+               ARRAY[
+                   'Open 1st lien','Open first lien','Open HELOC',
+                   'Free & clear','Free and clear','Any'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'lender_relationship'
+           OR document->>'lender_relationship' = ANY(
+               ARRAY[
+                   'All','Current customer','Former customer',
+                   'Competitor customer','Competitor'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'product'
+           OR document->>'product' = ANY(
+               ARRAY['All products','Refi','HELOC','Cash-out','Purchase','Retention']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'loan_product'
+           OR document->>'loan_product' = ANY(
+               ARRAY[
+                   'All loan products','Conventional','Jumbo','FHA','VA',
+                   'Other','Unknown'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'origination_channel'
+           OR document->>'origination_channel' = ANY(
+               ARRAY[
+                   'All channels','Loan officer','Digital','Branch',
+                   'Call center','Unknown'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'target_lender_ref'
+           OR (
+               jsonb_typeof(document->'target_lender_ref') = 'string'
+               AND length(document->>'target_lender_ref') BETWEEN 1 AND 80
+           )
+       )
+       AND (
+           NOT document ? 'min_equity_pct'
+           OR (
+               jsonb_typeof(document->'min_equity_pct') = 'number'
+               AND (document->>'min_equity_pct')::NUMERIC BETWEEN 0 AND 100
+           )
+       )
+       AND (
+           NOT document ? 'owner_link'
+           OR document->>'owner_link' = ANY(
+               ARRAY[
+                   'All','Single-property owner','Multi-property (2-4)',
+                   'Portfolio investor (5+)'
+               ]::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'purchase_intent'
+           OR document->>'purchase_intent' = ANY(
+               ARRAY['All','Listed for sale','HELOC intent','Both']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'marketing_eligibility'
+           OR document->>'marketing_eligibility' = ANY(
+               ARRAY['Eligible only','Any','Suppressed only']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'consent_status'
+           OR document->>'consent_status' = ANY(
+               ARRAY['Opt-in','Opt-out','Unknown','Any']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'recency'
+           OR document->>'recency' = ANY(
+               ARRAY['Untouched 30d','Untouched 60d','Untouched 90d','Any']::TEXT[]
+           )
+       )
+       AND (
+           NOT document ? 'min_equity_pct_label'
+           OR document->>'min_equity_pct_label' = ANY(
+               ARRAY['≥ 15%','≥ 25%','≥ 40%','Any']::TEXT[]
+           )
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_replay_filters_are_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'zips','county','counties','states','segment_codes',
+                   'segment_mode','target_lender_ref','portfolio_criteria',
+                   'borrower_ids','source'
+               ]::TEXT[]
+           )
+       AND (
+           NOT document ? 'zips'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'zips', '^[0-9]{5}$', 500
+           )
+       )
+       AND (
+           NOT document ? 'county'
+           OR (
+               jsonb_typeof(document->'county') = 'string'
+               AND document->>'county' ~ '^[0-9]{5}$'
+           )
+       )
+       AND (
+           NOT document ? 'counties'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'counties', '^[0-9]{5}$', 500
+           )
+       )
+       AND (
+           NOT document ? 'states'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'states', '^[A-Z]{2}$', 56
+           )
+       )
+       AND (
+           NOT document ? 'segment_codes'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'segment_codes',
+               '^(itm|listed|permit|investor|equity|retention)$',
+               6
+           )
+       )
+       AND (
+           NOT document ? 'segment_mode'
+           OR document->>'segment_mode' = ANY(ARRAY['all','any']::TEXT[])
+       )
+       AND (
+           NOT document ? 'target_lender_ref'
+           OR (
+               jsonb_typeof(document->'target_lender_ref') = 'string'
+               AND length(document->>'target_lender_ref') BETWEEN 1 AND 80
+           )
+       )
+       AND (
+           NOT document ? 'portfolio_criteria'
+           OR mip_app.campaign_portfolio_criteria_is_reviewed(
+               document->'portfolio_criteria'
+           )
+       )
+       AND (
+           NOT document ? 'borrower_ids'
+           OR mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'borrower_ids', '^B-[0-9A-Z]{13}$', 500
+           )
+       )
+       AND (
+           NOT document ? 'source'
+           OR document->>'source' = ANY(ARRAY['genie','trusted_sql']::TEXT[])
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_criteria_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT CASE
+        WHEN mip_app.campaign_portfolio_criteria_is_reviewed(document) THEN TRUE
+        WHEN document ? 'segment' THEN
+            mip_app.campaign_jsonb_has_only_keys(
+                document,
+                ARRAY[
+                    'segment','min_spread_bps','min_equity_pct',
+                    'heloc_equity_min_pct','heloc_propensity_min','intent_signal',
+                    'filed_permits','states','marketing_eligibility',
+                    'consent_status','recency'
+                ]::TEXT[]
+            )
+            AND document->>'segment' = ANY(ARRAY['itm','cashout','heloc']::TEXT[])
+            AND (
+                NOT document ? 'states'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'states', '^[A-Z]{2}$', 56
+                )
+            )
+            AND (
+                NOT document ? 'min_spread_bps'
+                OR (
+                    jsonb_typeof(document->'min_spread_bps') = 'number'
+                    AND (document->>'min_spread_bps')::NUMERIC BETWEEN 0 AND 2000
+                )
+            )
+            AND (
+                NOT document ? 'min_equity_pct'
+                OR (
+                    jsonb_typeof(document->'min_equity_pct') = 'number'
+                    AND (document->>'min_equity_pct')::NUMERIC BETWEEN 0 AND 100
+                )
+            )
+            AND (
+                NOT document ? 'heloc_equity_min_pct'
+                OR (
+                    jsonb_typeof(document->'heloc_equity_min_pct') = 'number'
+                    AND (document->>'heloc_equity_min_pct')::NUMERIC BETWEEN 0 AND 100
+                )
+            )
+            AND (
+                NOT document ? 'heloc_propensity_min'
+                OR (
+                    jsonb_typeof(document->'heloc_propensity_min') = 'number'
+                    AND (document->>'heloc_propensity_min')::NUMERIC BETWEEN 0 AND 1000
+                )
+            )
+            AND (
+                NOT document ? 'intent_signal'
+                OR document->>'intent_signal' = 'cotality_heloc_propensity'
+            )
+            AND (
+                NOT document ? 'filed_permits'
+                OR document->>'filed_permits' = 'pending_not_inferred'
+            )
+            AND (
+                NOT document ? 'marketing_eligibility'
+                OR document->>'marketing_eligibility' = 'Eligible only'
+            )
+            AND (
+                NOT document ? 'consent_status'
+                OR document->>'consent_status' = ANY(
+                    ARRAY['Opt-in','Opt-out','Unknown','Any']::TEXT[]
+                )
+            )
+            AND (
+                NOT document ? 'recency'
+                OR document->>'recency' = ANY(
+                    ARRAY['Untouched 30d','Untouched 60d','Untouched 90d','Any']::TEXT[]
+                )
+            )
+        WHEN document ? 'source' THEN
+            mip_app.campaign_jsonb_has_only_keys(
+                document,
+                ARRAY[
+                    'source','borrower_ids','criteria_hash','criteria_keys',
+                    'source_assets','visualization_kind','conversation_id',
+                    'message_id','question_hash','row_count','route',
+                    'result_filters','sql_hash'
+                ]::TEXT[]
+            )
+            AND document->>'source' = ANY(ARRAY['genie','trusted_sql']::TEXT[])
+            AND (
+                NOT document ? 'borrower_ids'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'borrower_ids', '^B-[0-9A-Z]{13}$', 500
+                )
+            )
+            AND (
+                NOT document ? 'criteria_keys'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'criteria_keys', '^[a-z][a-z0-9_]{0,63}$', 50
+                )
+            )
+            AND (
+                NOT document ? 'source_assets'
+                OR mip_app.campaign_jsonb_text_array_is_reviewed(
+                    document->'source_assets', '^[A-Za-z0-9_.]{1,160}$', 10
+                )
+            )
+            AND (
+                NOT document ? 'result_filters'
+                OR mip_app.campaign_replay_filters_are_reviewed(
+                    document->'result_filters'
+                )
+            )
+            AND (
+                NOT document ? 'row_count'
+                OR (
+                    jsonb_typeof(document->'row_count') = 'number'
+                    AND (document->>'row_count')::NUMERIC =
+                        trunc((document->>'row_count')::NUMERIC)
+                    AND (document->>'row_count')::NUMERIC BETWEEN 0 AND 10000000
+                )
+            )
+            AND (
+                NOT document ? 'route'
+                OR document->'route' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'route') = 'string'
+                    AND (
+                        document->>'route' = '/lead-queue'
+                        OR document->>'route' LIKE '/lead-queue?%'
+                    )
+                    AND length(document->>'route') <= 2000
+                )
+            )
+            AND (
+                NOT document ? 'visualization_kind'
+                OR document->'visualization_kind' = 'null'::jsonb
+                OR document->>'visualization_kind' = ANY(
+                    ARRAY['bar','line','metric','pie','scatter','table']::TEXT[]
+                )
+            )
+            AND (
+                NOT document ? 'criteria_hash'
+                OR document->'criteria_hash' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'criteria_hash') = 'string'
+                    AND document->>'criteria_hash' ~ '^[A-Za-z0-9_-]{1,128}$'
+                )
+            )
+            AND (
+                NOT document ? 'sql_hash'
+                OR document->'sql_hash' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'sql_hash') = 'string'
+                    AND document->>'sql_hash' ~ '^[A-Za-z0-9_-]{1,128}$'
+                )
+            )
+            AND (
+                NOT document ? 'question_hash'
+                OR document->'question_hash' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'question_hash') = 'string'
+                    AND document->>'question_hash' ~ '^[A-Za-z0-9_-]{1,128}$'
+                )
+            )
+            AND (
+                NOT document ? 'conversation_id'
+                OR document->'conversation_id' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'conversation_id') = 'string'
+                    AND length(document->>'conversation_id') BETWEEN 1 AND 256
+                )
+            )
+            AND (
+                NOT document ? 'message_id'
+                OR document->'message_id' = 'null'::jsonb
+                OR (
+                    jsonb_typeof(document->'message_id') = 'string'
+                    AND length(document->>'message_id') BETWEEN 1 AND 256
+                )
+            )
+            AND (
+                (
+                    document ? 'borrower_ids'
+                    AND jsonb_array_length(document->'borrower_ids') > 0
+                )
+                OR (
+                    document ? 'result_filters'
+                    AND document->'result_filters' <> '{}'::jsonb
+                )
+            )
+        ELSE FALSE
+    END;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_suppression_policy_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'default','require_marketing_eligible',
+                   'marketing_eligibility','frequency_cap_days'
+               ]::TEXT[]
+           )
+       AND (NOT document ? 'default' OR document->>'default' = 'eligible_only')
+       AND (
+           NOT document ? 'require_marketing_eligible'
+           OR jsonb_typeof(document->'require_marketing_eligible') = 'boolean'
+       )
+       AND (
+           NOT document ? 'marketing_eligibility'
+           OR document->>'marketing_eligibility' = 'Eligible only'
+       )
+       AND (
+           NOT document ? 'frequency_cap_days'
+           OR (
+               jsonb_typeof(document->'frequency_cap_days') = 'number'
+               AND (document->>'frequency_cap_days')::NUMERIC =
+                   trunc((document->>'frequency_cap_days')::NUMERIC)
+               AND (document->>'frequency_cap_days')::NUMERIC BETWEEN 1 AND 365
+           )
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_channel_cascade_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE plpgsql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+DECLARE
+    item JSONB;
+    step_number INTEGER;
+    seen_steps INTEGER[] := ARRAY[]::INTEGER[];
+BEGIN
+    IF jsonb_typeof(document) <> 'array' OR jsonb_array_length(document) > 6 THEN
+        RETURN FALSE;
+    END IF;
+    FOR item IN SELECT value FROM jsonb_array_elements(document) AS entries(value)
+    LOOP
+        IF NOT mip_app.campaign_jsonb_has_only_keys(
+            item, ARRAY['channel','step','after_days']::TEXT[]
+        ) THEN
+            RETURN FALSE;
+        END IF;
+        IF NOT item ? 'channel' OR NOT item ? 'step' THEN
+            RETURN FALSE;
+        END IF;
+        IF jsonb_typeof(item->'channel') <> 'string'
+           OR NOT (item->>'channel' = ANY(ARRAY['email','sms','direct_mail']::TEXT[])) THEN
+            RETURN FALSE;
+        END IF;
+        IF jsonb_typeof(item->'step') <> 'number'
+           OR (item->>'step')::NUMERIC <> trunc((item->>'step')::NUMERIC)
+           OR (item->>'step')::NUMERIC NOT BETWEEN 1 AND 100 THEN
+            RETURN FALSE;
+        END IF;
+        step_number := (item->>'step')::INTEGER;
+        IF step_number = ANY(seen_steps) THEN
+            RETURN FALSE;
+        END IF;
+        seen_steps := array_append(seen_steps, step_number);
+        IF item ? 'after_days' AND (
+            jsonb_typeof(item->'after_days') <> 'number'
+            OR (item->>'after_days')::NUMERIC <> trunc((item->>'after_days')::NUMERIC)
+            OR (item->>'after_days')::NUMERIC NOT BETWEEN 0 AND 365
+        ) THEN
+            RETURN FALSE;
+        END IF;
+    END LOOP;
+    RETURN TRUE;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_send_window_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT document = '{}'::jsonb
+       OR (
+           mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY['days','timezone','start_local','end_local']::TEXT[]
+           )
+           AND mip_app.campaign_jsonb_text_array_is_reviewed(
+               document->'days',
+               '^(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)$',
+               7
+           )
+           AND jsonb_array_length(document->'days') > 0
+           AND document->>'timezone' = 'borrower_local'
+           AND document->>'start_local' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+           AND document->>'end_local' ~ '^([01][0-9]|2[0-3]):[0-5][0-9]$'
+           AND document->>'start_local' < document->>'end_local'
+       );
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_holdout_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document, ARRAY['method','size_pct']::TEXT[]
+           )
+       AND document->>'method' = 'hash_modulo'
+       AND jsonb_typeof(document->'size_pct') = 'number'
+       AND (document->>'size_pct')::NUMERIC BETWEEN 0 AND 50;
+$$;
+
+CREATE OR REPLACE FUNCTION mip_app.campaign_roi_assumptions_is_reviewed(
+    document JSONB
+)
+RETURNS BOOLEAN
+LANGUAGE SQL
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT mip_app.campaign_jsonb_has_only_keys(
+               document,
+               ARRAY[
+                   'budget_usd','expected_conversion_rate',
+                   'expected_conversion_rate_pct','lo_capacity',
+                   'cost_per_contact_usd','source'
+               ]::TEXT[]
+           )
+       AND NOT EXISTS (
+           SELECT 1
+           FROM jsonb_each(document) AS entry(key_name, item)
+           WHERE key_name = ANY(
+               ARRAY[
+                   'budget_usd','expected_conversion_rate',
+                   'expected_conversion_rate_pct','lo_capacity'
+               ]::TEXT[]
+           )
+             AND (
+                 jsonb_typeof(item) <> 'number'
+                 OR (item #>> '{}')::NUMERIC < 0
+                 OR (
+                     key_name = ANY(
+                         ARRAY[
+                             'expected_conversion_rate',
+                             'expected_conversion_rate_pct'
+                         ]::TEXT[]
+                     )
+                     AND (item #>> '{}')::NUMERIC > 100
+                 )
+             )
+       )
+       AND (
+           NOT document ? 'cost_per_contact_usd'
+           OR (
+               jsonb_typeof(document->'cost_per_contact_usd') = 'number'
+               AND (document->>'cost_per_contact_usd')::NUMERIC >= 0
+           )
+           OR (
+               mip_app.campaign_jsonb_has_only_keys(
+                   document->'cost_per_contact_usd',
+                   ARRAY['email','sms','direct_mail']::TEXT[]
+               )
+               AND NOT EXISTS (
+                   SELECT 1
+                   FROM jsonb_each(document->'cost_per_contact_usd') AS cost(channel, amount)
+                   WHERE jsonb_typeof(amount) <> 'number'
+                      OR (amount #>> '{}')::NUMERIC < 0
+               )
+           )
+       )
+       AND (
+           NOT document ? 'source'
+           OR document->>'source' = ANY(
+               ARRAY[
+                   'operator_configured',
+                   'operator_required_before_live_send'
+               ]::TEXT[]
+           )
+       );
+$$;
+
+-- Existing rows are intentionally not scanned here. The post-seed suffix
+-- re-adds these checks NOT VALID, which enforces them on every future write.
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_criteria_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_suppression_policy_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_channel_cascade_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_send_window_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_holdout_reviewed_shape_chk;
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_roi_assumptions_reviewed_shape_chk;
+
 CREATE INDEX IF NOT EXISTS idx_campaigns_owner
     ON mip_app.campaigns (owner_email, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_campaigns_status
@@ -1613,6 +2275,48 @@ ON CONFLICT (version) DO NOTHING;
 -- jobs/lakebase_migrate.py executes the deterministic seed immediately before
 -- this suffix, in the same transaction. That ordering makes reviewed campaign
 -- variants available for legacy proof backfills before hard validation.
+
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_criteria_reviewed_shape_chk
+    CHECK (mip_app.campaign_criteria_is_reviewed(criteria) IS TRUE)
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_suppression_policy_reviewed_shape_chk
+    CHECK (
+        mip_app.campaign_suppression_policy_is_reviewed(suppression_policy) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_channel_cascade_reviewed_shape_chk
+    CHECK (
+        mip_app.campaign_channel_cascade_is_reviewed(channel_cascade) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_send_window_reviewed_shape_chk
+    CHECK (mip_app.campaign_send_window_is_reviewed(send_window) IS TRUE)
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_holdout_reviewed_shape_chk
+    CHECK (
+        holdout IS NULL
+        OR mip_app.campaign_holdout_is_reviewed(holdout) IS TRUE
+    )
+    NOT VALID;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_roi_assumptions_reviewed_shape_chk
+    CHECK (
+        roi_assumptions IS NULL
+        OR mip_app.campaign_roi_assumptions_is_reviewed(roi_assumptions) IS TRUE
+    )
+    NOT VALID;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_15_campaign_json_reviewed_shapes',
+    'Enforce exact reviewed shapes for new and changed campaign JSON fields'
+)
+ON CONFLICT (version) DO NOTHING;
 
 -- Upgrade historical campaign evidence only when the missing value has one
 -- possible immutable variant. Ambiguous or orphaned history remains unchanged

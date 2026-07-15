@@ -1035,6 +1035,21 @@ def test_campaign_create_accepts_marketing_controls() -> None:
     assert payload.holdout == {"method": "hash_modulo", "size_pct": 10.0}
 
 
+@pytest.mark.parametrize(
+    ("field_name", "value"),
+    (("step", 1.5), ("after_days", 2.5)),
+)
+def test_campaign_create_rejects_fractional_cascade_integers(
+    field_name: str,
+    value: float,
+) -> None:
+    cascade = {"channel": "email", "step": 1, "after_days": 0}
+    cascade[field_name] = value
+
+    with pytest.raises(ValidationError, match="step and after_days must be integers"):
+        PortfolioCreateRequest(name="Reviewed campaign", channel_cascade=[cascade])
+
+
 def test_campaign_roi_null_budget_means_omitted_not_rejected() -> None:
     """Re-audit #3 follow-up (2026-06-12, observed live): the builder's
     Budget input is optional and the client sends budget_usd: null when

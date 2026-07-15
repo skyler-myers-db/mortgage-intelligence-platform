@@ -18,8 +18,8 @@ What this tool does (in order):
    Databricks App access and is never an admin-group member.
 4. Mint an OAuth client_id + client_secret for the SP. A live mint requires
    ``--set-gh-secrets`` and pipes the one-shot secret directly to ``gh``.
-   Secret names are configurable so normal, admin, and verifier identities
-   never share one client credential.
+   Secret names are role-owned constants so normal, admin, and verifier
+   identities cannot overwrite one another's client credentials.
 
 5. Optionally rotate an existing SP's secret (``--rotate``). The old
    secret stays valid until the admin revokes it in the Accounts Console
@@ -75,6 +75,7 @@ from tools.databricks.m2m_identity_contract import (  # noqa: E402
     IDENTITY_DEFAULTS,
     IdentityRole,
     ProvisionResult,
+    validate_identity_role_binding,
 )
 
 _GH_SECRET_NAME_RE = _github_helpers.GH_SECRET_NAME_RE
@@ -108,6 +109,47 @@ def _validate_app_access_contract(*, identity_role: IdentityRole, grant_can_use:
     """Reject verifier App access before any workspace or secret side effect."""
     if identity_role == "verifier" and grant_can_use:
         raise ValueError(_VERIFIER_APP_ACCESS_ERROR)
+
+
+def _validate_provisioning_contract(
+    *,
+    identity_role: IdentityRole,
+    sp_name: str,
+    expected_application_id: str | None,
+    grant_can_use: bool,
+    group_name: str | None,
+    create_group: bool,
+    lakebase_instance: str | None,
+    gateway_endpoint: str | None,
+    warehouse_id: str | None,
+    client_id_secret_name: str,
+    client_secret_secret_name: str,
+    app_url_secret_name: str | None,
+) -> str | None:
+    """Validate role ownership before subprocess, SDK, or mutation paths."""
+    _validate_app_access_contract(
+        identity_role=identity_role,
+        grant_can_use=grant_can_use,
+    )
+    if identity_role != "admin" and group_name:
+        raise ValueError("only --identity-role admin may be assigned to an admin group")
+    if create_group and identity_role != "admin":
+        raise ValueError("--create-group is valid only with --identity-role admin")
+    if identity_role != "verifier" and (lakebase_instance or gateway_endpoint or warehouse_id):
+        raise ValueError(
+            "--lakebase-instance, --gateway-endpoint, and --warehouse-id are valid only with "
+            "--identity-role verifier"
+        )
+    if identity_role == "verifier" and gateway_endpoint and not warehouse_id:
+        raise ValueError("--gateway-endpoint requires --warehouse-id for exact proof verification")
+    return validate_identity_role_binding(
+        identity_role=identity_role,
+        sp_name=sp_name,
+        expected_application_id=expected_application_id,
+        client_id_secret_name=client_id_secret_name,
+        client_secret_secret_name=client_secret_secret_name,
+        app_url_secret_name=app_url_secret_name,
+    )
 
 
 def _load_app_name_from_bundle(path: Path = DATABRICKS_YML) -> str:
@@ -367,9 +409,19 @@ def provision(
     vars → ``~/.databrickscfg`` → workspace identity).
     """
     try:
-        _validate_app_access_contract(
+        expected_application_id = _validate_provisioning_contract(
             identity_role=identity_role,
+            sp_name=sp_name,
+            expected_application_id=expected_application_id,
             grant_can_use=grant_can_use,
+            group_name=group_name,
+            create_group=create_group,
+            lakebase_instance=lakebase_instance,
+            gateway_endpoint=gateway_endpoint,
+            warehouse_id=warehouse_id,
+            client_id_secret_name=client_id_secret_name,
+            client_secret_secret_name=client_secret_secret_name,
+            app_url_secret_name=app_url_secret_name,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
@@ -583,7 +635,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--sp-name",
         default=None,
-        help="Override the role-specific service-principal display name.",
+        help="Role-specific reserved service-principal name; overrides must match it exactly.",
     )
     parser.add_argument(
         "--expected-application-id",
@@ -663,22 +715,22 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--client-id-secret-name",
         default=None,
-        help="GitHub Actions secret name for this identity's OAuth client id.",
+        help="Role-owned GitHub client-id sink; overrides must match it exactly.",
     )
     parser.add_argument(
         "--client-secret-secret-name",
         default=None,
-        help="GitHub Actions secret name for this identity's OAuth client secret.",
+        help="Role-owned GitHub client-secret sink; overrides must match it exactly.",
     )
     parser.add_argument(
         "--app-url-secret-name",
         default=None,
-        help="GitHub Actions secret name for the app URL (normal default: MIP_APP_URL).",
+        help="Role-owned app-URL sink; only the normal role owns MIP_APP_URL.",
     )
     parser.add_argument(
         "--no-app-url-secret",
         action="store_true",
-        help="Do not write an app URL secret for this identity.",
+        help="Explicitly retain no app-URL sink for admin/verifier; invalid for normal.",
     )
     parser.add_argument(
         "--no-mint-secret",
@@ -710,16 +762,6 @@ def main(argv: list[str] | None = None) -> int:
     role: IdentityRole = args.identity_role
     defaults = IDENTITY_DEFAULTS[role]
     grant_can_use = defaults.grant_can_use if args.grant_can_use is None else args.grant_can_use
-    try:
-        _validate_app_access_contract(
-            identity_role=role,
-            grant_can_use=grant_can_use,
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
-
-    app_name = args.app_name or _load_app_name_from_bundle()
-    gh_repo = args.gh_repo or _infer_gh_repo()
     sp_name = args.sp_name or defaults.sp_name
     group_name = args.group_name or defaults.group_name
     lakebase_instance = args.lakebase_instance or defaults.lakebase_instance
@@ -728,20 +770,26 @@ def main(argv: list[str] | None = None) -> int:
     app_url_secret_name = args.app_url_secret_name or defaults.app_url_secret_name
     if args.no_app_url_secret:
         app_url_secret_name = None
-
-    if role != "admin" and group_name:
-        parser.error("only --identity-role admin may be assigned to an admin group")
-    if args.create_group and role != "admin":
-        parser.error("--create-group is valid only with --identity-role admin")
-    if role != "verifier" and (
-        args.lakebase_instance or args.gateway_endpoint or args.warehouse_id
-    ):
-        parser.error(
-            "--lakebase-instance, --gateway-endpoint, and --warehouse-id are valid only with "
-            "--identity-role verifier"
+    try:
+        expected_application_id = _validate_provisioning_contract(
+            identity_role=role,
+            sp_name=sp_name,
+            expected_application_id=args.expected_application_id,
+            grant_can_use=grant_can_use,
+            group_name=group_name,
+            create_group=args.create_group,
+            lakebase_instance=lakebase_instance,
+            gateway_endpoint=args.gateway_endpoint,
+            warehouse_id=args.warehouse_id,
+            client_id_secret_name=client_id_secret_name,
+            client_secret_secret_name=client_secret_secret_name,
+            app_url_secret_name=app_url_secret_name,
         )
-    if role == "verifier" and args.gateway_endpoint and not args.warehouse_id:
-        parser.error("--gateway-endpoint requires --warehouse-id for exact proof verification")
+    except ValueError as exc:
+        parser.error(str(exc))
+
+    app_name = args.app_name or _load_app_name_from_bundle()
+    gh_repo = args.gh_repo or _infer_gh_repo()
 
     _diag(
         f"provisioning plan: identity_role={role!r} sp_name={sp_name!r} "
@@ -764,7 +812,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         result = provision(
             sp_name=sp_name,
-            expected_application_id=args.expected_application_id,
+            expected_application_id=expected_application_id,
             app_name=app_name,
             grant_can_use=grant_can_use,
             group_name=group_name,

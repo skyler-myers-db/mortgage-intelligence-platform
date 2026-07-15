@@ -24,6 +24,7 @@ from backend.schemas.portfolio import (
     PortfolioCreateRequest,
     PortfolioCriteria,
     PortfolioPreviewRequest,
+    project_public_campaign_json_field,
 )
 from backend.services.campaign_intelligence import (
     campaign_copy_hash,
@@ -543,7 +544,33 @@ def test_campaign_list_is_fresh_lakebase_state_not_preview_cache(monkeypatch):
     assert all("mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
 
 
-def test_campaign_summary_derives_creation_verification_from_durable_proof() -> None:
+def test_campaign_projection_requires_exact_reviewed_lead_queue_route() -> None:
+    with pytest.raises(ValueError, match="must target the reviewed lead queue"):
+        project_public_campaign_json_field(
+            "criteria",
+            {
+                "source": "trusted_sql",
+                "result_filters": {"states": ["IL"]},
+                "route": "/lead-queue-internal?states=IL",
+            },
+        )
+
+    projected = project_public_campaign_json_field(
+        "criteria",
+        {
+            "source": "trusted_sql",
+            "result_filters": {"states": ["IL"]},
+            "route": "/lead-queue?states=IL",
+        },
+    )
+    assert projected == {
+        "source": "trusted_sql",
+        "result_filters": {"states": ["IL"]},
+        "route": "/lead-queue?states=IL",
+    }
+
+
+def test_campaign_summary_relational_variants_are_authoritative_and_verified_from_proof() -> None:
     generated = {
         "variant_name": "A",
         "channel": "email",
@@ -607,6 +634,79 @@ def test_campaign_summary_derives_creation_verification_from_durable_proof() -> 
     assert "internal_proof_note" not in summary.message_variants[0]
 
 
+def test_campaign_summary_projects_json_only_legacy_variants_as_unverified() -> None:
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Pre-upgrade campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": {"marketing_eligibility": "Eligible only"},
+            "suppression_policy": {"default": "eligible_only"},
+            "legacy_message_variants": [
+                {
+                    "variant_name": "Legacy A",
+                    "channel": "email",
+                    "subject": "Review your mortgage options",
+                    "body": "Contact a loan officer to review the available options.",
+                    "weight_pct": 100,
+                    "generation_mode": "supervisor",
+                    "generator_label": "Databricks Agent Responses",
+                    "copy_verified_at_creation": True,
+                    "provenance_key_id": "legacy-client-claim",
+                    "provenance_token_digest": "d" * 64,
+                }
+            ],
+            "normalized_message_variants": None,
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+    )
+
+    assert summary.message_variants == [
+        {
+            "variant_name": "Legacy A",
+            "channel": "email",
+            "subject": "Review your mortgage options",
+            "body": "Contact a loan officer to review the available options.",
+            "weight_pct": 100,
+            "generation_mode": "supervisor",
+            "generator_label": "Databricks Agent Responses",
+            "copy_verified_at_creation": False,
+        }
+    ]
+
+
+def test_campaign_summary_explicit_relational_empty_set_blocks_legacy_fallback() -> None:
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Relational campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": {},
+            "suppression_policy": {},
+            "legacy_message_variants": [
+                {
+                    "variant_name": "Legacy A",
+                    "channel": "email",
+                    "subject": "Review your mortgage options",
+                    "body": "Contact a loan officer to review the available options.",
+                }
+            ],
+            "normalized_message_variants": [],
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
+        }
+    )
+
+    assert summary.message_variants == []
+
+
 def test_campaign_summary_does_not_trust_duplicate_json_verification_claim() -> None:
     summary = campaign_summary_from_row(
         {
@@ -650,16 +750,23 @@ def test_campaign_summary_omits_poisoned_legacy_variant_without_echoing_values(
             "owner_email": "skyler@entrada.ai",
             "status": "draft",
             "criteria": {},
-            "normalized_message_variants": [
+            "suppression_policy": {},
+            "legacy_message_variants": [
                 {
                     "variant_name": "A",
                     "channel": "email",
-                    "subject": "Jane Smith mortgage review",
-                    "body": "Call Jane Smith to review the available options.",
+                    "subject": "Review your mortgage options",
+                    "body": "Contact a loan officer to review the available options.",
                     "generation_mode": "operator",
-                    "generator_label": "Jane Smith",
+                    "generator_label": "Operator edited",
+                    "legacy_metadata": {"reviewer": "Jane Smith"},
                 }
             ],
+            "normalized_message_variants": None,
+            "channel_cascade": [],
+            "send_window": {},
+            "holdout": None,
+            "roi_assumptions": None,
         }
     )
 
@@ -668,11 +775,68 @@ def test_campaign_summary_omits_poisoned_legacy_variant_without_echoing_values(
     warning = next(
         record
         for record in caplog.records
-        if getattr(record, "mip_event", None)
-        == "campaign_variant_public_projection_rejected"
+        if getattr(record, "mip_event", None) == "campaign_variant_public_projection_rejected"
     )
     assert warning.mip_outcome == "omitted"
     assert warning.mip_extras == {"reason": "invalid_public_payload"}
+
+
+def test_campaign_summary_omits_all_poisoned_json_fields_without_value_echo(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    poison = "Jordan Lee"
+    summary = campaign_summary_from_row(
+        {
+            "campaign_id": "11111111-1111-4111-8111-111111111111",
+            "name": "Poisoned campaign",
+            "owner_email": "skyler@entrada.ai",
+            "status": "draft",
+            "criteria": {"geography": poison},
+            "suppression_policy": {
+                "default": "eligible_only",
+                "unreviewed": {"owner": poison},
+            },
+            "normalized_message_variants": [],
+            "channel_cascade": [{"channel": "email", "step": 1, "unreviewed": poison}],
+            "send_window": {
+                "days": ["Tuesday"],
+                "timezone": "borrower_local",
+                "start_local": "09:00",
+                "end_local": "16:00",
+                "unreviewed": poison,
+            },
+            "holdout": {
+                "method": "hash_modulo",
+                "size_pct": 10,
+                "unreviewed": poison,
+            },
+            "roi_assumptions": {
+                "source": "operator_configured",
+                "unreviewed": poison,
+            },
+        }
+    )
+
+    assert summary.criteria == {}
+    assert summary.suppression_policy == {}
+    assert summary.channel_cascade == []
+    assert summary.send_window == {}
+    assert summary.holdout is None
+    assert summary.roi_assumptions is None
+    assert poison not in caplog.text
+    rejected_fields = {
+        record.mip_extras["field"]
+        for record in caplog.records
+        if getattr(record, "mip_event", None) == "campaign_json_public_projection_rejected"
+    }
+    assert rejected_fields == {
+        "criteria",
+        "suppression_policy",
+        "channel_cascade",
+        "send_window",
+        "holdout",
+        "roi_assumptions",
+    }
 
 
 def test_campaign_list_excludes_archived_by_default(monkeypatch):
@@ -697,7 +861,8 @@ def test_campaign_list_excludes_archived_by_default(monkeypatch):
     # exclusion so the regression can't be silently removed.
     assert "status <> 'archived'" in default_sql
     assert "FROM mip_app.campaign_message_variants AS variant" in default_sql
-    assert "c.message_variants" not in default_sql
+    assert "c.message_variants AS legacy_message_variants" in default_sql
+    assert "COALESCE(" not in default_sql
     assert lakebase.calls[-1]["params"]["status"] is None
 
     repo.list_campaigns(owner_email="skyler@entrada.ai", status="archived")

@@ -4,6 +4,7 @@ import type { RejectReasonCode } from './LeadTable.types';
 /** Concurrency cap for the bulk-approve client-side loop. */
 export const BULK_APPROVE_CONCURRENCY = 3;
 export const LEAD_ROW_ESTIMATE_PX = 86;
+export const LEAD_EXPANDED_PREVIEW_ESTIMATE_PX = 360;
 export const LEAD_ROW_OVERSCAN = 12;
 export const LEAD_VIRTUALIZATION_THRESHOLD = 120;
 export const LEAD_TABLE_COL_COUNT = 15;

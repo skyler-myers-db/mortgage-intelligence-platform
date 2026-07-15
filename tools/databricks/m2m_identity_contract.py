@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
@@ -51,6 +53,80 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         lakebase_instance=DEFAULT_LAKEBASE_INSTANCE,
     ),
 }
+
+
+def configured_identity_client_ids() -> dict[IdentityRole, str]:
+    """Return non-empty role-owned client IDs from the provisioning environment."""
+    configured: dict[IdentityRole, str] = {}
+    for role, defaults in IDENTITY_DEFAULTS.items():
+        client_id = os.environ.get(defaults.client_id_secret_name, "").strip()
+        if client_id:
+            configured[role] = client_id
+    return configured
+
+
+def validate_identity_role_binding(
+    *,
+    identity_role: IdentityRole,
+    sp_name: str,
+    expected_application_id: str | None,
+    client_id_secret_name: str,
+    client_secret_secret_name: str,
+    app_url_secret_name: str | None,
+    configured_client_ids: Mapping[IdentityRole, str] | None = None,
+) -> str | None:
+    """Bind one role to its reserved principal, client ID, and secret sinks."""
+    defaults = IDENTITY_DEFAULTS[identity_role]
+    if sp_name != defaults.sp_name:
+        raise ValueError(
+            f"--identity-role {identity_role} is bound to reserved service principal "
+            f"{defaults.sp_name!r}; --sp-name may not select another identity"
+        )
+    expected_sinks = (
+        defaults.client_id_secret_name,
+        defaults.client_secret_secret_name,
+        defaults.app_url_secret_name,
+    )
+    actual_sinks = (
+        client_id_secret_name,
+        client_secret_secret_name,
+        app_url_secret_name,
+    )
+    if actual_sinks != expected_sinks:
+        raise ValueError(
+            f"--identity-role {identity_role} may write only its role-owned GitHub secret sinks"
+        )
+
+    configured_source = (
+        configured_identity_client_ids()
+        if configured_client_ids is None
+        else configured_client_ids
+    )
+    configured = {
+        role: str(client_id).strip()
+        for role, client_id in configured_source.items()
+        if str(client_id).strip()
+    }
+    owners_by_client_id: dict[str, list[IdentityRole]] = {}
+    for role, client_id in configured.items():
+        owners_by_client_id.setdefault(client_id, []).append(role)
+    if any(len(owners) > 1 for owners in owners_by_client_id.values()):
+        raise ValueError("Configured M2M role client IDs must be distinct")
+
+    supplied = (expected_application_id or "").strip() or None
+    authoritative = configured.get(identity_role)
+    if supplied and authoritative and supplied != authoritative:
+        raise ValueError(
+            f"--expected-application-id does not match the configured {identity_role} client ID"
+        )
+    resolved = supplied or authoritative
+    if resolved is not None:
+        for role, client_id in configured.items():
+            if role != identity_role and client_id == resolved:
+                raise ValueError(
+                    f"--expected-application-id is reserved for the {role} identity role"
+                )
+    return resolved
 
 
 @dataclass
