@@ -175,6 +175,17 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     assert 'DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}' in workflow
 
 
+def test_deploy_accepts_numeric_app_service_principal_ids() -> None:
+    """The live Databricks Apps API emits service_principal_id as a number."""
+
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert (
+        'str(json.load(sys.stdin).get("service_principal_id") or "").strip()'
+        in script
+    )
+
+
 def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
