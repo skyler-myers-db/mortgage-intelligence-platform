@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import os
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +19,19 @@ assert SPEC is not None and SPEC.loader is not None
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
+
+
+def test_direct_cli_execution_does_not_shadow_databricks_sdk() -> None:
+    result = subprocess.run(
+        [sys.executable, str(MODULE_PATH), "--help"],
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Mirror Lakebase approvals/outreach state" in result.stdout
 
 
 def test_workspace_token_reuses_pat_for_exact_configured_host(monkeypatch) -> None:

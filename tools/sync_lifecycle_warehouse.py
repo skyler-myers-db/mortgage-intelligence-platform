@@ -14,6 +14,13 @@ from pathlib import Path
 from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+TOOLS_DIR = str(Path(__file__).resolve().parent)
+# Direct execution (``python tools/sync_lifecycle_warehouse.py``) puts the
+# repository's ``tools/`` directory ahead of site-packages.  Its local
+# ``tools/databricks`` package would then shadow the installed
+# ``databricks-sdk`` namespace used by workspace_auth.
+while TOOLS_DIR in sys.path:
+    sys.path.remove(TOOLS_DIR)
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
