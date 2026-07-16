@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Sync Lakebase lifecycle state into UC gold via SQL Warehouse."""
+
 from __future__ import annotations
 
 import argparse
@@ -10,21 +11,47 @@ import sys
 import urllib.request
 import uuid
 from pathlib import Path
+from typing import Any
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-def _build_client(timeout_s: int, settings: object):
+
+from tools.databricks.workspace_auth import deployment_workspace_client  # noqa: E402
+
+
+def _workspace_token_provider(workspace: Any):
+    def token() -> str:
+        headers = workspace.config.authenticate()
+        authorization = str(headers.get("Authorization") or "")
+        if not authorization.startswith("Bearer "):
+            raise RuntimeError("deployer workspace auth returned no bearer token")
+        return authorization.removeprefix("Bearer ").strip()
+
+    return token
+
+
+def _build_client(timeout_s: int, settings: Any, workspace: Any | None = None):
     from backend.services.databricks_sql import DatabricksSqlClient
 
-    try:
-        host, token_provider, warehouse_id = settings.require_databricks_creds()
-    except RuntimeError:
-        host = settings.databricks_host
-        warehouse_id = settings.databricks_warehouse_id
+    if workspace is not None:
+        host = str(workspace.config.host or "").strip()
+        warehouse_id = (
+            os.environ.get("DATABRICKS_WAREHOUSE_ID") or settings.databricks_warehouse_id or ""
+        ).strip()
         if not host or not warehouse_id:
-            raise
+            raise RuntimeError("deployer workspace host and warehouse are required")
+        token_provider = _workspace_token_provider(workspace)
+    else:
+        try:
+            host, token_provider, warehouse_id = settings.require_databricks_creds()
+        except RuntimeError:
+            host = settings.databricks_host
+            warehouse_id = settings.databricks_warehouse_id
+            if not host or not warehouse_id:
+                raise
+
         def token_provider() -> str:
             return _cli_token(host)
 
@@ -74,11 +101,20 @@ def main() -> None:
     )
     parser.add_argument("--skip-funnel", action="store_true")
     args = parser.parse_args()
-    _ensure_lakebase_env(settings)
+    deployer_bound = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "MIP_DEPLOYER_DATABRICKS_HOST",
+            "MIP_DEPLOYER_DATABRICKS_TOKEN",
+            "MIP_DEPLOYER_DATABRICKS_PROFILE",
+        )
+    )
+    workspace = deployment_workspace_client() if deployer_bound else None
+    _ensure_lakebase_env(settings, workspace=workspace)
 
     result = sync_lifecycle_state_via_warehouse(
         catalog=args.catalog,
-        sql_client=_build_client(args.timeout_s, settings),
+        sql_client=_build_client(args.timeout_s, settings, workspace),
         record_funnel_snapshot=not args.skip_funnel,
         funnel_sql_path=args.funnel_sql,
     )
@@ -86,23 +122,58 @@ def main() -> None:
 
 
 def _load_local_env() -> None:
-    from dotenv import load_dotenv
+    from dotenv import dotenv_values
 
-    load_dotenv(REPO_ROOT / ".env", override=False)
-    load_dotenv(REPO_ROOT / ".env.local", override=False)
+    deployer_auth_bound = any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "MIP_DEPLOYER_DATABRICKS_HOST",
+            "MIP_DEPLOYER_DATABRICKS_TOKEN",
+            "MIP_DEPLOYER_DATABRICKS_PROFILE",
+        )
+    )
+    immutable_workspace_auth = {
+        "DATABRICKS_HOST",
+        "DATABRICKS_TOKEN",
+        "DATABRICKS_AUTH_TYPE",
+        "DATABRICKS_CONFIG_PROFILE",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+    }
+    for path in (REPO_ROOT / ".env", REPO_ROOT / ".env.local"):
+        if not path.exists():
+            continue
+        for name, value in dotenv_values(path).items():
+            if value is None:
+                continue
+            if name in {"DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"}:
+                continue
+            if deployer_auth_bound and name in immutable_workspace_auth:
+                continue
+            os.environ.setdefault(name, value)
 
 
-def _ensure_lakebase_env(settings: object) -> None:
+def _ensure_lakebase_env(settings: Any, *, workspace: Any | None = None) -> None:
     host = (os.environ.get("LAKEBASE_HOST") or "").strip().lower()
     password = (os.environ.get("LAKEBASE_PASSWORD") or "").strip()
-    if host and host not in {"localhost", "127.0.0.1", "::1"} and password:
+    if workspace is None and host and host not in {"localhost", "127.0.0.1", "::1"} and password:
+        return
+
+    instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    if workspace is not None:
+        dns = workspace.database.get_database_instance(instance_name).read_write_dns
+        credential = workspace.database.generate_database_credential(
+            instance_names=[instance_name],
+            request_id=f"mip-sync-lifecycle-cli-{uuid.uuid4()}",
+        )
+        user_name = workspace.current_user.me().user_name
+        _set_lakebase_auth(settings, str(dns), str(user_name), str(credential.token))
         return
 
     workspace_host = settings.databricks_host
     if not workspace_host:
         return
     token = _workspace_token(workspace_host)
-    instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
     api_host = workspace_host.rstrip("/")
 
     inst = _api_json(
@@ -123,12 +194,40 @@ def _ensure_lakebase_env(settings: object) -> None:
         },
     )
 
-    os.environ["LAKEBASE_HOST"] = inst.get("read_write_dns") or os.environ.get("LAKEBASE_HOST", "")
-    os.environ["LAKEBASE_PORT"] = os.environ.get("LAKEBASE_PORT", "5432")
-    os.environ["LAKEBASE_DATABASE"] = "mip_app_state"
-    os.environ["LAKEBASE_USER"] = me.get("userName") or os.environ.get("LAKEBASE_USER", "")
-    os.environ["LAKEBASE_PASSWORD"] = cred.get("token") or os.environ.get("LAKEBASE_PASSWORD", "")
-    os.environ["LAKEBASE_SSLMODE"] = os.environ.get("LAKEBASE_SSLMODE", "require")
+    _set_lakebase_auth(
+        settings,
+        str(inst.get("read_write_dns") or ""),
+        str(me.get("userName") or ""),
+        str(cred.get("token") or ""),
+    )
+
+
+def _set_lakebase_auth(settings: Any, host: str, user: str, password: str) -> None:
+    if not host or not user or not password:
+        raise RuntimeError("deployer-derived Lakebase credentials were incomplete")
+    values = {
+        "LAKEBASE_HOST": host,
+        "LAKEBASE_PORT": "5432",
+        "LAKEBASE_DATABASE": "mip_app_state",
+        "LAKEBASE_USER": user,
+        "LAKEBASE_PASSWORD": password,
+        "LAKEBASE_SSLMODE": "require",
+        "PGHOST": host,
+        "PGPORT": "5432",
+        "PGDATABASE": "mip_app_state",
+        "PGUSER": user,
+        "PGPASSWORD": password,
+        "PGSSLMODE": "require",
+    }
+    os.environ.update(values)
+    settings.lakebase_host = host
+    settings.lakebase_port = 5432
+    settings.lakebase_database = "mip_app_state"
+    settings.lakebase_user = user
+    from pydantic import SecretStr
+
+    settings.lakebase_password = SecretStr(password)
+    settings.lakebase_sslmode = "require"
 
 
 def _api_json(

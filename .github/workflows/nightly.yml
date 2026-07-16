@@ -289,6 +289,8 @@ jobs:
           fi
           python tools/databricks/verify_ai_gateway_exact_proof.py \
             verify-pending \
+            --require-verifier-derived-auth \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
             --git-sha "$MIP_GIT_SHA" \
             --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
             --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
@@ -296,6 +298,8 @@ jobs:
             send \
             --wait \
             --require-verified \
+            --require-verifier-derived-auth \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
             --git-sha "$MIP_GIT_SHA" \
             --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
             --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
@@ -588,7 +592,13 @@ jobs:
           DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
           LAKEBASE_INTEGRATION: '1'
           MIP_LIVE_MUTATION_OK: '1'
+          MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}
         run: |
+          python -m tools.databricks.cleanup_campaign_treatment_scratch \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
+            --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+            --suffix "$MIP_LIVE_SCRATCH_SUFFIX" \
+            --stale-older-than-hours 2
           pytest -q --tb=short \
             tests/integration/test_campaign_audit_workflow_live.py \
             tests/integration/test_lakebase_idempotency_live.py \
@@ -597,6 +607,18 @@ jobs:
             tests/integration/test_lifecycle_delta_replay_live.py \
             tests/integration/test_campaign_treatment_at_cap_live.py \
             tests/integration/test_lineage_manifest_live.py
+      - name: Always clean deterministic treatment scratch table
+        if: always()
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}
+        run: |
+          python -m tools.databricks.cleanup_campaign_treatment_scratch \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
+            --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+            --suffix "$MIP_LIVE_SCRATCH_SUFFIX"
       - name: Genie semantic eval scorecard (deployed app)
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

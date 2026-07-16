@@ -25,6 +25,7 @@ import importlib.util
 import json
 import os
 import re
+import subprocess
 import sys
 import types
 from pathlib import Path
@@ -81,10 +82,14 @@ def test_env_local_does_not_override_catalog_routing(
 ) -> None:
     monkeypatch.delenv("MIP_DEFAULT_CATALOG", raising=False)
     monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
     monkeypatch.setattr(pgs, "REPO_ROOT", tmp_path)
     (tmp_path / ".env.local").write_text(
         "MIP_DEFAULT_CATALOG=mip_demo\n"
-        "DATABRICKS_HOST=https://dbc.example\n",
+        "DATABRICKS_HOST=https://dbc.example\n"
+        "DATABRICKS_CLIENT_ID=normal-app-client\n"
+        "DATABRICKS_CLIENT_SECRET=normal-app-secret\n",
         encoding="utf-8",
     )
 
@@ -92,6 +97,35 @@ def test_env_local_does_not_override_catalog_routing(
 
     assert "MIP_DEFAULT_CATALOG" not in os.environ
     assert os.environ["DATABRICKS_HOST"] == "https://dbc.example"
+    assert "DATABRICKS_CLIENT_ID" not in os.environ
+    assert "DATABRICKS_CLIENT_SECRET" not in os.environ
+
+
+def test_build_client_uses_explicit_deployer_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+    monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_PROFILE", "REVIEWED")
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "normal-app-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "normal-app-secret")
+    monkeypatch.setattr(pgs, "deployment_workspace_client", lambda: sentinel)
+    args = types.SimpleNamespace(workspace_host=None, profile="DEFAULT")
+
+    assert pgs._build_client(args) is sentinel
+
+
+def test_direct_script_entry_resolves_repo_imports(tmp_path: Path) -> None:
+    result = subprocess.run(
+        [sys.executable, str(_PGS_PATH), "--help"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "Create or update the Mortgage Lead Intelligence Genie Space" in result.stdout
+    assert "ModuleNotFoundError" not in result.stderr
 
 
 def test_smoke_test_rejects_prompt_echo(

@@ -54,7 +54,7 @@ from backend.services.capability_serving_probes import (
     serving_response_has_payload,
     serving_response_is_terminal_completed,
 )
-from backend.services.databricks_sql import get_sql_client
+from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.lakebase import get_lakebase_client
 
 
@@ -91,6 +91,19 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit non-zero when no current-SHA proof is verified.",
     )
+    parser.add_argument(
+        "--require-verifier-derived-auth",
+        action="store_true",
+        help=(
+            "Derive endpoint, inference-table, and proof-ledger access only from the "
+            "dedicated verifier OAuth identity. Required for claimable proof."
+        ),
+    )
+    parser.add_argument(
+        "--warehouse-id",
+        default=os.environ.get("DATABRICKS_WAREHOUSE_ID"),
+        help="SQL warehouse used by the dedicated verifier identity.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable summary.")
     return parser
 
@@ -113,10 +126,52 @@ def _workspace_client() -> Any:
     and the client resolve credentials at construction, so tests monkeypatch
     this factory rather than WorkspaceClient.
     """
-    return WorkspaceClient(config=Config(http_timeout_seconds=300, retry_timeout_seconds=0))
+    host = os.environ.get("DATABRICKS_HOST", "").strip()
+    client_id = os.environ.get("DATABRICKS_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET", "").strip()
+    if not host or not client_id or not client_secret:
+        raise ValueError("dedicated verifier DATABRICKS_HOST/CLIENT_ID/CLIENT_SECRET are required")
+    return WorkspaceClient(
+        config=Config(
+            host=host,
+            client_id=client_id,
+            client_secret=client_secret,
+            auth_type="oauth-m2m",
+            http_timeout_seconds=300,
+            retry_timeout_seconds=0,
+        )
+    )
 
 
-def ensure_lakebase_env(workspace_factory: Any = None) -> bool:
+def _verifier_sql_client(workspace: Any, *, warehouse_id: str) -> DatabricksSqlClient:
+    """Build inference-table access from the exact verifier SDK client."""
+
+    host = str(workspace.config.host or "").strip()
+    if not host or not warehouse_id.strip():
+        raise ValueError("verifier workspace host and --warehouse-id are required")
+
+    def token_provider() -> str:
+        headers = workspace.config.authenticate()
+        authorization = str(headers.get("Authorization") or "")
+        if not authorization.startswith("Bearer "):
+            raise RuntimeError("verifier workspace auth returned no bearer token")
+        token = authorization.removeprefix("Bearer ").strip()
+        if not token:
+            raise RuntimeError("verifier workspace auth returned an empty bearer token")
+        return token
+
+    return DatabricksSqlClient(
+        host=host,
+        token=token_provider,
+        warehouse_id=warehouse_id.strip(),
+    )
+
+
+def ensure_lakebase_env(
+    workspace_factory: Any = None,
+    *,
+    force_refresh: bool = False,
+) -> bool:
     """Mint Lakebase connection env from the Databricks identity when absent.
 
     ``workspace_factory`` late-binds to the module's ``WorkspaceClient`` at
@@ -143,10 +198,10 @@ def ensure_lakebase_env(workspace_factory: Any = None) -> bool:
         host = (value or "").strip().lower()
         return bool(host) and host not in {"localhost", "127.0.0.1", "::1"}
 
-    if _is_real_host(os.environ.get("LAKEBASE_HOST")):
+    if not force_refresh and _is_real_host(os.environ.get("LAKEBASE_HOST")):
         return False
     stale = get_settings()
-    if _is_real_host(stale.lakebase_host):
+    if not force_refresh and _is_real_host(stale.lakebase_host):
         # A real host from .env.local is fine; only absent or localhost-ish
         # resolution needs minting.
         return False
@@ -170,16 +225,24 @@ def ensure_lakebase_env(workspace_factory: Any = None) -> bool:
     # values are invisible to it (observed 2026-07-07: minting succeeded but
     # psycopg still dialed localhost). The PG* fallbacks read live os.environ
     # through that same stale object, which is exactly the Apps pathway.
-    os.environ["PGHOST"] = str(dns)
-    os.environ["PGUSER"] = str(user_name)
-    os.environ["PGPASSWORD"] = str(credential.token)
-    os.environ.setdefault("PGDATABASE", "mip_app_state")
-    # LAKEBASE_* kept for subprocesses and freshly-imported settings.
-    os.environ["LAKEBASE_HOST"] = str(dns)
-    os.environ["LAKEBASE_USER"] = str(user_name)
-    os.environ["LAKEBASE_PASSWORD"] = str(credential.token)
-    os.environ.setdefault("LAKEBASE_DATABASE", "mip_app_state")
-    os.environ.setdefault("LAKEBASE_SSLMODE", "require")
+    database = "mip_app_state"
+    os.environ.update(
+        {
+            "PGHOST": str(dns),
+            "PGPORT": "5432",
+            "PGDATABASE": database,
+            "PGUSER": str(user_name),
+            "PGPASSWORD": str(credential.token),
+            "PGSSLMODE": "require",
+            # LAKEBASE_* kept for subprocesses and freshly-imported settings.
+            "LAKEBASE_HOST": str(dns),
+            "LAKEBASE_PORT": "5432",
+            "LAKEBASE_DATABASE": database,
+            "LAKEBASE_USER": str(user_name),
+            "LAKEBASE_PASSWORD": str(credential.token),
+            "LAKEBASE_SSLMODE": "require",
+        }
+    )
     # The import-time settings singleton (bound by backend.services.lakebase
     # at module import) may carry truthy stale .env.local values such as
     # localhost/mip/mip, which shadow every PG* fallback in the resolver.
@@ -187,7 +250,7 @@ def ensure_lakebase_env(workspace_factory: Any = None) -> bool:
     # the live object the resolver actually reads.
     stale.lakebase_host = str(dns)
     stale.lakebase_port = 5432
-    stale.lakebase_database = os.environ["LAKEBASE_DATABASE"]
+    stale.lakebase_database = database
     stale.lakebase_user = str(user_name)
     stale.lakebase_password = SecretStr(str(credential.token))
     stale.lakebase_sslmode = os.environ["LAKEBASE_SSLMODE"]
@@ -202,8 +265,13 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("MIP_AI_GATEWAY_VERIFY_TIMEOUT_S must not exceed 3600 seconds")
     if args.interval_s <= 0:
         raise ValueError("MIP_AI_GATEWAY_VERIFY_INTERVAL_S must be positive")
+    if not args.require_verifier_derived_auth:
+        raise ValueError("exact proof requires --require-verifier-derived-auth for every mode")
     attestation_verify_key = derive_gateway_proof_verify_key(_attestation_signing_key())
-    ensure_lakebase_env()
+    workspace = _workspace_client()
+    if not (args.warehouse_id or "").strip():
+        raise ValueError("--warehouse-id is required for verifier-derived proof")
+    ensure_lakebase_env(lambda: workspace, force_refresh=True)
     settings = get_settings()
     git_sha = _resolved_sha(args.git_sha or settings.mip_git_sha)
     endpoint = (args.endpoint or settings.mip_ai_gateway_endpoint or "").strip()
@@ -216,8 +284,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("AI Gateway inference table is required")
 
     lakebase = get_lakebase_client()
-    sql_client = get_sql_client()
-    workspace = _workspace_client()
+    sql_client = _verifier_sql_client(workspace, warehouse_id=args.warehouse_id)
     expired = mark_expired_pending_proofs(
         lakebase,
         older_than=datetime.now(UTC) - timedelta(seconds=max(1, args.expiry_s)),

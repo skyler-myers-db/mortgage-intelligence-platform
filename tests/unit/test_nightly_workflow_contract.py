@@ -78,6 +78,19 @@ def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
     assert text.count("tools/databricks/export_gateway_runtime_contract.py") == 2
 
 
+def test_live_validation_gateway_proof_uses_only_verifier_derived_auth() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("- name: Refresh and verify AI Gateway exact proof ledger")
+    end = text.index("\n      - name:", start + 1)
+    block = text[start:end]
+
+    assert block.count("--require-verifier-derived-auth") == 2
+    assert block.count('--warehouse-id "$DATABRICKS_WAREHOUSE_ID"') == 2
+    assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in block
+    assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in block
+    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}" in block
+
+
 def test_live_browser_rechecks_exact_contract_before_live_mutations() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
     job_pos = text.index("\n  playwright-e2e-live:")
@@ -253,6 +266,16 @@ def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> Non
     assert "DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}" in block
     assert "tests/integration/test_lifecycle_delta_replay_live.py" in block
     assert "tests/integration/test_campaign_treatment_at_cap_live.py" in block
+    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in block
+    assert "tools.databricks.cleanup_campaign_treatment_scratch" in block
+    assert "--stale-older-than-hours 2" in block
+
+    cleanup_pos = text.index("- name: Always clean deterministic treatment scratch table")
+    cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
+    cleanup_block = text[cleanup_pos:cleanup_next]
+    assert "if: always()" in cleanup_block
+    assert "tools.databricks.cleanup_campaign_treatment_scratch" in cleanup_block
+    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in cleanup_block
 
 
 def test_nightly_agent_eval_passes_distinct_normal_and_admin_bearers() -> None:

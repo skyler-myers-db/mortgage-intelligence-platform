@@ -55,6 +55,46 @@ that can `GRANT USE CATALOG` on a newly-created catalog). The SE's own
 workspace login is usually insufficient — confirm `current_user()` is
 metastore-admin before running, or pair-deploy with a customer admin.
 
+For the governed treatment boundary, the current deployer canonical
+`user_name` is trusted automatically. If the metastore, catalog, audit schema,
+or treatment table is owned by another approved user, service-principal
+application ID, or governance group, list its canonical principal name in
+`MIP_UC_APPROVED_OWNER_PRINCIPALS` (comma-separated). Group-owned objects
+also require dedicated account OAuth credentials. Account SCIM binds the App
+and group to immutable IDs, but is deliberately not used as negative
+membership evidence: Automatic Identity Management can omit effective members
+from SCIM group responses. Deployment instead creates a five-minute OAuth
+secret for the App identity, evaluates `is_account_group_member()` through the
+warehouse as that identity, and deletes the secret before continuing. A
+positive result, failed query, or unproven secret cleanup fails the deployment
+closed. The account OAuth identity therefore needs Service Principal Manager
+on the App identity (or account-admin authority), and must be distinct from
+every runtime, operator, admin, verifier, and target-App principal. The
+deployment also fails closed on unresolved, ambiguous, or App-owned objects.
+Configure that separate identity through `DATABRICKS_ACCOUNT_HOST`,
+`DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and
+`DATABRICKS_ACCOUNT_CLIENT_SECRET`; workspace PAT configuration is never
+reused for account operations.
+
+Deployment-side workspace operations are also identity-bound. The deploy
+wrapper copies the reviewed workspace PAT (or selected CLI profile) into a
+dedicated deployer-only binding before reading App M2M credentials. The normal
+App client ID and secret remain shell-local and are exposed only to explicit
+token-mint or identity-verification child processes. UC convergence and App
+stop compensation therefore cannot silently authenticate as the normal App
+service principal.
+
+The deployment keeps the governed treatment write path fail-closed throughout
+rollout. The source-controlled App baseline carries
+`MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED=0`; the failure trap is armed before
+the existing App is inspected or quiesced; and the App remains read-only while
+constraints, table properties, ownership, and effective privileges converge.
+Only a promoted App snapshot carries marker `1`, and exact runtime `MODIFY` is
+restored after that promotion. A later failure must prove the App stopped; if
+that proof fails, deployment also attempts treatment-write quiescence and exits
+with a dedicated compensation failure instead of reporting the original step
+as the complete failure state.
+
 ---
 
 ## 1. Catalog `mip`

@@ -36,6 +36,9 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from tools import render_sql  # noqa: E402
+from tools.databricks.workspace_auth import (  # noqa: E402
+    strip_app_facing_workspace_auth,
+)
 
 ENV_LOCAL = REPO / ".env.local"
 
@@ -76,9 +79,7 @@ def _truthy(raw: str | None) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
-def _demo_feeds_allowed_for_target(
-    *, target: str, enabled: bool, env: dict[str, str]
-) -> bool:
+def _demo_feeds_allowed_for_target(*, target: str, enabled: bool, env: dict[str, str]) -> bool:
     if not enabled:
         return True
     if target == "dev":
@@ -118,6 +119,23 @@ def main() -> int:
     # Start from the current process env so PATH, HOME, DATABRICKS_CONFIG_*
     # all propagate, then overlay dotenv values.
     env = dict(os.environ)
+    strip_app_facing_workspace_auth(env)
+    deployer_auth_bound = any(
+        env.get(name, "").strip()
+        for name in (
+            "MIP_DEPLOYER_DATABRICKS_HOST",
+            "MIP_DEPLOYER_DATABRICKS_TOKEN",
+            "MIP_DEPLOYER_DATABRICKS_PROFILE",
+        )
+    )
+    immutable_workspace_auth = {
+        "DATABRICKS_HOST",
+        "DATABRICKS_TOKEN",
+        "DATABRICKS_AUTH_TYPE",
+        "DATABRICKS_CONFIG_PROFILE",
+        "DATABRICKS_CLIENT_ID",
+        "DATABRICKS_CLIENT_SECRET",
+    }
     if ENV_LOCAL.exists():
         for k, v in dotenv_values(ENV_LOCAL).items():
             if v is None:
@@ -132,9 +150,11 @@ def main() -> int:
             # caller (scripts/deploy.sh does this after target-aware checks).
             if k in {"MIP_DEFAULT_CATALOG", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"}:
                 continue
-            if k in {"DATABRICKS_WAREHOUSE_ID", "GENIE_SPACE_ID"} and _is_real(
-                env.get(k)
-            ):
+            if k in {"DATABRICKS_CLIENT_ID", "DATABRICKS_CLIENT_SECRET"}:
+                continue
+            if deployer_auth_bound and k in immutable_workspace_auth:
+                continue
+            if k in {"DATABRICKS_WAREHOUSE_ID", "GENIE_SPACE_ID"} and _is_real(env.get(k)):
                 continue
             env[k] = v
 
@@ -168,8 +188,8 @@ def main() -> int:
             )
             return 2
 
-    env["BUNDLE_VAR_sql_warehouse_id"] = warehouse if _is_real(warehouse) else PLACEHOLDER
-    env["BUNDLE_VAR_genie_space_id"] = genie if _is_real(genie) else PLACEHOLDER
+    env["BUNDLE_VAR_sql_warehouse_id"] = str(warehouse) if _is_real(warehouse) else PLACEHOLDER
+    env["BUNDLE_VAR_genie_space_id"] = str(genie) if _is_real(genie) else PLACEHOLDER
 
     catalog = env.get("MIP_DEFAULT_CATALOG") or "mip"
     env["BUNDLE_VAR_uc_catalog"] = catalog
@@ -203,7 +223,7 @@ def main() -> int:
     # Operator feedback (never print the full value; just confirm resolution).
     def status(name: str, value: str | None) -> str:
         if _is_real(value):
-            return f"{name}=set (…{value[-4:]})"
+            return f"{name}=set (…{str(value)[-4:]})"
         return f"{name}=not-set (will use placeholder)"
 
     print(f"[bundle_env] {status('DATABRICKS_WAREHOUSE_ID', warehouse)}", file=sys.stderr)

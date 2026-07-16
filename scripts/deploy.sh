@@ -224,8 +224,48 @@ RESTORE_RENDERED_SQL_FAIL_CLOSED=0
 APP_DEPLOY_PAYLOAD=""
 AGENTIC_ENV_FILE=""
 AGENT_EVAL_ENV_FILE=""
+APP_FAIL_CLOSED_ARMED=0
+APP_FAIL_CLOSED_NAME=""
+
+stop_app_after_failed_deploy() {
+  [[ "$DRY_RUN" -eq 0 && "$APP_FAIL_CLOSED_ARMED" -eq 1 && \
+     -n "$APP_FAIL_CLOSED_NAME" ]] || return 0
+  echo "${YLW}[deploy] deployment failed after App bootstrap; proving the App is stopped.${RST}" >&2
+  "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$APP_FAIL_CLOSED_NAME"
+}
+
+quiesce_app_treatment_after_failed_stop() {
+  local principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}"
+  if [[ -z "$principal" && -n "$APP_FAIL_CLOSED_NAME" ]]; then
+    principal="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null | "$PYTHON" -c '
+import json, sys
+print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
+' || true)"
+  fi
+  if [[ -z "$principal" || -z "${_GRANTS_WAREHOUSE_ID:-}" || \
+        -z "${_GRANTS_CATALOG:-}" ]]; then
+    echo "${RED}[deploy] secondary treatment quiescence lacks a resolved App identity or warehouse.${RST}" >&2
+    return 1
+  fi
+  echo "${YLW}[deploy] App stop is unproven; attempting secondary treatment-write quiescence.${RST}" >&2
+  "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --catalog "$_GRANTS_CATALOG" \
+    --principal "$principal" \
+    --mode quiesce
+}
 
 restore_rendered_sql_fail_closed() {
+  local rc=$? compensation_failed=0
+  if [[ "$rc" -ne 0 ]]; then
+    if ! stop_app_after_failed_deploy; then
+      compensation_failed=1
+      if ! quiesce_app_treatment_after_failed_stop; then
+        echo "${RED}[deploy] secondary treatment-write quiescence also failed.${RST}" >&2
+      fi
+    fi
+  fi
   if [[ -n "${APP_DEPLOY_PAYLOAD:-}" ]]; then
     rm -f "$APP_DEPLOY_PAYLOAD"
   fi
@@ -235,15 +275,20 @@ restore_rendered_sql_fail_closed() {
   if [[ -n "${AGENT_EVAL_ENV_FILE:-}" ]]; then
     rm -f "$AGENT_EVAL_ENV_FILE"
   fi
-  if [[ "$DRY_RUN" -eq 1 || "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -ne 1 ]]; then
-    return 0
-  fi
-  MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0 "$PYTHON" tools/render_sql.py \
-    --catalog "${MIP_DEFAULT_CATALOG:-mip}" >/dev/null 2>&1 || {
+  if [[ "$DRY_RUN" -eq 0 && "$RESTORE_RENDERED_SQL_FAIL_CLOSED" -eq 1 ]]; then
+    if MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=0 "$PYTHON" tools/render_sql.py \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" >/dev/null 2>&1; then
+      echo "${DIM}[deploy] restored sql/_rendered with demo first-party feeds disabled.${RST}" >&2
+    else
       echo "${YLW}[deploy] warning: failed to restore sql/_rendered with demo first-party feeds disabled.${RST}" >&2
-      return 0
-    }
-  echo "${DIM}[deploy] restored sql/_rendered with demo first-party feeds disabled.${RST}" >&2
+    fi
+  fi
+  if [[ "$compensation_failed" -eq 1 ]]; then
+    echo "${RED}[deploy] original failure was followed by unproven App shutdown.${RST}" >&2
+    trap - EXIT
+    exit 90
+  fi
+  return "$rc"
 }
 trap restore_rendered_sql_fail_closed EXIT
 
@@ -261,37 +306,220 @@ dotenv_value() {
 import sys
 from pathlib import Path
 
-from dotenv import dotenv_values
-
 key = sys.argv[1]
 path = Path(".env.local")
 if not path.exists():
     print("")
 else:
-    print((dotenv_values(path).get(key) or "").strip())
+    try:
+        from dotenv import dotenv_values
+    except ModuleNotFoundError:
+        # Preflight must also work in isolated release-contract fixtures where
+        # the repository venv has not been created yet. This intentionally
+        # supports only the literal KEY=value forms used for deploy secrets;
+        # it never evaluates shell syntax or expands variables.
+        value = ""
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            line = raw_line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("export "):
+                line = line[7:].lstrip()
+            name, separator, candidate = line.partition("=")
+            if separator and name.strip() == key:
+                candidate = candidate.strip()
+                if (
+                    len(candidate) >= 2
+                    and candidate[0] == candidate[-1]
+                    and candidate[0] in {"'", '"'}
+                ):
+                    candidate = candidate[1:-1]
+                value = candidate
+        print(value.strip())
+    else:
+        print((dotenv_values(path).get(key) or "").strip())
 PY
 }
 
 resolve_m2m_credential() {
-  local name="$1" value
+  local name="$1" scope="${2:-export}" value
   value="${!name:-}"
   if [[ -z "$value" ]]; then
     value="$(dotenv_value "$name")"
   fi
   printf -v "$name" '%s' "$value"
-  export "${name?}"
+  if [[ "$scope" == "shell" ]]; then
+    # Keep app-facing OAuth credentials available to explicit mint/subshell
+    # calls without letting bare deployment-side SDK clients auto-select them.
+    export -n "${name?}" 2>/dev/null || true
+  elif [[ "$scope" == "export" ]]; then
+    export "${name?}"
+  else
+    echo "${RED}[deploy] invalid credential scope '$scope' for $name.${RST}" >&2
+    return 2
+  fi
+}
+
+bind_deployment_workspace_auth() {
+  local bundle_host dotenv_host dotenv_token host token profile profile_host
+  dotenv_host="$(dotenv_value DATABRICKS_HOST)"
+  dotenv_token="$(dotenv_value DATABRICKS_TOKEN)"
+  unset MIP_DEPLOYER_DATABRICKS_HOST MIP_DEPLOYER_DATABRICKS_TOKEN \
+    MIP_DEPLOYER_DATABRICKS_PROFILE MIP_DATABRICKS_WORKSPACE_HOST
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    host="${dotenv_host:-${DATABRICKS_HOST:-}}"
+    if [[ -z "$host" ]]; then
+      echo "${RED}[deploy] could not resolve the planned deployment workspace host.${RST}" >&2
+      return 2
+    fi
+    export MIP_DATABRICKS_WORKSPACE_HOST="${host%/}"
+    export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET 2>/dev/null || true
+    return 0
+  fi
+  if [[ -n "${DATABRICKS_CONFIG_PROFILE:-}" ]]; then
+    profile="$DATABRICKS_CONFIG_PROFILE"
+    profile_host="$($PYTHON - "$profile" <<'PY'
+import configparser
+import os
+import sys
+from pathlib import Path
+
+path = Path(os.environ.get("DATABRICKS_CONFIG_FILE") or Path.home() / ".databrickscfg")
+parser = configparser.ConfigParser(interpolation=None)
+parser.read(path, encoding="utf-8")
+profile = sys.argv[1]
+print(parser.get(profile, "host", fallback="").strip().rstrip("/"))
+PY
+)"
+    if [[ -z "$profile_host" ]]; then
+      echo "${RED}[deploy] Databricks profile '$profile' has no workspace host.${RST}" >&2
+      return 2
+    fi
+    if [[ -n "$dotenv_host" && "${dotenv_host%/}" != "$profile_host" ]]; then
+      echo "${RED}[deploy] .env.local workspace host does not match selected Databricks profile '$profile'.${RST}" >&2
+      return 2
+    fi
+    host="$profile_host"
+    export DATABRICKS_CONFIG_PROFILE="$profile"
+    unset DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_AUTH_TYPE
+    export MIP_DEPLOYER_DATABRICKS_PROFILE="$profile"
+  else
+    if [[ -n "$dotenv_token" ]]; then
+      if [[ -z "$dotenv_host" ]]; then
+        echo "${RED}[deploy] .env.local DATABRICKS_TOKEN requires its own DATABRICKS_HOST.${RST}" >&2
+        return 2
+      fi
+      host="$dotenv_host"
+      token="$dotenv_token"
+    elif [[ -n "${DATABRICKS_TOKEN:-}" ]]; then
+      host="${DATABRICKS_HOST:-}"
+      token="$DATABRICKS_TOKEN"
+      if [[ -n "$dotenv_host" && "${dotenv_host%/}" != "${host%/}" ]]; then
+        echo "${RED}[deploy] refusing to combine an ambient PAT with a different .env.local host.${RST}" >&2
+        return 2
+      fi
+    else
+      host="${dotenv_host:-${DATABRICKS_HOST:-}}"
+      token=""
+    fi
+    if [[ -n "$token" ]]; then
+      if [[ -z "$host" ]]; then
+        echo "${RED}[deploy] DATABRICKS_TOKEN requires DATABRICKS_HOST for deployer auth.${RST}" >&2
+        return 2
+      fi
+      DATABRICKS_HOST="$host"
+      DATABRICKS_TOKEN="$token"
+      DATABRICKS_AUTH_TYPE="pat"
+      export DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_AUTH_TYPE
+      unset DATABRICKS_CONFIG_PROFILE
+      export MIP_DEPLOYER_DATABRICKS_HOST="$host"
+      export MIP_DEPLOYER_DATABRICKS_TOKEN="$token"
+    else
+      profile="DEFAULT"
+      profile_host="$($PYTHON - "$profile" <<'PY'
+import configparser
+import os
+import sys
+from pathlib import Path
+
+path = Path(os.environ.get("DATABRICKS_CONFIG_FILE") or Path.home() / ".databrickscfg")
+parser = configparser.ConfigParser(interpolation=None)
+parser.read(path, encoding="utf-8")
+profile = sys.argv[1]
+print(parser.get(profile, "host", fallback="").strip().rstrip("/"))
+PY
+)"
+      if [[ -z "$profile_host" ]]; then
+        echo "${RED}[deploy] DATABRICKS_TOKEN is absent and DEFAULT profile has no workspace host.${RST}" >&2
+        return 2
+      fi
+      if [[ -n "$host" && "${host%/}" != "$profile_host" ]]; then
+        echo "${RED}[deploy] .env.local workspace host does not match DEFAULT Databricks profile.${RST}" >&2
+        return 2
+      fi
+      host="$profile_host"
+      export DATABRICKS_CONFIG_PROFILE="$profile"
+      unset DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_AUTH_TYPE
+      export MIP_DEPLOYER_DATABRICKS_PROFILE="$profile"
+    fi
+  fi
+  if [[ -z "$host" ]]; then
+    echo "${RED}[deploy] could not resolve the deployment workspace host.${RST}" >&2
+    return 2
+  fi
+  bundle_host="$($PYTHON - "$TARGET" <<'PY'
+import sys
+from pathlib import Path
+
+import yaml
+
+data = yaml.safe_load(Path("databricks.yml").read_text(encoding="utf-8")) or {}
+target = sys.argv[1]
+targets = data.get("targets") or {}
+if target not in targets:
+    raise SystemExit(f"unknown Databricks bundle target: {target}")
+workspace = targets[target].get("workspace") or {}
+top_workspace = data.get("workspace") or {}
+print(str(workspace.get("host") or top_workspace.get("host") or "").strip().rstrip("/"))
+PY
+)"
+  if [[ -z "$bundle_host" || "${host%/}" != "$bundle_host" ]]; then
+    echo "${RED}[deploy] authenticated workspace host does not match databricks.yml target '$TARGET'.${RST}" >&2
+    return 2
+  fi
+  export MIP_DATABRICKS_WORKSPACE_HOST="${host%/}"
+  # These names represent the normal App user, never the UC/App deployment
+  # authority. Preserve their shell values but remove them from child envs.
+  export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET 2>/dev/null || true
 }
 
 mint_m2m_token() {
   local output_name="$1" client_id_env="$2" client_secret_env="$3"
+  local client_id="${!client_id_env}" client_secret="${!client_secret_env}"
   local token_file token
   token_file="$(mktemp -t mip-m2m-token.XXXXXX)"
   chmod 600 "$token_file"
   echo "${DIM}\$ $PYTHON tools/oauth_m2m_mint.py --client-id-env $client_id_env --client-secret-env $client_secret_env --output-file [secure-temp]${RST}"
-  if ! "$PYTHON" tools/oauth_m2m_mint.py \
-    --client-id-env "$client_id_env" \
-    --client-secret-env "$client_secret_env" \
-    --output-file "$token_file"; then
+  # The identity override is intentionally confined to this mint subprocess.
+  # shellcheck disable=SC2030
+  if ! (
+    unset DATABRICKS_TOKEN DATABRICKS_CONFIG_PROFILE \
+      MIP_DEPLOYER_DATABRICKS_HOST MIP_DEPLOYER_DATABRICKS_TOKEN \
+      MIP_DEPLOYER_DATABRICKS_PROFILE \
+      MIP_BEARER_TOKEN MIP_OPERATOR2_BEARER_TOKEN MIP_ADMIN_BEARER_TOKEN \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+      DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
+      DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
+      DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
+    export DATABRICKS_HOST="${MIP_DATABRICKS_WORKSPACE_HOST:?}"
+    export DATABRICKS_AUTH_TYPE="oauth-m2m"
+    export DATABRICKS_CLIENT_ID="$client_id"
+    export DATABRICKS_CLIENT_SECRET="$client_secret"
+    "$PYTHON" tools/oauth_m2m_mint.py \
+      --client-id-env DATABRICKS_CLIENT_ID \
+      --client-secret-env DATABRICKS_CLIENT_SECRET \
+      --output-file "$token_file"
+  ); then
     rm -f "$token_file"
     return 1
   fi
@@ -307,18 +535,31 @@ mint_m2m_token() {
 
 run_as_m2m_identity() {
   local label="$1" client_id_env="$2" client_secret_env="$3"
+  local client_id="${!client_id_env}" client_secret="${!client_secret_env}"
   shift 3
   echo "${DIM}\$ $* (${label} M2M identity)${RST}"
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
+  # The identity override is intentionally confined to this command subprocess.
+  # shellcheck disable=SC2030,SC2031
   (
-    # Intentionally scope these credentials to the child process.
-    # shellcheck disable=SC2030
-    export DATABRICKS_CLIENT_ID="${!client_id_env}"
-    export DATABRICKS_CLIENT_SECRET="${!client_secret_env}"
+    unset DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+      DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
+      DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
+      DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
+    export DATABRICKS_CLIENT_ID="$client_id"
+    export DATABRICKS_CLIENT_SECRET="$client_secret"
+    export DATABRICKS_HOST="${MIP_DATABRICKS_WORKSPACE_HOST:?}"
     export DATABRICKS_AUTH_TYPE="oauth-m2m"
     unset DATABRICKS_TOKEN DATABRICKS_CONFIG_PROFILE
+    unset MIP_DEPLOYER_DATABRICKS_HOST MIP_DEPLOYER_DATABRICKS_TOKEN \
+      MIP_DEPLOYER_DATABRICKS_PROFILE
+    unset MIP_BEARER_TOKEN MIP_OPERATOR2_BEARER_TOKEN MIP_ADMIN_BEARER_TOKEN
+    unset LAKEBASE_HOST LAKEBASE_PORT LAKEBASE_DATABASE LAKEBASE_USER \
+      LAKEBASE_PASSWORD LAKEBASE_SSLMODE PGHOST PGPORT PGDATABASE PGUSER \
+      PGPASSWORD PGSSLMODE
     "$@"
   )
 }
@@ -333,6 +574,8 @@ if [[ ! -f .env.local ]]; then
   echo "  copy .env.example to .env.local, then fill in DATABRICKS_HOST + DATABRICKS_WAREHOUSE_ID." >&2
   exit 2
 fi
+
+bind_deployment_workspace_auth
 
 if ! command -v databricks >/dev/null 2>&1; then
   echo "${RED}[deploy] \`databricks\` CLI is not on PATH.${RST}" >&2
@@ -360,6 +603,21 @@ fi
 # python-dotenv, so export the same normalized value here to keep the bundle,
 # SQL renderer, Python jobs, and Genie table bindings pointed at one catalog.
 export MIP_DEFAULT_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+_UC_APPROVED_OWNERS="${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}"
+if [[ -z "$_UC_APPROVED_OWNERS" ]]; then
+  _UC_APPROVED_OWNERS="$(dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS)"
+fi
+export MIP_UC_APPROVED_OWNER_PRINCIPALS="$_UC_APPROVED_OWNERS"
+for _ACCOUNT_AUTH_NAME in \
+  DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID \
+  DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+  resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"
+done
+resolve_m2m_credential DATABRICKS_OPERATOR2_CLIENT_ID
+if [[ -z "$DATABRICKS_ACCOUNT_HOST" ]]; then
+  DATABRICKS_ACCOUNT_HOST="https://accounts.cloud.databricks.com"
+  export DATABRICKS_ACCOUNT_HOST
+fi
 
 # Admin-allowlist visibility check (2026-06-11, observed live). Databricks
 # Apps deployment env_vars are a FULL REPLACEMENT, `admin_emails` defaults to
@@ -505,7 +763,12 @@ for _M2M_NAME in \
   DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
   DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET; do
-  resolve_m2m_credential "$_M2M_NAME"
+  if [[ "$_M2M_NAME" == "DATABRICKS_CLIENT_ID" || \
+        "$_M2M_NAME" == "DATABRICKS_CLIENT_SECRET" ]]; then
+    resolve_m2m_credential "$_M2M_NAME" shell
+  else
+    resolve_m2m_credential "$_M2M_NAME"
+  fi
 done
 if [[ "$DRY_RUN" -eq 0 ]]; then
   _M2M_MISSING=""
@@ -520,6 +783,17 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ -n "$_M2M_MISSING" ]]; then
     echo "${RED}[deploy] ERROR: missing required per-run M2M credential(s):${_M2M_MISSING}.${RST}" >&2
     exit 1
+  fi
+  if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" ]]; then
+    for _SEPARATED_CLIENT_ENV in \
+      DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID; do
+      if [[ -n "${!_SEPARATED_CLIENT_ENV:-}" && \
+            "$DATABRICKS_ACCOUNT_CLIENT_ID" == "${!_SEPARATED_CLIENT_ENV}" ]]; then
+        echo "${RED}[deploy] ERROR: account-SCIM OAuth client must be distinct from ${_SEPARATED_CLIENT_ENV}.${RST}" >&2
+        exit 1
+      fi
+    done
   fi
   # run_as_m2m_identity changes DATABRICKS_CLIENT_ID only in a subshell.
   # shellcheck disable=SC2031
@@ -637,9 +911,95 @@ run "$PYTHON" tools/databricks/bundle_env.py plan -t "$TARGET"
 # -----------------------------------------------------------------------------
 # Step 4: deploy bundle
 # -----------------------------------------------------------------------------
+_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"
+_GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
+_GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
+  echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID missing (env or .env.local) — cannot govern treatment access.${RST}" >&2
+  exit 4
+fi
+APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+APP_FAIL_CLOSED_ARMED=1
+
+# Bundle apply triggers an app deployment before the later schema bootstrap.
+# On an upgrade, remove the existing app's treatment write path first so new
+# runtime code cannot write against absent or drifted constraints. A failed
+# roll-forward intentionally leaves outreach treatment writes quiesced; the
+# exact runtime grant is restored only after constraint convergence succeeds.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  _EXISTING_APPS_JSON="$(databricks apps list -o json)"
+  _EXISTING_APP_SP_CLIENT_ID="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
+import json, os, sys
+items = json.load(sys.stdin)
+name = os.environ.get("MIP_APP_NAME", "mip-app")
+matches = [item for item in items if str(item.get("name") or "") == name]
+if len(matches) > 1:
+    raise SystemExit(f"multiple Databricks Apps named {name!r}")
+if not matches:
+    print("")
+else:
+    principal = str(matches[0].get("service_principal_client_id") or "").strip()
+    if not principal:
+        raise SystemExit(f"existing Databricks App {name!r} has no service principal")
+    print(principal)
+')"
+  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" && \
+          "$DATABRICKS_ACCOUNT_CLIENT_ID" == "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+      echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the existing target App service principal.${RST}" >&2
+      exit 4
+    fi
+    step "quiesce existing app campaign treatment writes before bundle deploy"
+    run "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --catalog "$_GRANTS_CATALOG" \
+      --principal "$_EXISTING_APP_SP_CLIENT_ID" \
+      --mode quiesce
+  else
+    step "prove absent or converge governed treatment table before first App creation"
+    run "$PYTHON" -m tools.databricks.ensure_campaign_treatment_table \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --catalog "$_GRANTS_CATALOG" \
+      --allow-absent
+  fi
+else
+  echo "[deploy] dry-run: existing app treatment writes would be quiesced before bundle deploy"
+fi
+
 verify_exact_deploy_source
 step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
 run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
+
+# A true first install has no service principal to quiesce before bundle
+# apply. Resolve the newly created (or retained) App identity immediately and
+# apply the same authoritative identity/metastore/UC boundary before any
+# migration, catalog bootstrap, or general data grant can run.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  APP_RESOURCE_JSON="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null || true)"
+  APP_SP_CLIENT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' 2>/dev/null || true)"
+  APP_SP_SCIM_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("service_principal_id") or "").strip())' 2>/dev/null || true)"
+  if [[ -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
+    echo "${RED}[deploy] could not resolve both service-principal identifiers for app '$_GRANTS_APP_NAME' immediately after bundle apply.${RST}" >&2
+    exit 4
+  fi
+  if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" && \
+        "$DATABRICKS_ACCOUNT_CLIENT_ID" == "$APP_SP_CLIENT_ID" ]]; then
+    echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the target App service principal.${RST}" >&2
+    exit 4
+  fi
+else
+  # A true first-install dry run has no App identity yet. Use visibly inert
+  # placeholders so the printed plan remains complete without making a live
+  # lookup or accidentally substituting an operator credential.
+  APP_SP_CLIENT_ID="dry-run-app-client-id"
+  APP_SP_SCIM_ID="dry-run-app-scim-id"
+fi
+step "quiesce bundle-resolved app treatment writes before migrations"
+run "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --catalog "$_GRANTS_CATALOG" \
+  --principal "$APP_SP_CLIENT_ID" \
+  --mode quiesce
 
 # The first migration grants the dedicated verifier's proof-ledger role. On a
 # fresh workspace that Lakebase OAuth role does not exist merely because the
@@ -673,6 +1033,15 @@ run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
 step "initialize UC catalog schemas and governed treatment table (idempotent)"
 run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"
 
+# CHECK constraints must be added through ALTER TABLE in Databricks SQL; the
+# CREATE TABLE bootstrap cannot declare them inline. Inspect Delta's persisted
+# constraint properties, add only missing exact definitions, and fail closed
+# on drift before granting the app access to the treatment table.
+step "converge governed campaign treatment Delta constraints (idempotent)"
+run "$PYTHON" -m tools.databricks.ensure_campaign_treatment_table \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --catalog "$_GRANTS_CATALOG"
+
 # -----------------------------------------------------------------------------
 # Step 4c: UC grants for the app service principal (audit P1-3, zero-click)
 # -----------------------------------------------------------------------------
@@ -690,25 +1059,14 @@ run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"
 # GRANTS.md remains the audit-readable matrix; Lakebase role grants are
 # applied by jobs/lakebase_migrate.py in step 4b.
 step "apply UC grants to the app service principal (idempotent)"
-_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"
-_GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
-_GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
 _GRANTS_SYNC_CATALOG="${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}"
 _GRANTS_SYNC_SCHEMA="${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}"
-APP_RESOURCE_JSON="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null || true)"
-APP_SP_CLIENT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' 2>/dev/null || true)"
-APP_SP_SCIM_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("service_principal_id") or "").strip())' 2>/dev/null || true)"
-if [[ -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
-  echo "${RED}[deploy] could not resolve both service-principal identifiers for app '$_GRANTS_APP_NAME'.${RST}" >&2
-  echo "  The bundle apply (step 4) should have created the app. Inspect 'databricks apps get $_GRANTS_APP_NAME'." >&2
-  exit 4
-fi
-if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
-  echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID missing (env or .env.local) — cannot apply UC grants.${RST}" >&2
-  exit 4
-fi
 while IFS= read -r _grant_stmt; do
   [[ -z "$_grant_stmt" ]] && continue
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  would grant: ${_grant_stmt}"
+    continue
+  fi
   # Re-audit 2026-06-11: a single 50s/CANCEL attempt reported a cold or
   # queued warehouse as a misleading "grant failed". Retry the statement
   # up to 3 attempts (the wait_timeout API ceiling is 50s per call) so
@@ -741,7 +1099,6 @@ GRANT MODIFY ON TABLE ${_GRANTS_CATALOG}.gold.borrower_lifecycle_state TO \`${AP
 GRANT MODIFY ON TABLE ${_GRANTS_CATALOG}.gold.funnel_snapshot_daily TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.ref TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${APP_SP_CLIENT_ID}\`
-GRANT SELECT, MODIFY ON TABLE ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${APP_SP_CLIENT_ID}\`
@@ -749,26 +1106,10 @@ GRANT USE CATALOG ON CATALOG ${_GRANTS_SYNC_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_SYNC_CATALOG}.${_GRANTS_SYNC_SCHEMA} TO \`${APP_SP_CLIENT_ID}\`
 GRANTS_EOF
 
-_treatment_grant_stmt="SHOW GRANTS \`${APP_SP_CLIENT_ID}\` ON TABLE ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
-_treatment_grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
-  "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
-    "$_GRANTS_WAREHOUSE_ID" "$_treatment_grant_stmt"
-)")"
-if ! printf '%s' "$_treatment_grant_resp" | "$PYTHON" -c '
-import json, sys
-body = json.load(sys.stdin)
-if body.get("status", {}).get("state") != "SUCCEEDED":
-    raise SystemExit(1)
-cells = {str(cell).upper() for row in body.get("result", {}).get("data_array", []) for cell in row}
-if not any("SELECT" in cell for cell in cells) or not any("MODIFY" in cell for cell in cells):
-    raise SystemExit(1)
-'; then
-  echo "${RED}[deploy] campaign treatment table grant postflight failed for app principal.${RST}" >&2
-  exit 4
-fi
-echo "  verified: app principal has SELECT + MODIFY on ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
-
 _treatment_properties_stmt="SHOW TBLPROPERTIES ${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "  would verify: campaign treatment table append-only and exact retention properties"
+else
 _treatment_properties_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
   "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
     "$_GRANTS_WAREHOUSE_ID" "$_treatment_properties_stmt"
@@ -792,7 +1133,7 @@ if any(actual.get(key) != value for key, value in expected.items()):
   exit 4
 fi
 echo "  verified: campaign treatment table is append-only with exact log and deleted-file retention"
-
+fi
 # -----------------------------------------------------------------------------
 # Step 4d: provision the PII-salt secret scope (audit P1-4, zero-click)
 # -----------------------------------------------------------------------------
@@ -808,21 +1149,23 @@ step "provision pii-salt secret scope (create-if-missing, never rotate)"
 # CLI JSON shape note (observed live 2026-06-11): `databricks secrets
 # list-scopes -o json` / `list-secrets -o json` emit a BARE ARRAY on
 # current CLI versions and a wrapped object on older ones — accept both.
-if ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  echo "  would inspect/create: scope mip and write-once pii-salt-v1"
+elif ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
 data = json.load(sys.stdin)
 items = data.get("scopes", []) if isinstance(data, dict) else (data or [])
 names = {s.get("name") for s in items if isinstance(s, dict)}
 sys.exit(0 if "mip" in names else 1)'; then
   run databricks secrets create-scope mip
 fi
-if ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys
+if [[ "$DRY_RUN" -eq 0 ]] && ! databricks secrets list-secrets mip -o json 2>/dev/null | "$PYTHON" -c 'import json,sys
 data = json.load(sys.stdin)
 items = data.get("secrets", []) if isinstance(data, dict) else (data or [])
 keys = {s.get("key") for s in items if isinstance(s, dict)}
 sys.exit(0 if "pii-salt-v1" in keys else 1)'; then
   echo "  generating pii-salt-v1 (random 64-hex, write-once)"
-  databricks secrets put-secret mip pii-salt-v1 --string-value "$(openssl rand -hex 32)"
-else
+  run databricks secrets put-secret mip pii-salt-v1 --string-value "$(openssl rand -hex 32)"
+elif [[ "$DRY_RUN" -eq 0 ]]; then
   echo "  pii-salt-v1 already present — leaving untouched (rotation would break masked-ID stability)"
 fi
 
@@ -871,6 +1214,7 @@ deploy_app_snapshot() {
     --app-env "$APP_RUNTIME_ENV" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
+    --enable-campaign-treatment-runtime \
     > "$APP_DEPLOY_PAYLOAD"
   run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
   rm -f "$APP_DEPLOY_PAYLOAD"
@@ -892,7 +1236,11 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   wait_for_app_deployable
 fi
 
-APP_DEPLOY_META="$(databricks bundle summary -t "$TARGET" -o json | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")')"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  APP_DEPLOY_META="$(databricks bundle summary -t "$TARGET" -o json | "$PYTHON" -c 'import json,sys; data=json.load(sys.stdin); ws=data.get("workspace") or {}; print((data.get("resources") or {}).get("apps", {}).get("mip_app", {}).get("source_code_path") or ws.get("file_path") or ""); print((ws.get("current_user") or {}).get("userName") or "")')"
+else
+  APP_DEPLOY_META=$'/Workspace/dry-run/mortgage-intelligence-platform\ndry-run-deployer@example.invalid'
+fi
 APP_SOURCE_PATH="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '1p')"
 APP_CURRENT_USER="$(printf '%s\n' "$APP_DEPLOY_META" | sed -n '2p')"
 if [[ -z "$APP_SOURCE_PATH" ]]; then
@@ -916,6 +1264,17 @@ if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" ]]; then
   set +a
 fi
 deploy_app_snapshot "deploy Databricks App snapshot from uploaded bundle source"
+
+# Keep both the previous active deployment and the pending enabled snapshot
+# read-only until Apps confirms the enabled source promotion succeeded. This
+# closes the upgrade window where a prior marker=1 deployment could otherwise
+# regain MODIFY while its replacement was still pending or failed.
+step "restore exact app campaign treatment runtime privileges after enabled snapshot promotion"
+run "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --catalog "$_GRANTS_CATALOG" \
+  --principal "$APP_SP_CLIENT_ID" \
+  --mode runtime
 
 # -----------------------------------------------------------------------------
 # Step 6: silver refresh (FRED + Cotality share)
@@ -1045,6 +1404,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
         tools/databricks/verify_ai_gateway_exact_proof.py
         send
         --wait
+        --require-verifier-derived-auth
+        --warehouse-id "$_GRANTS_WAREHOUSE_ID"
         --git-sha "$APP_GIT_SHA"
         --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
         --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
@@ -1139,6 +1500,7 @@ fi
 # -----------------------------------------------------------------------------
 # Done
 # -----------------------------------------------------------------------------
+APP_FAIL_CLOSED_ARMED=0
 echo
 echo "${GRN}[deploy] complete.${RST}"
 echo "${DIM}  App URL:     ${MIP_APP_URL:-"(check the Databricks workspace → Apps)"}${RST}"

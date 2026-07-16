@@ -186,6 +186,17 @@ def test_live_config_requires_credentials_and_explicit_mutation_opt_in(
     )
 
 
+def test_live_scratch_suffix_must_be_explicit_and_safe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MIP_LIVE_SCRATCH_SUFFIX", raising=False)
+    with pytest.raises(ValueError, match="scratch suffix"):
+        at_cap_live._scratch_suffix()
+
+    monkeypatch.setenv("MIP_LIVE_SCRATCH_SUFFIX", "gha_123")
+    assert at_cap_live._scratch_suffix() == "gha_123"
+
+
 def test_at_cap_selection_uses_only_canonical_governed_eligibility() -> None:
     class _AtCapClient(_RecordingClient):
         def execute(

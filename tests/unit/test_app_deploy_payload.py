@@ -86,6 +86,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert "MIP_GENIE_ACTION_SECRET_PREVIOUS_KID" not in env
     assert env["MIP_DEFAULT_CATALOG"]["value"] == "acme_mip"
     assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "0"
+    assert env["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "0"
     assert env["MIP_LENDER_NAME"]["value"] == "Acme Mortgage"
     assert env["MIP_TRUST_FORWARDED_HEADERS"]["value"] == "false"
     assert env["MIP_RUM_ENABLED"]["value"] == "1"
@@ -93,6 +94,24 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_LIVE_CAPABILITY_PROBE_TTL_S"]["value"] == "45"
     assert env["MIP_GIT_SHA"]["value"] == "abc123def456"
     assert "MIP_ADMIN_EMAILS" not in env
+
+
+def test_treatment_runtime_gate_requires_exact_enabled_value(monkeypatch) -> None:
+    # Stale operator config cannot enable the gate.
+    monkeypatch.setenv("MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED", "1")
+    disabled = _env_map(
+        build_payload(source_code_path="/Workspace/app/files", target="prod")
+    )
+    assert disabled["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "0"
+
+    enabled = _env_map(
+        build_payload(
+            source_code_path="/Workspace/app/files",
+            target="prod",
+            campaign_treatment_runtime_enabled=True,
+        )
+    )
+    assert enabled["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "1"
 
 
 def test_app_deploy_payload_does_not_overlay_lakebase_dsn_fragments(monkeypatch) -> None:

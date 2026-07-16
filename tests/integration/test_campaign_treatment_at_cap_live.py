@@ -184,6 +184,13 @@ def _scratch_table_name(*, catalog: str, schema: str, suffix: str) -> str:
     )
 
 
+def _scratch_suffix() -> str:
+    return _safe_identifier(
+        os.environ.get("MIP_LIVE_SCRATCH_SUFFIX", ""),
+        field="scratch suffix",
+    )
+
+
 @contextmanager
 def _scratch_treatment_table(
     client: _SqlClient,
@@ -238,6 +245,7 @@ def live_warehouse_config() -> tuple[str, str, str]:
             "Set DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_WAREHOUSE_ID, "
             "and MIP_LIVE_MUTATION_OK=1 to run the at-cap treatment proof."
         )
+    _scratch_suffix()
     return config
 
 
@@ -253,7 +261,7 @@ def test_campaign_treatment_materializes_exact_cap_with_bounded_latency(
     # The proof is intentionally fixed to the governed audit schema. Allowing
     # an environment override would make a green run ambiguous about grants.
     schema = "audit"
-    suffix = uuid4().hex.lower()
+    suffix = _scratch_suffix()
     production_table = qualify("audit", "campaign_treatment_snapshot", catalog=catalog)
     scratch_table = _scratch_table_name(catalog=catalog, schema=schema, suffix=suffix)
     campaign_id = str(uuid4())

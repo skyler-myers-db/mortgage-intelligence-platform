@@ -78,8 +78,17 @@ except ImportError as exc:  # pragma: no cover - PyYAML ships with databricks-sd
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from tools.databricks.workspace_auth import (  # noqa: E402
+    APP_FACING_WORKSPACE_AUTH_ENV,
+    deployment_workspace_client,
+)
+
 SPACE_YAML = REPO_ROOT / "genie" / "mortgage_lead_intelligence_space.yml"
 SPACE_ID_FILE = REPO_ROOT / "genie" / "space_id.txt"
+
 
 def _load_env_local() -> None:
     """Overlay .env.local onto the process env for SUBPROCESS CLI runs ONLY.
@@ -109,6 +118,14 @@ def _load_env_local() -> None:
             # intended catalog before invoking this tool. Standalone operators
             # should use --catalog or an explicit exported env var.
             if key in {"MIP_DEFAULT_CATALOG", "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS"}:
+                continue
+            if key in APP_FACING_WORKSPACE_AUTH_ENV:
+                continue
+            if os.environ.get("MIP_DEPLOYER_DATABRICKS_PROFILE") and key in {
+                "DATABRICKS_HOST",
+                "DATABRICKS_TOKEN",
+                "DATABRICKS_AUTH_TYPE",
+            }:
                 continue
             os.environ[key] = value
 
@@ -407,6 +424,15 @@ def _build_client(args: argparse.Namespace):
     """Instantiate WorkspaceClient using CLI-equivalent auth resolution."""
     from databricks.sdk import WorkspaceClient
 
+    if any(
+        os.environ.get(name, "").strip()
+        for name in (
+            "MIP_DEPLOYER_DATABRICKS_HOST",
+            "MIP_DEPLOYER_DATABRICKS_TOKEN",
+            "MIP_DEPLOYER_DATABRICKS_PROFILE",
+        )
+    ):
+        return deployment_workspace_client()
     kwargs: dict[str, Any] = {}
     if args.workspace_host:
         kwargs["host"] = args.workspace_host

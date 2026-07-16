@@ -157,6 +157,7 @@ def build_payload(
     catalog: str = CATALOG_DEFAULT,
     schema: str = SCHEMA_DEFAULT,
     mode: str = "SNAPSHOT",
+    campaign_treatment_runtime_enabled: bool = False,
 ) -> dict[str, object]:
     dotenv = _dotenv_overlay()
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
@@ -177,6 +178,10 @@ def build_payload(
         ),
         {"name": "MIP_DEFAULT_CATALOG", "value": catalog},
         {"name": "MIP_DEFAULT_SCHEMA", "value": schema},
+        {
+            "name": "MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED",
+            "value": "1" if campaign_treatment_runtime_enabled else "0",
+        },
     ]
 
     if previous_secret_enabled:
@@ -219,6 +224,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--catalog", default=CATALOG_DEFAULT)
     parser.add_argument("--schema", default=SCHEMA_DEFAULT)
     parser.add_argument("--mode", default="SNAPSHOT", choices=("SNAPSHOT", "AUTO_SYNC"))
+    parser.add_argument(
+        "--enable-campaign-treatment-runtime",
+        action="store_true",
+        help=(
+            "Set only after treatment constraints/properties are proven while "
+            "access remains quiesced; restore runtime MODIFY after promotion."
+        ),
+    )
     return parser
 
 
@@ -232,6 +245,7 @@ def main(argv: list[str] | None = None) -> int:
         catalog=args.catalog,
         schema=args.schema,
         mode=args.mode,
+        campaign_treatment_runtime_enabled=args.enable_campaign_treatment_runtime,
     )
     json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")

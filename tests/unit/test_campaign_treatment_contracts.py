@@ -27,6 +27,8 @@ LIVE_AUDIT = Path("tests/integration/test_campaign_audit_workflow_live.py").read
 def test_campaign_treatment_delta_retains_logs_and_rewritten_files() -> None:
     for sql in (DDL, RENDERED_DDL):
         assert "CREATE TABLE IF NOT EXISTS mip.audit.campaign_treatment_snapshot" in sql
+        assert "CONSTRAINT campaign_treatment_row_kind_chk" not in sql
+        assert "CONSTRAINT campaign_treatment_assignment_chk" not in sql
         assert "ALTER TABLE mip.audit.campaign_treatment_snapshot SET TBLPROPERTIES" in sql
         assert "'delta.appendOnly' = 'true'" in sql
         assert "'delta.logRetentionDuration' = 'interval 2555 days'" in sql
@@ -41,15 +43,16 @@ def test_runtime_relation_allowlist_includes_only_the_exact_treatment_table() ->
 
 def test_deploy_grants_and_postflights_exact_app_table_privileges() -> None:
     exact_table = "${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
-    assert f"GRANT SELECT, MODIFY ON TABLE {exact_table} TO \\`" in DEPLOY
-    assert "SHOW GRANTS \\`" in DEPLOY
-    assert f"ON TABLE {exact_table}" in DEPLOY
-    assert "campaign treatment table grant postflight failed" in DEPLOY
+    assert "tools.databricks.converge_campaign_treatment_access" in DEPLOY
+    assert "--mode quiesce" in DEPLOY
+    assert "--mode runtime" in DEPLOY
+    assert f"GRANT SELECT, MODIFY ON TABLE {exact_table} TO \\`" not in DEPLOY
     assert f"SHOW TBLPROPERTIES {exact_table}" in DEPLOY
     assert '"delta.appendOnly": "true"' in DEPLOY
     assert '"delta.logRetentionDuration": "interval 2555 days"' in DEPLOY
     assert '"delta.deletedFileRetentionDuration": "interval 2555 days"' in DEPLOY
     assert "campaign treatment table property postflight failed" in DEPLOY
+    assert "tools.databricks.ensure_campaign_treatment_table" in DEPLOY
     assert "GRANT SELECT, MODIFY ON TABLE mip.audit.campaign_treatment_snapshot" in GRANTS
     assert "The verifier receives no privilege on this table." in GRANTS
 

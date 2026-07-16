@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import json
 import os
+import shlex
 import subprocess
+import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -12,6 +16,248 @@ REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 DEPLOY_SCRIPT = REPO / "scripts" / "deploy.sh"
+
+
+def _deploy_exit_trap_block() -> str:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = text.index("restore_rendered_sql_fail_closed() {")
+    trap_line = "trap restore_rendered_sql_fail_closed EXIT"
+    end = text.index(trap_line, start) + len(trap_line)
+    return text[start:end]
+
+
+def _deploy_auth_function_block() -> str:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = text.index("dotenv_value() {")
+    end = text.index("# Step 0: preflight", start)
+    return text[start:end]
+
+
+def _read_env_log(path: Path) -> dict[str, str]:
+    return dict(
+        line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines() if "=" in line
+    )
+
+
+def _run_deploy_auth_harness(tmp_path: Path, *, mode: str) -> dict[str, Any]:
+    repo = tmp_path / mode
+    tools_dir = repo / "tools"
+    home = repo / "home"
+    tools_dir.mkdir(parents=True)
+    home.mkdir()
+    reviewed_host = "https://reviewed-workspace.example"
+    env_lines = [
+        f"DATABRICKS_HOST={reviewed_host}",
+        "DATABRICKS_CLIENT_ID=normal-app-client",
+        "DATABRICKS_CLIENT_SECRET=normal-app-secret",
+        "DATABRICKS_ADMIN_CLIENT_ID=admin-app-client",
+        "DATABRICKS_ADMIN_CLIENT_SECRET=admin-app-secret",
+        "DATABRICKS_VERIFIER_CLIENT_ID=verifier-client",
+        "DATABRICKS_VERIFIER_CLIENT_SECRET=verifier-secret",
+    ]
+    if mode == "pat":
+        env_lines.append("DATABRICKS_TOKEN=reviewed-deployer-pat")
+    (repo / ".env.local").write_text("\n".join(env_lines) + "\n", encoding="utf-8")
+    (repo / "databricks.yml").write_text(
+        "workspace:\n"
+        f"  host: {reviewed_host}\n"
+        "targets:\n"
+        "  dev:\n"
+        "    workspace:\n"
+        f"      host: {reviewed_host}\n",
+        encoding="utf-8",
+    )
+    (home / ".databrickscfg").write_text(
+        "[DEFAULT]\n"
+        "host = https://conflicting-default.example\n"
+        "token = conflicting-default-token\n"
+        "[REVIEWED]\n"
+        f"host = {reviewed_host}\n"
+        "token = reviewed-profile-token\n",
+        encoding="utf-8",
+    )
+    mock_mint = tools_dir / "oauth_m2m_mint.py"
+    mock_mint.write_text(
+        """from __future__ import annotations
+import json
+import os
+import sys
+from pathlib import Path
+
+with Path(os.environ["MINT_ENV_LOG"]).open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(dict(os.environ)) + "\\n")
+output = Path(sys.argv[sys.argv.index("--output-file") + 1])
+output.write_text("minted-token\\n", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
+    deploy_log = repo / "deploy.env"
+    mint_log = repo / "mint.json"
+    m2m_log = repo / "m2m.env"
+    profile_export = "export DATABRICKS_CONFIG_PROFILE=REVIEWED" if mode == "profile" else ""
+    harness = repo / "auth-harness.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+RED=""
+DIM=""
+RST=""
+DRY_RUN=0
+TARGET=dev
+PYTHON={shlex.quote(sys.executable)}
+MINT_ENV_LOG={shlex.quote(str(mint_log))}
+M2M_ENV_LOG={shlex.quote(str(m2m_log))}
+export MINT_ENV_LOG M2M_ENV_LOG
+{profile_export}
+{_deploy_auth_function_block()}
+bind_deployment_workspace_auth
+resolve_m2m_credential DATABRICKS_CLIENT_ID shell
+resolve_m2m_credential DATABRICKS_CLIENT_SECRET shell
+resolve_m2m_credential DATABRICKS_ADMIN_CLIENT_ID
+resolve_m2m_credential DATABRICKS_ADMIN_CLIENT_SECRET
+resolve_m2m_credential DATABRICKS_VERIFIER_CLIENT_ID
+resolve_m2m_credential DATABRICKS_VERIFIER_CLIENT_SECRET
+export DATABRICKS_ACCOUNT_CLIENT_ID=hostile-account-client
+export DATABRICKS_ACCOUNT_CLIENT_SECRET=hostile-account-secret
+env | sort > {shlex.quote(str(deploy_log))}
+mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+mint_m2m_token MIP_ADMIN_BEARER_TOKEN DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+run_as_m2m_identity verifier DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
+  bash -c 'env | sort > "$M2M_ENV_LOG"'
+""",
+        encoding="utf-8",
+    )
+    run_env = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": str(home),
+        "DATABRICKS_HOST": "https://ambient-wrong.example",
+        "DATABRICKS_TOKEN": "ambient-wrong-token",
+        "DATABRICKS_AUTH_TYPE": "pat",
+    }
+    result = subprocess.run(
+        ["env", "-i", *(f"{key}={value}" for key, value in run_env.items()), "bash", str(harness)],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    return {
+        "deploy": _read_env_log(deploy_log),
+        "mints": [json.loads(line) for line in mint_log.read_text(encoding="utf-8").splitlines()],
+        "m2m": _read_env_log(m2m_log),
+    }
+
+
+def _run_bind_harness(
+    tmp_path: Path,
+    *,
+    env_local: str,
+    bundle_host: str,
+    ambient: dict[str, str],
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    repo = tmp_path / "bind"
+    bin_dir = repo / "bin"
+    home = repo / "home"
+    bin_dir.mkdir(parents=True)
+    home.mkdir()
+    (repo / ".env.local").write_text(env_local, encoding="utf-8")
+    (repo / "databricks.yml").write_text(
+        "targets:\n" "  dev:\n" "    workspace:\n" f"      host: {bundle_host}\n",
+        encoding="utf-8",
+    )
+    mutation_marker = repo / "network-mutation-attempted"
+    fake_databricks = bin_dir / "databricks"
+    fake_databricks.write_text(
+        "#!/usr/bin/env bash\n" f"touch {shlex.quote(str(mutation_marker))}\n",
+        encoding="utf-8",
+    )
+    fake_databricks.chmod(0o755)
+    harness = repo / "bind-harness.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+RED=""
+RST=""
+DRY_RUN=0
+TARGET=dev
+PYTHON={shlex.quote(sys.executable)}
+{_deploy_auth_function_block()}
+bind_deployment_workspace_auth
+databricks apps list
+""",
+        encoding="utf-8",
+    )
+    run_env = {
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+        "HOME": str(home),
+        **ambient,
+    }
+    return (
+        subprocess.run(
+            [
+                "env",
+                "-i",
+                *(f"{key}={value}" for key, value in run_env.items()),
+                "bash",
+                str(harness),
+            ],
+            cwd=repo,
+            text=True,
+            capture_output=True,
+            check=False,
+        ),
+        mutation_marker,
+    )
+
+
+def _run_deploy_exit_trap_harness(
+    tmp_path: Path,
+    *,
+    original_rc: int,
+    stop_result: int,
+    quiesce_result: int,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    compensation_log = tmp_path / "compensation.log"
+    harness = tmp_path / "deploy-exit-trap-harness.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+APP_DEPLOY_PAYLOAD=""
+AGENTIC_ENV_FILE=""
+AGENT_EVAL_ENV_FILE=""
+RED=""
+YLW=""
+DIM=""
+RST=""
+PYTHON=python3
+COMPENSATION_LOG={compensation_log!s}
+STOP_RESULT={stop_result}
+QUIESCE_RESULT={quiesce_result}
+stop_app_after_failed_deploy() {{
+  printf 'stop\\n' >> "$COMPENSATION_LOG"
+  return "$STOP_RESULT"
+}}
+quiesce_app_treatment_after_failed_stop() {{
+  printf 'quiesce\\n' >> "$COMPENSATION_LOG"
+  return "$QUIESCE_RESULT"
+}}
+{_deploy_exit_trap_block()}
+exit {original_rc}
+""",
+        encoding="utf-8",
+    )
+    return (
+        subprocess.run(
+            ["bash", str(harness)],
+            text=True,
+            capture_output=True,
+            check=False,
+        ),
+        compensation_log,
+    )
 
 
 def _commit_deploy_fixture(repo: Path) -> None:
@@ -70,12 +316,131 @@ def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None
     assert "databricks auth token" not in text
     assert "DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in text
     assert "normal, admin, and verifier M2M client IDs must be distinct" in text
-    assert text.count(
-        "mint_m2m_token MIP_ADMIN_BEARER_TOKEN"
-    ) >= 2  # initial per-run mint + immediate pre-eval remint
+    assert (
+        text.count("mint_m2m_token MIP_ADMIN_BEARER_TOKEN") >= 2
+    )  # initial per-run mint + immediate pre-eval remint
     remint_pos = text.index("A full deploy can exceed the workspace OAuth TTL")
     eval_pos = text.index("tools/databricks/run_agent_eval.py")
     assert remint_pos < eval_pos
+
+
+def test_deploy_binds_deployer_auth_and_keeps_normal_app_oauth_shell_scoped() -> None:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    bind_call = text.index("\nbind_deployment_workspace_auth\n")
+    m2m_resolution = text.index("for _M2M_NAME in")
+    first_treatment_proof = text.index(
+        'step "quiesce existing app campaign treatment writes before bundle deploy"'
+    )
+    assert bind_call < m2m_resolution < first_treatment_proof
+    assert "MIP_DEPLOYER_DATABRICKS_HOST" in text
+    assert "MIP_DEPLOYER_DATABRICKS_TOKEN" in text
+    assert "MIP_DEPLOYER_DATABRICKS_PROFILE" in text
+    assert "export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET" in text
+    assert 'resolve_m2m_credential "$_M2M_NAME" shell' in text
+    assert 'DATABRICKS_HOST="${MIP_DATABRICKS_WORKSPACE_HOST:?}"' in text
+    m2m_block = text[text.index("run_as_m2m_identity() {") : text.index("# Step 0: preflight")]
+    assert "unset MIP_DEPLOYER_DATABRICKS_HOST MIP_DEPLOYER_DATABRICKS_TOKEN" in m2m_block
+    for helper in (
+        "converge_campaign_treatment_access.py",
+        "ensure_campaign_treatment_table.py",
+        "stop_app_fail_closed.py",
+    ):
+        helper_text = (REPO / "tools" / "databricks" / helper).read_text(encoding="utf-8")
+        assert "deployment_workspace_client()" in helper_text
+
+
+@pytest.mark.parametrize("mode", ("pat", "profile"))
+def test_deploy_auth_handoff_is_single_workspace_and_child_isolated(
+    tmp_path: Path,
+    mode: str,
+) -> None:
+    logs = _run_deploy_auth_harness(tmp_path, mode=mode)
+    deploy = logs["deploy"]
+    mints = logs["mints"]
+    m2m = logs["m2m"]
+    expected_host = "https://reviewed-workspace.example"
+
+    assert deploy["MIP_DATABRICKS_WORKSPACE_HOST"] == expected_host
+    assert "DATABRICKS_CLIENT_ID" not in deploy
+    assert "DATABRICKS_CLIENT_SECRET" not in deploy
+    if mode == "pat":
+        assert deploy["DATABRICKS_HOST"] == expected_host
+        assert deploy["DATABRICKS_TOKEN"] == "reviewed-deployer-pat"
+        assert deploy["DATABRICKS_AUTH_TYPE"] == "pat"
+        assert "DATABRICKS_CONFIG_PROFILE" not in deploy
+    else:
+        assert deploy["DATABRICKS_CONFIG_PROFILE"] == "REVIEWED"
+        assert "DATABRICKS_HOST" not in deploy
+        assert "DATABRICKS_TOKEN" not in deploy
+        assert "DATABRICKS_AUTH_TYPE" not in deploy
+
+    assert len(mints) == 2
+    assert [mint["DATABRICKS_CLIENT_ID"] for mint in mints] == [
+        "normal-app-client",
+        "admin-app-client",
+    ]
+    for mint in mints:
+        assert mint["DATABRICKS_HOST"] == expected_host
+        assert mint["DATABRICKS_AUTH_TYPE"] == "oauth-m2m"
+        assert "DATABRICKS_TOKEN" not in mint
+        assert "DATABRICKS_CONFIG_PROFILE" not in mint
+        assert "MIP_DEPLOYER_DATABRICKS_TOKEN" not in mint
+        assert "MIP_DEPLOYER_DATABRICKS_PROFILE" not in mint
+        assert "MIP_BEARER_TOKEN" not in mint
+        assert "MIP_ADMIN_BEARER_TOKEN" not in mint
+        assert "DATABRICKS_VERIFIER_CLIENT_SECRET" not in mint
+        assert "DATABRICKS_ACCOUNT_CLIENT_SECRET" not in mint
+
+    assert m2m["DATABRICKS_HOST"] == expected_host
+    assert m2m["DATABRICKS_CLIENT_ID"] == "verifier-client"
+    assert m2m["DATABRICKS_CLIENT_SECRET"] == "verifier-secret"
+    assert m2m["DATABRICKS_AUTH_TYPE"] == "oauth-m2m"
+    assert "DATABRICKS_TOKEN" not in m2m
+    assert "DATABRICKS_CONFIG_PROFILE" not in m2m
+    assert "MIP_DEPLOYER_DATABRICKS_TOKEN" not in m2m
+    assert "MIP_DEPLOYER_DATABRICKS_PROFILE" not in m2m
+    assert "MIP_BEARER_TOKEN" not in m2m
+    assert "MIP_ADMIN_BEARER_TOKEN" not in m2m
+    assert "DATABRICKS_ADMIN_CLIENT_SECRET" not in m2m
+    assert "DATABRICKS_ACCOUNT_CLIENT_SECRET" not in m2m
+
+
+def test_deploy_refuses_mixed_ambient_pat_and_dotenv_host_before_network(
+    tmp_path: Path,
+) -> None:
+    result, mutation_marker = _run_bind_harness(
+        tmp_path,
+        env_local="DATABRICKS_HOST=https://dotenv-workspace.example\n",
+        bundle_host="https://ambient-workspace.example",
+        ambient={
+            "DATABRICKS_HOST": "https://ambient-workspace.example",
+            "DATABRICKS_TOKEN": "ambient-pat",
+        },
+    )
+
+    assert result.returncode == 2
+    assert "refusing to combine an ambient PAT with a different .env.local host" in result.stderr
+    assert not mutation_marker.exists()
+
+
+def test_deploy_refuses_authenticated_host_outside_bundle_target_before_network(
+    tmp_path: Path,
+) -> None:
+    result, mutation_marker = _run_bind_harness(
+        tmp_path,
+        env_local=(
+            "DATABRICKS_HOST=https://reviewed-workspace.example\n" "DATABRICKS_TOKEN=reviewed-pat\n"
+        ),
+        bundle_host="https://different-target.example",
+        ambient={},
+    )
+
+    assert result.returncode == 2
+    assert (
+        "authenticated workspace host does not match databricks.yml target 'dev'" in result.stderr
+    )
+    assert not mutation_marker.exists()
 
 
 def test_deploy_dev_seeds_databricks_auth_without_printing_secrets() -> None:
@@ -127,24 +492,27 @@ def test_deploy_dev_has_cost_and_permission_guards() -> None:
 
 def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers() -> None:
     text = DEPLOY_DEV.read_text(encoding="utf-8")
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     assert "MIP_ADMIN_EMAILS: ${{ vars.MIP_ADMIN_EMAILS }}" in text
     assert "MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}" in text
     assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}" in text
     assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in text
     assert "DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}" in text
-    assert (
-        "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
-    )
+    assert "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
     assert "secrets.MIP_ADMIN_BEARER_TOKEN" not in text
-    assert "python tools/oauth_m2m_mint.py" in text
-    assert "--github-env MIP_BEARER_TOKEN" in text
-    assert "--github-env MIP_ADMIN_BEARER_TOKEN" in text
+    assert "Mint initial per-run app Bearers" not in text
+    assert "--github-env MIP_BEARER_TOKEN" not in text
+    assert "--github-env MIP_ADMIN_BEARER_TOKEN" not in text
+    assert "DATABRICKS_OPERATOR2_CLIENT_SECRET" not in text
+    assert "mint_m2m_token MIP_BEARER_TOKEN" in script
+    assert "mint_m2m_token MIP_ADMIN_BEARER_TOKEN" in script
     assert (
-        "Normal, operator2, admin, and verifier M2M client IDs must be pairwise distinct."
-        in text
+        "Normal, operator2, admin, and verifier M2M client IDs must be pairwise distinct." in text
     )
-    assert "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}" in text
+    assert (
+        "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}" in text
+    )
     assert "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID}" in text
     assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" not in text
 
@@ -172,7 +540,7 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     assert boundary < proof
     assert "tools/databricks/verify_verifier_identity_boundary.py" in script[boundary:proof]
     assert '--protected-service-principal-id "$APP_SP_SCIM_ID"' in script[boundary:proof]
-    assert 'DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}' in workflow
+    assert "DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}" in workflow
 
 
 def test_deploy_accepts_numeric_app_service_principal_ids() -> None:
@@ -180,10 +548,7 @@ def test_deploy_accepts_numeric_app_service_principal_ids() -> None:
 
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
-    assert (
-        'str(json.load(sys.stdin).get("service_principal_id") or "").strip()'
-        in script
-    )
+    assert 'str(json.load(sys.stdin).get("service_principal_id") or "").strip()' in script
 
 
 def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
@@ -192,8 +557,10 @@ def test_gateway_proof_failure_only_blocks_strict_release_deploys() -> None:
     proof_step = script.index('step "verify AI Gateway exact inference-row proof')
     next_step = script.index("wait_for_app_deployable", proof_step)
     proof_block = script[proof_step:next_step]
-    assert 'AI_GATEWAY_PROOF_ARGS+=(--require-verified)' in proof_block
-    assert 'if ! run_as_m2m_identity \\' in proof_block
+    assert "--require-verifier-derived-auth" in proof_block
+    assert '--warehouse-id "$_GRANTS_WAREHOUSE_ID"' in proof_block
+    assert "AI_GATEWAY_PROOF_ARGS+=(--require-verified)" in proof_block
+    assert "if ! run_as_m2m_identity \\" in proof_block
     assert "strict AI Gateway exact proof failed" in proof_block
     assert "exit 1" in proof_block
     assert "continuing with the capability honestly configured/unavailable" in proof_block
@@ -205,7 +572,7 @@ def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() ->
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     workflow = NIGHTLY.read_text(encoding="utf-8")
 
-    grant_start = script.index('AI_GATEWAY_GRANTS_READY=1')
+    grant_start = script.index("AI_GATEWAY_GRANTS_READY=1")
     proof_start = script.index('step "verify AI Gateway exact inference-row proof', grant_start)
     grant_block = script[grant_start:proof_start]
     assert 'if ! run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py' in grant_block
@@ -219,6 +586,10 @@ def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() ->
 def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
+    absent_or_converged = script.index(
+        'step "prove absent or converge governed treatment table before first App creation"'
+    )
+    quiesce = script.index("--mode quiesce")
     bundle_apply = script.index('tools/databricks/bundle_env.py deploy -t "$TARGET"')
     role_bootstrap = script.index(
         'step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"'
@@ -226,7 +597,10 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
     first_migration = script.index(
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
     )
-    assert bundle_apply < role_bootstrap < first_migration
+    assert quiesce < absent_or_converged < bundle_apply < role_bootstrap < first_migration
+    first_install_block = script[absent_or_converged:bundle_apply]
+    assert "tools.databricks.ensure_campaign_treatment_table" in first_install_block
+    assert "--allow-absent" in first_install_block
     bootstrap_block = script[role_bootstrap:first_migration]
     assert "tools/databricks/provision_m2m_oauth.py" in bootstrap_block
     assert "--identity-role verifier" in bootstrap_block
@@ -243,28 +617,244 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
     migration = script.index(
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
     )
+    bundle_apply = script.index('tools/databricks/bundle_env.py deploy -t "$TARGET"')
+    post_bundle_quiesce = script.index(
+        'step "quiesce bundle-resolved app treatment writes before migrations"'
+    )
     uc_init = script.index(
         'run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"'
+    )
+    constraint_convergence = script.index(
+        "tools.databricks.ensure_campaign_treatment_table", uc_init
     )
     table_grants = script.index('step "apply UC grants to the app service principal')
     skip_silver_branch = script.index('if [[ "$SKIP_SILVER" -eq 1 ]]')
 
-    assert migration < uc_init < table_grants < skip_silver_branch
+    assert (
+        bundle_apply
+        < post_bundle_quiesce
+        < migration
+        < uc_init
+        < constraint_convergence
+        < table_grants
+        < skip_silver_branch
+    )
+    assert script.count("--mode quiesce") == 3
+    assert "quiesce_app_treatment_after_failed_stop" in script
+    assert 'step "quiesce existing app campaign treatment writes before bundle deploy"' in script
+    assert 'step "quiesce bundle-resolved app treatment writes before migrations"' in script
     assert "mip_init_catalog_schemas:" in bundle
     assert "path: sql/_rendered/ddl/001_catalogs_schemas.sql" in bundle
+
+
+def test_first_install_dry_run_does_not_require_a_live_app_identity() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    resolve_start = script.index('if [[ "$DRY_RUN" -eq 0 ]]; then\n  APP_RESOURCE_JSON=')
+    quiesce = script.index('step "quiesce bundle-resolved app treatment writes before migrations"')
+    resolve_block = script[resolve_start:quiesce]
+    assert 'databricks apps get "$_GRANTS_APP_NAME"' in resolve_block
+    assert 'APP_SP_CLIENT_ID="dry-run-app-client-id"' in resolve_block
+    assert 'APP_SP_SCIM_ID="dry-run-app-scim-id"' in resolve_block
+
+
+def test_first_install_dry_run_executes_no_databricks_operations(
+    tmp_path: Path,
+) -> None:
+    checkout = tmp_path / "checkout"
+    subprocess.run(
+        ["git", "clone", "--quiet", "--local", str(REPO), str(checkout)],
+        check=True,
+    )
+    deploy_copy = checkout / "scripts" / "deploy.sh"
+    deploy_copy.write_text(DEPLOY_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    payload_copy = checkout / "tools" / "databricks" / "app_deploy_payload.py"
+    payload_copy.write_text(
+        (REPO / "tools" / "databricks" / "app_deploy_payload.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    subprocess.run(
+        ["git", "add", "scripts/deploy.sh", "tools/databricks/app_deploy_payload.py"],
+        cwd=checkout,
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git",
+            "-c",
+            "user.name=Dry Run Contract",
+            "-c",
+            "user.email=dry-run@example.invalid",
+            "commit",
+            "-qm",
+            "test current dry-run contract",
+        ],
+        cwd=checkout,
+        check=True,
+    )
+    (checkout / ".venv").symlink_to(REPO / ".venv", target_is_directory=True)
+    with (checkout / ".git" / "info" / "exclude").open("a", encoding="utf-8") as exclude:
+        exclude.write(".venv\n")
+    (checkout / ".env.local").write_text(
+        "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
+        "DATABRICKS_WAREHOUSE_ID=warehouse-1\n"
+        "GENIE_SPACE_ID=space-1\n",
+        encoding="utf-8",
+    )
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "databricks.log"
+    fake_databricks = bin_dir / "databricks"
+    fake_databricks.write_text(
+        "#!/usr/bin/env bash\n"
+        'printf \'%s\\n\' "$*" >> "$DATABRICKS_STUB_LOG"\n'
+        'if [[ "$1" == "--version" ]]; then\n'
+        "  echo 'Databricks CLI v-test'\n"
+        "  exit 0\n"
+        "fi\n"
+        'echo "unexpected Databricks dry-run invocation: $*" >&2\n'
+        "exit 97\n",
+        encoding="utf-8",
+    )
+    fake_databricks.chmod(0o755)
+    env = {
+        **{
+            name: value
+            for name, value in os.environ.items()
+            if not name.startswith(("COV_CORE", "COVERAGE"))
+        },
+        "APP_ENV": "local",
+        "DATABRICKS_STUB_LOG": str(log),
+        "GENIE_SPACE_ID": "space-1",
+        "MIP_ADMIN_EMAILS": "operator@example.invalid",
+        "MIP_COTALITY_ID_MASK_SECRET": "stable-local-mask-secret",
+        "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-local-action-secret",
+        "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
+    }
+
+    result = subprocess.run(
+        [
+            "bash",
+            "scripts/deploy.sh",
+            "-t",
+            "dev",
+            "--dry-run",
+            "--no-confirm",
+            "--skip-silver",
+            "--skip-smoke",
+        ],
+        cwd=checkout,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=60,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert log.read_text(encoding="utf-8").splitlines() == ["--version"]
+    assert "would grant: GRANT USE CATALOG" in result.stdout
+    assert "would verify: campaign treatment table append-only" in result.stdout
+    assert "would inspect/create: scope mip and write-once pii-salt-v1" in result.stdout
+    assert "deploy Databricks App snapshot with Agent Evaluation proof" in result.stdout
 
 
 def test_deploy_dev_wires_required_gateway_proof_signing_key() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
 
     secret_binding = (
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: "
-        "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: " "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
     )
     assert workflow.count(secret_binding) == 2
-    required_loop = workflow[workflow.index("missing=\"\"") : workflow.index("python - <<'PY'")]
+    required_loop = workflow[workflow.index('missing=""') : workflow.index("python - <<'PY'")]
     assert "MIP_GENIE_ACTION_SECRET_CURRENT" in required_loop
     assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" in required_loop
+
+
+def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
+    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+
+    binding = "MIP_UC_APPROVED_OWNER_PRINCIPALS: " "${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}"
+    assert workflow.count(binding) == 2
+    assert "MIP_UC_APPROVED_OWNER_PRINCIPALS=${MIP_UC_APPROVED_OWNER_PRINCIPALS}" in workflow
+    assert "DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}" in workflow
+    assert (
+        "DATABRICKS_ACCOUNT_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}"
+    ) in workflow
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    assert "dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS" in script
+    assert 'resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"' in script
+    assert "account-SCIM OAuth client must be distinct from" in script
+    assert script.index("existing target App service principal") < script.index(
+        'step "quiesce existing app campaign treatment writes before bundle deploy"'
+    )
+    assert "Account-SCIM OAuth client must be distinct from every app-facing" in workflow
+    assert (
+        "DATABRICKS_ACCOUNT_CLIENT_ID"
+        in workflow[
+            workflow.index("Configure Databricks dev credentials") : workflow.index(
+                "Deploy dev Databricks App"
+            )
+        ]
+    )
+    app_yaml = (REPO / "app.yaml").read_text(encoding="utf-8")
+    assert "MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED" in app_yaml
+    assert 'value: "0"' in app_yaml
+    assert "--enable-campaign-treatment-runtime" in script
+    assert "export MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED=1" not in script
+    first_snapshot = script.index(
+        'deploy_app_snapshot "deploy Databricks App snapshot from uploaded bundle source"'
+    )
+    runtime_restore = script.index(
+        "restore exact app campaign treatment runtime privileges after enabled snapshot promotion"
+    )
+    assert runtime_restore > first_snapshot
+    bundle_index = script.index('run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"')
+    fail_closed_arm = script.index("APP_FAIL_CLOSED_ARMED=1")
+    first_treatment_proof = script.index(
+        'step "quiesce existing app campaign treatment writes before bundle deploy"'
+    )
+    assert fail_closed_arm < first_treatment_proof < bundle_index
+    assert "stop_app_after_failed_deploy" in script
+    assert "tools.databricks.stop_app_fail_closed" in script
+    assert "quiesce_app_treatment_after_failed_stop" in script
+    assert "--mode quiesce" in script
+    assert "original failure was followed by unproven App shutdown" in script
+    assert "exit 90" in script
+    assert script.index("APP_FAIL_CLOSED_ARMED=0", bundle_index) > script.index(
+        'deploy_app_snapshot "deploy Databricks App snapshot with Agent Evaluation proof"'
+    )
+
+
+@pytest.mark.parametrize(
+    ("original_rc", "stop_result", "quiesce_result", "expected_rc", "expected_log"),
+    (
+        (0, 1, 1, 0, ""),
+        (7, 0, 1, 7, "stop\n"),
+        (7, 1, 0, 90, "stop\nquiesce\n"),
+        (7, 1, 1, 90, "stop\nquiesce\n"),
+    ),
+)
+def test_deploy_exit_trap_preserves_failure_or_fails_closed(
+    tmp_path: Path,
+    original_rc: int,
+    stop_result: int,
+    quiesce_result: int,
+    expected_rc: int,
+    expected_log: str,
+) -> None:
+    result, compensation_log = _run_deploy_exit_trap_harness(
+        tmp_path,
+        original_rc=original_rc,
+        stop_result=stop_result,
+        quiesce_result=quiesce_result,
+    )
+
+    assert result.returncode == expected_rc, result.stderr
+    actual_log = compensation_log.read_text(encoding="utf-8") if compensation_log.exists() else ""
+    assert actual_log == expected_log
+    if expected_rc == 90:
+        assert "original failure was followed by unproven App shutdown" in result.stderr
 
 
 def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflight() -> None:
@@ -276,9 +866,9 @@ def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflig
         "SALESFORCE_PASSWORD: ${{ secrets.SALESFORCE_PASSWORD }}",
     ):
         assert binding in workflow
-    required_preflight = workflow[workflow.index('missing=""') : workflow.index(
-        'if [ -n "$missing" ]'
-    )]
+    required_preflight = workflow[
+        workflow.index('missing=""') : workflow.index('if [ -n "$missing" ]')
+    ]
     assert "SALESFORCE" not in required_preflight
 
 

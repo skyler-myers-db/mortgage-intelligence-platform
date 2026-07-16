@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
@@ -323,14 +324,122 @@ def test_workspace_client_disables_sdk_transport_retries(monkeypatch) -> None:
 
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "Config", _config)
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "WorkspaceClient", _workspace_client)
+    monkeypatch.setenv("DATABRICKS_HOST", "https://verifier-workspace.example")
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "verifier-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "verifier-secret")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "hostile-deployer-pat")
 
     verify_ai_gateway_exact_proof._workspace_client()
 
     assert captured["config_kwargs"] == {
+        "host": "https://verifier-workspace.example",
+        "client_id": "verifier-client",
+        "client_secret": "verifier-secret",
+        "auth_type": "oauth-m2m",
         "http_timeout_seconds": 300,
         "retry_timeout_seconds": 0,
     }
     assert captured["config"] == captured["config_kwargs"]
+
+
+def _patch_strict_runtime(monkeypatch, *, sql_client: _ProofSql) -> None:
+    monkeypatch.setattr(
+        verify_ai_gateway_exact_proof,
+        "ensure_lakebase_env",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        verify_ai_gateway_exact_proof,
+        "_verifier_sql_client",
+        lambda _workspace, *, warehouse_id: sql_client,
+    )
+
+
+def test_verifier_runtime_overwrites_hostile_sql_and_lakebase_auth(monkeypatch) -> None:
+    class _Config:
+        host = "https://verifier-workspace.example"
+
+        @staticmethod
+        def authenticate() -> dict[str, str]:
+            return {"Authorization": "Bearer verifier-workspace-token"}
+
+    class _Database:
+        @staticmethod
+        def get_database_instance(_name: str) -> object:
+            return type("Instance", (), {"read_write_dns": "verifier-lakebase.example"})()
+
+        @staticmethod
+        def generate_database_credential(**_kwargs: Any) -> object:
+            return type("Credential", (), {"token": "verifier-lakebase-token"})()
+
+    workspace = type(
+        "VerifierWorkspace",
+        (),
+        {
+            "config": _Config(),
+            "database": _Database(),
+            "current_user": type(
+                "CurrentUser",
+                (),
+                {"me": staticmethod(lambda: type("Me", (), {"user_name": "verifier-client"})())},
+            )(),
+        },
+    )()
+    stale = verify_ai_gateway_exact_proof.get_settings()
+    monkeypatch.setattr(stale, "lakebase_host", "hostile-dotenv-lakebase.example")
+    monkeypatch.setattr(stale, "lakebase_user", "hostile-dotenv-user")
+    monkeypatch.setattr(stale, "lakebase_password", None)
+    for name, value in {
+        "LAKEBASE_HOST": "hostile-ambient-lakebase.example",
+        "LAKEBASE_USER": "hostile-ambient-user",
+        "LAKEBASE_PASSWORD": "hostile-ambient-password",
+        "PGHOST": "hostile-pg.example",
+        "PGUSER": "hostile-pg-user",
+        "PGPASSWORD": "hostile-pg-password",
+        "DATABRICKS_TOKEN": "hostile-deployer-pat",
+    }.items():
+        monkeypatch.setenv(name, value)
+
+    assert verify_ai_gateway_exact_proof.ensure_lakebase_env(
+        lambda: workspace,
+        force_refresh=True,
+    )
+    sql_client = verify_ai_gateway_exact_proof._verifier_sql_client(
+        workspace,
+        warehouse_id="verifier-warehouse",
+    )
+
+    assert os.environ["LAKEBASE_HOST"] == "verifier-lakebase.example"
+    assert os.environ["LAKEBASE_USER"] == "verifier-client"
+    assert os.environ["LAKEBASE_PASSWORD"] == "verifier-lakebase-token"
+    assert os.environ["PGHOST"] == "verifier-lakebase.example"
+    assert os.environ["PGUSER"] == "verifier-client"
+    assert os.environ["PGPASSWORD"] == "verifier-lakebase-token"
+    assert stale.lakebase_host == "verifier-lakebase.example"
+    assert stale.lakebase_user == "verifier-client"
+    assert stale.lakebase_password.get_secret_value() == "verifier-lakebase-token"
+    assert sql_client._host == "https://verifier-workspace.example"
+    assert sql_client._warehouse_id == "verifier-warehouse"
+    assert sql_client._token_provider() == "verifier-workspace-token"
+
+
+@pytest.mark.parametrize("mode", ("verify-pending", "send"))
+def test_every_proof_mode_requires_verifier_derived_auth(mode: str) -> None:
+    with pytest.raises(
+        ValueError,
+        match="exact proof requires --require-verifier-derived-auth for every mode",
+    ):
+        verify_ai_gateway_exact_proof.main(
+            [
+                mode,
+                "--git-sha",
+                _TEST_GIT_SHA,
+                "--endpoint",
+                _ENDPOINT,
+                "--inference-table",
+                _INFERENCE_TABLE,
+            ]
+        )
 
 
 def _verified_row(*, git_sha: str, verified_at: datetime) -> dict[str, Any]:
@@ -632,9 +741,7 @@ def test_mark_expired_pending_proofs_marks_expired_not_failed() -> None:
 def test_verifier_send_wait_records_exact_verified_row(monkeypatch) -> None:
     lakebase = _ProofLakebase()
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(
-        verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1)
-    )
+    _patch_strict_runtime(monkeypatch, sql_client=_ProofSql(exact_count=1))
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
@@ -642,6 +749,9 @@ def test_verifier_send_wait_records_exact_verified_row(monkeypatch) -> None:
             "send",
             "--wait",
             "--require-verified",
+            "--require-verifier-derived-auth",
+            "--warehouse-id",
+            "warehouse-id",
             "--git-sha",
             _TEST_GIT_SHA,
             "--endpoint",
@@ -666,15 +776,16 @@ def test_verifier_require_verified_accepts_existing_current_sha_proof(monkeypatc
         [_verified_row(git_sha=_TEST_GIT_SHA, verified_at=datetime.now(UTC) - timedelta(minutes=5))]
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(
-        verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=0)
-    )
+    _patch_strict_runtime(monkeypatch, sql_client=_ProofSql(exact_count=0))
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
             "verify-pending",
             "--require-verified",
+            "--require-verifier-derived-auth",
+            "--warehouse-id",
+            "warehouse-id",
             "--git-sha",
             _TEST_GIT_SHA,
             "--endpoint",
@@ -698,15 +809,16 @@ def test_verifier_require_verified_rejects_wrong_endpoint_pending_false_pass(mon
         sent_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(
-        verify_ai_gateway_exact_proof, "get_sql_client", lambda: _ProofSql(exact_count=1)
-    )
+    _patch_strict_runtime(monkeypatch, sql_client=_ProofSql(exact_count=1))
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
     exit_code = verify_ai_gateway_exact_proof.main(
         [
             "verify-pending",
             "--require-verified",
+            "--require-verifier-derived-auth",
+            "--warehouse-id",
+            "warehouse-id",
             "--git-sha",
             _TEST_GIT_SHA,
             "--endpoint",
@@ -734,10 +846,9 @@ def test_verifier_requires_exact_client_request_id(monkeypatch) -> None:
         sent_at=datetime.now(UTC) - timedelta(minutes=5),
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(
-        verify_ai_gateway_exact_proof,
-        "get_sql_client",
-        lambda: _ProofSql(counts_by_request_id={other_id: 1}),
+    _patch_strict_runtime(
+        monkeypatch,
+        sql_client=_ProofSql(counts_by_request_id={other_id: 1}),
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
@@ -745,6 +856,9 @@ def test_verifier_requires_exact_client_request_id(monkeypatch) -> None:
         [
             "verify-pending",
             "--require-verified",
+            "--require-verifier-derived-auth",
+            "--warehouse-id",
+            "warehouse-id",
             "--git-sha",
             _TEST_GIT_SHA,
             "--endpoint",
@@ -1074,10 +1188,9 @@ def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
         [_verified_row(git_sha=_TEST_GIT_SHA, verified_at=datetime.now(UTC) - timedelta(minutes=5))]
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "get_lakebase_client", lambda: lakebase)
-    monkeypatch.setattr(
-        verify_ai_gateway_exact_proof,
-        "get_sql_client",
-        lambda: _ProofSql(counts_by_request_id={}),
+    _patch_strict_runtime(
+        monkeypatch,
+        sql_client=_ProofSql(counts_by_request_id={}),
     )
     monkeypatch.setattr(verify_ai_gateway_exact_proof, "_workspace_client", lambda: _Workspace())
 
@@ -1086,6 +1199,9 @@ def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
             "send",
             "--wait",
             "--require-verified",
+            "--require-verifier-derived-auth",
+            "--warehouse-id",
+            "warehouse-id",
             "--git-sha",
             _TEST_GIT_SHA,
             "--endpoint",

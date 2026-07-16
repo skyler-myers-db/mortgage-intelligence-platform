@@ -187,11 +187,7 @@ CREATE TABLE IF NOT EXISTS mip.audit.campaign_treatment_snapshot (
   owner_link_household_count     BIGINT,
   mailing_address_household_count BIGINT,
   singleton_household_count      BIGINT,
-  materialized_at                TIMESTAMP NOT NULL,
-  CONSTRAINT campaign_treatment_row_kind_chk
-    CHECK (row_kind IN ('manifest', 'member')),
-  CONSTRAINT campaign_treatment_assignment_chk
-    CHECK (assignment IS NULL OR assignment IN ('treatment', 'holdout'))
+  materialized_at                TIMESTAMP NOT NULL
 )
 USING DELTA
 TBLPROPERTIES (
@@ -208,3 +204,9 @@ ALTER TABLE mip.audit.campaign_treatment_snapshot SET TBLPROPERTIES (
   'delta.logRetentionDuration' = 'interval 2555 days',
   'delta.deletedFileRetentionDuration' = 'interval 2555 days'
 );
+
+-- Databricks rejects inline CHECK constraints in CREATE TABLE even though
+-- Delta CHECK constraints are supported through ALTER TABLE ADD CONSTRAINT.
+-- scripts/deploy.sh therefore runs ensure_campaign_treatment_table.py after
+-- this DDL. That fail-closed step adds only missing constraints and rejects a
+-- conflicting existing definition without ever dropping the protection.

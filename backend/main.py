@@ -55,6 +55,7 @@ from backend.api import (
 from backend.config.settings import (
     _running_under_pytest,
     check_trust_boundary_at_startup,
+    looks_like_databricks_app_deploy,
     settings,
 )
 from backend.services.backpressure import BackpressureController, BackpressureMiddleware
@@ -80,6 +81,25 @@ COMPAT_API_PREFIX = "/api"
 # lines. configure_logging() is idempotent so a second call during tests
 # is a safe no-op.
 configure_logging()
+
+
+def _require_campaign_treatment_runtime_gate() -> None:
+    """Refuse traffic until deployment proves exact treatment authority.
+
+    A bundle apply creates and can start the Databricks App before the deploy
+    script can resolve its service principal and converge UC access. The
+    source-controlled app.yaml baseline is therefore disabled. Only the final
+    snapshot deployment, after constraint/property proof while treatment
+    access remains read-only, carries the marker; runtime MODIFY is restored
+    only after that enabled snapshot promotes.
+    """
+
+    if not looks_like_databricks_app_deploy():
+        return
+    if os.environ.get("MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED", "").strip() != "1":
+        raise RuntimeError(
+            "Campaign treatment runtime is disabled until governed access proof completes"
+        )
 
 
 def _operation_id(route: APIRoute) -> str:
@@ -250,6 +270,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
       deployed app default sets this to 0 so idle workspaces can auto-stop.
     """
     rewarm_task: asyncio.Task[None] | None = None
+    # This is a Databricks Apps deployment invariant, not a generic startup
+    # convenience check. Keep it outside _running_under_pytest() so
+    # MIP_BYPASS_STARTUP_CHECKS cannot disable the production write gate.
+    _require_campaign_treatment_runtime_gate()
     if not _running_under_pytest():
         # ``require_databricks_creds`` raises RuntimeError with a
         # clear operator-facing message when any of the three env
