@@ -9,9 +9,9 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services.databricks_sql_helpers import qualify
+from tools.render_sql import render
 
 DDL = Path("sql/ddl/001_catalogs_schemas.sql").read_text(encoding="utf-8")
-RENDERED_DDL = Path("sql/_rendered/ddl/001_catalogs_schemas.sql").read_text(encoding="utf-8")
 LAKEBASE_SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
 DEPLOY = Path("scripts/deploy.sh").read_text(encoding="utf-8")
@@ -24,8 +24,16 @@ LIVE_AUDIT = Path("tests/integration/test_campaign_audit_workflow_live.py").read
 )
 
 
-def test_campaign_treatment_delta_retains_logs_and_rewritten_files() -> None:
-    for sql in (DDL, RENDERED_DDL):
+def test_campaign_treatment_delta_retains_logs_and_rewritten_files(tmp_path: Path) -> None:
+    render(
+        catalog="mip",
+        demo_first_party_enabled=False,
+        source_root=Path("sql/ddl"),
+        dest_root=tmp_path,
+    )
+    rendered_ddl = (tmp_path / "001_catalogs_schemas.sql").read_text(encoding="utf-8")
+
+    for sql in (DDL, rendered_ddl):
         assert "CREATE TABLE IF NOT EXISTS mip.audit.campaign_treatment_snapshot" in sql
         assert "CONSTRAINT campaign_treatment_row_kind_chk" not in sql
         assert "CONSTRAINT campaign_treatment_assignment_chk" not in sql
@@ -87,11 +95,15 @@ def test_portfolio_openapi_models_expose_typed_campaign_build_contract() -> None
     preview_properties = PortfolioPreview.model_json_schema()["properties"]
     assert preview_properties["campaign_build_limit"]["default"] == 10_000
     assert preview_properties["campaign_build_limit"]["minimum"] == 1
-    assert {item.get("type") for item in preview_properties["campaign_build_contact_count"]["anyOf"]} == {
+    assert {
+        item.get("type") for item in preview_properties["campaign_build_contact_count"]["anyOf"]
+    } == {
         "integer",
         "null",
     }
-    assert {item.get("type") for item in preview_properties["campaign_build_eligible"]["anyOf"]} == {
+    assert {
+        item.get("type") for item in preview_properties["campaign_build_eligible"]["anyOf"]
+    } == {
         "boolean",
         "null",
     }

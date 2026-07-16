@@ -686,6 +686,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
             "-c",
             "user.email=dry-run@example.invalid",
             "commit",
+            "--allow-empty",
             "-qm",
             "test current dry-run contract",
         ],
