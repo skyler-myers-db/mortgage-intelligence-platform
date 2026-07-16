@@ -75,7 +75,7 @@ def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
 
     assert "secrets.MIP_AI_GATEWAY_ENDPOINT" not in text
     assert "secrets.MIP_AI_GATEWAY_INFERENCE_TABLE" not in text
-    assert text.count("tools/databricks/export_gateway_runtime_contract.py") == 2
+    assert text.count("-m tools.databricks.export_gateway_runtime_contract") == 2
 
 
 def test_live_validation_gateway_proof_uses_only_verifier_derived_auth() -> None:
@@ -292,7 +292,7 @@ def test_nightly_agent_eval_passes_distinct_normal_and_admin_bearers() -> None:
     assert "DATABRICKS_ADMIN_CLIENT_ID" in remint_block
     assert "Per-run admin M2M bearer was not minted" in eval_block
     assert "exit 1" in eval_block
-    assert "python tools/databricks/run_agent_eval.py" in eval_block
+    assert "python -m tools.databricks.run_agent_eval" in eval_block
     assert "MIP_ADMIN_BEARER_TOKEN" in eval_block
     assert '--token "$MIP_BEARER_TOKEN"' not in eval_block
     assert '--admin-token "$MIP_ADMIN_BEARER_TOKEN"' not in eval_block
@@ -321,7 +321,7 @@ def test_verifier_boundary_uses_its_own_identity_and_precedes_exact_proof() -> N
     block = text[boundary_pos:proof_pos]
 
     assert boundary_pos < proof_pos
-    assert "tools/databricks/verify_verifier_identity_boundary.py" in block
+    assert "-m tools.databricks.verify_verifier_identity_boundary" in block
     assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in block
     assert "secrets.DATABRICKS_VERIFIER_CLIENT_ID" in block
     assert "secrets.DATABRICKS_VERIFIER_CLIENT_SECRET" in block

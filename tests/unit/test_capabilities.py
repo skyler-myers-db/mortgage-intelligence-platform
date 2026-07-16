@@ -1753,7 +1753,7 @@ def test_ai_gateway_audit_grant_is_table_scoped() -> None:
     grants = (_REPO_ROOT / "docs" / "security" / "GRANTS.md").read_text(encoding="utf-8")
     assert "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit" not in deploy
     assert "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit" in deploy
-    assert "grant_ai_gateway_inference_table.py" in deploy
+    assert "-m tools.databricks.grant_ai_gateway_inference_table" in deploy
     assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload" in grants
     assert "Do not grant `SELECT ON SCHEMA mip.audit`" in grants
 

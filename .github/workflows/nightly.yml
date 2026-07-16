@@ -136,7 +136,7 @@ jobs:
         env:
           DATABRICKS_AUTH_TYPE: pat
         run: |
-          python tools/databricks/export_gateway_runtime_contract.py \
+          python -m tools.databricks.export_gateway_runtime_contract \
             --github-env "$GITHUB_ENV"
       - name: Fail fast unless the exact app commit and Gateway binding are deployed
         env:
@@ -216,7 +216,7 @@ jobs:
           fi
           echo "MIP_APP_SERVICE_PRINCIPAL_ID=$APP_SP_ID" >> "$GITHUB_ENV"
           for principal in "$APP_SP_CLIENT_ID" "$DATABRICKS_VERIFIER_CLIENT_ID"; do
-            python tools/databricks/grant_ai_gateway_inference_table.py \
+            python -m tools.databricks.grant_ai_gateway_inference_table \
               --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
               --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
               --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
@@ -250,7 +250,7 @@ jobs:
             echo "::error::Missing required verifier-boundary input(s):$missing"
             exit 1
           fi
-          python tools/databricks/verify_verifier_identity_boundary.py \
+          python -m tools.databricks.verify_verifier_identity_boundary \
             --expected-application-id "$DATABRICKS_CLIENT_ID" \
             --account-host "$DATABRICKS_ACCOUNT_HOST" \
             --account-id "$DATABRICKS_ACCOUNT_ID" \
@@ -287,14 +287,14 @@ jobs:
             echo "::error::Missing required dedicated AI Gateway verifier secret(s):$missing"
             exit 1
           fi
-          python tools/databricks/verify_ai_gateway_exact_proof.py \
+          python -m tools.databricks.verify_ai_gateway_exact_proof \
             verify-pending \
             --require-verifier-derived-auth \
             --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
             --git-sha "$MIP_GIT_SHA" \
             --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
             --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
-          python tools/databricks/verify_ai_gateway_exact_proof.py \
+          python -m tools.databricks.verify_ai_gateway_exact_proof \
             send \
             --wait \
             --require-verified \
@@ -404,7 +404,7 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
-          python tools/databricks/export_gateway_runtime_contract.py \
+          python -m tools.databricks.export_gateway_runtime_contract \
             --github-env "$GITHUB_ENV"
       - name: Resolve deployed app URL
         # This job intentionally has one path:
@@ -668,7 +668,7 @@ jobs:
             exit 1
           fi
           mkdir -p dist
-          python tools/databricks/run_agent_eval.py \
+          python -m tools.databricks.run_agent_eval \
             --app-url "$MIP_APP_URL" \
             --require-mlflow-genai-evaluate \
             --out-json dist/nightly-agent-eval.json

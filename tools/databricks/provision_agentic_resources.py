@@ -14,33 +14,37 @@ import json
 import os
 import shlex
 import subprocess
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from backend.agents.gateway_contract import (
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from backend.agents.gateway_contract import (  # noqa: E402
     DEFAULT_GATEWAY_AGENT_MODEL,
     DEFAULT_GATEWAY_ENDPOINT,
 )
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.errors import NotFound, ResourceDoesNotExist
-from databricks.sdk.service.database import (
+from databricks.sdk import WorkspaceClient  # noqa: E402
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist  # noqa: E402
+from databricks.sdk.service.database import (  # noqa: E402
     NewPipelineSpec,
     SyncedDatabaseTable,
     SyncedTableSchedulingPolicy,
     SyncedTableSpec,
 )
-from tools.databricks.provision_gateway_responses_agent import (
+from tools.databricks.provision_gateway_responses_agent import (  # noqa: E402
     ensure_gateway_responses_agent,
     verify_gateway_responses_agent,
 )
-from tools.databricks.serving_endpoint_acl import (
+from tools.databricks.serving_endpoint_acl import (  # noqa: E402
     grant_direct_can_query,
     revoke_direct_permissions,
 )
 
-REPO = Path(__file__).resolve().parents[2]
 DEFAULT_SYNC_TABLES = (
     ("source_readiness", "source_readiness", ("source_name",)),
     ("segment_population", "segment_population", ("segment_code", "state")),

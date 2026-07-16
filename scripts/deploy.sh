@@ -818,7 +818,7 @@ fi
 RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
 export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"
 step "provision Databricks App runtime secret bindings"
-run "$PYTHON" tools/databricks/provision_runtime_secrets.py \
+run "$PYTHON" -m tools.databricks.provision_runtime_secrets \
   --scope "$RUNTIME_SECRET_SCOPE"
 
 # -----------------------------------------------------------------------------
@@ -838,7 +838,7 @@ fi
 
 if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
   step "provision Genie space before bundle deploy (first-run app binding)"
-  run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
+  run "$PYTHON" -m tools.databricks.provision_genie_space --no-smoke-test
   if [[ "$DRY_RUN" -eq 0 ]]; then
     if [[ ! -s genie/space_id.txt ]]; then
       echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
@@ -900,13 +900,13 @@ run npm --prefix frontend run build
 # Step 2: validate bundle
 # -----------------------------------------------------------------------------
 step "validate direct-deployment bundle against -t ${TARGET}"
-run "$PYTHON" tools/databricks/bundle_env.py validate -t "$TARGET"
+run "$PYTHON" -m tools.databricks.bundle_env validate -t "$TARGET"
 
 # -----------------------------------------------------------------------------
 # Step 3: plan bundle
 # -----------------------------------------------------------------------------
 step "plan direct deployment against -t ${TARGET}"
-run "$PYTHON" tools/databricks/bundle_env.py plan -t "$TARGET"
+run "$PYTHON" -m tools.databricks.bundle_env plan -t "$TARGET"
 
 # -----------------------------------------------------------------------------
 # Step 4: deploy bundle
@@ -968,7 +968,7 @@ fi
 
 verify_exact_deploy_source
 step "deploy bundle (app + warehouse + jobs + pipelines + Lakebase)"
-run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"
+run "$PYTHON" -m tools.databricks.bundle_env deploy -t "$TARGET"
 
 # A true first install has no service principal to quiesce before bundle
 # apply. Resolve the newly created (or retained) App identity immediately and
@@ -1007,7 +1007,7 @@ run "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
 # grant postflight. Endpoint and warehouse grants stay in the later agentic
 # convergence step, after those concrete resources are known.
 step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"
-run "$PYTHON" tools/databricks/provision_m2m_oauth.py \
+run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
   --identity-role verifier \
   --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
   --no-mint-secret
@@ -1207,7 +1207,7 @@ deploy_app_snapshot() {
   local label="$1"
   step "$label"
   APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
-  MIP_GIT_SHA="$APP_GIT_SHA" "$PYTHON" tools/databricks/app_deploy_payload.py \
+  MIP_GIT_SHA="$APP_GIT_SHA" "$PYTHON" -m tools.databricks.app_deploy_payload \
     --source-code-path "$APP_SOURCE_PATH" \
     --target "$TARGET" \
     --current-user-email "$APP_CURRENT_USER" \
@@ -1303,7 +1303,7 @@ run_job_with_retry databricks bundle run mip_refresh_scores -t "$TARGET"
 # Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)
 # -----------------------------------------------------------------------------
 step "sync lifecycle state from Lakebase + record daily funnel snapshot"
-run "$PYTHON" tools/sync_lifecycle_warehouse.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+run "$PYTHON" -m tools.sync_lifecycle_warehouse --catalog "${MIP_DEFAULT_CATALOG:-mip}"
 
 # -----------------------------------------------------------------------------
 # Step 9b: KPI snapshot backfill (S3)
@@ -1320,14 +1320,14 @@ run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 # Step 10: rebind the Genie space after gold/semantic assets exist
 # -----------------------------------------------------------------------------
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
-run "$PYTHON" tools/databricks/provision_genie_space.py --no-smoke-test
+run "$PYTHON" -m tools.databricks.provision_genie_space --no-smoke-test
 
 # -----------------------------------------------------------------------------
 # Step 10b: provision MIP-owned agentic resources after gold/Genie assets exist
 # -----------------------------------------------------------------------------
 step "provision agentic resources — Lakebase sync, AI Gateway, Supervisor Agent"
 AGENTIC_ENV_FILE="$(mktemp -t mip-agentic.XXXXXX.env)"
-run "$PYTHON" tools/databricks/provision_agentic_resources.py \
+run "$PYTHON" -m tools.databricks.provision_agentic_resources \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
   --out-env "$AGENTIC_ENV_FILE"
@@ -1343,7 +1343,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   cp "$AGENTIC_ENV_FILE" "$AGENTIC_ENV_CACHE"
   if [[ -n "${MIP_AI_GATEWAY_INFERENCE_TABLE:-}" && -n "${MIP_AI_GATEWAY_ENDPOINT:-}" ]]; then
     step "converge dedicated AI Gateway verifier identity and Lakebase OAuth role"
-    run "$PYTHON" tools/databricks/provision_m2m_oauth.py \
+    run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
       --identity-role verifier \
       --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
       --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
@@ -1355,7 +1355,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     run "$PYTHON" jobs/lakebase_migrate.py
     AI_GATEWAY_GRANTS_READY=1
     step "grant least-privilege AI Gateway inference-table access to the app service principal"
-    if ! run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
+    if ! run "$PYTHON" -m tools.databricks.grant_ai_gateway_inference_table \
       --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
       --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
       --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
@@ -1364,7 +1364,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     fi
     if [[ "$AI_GATEWAY_GRANTS_READY" -eq 1 ]]; then
       step "grant read-only AI Gateway inference-table access to the verifier service principal"
-      if ! run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py \
+      if ! run "$PYTHON" -m tools.databricks.grant_ai_gateway_inference_table \
         --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
         --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
         --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
@@ -1389,7 +1389,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
         verifier \
         DATABRICKS_VERIFIER_CLIENT_ID \
         DATABRICKS_VERIFIER_CLIENT_SECRET \
-        "$PYTHON" tools/databricks/verify_verifier_identity_boundary.py \
+        "$PYTHON" -m tools.databricks.verify_verifier_identity_boundary \
         --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
         --account-host "$DATABRICKS_ACCOUNT_HOST" \
         --account-id "$DATABRICKS_ACCOUNT_ID" \
@@ -1401,7 +1401,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
         --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
       step "verify AI Gateway exact inference-row proof with dedicated verifier identity"
       AI_GATEWAY_PROOF_ARGS=(
-        tools/databricks/verify_ai_gateway_exact_proof.py
+        -m
+        tools.databricks.verify_ai_gateway_exact_proof
         send
         --wait
         --require-verifier-derived-auth
@@ -1447,7 +1448,7 @@ fi
 step "run live Agent Evaluation — golden Growth Agent workflows"
 mkdir -p dist
 AGENT_EVAL_ENV_FILE="$(mktemp -t mip-agent-eval.XXXXXX.env)"
-run "$PYTHON" tools/databricks/run_agent_eval.py \
+run "$PYTHON" -m tools.databricks.run_agent_eval \
   --app-url "${MIP_APP_URL:-}" \
   --require-mlflow-genai-evaluate \
   --out-env "$AGENT_EVAL_ENV_FILE" \

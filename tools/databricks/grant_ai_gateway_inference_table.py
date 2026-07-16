@@ -13,13 +13,19 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import sys
 import time
+from pathlib import Path
 from uuid import uuid4
 
-from backend.services.capability_serving_probes import query_serving_endpoint
-from databricks.sdk import WorkspaceClient
-from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
-from tools.databricks.m2m_access_policy import resolve_effective_groups
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from backend.services.capability_serving_probes import query_serving_endpoint  # noqa: E402
+from databricks.sdk import WorkspaceClient  # noqa: E402
+from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout  # noqa: E402
+from tools.databricks.m2m_access_policy import resolve_effective_groups  # noqa: E402
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _MIP_GATEWAY_PREFIX_RE = re.compile(r"^mip_agent_gateway_[A-Za-z0-9_]{3,}$")

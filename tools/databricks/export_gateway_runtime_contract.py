@@ -4,21 +4,26 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from mlflow import MlflowClient
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
 
-from backend.agents.gateway_contract import (
+from mlflow import MlflowClient  # noqa: E402
+
+from backend.agents.gateway_contract import (  # noqa: E402
     DEFAULT_GATEWAY_AGENT_MODEL,
     DEFAULT_GATEWAY_ENDPOINT,
     DEFAULT_GATEWAY_INFERENCE_TABLE,
     gateway_proxy_source_hash,
     gateway_runtime_binding_hash,
 )
-from databricks.sdk import WorkspaceClient
-from tools.databricks.provision_gateway_responses_agent import (
+from databricks.sdk import WorkspaceClient  # noqa: E402
+from tools.databricks.provision_gateway_responses_agent import (  # noqa: E402
     GatewayAgentDeployment,
     verify_gateway_responses_agent,
 )

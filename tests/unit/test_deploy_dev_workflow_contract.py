@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import subprocess
 import sys
@@ -320,7 +321,7 @@ def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None
         text.count("mint_m2m_token MIP_ADMIN_BEARER_TOKEN") >= 2
     )  # initial per-run mint + immediate pre-eval remint
     remint_pos = text.index("A full deploy can exceed the workspace OAuth TTL")
-    eval_pos = text.index("tools/databricks/run_agent_eval.py")
+    eval_pos = text.index("-m tools.databricks.run_agent_eval")
     assert remint_pos < eval_pos
 
 
@@ -538,7 +539,7 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     )
     proof = script.index('step "verify AI Gateway exact inference-row proof')
     assert boundary < proof
-    assert "tools/databricks/verify_verifier_identity_boundary.py" in script[boundary:proof]
+    assert "-m tools.databricks.verify_verifier_identity_boundary" in script[boundary:proof]
     assert '--protected-service-principal-id "$APP_SP_SCIM_ID"' in script[boundary:proof]
     assert "DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}" in workflow
 
@@ -575,12 +576,15 @@ def test_gateway_grant_delivery_is_retryable_and_only_blocks_strict_release() ->
     grant_start = script.index("AI_GATEWAY_GRANTS_READY=1")
     proof_start = script.index('step "verify AI Gateway exact inference-row proof', grant_start)
     grant_block = script[grant_start:proof_start]
-    assert 'if ! run "$PYTHON" tools/databricks/grant_ai_gateway_inference_table.py' in grant_block
+    assert (
+        'if ! run "$PYTHON" -m tools.databricks.grant_ai_gateway_inference_table'
+        in grant_block
+    )
     assert "strict AI Gateway inference-table grant convergence failed" in grant_block
     assert "delivery/grants are pending" in grant_block
     assert "honestly configured/unavailable" in grant_block
     assert "Reconcile delayed AI Gateway inference-table grants" in workflow
-    assert workflow.count("tools/databricks/grant_ai_gateway_inference_table.py") >= 1
+    assert workflow.count("-m tools.databricks.grant_ai_gateway_inference_table") >= 1
 
 
 def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() -> None:
@@ -590,7 +594,7 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
         'step "prove absent or converge governed treatment table before first App creation"'
     )
     quiesce = script.index("--mode quiesce")
-    bundle_apply = script.index('tools/databricks/bundle_env.py deploy -t "$TARGET"')
+    bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
     role_bootstrap = script.index(
         'step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"'
     )
@@ -602,7 +606,7 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
     assert "tools.databricks.ensure_campaign_treatment_table" in first_install_block
     assert "--allow-absent" in first_install_block
     bootstrap_block = script[role_bootstrap:first_migration]
-    assert "tools/databricks/provision_m2m_oauth.py" in bootstrap_block
+    assert "-m tools.databricks.provision_m2m_oauth" in bootstrap_block
     assert "--identity-role verifier" in bootstrap_block
     assert '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in bootstrap_block
     assert "--no-mint-secret" in bootstrap_block
@@ -617,7 +621,7 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
     migration = script.index(
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
     )
-    bundle_apply = script.index('tools/databricks/bundle_env.py deploy -t "$TARGET"')
+    bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
     post_bundle_quiesce = script.index(
         'step "quiesce bundle-resolved app treatment writes before migrations"'
     )
@@ -810,7 +814,9 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
         "restore exact app campaign treatment runtime privileges after enabled snapshot promotion"
     )
     assert runtime_restore > first_snapshot
-    bundle_index = script.index('run "$PYTHON" tools/databricks/bundle_env.py deploy -t "$TARGET"')
+    bundle_index = script.index(
+        'run "$PYTHON" -m tools.databricks.bundle_env deploy -t "$TARGET"'
+    )
     fail_closed_arm = script.index("APP_FAIL_CLOSED_ARMED=1")
     first_treatment_proof = script.index(
         'step "quiesce existing app campaign treatment writes before bundle deploy"'
@@ -879,7 +885,9 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
     assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
     assert "MIP_COTALITY_ID_MASK_SECRET is required for target" in text
     assert "source-known compatibility namespace is allowed only for local/test" in text
-    assert text.index("provision_runtime_secrets.py") < text.index("bundle_env.py validate")
+    assert text.index("tools.databricks.provision_runtime_secrets") < text.index(
+        "tools.databricks.bundle_env validate"
+    )
     assert 'RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"' in text
     assert 'export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"' in text
     assert '--scope "$RUNTIME_SECRET_SCOPE"' in text
@@ -1118,9 +1126,8 @@ def test_exact_source_gate_allows_standard_ignored_artifacts(tmp_path: Path) -> 
     assert 'APP_GIT_SHA="$SOURCE_GIT_SHA"' in text
     assert text.count("verify_exact_deploy_source") >= 3
     assert text.rindex("verify_exact_deploy_source") < text.index(
-        'bundle_env.py deploy -t "$TARGET"'
+        'tools.databricks.bundle_env deploy -t "$TARGET"'
     )
-
     repo = tmp_path / "repo"
     script_dir = repo / "scripts"
     script_dir.mkdir(parents=True)
@@ -1145,6 +1152,44 @@ def test_exact_source_gate_allows_standard_ignored_artifacts(tmp_path: Path) -> 
     assert result.returncode == 0
     assert "exact source:" in result.stdout
     assert "tracked and untracked source clean" in result.stdout
+
+
+def test_release_automation_never_executes_package_helpers_by_file_path() -> None:
+    direct_entrypoint = re.compile(
+        r"tools/(?:databricks/[A-Za-z0-9_]+|sync_lifecycle_warehouse)\.py"
+    )
+    offenders: list[str] = []
+    for path in (DEPLOY_SCRIPT, NIGHTLY):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if line.lstrip().startswith("#"):
+                continue
+            if direct_entrypoint.search(line):
+                offenders.append(f"{path.relative_to(REPO)}:{number}: {line.strip()}")
+
+    assert offenders == []
+
+
+@pytest.mark.parametrize(
+    "entrypoint",
+    [
+        "tools/databricks/export_gateway_runtime_contract.py",
+        "tools/databricks/grant_ai_gateway_inference_table.py",
+        "tools/databricks/provision_agentic_resources.py",
+    ],
+)
+def test_package_dependent_databricks_entrypoints_support_direct_help(
+    entrypoint: str,
+    tmp_path: Path,
+) -> None:
+    result = subprocess.run(
+        [sys.executable, str(REPO / entrypoint), "--help"],
+        cwd=tmp_path,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("dirty_kind", ["tracked", "untracked"])
