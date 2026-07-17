@@ -317,8 +317,10 @@ Gateway proof, evaluation, smoke, and authenticated health. Durable capture
 first persists and verifies the signed last-good contract while treatment is
 still quiesced, then restores treatment authority and repeats App health,
 resource, and lease proof. Deployment acquires an atomic, signed workspace
-lease under `/Shared/.mip-deployment-leases`; its directory ACL is pinned to the
-exact workspace-admin deployer and its one-minute heartbeat renews the signed
+lease under `/.mip-deployment-leases`; the root-level location avoids
+`/Shared`'s inherited `users`-group management permission. Its directory ACL is
+pinned to the exact workspace-admin deployer, with only the inherited `admins`
+group also retaining management, and its one-minute heartbeat renews the signed
 fence. A losing contender reads the existing lease without changing that ACL,
 and a heartbeat exits without renewal as soon as it is no longer a child of the
 deployer that launched it. An expired lease is never auto-replaced: after a crashed runner, an

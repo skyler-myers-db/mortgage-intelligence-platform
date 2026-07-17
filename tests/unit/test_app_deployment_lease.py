@@ -100,6 +100,10 @@ def test_workspace_lease_is_exclusive_and_owner_releasable() -> None:
     assert workspace.workspace.data == {}
 
 
+def test_lease_root_avoids_shared_users_management_inheritance() -> None:
+    assert lease.LEASE_ROOT == "/.mip-deployment-leases"
+
+
 def test_release_rejects_silent_delete_noop() -> None:
     workspace = _workspace()
     lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
@@ -433,6 +437,27 @@ def test_lease_fence_rejects_storage_acl_drift() -> None:
         SimpleNamespace(
             user_name="other@example.com",
             group_name=None,
+            all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE")],
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected manager"):
+        lease.assert_held(
+            workspace,
+            app_name="mip-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+            now=NOW + timedelta(minutes=1),
+        )
+
+
+def test_lease_fence_rejects_inherited_non_admin_group_management() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.workspace.access_control_list.append(
+        SimpleNamespace(
+            user_name=None,
+            group_name="users",
             all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE")],
         )
     )

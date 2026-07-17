@@ -35,7 +35,10 @@ from databricks.sdk.service.workspace import (
 
 LEASE_VERSION = 1
 LEASE_TTL = timedelta(hours=4)
-LEASE_ROOT = "/Shared/.mip-deployment-leases"
+# /Shared grants the workspace `users` group inherited CAN_MANAGE, which cannot
+# be removed on a child directory. Keep the deployment fence at the workspace
+# root, where only the `admins` group inherits management access.
+LEASE_ROOT = "/.mip-deployment-leases"
 HEARTBEAT_INTERVAL_SECONDS = 60
 
 
