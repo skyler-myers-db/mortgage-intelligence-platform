@@ -7,16 +7,14 @@ from databricks.sdk.errors import NotFound, PermissionDenied
 
 from tools.databricks.converge_campaign_treatment_access import (
     _effective_privileges,
-    _target_group_membership_probe,
     converge_campaign_treatment_access,
+    target_group_membership_probe,
 )
 from tools.databricks.uc_owner_policy import account_client_from_env
 
 
 class _UcObjects:
-    def __init__(
-        self, *, exists: bool, owner: str = "deployer", denied: bool = False
-    ) -> None:
+    def __init__(self, *, exists: bool, owner: str = "deployer", denied: bool = False) -> None:
         self.exists = exists
         self.owner = owner
         self.denied = denied
@@ -90,11 +88,7 @@ class _Groups:
     def get(self, group_id: str) -> object:
         assert self.owner_group is not None
         assert group_id == "owner-group-id"
-        members = (
-            [SimpleNamespace(value=self.target_member_id)]
-            if self.target_is_member
-            else []
-        )
+        members = [SimpleNamespace(value=self.target_member_id)] if self.target_is_member else []
         return SimpleNamespace(
             id=group_id,
             display_name=self.owner_group,
@@ -256,18 +250,14 @@ def _workspace(
                 application_id=current_application_id,
             )
         ),
-        catalogs=_UcObjects(
-            exists=catalog_exists, owner=owner, denied=catalog_denied
-        ),
+        catalogs=_UcObjects(exists=catalog_exists, owner=owner, denied=catalog_denied),
         schemas=_UcObjects(exists=schema_exists, owner=owner),
         tables=_UcObjects(exists=table_exists, owner=owner),
     )
     return workspace, execution, grants
 
 
-def _account_factory(
-    *, owner_group: str, target_is_member: bool
-) -> object:
+def _account_factory(*, owner_group: str, target_is_member: bool) -> object:
     return SimpleNamespace(
         config=SimpleNamespace(client_id="dedicated-account-client"),
         service_principals=SimpleNamespace(
@@ -282,7 +272,7 @@ def _account_factory(
             owner_group=owner_group,
             target_is_member=target_is_member,
             target_member_id="account-sp-id",
-        )
+        ),
     )
 
 
@@ -296,9 +286,7 @@ def test_account_client_uses_dedicated_oauth_without_workspace_env(
         captured.update(kwargs)
         return sentinel
 
-    monkeypatch.setattr(
-        "tools.databricks.uc_owner_policy.AccountClient", account_client
-    )
+    monkeypatch.setattr("tools.databricks.uc_owner_policy.AccountClient", account_client)
     monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example.invalid")
     monkeypatch.setenv("DATABRICKS_TOKEN", "workspace-pat-must-not-be-used")
     monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "pat")
@@ -614,9 +602,7 @@ def test_rejects_nested_app_membership_in_approved_owner_group() -> None:
     account = SimpleNamespace(
         config=SimpleNamespace(client_id="dedicated-account-client"),
         service_principals=SimpleNamespace(
-            list=lambda **_: [
-                SimpleNamespace(id="account-sp-id", application_id="app-client")
-            ]
+            list=lambda **_: [SimpleNamespace(id="account-sp-id", application_id="app-client")]
         ),
         groups=SimpleNamespace(
             list=lambda **_: list(account_groups.values()),
@@ -710,32 +696,29 @@ def test_target_group_probe_uses_short_lived_secret_and_deletes_it() -> None:
         def delete(self, sp_id: str, secret_id: str) -> None:
             secret_calls.append(("delete", sp_id, secret_id))
 
-    statements: list[tuple[str, list[object]]] = []
-
-    class Execution:
-        def execute_statement(
-            self, *, statement: str, parameters: list[object], **_: object
-        ) -> object:
-            statements.append((statement, parameters))
-            return SimpleNamespace(
-                status=SimpleNamespace(state="SUCCEEDED", error=None),
-                result=SimpleNamespace(data_array=[[False]]),
-            )
-
     workspace_kwargs: dict[str, object] = {}
+    api_calls: list[tuple[tuple[object, ...], dict[str, object]]] = []
+
+    def current_identity(*args: object, **kwargs: object) -> object:
+        api_calls.append((args, kwargs))
+        return {
+            "id": "account-sp-id",
+            "userName": "app-client",
+            "groups": [{"value": "other-group-id", "display": "other-group"}],
+        }
 
     def workspace_factory(**kwargs: object) -> object:
         workspace_kwargs.update(kwargs)
-        return SimpleNamespace(statement_execution=Execution())
+        return SimpleNamespace(api_client=SimpleNamespace(do=current_identity))
 
     account = SimpleNamespace(service_principal_secrets=Secrets())
 
-    assert not _target_group_membership_probe(
+    assert not target_group_membership_probe(
         account,  # type: ignore[arg-type]
         "account-sp-id",
         "app-client",
-        "Customer\\'s Governance'); SELECT current_user(); --",
-        warehouse_id="warehouse-1",
+        "owner-group-id",
+        "Customer's Governance",
         workspace_host="https://workspace.example.invalid",
         workspace_factory=workspace_factory,  # type: ignore[arg-type]
     )
@@ -749,14 +732,148 @@ def test_target_group_probe_uses_short_lived_secret_and_deletes_it() -> None:
         "client_secret": "temporary-value",
         "auth_type": "oauth-m2m",
     }
-    assert len(statements) == 1
-    statement, parameters = statements[0]
-    assert statement == "SELECT is_account_group_member(:owner_group)"
-    assert "Customer" not in statement
-    assert len(parameters) == 1
-    assert parameters[0].name == "owner_group"
-    assert parameters[0].type == "STRING"
-    assert parameters[0].value == "Customer\\'s Governance'); SELECT current_user(); --"
+    assert api_calls == [
+        (
+            ("GET", "/api/2.0/preview/scim/v2/Me"),
+            {
+                "query": {"attributes": "id,userName,groups"},
+                "headers": {"Accept": "application/json"},
+            },
+        )
+    ]
+
+
+def test_target_group_probe_recognizes_effective_group_by_immutable_id() -> None:
+    class Secrets:
+        def create(self, _sp_id: str, *, lifetime: str) -> object:
+            assert lifetime == "300s"
+            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
+
+        def delete(self, _sp_id: str, _secret_id: str) -> None:
+            return None
+
+    account = SimpleNamespace(service_principal_secrets=Secrets())
+    workspace = SimpleNamespace(
+        api_client=SimpleNamespace(
+            do=lambda *_args, **_kwargs: {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"value": "owner-group-id", "display": "MIP Owners"}],
+            }
+        )
+    )
+
+    assert target_group_membership_probe(
+        account,  # type: ignore[arg-type]
+        "account-sp-id",
+        "app-client",
+        "owner-group-id",
+        "mip owners",
+        workspace_host="https://workspace.example.invalid",
+        workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
+    )
+
+
+def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
+    deleted: list[tuple[str, str]] = []
+
+    class Secrets:
+        def create(self, _sp_id: str, *, lifetime: str) -> object:
+            assert lifetime == "300s"
+            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
+
+        def delete(self, sp_id: str, secret_id: str) -> None:
+            deleted.append((sp_id, secret_id))
+
+    account = SimpleNamespace(service_principal_secrets=Secrets())
+    workspace = SimpleNamespace(
+        api_client=SimpleNamespace(
+            do=lambda *_args, **_kwargs: {
+                "id": "account-sp-id",
+                "userName": "app-client",
+            }
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="omitted the authoritative groups"):
+        target_group_membership_probe(
+            account,  # type: ignore[arg-type]
+            "account-sp-id",
+            "app-client",
+            "owner-group-id",
+            "mip owners",
+            workspace_host="https://workspace.example.invalid",
+            workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
+        )
+
+    assert deleted == [("account-sp-id", "temporary-secret-id")]
+
+
+@pytest.mark.parametrize(
+    ("identity", "error"),
+    [
+        (
+            {"id": "wrong-sp-id", "userName": "app-client", "groups": []},
+            "different target identity",
+        ),
+        (
+            {"id": "account-sp-id", "userName": "wrong-client", "groups": []},
+            "different target identity",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"value": "owner-group-id", "display": "wrong owners"}],
+            },
+            "mismatched group name",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"value": "wrong-group-id", "display": "mip owners"}],
+            },
+            "mismatched group id",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"display": "unidentified group"}],
+            },
+            "group without an id",
+        ),
+    ],
+)
+def test_target_group_probe_rejects_mismatched_or_malformed_identity_evidence(
+    identity: dict[str, object], error: str
+) -> None:
+    deleted: list[tuple[str, str]] = []
+
+    class Secrets:
+        def create(self, _sp_id: str, *, lifetime: str) -> object:
+            assert lifetime == "300s"
+            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
+
+        def delete(self, sp_id: str, secret_id: str) -> None:
+            deleted.append((sp_id, secret_id))
+
+    account = SimpleNamespace(service_principal_secrets=Secrets())
+    workspace = SimpleNamespace(api_client=SimpleNamespace(do=lambda *_args, **_kwargs: identity))
+
+    with pytest.raises(RuntimeError, match=error):
+        target_group_membership_probe(
+            account,  # type: ignore[arg-type]
+            "account-sp-id",
+            "app-client",
+            "owner-group-id",
+            "mip owners",
+            workspace_host="https://workspace.example.invalid",
+            workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
+        )
+
+    assert deleted == [("account-sp-id", "temporary-secret-id")]
 
 
 def test_target_group_probe_fails_closed_when_secret_cleanup_fails() -> None:
@@ -767,24 +884,19 @@ def test_target_group_probe_fails_closed_when_secret_cleanup_fails() -> None:
         def delete(self, sp_id: str, secret_id: str) -> None:
             raise RuntimeError("delete denied")
 
-    execution = SimpleNamespace(
-        execute_statement=lambda **_: SimpleNamespace(
-            status=SimpleNamespace(state="SUCCEEDED", error=None),
-            result=SimpleNamespace(data_array=[[False]]),
-        )
-    )
+    identity = {"id": "account-sp-id", "userName": "app-client", "groups": []}
     account = SimpleNamespace(service_principal_secrets=Secrets())
 
     with pytest.raises(RuntimeError, match="cleanup could not be proven"):
-        _target_group_membership_probe(
+        target_group_membership_probe(
             account,  # type: ignore[arg-type]
             "account-sp-id",
             "app-client",
+            "owner-group-id",
             "customer-platform-governance",
-            warehouse_id="warehouse-1",
             workspace_host="https://workspace.example.invalid",
             workspace_factory=lambda **_: SimpleNamespace(
-                statement_execution=execution
+                api_client=SimpleNamespace(do=lambda *_args, **_kwargs: identity)
             ),  # type: ignore[arg-type]
         )
 

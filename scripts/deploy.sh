@@ -935,6 +935,11 @@ run_with_account_identity() {
   if [[ "$DRY_RUN" -eq 1 ]]; then
     return 0
   fi
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]] && \
+     ! kill -0 "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null; then
+    echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
+    return 1
+  fi
   if [[ -z "$account_client_id" || -z "$account_client_secret" ]]; then
     echo "${RED}[deploy] bounded account-SCIM credentials are missing.${RST}" >&2
     return 2
@@ -1076,10 +1081,10 @@ if [[ ! "$MIP_LAKEBASE_INSTANCE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; the
   echo "${RED}[deploy] MIP_LAKEBASE_INSTANCE must be a lowercase DNS-style name.${RST}" >&2
   exit 2
 fi
-if [[ ! "$MIP_DEFAULT_CATALOG" =~ ^[A-Za-z_][A-Za-z0-9_]{0,254}$ || \
-      ! "$MIP_LAKEBASE_SYNC_CATALOG" =~ ^[A-Za-z_][A-Za-z0-9_]{0,254}$ || \
-      ! "$LAKEBASE_DATABASE" =~ ^[A-Za-z_][A-Za-z0-9_]{0,254}$ ]]; then
-  echo "${RED}[deploy] UC/Lakebase catalog and database must be unquoted identifiers.${RST}" >&2
+if [[ ! "$MIP_DEFAULT_CATALOG" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
+      ! "$MIP_LAKEBASE_SYNC_CATALOG" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
+      ! "$LAKEBASE_DATABASE" =~ ^[a-z_][a-z0-9_]{0,254}$ ]]; then
+  echo "${RED}[deploy] UC/Lakebase catalog and database must be lowercase unquoted identifiers.${RST}" >&2
   exit 2
 fi
 if [[ ! "$MIP_RUNTIME_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
@@ -1538,9 +1543,8 @@ run "$PYTHON" -m tools.databricks.provision_runtime_secrets \
 # -----------------------------------------------------------------------------
 # The bundle's SQL tasks read from sql/_rendered/**/*.sql. The canonical
 # sources under sql/** hardcode the default `mip.*` catalog prefix for
-# readability + code review; tools/render_sql.py substitutes the five
-# documented UC prefixes (mip.gold., mip.silver., mip.ref., mip.semantics.,
-# mip.raw., mip.first_party.) for the target catalog before bundle
+# readability + code review; tools/render_sql.py substitutes the governed
+# catalog/schema DDL and three-part UC prefixes for the target catalog before bundle
 # validate/deploy read the rendered tree. The renderer also materializes the
 # first-party demo-feed switch as a SQL literal because Databricks SQL does not
 # allow parameter markers in this DDL path. The stand-alone renderer defaults to
@@ -1594,6 +1598,32 @@ run "$PYTHON" -m tools.databricks.bundle_env plan -t "$TARGET"
 # Step 4: deploy bundle
 # -----------------------------------------------------------------------------
 
+verify_exact_deploy_source
+# A pipeline resource cannot be created until its target catalog/schema exists,
+# while the full catalog DDL is itself uploaded as a bundle job. Break that
+# first-install cycle under the signed deployment lease by creating only the
+# empty managed namespace needed by the pipeline. Governed tables remain in the
+# post-bundle mip_init_catalog_schemas job after the App identity is quiesced.
+step "ensure managed UC pipeline namespace exists before bundle apply"
+_PIPELINE_NAMESPACE_ARGS=(
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+  --schema silver
+)
+# shellcheck disable=SC2031  # Parent-shell M2M ids survive bounded subshells.
+for _FORBIDDEN_OWNER in \
+  "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+  "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; do
+  _PIPELINE_NAMESPACE_ARGS+=(--forbidden-owner-principal "$_FORBIDDEN_OWNER")
+done
+if [[ -n "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
+  _PIPELINE_NAMESPACE_ARGS+=(
+    --forbidden-owner-principal "$_EXISTING_APP_SP_CLIENT_ID"
+  )
+fi
+run_with_account_identity \
+  "$PYTHON" -m tools.databricks.ensure_pipeline_namespace \
+  "${_PIPELINE_NAMESPACE_ARGS[@]}"
 verify_exact_deploy_source
 if [[ -n "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
   step "deploy non-App bundle resources while the prior App snapshot remains live"

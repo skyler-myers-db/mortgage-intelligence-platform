@@ -52,7 +52,7 @@ ENV_LOCAL = REPO / ".env.local"
 
 PLACEHOLDER = "00000000PLACEHOLDER"
 _APP_OR_INSTANCE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
-_UC_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,254}\Z")
+_UC_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,254}\Z")
 
 
 def _is_real(value: str | None) -> bool:
@@ -141,7 +141,7 @@ def _deployment_resource_names(env: dict[str, str]) -> dict[str, str]:
         ("LAKEBASE_DATABASE", database_name),
     ):
         if _UC_IDENTIFIER.fullmatch(value) is None:
-            raise ValueError(f"{label} must be an unquoted identifier")
+            raise ValueError(f"{label} must be a lowercase unquoted identifier")
 
     return {
         "app_name": app_name,
@@ -225,9 +225,7 @@ def _resolve_governed_genie_space_id(
         getattr(confirmed, "title", None) or getattr(confirmed, "name", None) or ""
     ).strip()
     if confirmed_title != space_name:
-        raise ValueError(
-            f"Genie space {space_id!r} round-trip title does not match {space_name!r}"
-        )
+        raise ValueError(f"Genie space {space_id!r} round-trip title does not match {space_name!r}")
     return space_id
 
 
@@ -322,7 +320,9 @@ def main() -> int:
         try:
             governed_genie = _resolve_governed_genie_space_id(env, space_name=space_name)
         except Exception as exc:  # noqa: BLE001 - CLI boundary must fail closed
-            print(f"[bundle_env] governed Genie binding verification failed: {exc}", file=sys.stderr)
+            print(
+                f"[bundle_env] governed Genie binding verification failed: {exc}", file=sys.stderr
+            )
             return 2
         if _is_real(genie) and str(genie).strip() != governed_genie:
             print(
@@ -379,7 +379,7 @@ def main() -> int:
     catalog = str(env.get("MIP_DEFAULT_CATALOG") or "mip").strip()
     if _UC_IDENTIFIER.fullmatch(catalog) is None:
         print(
-            "[bundle_env] MIP_DEFAULT_CATALOG must be an unquoted identifier",
+            "[bundle_env] MIP_DEFAULT_CATALOG must be a lowercase unquoted identifier",
             file=sys.stderr,
         )
         return 2

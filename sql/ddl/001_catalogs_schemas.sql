@@ -13,8 +13,11 @@
 --                mip.app        -- app-runtime scratch / lookups
 --                mip.audit      -- audit tables (mirrors Lakebase audit)
 --
--- Posture:   CREATE ... IF NOT EXISTS everywhere. Safe to re-run on every
---            job invocation and every `databricks bundle deploy`. This
+-- Posture:   deploy.sh pre-creates only the empty catalog + silver schema so
+--            the bundle can define its pipeline on a brand-new workspace.
+--            This full governed DDL remains post-bundle and runs before any
+--            table grants. CREATE ... IF NOT EXISTS everywhere. Safe to re-run on every
+--            deploy workflow and every job invocation. This
 --            script MUST come before any silver/gold DDL in the Lakeflow
 --            job graph so downstream tables land in valid namespaces.
 --

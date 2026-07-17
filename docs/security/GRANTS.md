@@ -29,11 +29,14 @@ That script wraps the Databricks bundle resource deploy plus app promotion and
 population jobs. Every SQL block below remains copy-paste-able for manual
 recovery and review.
 
-**Precondition.** The bundle has been deployed once (`databricks bundle
-deploy -t dev`) so the `mip-app` resource, the SQL warehouse, the
-Lakebase instance, and the UC catalog `mip` all exist. The grants below
-bind the app's workspace identity to the UC objects it already owns
-logically but cannot yet read.
+**Precondition for manual recovery.** The command-of-record deployment
+(`./scripts/deploy.sh -t dev|prod`) has completed its minimal namespace and
+bundle-resource phases once, so the `mip-app` resource, SQL warehouse,
+Lakebase instance, and governed UC catalog exist. A bare
+`databricks bundle deploy` is only a post-bootstrap resource-recovery path; it
+cannot establish this precondition on a fresh workspace. The grants below bind
+the app's workspace identity to the UC objects it already owns logically but
+cannot yet read.
 
 **Identity.** Unity Catalog grants target the workspace-bound service
 principal associated with the app (shown as `mip-app` in the UC examples).
@@ -70,10 +73,10 @@ end-to-end walkthrough; this file is the "grants reference" it links
 to. [`docs/runbook.md`](../runbook.md) covers operator recovery after a
 live incident — not first-deploy setup.
 
-**Who runs these statements.** A metastore admin (the only principal
-that can `GRANT USE CATALOG` on a newly-created catalog). The SE's own
-workspace login is usually insufficient — confirm `current_user()` is
-metastore-admin before running, or pair-deploy with a customer admin.
+**Who runs these statements.** The approved catalog owner or a metastore admin
+with grant authority. The SE's own workspace login is usually insufficient;
+use the same approved deploying identity as the command-of-record or pair with
+a customer metastore administrator.
 
 For the governed treatment boundary, the current deployer canonical
 `user_name` is trusted automatically. If the metastore, catalog, audit schema,
@@ -83,13 +86,22 @@ application ID, or governance group, list its canonical principal name in
 also require dedicated account OAuth credentials. Account SCIM binds the App
 and group to immutable IDs, but is deliberately not used as negative
 membership evidence: Automatic Identity Management can omit effective members
-from SCIM group responses. Deployment instead creates a five-minute OAuth
-secret for the App identity, evaluates `is_account_group_member()` through the
-warehouse as that identity, and deletes the secret before continuing. A
-positive result, failed query, or unproven secret cleanup fails the deployment
-closed. The account OAuth identity therefore needs Service Principal Manager
-on the App identity (or account-admin authority), and must be distinct from
-every runtime, operator, admin, verifier, and target-App principal. The
+from account/group SCIM responses. For each forbidden app-facing M2M and
+existing target-App identity, deployment creates a five-minute OAuth secret and
+uses it to request that target's own raw Current User SCIM
+`id,userName,groups` projection. The read-only
+`groups` collection covers direct, nested, and dynamically calculated
+membership and is matched to the approved group's immutable account ID. A
+positive result, omitted or malformed evidence, failed API request, identity or
+group mismatch, or unproven secret cleanup fails the deployment closed. No SQL
+warehouse access is required. The account OAuth identity therefore needs
+account-admin authority for a first install with an approved group owner,
+because the bundle-created target App does not exist early enough for delegated
+management to be granted in advance. After that install, downscope it to
+Service Principal Manager on every forbidden normal, operator2, admin,
+verifier, agent-runtime, and now-existing target-App principal whose membership
+is probed. It must itself be distinct from every app-facing M2M and target-App
+principal. The
 deployment also fails closed on unresolved, ambiguous, or App-owned objects.
 Configure that separate identity through `DATABRICKS_ACCOUNT_HOST`,
 `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and

@@ -11,12 +11,11 @@ from __future__ import annotations
 import argparse
 import os
 import re
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Literal
 
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
-from databricks.sdk.service.sql import StatementParameterListItem
 from tools.databricks.ensure_campaign_treatment_table import execute_sql
 from tools.databricks.m2m_access_policy import (
     assert_non_admin_service_principal,
@@ -38,6 +37,10 @@ Mode = Literal["quiesce", "runtime"]
 _TEMPORARY_PROBE_SECRET_LIFETIME = "300s"
 
 
+def _canonical(value: object) -> str:
+    return str(value or "").strip().casefold()
+
+
 def _validate_identifier(label: str, value: str) -> str:
     text = value.strip()
     if not _IDENTIFIER_RE.fullmatch(text):
@@ -56,22 +59,24 @@ def _quoted_principal(value: str) -> str:
     return f"`{principal}`"
 
 
-def _target_group_membership_probe(
+def target_group_membership_probe(
     account: AccountClient,
     account_sp_id: str,
     application_id: str,
+    owner_group_id: str,
     owner_group: str,
     *,
-    warehouse_id: str,
     workspace_host: str,
     workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
 ) -> bool:
     """Evaluate effective group membership as the target App identity.
 
     Account SCIM cannot prove a negative membership result when Automatic
-    Identity Management is enabled. Mint a bounded target-SP credential,
-    evaluate Databricks' own effective-membership function, and revoke the
-    credential before returning. Cleanup failure is always fatal.
+    Identity Management is enabled. Mint a bounded target-SP credential and
+    read that identity's own SCIM ``groups`` collection instead. SCIM defines
+    that collection to include direct, nested, and dynamically calculated
+    membership, so this proof needs no SQL warehouse authority. Cleanup
+    failure is always fatal.
     """
 
     host = workspace_host.strip()
@@ -80,6 +85,12 @@ def _target_group_membership_probe(
     principal_id = account_sp_id.strip()
     if not principal_id:
         raise RuntimeError("Account service-principal id is required for identity proof")
+    group_id = owner_group_id.strip()
+    if not group_id:
+        raise RuntimeError("Account group id is required for identity proof")
+    group_name = owner_group.strip()
+    if not group_name:
+        raise RuntimeError("Account group name is required for identity proof")
     secret_id = ""
     probe_error: BaseException | None = None
     target_is_member = False
@@ -91,44 +102,55 @@ def _target_group_membership_probe(
         secret_id = str(getattr(created, "id", "") or "").strip()
         secret = str(getattr(created, "secret", "") or "").strip()
         if not secret_id or not secret:
-            raise RuntimeError(
-                "Temporary target identity credential did not return id and secret"
-            )
+            raise RuntimeError("Temporary target identity credential did not return id and secret")
         target_workspace = workspace_factory(
             host=host,
             client_id=application_id,
             client_secret=secret,
             auth_type="oauth-m2m",
         )
-        response = execute_sql(
-            target_workspace,
-            warehouse_id=warehouse_id,
-            statement="SELECT is_account_group_member(:owner_group)",
-            parameters=[
-                StatementParameterListItem(
-                    name="owner_group",
-                    type="STRING",
-                    value=owner_group,
-                )
-            ],
+        identity = target_workspace.api_client.do(
+            "GET",
+            "/api/2.0/preview/scim/v2/Me",
+            query={"attributes": "id,userName,groups"},
+            headers={"Accept": "application/json"},
         )
-        rows = getattr(getattr(response, "result", None), "data_array", None)
-        if (
-            not isinstance(rows, Sequence)
-            or isinstance(rows, str | bytes)
-            or len(rows) != 1
-            or not isinstance(rows[0], Sequence)
-            or isinstance(rows[0], str | bytes)
-            or len(rows[0]) != 1
-        ):
-            raise RuntimeError("Target identity membership proof returned invalid rows")
-        raw_value = rows[0][0]
-        if isinstance(raw_value, bool):
-            target_is_member = raw_value
-        elif str(raw_value).strip().casefold() in {"true", "false"}:
-            target_is_member = str(raw_value).strip().casefold() == "true"
-        else:
-            raise RuntimeError("Target identity membership proof was not boolean")
+        if not isinstance(identity, dict):
+            raise RuntimeError("Target identity membership proof returned a malformed identity")
+        identity_id = str(identity.get("id") or "").strip()
+        identity_name = str(identity.get("userName") or "").strip()
+        if identity_id != principal_id or _canonical(identity_name) != _canonical(application_id):
+            raise RuntimeError("Temporary credential authenticated as a different target identity")
+        if "groups" not in identity:
+            raise RuntimeError(
+                "Target identity membership proof omitted the authoritative groups collection"
+            )
+        groups = identity["groups"]
+        if not isinstance(groups, list):
+            raise RuntimeError(
+                "Target identity membership proof returned a malformed groups collection"
+            )
+        expected_name = _canonical(group_name)
+        for group in groups:
+            if not isinstance(group, dict):
+                raise RuntimeError("Target identity membership proof returned a malformed group")
+            observed_id = str(group.get("value") or "").strip()
+            observed_name = str(group.get("display") or "").strip()
+            if not observed_id:
+                raise RuntimeError(
+                    "Target identity membership proof returned a group without an id"
+                )
+            if observed_id == group_id:
+                if observed_name and _canonical(observed_name) != expected_name:
+                    raise RuntimeError(
+                        "Target identity membership proof returned a mismatched group name"
+                    )
+                target_is_member = True
+                break
+            if observed_name and _canonical(observed_name) == expected_name:
+                raise RuntimeError(
+                    "Target identity membership proof returned a mismatched group id"
+                )
     except BaseException as exc:
         probe_error = exc
     finally:
@@ -165,13 +187,9 @@ def _object_presence(
     return catalog_object, schema_object, table_object
 
 
-def _identity_context(
-    workspace: WorkspaceClient, principal: str
-) -> TargetServicePrincipal:
+def _identity_context(workspace: WorkspaceClient, principal: str) -> TargetServicePrincipal:
     escaped = principal.replace('"', '\\"')
-    matches = list(
-        workspace.service_principals.list(filter=f'applicationId eq "{escaped}"')
-    )
+    matches = list(workspace.service_principals.list(filter=f'applicationId eq "{escaped}"'))
     if len(matches) != 1:
         raise RuntimeError(
             f"expected one service principal for application id {principal!r}, "
@@ -341,8 +359,7 @@ def converge_campaign_treatment_access(
     mode: Mode,
     approved_owner_principals: set[str] | None = None,
     account_factory: Callable[[], AccountClient] | None = None,
-    group_membership_probe: Callable[[AccountClient, str, str, str], bool]
-    | None = None,
+    group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None,
     workspace: WorkspaceClient | None = None,
 ) -> bool:
     warehouse = warehouse_id.strip()
@@ -363,13 +380,13 @@ def converge_campaign_treatment_access(
         or os.environ.get("DATABRICKS_HOST", "")
     ).strip()
     membership_probe = group_membership_probe or (
-        lambda account, account_sp_id, application_id, owner_group: (
-            _target_group_membership_probe(
+        lambda account, account_sp_id, application_id, owner_group_id, owner_group: (
+            target_group_membership_probe(
                 account,
                 account_sp_id,
                 application_id,
+                owner_group_id,
                 owner_group,
-                warehouse_id=warehouse,
                 workspace_host=workspace_host,
             )
         )
@@ -381,9 +398,7 @@ def converge_campaign_treatment_access(
         account_factory=account_factory or account_client_from_env,
         group_membership_probe=membership_probe,
     )
-    _assert_metastore_boundary(
-        client, principal=principal_name, owner_policy=owner_policy
-    )
+    _assert_metastore_boundary(client, principal=principal_name, owner_policy=owner_policy)
     objects = _object_presence(client, catalog=catalog_name)
     catalog_object, schema_object, table_object = objects
     if catalog_object is None:

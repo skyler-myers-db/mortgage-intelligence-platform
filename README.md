@@ -85,11 +85,14 @@ make deploy-dev
 
 `make deploy-dev` runs `scripts/deploy.sh`: build, env-aware direct bundle
 validate/plan/deploy, app snapshot promotion, refresh jobs, Genie rebinding,
-and smoke checks. For narrow resource-only recovery, `make bundle-validate`,
-`make bundle-plan`, and `make bundle-deploy` are safe because they run
-`tools/databricks/bundle_env.py`.
+and smoke checks. `make bundle-validate` and `make bundle-plan` are safe
+read-only diagnostics because they run `tools/databricks/bundle_env.py`.
+`make bundle-deploy` is a lower-level resource-recovery command: it requires
+the command-of-record deployment to have created the pipeline namespace first.
 
-The Entrada dev target also supports the plain Databricks bundle path:
+After the command-of-record first install has created the governed UC
+namespace, the Entrada dev target also supports the plain Databricks bundle
+resource-recovery path:
 
 ```bash
 databricks bundle deploy -t dev --profile DEFAULT

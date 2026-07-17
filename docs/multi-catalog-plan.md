@@ -35,7 +35,9 @@ Scanned 2026-04-23 across `sql/` (56 .sql files total):
 
 Post-implementation re-scan (2026-04-23 rollout): 56 files processed, 313 substitutions applied per render pass — slight drift above the original 291 reflects subsequent SQL edits between design and rollout. The renderer reports the exact counts on every invocation.
 
-Prefixes in use: `mip.gold.`, `mip.silver.`, `mip.ref.`, `mip.semantics.`, `mip.raw.`. No other three-part names appear.
+Prefixes in use: `mip.gold.`, `mip.silver.`, `mip.ref.`, `mip.semantics.`,
+`mip.raw.`, `mip.first_party.`, `mip.audit.`, and `mip.app.`. No other
+governed three-part names appear.
 
 ## Option analysis
 
@@ -47,7 +49,7 @@ Databricks Asset Bundles do substitute `${var.xxx}` inside YAML, but that only r
 
 ### (b) Preprocessing step inside `databricks bundle deploy` — SHIPPED
 
-Run `tools/render_sql.py` to materialize `sql/_rendered/**` from `sql/**` with a regex-based substitution on the five documented prefixes. Bundle declares `sql_task.file.path` pointing at `sql/_rendered/...` and the rendered directory is gitignored.
+Run `tools/render_sql.py` to materialize `sql/_rendered/**` from `sql/**` with context-specific substitutions for governed catalog/schema creation and three-part UC prefixes. Bundle declares `sql_task.file.path` pointing at `sql/_rendered/...` and the rendered directory is gitignored.
 
 Pros:
 - Zero per-file edits — the canonical sources keep the readable `mip.*` identifiers.
@@ -68,13 +70,16 @@ Use `SET var.catalog = 'mip';` at the top of every file and reference `${catalog
 
 ### Renderer — `tools/render_sql.py`
 
-Regex-free Jinja, just `re.sub` over the five prefixes:
+The renderer uses reviewed context-specific `re.sub` patterns:
 
 - `\bmip\.gold\.`        → `{catalog}.gold.`
 - `\bmip\.silver\.`      → `{catalog}.silver.`
 - `\bmip\.ref\.`         → `{catalog}.ref.`
 - `\bmip\.semantics\.`   → `{catalog}.semantics.`
 - `\bmip\.raw\.`         → `{catalog}.raw.`
+- `\bmip\.first_party\.` → `{catalog}.first_party.`
+- `\bmip\.audit\.`       → `{catalog}.audit.`
+- `\bmip\.app\.`         → `{catalog}.app.`
 
 Safety:
 

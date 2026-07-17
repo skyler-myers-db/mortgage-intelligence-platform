@@ -62,15 +62,15 @@ targets:
       # a concrete space_id; it cannot resolve Genie spaces by name through a
       # bundle lookup. Keep the root variable default as the CI placeholder, but
       # pin the Entrada dev target to the governed mortgage_lead_intelligence
-      # space in this target workspace so a plain bundle deploy using the
-      # reviewed workspace profile
+      # space in this target workspace so a post-bootstrap resource-recovery
+      # bundle deploy using the reviewed workspace profile
       # never reaches Apps with the placeholder and returns the opaque 403
       # "Can View" permission error.
       genie_space_id: 01f18188d7a41311abe3d99932b5aa9a
 
   prod:
     mode: production
-    # CUSTOMER-SE CHECKLIST BEFORE FIRST `bundle deploy -t prod`:
+    # CUSTOMER-SE CHECKLIST BEFORE FIRST `./scripts/deploy.sh -t prod`:
     #   1. `workspace.host` dereferences the root `&default_host` YAML anchor.
     #      Before customer deploy, run:
     #        ./scripts/configure-workspace.sh https://<customer-workspace>
@@ -79,8 +79,10 @@ targets:
     #   2. Decide catalog isolation: share `mip` with dev in a single
     #      workspace, or set `variables.uc_catalog.default` to `mip_prod`
     #      for separation. Both are valid; pick one and document.
-    #   3. Confirm `run_as` service principal has CREATE on uc_catalog
-    #      and USAGE on Delta Share source catalog.
+    #   3. Confirm the deploying identity is the approved UC owner/metastore
+    #      administrator and Delta Share source access is available. The
+    #      command-of-record creates the minimal pipeline namespace before
+    #      bundle apply, then converges runtime grants and verifies postflight.
     #   4. Lakebase instance name `mip-app-state` is reused across targets
     #      via UC; if you need a prod-only instance, override the resource
     #      block under `database_instances`.
@@ -1242,11 +1244,12 @@ variables:
   # BUNDLE_VAR_genie_space_id=$GENIE_SPACE_ID before calling the CLI.
   #
   # The root defaults stay as CI placeholders. The dev target above pins the
-  # governed Entrada Genie space explicitly so a plain
+  # governed Entrada Genie space explicitly so, after the command-of-record
+  # first install has created the pipeline namespace, a resource-recovery
   # `databricks bundle deploy -t dev --profile <reviewed-workspace-profile>`
-  # is also safe. Customer
-  # targets should either set a target-specific Genie space id after
-  # provisioning or pass BUNDLE_VAR_genie_space_id / --var on deploy.
+  # does not use the placeholder. Customer targets should either set a
+  # target-specific Genie space id after provisioning or pass
+  # BUNDLE_VAR_genie_space_id / --var on deploy.
   sql_warehouse_id:
     description: >-
       Serverless SQL Warehouse ID. Override with BUNDLE_VAR_sql_warehouse_id

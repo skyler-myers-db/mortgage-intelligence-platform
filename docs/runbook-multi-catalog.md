@@ -12,18 +12,19 @@ MIP_DEFAULT_CATALOG=summit_mortgage
 ./scripts/deploy.sh           # or: make deploy-dev
 ```
 
-That is the entire operator contract. `scripts/deploy.sh` (step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"` before the bundle validate/deploy phase, which materializes `sql/_rendered/**` with the target catalog substituted into the five documented UC prefixes. The bundle's SQL tasks all read from `sql/_rendered/**`, so every CTAS / DDL / metric view / UC function lands in the right catalog on first deploy.
+That is the entire operator contract. `scripts/deploy.sh` (step 1a) runs `tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"` before the bundle validate/deploy phase, which materializes `sql/_rendered/**` with the target catalog substituted into the governed catalog/schema DDL and three-part UC prefixes. The bundle's SQL tasks all read from `sql/_rendered/**`, so every CTAS / DDL / metric view / UC function lands in the right catalog on first deploy.
 
 For the bundle-variable path (non-default workspace target), keep the two-var form:
 
 ```bash
 MIP_DEFAULT_CATALOG=mip_prod \
-databricks bundle deploy -t prod \
-    --var="uc_catalog=mip_prod" \
-    --var="lakebase_instance=mip-prod-lakebase"
+./scripts/deploy.sh -t prod
 ```
 
-(`uc_catalog` is the bundle-side variable consumed by `pipelines.mip_feature_pipeline.catalog` and the Spark Python job parameters; `MIP_DEFAULT_CATALOG` drives the SQL renderer and the Python runtime. Keep them equal.)
+The deploy script maps `MIP_DEFAULT_CATALOG` to the bundle-side `uc_catalog`
+used by the pipeline and Spark jobs, and it performs the signed, minimal
+namespace bootstrap required on a pristine workspace. Bare bundle apply is a
+lower-level recovery path only after that namespace exists.
 
 ## Python layer — multi-catalog safe since hole-finder R2 #19
 
@@ -60,7 +61,16 @@ mip.silver.    -> {catalog}.silver.
 mip.ref.       -> {catalog}.ref.
 mip.semantics. -> {catalog}.semantics.
 mip.raw.       -> {catalog}.raw.
+mip.first_party. -> {catalog}.first_party.
+mip.audit.     -> {catalog}.audit.
+mip.app.       -> {catalog}.app.
 ```
+
+The renderer also rewrites only exact executable
+`CREATE CATALOG IF NOT EXISTS mip` and
+`CREATE SCHEMA IF NOT EXISTS mip.<governed-schema>` statements. This keeps
+first-install namespace creation in the same target catalog as all downstream
+table DDL.
 
 Wiring:
 

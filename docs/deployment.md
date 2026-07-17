@@ -145,7 +145,13 @@ to report success for an existing principal without an explicit rotation.
 Create the separate account-SCIM OAuth principal and store
 `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and
 `DATABRICKS_ACCOUNT_CLIENT_SECRET` independently; it must not reuse any of the
-five workspace client IDs. Also configure the two distinct Ed25519 private keys
+five workspace client IDs. A first install with an approved group owner requires
+account-admin authority because the bundle-created target App cannot be
+delegated in advance. After that install, downscope the account principal to
+Service Principal Manager on every forbidden normal, operator2, admin,
+verifier, agent-runtime, and now-existing target-App principal so later deploys
+can create and revoke each five-minute target-identity proof credential. Also
+configure the two distinct Ed25519 private keys
 `MIP_AI_GATEWAY_PROOF_SIGNING_KEY` and
 `MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`, plus the runtime HMAC/masking
 secrets documented below. Store its derived public key separately as the
@@ -446,7 +452,9 @@ which immediately invalidates old tokens while keeping the static Databricks
 App resource valid. An ordinary deploy with no configured previous key does
 the same before emitting a payload without the previous environment binding.
 
-The Entrada dev target also supports the plain Databricks bundle resource path:
+After the command-of-record first install has created the governed UC
+namespace, the Entrada dev target also supports the plain Databricks bundle
+resource-recovery path:
 
 ```bash
 databricks bundle deploy -t dev --profile <reviewed-workspace-profile>

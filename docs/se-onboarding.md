@@ -140,17 +140,18 @@ The helper normalizes the URL, updates only the `&default_host` line in
 
 ---
 
-## 3. Apply UC grants (5 minutes — BEFORE `bundle deploy`)
+## 3. Confirm the governed deployer (5 minutes — BEFORE deployment)
 
-Open the internal workspace-grants packet and execute the required UC grants in
-order against the customer workspace (Databricks SQL editor, any warehouse).
-The whole section is copy-paste-able; budget 5 minutes actual work + a few
-minutes if the metastore admin needs to switch seats.
+Use the customer-approved metastore administrator as the deploying identity and
+set `MIP_UC_APPROVED_OWNER_PRINCIPALS` when an approved owner other than that
+identity already owns the target catalog or schema. Keep every App and M2M
+identity out of those owner principals and groups.
 
-**Do not skip this step.** `databricks bundle deploy` does not need the
-grants (it runs as your admin user) but the app's first boot does —
-skipping means §6 fails with `PERMISSION_DENIED` and you waste the
-warehouse warm-up time diagnosing it.
+Do not apply a separate manual grant packet. The command-of-record creates and
+verifies the minimal pipeline namespace before bundle apply, runs the complete
+catalog DDL after apply, converges the exact App/runtime grants, and performs an
+authoritative grants postflight. An inconclusive owner, group-membership, or
+grant proof fails the deployment closed.
 
 ---
 
@@ -162,8 +163,9 @@ but `./scripts/deploy.sh` runs both. Use the script for customer first
 deploys because it provisions/rebinds Genie, maps `.env.local` to
 `BUNDLE_VAR_*`, and runs the direct deployment plan before apply. The
 Entrada dev target also pins its governed Genie space id, so plain
-`databricks bundle deploy -t dev --profile DEFAULT` is safe for
-resource-only recovery in Entrada's workspace.
+`databricks bundle deploy -t dev --profile DEFAULT` is available for
+resource-only recovery in Entrada's workspace after the command-of-record has
+created the governed pipeline namespace.
 
 ```bash
 # One command: env-aware direct bundle validate/plan/deploy, app promotion, jobs, refreshes, and Genie provision
@@ -270,10 +272,10 @@ customer.
 
 ### 7.1 "PERMISSION_DENIED" on `mip.gold.*` or `mip.silver.*`
 
-You skipped §3 or one of the `GRANT` statements ran under a non-
-metastore-admin identity. Re-run the internal workspace-grants packet as a
-metastore admin and re-run §5 verification here. No redeploy needed — grants
-take effect on the next SQL statement.
+The command-of-record was run under a non-approved owner/metastore identity, or
+its automated grant convergence/postflight did not complete. Correct that
+identity or configuration and re-run `./scripts/deploy.sh -t dev`; do not patch
+runtime grants manually, because the deployment verifies their exact shape.
 
 ### 7.2 `/api/v1/health` reports `warehouse: "down"` for > 60 s
 
@@ -311,8 +313,9 @@ Three possible causes, in order of likelihood:
 1. **`GENIE_SPACE_ID` not set.** Re-run
    `echo "GENIE_SPACE_ID=$(cat genie/space_id.txt)" >> .env.local`,
    re-run phase 1 deploy, re-run phase 2.
-2. **Service principal missing `CAN RUN` on the space.** Fix per the internal
-   workspace-grants packet.
+2. **Service principal missing `CAN RUN` on the space.** Re-run
+   `./scripts/deploy.sh -t dev`; its identity-access convergence grants and
+   verifies that exact permission.
 3. **Semantics views unbound.** Re-run
    `databricks bundle run mip_refresh_scores -t dev` — the
    `refresh_semantics_views` task rebinds Genie's trusted assets.

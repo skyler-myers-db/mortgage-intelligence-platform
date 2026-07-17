@@ -288,7 +288,11 @@ def test_bundle_child_preserves_exported_runtime_scope_over_dotenv(
         ({"MIP_APP_NAME": "MIP Unsafe"}, "MIP_APP_NAME must be a lowercase DNS-style name"),
         (
             {"MIP_LAKEBASE_SYNC_CATALOG": "mip-pr105-state"},
-            "MIP_LAKEBASE_SYNC_CATALOG must be an unquoted identifier",
+            "MIP_LAKEBASE_SYNC_CATALOG must be a lowercase unquoted identifier",
+        ),
+        (
+            {"MIP_LAKEBASE_SYNC_CATALOG": "MIP_STATE"},
+            "MIP_LAKEBASE_SYNC_CATALOG must be a lowercase unquoted identifier",
         ),
     ],
 )

@@ -394,13 +394,13 @@ def _run_app_failure_compensation_harness(
         f'if [[ "$*" == *app_deployment_rollback* ]]; then exit {rollback_result}; fi\n'
         'if [[ "$*" == *stop_app_fail_closed* ]]; then\n'
         f"  [[ {stop_result} -eq 0 ]] || exit {stop_result}\n"
-        "  outcome_file=\"\"\n"
+        '  outcome_file=""\n'
         "  while (( $# )); do\n"
-        "    if [[ \"$1\" == --out-env && $# -ge 2 ]]; then outcome_file=\"$2\"; break; fi\n"
+        '    if [[ "$1" == --out-env && $# -ge 2 ]]; then outcome_file="$2"; break; fi\n'
         "    shift\n"
         "  done\n"
-        "  [[ -n \"$outcome_file\" ]] || exit 64\n"
-        f"  printf %s {shlex.quote(outcome_record)} > \"$outcome_file\"\n"
+        '  [[ -n "$outcome_file" ]] || exit 64\n'
+        f'  printf %s {shlex.quote(outcome_record)} > "$outcome_file"\n'
         "  exit 0\n"
         "fi\n"
         "exit 0\n",
@@ -824,10 +824,7 @@ def test_deploy_auth_handoff_is_single_workspace_and_child_isolated(
     assert runtime_authorized["DATABRICKS_CLIENT_ID"] == "runtime-client"
     assert runtime_authorized["DATABRICKS_CLIENT_SECRET"] == "runtime-secret"
     assert runtime_authorized["MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING"] == "1"
-    assert (
-        runtime_authorized["MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"]
-        == "model-signing-secret"
-    )
+    assert runtime_authorized["MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY"] == "model-signing-secret"
     assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" not in runtime_authorized
 
 
@@ -1170,6 +1167,12 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
     )
     bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
+    namespace_setup = script.index(
+        'step "ensure managed UC pipeline namespace exists before bundle apply"'
+    )
+    namespace_bootstrap = script.index(
+        "tools.databricks.ensure_pipeline_namespace", namespace_setup
+    )
     post_bundle_quiesce = script.index(
         'step "quiesce app treatment writes immediately before treatment-table DDL"'
     )
@@ -1183,7 +1186,8 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
     skip_silver_branch = script.index('if [[ "$SKIP_SILVER" -eq 1 ]]')
 
     assert (
-        bundle_apply
+        namespace_bootstrap
+        < bundle_apply
         < migration
         < post_bundle_quiesce
         < uc_init
@@ -1207,6 +1211,37 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
     assert atomic_restore_and_capture < first_green_capture
     assert "mip_init_catalog_schemas:" in bundle
     assert "path: sql/_rendered/ddl/001_catalogs_schemas.sql" in bundle
+    namespace_block = script[namespace_setup:bundle_apply]
+    assert '--catalog "${MIP_DEFAULT_CATALOG:-mip}"' in namespace_block
+    assert "--schema silver" in namespace_block
+    assert "--warehouse-id" not in namespace_block
+    assert "run_with_account_identity" in namespace_block
+    assert namespace_block.count("--forbidden-owner-principal") >= 2
+    for forbidden_client_id in (
+        '"$DATABRICKS_CLIENT_ID"',
+        '"$DATABRICKS_OPERATOR2_CLIENT_ID"',
+        '"$DATABRICKS_ADMIN_CLIENT_ID"',
+        '"$DATABRICKS_VERIFIER_CLIENT_ID"',
+        '"$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"',
+    ):
+        assert forbidden_client_id in namespace_block
+    assert '"$_EXISTING_APP_SP_CLIENT_ID"' in namespace_block
+    assert "mip_init_catalog_schemas" not in namespace_block
+
+
+def test_pipeline_namespace_bootstrap_is_leased_and_precedes_bundle_apply() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    lease = script.index("tools.databricks.app_deployment_lease acquire")
+    compensation = script.index("APP_FAIL_CLOSED_ARMED=1")
+    plan = script.index('tools.databricks.bundle_env plan -t "$TARGET"')
+    namespace = script.index("tools.databricks.ensure_pipeline_namespace")
+    bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
+    full_ddl = script.index('databricks bundle run mip_init_catalog_schemas -t "$TARGET"')
+
+    assert lease < compensation < plan < namespace < bundle_apply < full_ddl
+    assert script.count("verify_exact_deploy_source", plan, bundle_apply) == 2
+    assert "^[a-z_][a-z0-9_]{0,254}$" in script
 
 
 def test_first_install_dry_run_does_not_require_a_live_app_identity() -> None:
@@ -1446,9 +1481,7 @@ def test_proof_signing_heartbeat_is_direct_child_and_renews(
         """
     )
     env = {
-        key: value
-        for key, value in os.environ.items()
-        if key != "MIP_AI_GATEWAY_PROOF_SIGNING_KEY"
+        key: value for key, value in os.environ.items() if key != "MIP_AI_GATEWAY_PROOF_SIGNING_KEY"
     }
     env["PYTHONPATH"] = os.pathsep.join(
         value for value in (str(REPO), env.get("PYTHONPATH", "")) if value

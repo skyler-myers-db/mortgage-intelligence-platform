@@ -24,9 +24,7 @@ def account_client_from_env() -> AccountClient:
         "host": os.environ.get("DATABRICKS_ACCOUNT_HOST", "").strip(),
         "account_id": os.environ.get("DATABRICKS_ACCOUNT_ID", "").strip(),
         "client_id": os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", "").strip(),
-        "client_secret": os.environ.get(
-            "DATABRICKS_ACCOUNT_CLIENT_SECRET", ""
-        ).strip(),
+        "client_secret": os.environ.get("DATABRICKS_ACCOUNT_CLIENT_SECRET", "").strip(),
     }
     missing = sorted(name for name, value in values.items() if not value)
     if missing:
@@ -64,16 +62,11 @@ def _account_principal_id(account: AccountClient, *, application_id: str) -> str
     escaped = _escaped_filter(application_id)
     principals = [
         item
-        for item in account.service_principals.list(
-            filter=f'applicationId eq "{escaped}"'
-        )
-        if _canonical(getattr(item, "application_id", ""))
-        == _canonical(application_id)
+        for item in account.service_principals.list(filter=f'applicationId eq "{escaped}"')
+        if _canonical(getattr(item, "application_id", "")) == _canonical(application_id)
     ]
     if len(principals) != 1:
-        raise RuntimeError(
-            "Target App identity did not resolve exactly once in account SCIM"
-        )
+        raise RuntimeError("Target App identity did not resolve exactly once in account SCIM")
     principal_id = str(getattr(principals[0], "id", "") or "").strip()
     if not principal_id:
         raise RuntimeError("Target App account principal has no immutable id")
@@ -89,16 +82,14 @@ class ApprovedOwnerPolicy:
     target: TargetServicePrincipal
     configured_principals: set[str] = field(default_factory=set)
     account_factory: Callable[[], AccountClient] = account_client_from_env
-    group_membership_probe: Callable[[AccountClient, str, str, str], bool] | None = None
+    group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None
     _account_client: AccountClient | None = field(default=None, init=False)
     _account_target_sp_id: str = field(default="", init=False)
     _account_group_names: dict[str, str] = field(default_factory=dict, init=False)
     _resolved: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
     _current_name: str = field(default="", init=False)
     _current_id: str = field(default="", init=False)
-    _group_membership_results: dict[str, bool] = field(
-        default_factory=dict, init=False
-    )
+    _group_membership_results: dict[str, bool] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         current = self.workspace.current_user.me()
@@ -109,9 +100,7 @@ class ApprovedOwnerPolicy:
             raise RuntimeError(
                 "Deploying identity must expose canonical user_name and immutable id"
             )
-        if {current_name, current_id, current_application_id}.intersection(
-            self.target.aliases
-        ):
+        if {current_name, current_id, current_application_id}.intersection(self.target.aliases):
             raise RuntimeError(
                 "Deploying identity must be distinct from the target App service principal"
             )
@@ -124,11 +113,7 @@ class ApprovedOwnerPolicy:
         self._current_id = current_id
 
     def _exact(self, items: Iterable[object], attribute: str, expected: str) -> list[object]:
-        return [
-            item
-            for item in items
-            if _canonical(getattr(item, attribute, "")) == expected
-        ]
+        return [item for item in items if _canonical(getattr(item, attribute, "")) == expected]
 
     def _resolve(self, owner: str, *, query_name: str) -> tuple[str, str]:
         cached = self._resolved.get(owner)
@@ -141,9 +126,7 @@ class ApprovedOwnerPolicy:
             owner,
         )
         service_principals = self._exact(
-            self.workspace.service_principals.list(
-                filter=f'applicationId eq "{escaped}"'
-            ),
+            self.workspace.service_principals.list(filter=f'applicationId eq "{escaped}"'),
             "application_id",
             owner,
         )
@@ -190,9 +173,7 @@ class ApprovedOwnerPolicy:
                 or os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", "")
             )
             if not account_client_id:
-                raise RuntimeError(
-                    "Dedicated account OAuth client has no canonical client id"
-                )
+                raise RuntimeError("Dedicated account OAuth client has no canonical client id")
             separated_ids = {
                 _canonical(os.environ.get(name, ""))
                 for name in (
@@ -232,13 +213,9 @@ class ApprovedOwnerPolicy:
             hydrated_id = str(getattr(account_group, "id", "") or "").strip()
             if hydrated_id != group_id:
                 raise RuntimeError("Account SCIM hydrated group id mismatch")
-            raw_account_name = str(
-                getattr(account_group, "display_name", "") or ""
-            ).strip()
+            raw_account_name = str(getattr(account_group, "display_name", "") or "").strip()
             if not raw_account_name:
-                raise RuntimeError(
-                    f"Account SCIM group {group_id!r} has no display name"
-                )
+                raise RuntimeError(f"Account SCIM group {group_id!r} has no display name")
             self._account_group_names[group_id] = raw_account_name
         account_name = _canonical(raw_account_name)
         if not account_name or account_name != owner:
@@ -257,6 +234,7 @@ class ApprovedOwnerPolicy:
                     self._account_client,
                     account_sp_id,
                     self.target.application_id,
+                    group_id,
                     raw_account_name,
                 )
             except Exception as exc:
