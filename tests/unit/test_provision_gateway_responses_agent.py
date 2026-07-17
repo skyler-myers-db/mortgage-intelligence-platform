@@ -424,7 +424,7 @@ class _Client:
         page_token: str | None = None,
     ) -> list[object]:
         assert experiment_ids == ["experiment-7"]
-        assert max_results in (None, registration_recovery._LOGGED_MODEL_SEARCH_PAGE_SIZE)
+        assert max_results == registration_recovery._LOGGED_MODEL_SEARCH_PAGE_SIZE == 50
         assert page_token is None
         return [
             logged_model
@@ -2448,6 +2448,7 @@ def test_orphan_discovery_exhausts_pages_before_selecting_source() -> None:
 
     class PaginatedClient(_CleanupClient):
         logged_page_tokens: list[str | None] = []
+        logged_page_sizes: list[int | None] = []
 
         def search_logged_models(
             self,
@@ -2457,8 +2458,9 @@ def test_orphan_discovery_exhausts_pages_before_selecting_source() -> None:
             page_token: str | None = None,
         ) -> Page:
             assert experiment_ids == ["experiment-7"]
-            assert max_results == registration_recovery._LOGGED_MODEL_SEARCH_PAGE_SIZE
+            assert max_results == registration_recovery._LOGGED_MODEL_SEARCH_PAGE_SIZE == 50
             self.logged_page_tokens.append(page_token)
+            self.logged_page_sizes.append(max_results)
             values = list(self.logged_models.values())
             return Page(values[:1], "next") if page_token is None else Page(values[1:])
 
@@ -2484,6 +2486,39 @@ def test_orphan_discovery_exhausts_pages_before_selecting_source() -> None:
         )
 
     assert client.logged_page_tokens == [None, "next"]
+    assert client.logged_page_sizes == [50, 50]
+
+
+def test_orphan_discovery_rejects_repeated_logged_model_page_token() -> None:
+    class Page(list[object]):
+        token = "repeated"
+
+    class RepeatedTokenClient(_CleanupClient):
+        logged_page_sizes: list[int | None] = []
+
+        def search_logged_models(
+            self,
+            *,
+            experiment_ids: list[str],
+            max_results: int | None = None,
+            page_token: str | None = None,
+        ) -> Page:
+            assert experiment_ids == ["experiment-7"]
+            assert page_token in (None, "repeated")
+            assert max_results == registration_recovery._LOGGED_MODEL_SEARCH_PAGE_SIZE == 50
+            self.logged_page_sizes.append(max_results)
+            return Page()
+
+    client = RepeatedTokenClient()
+
+    with pytest.raises(RuntimeError, match="logged-model search repeated a pagination token"):
+        registration_recovery.require_no_unjournaled_gateway_sources(
+            client,
+            experiment_id="experiment-7",
+            expected_logged_model_name="mortgage_growth_supervisor_proxy",
+        )
+
+    assert client.logged_page_sizes == [50, 50]
 
 
 def test_orphan_discovery_rejects_name_and_identity_drift() -> None:
