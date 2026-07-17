@@ -107,9 +107,14 @@ def _qualified_uc_table(catalog: str, schema: str, table: str) -> str:
     )
 
 
-def _resolve_connection() -> dict:
+def _resolve_connection(
+    *,
+    instance_name: str | None = None,
+    database_name: str | None = None,
+) -> dict:
     """Return psycopg.connect kwargs. Mirrors jobs/lakebase_migrate.py."""
-    instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    instance_name = instance_name or os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    database_name = database_name or os.environ.get("LAKEBASE_DATABASE", "mip_app_state")
     host = os.environ.get("LAKEBASE_HOST")
     user = os.environ.get("LAKEBASE_USER")
     password = os.environ.get("LAKEBASE_PASSWORD")
@@ -118,7 +123,7 @@ def _resolve_connection() -> dict:
         return {
             "host": host,
             "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-            "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+            "dbname": database_name,
             "user": user,
             "password": password,
             "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
@@ -187,7 +192,7 @@ def _resolve_connection() -> dict:
     return {
         "host": resolved_host,
         "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-        "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+        "dbname": database_name,
         "user": user or identity,
         "password": password or cred_token,
         "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
@@ -593,6 +598,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=("Unity Catalog catalog for gold tables " "(default: MIP_DEFAULT_CATALOG or mip)."),
     )
     parser.add_argument(
+        "--lakebase-instance",
+        default=os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state"),
+    )
+    parser.add_argument(
+        "--lakebase-database",
+        default=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+    )
+    parser.add_argument(
         "--prune-legacy-defaults",
         action="store_true",
         help=(
@@ -605,7 +618,10 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> None:
     args = build_parser().parse_args(argv)
-    conn_kwargs = _resolve_connection()
+    conn_kwargs = _resolve_connection(
+        instance_name=args.lakebase_instance,
+        database_name=args.lakebase_database,
+    )
     try:
         rows = _fetch_lakebase_rows(conn_kwargs)
     except Exception as exc:  # noqa: BLE001 -- operator-facing

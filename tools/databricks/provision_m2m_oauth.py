@@ -1,9 +1,4 @@
-"""Provision role-separated M2M identities for live Module 0 automation.
-
-The tool converges reviewed access and can send a one-shot OAuth secret
-directly to GitHub. It never prints or stores the secret locally.
-
-"""
+"""Provision role-separated M2M identities for live Module 0 automation."""
 
 from __future__ import annotations
 
@@ -69,24 +64,22 @@ def _reserved_gateway_endpoints(client: Any) -> set[str]:
 
 DATABRICKS_YML = REPO_ROOT / "databricks.yml"
 DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
-# Deployed App URL. Written as a GitHub secret alongside the client id/secret
-# so the workflow's deployed-path detection flips on in a single admin pass.
-DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
 CANONICAL_GH_REPO = "skyler-myers-db/mortgage-intelligence-platform"
 _GH_REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
 
 
 def _diag(msg: str) -> None:
-    """Stderr diagnostic. Keeps stdout clean for scripted consumers."""
     print(f"[mip-m2m-provision] {msg}", file=sys.stderr)
 
 
 def _load_app_name_from_bundle(path: Path = DATABRICKS_YML) -> str:
-    return _config_helpers.load_app_name_from_bundle(path)
+    return _config_helpers.load_deployment_app_name(path)
+
+
+_resolve_live_app_url = _config_helpers.resolve_live_app_url
 
 
 def _infer_gh_repo() -> str | None:
-    """Infer ``owner/repo`` from the ``origin`` remote. None if unresolved."""
     return _config_helpers.infer_gh_repo(REPO_ROOT, runner=subprocess.run)
 
 
@@ -272,7 +265,7 @@ def provision(
     set_gh_secrets: bool,
     mint_secret: bool,
     rotate: bool,
-    app_url: str,
+    app_url: str | None,
     client_id_secret_name: str,
     client_secret_secret_name: str,
     app_url_secret_name: str | None,
@@ -355,6 +348,10 @@ def provision(
             raise SystemExit(f"Invalid GitHub Actions secret name: {name!r}")
 
     client = client_factory()
+
+    resolved_app_url = app_url.strip() if app_url else None
+    if mint_secret and app_url_secret_name and not pre_app_bootstrap and not resolved_app_url:
+        resolved_app_url = _resolve_live_app_url(client, app_name=app_name)
 
     # A missing identity group is a governance decision, not an incidental SP
     # bootstrap side effect. Fail before creating or mutating any identity
@@ -544,7 +541,8 @@ def provision(
         _set_gh_secret(gh_repo, client_secret_secret_name, secret_value)
         _set_gh_secret(gh_repo, client_id_secret_name, client_id)
         if app_url_secret_name and not pre_app_bootstrap:
-            _set_gh_secret(gh_repo, app_url_secret_name, app_url)
+            assert resolved_app_url is not None  # resolved before any identity mutation
+            _set_gh_secret(gh_repo, app_url_secret_name, resolved_app_url)
         wrote_secrets = True
         secret_value = None
 
@@ -835,7 +833,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(exc))
 
     app_name = "" if args.pre_app_bootstrap else args.app_name or _load_app_name_from_bundle()
-    app_url = args.app_url or os.environ.get("MIP_APP_URL", DEFAULT_APP_URL)
+    app_url = args.app_url or os.environ.get("MIP_APP_URL")
     gh_repo = args.gh_repo or _infer_gh_repo()
     try:
         _validate_gh_repo(gh_repo, bind_secret_sink=args.mint_secret)

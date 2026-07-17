@@ -15,6 +15,7 @@ import argparse
 import json
 import math
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass
@@ -62,6 +63,8 @@ from tools.databricks.ai_gateway_tool_trace import (
     warm_endpoint_with_cold_start_patience,
 )
 
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,254}\Z")
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -108,6 +111,18 @@ def _parser() -> argparse.ArgumentParser:
         "--warehouse-id",
         default=os.environ.get("DATABRICKS_WAREHOUSE_ID"),
         help="SQL warehouse used by the dedicated verifier identity.",
+    )
+    parser.add_argument(
+        "--lakebase-instance",
+        default=(
+            os.environ.get("MIP_LAKEBASE_INSTANCE")
+            or os.environ.get("LAKEBASE_INSTANCE_NAME")
+            or "mip-app-state"
+        ),
+    )
+    parser.add_argument(
+        "--lakebase-database",
+        default=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
     )
     parser.add_argument(
         "--expected-tool-count",
@@ -181,6 +196,8 @@ def ensure_lakebase_env(
     workspace_factory: Any = None,
     *,
     force_refresh: bool = False,
+    instance_name: str | None = None,
+    database_name: str | None = None,
 ) -> bool:
     """Mint Lakebase connection env from the Databricks identity when absent.
 
@@ -208,7 +225,15 @@ def ensure_lakebase_env(
         host = (value or "").strip().lower()
         return bool(host) and host not in {"localhost", "127.0.0.1", "::1"}
 
+    database = (database_name or os.environ.get("LAKEBASE_DATABASE") or "mip_app_state").strip()
+    if _IDENTIFIER.fullmatch(database) is None:
+        raise ValueError("Lakebase database must be an unquoted identifier")
+
     if not force_refresh and _is_real_host(os.environ.get("LAKEBASE_HOST")):
+        os.environ["LAKEBASE_DATABASE"] = database
+        os.environ["PGDATABASE"] = database
+        stale = get_settings()
+        stale.lakebase_database = database
         return False
     stale = get_settings()
     if not force_refresh and _is_real_host(stale.lakebase_host):
@@ -220,7 +245,12 @@ def ensure_lakebase_env(
             "[ai-gateway-verify] ignoring localhost Lakebase config from .env.local — "
             "the proof ledger must live in the real mip-app-state instance."
         )
-    instance = (os.environ.get("MIP_LAKEBASE_INSTANCE") or "mip-app-state").strip()
+    instance = (
+        instance_name
+        or os.environ.get("MIP_LAKEBASE_INSTANCE")
+        or os.environ.get("LAKEBASE_INSTANCE_NAME")
+        or "mip-app-state"
+    ).strip()
     factory = workspace_factory if workspace_factory is not None else WorkspaceClient
     workspace = factory()
     dns = workspace.database.get_database_instance(instance).read_write_dns
@@ -235,7 +265,6 @@ def ensure_lakebase_env(
     # values are invisible to it (observed 2026-07-07: minting succeeded but
     # psycopg still dialed localhost). The PG* fallbacks read live os.environ
     # through that same stale object, which is exactly the Apps pathway.
-    database = "mip_app_state"
     os.environ.update(
         {
             "PGHOST": str(dns),
@@ -281,7 +310,12 @@ def main(argv: list[str] | None = None) -> int:
     workspace = _workspace_client()
     if not (args.warehouse_id or "").strip():
         raise ValueError("--warehouse-id is required for verifier-derived proof")
-    ensure_lakebase_env(lambda: workspace, force_refresh=True)
+    ensure_lakebase_env(
+        lambda: workspace,
+        force_refresh=True,
+        instance_name=args.lakebase_instance,
+        database_name=args.lakebase_database,
+    )
     settings = get_settings()
     git_sha = _resolved_sha(args.git_sha or settings.mip_git_sha)
     endpoint = (args.endpoint or settings.mip_ai_gateway_endpoint or "").strip()

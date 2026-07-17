@@ -116,6 +116,9 @@ def _make_client(
         ]
     )
     client.apps.list.return_value = iter([SimpleNamespace(name="mip-app")])
+    client.apps.get.return_value = SimpleNamespace(
+        url="https://mip-app-live.aws.databricksapps.com"
+    )
     client.apps.get_permissions.return_value = SimpleNamespace(access_control_list=[])
     client.warehouses.list.return_value = iter([SimpleNamespace(id="warehouse-123")])
     warehouse_principal = endpoint_principal
@@ -162,6 +165,24 @@ def test_infer_gh_repo_preserves_dotted_repository_names(
         return_value=SimpleNamespace(stdout=origin),
     ):
         assert pmo._infer_gh_repo() == expected
+
+
+def test_app_name_resolution_prefers_reviewed_deployment_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_APP_NAME", "mip-app-pr105-staging")
+    monkeypatch.setenv("BUNDLE_VAR_app_name", "wrong-lower-precedence")
+
+    assert pmo._load_app_name_from_bundle() == "mip-app-pr105-staging"
+
+
+def test_app_name_resolution_accepts_bundle_variable_without_mip_alias(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("MIP_APP_NAME", raising=False)
+    monkeypatch.setenv("BUNDLE_VAR_app_name", "mip-app-customer")
+
+    assert pmo._load_app_name_from_bundle() == "mip-app-customer"
 
 
 def _provision(client: MagicMock, **overrides: object):
@@ -667,6 +688,33 @@ def test_normal_happy_path_creates_grants_mints_and_uses_role_owned_secret_names
     assert result.secret_minted is True
     assert result.secret_written_to_gh is True
     assert not hasattr(result, "client_secret")
+
+
+def test_normal_secret_sink_discovers_the_exact_live_app_url() -> None:
+    new_sp = _sp()
+    client = _make_client(create_returns=new_sp)
+
+    with patch.object(pmo, "_set_gh_secret") as set_secret:
+        _provision(client, app_name="mip-app-pr105-staging", app_url=None)
+
+    client.apps.get.assert_called_once_with("mip-app-pr105-staging")
+    assert call(
+        _CANONICAL_GH_REPO,
+        "MIP_APP_URL",
+        "https://mip-app-live.aws.databricksapps.com",
+    ) in set_secret.call_args_list
+
+
+def test_missing_live_app_url_fails_before_identity_mutation() -> None:
+    client = _make_client(create_returns=_sp())
+    client.apps.get.return_value = SimpleNamespace(url=None)
+
+    with pytest.raises(SystemExit, match="returned no valid HTTPS URL"):
+        _provision(client, app_name="mip-app-pr105-staging", app_url=None)
+
+    client.service_principals.list.assert_not_called()
+    client.service_principals.create.assert_not_called()
+    client.service_principal_secrets_proxy.create.assert_not_called()
 
 
 @pytest.mark.parametrize(

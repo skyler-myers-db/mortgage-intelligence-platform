@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from collections.abc import Callable
@@ -21,6 +22,36 @@ def load_app_name_from_bundle(path: Path) -> str:
         re.MULTILINE,
     )
     return match.group(1) if match else "mip-app"
+
+
+def load_deployment_app_name(
+    path: Path,
+    *,
+    env: Any = os.environ,
+) -> str:
+    """Prefer the reviewed deployment namespace over the bundle default."""
+
+    configured = str(env.get("MIP_APP_NAME") or env.get("BUNDLE_VAR_app_name") or "").strip()
+    return configured or load_app_name_from_bundle(path)
+
+
+def resolve_live_app_url(client: Any, *, app_name: str) -> str:
+    """Resolve the exact workspace-local App URL before identity mutation."""
+
+    from tools.databricks.m2m_access_policy import wrap_admin_error
+
+    try:
+        app = client.apps.get(app_name)
+    except Exception as exc:  # noqa: BLE001
+        raise wrap_admin_error(exc, step=f"resolve URL for App {app_name!r}") from exc
+    value = app.get("url") if isinstance(app, dict) else getattr(app, "url", None)
+    app_url = str(value or "").strip()
+    if not app_url.startswith("https://") or any(char.isspace() for char in app_url):
+        raise SystemExit(
+            f"App {app_name!r} returned no valid HTTPS URL; wait for App provisioning "
+            "to finish or pass the reviewed --app-url explicitly"
+        )
+    return app_url
 
 
 def infer_gh_repo(

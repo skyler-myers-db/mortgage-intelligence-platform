@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import urllib.request
@@ -26,6 +27,8 @@ if str(REPO_ROOT) not in sys.path:
 
 
 from tools.databricks.workspace_auth import deployment_workspace_client  # noqa: E402
+
+_IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,254}\Z")
 
 
 def _workspace_token_provider(workspace: Any):
@@ -100,6 +103,14 @@ def main() -> None:
         description="Mirror Lakebase approvals/outreach state into UC gold without a Spark job."
     )
     parser.add_argument("--catalog", default=settings.mip_default_catalog)
+    parser.add_argument(
+        "--lakebase-instance",
+        default=os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state"),
+    )
+    parser.add_argument(
+        "--lakebase-database",
+        default=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+    )
     parser.add_argument("--timeout-s", type=int, default=50)
     parser.add_argument(
         "--funnel-sql",
@@ -117,7 +128,12 @@ def main() -> None:
         )
     )
     workspace = deployment_workspace_client() if deployer_bound else None
-    _ensure_lakebase_env(settings, workspace=workspace)
+    _ensure_lakebase_env(
+        settings,
+        workspace=workspace,
+        instance_name=args.lakebase_instance,
+        database_name=args.lakebase_database,
+    )
 
     result = sync_lifecycle_state_via_warehouse(
         catalog=args.catalog,
@@ -160,13 +176,25 @@ def _load_local_env() -> None:
             os.environ.setdefault(name, value)
 
 
-def _ensure_lakebase_env(settings: Any, *, workspace: Any | None = None) -> None:
+def _ensure_lakebase_env(
+    settings: Any,
+    *,
+    workspace: Any | None = None,
+    instance_name: str | None = None,
+    database_name: str | None = None,
+) -> None:
+    instance_name = instance_name or os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    database_name = database_name or os.environ.get("LAKEBASE_DATABASE", "mip_app_state")
+    if _IDENTIFIER.fullmatch(database_name) is None:
+        raise ValueError("Lakebase database must be an unquoted identifier")
     host = (os.environ.get("LAKEBASE_HOST") or "").strip().lower()
     password = (os.environ.get("LAKEBASE_PASSWORD") or "").strip()
     if workspace is None and host and host not in {"localhost", "127.0.0.1", "::1"} and password:
+        os.environ["LAKEBASE_DATABASE"] = database_name
+        os.environ["PGDATABASE"] = database_name
+        settings.lakebase_database = database_name
         return
 
-    instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
     if workspace is not None:
         dns = workspace.database.get_database_instance(instance_name).read_write_dns
         credential = workspace.database.generate_database_credential(
@@ -174,7 +202,13 @@ def _ensure_lakebase_env(settings: Any, *, workspace: Any | None = None) -> None
             request_id=f"mip-sync-lifecycle-cli-{uuid.uuid4()}",
         )
         user_name = workspace.current_user.me().user_name
-        _set_lakebase_auth(settings, str(dns), str(user_name), str(credential.token))
+        _set_lakebase_auth(
+            settings,
+            str(dns),
+            str(user_name),
+            str(credential.token),
+            database_name=database_name,
+        )
         return
 
     workspace_host = settings.databricks_host
@@ -206,22 +240,30 @@ def _ensure_lakebase_env(settings: Any, *, workspace: Any | None = None) -> None
         str(inst.get("read_write_dns") or ""),
         str(me.get("userName") or ""),
         str(cred.get("token") or ""),
+        database_name=database_name,
     )
 
 
-def _set_lakebase_auth(settings: Any, host: str, user: str, password: str) -> None:
+def _set_lakebase_auth(
+    settings: Any,
+    host: str,
+    user: str,
+    password: str,
+    *,
+    database_name: str,
+) -> None:
     if not host or not user or not password:
         raise RuntimeError("deployer-derived Lakebase credentials were incomplete")
     values = {
         "LAKEBASE_HOST": host,
         "LAKEBASE_PORT": "5432",
-        "LAKEBASE_DATABASE": "mip_app_state",
+        "LAKEBASE_DATABASE": database_name,
         "LAKEBASE_USER": user,
         "LAKEBASE_PASSWORD": password,
         "LAKEBASE_SSLMODE": "require",
         "PGHOST": host,
         "PGPORT": "5432",
-        "PGDATABASE": "mip_app_state",
+        "PGDATABASE": database_name,
         "PGUSER": user,
         "PGPASSWORD": password,
         "PGSSLMODE": "require",
@@ -229,7 +271,7 @@ def _set_lakebase_auth(settings: Any, host: str, user: str, password: str) -> No
     os.environ.update(values)
     settings.lakebase_host = host
     settings.lakebase_port = 5432
-    settings.lakebase_database = "mip_app_state"
+    settings.lakebase_database = database_name
     settings.lakebase_user = user
     from pydantic import SecretStr
 

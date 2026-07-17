@@ -26,7 +26,7 @@ bundle:
 # anchor and fails if it finds one — a forkability safeguard so an SE
 # cannot ship a customer deploy still pointing at Entrada's workspace.
 workspace:
-  host: &default_host https://dbc-3aa503a9-4fa8.cloud.databricks.com
+  host: &default_host https://dbc-149e560d-e056.cloud.databricks.com
 
 # Sync: explicitly include the built frontend bundle in the uploaded
 # source tree. `frontend/dist/` is in .gitignore (we don't commit built
@@ -56,17 +56,17 @@ targets:
     default: true
     workspace:
       host: *default_host
-      profile: DEFAULT
       root_path: ~/.bundle/${bundle.name}/${bundle.target}
     variables:
       # The Databricks Apps bundle schema requires app Genie bindings to carry
       # a concrete space_id; it cannot resolve Genie spaces by name through a
       # bundle lookup. Keep the root variable default as the CI placeholder, but
       # pin the Entrada dev target to the governed mortgage_lead_intelligence
-      # space so plain `databricks bundle deploy -t dev --profile DEFAULT`
+      # space in this target workspace so a plain bundle deploy using the
+      # reviewed workspace profile
       # never reaches Apps with the placeholder and returns the opaque 403
       # "Can View" permission error.
-      genie_space_id: 01f13d4968af1b249dc388fd5b18b195
+      genie_space_id: 01f18188d7a41311abe3d99932b5aa9a
 
   prod:
     mode: production
@@ -224,8 +224,10 @@ resources:
     mip_app_state:
       # DNS-compliant: alphanumeric + hyphens only. The bundle resource key
       # stays `mip_app_state` for internal references; the actual instance
-      # name on the Databricks side is `mip-app-state`.
-      name: mip-app-state
+      # name on the Databricks side defaults to `mip-app-state`. Isolated
+      # staging and customer installs override the bundle variable instead of
+      # editing this resource or colliding with another deployment.
+      name: ${var.lakebase_instance_name}
       # CU_1 is the smallest tier and is appropriate for Module 0's
       # default write volume (audit + approvals on the order of a
       # few rows per minute). Production lift to CU_2 would be a
@@ -237,14 +239,14 @@ resources:
 
   database_catalogs:
     mip_app_state_catalog:
-      name: mip_app_state
+      name: ${var.lakebase_catalog_name}
       database_instance_name: ${resources.database_instances.mip_app_state.name}
       database_name: ${var.lakebase_database_name}
       create_database_if_not_exists: true
 
   apps:
     mip_app:
-      name: mip-app
+      name: ${var.app_name}
       description: Mortgage Intelligence Platform — Module 0 (Top-of-Funnel Lead Generation & Borrower Segmentation).
       source_code_path: .
       # App resource bindings. On deploy, Databricks Apps injects env
@@ -941,7 +943,10 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/sync_lifecycle_state.py
-            parameters: ["--catalog=${var.uc_catalog}"]
+            parameters:
+              - "--catalog=${var.uc_catalog}"
+              - "--lakebase-instance=${var.lakebase_instance_name}"
+              - "--lakebase-database=${var.lakebase_database_name}"
           max_retries: 2
           min_retry_interval_millis: 10000
           retry_on_timeout: true
@@ -996,7 +1001,10 @@ resources:
           environment_key: py_default
           spark_python_task:
             python_file: jobs/kpi_snapshot.py
-            parameters: ["--catalog=${var.uc_catalog}"]
+            parameters:
+              - "--catalog=${var.uc_catalog}"
+              - "--lakebase-instance=${var.lakebase_instance_name}"
+              - "--lakebase-database=${var.lakebase_database_name}"
           max_retries: 2
           retry_on_timeout: true
 
@@ -1065,10 +1073,14 @@ resources:
               - databricks-sdk>=0.30.0
       tasks:
         - task_key: apply_schema_and_seed
-          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against mip-app-state."
+          description: "Apply lakebase/schema.sql + lakebase/seed_campaigns.sql against the configured Lakebase instance."
           environment_key: py_default
           spark_python_task:
             python_file: jobs/lakebase_migrate.py
+            parameters:
+              - "--app-name=${var.app_name}"
+              - "--lakebase-instance=${var.lakebase_instance_name}"
+              - "--lakebase-database=${var.lakebase_database_name}"
           max_retries: 2
           retry_on_timeout: true
 
@@ -1210,6 +1222,16 @@ variables:
   app_name:
     description: Databricks App display name
     default: mip-app
+  lakebase_instance_name:
+    description: >-
+      Workspace-unique Lakebase instance name. Override for isolated staging
+      or when more than one Module 0 deployment shares a workspace.
+    default: mip-app-state
+  lakebase_catalog_name:
+    description: >-
+      Unity Catalog database-catalog name registered for the Lakebase instance.
+      Keep it aligned with MIP_LAKEBASE_SYNC_CATALOG.
+    default: mip_app_state
   # sql_warehouse_id and genie_space_id can be overridden per-invocation via
   # the Databricks CLI BUNDLE_VAR_* mechanism. The Makefile targets
   # `bundle-validate-env` and `bundle-deploy-dev` source .env.local and export
@@ -1218,7 +1240,8 @@ variables:
   #
   # The root defaults stay as CI placeholders. The dev target above pins the
   # governed Entrada Genie space explicitly so a plain
-  # `databricks bundle deploy -t dev --profile DEFAULT` is also safe. Customer
+  # `databricks bundle deploy -t dev --profile <reviewed-workspace-profile>`
+  # is also safe. Customer
   # targets should either set a target-specific Genie space id after
   # provisioning or pass BUNDLE_VAR_genie_space_id / --var on deploy.
   sql_warehouse_id:

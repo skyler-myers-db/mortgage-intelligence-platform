@@ -1,9 +1,8 @@
 """Stdlib-only Databricks Genie Conversation API client.
 
-Module 0 Slice 7 flips ``/ask-genie`` onto the real `mortgage_lead_
-intelligence` Genie space provisioned at space id
-``01f13d4968af1b249dc388fd5b18b195`` in the DEFAULT workspace. This
-module is the HTTP seam; ``backend.services.repositories.databricks_repo
+Module 0 Slice 7 flips ``/ask-genie`` onto the real, deployment-bound
+`mortgage_lead_intelligence` Genie space. This module is the HTTP seam;
+``backend.services.repositories.databricks_repo
 .DatabricksGenieRepository`` wraps it with an honest degraded response
 when the ``genie`` circuit breaker is OPEN.
 

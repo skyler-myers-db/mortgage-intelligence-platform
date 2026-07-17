@@ -614,6 +614,15 @@ else:
 PY
 }
 
+deployment_control_value() {
+  local name="$1" default_value="${2:-}" value
+  value="${!name:-}"
+  if [[ -z "$value" ]]; then
+    value="$(dotenv_value "$name")"
+  fi
+  printf '%s' "${value:-$default_value}"
+}
+
 resolve_m2m_credential() {
   local name="$1" scope="${2:-export}" value
   value="${!name:-}"
@@ -817,6 +826,8 @@ run_as_m2m_identity() {
   local model_verify_key="${MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY:-}"
   local model_previous_key="${MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY:-}"
   local allow_runtime_model_signing="${MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING:-0}"
+  local lakebase_instance="${MIP_LAKEBASE_INSTANCE:-${LAKEBASE_INSTANCE_NAME:-mip-app-state}}"
+  local lakebase_database="${LAKEBASE_DATABASE:-${MIP_LAKEBASE_DATABASE_NAME:-mip_app_state}}"
   local allowed_name
   shift 3
   echo "${DIM}\$ $* (${label} M2M identity)${RST}"
@@ -837,6 +848,10 @@ run_as_m2m_identity() {
     export DATABRICKS_CLIENT_ID="$client_id"
     export DATABRICKS_CLIENT_SECRET="$client_secret"
     export MIP_DISABLE_DOTENV=1
+    export MIP_LAKEBASE_INSTANCE="$lakebase_instance"
+    export LAKEBASE_INSTANCE_NAME="$lakebase_instance"
+    export LAKEBASE_DATABASE="$lakebase_database"
+    export MIP_LAKEBASE_DATABASE_NAME="$lakebase_database"
     for allowed_name in TMPDIR LANG LC_ALL SSL_CERT_FILE REQUESTS_CA_BUNDLE \
       CURL_CA_BUNDLE HTTPS_PROXY HTTP_PROXY NO_PROXY; do
       if [[ -n "${!allowed_name:-}" ]]; then
@@ -980,12 +995,60 @@ if [[ "$DRY_RUN" -eq 0 && "$NO_CONFIRM" -eq 0 ]]; then
   fi
 fi
 
-# Resolve deployment-scoped controls before any helper can read .env.local.
-# bundle_env.py intentionally ignores stale local MIP_DEFAULT_CATALOG values
-# unless the caller exports one; provision_genie_space.py loads .env.local via
-# python-dotenv, so export the same normalized value here to keep the bundle,
-# SQL renderer, Python jobs, and Genie table bindings pointed at one catalog.
-export MIP_DEFAULT_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
+# Resolve deployment-scoped controls before any workspace mutation. A reviewed
+# shell export wins; otherwise the documented .env.local value wins; defaults
+# preserve the established Entrada installation. Alias drift still fails.
+MIP_DEFAULT_CATALOG="$(deployment_control_value MIP_DEFAULT_CATALOG mip)"
+MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME mip-app)"
+_LAKEBASE_INSTANCE_NAME="$(deployment_control_value LAKEBASE_INSTANCE_NAME)"
+_MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)"
+if [[ -n "$_LAKEBASE_INSTANCE_NAME" && -n "$_MIP_LAKEBASE_INSTANCE" && \
+      "$_LAKEBASE_INSTANCE_NAME" != "$_MIP_LAKEBASE_INSTANCE" ]]; then
+  echo "${RED}[deploy] LAKEBASE_INSTANCE_NAME and MIP_LAKEBASE_INSTANCE must match.${RST}" >&2
+  exit 2
+fi
+MIP_LAKEBASE_INSTANCE="${_MIP_LAKEBASE_INSTANCE:-${_LAKEBASE_INSTANCE_NAME:-mip-app-state}}"
+LAKEBASE_INSTANCE_NAME="$MIP_LAKEBASE_INSTANCE"
+_LAKEBASE_DATABASE="$(deployment_control_value LAKEBASE_DATABASE)"
+_MIP_LAKEBASE_DATABASE_NAME="$(deployment_control_value MIP_LAKEBASE_DATABASE_NAME)"
+if [[ -n "$_LAKEBASE_DATABASE" && -n "$_MIP_LAKEBASE_DATABASE_NAME" && \
+      "$_LAKEBASE_DATABASE" != "$_MIP_LAKEBASE_DATABASE_NAME" ]]; then
+  echo "${RED}[deploy] LAKEBASE_DATABASE and MIP_LAKEBASE_DATABASE_NAME must match.${RST}" >&2
+  exit 2
+fi
+LAKEBASE_DATABASE="${_LAKEBASE_DATABASE:-${_MIP_LAKEBASE_DATABASE_NAME:-mip_app_state}}"
+MIP_LAKEBASE_DATABASE_NAME="$LAKEBASE_DATABASE"
+MIP_LAKEBASE_SYNC_CATALOG="$(deployment_control_value MIP_LAKEBASE_SYNC_CATALOG mip_app_state)"
+MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME 'Mortgage Lead Intelligence')"
+MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"
+MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE mip-app-rollback)"
+export MIP_DEFAULT_CATALOG MIP_APP_NAME MIP_LAKEBASE_INSTANCE LAKEBASE_INSTANCE_NAME
+export LAKEBASE_DATABASE MIP_LAKEBASE_DATABASE_NAME MIP_LAKEBASE_SYNC_CATALOG
+export MIP_GENIE_SPACE_NAME MIP_RUNTIME_SECRET_SCOPE MIP_APP_ROLLBACK_SECRET_SCOPE
+APP_ROLLBACK_SECRET_SCOPE="$MIP_APP_ROLLBACK_SECRET_SCOPE"
+if [[ ! "$MIP_APP_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "${RED}[deploy] MIP_APP_NAME must be a lowercase DNS-style name.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_LAKEBASE_INSTANCE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+  echo "${RED}[deploy] MIP_LAKEBASE_INSTANCE must be a lowercase DNS-style name.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_DEFAULT_CATALOG" =~ ^[A-Za-z_][A-Za-z0-9_]{0,254}$ || \
+      ! "$MIP_LAKEBASE_SYNC_CATALOG" =~ ^[A-Za-z_][A-Za-z0-9_]{0,254}$ || \
+      ! "$LAKEBASE_DATABASE" =~ ^[A-Za-z_][A-Za-z0-9_]{0,254}$ ]]; then
+  echo "${RED}[deploy] UC/Lakebase catalog and database must be unquoted identifiers.${RST}" >&2
+  exit 2
+fi
+if [[ ! "$MIP_RUNTIME_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
+      ! "$MIP_APP_ROLLBACK_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+  echo "${RED}[deploy] Databricks secret-scope names are invalid.${RST}" >&2
+  exit 2
+fi
+export BUNDLE_VAR_app_name="$MIP_APP_NAME"
+export BUNDLE_VAR_lakebase_instance_name="$MIP_LAKEBASE_INSTANCE"
+export BUNDLE_VAR_lakebase_catalog_name="$MIP_LAKEBASE_SYNC_CATALOG"
+export BUNDLE_VAR_lakebase_database_name="$LAKEBASE_DATABASE"
 _UC_APPROVED_OWNERS="${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}"
 if [[ -z "$_UC_APPROVED_OWNERS" ]]; then
   _UC_APPROVED_OWNERS="$(dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS)"
@@ -1391,44 +1454,41 @@ fi
 APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
 APP_FAIL_CLOSED_ARMED=1
 
-# Provision runtime HMAC values directly into Databricks Secrets before the
-# bundle validates its app resource bindings. The later Apps deploy payload
+# -----------------------------------------------------------------------------
+# Step 0a: resolve the governed Genie space before any App secret mutation
+# -----------------------------------------------------------------------------
+# The app resource binding validates the Genie space during
+# `databricks bundle deploy`. A merely well-formed GENIE_SPACE_ID is not proof
+# that it names the governed space in this workspace: CI variables and local
+# dotenv files can survive a workspace change. Always resolve by the reviewed
+# MIP_GENIE_SPACE_NAME, then replace the ambient id with the provisioner's
+# authoritative result before any runtime secret or bundle mutation.
+step "resolve governed Genie space before App secret and bundle mutation"
+run "$PYTHON" -m tools.databricks.provision_genie_space \
+  --space-name "$MIP_GENIE_SPACE_NAME" \
+  --catalog "$MIP_DEFAULT_CATALOG" \
+  --no-smoke-test
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if [[ ! -s genie/space_id.txt ]]; then
+    echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
+    exit 2
+  fi
+  GENIE_SPACE_ID="$(< genie/space_id.txt)"
+  if ! is_real_bundle_value "$GENIE_SPACE_ID"; then
+    echo "${RED}[deploy] governed Genie space resolution returned an invalid id.${RST}" >&2
+    exit 2
+  fi
+  export GENIE_SPACE_ID
+fi
+
+# Provision runtime HMAC values directly into Databricks Secrets only after
+# the governed Genie binding has been resolved. The later Apps deploy payload
 # carries only value_from resource names, never raw secret values.
 RUNTIME_SECRET_SCOPE="${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
 export BUNDLE_VAR_runtime_secret_scope="$RUNTIME_SECRET_SCOPE"
 step "provision Databricks App runtime secret bindings"
 run "$PYTHON" -m tools.databricks.provision_runtime_secrets \
   --scope "$RUNTIME_SECRET_SCOPE"
-
-# -----------------------------------------------------------------------------
-# Step 0a: ensure the bundle has a real Genie space id before app resource apply
-# -----------------------------------------------------------------------------
-# The app resource binding validates the Genie space during
-# `databricks bundle deploy`. If GENIE_SPACE_ID is blank, the bundle default
-# `00000000PLACEHOLDER` can reach Databricks and return the opaque
-# error "You need Can View permission to perform this action." Provisioning the
-# space here makes the first real app update deterministic. We re-run the same
-# provisioner after gold refresh below so the space picks up newly-materialized
-# trusted assets.
-GENIE_SPACE_ID_FROM_ENV="${GENIE_SPACE_ID:-}"
-if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
-  GENIE_SPACE_ID_FROM_ENV="$(dotenv_value GENIE_SPACE_ID)"
-fi
-
-if ! is_real_bundle_value "$GENIE_SPACE_ID_FROM_ENV"; then
-  step "provision Genie space before bundle deploy (first-run app binding)"
-  run "$PYTHON" -m tools.databricks.provision_genie_space --no-smoke-test
-  if [[ "$DRY_RUN" -eq 0 ]]; then
-    if [[ ! -s genie/space_id.txt ]]; then
-      echo "${RED}[deploy] Genie provisioner did not write genie/space_id.txt.${RST}" >&2
-      exit 2
-    fi
-    GENIE_SPACE_ID="$(< genie/space_id.txt)"
-    export GENIE_SPACE_ID
-  fi
-else
-  export GENIE_SPACE_ID="$GENIE_SPACE_ID_FROM_ENV"
-fi
 
 # -----------------------------------------------------------------------------
 # Step 1a: render SQL for the target UC catalog
@@ -1579,6 +1639,7 @@ step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"
 run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
   --identity-role verifier \
   --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
   --no-mint-secret
 step "re-audit dedicated agent-runtime isolation before resource ownership"
 run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
@@ -1968,7 +2029,10 @@ run_job_with_retry databricks bundle run mip_refresh_scores -t "$TARGET"
 # Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)
 # -----------------------------------------------------------------------------
 step "sync lifecycle state from Lakebase + record daily funnel snapshot"
-run "$PYTHON" -m tools.sync_lifecycle_warehouse --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+run "$PYTHON" -m tools.sync_lifecycle_warehouse \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --lakebase-database "$LAKEBASE_DATABASE"
 
 # -----------------------------------------------------------------------------
 # Step 9b: KPI snapshot backfill (S3)
@@ -1985,7 +2049,22 @@ run_job_with_retry databricks bundle run mip_kpi_snapshot -t "$TARGET"
 # Step 10: rebind the Genie space after gold/semantic assets exist
 # -----------------------------------------------------------------------------
 step "rebind Genie space — bind trusted assets from genie/mortgage_lead_intelligence_space.yml"
-run "$PYTHON" -m tools.databricks.provision_genie_space --no-smoke-test
+run "$PYTHON" -m tools.databricks.provision_genie_space \
+  --space-name "$MIP_GENIE_SPACE_NAME" \
+  --catalog "$MIP_DEFAULT_CATALOG" \
+  --no-smoke-test
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  if [[ ! -s genie/space_id.txt ]]; then
+    echo "${RED}[deploy] Genie rebind did not write genie/space_id.txt.${RST}" >&2
+    exit 2
+  fi
+  GENIE_SPACE_ID="$(< genie/space_id.txt)"
+  if ! is_real_bundle_value "$GENIE_SPACE_ID"; then
+    echo "${RED}[deploy] governed Genie rebind returned an invalid id.${RST}" >&2
+    exit 2
+  fi
+  export GENIE_SPACE_ID
+fi
 
 # -----------------------------------------------------------------------------
 # Step 10b: provision MIP-owned agentic resources after gold/Genie assets exist
@@ -2181,6 +2260,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
       --identity-role verifier \
       --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
       --gateway-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
       --revoke-gateway-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-}" \
       --revoke-gateway-endpoint "mip-agent-gateway" \
@@ -2309,7 +2389,10 @@ PYEOF
       --expected-count "$AGENT_TOOL_EXPECTED_COUNT" \
       --catalog "${MIP_DEFAULT_CATALOG:-mip}"
     step "reconcile runtime read-only and verifier-only Lakebase proof-ledger grants"
-    run "$PYTHON" jobs/lakebase_migrate.py
+    run "$PYTHON" jobs/lakebase_migrate.py \
+      --app-name "$MIP_APP_NAME" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE"
     AI_GATEWAY_GRANTS_READY=1
     step "grant least-privilege AI Gateway inference-table access to the app service principal"
     if ! run "$PYTHON" -m tools.databricks.grant_ai_gateway_inference_table \
@@ -2364,6 +2447,8 @@ PYEOF
         --wait
         --require-verifier-derived-auth
         --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+        --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+        --lakebase-database "$LAKEBASE_DATABASE"
         --git-sha "$APP_GIT_SHA"
         --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
         --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"

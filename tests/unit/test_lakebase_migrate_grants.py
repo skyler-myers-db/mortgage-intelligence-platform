@@ -198,6 +198,27 @@ def test_resolve_app_role_uses_authoritative_client_id(
     assert requested == ["customer-mip"]
 
 
+def test_resolve_app_role_explicit_name_overrides_ambient_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    requested: list[str] = []
+    monkeypatch.setenv("MIP_APP_NAME", "wrong-ambient-app")
+    client = SimpleNamespace(
+        apps=SimpleNamespace(
+            get=lambda name: (
+                requested.append(name)
+                or SimpleNamespace(service_principal_client_id="staging-app-client-id")
+            )
+        )
+    )
+
+    assert (
+        lakebase_migrate._resolve_app_role(client, app_name="mip-app-pr105-staging")
+        == "staging-app-client-id"
+    )
+    assert requested == ["mip-app-pr105-staging"]
+
+
 def test_schema_and_seed_run_in_one_rollback_capable_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -445,7 +445,8 @@ def _build_client(args: argparse.Namespace):
 
 
 def _find_space(client: Any, target_name: str) -> Any | None:
-    """Page through all spaces and return the first whose title matches."""
+    """Resolve at most one exact-title space across every result page."""
+    matches: list[Any] = []
     page_token: str | None = None
     while True:
         resp = client.genie.list_spaces(page_token=page_token)
@@ -453,10 +454,16 @@ def _find_space(client: Any, target_name: str) -> Any | None:
         for space in spaces:
             title = getattr(space, "title", None) or getattr(space, "name", None)
             if title and title.strip() == target_name:
-                return space
+                matches.append(space)
         page_token = getattr(resp, "next_page_token", None)
         if not page_token:
-            return None
+            break
+    if len(matches) > 1:
+        raise ValueError(
+            f"refusing ambiguous Genie binding: found {len(matches)} spaces "
+            f"named {target_name!r}"
+        )
+    return matches[0] if matches else None
 
 
 def _workspace_ui_url(host: str | None, space_id: str | None = None) -> str:

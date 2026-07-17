@@ -68,6 +68,43 @@ def _expected_assets(catalog: str = "mip") -> set[str]:
     return {f"{catalog}.{schema}.{table}" for schema, table in EXPECTED_ASSET_PAIRS}
 
 
+def test_find_space_rejects_duplicate_exact_titles_before_update() -> None:
+    class Genie:
+        def __init__(self) -> None:
+            self.pages: list[str | None] = []
+
+        def list_spaces(self, *, page_token: str | None) -> types.SimpleNamespace:
+            self.pages.append(page_token)
+            if page_token is None:
+                return types.SimpleNamespace(
+                    spaces=[
+                        types.SimpleNamespace(
+                            title="Mortgage Lead Intelligence",
+                            space_id="first-space",
+                        )
+                    ],
+                    next_page_token="next",
+                )
+            return types.SimpleNamespace(
+                spaces=[
+                    types.SimpleNamespace(
+                        title="Mortgage Lead Intelligence",
+                        space_id="second-space",
+                    )
+                ],
+                next_page_token=None,
+            )
+
+    genie = Genie()
+    with pytest.raises(ValueError, match="refusing ambiguous Genie binding"):
+        pgs._find_space(
+            types.SimpleNamespace(genie=genie),
+            "Mortgage Lead Intelligence",
+        )
+
+    assert genie.pages == [None, "next"]
+
+
 @pytest.fixture(autouse=True)
 def _default_catalog(
     monkeypatch: pytest.MonkeyPatch,

@@ -20,14 +20,23 @@ FastAPI serves `frontend/dist` automatically if present.
 
 ## Databricks App
 
-1. Fill `.env.local` with workspace, warehouse, and lender values. Customer
-   forks should set the public brand before deploy:
+1. Fill `.env.local` with workspace, warehouse, lender/runtime values, and the
+   deployment-owned resource namespace (or set the corresponding GitHub
+   Actions variables); customer forks should set the public brand before deploy:
 
 ```bash
 MIP_LENDER_NAME="Acme Mortgage"
 # Optional; defaults from MIP_LENDER_NAME when unset.
 MIP_TENANT_ID="acme_mortgage"
 MIP_DEFAULT_CATALOG="acme_mip"
+# Use a deployment-owned namespace in any isolated staging/customer workspace.
+MIP_APP_NAME="acme-mip-app"
+MIP_LAKEBASE_INSTANCE="acme-mip-state"
+MIP_LAKEBASE_SYNC_CATALOG="acme_mip_state"
+LAKEBASE_DATABASE="mip_app_state"
+MIP_GENIE_SPACE_NAME="Acme Mortgage Lead Intelligence"
+MIP_RUNTIME_SECRET_SCOPE="acme-mip-runtime"
+MIP_APP_ROLLBACK_SECRET_SCOPE="acme-mip-app-rollback"
 # Required for every deployed runtime, including the dev sandbox.
 MIP_COTALITY_ID_MASK_SECRET="<deployment-scoped-random-secret>"
 MIP_GENIE_ACTION_SECRET_CURRENT="<deployment-scoped-random-secret>"
@@ -45,6 +54,22 @@ MIP_GENIE_ACTION_SECRET_KID="v2"
 ```bash
 ./scripts/configure-workspace.sh https://<customer-workspace>.cloud.databricks.com
 ```
+
+   The `databricks.yml` host anchor, `DATABRICKS_HOST`, and the repository or
+   environment configuration used by GitHub Actions must identify that same
+   workspace. Before the first deployment into an isolated workspace, run:
+
+```bash
+python tools/databricks/bundle_env.py validate -t dev
+python tools/databricks/bundle_env.py plan -t dev
+```
+
+   The first plan must report only additions (`0 to change`, `0 to delete`). A
+   change or deletion means the local bundle state or resource namespace still
+   points at another installation; stop before deployment and reconcile it.
+   `MIP_LAKEBASE_INSTANCE`/`LAKEBASE_INSTANCE_NAME` and
+   `LAKEBASE_DATABASE`/`MIP_LAKEBASE_DATABASE_NAME` are compatibility alias
+   pairs and must match when both names are present.
 
 3. Run the deployment script. It builds the frontend, provisions Genie if
    needed, validates/plans/deploys the direct bundle through the env-aware wrapper,
@@ -422,7 +447,7 @@ the same before emitting a payload without the previous environment binding.
 The Entrada dev target also supports the plain Databricks bundle resource path:
 
 ```bash
-databricks bundle deploy -t dev --profile DEFAULT
+databricks bundle deploy -t dev --profile <reviewed-workspace-profile>
 ```
 
 That command updates bundle-managed resources and now binds the governed
@@ -560,6 +585,9 @@ the helper-generated full `env_vars` payload.
 The app runs on live Unity Catalog + Lakebase in every environment — there is no mock-mode runtime toggle (see [CLAUDE.md](../CLAUDE.md) "Negative prompting"). Flakiness is handled by the resilience layer (retry, warehouse warm-start, SWR cache, circuit breaker, degraded-state banner), never by silent mock fallback.
 
 - Warehouse ID + Genie space ID are set (`BUNDLE_VAR_sql_warehouse_id`, `BUNDLE_VAR_genie_space_id`).
+- App name, Lakebase instance/catalog/database, Genie title, and runtime/rollback
+  secret scopes are unique to the intended workspace; the configured bundle
+  host and `DATABRICKS_HOST` identify that same workspace.
 - Lakebase schema + `mip_app.action_audit` table exist.
 - Genie space is curated against `mip.semantics.*` metric views only.
 - `/api/v1/health` returns `status: ok`; `/api/v1/admin/health` reports
@@ -572,7 +600,8 @@ The app runs on live Unity Catalog + Lakebase in every environment — there is 
 - `./scripts/deploy.sh --verify-source-only` passes for the exact committed SHA.
 - `tools/databricks/bundle_env.py validate -t dev` passes.
 - `tools/databricks/bundle_env.py plan -t dev` shows the expected direct
-  deployment changes.
+  deployment changes; a first isolated-workspace plan has zero changes and
+  zero deletions.
 - Optional production observability gate: if external log durability is
   required, `MIP_OTEL_ENDPOINT` and any required `MIP_OTEL_HEADERS` are
   configured, `/api/v1/admin/health` reports `log_export: otlp`, and the

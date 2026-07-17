@@ -92,6 +92,13 @@ app-admin access to the Databricks PAT owner.
 | `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist for the dev app. | Use when a named operator must access `/api/v1/admin/*`. |
 | `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
 | `MIP_DEFAULT_CATALOG` | Target Unity Catalog name. | Defaults to `mip`; deploy and every nightly proof/render step use the same value. |
+| `MIP_APP_NAME` | Bundle-managed Databricks App name. | Defaults to `mip-app`; use a unique DNS-style value for every isolated staging/customer workspace. |
+| `MIP_LAKEBASE_INSTANCE` | Bundle-managed Lakebase instance name. | Defaults to `mip-app-state`; it must match `LAKEBASE_INSTANCE_NAME` if that compatibility alias is also set. |
+| `MIP_LAKEBASE_SYNC_CATALOG` | Bundle-managed Lakebase synced-table catalog. | Defaults to `mip_app_state`; use a unique Unity Catalog identifier outside the established dev installation. |
+| `LAKEBASE_DATABASE` | Database inside the Lakebase instance that owns `mip_app`. | Defaults to `mip_app_state`; it must match `MIP_LAKEBASE_DATABASE_NAME` if that compatibility alias is also set. |
+| `MIP_GENIE_SPACE_NAME` | Human-readable governed Genie space title. | Defaults to `Mortgage Lead Intelligence`; use an environment-qualified title when several spaces share an account. |
+| `MIP_RUNTIME_SECRET_SCOPE` | Databricks secret scope for App runtime bindings. | Defaults to `mip-runtime`; isolate it per deployment. |
+| `MIP_APP_ROLLBACK_SECRET_SCOPE` | Databricks secret scope for signed last-good App state. | Defaults to `mip-app-rollback`; isolate it per deployment. |
 
 Optional non-secret Gateway family variables are `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`
 (default `<catalog>.audit.mortgage_growth_supervisor_proxy`),
@@ -107,8 +114,12 @@ deploy and nightly jobs export and verify them from live immutable resources.
 
 | Secret | What it enables | Notes |
 |---|---|---|
-| `MIP_APP_URL` | Explicit deployed Databricks App URL for live Playwright and real-infra drill jobs. | If unset for Playwright, the workflow resolves `mip-app` through the Databricks Apps API. The opt-in real-infra drill still requires this secret. |
-| `LAKEBASE_DATABASE` | Lakebase database the `mip_app` schema lives in. | Defaults to `mip_app_state`; the app and live tests use workspace-identity Lakebase credentials, not static Lakebase password secrets. |
+| `MIP_APP_URL` | Explicit deployed Databricks App URL for live Playwright and real-infra drill jobs. | If unset for Playwright, the workflow resolves `MIP_APP_NAME` through the Databricks Apps API. The opt-in real-infra drill still requires this secret. |
+
+`nightly.yml` still reads the historical `LAKEBASE_DATABASE` secret as a
+temporary compatibility fallback, but new installations should use the
+non-secret repository/environment variable above. The app and live tests use
+workspace-identity Lakebase credentials, not static database passwords.
 
 ## No-secret jobs (run on every PR)
 

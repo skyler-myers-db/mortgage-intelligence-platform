@@ -448,6 +448,8 @@ def test_verifier_runtime_overwrites_hostile_sql_and_lakebase_auth(monkeypatch) 
     assert verify_ai_gateway_exact_proof.ensure_lakebase_env(
         lambda: workspace,
         force_refresh=True,
+        instance_name="mip-pr105-state",
+        database_name="mip_pr105_database",
     )
     sql_client = verify_ai_gateway_exact_proof._verifier_sql_client(
         workspace,
@@ -460,9 +462,12 @@ def test_verifier_runtime_overwrites_hostile_sql_and_lakebase_auth(monkeypatch) 
     assert os.environ["PGHOST"] == "verifier-lakebase.example"
     assert os.environ["PGUSER"] == "verifier-client"
     assert os.environ["PGPASSWORD"] == "verifier-lakebase-token"
+    assert os.environ["LAKEBASE_DATABASE"] == "mip_pr105_database"
+    assert os.environ["PGDATABASE"] == "mip_pr105_database"
     assert stale.lakebase_host == "verifier-lakebase.example"
     assert stale.lakebase_user == "verifier-client"
     assert stale.lakebase_password.get_secret_value() == "verifier-lakebase-token"
+    assert stale.lakebase_database == "mip_pr105_database"
     assert sql_client._host == "https://verifier-workspace.example"
     assert sql_client._warehouse_id == "verifier-warehouse"
     assert sql_client._token_provider() == "verifier-workspace-token"

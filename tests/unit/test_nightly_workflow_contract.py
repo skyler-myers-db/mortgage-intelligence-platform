@@ -140,6 +140,21 @@ def test_live_validation_gateway_proof_uses_only_verifier_derived_auth() -> None
     assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in block
     assert "DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in block
     assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}" in block
+    assert block.count('--lakebase-instance "$MIP_LAKEBASE_INSTANCE"') == 2
+    assert block.count('--lakebase-database "$LAKEBASE_DATABASE"') == 2
+
+
+def test_simulated_drills_never_receive_static_lakebase_secrets() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("\n  kill-drill-simulated:")
+    end = text.index("\n  kill-drill-real-infra:", start)
+    block = text[start:end]
+
+    for name in ("LAKEBASE_HOST", "LAKEBASE_USER", "LAKEBASE_PASSWORD"):
+        assert f"secrets.{name}" not in block
+    assert "LAKEBASE_HOST=invalid.host.example.com" in block
+    assert "LAKEBASE_USER=mip-simulated-drill" in block
+    assert "LAKEBASE_PASSWORD=drill-invalid-password" in block
 
 
 def test_live_browser_rechecks_exact_contract_before_live_mutations() -> None:

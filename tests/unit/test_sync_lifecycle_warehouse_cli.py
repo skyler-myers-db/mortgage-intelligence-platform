@@ -64,6 +64,23 @@ def test_workspace_token_mints_oauth_when_pat_is_absent(monkeypatch) -> None:
     cli_token.assert_called_once_with("https://dbc.example.com")
 
 
+def test_static_lakebase_auth_still_honors_explicit_database(monkeypatch) -> None:
+    settings = SimpleNamespace(lakebase_database="wrong_ambient_database")
+    monkeypatch.setenv("LAKEBASE_HOST", "live-lakebase.example")
+    monkeypatch.setenv("LAKEBASE_PASSWORD", "static-password")
+    monkeypatch.setenv("LAKEBASE_DATABASE", "wrong_ambient_database")
+    monkeypatch.setenv("PGDATABASE", "wrong_ambient_database")
+
+    MODULE._ensure_lakebase_env(
+        settings,
+        database_name="mip_pr105_database",
+    )
+
+    assert os.environ["LAKEBASE_DATABASE"] == "mip_pr105_database"
+    assert os.environ["PGDATABASE"] == "mip_pr105_database"
+    assert settings.lakebase_database == "mip_pr105_database"
+
+
 def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> None:
     class _Config:
         host = "https://reviewed-workspace.example"
@@ -104,7 +121,12 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
     }.items():
         monkeypatch.setenv(name, value)
 
-    MODULE._ensure_lakebase_env(settings, workspace=workspace)
+    MODULE._ensure_lakebase_env(
+        settings,
+        workspace=workspace,
+        instance_name="mip-pr105-state",
+        database_name="mip_pr105_database",
+    )
     client = MODULE._build_client(17, settings, workspace)
 
     assert os.environ["LAKEBASE_HOST"] == "reviewed-lakebase.example"
@@ -113,8 +135,11 @@ def test_bound_deployer_workspace_owns_sql_and_lakebase_auth(monkeypatch) -> Non
     assert os.environ["PGHOST"] == "reviewed-lakebase.example"
     assert os.environ["PGUSER"] == "reviewed-deployer"
     assert os.environ["PGPASSWORD"] == "reviewed-lakebase-token"
+    assert os.environ["LAKEBASE_DATABASE"] == "mip_pr105_database"
+    assert os.environ["PGDATABASE"] == "mip_pr105_database"
     assert settings.lakebase_host == "reviewed-lakebase.example"
     assert settings.lakebase_password.get_secret_value() == "reviewed-lakebase-token"
+    assert settings.lakebase_database == "mip_pr105_database"
     assert client._host == "https://reviewed-workspace.example"
     assert client._warehouse_id == "warehouse-id"
     assert client._token_provider() == "reviewed-workspace-token"

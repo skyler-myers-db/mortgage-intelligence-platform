@@ -40,6 +40,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import argparse
 import os
 import sys
 import time
@@ -49,14 +50,19 @@ from uuid import uuid4
 _POST_SEED_MARKER = "-- MIP_LAKEBASE_POST_SEED_BEGIN"
 
 
-def _resolve_connection() -> dict:
+def _resolve_connection(
+    *,
+    instance_name: str | None = None,
+    database_name: str | None = None,
+) -> dict:
     """Return a dict of connection kwargs for psycopg.connect.
 
     Prefers env-var overrides; otherwise uses the Databricks SDK with
     the ambient workspace identity to resolve the DNS + fetch a fresh
     Postgres credential.
     """
-    instance_name = os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    instance_name = instance_name or os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state")
+    database_name = database_name or os.environ.get("LAKEBASE_DATABASE", "mip_app_state")
     host = os.environ.get("LAKEBASE_HOST")
     user = os.environ.get("LAKEBASE_USER")
     password = os.environ.get("LAKEBASE_PASSWORD")
@@ -65,7 +71,7 @@ def _resolve_connection() -> dict:
         return {
             "host": host,
             "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-            "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+            "dbname": database_name,
             "user": user,
             "password": password,
             "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
@@ -140,7 +146,7 @@ def _resolve_connection() -> dict:
     return {
         "host": resolved_host,
         "port": int(os.environ.get("LAKEBASE_PORT", "5432")),
-        "dbname": os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+        "dbname": database_name,
         "user": user or identity,
         "password": password or cred_token,
         "sslmode": os.environ.get("LAKEBASE_SSLMODE", "require"),
@@ -974,9 +980,13 @@ _TABLE_PRIVILEGE_NAMES = (
 _SEQUENCE_PRIVILEGE_NAMES = ("USAGE", "SELECT", "UPDATE")
 
 
-def _resolve_app_role(workspace_client: object | None = None) -> str:
+def _resolve_app_role(
+    workspace_client: object | None = None,
+    *,
+    app_name: str | None = None,
+) -> str:
     """Resolve the one authoritative Lakebase role for the Databricks App."""
-    app_name = os.environ.get("MIP_APP_NAME", "mip-app")
+    app_name = app_name or os.environ.get("MIP_APP_NAME", "mip-app")
     if workspace_client is None:
         try:
             from databricks.sdk import WorkspaceClient
@@ -1334,13 +1344,14 @@ def _postflight_ai_gateway_verifier_grants(cur: object, role: str) -> None:
 def _apply_app_role_grants(
     conn_kwargs: dict,
     *,
+    app_name: str | None = None,
     role_wait_timeout_s: float | None = None,
     role_wait_interval_s: float | None = None,
 ) -> None:
     import psycopg
     from psycopg import sql as psql
 
-    role = _resolve_app_role()
+    role = _resolve_app_role() if app_name is None else _resolve_app_role(app_name=app_name)
     verifier_role = _resolve_ai_gateway_verifier_role()
     if verifier_role == role:
         raise RuntimeError(
@@ -1512,8 +1523,36 @@ def _apply_app_role_grants(
         conn.close()
 
 
-def main() -> None:
-    conn_kwargs = _resolve_connection()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Apply the governed Lakebase schema and seed")
+    parser.add_argument(
+        "--app-name",
+        default=os.environ.get("MIP_APP_NAME", "mip-app"),
+    )
+    parser.add_argument(
+        "--lakebase-instance",
+        default=os.environ.get("LAKEBASE_INSTANCE_NAME", "mip-app-state"),
+    )
+    parser.add_argument(
+        "--lakebase-database",
+        default=os.environ.get("LAKEBASE_DATABASE", "mip_app_state"),
+    )
+    return parser
+
+
+def main(
+    *,
+    app_name: str | None = None,
+    lakebase_instance: str | None = None,
+    lakebase_database: str | None = None,
+) -> None:
+    if lakebase_instance is None and lakebase_database is None:
+        conn_kwargs = _resolve_connection()
+    else:
+        conn_kwargs = _resolve_connection(
+            instance_name=lakebase_instance,
+            database_name=lakebase_database,
+        )
     repo_root = _repo_root()
     schema_sql = (repo_root / "lakebase" / "schema.sql").read_text(encoding="utf-8")
     seed_sql = (repo_root / "lakebase" / "seed_campaigns.sql").read_text(encoding="utf-8")
@@ -1537,7 +1576,10 @@ def main() -> None:
     # unusable runtime role is a false-green deploy: every audited mutation
     # fails even though SELECT 1 health remains green.
     try:
-        _apply_app_role_grants(conn_kwargs)
+        if app_name is None:
+            _apply_app_role_grants(conn_kwargs)
+        else:
+            _apply_app_role_grants(conn_kwargs, app_name=app_name)
     except Exception as exc:  # noqa: BLE001 -- operator-facing deployment gate
         print(
             "[lakebase-migrate] app-role grants failed "
@@ -1549,4 +1591,9 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    _args = build_parser().parse_args()
+    main(
+        app_name=_args.app_name,
+        lakebase_instance=_args.lakebase_instance,
+        lakebase_database=_args.lakebase_database,
+    )
