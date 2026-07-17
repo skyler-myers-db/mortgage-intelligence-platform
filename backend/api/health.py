@@ -31,6 +31,7 @@ Anonymous load-balancer/liveness requests intentionally do not run those
 probes, so external monitoring cannot keep billable dependencies warm.
 The frontend's degraded banner auto-retries until ``status == "ok"``.
 """
+
 from __future__ import annotations
 
 import hashlib
@@ -67,6 +68,7 @@ def _agent_gateway_binding_sha256() -> str | None:
     endpoint = (settings.mip_agent_serving_endpoint or "").strip()
     supervisor_id = (settings.mip_agent_supervisor_id or "").strip()
     upstream = (settings.mip_agent_supervisor_endpoint or "").strip()
+    runtime_application_id = (settings.mip_agent_runtime_client_id or "").strip()
     model_name = settings.mip_agent_gateway_model.strip()
     model_version = settings.mip_agent_gateway_model_version
     inference_table = (settings.mip_ai_gateway_inference_table or "").strip()
@@ -74,6 +76,7 @@ def _agent_gateway_binding_sha256() -> str | None:
         not endpoint
         or not supervisor_id
         or not upstream
+        or not runtime_application_id
         or not model_name
         or model_version is None
         or not inference_table
@@ -83,6 +86,7 @@ def _agent_gateway_binding_sha256() -> str | None:
         endpoint=endpoint,
         supervisor_id=supervisor_id,
         upstream_endpoint=upstream,
+        runtime_application_id=runtime_application_id,
         model_name=model_name,
         model_version=model_version,
         inference_table=inference_table,
@@ -226,6 +230,8 @@ def _diagnostic_body(
     }
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
+    if settings.mip_app_deployment_lease_id:
+        body["deployment_lease_id"] = settings.mip_app_deployment_lease_id
     gateway_binding = _agent_gateway_binding_sha256()
     if gateway_binding:
         body["agent_gateway_binding_sha256"] = gateway_binding
@@ -285,6 +291,8 @@ def health(request: Request) -> dict[str, Any]:
     }
     if settings.mip_git_sha:
         body["git_sha"] = settings.mip_git_sha
+    if settings.mip_app_deployment_lease_id:
+        body["deployment_lease_id"] = settings.mip_app_deployment_lease_id
     gateway_binding = _agent_gateway_binding_sha256()
     if gateway_binding:
         body["agent_gateway_binding_sha256"] = gateway_binding

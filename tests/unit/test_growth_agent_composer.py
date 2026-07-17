@@ -18,6 +18,7 @@ from tests.fixtures.supervisor_runtime import (
     GATEWAY_ENDPOINT,
     gateway_endpoint_details,
     runtime_settings,
+    supervisor_endpoint_details,
     supervisor_metadata,
 )
 
@@ -26,7 +27,7 @@ def _compose_settings() -> Settings:
     return runtime_settings(
         databricks_host="dbc-test.cloud.databricks.com",
         databricks_warehouse_id="wh-123",
-        genie_space_id="space-abc",
+        genie_space_id="space-123",
         lakebase_host="lb-test",
         lakebase_user="mip_app",
     )
@@ -37,6 +38,8 @@ class _Endpoints:
         self._details = gateway_endpoint_details(ready=ready, task=task)
 
     def get(self, _endpoint: str) -> object:
+        if _endpoint != GATEWAY_ENDPOINT:
+            return supervisor_endpoint_details()
         assert _endpoint == GATEWAY_ENDPOINT
         return self._details
 

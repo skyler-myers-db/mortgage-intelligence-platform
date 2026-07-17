@@ -435,10 +435,16 @@ def test_authenticated_health_surfaces_deployed_git_sha(
     monkeypatch.setattr(health_mod.settings, "mip_git_sha", "abc123def456")
     monkeypatch.setattr(
         health_mod.settings,
+        "mip_app_deployment_lease_id",
+        "11111111-1111-4111-8111-111111111111",
+    )
+    monkeypatch.setattr(
+        health_mod.settings,
         "mip_agent_serving_endpoint",
         "mip-growth-agent-gateway",
     )
     monkeypatch.setattr(health_mod.settings, "mip_agent_supervisor_id", "supervisor-123")
+    monkeypatch.setattr(health_mod.settings, "mip_agent_runtime_client_id", "runtime-client")
     monkeypatch.setattr(
         health_mod.settings,
         "mip_agent_supervisor_endpoint",
@@ -459,6 +465,7 @@ def test_authenticated_health_surfaces_deployed_git_sha(
         endpoint="mip-growth-agent-gateway",
         supervisor_id="supervisor-123",
         upstream_endpoint="mas-supervisor-endpoint",
+        runtime_application_id="runtime-client",
         model_name="mip.audit.mortgage_growth_supervisor_proxy",
         model_version=7,
         inference_table="mip.audit.mip_agent_gateway_growth_agent",
@@ -467,16 +474,19 @@ def test_authenticated_health_surfaces_deployed_git_sha(
     anon = client.get("/api/health")
     assert anon.status_code == 200
     assert "git_sha" not in anon.json()
+    assert "deployment_lease_id" not in anon.json()
     assert "agent_gateway_binding_sha256" not in anon.json()
 
     auth = client.get("/api/health", headers={"X-Forwarded-Email": "skyler@entrada.ai"})
     assert auth.status_code == 200
     assert auth.json()["git_sha"] == "abc123def456"
+    assert auth.json()["deployment_lease_id"] == "11111111-1111-4111-8111-111111111111"
     assert auth.json()["agent_gateway_binding_sha256"] == expected_binding
 
     admin = client.get("/api/admin/health", headers=ADMIN_HEADERS)
     assert admin.status_code == 200
     assert admin.json()["git_sha"] == "abc123def456"
+    assert admin.json()["deployment_lease_id"] == "11111111-1111-4111-8111-111111111111"
     assert admin.json()["agent_gateway_binding_sha256"] == expected_binding
 
 

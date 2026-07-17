@@ -87,7 +87,12 @@ def _make_client(
     client.groups.list.side_effect = lambda **_kwargs: iter(group_values)
     groups_by_id = {str(group.id): group for group in group_values if getattr(group, "id", None)}
     client.groups.get.side_effect = lambda group_id: groups_by_id[str(group_id)]
-    client.database.list_database_instance_roles.return_value = iter(lakebase_roles or [])
+    client.database.list_database_instances.return_value = iter(
+        [SimpleNamespace(name="mip-app-state")]
+    )
+    client.database.list_database_instance_roles.side_effect = lambda _name: iter(
+        lakebase_roles or []
+    )
     client.serving_endpoints.get.return_value = SimpleNamespace(
         id="mip-gateway-endpoint-id",
         name="mip-agent-gateway",
@@ -110,6 +115,7 @@ def _make_client(
             )
         ]
     )
+    client.apps.list.return_value = iter([SimpleNamespace(name="mip-app")])
     client.apps.get_permissions.return_value = SimpleNamespace(access_control_list=[])
     client.warehouses.list.return_value = iter([SimpleNamespace(id="warehouse-123")])
     warehouse_principal = endpoint_principal
@@ -203,6 +209,7 @@ def test_help_exposes_role_group_and_secret_name_contract(
     out = capsys.readouterr().out
     for option in (
         "--identity-role",
+        "--pre-app-bootstrap",
         "--create-group",
         "--client-id-secret-name",
         "--client-secret-secret-name",
@@ -210,6 +217,11 @@ def test_help_exposes_role_group_and_secret_name_contract(
         "--no-mint-secret",
     ):
         assert option in out
+
+
+def test_role_contract_helpers_remain_reexported_for_callers() -> None:
+    assert pmo._validate_app_access_contract is pmo.validate_app_access_contract
+    assert pmo._validate_provisioning_contract is pmo.validate_provisioning_contract
 
 
 @pytest.mark.parametrize(
@@ -234,6 +246,12 @@ def test_help_exposes_role_group_and_secret_name_contract(
             "DATABRICKS_VERIFIER_CLIENT_ID",
             "DATABRICKS_VERIFIER_CLIENT_SECRET",
         ),
+        (
+            "agent_runtime",
+            "mip-agent-runtime-ci-sp",
+            "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+            "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+        ),
     ],
 )
 def test_role_defaults_are_distinct(
@@ -246,6 +264,197 @@ def test_role_defaults_are_distinct(
     assert defaults.sp_name == sp_name
     assert defaults.client_id_secret_name == client_id_name
     assert defaults.client_secret_secret_name == client_secret_name
+
+
+@pytest.mark.parametrize(
+    "role",
+    ["normal", "operator2", "admin", "verifier", "agent_runtime"],
+)
+def test_pre_app_bootstrap_mints_only_role_owned_credentials_without_resource_calls(
+    role: str,
+) -> None:
+    defaults = pmo.IDENTITY_DEFAULTS[role]
+    new_sp = _sp(
+        defaults.sp_name,
+        sp_id=f"{role}-sp-id",
+        application_id=f"{role}-application-id",
+    )
+    client = _make_client(create_returns=new_sp)
+    if role == "admin":
+        client.groups.create.return_value = SimpleNamespace(
+            id="mip-admin-group-id",
+            display_name=pmo.DEFAULT_ADMIN_GROUP,
+            members=[],
+        )
+
+    with patch.object(pmo, "_set_gh_secret") as set_secret:
+        result = _provision(
+            client,
+            identity_role=role,
+            app_name="",
+            grant_can_use=False,
+            group_name=defaults.group_name,
+            create_group=role == "admin",
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            app_url_secret_name=defaults.app_url_secret_name,
+            pre_app_bootstrap=True,
+        )
+
+    assert result.secret_minted is True
+    assert result.secret_written_to_gh is True
+    assert set_secret.call_args_list == [
+        call(_CANONICAL_GH_REPO, defaults.client_secret_secret_name, "dose_fake_secret_value"),
+        call(_CANONICAL_GH_REPO, defaults.client_id_secret_name, f"{role}-application-id"),
+    ]
+    assert client.apps.mock_calls == []
+    assert client.database.mock_calls == []
+    assert client.serving_endpoints.mock_calls == []
+    assert client.warehouses.mock_calls == []
+
+
+def test_pre_app_bootstrap_existing_identity_requires_explicit_rotation() -> None:
+    existing = _sp()
+    client = _make_client(existing_sp=existing)
+
+    with pytest.raises(SystemExit, match="pass --rotate"):
+        _provision(
+            client,
+            app_name="",
+            grant_can_use=False,
+            pre_app_bootstrap=True,
+        )
+
+    client.service_principal_secrets_proxy.create.assert_not_called()
+    assert client.apps.mock_calls == []
+    assert client.database.mock_calls == []
+
+
+@pytest.mark.parametrize(
+    ("option", "value"),
+    [
+        ("grant_can_use", True),
+        ("lakebase_instance", "mip-app-state"),
+        ("gateway_endpoint", "gateway"),
+        ("warehouse_id", "warehouse"),
+        ("revoke_gateway_endpoints", ("old-gateway",)),
+    ],
+)
+def test_pre_app_bootstrap_rejects_resource_scope_before_sdk_calls(
+    option: str,
+    value: object,
+) -> None:
+    client_factory = MagicMock()
+    defaults = pmo.IDENTITY_DEFAULTS["normal"]
+    kwargs: dict[str, object] = {
+        "sp_name": defaults.sp_name,
+        "expected_application_id": None,
+        "app_name": "",
+        "grant_can_use": False,
+        "group_name": defaults.group_name,
+        "create_group": False,
+        "lakebase_instance": None,
+        "gateway_endpoint": None,
+        "warehouse_id": None,
+        "gh_repo": _CANONICAL_GH_REPO,
+        "set_gh_secrets": True,
+        "mint_secret": True,
+        "rotate": False,
+        "app_url": "",
+        "client_id_secret_name": defaults.client_id_secret_name,
+        "client_secret_secret_name": defaults.client_secret_secret_name,
+        "app_url_secret_name": defaults.app_url_secret_name,
+        "identity_role": "normal",
+        "client_factory": client_factory,
+        "pre_app_bootstrap": True,
+    }
+    kwargs[option] = value
+
+    with pytest.raises(SystemExit, match="forbids resource access"):
+        pmo.provision(**kwargs)
+
+    client_factory.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["--pre-app-bootstrap"],
+        ["--pre-app-bootstrap", "--set-gh-secrets", "--no-mint-secret"],
+        ["--pre-app-bootstrap", "--set-gh-secrets", "--app-name", "mip-app"],
+        ["--pre-app-bootstrap", "--set-gh-secrets", "--app-url", "https://app.invalid"],
+        ["--pre-app-bootstrap", "--set-gh-secrets", "--grant-can-use"],
+        ["--pre-app-bootstrap", "--set-gh-secrets", "--lakebase-instance", "state"],
+        [
+            "--pre-app-bootstrap",
+            "--set-gh-secrets",
+            "--client-id-secret-name",
+            "DATABRICKS_ADMIN_CLIENT_ID",
+        ],
+    ],
+)
+def test_pre_app_bootstrap_cli_rejects_missing_or_unsafe_arguments(
+    argv: list[str],
+) -> None:
+    with (
+        patch.object(pmo, "provision") as provision_call,
+        pytest.raises(SystemExit) as exc,
+    ):
+        pmo.main([*argv, "--dry-run"])
+
+    assert exc.value.code == 2
+    provision_call.assert_not_called()
+
+
+def test_pre_app_bootstrap_rejects_unreviewed_github_sink_before_sdk_calls() -> None:
+    with (
+        patch.object(pmo, "_reviewed_gh_repo", return_value=_CANONICAL_GH_REPO),
+        patch.object(pmo, "provision") as provision_call,
+        pytest.raises(SystemExit) as exc,
+    ):
+        pmo.main(
+            [
+                "--pre-app-bootstrap",
+                "--set-gh-secrets",
+                "--gh-repo",
+                "attacker/repository",
+                "--dry-run",
+            ]
+        )
+
+    assert exc.value.code == 2
+    provision_call.assert_not_called()
+
+
+def test_pre_app_bootstrap_cli_forwards_credentials_only_contract() -> None:
+    with (
+        patch.object(pmo, "_reviewed_gh_repo", return_value=_CANONICAL_GH_REPO),
+        patch.object(pmo, "provision", return_value=MagicMock()) as provision_call,
+        patch.object(pmo, "_print_summary"),
+    ):
+        rc = pmo.main(
+            [
+                "--identity-role",
+                "normal",
+                "--pre-app-bootstrap",
+                "--set-gh-secrets",
+                "--gh-repo",
+                _CANONICAL_GH_REPO,
+            ]
+        )
+
+    assert rc == 0
+    kwargs = provision_call.call_args.kwargs
+    assert kwargs["pre_app_bootstrap"] is True
+    assert kwargs["app_name"] == ""
+    assert kwargs["grant_can_use"] is False
+    assert kwargs["lakebase_instance"] is None
+    assert kwargs["gateway_endpoint"] is None
+    assert kwargs["warehouse_id"] is None
+    assert kwargs["set_gh_secrets"] is True
+    assert kwargs["mint_secret"] is True
+    assert kwargs["gh_repo"] == _CANONICAL_GH_REPO
 
 
 def test_dry_run_does_not_touch_sdk() -> None:
@@ -273,6 +482,104 @@ def test_cli_rejects_verifier_app_can_use_before_provision(
     assert exc.value.code == 2
     assert "verifier forbids Databricks App CAN_USE" in capsys.readouterr().err
     mock_provision.assert_not_called()
+
+
+def test_cli_rejects_agent_runtime_app_or_verifier_resource_access(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as app_exc:
+        pmo.main(["--identity-role", "agent_runtime", "--grant-can-use", "--dry-run"])
+    assert app_exc.value.code == 2
+    assert "agent_runtime forbids Databricks App CAN_USE" in capsys.readouterr().err
+
+    for option in ("--lakebase-instance", "--gateway-endpoint", "--warehouse-id"):
+        with pytest.raises(SystemExit) as resource_exc:
+            pmo.main(
+                ["--identity-role", "agent_runtime", option, "forbidden-resource", "--dry-run"]
+            )
+        assert resource_exc.value.code == 2
+
+
+def test_agent_runtime_reaudit_rejects_preexisting_lakebase_role() -> None:
+    runtime = _sp(
+        "mip-agent-runtime-ci-sp",
+        application_id="runtime-client",
+    )
+    client = _make_client(
+        existing_sp=runtime,
+        lakebase_roles=[SimpleNamespace(name="runtime-client")],
+    )
+    client.warehouses.get_permissions.return_value = WarehousePermissions(access_control_list=[])
+
+    with pytest.raises(SystemExit, match="forbidden Lakebase role"):
+        _provision(
+            client,
+            sp_name=runtime.display_name,
+            expected_application_id="runtime-client",
+            identity_role="agent_runtime",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+            client_id_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+            client_secret_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+            app_url_secret_name=None,
+        )
+
+
+def test_agent_runtime_reaudit_rejects_role_on_second_lakebase_instance() -> None:
+    runtime = _sp(
+        "mip-agent-runtime-ci-sp",
+        application_id="runtime-client",
+    )
+    client = _make_client(existing_sp=runtime)
+    client.database.list_database_instances.return_value = iter(
+        [SimpleNamespace(name="mip-app-state"), SimpleNamespace(name="other-state")]
+    )
+    client.database.list_database_instance_roles.side_effect = lambda name: iter(
+        [SimpleNamespace(name="runtime-client")] if name == "other-state" else []
+    )
+    client.warehouses.get_permissions.return_value = WarehousePermissions(access_control_list=[])
+
+    with pytest.raises(SystemExit, match="on instance 'other-state'"):
+        _provision(
+            client,
+            sp_name=runtime.display_name,
+            expected_application_id="runtime-client",
+            identity_role="agent_runtime",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    assert client.database.list_database_instance_roles.call_args_list == [
+        call("mip-app-state"),
+        call("other-state"),
+    ]
+
+
+def test_agent_runtime_reaudit_rejects_effective_warehouse_access() -> None:
+    runtime = _sp(
+        "mip-agent-runtime-ci-sp",
+        application_id="runtime-client",
+    )
+    client = _make_client(existing_sp=runtime)
+
+    with pytest.raises(RuntimeError, match="effective SQL warehouse access"):
+        _provision(
+            client,
+            sp_name=runtime.display_name,
+            expected_application_id="runtime-client",
+            identity_role="agent_runtime",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+            client_id_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+            client_secret_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+            app_url_secret_name=None,
+        )
 
 
 @pytest.mark.parametrize(
@@ -678,6 +985,96 @@ def test_verifier_fails_closed_on_forbidden_direct_app_permission() -> None:
         )
 
     client.warehouses.update_permissions.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("identity_role", "display_name", "application_id"),
+    [
+        ("verifier", "mip-ai-gateway-verifier-ci-sp", "verifier-application-id"),
+        ("agent_runtime", "mip-agent-runtime-ci-sp", "runtime-application-id"),
+    ],
+)
+def test_isolated_role_fails_closed_on_permission_to_other_app(
+    identity_role: str,
+    display_name: str,
+    application_id: str,
+) -> None:
+    principal = _sp(display_name, application_id=application_id)
+    client = _make_client(existing_sp=principal)
+    client.apps.list.return_value = iter(
+        [SimpleNamespace(name="mip-app"), SimpleNamespace(name="unrelated-app")]
+    )
+    client.apps.get_permissions.side_effect = lambda app_name: SimpleNamespace(
+        access_control_list=(
+            [
+                SimpleNamespace(
+                    service_principal_name=application_id,
+                    all_permissions=[SimpleNamespace(inherited=False)],
+                )
+            ]
+            if app_name == "unrelated-app"
+            else []
+        )
+    )
+
+    with pytest.raises(SystemExit, match="permission on 'unrelated-app'"):
+        _provision(
+            client,
+            sp_name=display_name,
+            expected_application_id=application_id,
+            identity_role=identity_role,
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    assert client.apps.get_permissions.call_args_list == [
+        call("mip-app"),
+        call("unrelated-app"),
+    ]
+
+
+def test_isolated_role_fails_closed_on_group_access_to_other_app() -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    access_group = SimpleNamespace(
+        id="broad-app-group",
+        display_name="all-app-users",
+        members=[SimpleNamespace(value="verifier-scim-id")],
+    )
+    client = _make_client(existing_sp=verifier, groups=[access_group])
+    client.apps.list.return_value = iter(
+        [SimpleNamespace(name="mip-app"), SimpleNamespace(name="unrelated-app")]
+    )
+    client.apps.get_permissions.side_effect = lambda app_name: SimpleNamespace(
+        access_control_list=(
+            [
+                SimpleNamespace(
+                    group_name="all-app-users",
+                    all_permissions=[SimpleNamespace(inherited=False)],
+                )
+            ]
+            if app_name == "unrelated-app"
+            else []
+        )
+    )
+
+    with pytest.raises(
+        SystemExit,
+        match="permission on 'unrelated-app' through group 'all-app-users'",
+    ):
+        _provision(
+            client,
+            identity_role="verifier",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
 
 
 def test_verifier_fails_closed_on_inherited_effective_app_permission() -> None:

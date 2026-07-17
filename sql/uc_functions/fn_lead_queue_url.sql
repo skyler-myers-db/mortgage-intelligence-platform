@@ -17,9 +17,9 @@ COMMENT 'Reviewed Mortgage Growth Agent Lead Queue handoff tool. Produces a safe
 RETURN CONCAT(
   '/lead-queue?',
   CASE
-    WHEN SIZE(COALESCE(segment_codes, ARRAY())) = 1
+    WHEN SIZE(COALESCE(segment_codes, CAST(ARRAY() AS ARRAY<STRING>))) = 1
       THEN CONCAT('segment=', LOWER(segment_codes[0]))
-    WHEN SIZE(COALESCE(segment_codes, ARRAY())) > 1
+    WHEN SIZE(COALESCE(segment_codes, CAST(ARRAY() AS ARRAY<STRING>))) > 1
       THEN CONCAT(
         'segment_codes=',
         ARRAY_JOIN(TRANSFORM(segment_codes, x -> LOWER(x)), ','),
@@ -30,7 +30,7 @@ RETURN CONCAT(
   END,
   '&marketing_eligibility=Eligible+only',
   CASE
-    WHEN SIZE(COALESCE(states, ARRAY())) > 0
+    WHEN SIZE(COALESCE(states, CAST(ARRAY() AS ARRAY<STRING>))) > 0
       THEN CONCAT('&states=', ARRAY_JOIN(TRANSFORM(states, x -> UPPER(x)), ','))
     ELSE ''
   END

@@ -1,50 +1,8 @@
-"""Provision distinct M2M identities for live Module 0 automation.
+"""Provision role-separated M2M identities for live Module 0 automation.
 
-Zero-click replacement for the manual Accounts-Console workflow
-documented in ``docs/security/m2m-oauth-setup.md``. The user's explicit
-requirement is that the full M2M setup is scripted in this repo — no
-workspace UI steps.
+The tool converges reviewed access and can send a one-shot OAuth secret
+directly to GitHub. It never prints or stores the secret locally.
 
-What this tool does (in order):
-
-1. Create (or reuse) a workspace service principal with the requested
-   ``--sp-name``. Idempotent: an SP whose ``displayName`` already matches
-   is re-used rather than duplicated.
-2. For both non-admin operator identities and the admin identity, grant
-   ``CAN USE`` on the deployed Databricks App resource (``--app-name``).
-   The verifier role
-   rejects this grant even when ``--grant-can-use`` is supplied explicitly.
-3. For the verifier identity, grant ``CAN USE`` on the exact SQL warehouse
-   used to validate AI Gateway inference rows. The verifier still receives no
-   Databricks App access and is never an admin-group member.
-4. Mint an OAuth client_id + client_secret for the SP. A live mint requires
-   ``--set-gh-secrets`` and pipes the one-shot secret directly to ``gh``.
-   Secret names are role-owned constants so both operators, admin, and verifier
-   identities cannot overwrite one another's client credentials.
-
-5. Optionally rotate an existing SP's secret (``--rotate``); the old secret
-   remains valid until an admin revokes it.
-
-Safety invariants: the secret never touches the repo, local files, stdout, or stderr; it is passed only to ``gh`` via stdin.
-* A ``--dry-run`` flag exercises every argument-parsing + SDK-surface
-  check without touching the workspace, for CI-safe import coverage.
-* Admin-permission failures point to ``docs/security/m2m-oauth-setup.md``.
-
-Usage
------
-    # canonical happy path (admin auth resolved from ~/.databrickscfg)
-    python tools/databricks/provision_m2m_oauth.py \\
-        --sp-name mip-nightly-ci-sp \\
-        --app-name mip-app \\
-        --gh-repo skyler-myers-db/mortgage-intelligence-platform \\
-        --set-gh-secrets
-
-    # rotate the existing SP's secret
-    python tools/databricks/provision_m2m_oauth.py \\
-        --sp-name mip-nightly-ci-sp --rotate --set-gh-secrets
-
-    # CI-safe shape-check (no workspace calls)
-    python tools/databricks/provision_m2m_oauth.py --dry-run
 """
 
 from __future__ import annotations
@@ -61,6 +19,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from backend.agents.gateway_contract import (  # noqa: E402
+    DEFAULT_GATEWAY_ENDPOINT,
+    LEGACY_GATEWAY_ENDPOINT,
+)
 from tools.databricks import m2m_access_policy as _access_policy  # noqa: E402
 from tools.databricks import m2m_oauth_config as _config_helpers  # noqa: E402
 from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
@@ -70,7 +32,8 @@ from tools.databricks.m2m_identity_contract import (  # noqa: E402
     IDENTITY_DEFAULTS,
     IdentityRole,
     ProvisionResult,
-    validate_identity_role_binding,
+    validate_app_access_contract,
+    validate_provisioning_contract,
 )
 
 _GH_SECRET_NAME_RE = _github_helpers.GH_SECRET_NAME_RE
@@ -87,6 +50,22 @@ _grant_can_query_on_endpoint = _access_policy.grant_can_query_on_endpoint
 _resolve_effective_groups = _access_policy.resolve_effective_groups
 _revoke_can_query_on_obsolete_endpoint = _access_policy.revoke_can_query_on_obsolete_endpoint
 _wrap_admin_error = _access_policy.wrap_admin_error
+_validate_app_access_contract = validate_app_access_contract
+_validate_provisioning_contract = validate_provisioning_contract
+
+
+def _reserved_gateway_endpoints(client: Any) -> set[str]:
+    names: set[str] = set()
+    for item in client.serving_endpoints.list():
+        name = str(
+            (item.get("name") if isinstance(item, dict) else getattr(item, "name", "")) or ""
+        ).strip()
+        if name in (DEFAULT_GATEWAY_ENDPOINT, LEGACY_GATEWAY_ENDPOINT) or name.startswith(
+            f"{DEFAULT_GATEWAY_ENDPOINT}-"
+        ):
+            names.add(name)
+    return names
+
 
 DATABRICKS_YML = REPO_ROOT / "databricks.yml"
 DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
@@ -95,67 +74,11 @@ DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
 DEFAULT_APP_URL = "https://mip-app-2543889327043640.aws.databricksapps.com"
 CANONICAL_GH_REPO = "skyler-myers-db/mortgage-intelligence-platform"
 _GH_REPO_PATTERN = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
-_VERIFIER_APP_ACCESS_ERROR = (
-    "--identity-role verifier forbids Databricks App CAN_USE; "
-    "remove --grant-can-use before provisioning"
-)
 
 
 def _diag(msg: str) -> None:
     """Stderr diagnostic. Keeps stdout clean for scripted consumers."""
     print(f"[mip-m2m-provision] {msg}", file=sys.stderr)
-
-
-def _validate_app_access_contract(*, identity_role: IdentityRole, grant_can_use: bool) -> None:
-    """Reject verifier App access before any workspace or secret side effect."""
-    if identity_role == "verifier" and grant_can_use:
-        raise ValueError(_VERIFIER_APP_ACCESS_ERROR)
-
-
-def _validate_provisioning_contract(
-    *,
-    identity_role: IdentityRole,
-    sp_name: str,
-    expected_application_id: str | None,
-    grant_can_use: bool,
-    group_name: str | None,
-    create_group: bool,
-    lakebase_instance: str | None,
-    gateway_endpoint: str | None,
-    warehouse_id: str | None,
-    client_id_secret_name: str,
-    client_secret_secret_name: str,
-    app_url_secret_name: str | None,
-) -> str | None:
-    """Validate role ownership before subprocess, SDK, or mutation paths."""
-    _validate_app_access_contract(
-        identity_role=identity_role,
-        grant_can_use=grant_can_use,
-    )
-    expected_group = IDENTITY_DEFAULTS[identity_role].group_name
-    if group_name != expected_group:
-        expected_label = expected_group or "no group"
-        raise ValueError(
-            f"--identity-role {identity_role} is bound to {expected_label!r}; "
-            "--group-name may not select another identity boundary"
-        )
-    if create_group and expected_group is None:
-        raise ValueError("--create-group is invalid for an identity role with no group")
-    if identity_role != "verifier" and (lakebase_instance or gateway_endpoint or warehouse_id):
-        raise ValueError(
-            "--lakebase-instance, --gateway-endpoint, and --warehouse-id are valid only with "
-            "--identity-role verifier"
-        )
-    if identity_role == "verifier" and gateway_endpoint and not warehouse_id:
-        raise ValueError("--gateway-endpoint requires --warehouse-id for exact proof verification")
-    return validate_identity_role_binding(
-        identity_role=identity_role,
-        sp_name=sp_name,
-        expected_application_id=expected_application_id,
-        client_id_secret_name=client_id_secret_name,
-        client_secret_secret_name=client_secret_secret_name,
-        app_url_secret_name=app_url_secret_name,
-    )
 
 
 def _load_app_name_from_bundle(path: Path = DATABRICKS_YML) -> str:
@@ -356,13 +279,31 @@ def provision(
     identity_role: IdentityRole = "normal",
     client_factory: Any | None = None,
     revoke_gateway_endpoints: tuple[str, ...] = (),
+    pre_app_bootstrap: bool = False,
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
 
-    ``client_factory`` exists for unit tests — when None we resolve a
-    real ``WorkspaceClient`` via the SDK's standard auth chain (env
-    vars → ``~/.databrickscfg`` → workspace identity).
+    ``client_factory`` is test-only; otherwise the SDK auth chain resolves the identity.
     """
+    if pre_app_bootstrap:
+        incompatible = []
+        if grant_can_use:
+            incompatible.append("App CAN_USE")
+        if lakebase_instance:
+            incompatible.append("Lakebase instance")
+        if gateway_endpoint or revoke_gateway_endpoints:
+            incompatible.append("Gateway endpoint")
+        if warehouse_id:
+            incompatible.append("SQL warehouse")
+        if incompatible:
+            raise SystemExit(
+                "--pre-app-bootstrap forbids resource access: " + ", ".join(incompatible)
+            )
+        if not mint_secret or not set_gh_secrets or not gh_repo:
+            raise SystemExit(
+                "--pre-app-bootstrap requires one-shot OAuth minting through "
+                "--set-gh-secrets and a reviewed --gh-repo sink"
+            )
     try:
         expected_application_id = _validate_provisioning_contract(
             identity_role=identity_role,
@@ -442,7 +383,11 @@ def provision(
             f"Service principal {sp_name!r} application id does not match the "
             "configured client id; refusing to grant the wrong identity."
         )
-
+    if pre_app_bootstrap and not created_sp and not rotate:
+        raise SystemExit(
+            "--pre-app-bootstrap found an existing service principal; pass --rotate "
+            "to mint and deliver a new one-shot credential"
+        )
     effective_groups: dict[str, str] = {}
     if identity_role != "admin":
         effective_groups = _resolve_effective_groups(client, sp_id=sp.id)
@@ -457,15 +402,29 @@ def provision(
             effective_groups=effective_groups,
             identity_role=identity_role,
         )
-    if identity_role == "verifier":
+    if not pre_app_bootstrap and identity_role in {"verifier", "agent_runtime"}:
         _assert_no_app_permission(
             client,
             app_name=app_name,
             sp_application_id=sp.application_id,
             sp_display_name=sp.display_name,
             effective_group_names=set(effective_groups.values()),
+            identity_role=identity_role,
         )
-
+    if not pre_app_bootstrap and identity_role == "agent_runtime":
+        _access_policy.assert_agent_runtime_infrastructure_isolation(
+            client,
+            instance_name=DEFAULT_LAKEBASE_INSTANCE,
+            application_id=sp.application_id,
+            effective_group_names=set(effective_groups.values()),
+        )
+    if not pre_app_bootstrap and identity_role == "verifier":
+        _access_policy.assert_lakebase_role_scope(
+            client,
+            application_id=sp.application_id,
+            allowed_instance_names={lakebase_instance} if lakebase_instance else set(),
+            identity_role="verifier",
+        )
     added_to_group = False
     if group_name:
         target_group = _find_group(client, group_name)
@@ -519,7 +478,10 @@ def provision(
         )
 
     granted_can_query = False
-    for obsolete_endpoint in revoke_gateway_endpoints:
+    obsolete_gateway_endpoints = set(revoke_gateway_endpoints)
+    if gateway_endpoint:
+        obsolete_gateway_endpoints.update(_reserved_gateway_endpoints(client))
+    for obsolete_endpoint in sorted(obsolete_gateway_endpoints):
         if obsolete_endpoint and obsolete_endpoint != gateway_endpoint:
             _revoke_can_query_on_obsolete_endpoint(
                 client,
@@ -581,7 +543,7 @@ def provision(
         assert gh_repo is not None  # validated before any SDK mutation
         _set_gh_secret(gh_repo, client_secret_secret_name, secret_value)
         _set_gh_secret(gh_repo, client_id_secret_name, client_id)
-        if app_url_secret_name:
+        if app_url_secret_name and not pre_app_bootstrap:
             _set_gh_secret(gh_repo, app_url_secret_name, app_url)
         wrote_secrets = True
         secret_value = None
@@ -643,7 +605,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="provision_m2m_oauth",
         description=(
-            "Create or converge an operator, admin, or verifier M2M identity "
+            "Create or converge an operator, admin, verifier, or agent-runtime M2M identity "
             "without printing one-shot OAuth secrets."
         ),
     )
@@ -652,6 +614,15 @@ def _build_parser() -> argparse.ArgumentParser:
         choices=tuple(IDENTITY_DEFAULTS),
         default="normal",
         help="Identity contract to provision (default: normal operator).",
+    )
+    parser.add_argument(
+        "--pre-app-bootstrap",
+        action="store_true",
+        help=(
+            "Before the App exists, create or resolve only the role-bound service "
+            "principal, optional reviewed admin group membership, and role-owned "
+            "GitHub OAuth credential sinks. Forbids all App and data-resource access."
+        ),
     )
     parser.add_argument(
         "--sp-name",
@@ -673,7 +644,7 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--app-url",
-        default=os.environ.get("MIP_APP_URL", DEFAULT_APP_URL),
+        default=None,
         help="Deployed App URL written as MIP_APP_URL GitHub secret.",
     )
     parser.add_argument(
@@ -694,7 +665,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Role-reserved group (admin default: "
-            f"{DEFAULT_ADMIN_GROUP}; normal/operator2/verifier: none)."
+            f"{DEFAULT_ADMIN_GROUP}; normal/operator2/verifier/agent_runtime: none)."
         ),
     )
     parser.add_argument(
@@ -767,7 +738,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-app-url-secret",
         action="store_true",
         help=(
-            "Explicitly retain no app-URL sink for operator2/admin/verifier; "
+            "Explicitly retain no app-URL sink for operator2/admin/verifier/agent_runtime; "
             "invalid for normal."
         ),
     )
@@ -797,13 +768,43 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
     args = parser.parse_args(argv)
-
     role: IdentityRole = args.identity_role
     defaults = IDENTITY_DEFAULTS[role]
-    grant_can_use = defaults.grant_can_use if args.grant_can_use is None else args.grant_can_use
+    if args.pre_app_bootstrap:
+        incompatible = []
+        if args.app_name is not None:
+            incompatible.append("--app-name")
+        if args.app_url is not None:
+            incompatible.append("--app-url")
+        if args.grant_can_use is not None:
+            incompatible.append("--grant-can-use/--no-grant-can-use")
+        if args.lakebase_instance is not None:
+            incompatible.append("--lakebase-instance")
+        if args.gateway_endpoint is not None or args.revoke_gateway_endpoint:
+            incompatible.append("--gateway-endpoint/--revoke-gateway-endpoint")
+        if args.warehouse_id is not None:
+            incompatible.append("--warehouse-id")
+        if args.no_app_url_secret or args.app_url_secret_name is not None:
+            incompatible.append("--app-url-secret-name/--no-app-url-secret")
+        if incompatible:
+            parser.error(
+                "--pre-app-bootstrap forbids resource or App-sink options: "
+                + ", ".join(incompatible)
+            )
+        if not args.mint_secret or not args.set_gh_secrets:
+            parser.error("--pre-app-bootstrap requires OAuth minting through --set-gh-secrets")
+    grant_can_use = (
+        False
+        if args.pre_app_bootstrap
+        else defaults.grant_can_use
+        if args.grant_can_use is None
+        else args.grant_can_use
+    )
     sp_name = args.sp_name or defaults.sp_name
     group_name = args.group_name or defaults.group_name
-    lakebase_instance = args.lakebase_instance or defaults.lakebase_instance
+    lakebase_instance = (
+        None if args.pre_app_bootstrap else args.lakebase_instance or defaults.lakebase_instance
+    )
     client_id_secret_name = args.client_id_secret_name or defaults.client_id_secret_name
     client_secret_secret_name = args.client_secret_secret_name or defaults.client_secret_secret_name
     app_url_secret_name = args.app_url_secret_name or defaults.app_url_secret_name
@@ -833,7 +834,8 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             parser.error(str(exc))
 
-    app_name = args.app_name or _load_app_name_from_bundle()
+    app_name = "" if args.pre_app_bootstrap else args.app_name or _load_app_name_from_bundle()
+    app_url = args.app_url or os.environ.get("MIP_APP_URL", DEFAULT_APP_URL)
     gh_repo = args.gh_repo or _infer_gh_repo()
     try:
         _validate_gh_repo(gh_repo, bind_secret_sink=args.mint_secret)
@@ -842,7 +844,8 @@ def main(argv: list[str] | None = None) -> int:
 
     _diag(
         f"provisioning plan: identity_role={role!r} sp_name={sp_name!r} "
-        f"app_name={app_name!r} group_name={group_name!r} "
+        f"pre_app_bootstrap={args.pre_app_bootstrap} app_name={app_name!r} "
+        f"group_name={group_name!r} "
         f"create_group={args.create_group} lakebase_instance={lakebase_instance!r} "
         f"warehouse_id={args.warehouse_id!r} "
         f"gh_repo={gh_repo!r} set_gh_secrets={args.set_gh_secrets} rotate={args.rotate}"
@@ -873,12 +876,13 @@ def main(argv: list[str] | None = None) -> int:
             set_gh_secrets=args.set_gh_secrets,
             mint_secret=args.mint_secret,
             rotate=args.rotate,
-            app_url=args.app_url,
+            app_url=app_url,
             client_id_secret_name=client_id_secret_name,
             client_secret_secret_name=client_secret_secret_name,
             app_url_secret_name=app_url_secret_name,
             identity_role=role,
             revoke_gateway_endpoints=tuple(args.revoke_gateway_endpoint),
+            pre_app_bootstrap=args.pre_app_bootstrap,
         )
     except SystemExit:
         raise

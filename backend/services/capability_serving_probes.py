@@ -64,6 +64,7 @@ def query_serving_endpoint_with_proof(
     client_request_id: str | None = None,
     task: str | None = None,
     max_tokens: int = 64,
+    return_trace: bool = False,
 ) -> ServingEndpointExecution:
     if _is_agent_responses_task(task):
         input_messages = [{"role": "user", "content": prompt}]
@@ -75,6 +76,10 @@ def query_serving_endpoint_with_proof(
         }
         if client_request_id:
             body["client_request_id"] = client_request_id
+        if return_trace:
+            body["custom_inputs"] = {
+                "databricks_options": {"return_trace": True},
+            }
         response = workspace_client.api_client.do("POST", "/serving-endpoints/responses", body=body)
         return ServingEndpointExecution(
             endpoint=endpoint,

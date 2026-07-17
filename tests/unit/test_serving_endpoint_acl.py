@@ -11,6 +11,7 @@ from databricks.sdk.service.serving import (
 )
 
 from tools.databricks.serving_endpoint_acl import (
+    audit_global_serving_endpoint_access,
     grant_direct_can_query,
     revoke_direct_permissions,
 )
@@ -202,3 +203,186 @@ def test_default_group_resolution_uses_exact_scim_application_id_filter() -> Non
     )
 
     assert filters == ['applicationId eq "app-sp"']
+
+
+class _GlobalServing:
+    def __init__(
+        self,
+        permissions: dict[str, ServingEndpointPermissions],
+        *,
+        platform_foundation_endpoints: set[str] | None = None,
+    ) -> None:
+        self.permissions = permissions
+        self.platform_foundation_endpoints = platform_foundation_endpoints or set()
+
+    def list(self) -> object:
+        return iter(SimpleNamespace(name=name) for name in self.permissions)
+
+    def get(self, name: str) -> object:
+        if name in self.platform_foundation_endpoints:
+            return SimpleNamespace(
+                id=None,
+                creator=None,
+                config=SimpleNamespace(
+                    served_entities=[
+                        SimpleNamespace(
+                            foundation_model=SimpleNamespace(name="system.ai.databricks-model")
+                        )
+                    ]
+                ),
+            )
+        return SimpleNamespace(id=f"{name}-id")
+
+    def get_permissions(self, endpoint_id: str) -> ServingEndpointPermissions:
+        return self.permissions[endpoint_id.removesuffix("-id")]
+
+
+def test_global_serving_audit_rejects_unrelated_endpoint_access() -> None:
+    serving = _GlobalServing(
+        {
+            "reviewed": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("verifier-sp", "CAN_QUERY")]
+            ),
+            "unrelated": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("verifier-sp", "CAN_VIEW")]
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="unrelated serving endpoint 'unrelated'"):
+        audit_global_serving_endpoint_access(
+            SimpleNamespace(serving_endpoints=serving),
+            reviewed_endpoint_names=("reviewed",),
+            service_principal="verifier-sp",
+            effective_group_names=set(),
+        )
+
+
+def test_global_serving_audit_accepts_exact_reviewed_endpoint_only() -> None:
+    serving = _GlobalServing(
+        {
+            "reviewed": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("verifier-sp", "CAN_QUERY")]
+            ),
+            "unrelated": ServingEndpointPermissions(access_control_list=[]),
+        }
+    )
+
+    audit_global_serving_endpoint_access(
+        SimpleNamespace(serving_endpoints=serving),
+        reviewed_endpoint_names=("reviewed",),
+        service_principal="verifier-sp",
+        effective_group_names=set(),
+    )
+
+
+def test_global_serving_audit_routes_platform_foundation_models_to_uc_inventory() -> None:
+    serving = _GlobalServing(
+        {
+            "reviewed": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("verifier-sp", "CAN_QUERY")]
+            ),
+            "databricks-foundation": ServingEndpointPermissions(access_control_list=[]),
+        },
+        platform_foundation_endpoints={"databricks-foundation"},
+    )
+
+    audit_global_serving_endpoint_access(
+        SimpleNamespace(serving_endpoints=serving),
+        reviewed_endpoint_names=("reviewed",),
+        service_principal="verifier-sp",
+        effective_group_names=set(),
+    )
+
+
+def test_global_serving_audit_rejects_unrelated_endpoint_group_laundering() -> None:
+    serving = _GlobalServing(
+        {
+            "reviewed": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("verifier-sp", "CAN_QUERY")]
+            ),
+            "unrelated": ServingEndpointPermissions(
+                access_control_list=[_group_entry("all-endpoint-users", "CAN_VIEW")]
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="unrelated serving endpoint 'unrelated'"):
+        audit_global_serving_endpoint_access(
+            SimpleNamespace(serving_endpoints=serving),
+            reviewed_endpoint_names=("reviewed",),
+            service_principal="verifier-sp",
+            effective_group_names={"all-endpoint-users"},
+        )
+
+
+def test_global_serving_audit_accepts_runtime_owner_on_exact_agent_endpoints() -> None:
+    serving = _GlobalServing(
+        {
+            "mip-agent-supervisor": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("runtime-sp", "CAN_MANAGE")]
+            ),
+            "mip-agent-gateway": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("runtime-sp", "CAN_MANAGE")]
+            ),
+            "unrelated": ServingEndpointPermissions(access_control_list=[]),
+        }
+    )
+
+    audit_global_serving_endpoint_access(
+        SimpleNamespace(serving_endpoints=serving),
+        reviewed_endpoint_names=("mip-agent-supervisor", "mip-agent-gateway"),
+        service_principal="runtime-sp",
+        expected_permission_level="CAN_MANAGE",
+        effective_group_names=set(),
+    )
+
+
+def test_global_serving_audit_rejects_runtime_access_to_unrelated_endpoint() -> None:
+    serving = _GlobalServing(
+        {
+            "mip-agent-supervisor": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("runtime-sp", "CAN_MANAGE")]
+            ),
+            "mip-agent-gateway": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("runtime-sp", "CAN_MANAGE")]
+            ),
+            "unrelated": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("runtime-sp", "CAN_QUERY")]
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="unrelated serving endpoint 'unrelated'"):
+        audit_global_serving_endpoint_access(
+            SimpleNamespace(serving_endpoints=serving),
+            reviewed_endpoint_names=("mip-agent-supervisor", "mip-agent-gateway"),
+            service_principal="runtime-sp",
+            expected_permission_level="CAN_MANAGE",
+            effective_group_names=set(),
+        )
+
+
+def test_global_serving_audit_rejects_runtime_group_access_on_reviewed_endpoint() -> None:
+    serving = _GlobalServing(
+        {
+            "mip-agent-supervisor": ServingEndpointPermissions(
+                access_control_list=[
+                    _sp_entry("runtime-sp", "CAN_MANAGE"),
+                    _group_entry("runtime-owners", "CAN_MANAGE"),
+                ]
+            ),
+            "mip-agent-gateway": ServingEndpointPermissions(
+                access_control_list=[_sp_entry("runtime-sp", "CAN_MANAGE")]
+            ),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="exact global CAN_MANAGE audit failed"):
+        audit_global_serving_endpoint_access(
+            SimpleNamespace(serving_endpoints=serving),
+            reviewed_endpoint_names=("mip-agent-supervisor", "mip-agent-gateway"),
+            service_principal="runtime-sp",
+            expected_permission_level="CAN_MANAGE",
+            effective_group_names={"runtime-owners"},
+        )

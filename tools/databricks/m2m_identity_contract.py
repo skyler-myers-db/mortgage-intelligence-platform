@@ -10,7 +10,7 @@ from typing import Literal
 DEFAULT_ADMIN_GROUP = "mip-admin"
 DEFAULT_LAKEBASE_INSTANCE = "mip-app-state"
 
-IdentityRole = Literal["normal", "operator2", "admin", "verifier"]
+IdentityRole = Literal["normal", "operator2", "admin", "verifier", "agent_runtime"]
 
 
 @dataclass(frozen=True)
@@ -60,6 +60,15 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         group_name=None,
         grant_can_use=False,
         lakebase_instance=DEFAULT_LAKEBASE_INSTANCE,
+    ),
+    "agent_runtime": IdentityDefaults(
+        sp_name="mip-agent-runtime-ci-sp",
+        client_id_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        client_secret_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+        app_url_secret_name=None,
+        group_name=None,
+        grant_can_use=False,
+        lakebase_instance=None,
     ),
 }
 
@@ -136,6 +145,67 @@ def validate_identity_role_binding(
                     f"--expected-application-id is reserved for the {role} identity role"
                 )
     return resolved
+
+
+def validate_app_access_contract(
+    *,
+    identity_role: IdentityRole,
+    grant_can_use: bool,
+) -> None:
+    """Reject isolated-role App access before any external side effect."""
+
+    if identity_role in {"verifier", "agent_runtime"} and grant_can_use:
+        raise ValueError(
+            f"--identity-role {identity_role} forbids Databricks App CAN_USE; "
+            "remove --grant-can-use before provisioning"
+        )
+
+
+def validate_provisioning_contract(
+    *,
+    identity_role: IdentityRole,
+    sp_name: str,
+    expected_application_id: str | None,
+    grant_can_use: bool,
+    group_name: str | None,
+    create_group: bool,
+    lakebase_instance: str | None,
+    gateway_endpoint: str | None,
+    warehouse_id: str | None,
+    client_id_secret_name: str,
+    client_secret_secret_name: str,
+    app_url_secret_name: str | None,
+) -> str | None:
+    """Validate complete role ownership before SDK, subprocess, or mutation paths."""
+
+    validate_app_access_contract(
+        identity_role=identity_role,
+        grant_can_use=grant_can_use,
+    )
+    expected_group = IDENTITY_DEFAULTS[identity_role].group_name
+    if group_name != expected_group:
+        expected_label = expected_group or "no group"
+        raise ValueError(
+            f"--identity-role {identity_role} is bound to {expected_label!r}; "
+            "--group-name may not select another identity boundary"
+        )
+    if create_group and expected_group is None:
+        raise ValueError("--create-group is invalid for an identity role with no group")
+    if identity_role != "verifier" and (lakebase_instance or gateway_endpoint or warehouse_id):
+        raise ValueError(
+            "--lakebase-instance, --gateway-endpoint, and --warehouse-id are valid only with "
+            "--identity-role verifier"
+        )
+    if identity_role == "verifier" and gateway_endpoint and not warehouse_id:
+        raise ValueError("--gateway-endpoint requires --warehouse-id for exact proof verification")
+    return validate_identity_role_binding(
+        identity_role=identity_role,
+        sp_name=sp_name,
+        expected_application_id=expected_application_id,
+        client_id_secret_name=client_id_secret_name,
+        client_secret_secret_name=client_secret_secret_name,
+        app_url_secret_name=app_url_secret_name,
+    )
 
 
 @dataclass

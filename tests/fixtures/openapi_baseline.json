@@ -532,6 +532,17 @@
             "title": "Dependencies",
             "type": "object"
           },
+          "deployment_lease_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Lease Id"
+          },
           "fallback_identity_fallbacks_process_total": {
             "default": 0,
             "title": "Fallback Identity Fallbacks Process Total",
@@ -7601,6 +7612,17 @@
             },
             "title": "Dependencies",
             "type": "object"
+          },
+          "deployment_lease_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deployment Lease Id"
           },
           "forced_degraded": {
             "anyOf": [

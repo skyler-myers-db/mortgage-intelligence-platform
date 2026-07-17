@@ -125,6 +125,7 @@ class Settings(BaseSettings):
         default=None,
         validation_alias=AliasChoices("MIP_GIT_SHA", "GIT_SHA", "SOURCE_VERSION"),
     )
+    mip_app_deployment_lease_id: str | None = None
     mip_lender_name: str = "Summit Mortgage"
     mip_tenant_id: str | None = None
     mip_default_catalog: str = "mip"
@@ -201,6 +202,15 @@ class Settings(BaseSettings):
     )
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
+    mip_ai_gateway_agent_model_source: str | None = None
+    mip_ai_gateway_experiment_name: str | None = None
+    mip_ai_gateway_experiment_id: str | None = None
+    mip_expected_agent_gateway_binding_sha256: str | None = None
+    mip_expected_agent_gateway_resource_sha256: str | None = None
+    mip_expected_agent_gateway_resource_contract_json: str | None = None
+    mip_expected_agent_gateway_resource_signature: str | None = None
+    mip_gateway_model_attestation_verify_key: str | None = None
+    mip_gateway_model_attestation_previous_verify_key: str | None = None
     # Public Ed25519 key for exact inference-row proof attestations. The
     # verifier-only private key is never injected into the App runtime.
     mip_ai_gateway_proof_verify_key: str | None = None
@@ -217,6 +227,7 @@ class Settings(BaseSettings):
     mip_agent_eval_run_id: str | None = None
     mip_agent_supervisor_id: str | None = None
     mip_agent_supervisor_name: str | None = None
+    mip_agent_runtime_client_id: str | None = None
     mip_lakebase_sync_catalog: str = "mip_app_state"
     mip_lakebase_sync_schema: str = "mip_sync"
     mip_lakebase_sync_tables: str = "source_readiness,segment_population,funnel_snapshot_daily"
@@ -708,6 +719,10 @@ def check_trust_boundary_at_startup() -> None:
 
 @lru_cache
 def get_settings() -> Settings:
+    if os.environ.get("MIP_DISABLE_DOTENV", "").strip() == "1":
+        # `_env_file` is a pydantic-settings runtime init control; its generated
+        # static signature does not expose the keyword.
+        return Settings(_env_file=None)  # type: ignore[call-arg]
     return Settings()
 
 

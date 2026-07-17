@@ -31,7 +31,7 @@ RETURN (
     AND (b.last_touch_at IS NULL
       OR b.last_touch_at < CURRENT_TIMESTAMP() - INTERVAL '30' DAYS))
     AND (
-      SIZE(COALESCE(segment_codes, ARRAY())) = 0
+      SIZE(COALESCE(segment_codes, CAST(ARRAY() AS ARRAY<STRING>))) = 0
       OR CASE
         WHEN LOWER(COALESCE(segment_mode, 'any')) = 'all'
           THEN SIZE(ARRAY_EXCEPT(TRANSFORM(segment_codes, x -> LOWER(x)), b.segment_codes)) = 0
@@ -39,7 +39,7 @@ RETURN (
       END
     )
     AND (
-      SIZE(COALESCE(states, ARRAY())) = 0
+      SIZE(COALESCE(states, CAST(ARRAY() AS ARRAY<STRING>))) = 0
       OR ARRAY_CONTAINS(TRANSFORM(states, x -> UPPER(x)), UPPER(b.state))
     )
 );

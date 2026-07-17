@@ -13,6 +13,7 @@ from tests.fixtures.supervisor_runtime import (
     GATEWAY_ENDPOINT,
     gateway_endpoint_details,
     runtime_settings,
+    supervisor_endpoint_details,
     supervisor_metadata,
 )
 from tests.unit.test_growth_agent_api import (
@@ -59,6 +60,8 @@ class _ReadyServingEndpoints:
         self.task = task
 
     def get(self, endpoint: str) -> object:
+        if endpoint != GATEWAY_ENDPOINT:
+            return supervisor_endpoint_details()
         assert endpoint == GATEWAY_ENDPOINT
         return gateway_endpoint_details(
             ready="READY" if self.ready else "NOT_READY",

@@ -6,6 +6,7 @@ import hashlib
 import json
 from collections.abc import Sequence
 from typing import Any
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import psycopg
 from fastapi import HTTPException
@@ -176,13 +177,33 @@ def _notification_draft_intent(
     actionable_total: int,
     channel: str,
 ) -> str:
+    route_parts = urlsplit(route)
+    stable_query = urlencode(
+        [
+            (key, value)
+            for key, value in parse_qsl(route_parts.query, keep_blank_values=True)
+            if key != "growth_handoff"
+        ]
+    )
+    stable_route = urlunsplit(
+        (
+            route_parts.scheme,
+            route_parts.netloc,
+            route_parts.path,
+            stable_query,
+            route_parts.fragment,
+        )
+    )
     payload = {
         "actor": actor,
         "monitor_id": monitor.monitor_id,
         "monitor_name": monitor.name,
         "workflow_id": monitor.workflow_id,
         "run_id": run_id,
-        "route": route,
+        # The signed handoff token carries wall-clock iat/exp claims and is
+        # intentionally reissued on a semantic retry. It remains immutable in
+        # the stored draft body/audit, but cannot define request identity.
+        "route": stable_route,
         "actionable_total": actionable_total,
         "channel": channel,
         "source_assets": monitor.source_assets,

@@ -1538,6 +1538,54 @@ def test_notification_request_id_mismatch_is_409_without_new_audit() -> None:
     assert len(lakebase.audit_events) == 1
 
 
+def test_notification_request_replay_ignores_only_rotated_handoff_token() -> None:
+    lakebase = _FakeLakebaseClient()
+    monitor = _notification_test_monitor()
+    request_id = "67676767-6767-4767-8767-676767676767"
+    first_route = f"{monitor.route}&growth_handoff=proof-at-second-100"
+    replay_route = f"{monitor.route}&growth_handoff=proof-at-second-101"
+
+    first = create_notification_drafts(
+        lakebase,
+        actor="operator@example.com",
+        monitor=monitor,
+        run_id=str(monitor.last_run_id),
+        route=first_route,
+        actionable_total=monitor.actionable_total,
+        channels=["teams"],
+        request_id=request_id,
+    )
+    replay = create_notification_drafts(
+        lakebase,
+        actor="operator@example.com",
+        monitor=monitor,
+        run_id=str(monitor.last_run_id),
+        route=replay_route,
+        actionable_total=monitor.actionable_total,
+        channels=["teams"],
+        request_id=request_id,
+    )
+
+    assert replay[0].draft_id == first[0].draft_id
+    assert replay[0].body == first[0].body
+    assert "proof-at-second-100" in first[0].body
+    assert "proof-at-second-101" not in replay[0].body
+    assert len(lakebase.notification_drafts) == 1
+    assert len(lakebase.audit_events) == 1
+
+    with pytest.raises(HTTPException, match="different notification draft intent"):
+        create_notification_drafts(
+            lakebase,
+            actor="operator@example.com",
+            monitor=monitor,
+            run_id=str(monitor.last_run_id),
+            route=f"{monitor.route}&states=CA&growth_handoff=proof-at-second-102",
+            actionable_total=monitor.actionable_total,
+            channels=["teams"],
+            request_id=request_id,
+        )
+
+
 def test_concurrent_notification_replay_has_one_draft_and_one_audit() -> None:
     lakebase = _FakeLakebaseClient()
     monitor = _notification_test_monitor()
@@ -2068,9 +2116,7 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     )
     token = _handoff_token(body["route"])
     encoded_claims = token.split(".", 1)[0]
-    claims = json.loads(
-        base64.urlsafe_b64decode(encoded_claims + "=" * (-len(encoded_claims) % 4))
-    )
+    claims = json.loads(base64.urlsafe_b64decode(encoded_claims + "=" * (-len(encoded_claims) % 4)))
     assert claims["run_id"] == body["run_id"]
     assert claims["cohort_fingerprint"] == body["actionable_cohort_fingerprint"]
     assert claims["total"] == body["actionable_total"]
@@ -2102,10 +2148,7 @@ def test_run_workflow_reconciles_broad_to_actionable_and_writes_audit() -> None:
     assert metadata["tool_result_hash"] == body["tool_result_hash"]
     assert metadata["specialist_agent"] == "structured_data_agent"
     assert metadata["governance_chips"][0]["label"] == "Human approval required"
-    assert (
-        metadata["governance_chips"][-1]["evidence_ref"]
-        == body["actionable_cohort_fingerprint"]
-    )
+    assert metadata["governance_chips"][-1]["evidence_ref"] == body["actionable_cohort_fingerprint"]
     assert metadata["governance_chips"][-1]["result_hash"] == body["actionable_snapshot_id"]
     assert metadata["governance_chips"][-1]["detail"] == (
         "Cohort fingerprint and source snapshot bound."
@@ -2454,9 +2497,10 @@ def test_growth_agent_request_id_replays_existing_run_without_duplicate_audit() 
     assert replay.status_code == 200, replay.text
     assert replay.json()["run_id"] == first.json()["run_id"]
     assert replay.json()["audit_event_id"] == first.json()["audit_event_id"]
-    assert replay.json()["actionable_cohort_fingerprint"] == first.json()[
-        "actionable_cohort_fingerprint"
-    ]
+    assert (
+        replay.json()["actionable_cohort_fingerprint"]
+        == first.json()["actionable_cohort_fingerprint"]
+    )
     assert replay.json()["actionable_snapshot_id"] == "e" * 64
     assert len(lakebase.runs) == 1
     assert len(lakebase.audit_events) == 1
@@ -2489,9 +2533,7 @@ def test_growth_agent_lead_queue_workflow_requires_snapshot_proof() -> None:
         _clear_overrides()
 
     assert response.status_code == 503
-    assert response.json() == {
-        "detail": "Growth Agent cohort snapshot proof is unavailable"
-    }
+    assert response.json() == {"detail": "Growth Agent cohort snapshot proof is unavailable"}
     assert lakebase.runs == []
 
 

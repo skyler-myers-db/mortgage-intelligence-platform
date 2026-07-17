@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Collection
+from typing import Any, Literal
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from databricks.sdk.service.serving import (
@@ -35,6 +36,14 @@ def _effective_query_or_manage(entry: object) -> str | None:
     ]
     query_capable = [level for level in effective if level in {"CAN_QUERY", "CAN_MANAGE"}]
     return max(query_capable, key=_LEVEL_RANK.__getitem__) if query_capable else None
+
+
+def _all_levels(entry: object) -> set[str]:
+    return {
+        _text(getattr(permission, "permission_level", None))
+        for permission in (getattr(entry, "all_permissions", None) or [])
+        if _text(getattr(permission, "permission_level", None))
+    }
 
 
 def _principal_entry(permissions: object, principal: str) -> object | None:
@@ -87,6 +96,19 @@ def _group_query_or_manage(
     return None
 
 
+def _groups_with_access(
+    permissions: object,
+    *,
+    effective_group_names: set[str],
+) -> set[str]:
+    return {
+        str(getattr(entry, "group_name", "") or "").strip()
+        for entry in getattr(permissions, "access_control_list", None) or []
+        if str(getattr(entry, "group_name", "") or "").strip() in effective_group_names
+        and _all_levels(entry)
+    }
+
+
 def _preserved_direct_acl(
     permissions: object,
     *,
@@ -127,6 +149,110 @@ def _endpoint_id(client: Any, endpoint_name: str, *, missing_ok: bool) -> str | 
     if not endpoint_id:
         raise RuntimeError(f"serving endpoint {endpoint_name!r} has no immutable id")
     return endpoint_id
+
+
+def _is_platform_foundation_endpoint(details: object) -> bool:
+    """Recognize only Databricks system foundation endpoints without ACL IDs.
+
+    Their model entitlements are audited through the fixed ``system.ai`` UC
+    inventory; they are not customer-created serving securables.
+    """
+
+    if str(getattr(details, "id", "") or "").strip() or str(
+        getattr(details, "creator", "") or ""
+    ).strip():
+        return False
+    entities = getattr(getattr(details, "config", None), "served_entities", None) or []
+    if not entities:
+        return False
+    for entity in entities:
+        foundation = getattr(entity, "foundation_model", None)
+        full_name = str(getattr(foundation, "name", "") or "").strip()
+        if foundation is None or not full_name.startswith("system.ai."):
+            return False
+    return True
+
+
+def audit_global_serving_endpoint_access(
+    client: Any,
+    *,
+    reviewed_endpoint_names: Collection[str],
+    service_principal: str,
+    expected_permission_level: Literal["CAN_QUERY", "CAN_MANAGE"] = "CAN_QUERY",
+    service_principal_id: str | None = None,
+    effective_group_names: set[str] | None = None,
+) -> None:
+    """Admin-side proof of one exact direct level on only reviewed endpoints."""
+
+    reviewed = {str(name).strip() for name in reviewed_endpoint_names if str(name).strip()}
+    if not reviewed or len(reviewed) != len(reviewed_endpoint_names):
+        raise ValueError("reviewed endpoint names must be non-empty and distinct")
+    principal = service_principal.strip()
+    if not principal:
+        raise ValueError("service principal application ID is required")
+    if expected_permission_level not in {"CAN_QUERY", "CAN_MANAGE"}:
+        raise ValueError("expected permission level must be CAN_QUERY or CAN_MANAGE")
+    group_names = (
+        effective_group_names
+        if effective_group_names is not None
+        else _effective_group_names(
+            client,
+            service_principal=principal,
+            service_principal_id=service_principal_id,
+        )
+    )
+    try:
+        visible = list(client.serving_endpoints.list())
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"cannot list serving endpoints for global ACL audit: {exc}") from exc
+    endpoint_ids: dict[str, str] = {}
+    for endpoint in visible:
+        name = str(
+            (endpoint.get("name") if isinstance(endpoint, dict) else getattr(endpoint, "name", ""))
+            or ""
+        ).strip()
+        if not name:
+            raise RuntimeError("cannot audit serving ACLs: a visible endpoint has no name")
+        if name in endpoint_ids:
+            raise RuntimeError(f"cannot audit serving ACLs: duplicate endpoint {name!r}")
+        details = client.serving_endpoints.get(name)
+        endpoint_id = str(getattr(details, "id", "") or "").strip()
+        if not endpoint_id:
+            if _is_platform_foundation_endpoint(details):
+                continue
+            raise RuntimeError(f"serving endpoint {name!r} has no immutable id")
+        endpoint_ids[name] = endpoint_id
+    missing = reviewed.difference(endpoint_ids)
+    if missing:
+        raise RuntimeError(
+            "reviewed serving endpoint(s) are not visible to the admin audit: "
+            + ", ".join(sorted(missing))
+        )
+    for name, endpoint_id in sorted(endpoint_ids.items()):
+        try:
+            permissions = client.serving_endpoints.get_permissions(endpoint_id)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(f"cannot inspect serving ACL for {name!r}: {exc}") from exc
+        entry = _principal_entry(permissions, principal)
+        groups = _groups_with_access(
+            permissions,
+            effective_group_names=group_names,
+        )
+        if name in reviewed:
+            if (
+                _direct_level(entry or object()) != expected_permission_level
+                or _all_levels(entry or object()) != {expected_permission_level}
+                or groups
+            ):
+                raise RuntimeError(
+                    f"exact global {expected_permission_level} audit failed for {principal!r} "
+                    f"on reviewed endpoint {name!r}; remove inherited, group, or broader access"
+                )
+        elif (entry is not None and _all_levels(entry)) or groups:
+            raise RuntimeError(
+                f"{principal!r} retains forbidden access to unrelated serving endpoint "
+                f"{name!r}; remove direct or effective group access"
+            )
 
 
 def grant_direct_can_query(

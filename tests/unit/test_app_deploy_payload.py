@@ -59,7 +59,23 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     monkeypatch.setenv("MIP_RUM_ENABLED", "1")
     monkeypatch.setenv("MIP_GENIE_CONCURRENCY_LIMIT", "8")
     monkeypatch.setenv("MIP_LIVE_CAPABILITY_PROBE_TTL_S", "45")
+    monkeypatch.setenv("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY", "acme_mip.audit.proxy_family")
+    monkeypatch.setenv("MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE", "acme-gateway-proxy")
+    monkeypatch.setenv("MIP_AI_GATEWAY_TABLE_PREFIX", "acme_gateway_inference")
+    monkeypatch.setenv("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON", '{"v":"1"}')
+    monkeypatch.setenv("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256", "a" * 64)
+    monkeypatch.setenv("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE", "signed-public-proof")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "current-public-key")
+    monkeypatch.setenv(
+        "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
+        "previous-public-key",
+    )
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", "must-not-reach-app")
     monkeypatch.setenv("MIP_GIT_SHA", "abc123def456")
+    monkeypatch.setenv(
+        "MIP_APP_DEPLOYMENT_LEASE_ID",
+        "11111111-1111-4111-8111-111111111111",
+    )
 
     payload = build_payload(
         source_code_path="/Workspace/app/files",
@@ -88,10 +104,26 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "0"
     assert env["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "0"
     assert env["MIP_LENDER_NAME"]["value"] == "Acme Mortgage"
+    assert env["MIP_APP_DEPLOYMENT_LEASE_ID"]["value"] == ("11111111-1111-4111-8111-111111111111")
     assert env["MIP_TRUST_FORWARDED_HEADERS"]["value"] == "false"
     assert env["MIP_RUM_ENABLED"]["value"] == "1"
     assert env["MIP_GENIE_CONCURRENCY_LIMIT"]["value"] == "8"
     assert env["MIP_LIVE_CAPABILITY_PROBE_TTL_S"]["value"] == "45"
+    assert env["MIP_AI_GATEWAY_AGENT_MODEL_FAMILY"]["value"] == (
+        "acme_mip.audit.proxy_family"
+    )
+    assert env["MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE"]["value"] == "acme-gateway-proxy"
+    assert env["MIP_AI_GATEWAY_TABLE_PREFIX"]["value"] == "acme_gateway_inference"
+    assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"]["value"] == '{"v":"1"}'
+    assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"]["value"] == "a" * 64
+    assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE"]["value"] == (
+        "signed-public-proof"
+    )
+    assert env["MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY"]["value"] == "current-public-key"
+    assert env["MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY"]["value"] == (
+        "previous-public-key"
+    )
+    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in env
     assert env["MIP_GIT_SHA"]["value"] == "abc123def456"
     assert "MIP_ADMIN_EMAILS" not in env
 
@@ -99,9 +131,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
 def test_treatment_runtime_gate_requires_exact_enabled_value(monkeypatch) -> None:
     # Stale operator config cannot enable the gate.
     monkeypatch.setenv("MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED", "1")
-    disabled = _env_map(
-        build_payload(source_code_path="/Workspace/app/files", target="prod")
-    )
+    disabled = _env_map(build_payload(source_code_path="/Workspace/app/files", target="prod"))
     assert disabled["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "0"
 
     enabled = _env_map(

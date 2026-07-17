@@ -21,11 +21,22 @@ from fastapi.testclient import TestClient
 import backend.services.ai_gateway_capability_probe as ai_gateway_probe_module
 import backend.services.capabilities as capabilities_module
 import backend.services.capability_request as capability_request_module
+import backend.services.supervisor_runtime as supervisor_runtime_module
 from backend.agents.gateway_contract import (
+    GATEWAY_BURST_SCALING_ENABLED,
+    GATEWAY_ENDPOINT_DESCRIPTION,
     GATEWAY_PROXY_SOURCE_HASH_TAG,
+    GATEWAY_ROUTE_OPTIMIZED,
+    GATEWAY_SCALE_TO_ZERO_ENABLED,
+    GATEWAY_STATIC_ENV,
+    GATEWAY_TRAFFIC_PERCENTAGE,
     GATEWAY_UPSTREAM_TAG,
+    GATEWAY_WORKLOAD_SIZE,
+    GATEWAY_WORKLOAD_TYPE,
     gateway_proxy_source_hash,
+    gateway_runtime_binding_hash,
 )
+from backend.agents.supervisor_contract import supervisor_contract_hash
 from backend.config.settings import AI_GATEWAY_PROOF_FRESHNESS_MAX_S, Settings
 from backend.main import app
 from backend.services.ai_gateway_proof_attestation import (
@@ -51,6 +62,19 @@ _TEST_GIT_SHA = "69ff206fa7667589a28498c6554779f7f6c18c08"
 _OTHER_GIT_SHA = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 _TEST_SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 _TEST_VERIFY_KEY = derive_gateway_proof_verify_key(_TEST_SIGNING_KEY)
+_TEST_GATEWAY_ENDPOINT_ID = "gateway-endpoint-id"
+_TEST_SUPERVISOR_ENDPOINT_ID = "supervisor-endpoint-id"
+
+
+@pytest.fixture(autouse=True)
+def _exact_runtime_resource_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        supervisor_runtime_module,
+        "verified_gateway_runtime_resource_environment",
+        lambda environment: json.loads(
+            environment["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"]
+        ),
+    )
 
 
 def _settings(**overrides: object) -> Settings:
@@ -66,18 +90,87 @@ def _settings(**overrides: object) -> Settings:
         "mip_agent_supervisor_endpoint": "mip-supervisor-endpoint",
         "mip_agent_supervisor_id": "supervisor-1",
         "mip_agent_gateway_model_version": 7,
+        "mip_agent_runtime_client_id": "runtime-client",
+        "mip_default_catalog": "mip",
         "mip_ai_gateway_inference_table": "mip_app_state.mip_sync.mip_agent_inference",
+        "mip_ai_gateway_experiment_id": "experiment-7",
+        "mip_ai_gateway_experiment_name": "/Users/runtime-client/proxy",
+        "mip_ai_gateway_agent_model_source": "models:/m-reviewed-proxy",
+        "mip_expected_agent_gateway_resource_sha256": "a" * 64,
+        "mip_expected_agent_gateway_resource_signature": "signature",
+        "mip_gateway_model_attestation_verify_key": _TEST_VERIFY_KEY,
     }
     if overrides.get("mip_ai_gateway") is True and "mip_agent_orchestrator" not in overrides:
         base["mip_agent_orchestrator"] = True
+    base.update(overrides)
     overridden_gateway_endpoint = overrides.get("mip_ai_gateway_endpoint")
     if (
         isinstance(overridden_gateway_endpoint, str)
         and "mip_agent_serving_endpoint" not in overrides
     ):
         base["mip_agent_serving_endpoint"] = overridden_gateway_endpoint
-    base.update(overrides)
+    binding_values = (
+        base.get("mip_agent_serving_endpoint"),
+        base.get("mip_agent_supervisor_id"),
+        base.get("mip_agent_supervisor_endpoint"),
+        base.get("mip_agent_runtime_client_id"),
+        base.get("mip_agent_gateway_model", "mip.audit.mortgage_growth_supervisor_proxy"),
+        base.get("mip_agent_gateway_model_version"),
+        base.get("mip_ai_gateway_inference_table"),
+    )
+    if all(binding_values):
+        base["mip_expected_agent_gateway_binding_sha256"] = gateway_runtime_binding_hash(
+            endpoint=str(binding_values[0]),
+            supervisor_id=str(binding_values[1]),
+            upstream_endpoint=str(binding_values[2]),
+            runtime_application_id=str(binding_values[3]),
+            model_name=str(binding_values[4]),
+            model_version=int(str(binding_values[5])),
+            inference_table=str(binding_values[6]),
+        )
+    base["mip_expected_agent_gateway_resource_contract_json"] = json.dumps(
+        {
+            "catalog": base.get("mip_default_catalog"),
+            "genie_space_id": base.get("genie_space_id"),
+            "runtime_application_id": base.get("mip_agent_runtime_client_id"),
+            "supervisor_id": base.get("mip_agent_supervisor_id"),
+            "supervisor_endpoint": base.get("mip_agent_supervisor_endpoint"),
+            "supervisor_endpoint_id": _TEST_SUPERVISOR_ENDPOINT_ID,
+            "gateway_endpoint": base.get("mip_agent_serving_endpoint"),
+            "gateway_endpoint_id": _TEST_GATEWAY_ENDPOINT_ID,
+            "gateway_model_name": base.get(
+                "mip_agent_gateway_model", "mip.audit.mortgage_growth_supervisor_proxy"
+            ),
+            "gateway_model_version": str(base.get("mip_agent_gateway_model_version")),
+            "gateway_model_source": base.get("mip_ai_gateway_agent_model_source"),
+            "gateway_experiment_name": base.get("mip_ai_gateway_experiment_name"),
+            "gateway_experiment_id": base.get("mip_ai_gateway_experiment_id"),
+            "gateway_inference_table": base.get("mip_ai_gateway_inference_table"),
+        }
+    )
     return Settings(**base)
+
+
+def _runtime_resource_environment(*, endpoint: str, inference_table: str) -> dict[str, str]:
+    configured = _settings(
+        mip_agent_serving_endpoint=endpoint,
+        mip_ai_gateway_endpoint=endpoint,
+        mip_ai_gateway_inference_table=inference_table,
+    )
+    return {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": (
+            configured.mip_expected_agent_gateway_resource_contract_json or ""
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": (
+            configured.mip_expected_agent_gateway_resource_sha256 or ""
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": (
+            configured.mip_expected_agent_gateway_resource_signature or ""
+        ),
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": (
+            configured.mip_gateway_model_attestation_verify_key or ""
+        ),
+    }
 
 
 def _by_key(caps: list, key: str):
@@ -325,10 +418,14 @@ class _FakeWorkspaceClient:
         supervisor_metadata_id: str = "supervisor-1",
         supervisor_metadata_endpoint: str = "mip-supervisor-endpoint",
         supervisor_metadata_error: Exception | None = None,
+        gateway_endpoint_id: str = _TEST_GATEWAY_ENDPOINT_ID,
+        supervisor_endpoint_id: str = _TEST_SUPERVISOR_ENDPOINT_ID,
+        supervisor_endpoint_creator: str = "runtime-client",
         inference_enabled: bool = True,
         inference_catalog: str = "mip_app_state",
         inference_schema: str = "mip_sync",
         inference_table_prefix: str = "mip_agent_inference",
+        resource_inference_table: str = "mip_app_state.mip_sync.mip_agent_inference",
         responses_api_error: Exception | None = None,
         serving_response_status: str = "completed",
         eval_total: int = 5,
@@ -367,6 +464,10 @@ class _FakeWorkspaceClient:
             inference_catalog=inference_catalog,
             inference_schema=inference_schema,
             inference_table_prefix=inference_table_prefix,
+            resource_inference_table=resource_inference_table,
+            gateway_endpoint_id=gateway_endpoint_id,
+            supervisor_endpoint_id=supervisor_endpoint_id,
+            supervisor_endpoint_creator=supervisor_endpoint_creator,
         )
         self.experiments = _FakeExperiments(
             total=eval_total,
@@ -402,6 +503,10 @@ class _FakeServingEndpoints:
         inference_catalog: str = "mip_app_state",
         inference_schema: str = "mip_sync",
         inference_table_prefix: str = "mip_agent_inference",
+        resource_inference_table: str = "mip_app_state.mip_sync.mip_agent_inference",
+        gateway_endpoint_id: str = _TEST_GATEWAY_ENDPOINT_ID,
+        supervisor_endpoint_id: str = _TEST_SUPERVISOR_ENDPOINT_ID,
+        supervisor_endpoint_creator: str = "runtime-client",
     ) -> None:
         self.ready = ready
         self.task = task
@@ -410,12 +515,22 @@ class _FakeServingEndpoints:
         self.inference_catalog = inference_catalog
         self.inference_schema = inference_schema
         self.inference_table_prefix = inference_table_prefix
+        self.resource_inference_table = resource_inference_table
+        self.gateway_endpoint_id = gateway_endpoint_id
+        self.supervisor_endpoint_id = supervisor_endpoint_id
+        self.supervisor_endpoint_creator = supervisor_endpoint_creator
         self.queries: list[tuple[str, dict[str, object]]] = []
 
     def get(self, name: str) -> object:
-        _ = name
         upstream = "mip-supervisor-endpoint"
+        if name == upstream:
+            return SimpleNamespace(
+                id=self.supervisor_endpoint_id,
+                creator=self.supervisor_endpoint_creator,
+            )
         return SimpleNamespace(
+            id=self.gateway_endpoint_id,
+            creator="runtime-client",
             state=SimpleNamespace(ready="READY" if self.ready else "NOT_READY"),
             task=self.task,
             pending_config=None,
@@ -424,24 +539,66 @@ class _FakeServingEndpoints:
                     SimpleNamespace(
                         entity_name="mip.audit.mortgage_growth_supervisor_proxy",
                         entity_version="7",
-                        environment_vars={"MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream},
+                        name="mip-growth-supervisor-proxy-7",
+                        environment_vars={
+                            **GATEWAY_STATIC_ENV,
+                            **_runtime_resource_environment(
+                                endpoint=name,
+                                inference_table=self.resource_inference_table,
+                            ),
+                            "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-1",
+                            "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
+                            "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
+                            "MIP_SUPERVISOR_CATALOG": "mip",
+                            "MIP_SUPERVISOR_GENIE_SPACE_ID": "space-abc",
+                            "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(
+                                genie_space_id="space-abc",
+                                catalog="mip",
+                            ),
+                            "MLFLOW_EXPERIMENT_ID": "experiment-7",
+                        },
+                        workload_size=GATEWAY_WORKLOAD_SIZE,
+                        workload_type=GATEWAY_WORKLOAD_TYPE,
+                        scale_to_zero_enabled=GATEWAY_SCALE_TO_ZERO_ENABLED,
+                        burst_scaling_enabled=GATEWAY_BURST_SCALING_ENABLED,
                     )
-                ]
+                ],
+                traffic_config=SimpleNamespace(
+                    routes=[
+                        SimpleNamespace(
+                            served_entity_name="mip-growth-supervisor-proxy-7",
+                            traffic_percentage=GATEWAY_TRAFFIC_PERCENTAGE,
+                        )
+                    ]
+                ),
             ),
+            description=GATEWAY_ENDPOINT_DESCRIPTION,
+            route_optimized=GATEWAY_ROUTE_OPTIMIZED,
+            budget_policy_id=None,
+            email_notifications=None,
+            rate_limits=[],
             tags=[
                 SimpleNamespace(
                     key=GATEWAY_PROXY_SOURCE_HASH_TAG,
-                    value=gateway_proxy_source_hash(upstream_endpoint=upstream),
+                    value=gateway_proxy_source_hash(
+                        upstream_endpoint=upstream,
+                        catalog="mip",
+                        genie_space_id="space-abc",
+                    ),
                 ),
                 SimpleNamespace(key=GATEWAY_UPSTREAM_TAG, value=upstream),
             ],
             ai_gateway=SimpleNamespace(
+                fallback_config=None,
+                guardrails=None,
+                rate_limits=[],
+                usage_tracking_config=None,
                 inference_table_config=SimpleNamespace(
                     enabled=self.inference_enabled,
                     catalog_name=self.inference_catalog,
                     schema_name=self.inference_schema,
                     table_name_prefix=self.inference_table_prefix,
-                )
+                ),
             ),
         )
 
@@ -481,6 +638,7 @@ class _FakeApiClient:
             return {
                 "supervisor_agent_id": self.supervisor_id,
                 "endpoint_name": self.supervisor_endpoint,
+                "creator": "runtime-client",
             }
         if self.error is not None:
             raise self.error
@@ -902,52 +1060,49 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
     )
 
     assert statuses["agent_orchestrator"].available is True
-    assert len(workspace.api_client.requests) == 2
-    metadata_method, metadata_path, _metadata_body = workspace.api_client.requests[0]
-    assert metadata_method == "GET"
-    assert metadata_path == "/api/2.1/supervisor-agents/supervisor-1"
-    method, path, body = workspace.api_client.requests[1]
+    assert len(workspace.api_client.requests) == 1
+    method, path, body = workspace.api_client.requests[0]
     assert method == "POST"
     assert path == "/serving-endpoints/responses"
     assert body is not None
     assert body["model"] == "mip-growth-agent-gateway"
 
 
-def test_agent_orchestrator_rejects_supervisor_endpoint_metadata_mismatch() -> None:
-    workspace = _FakeWorkspaceClient(supervisor_metadata_endpoint="different-endpoint")
+@pytest.mark.parametrize(
+    ("identity_field", "reason"),
+    (
+        ("gateway_endpoint_id", "gateway_endpoint_id_mismatch"),
+        ("supervisor_endpoint_id", "supervisor_endpoint_id_mismatch"),
+    ),
+)
+def test_agent_orchestrator_rejects_live_endpoint_identity_replacement(
+    identity_field: str,
+    reason: str,
+) -> None:
+    workspace = _FakeWorkspaceClient(**{identity_field: "replaced-endpoint-id"})
     statuses = collect_live_capability_statuses(
-        settings=_settings(
-            mip_agent_orchestrator=True,
-            mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-growth-agent-gateway",
-        ),
+        settings=_settings(mip_agent_orchestrator=True),
         workspace_client=workspace,
     )
 
     assert statuses["agent_orchestrator"].available is False
-    assert "does not map" in statuses["agent_orchestrator"].detail
-    assert len(workspace.api_client.requests) == 1
-    assert workspace.serving_endpoints.queries == []
+    assert reason in statuses["agent_orchestrator"].detail
+    assert _gateway_probe_requests(workspace) == []
 
 
-def test_agent_orchestrator_rejects_supervisor_identity_metadata_mismatch() -> None:
-    workspace = _FakeWorkspaceClient(supervisor_metadata_id="different-supervisor")
+def test_agent_orchestrator_rejects_supervisor_endpoint_creator_mismatch() -> None:
+    workspace = _FakeWorkspaceClient(supervisor_endpoint_creator="attacker-client")
     statuses = collect_live_capability_statuses(
-        settings=_settings(
-            mip_agent_orchestrator=True,
-            mip_agent_supervisor_id="supervisor-1",
-            mip_agent_serving_endpoint="mip-growth-agent-gateway",
-        ),
+        settings=_settings(mip_agent_orchestrator=True),
         workspace_client=workspace,
     )
 
     assert statuses["agent_orchestrator"].available is False
-    assert "did not match" in statuses["agent_orchestrator"].detail
-    assert len(workspace.api_client.requests) == 1
-    assert workspace.serving_endpoints.queries == []
+    assert "supervisor_endpoint_creator_mismatch" in statuses["agent_orchestrator"].detail
+    assert _gateway_probe_requests(workspace) == []
 
 
-def test_agent_orchestrator_fails_closed_when_supervisor_metadata_is_unavailable() -> None:
+def test_agent_orchestrator_does_not_require_runtime_private_supervisor_metadata() -> None:
     class PermissionDenied(Exception):
         pass
 
@@ -961,10 +1116,9 @@ def test_agent_orchestrator_fails_closed_when_supervisor_metadata_is_unavailable
         workspace_client=workspace,
     )
 
-    assert statuses["agent_orchestrator"].available is False
-    assert "PermissionDenied" in statuses["agent_orchestrator"].detail
+    assert statuses["agent_orchestrator"].available is True
     assert len(workspace.api_client.requests) == 1
-    assert workspace.serving_endpoints.queries == []
+    assert workspace.api_client.requests[0][1] == "/serving-endpoints/responses"
 
 
 def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transport() -> None:
@@ -981,7 +1135,7 @@ def test_agent_orchestrator_normalizes_sdk_enum_task_to_exact_responses_transpor
     )
 
     assert statuses["agent_orchestrator"].available is True
-    assert workspace.api_client.requests[1][1] == "/serving-endpoints/responses"
+    assert workspace.api_client.requests[0][1] == "/serving-endpoints/responses"
 
 
 def test_agent_orchestrator_live_probe_does_not_retry_after_responses_route_failure() -> None:
@@ -997,7 +1151,7 @@ def test_agent_orchestrator_live_probe_does_not_retry_after_responses_route_fail
 
     assert statuses["agent_orchestrator"].available is False
     assert "JSONDecodeError" in statuses["agent_orchestrator"].detail
-    assert len(workspace.api_client.requests) == 2
+    assert len(workspace.api_client.requests) == 1
     assert workspace.serving_endpoints.queries == []
 
 
@@ -1462,7 +1616,9 @@ def test_ai_gateway_live_probe_rejects_inference_table_mismatch() -> None:
         ),
         sql_client=_LiveSqlClient(),
         lakebase=_LiveLakebase(),
-        workspace_client=_FakeWorkspaceClient(),
+        workspace_client=_FakeWorkspaceClient(
+            resource_inference_table="mip_app_state.mip_sync.other_gateway_prefix"
+        ),
     )
 
     assert statuses["ai_gateway"].available is False
@@ -1735,6 +1891,9 @@ def test_uc_growth_agent_tool_sql_contracts_are_present() -> None:
         assert "create or replace function" in text
         assert "mortgage growth agent" in text
         assert "read-only" in text or "no outreach or state write" in text
+        assert "coalesce(segment_codes, array())" not in text
+        assert "coalesce(states, array())" not in text
+        assert "cast(array() as array<string>)" in text
 
 
 def test_growth_agent_function_grants_are_documented_and_deployed() -> None:
@@ -1754,7 +1913,10 @@ def test_ai_gateway_audit_grant_is_table_scoped() -> None:
     assert "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.audit" not in deploy
     assert "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit" in deploy
     assert "-m tools.databricks.grant_ai_gateway_inference_table" in deploy
-    assert "GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload" in grants
+    assert (
+        "GRANT SELECT ON TABLE "
+        "mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload" in grants
+    )
     assert "Do not grant `SELECT ON SCHEMA mip.audit`" in grants
 
 

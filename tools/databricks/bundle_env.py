@@ -14,6 +14,7 @@ Mapping (env -> BUNDLE_VAR_*):
 Usage:
   python tools/databricks/bundle_env.py validate -t dev
   python tools/databricks/bundle_env.py plan     -t dev
+  python tools/databricks/bundle_env.py summary  -t dev -o json
   python tools/databricks/bundle_env.py deploy   -t dev
 
 The dev target defaults to Summit demo first-party feeds so the public demo
@@ -103,15 +104,15 @@ def _demo_first_party_flag_for_target(env: dict[str, str], *, target: str) -> st
 def main() -> int:
     if len(sys.argv) < 2:
         print(
-            "usage: bundle_env.py <validate|plan|deploy> [databricks bundle args...]",
+            "usage: bundle_env.py <validate|plan|summary|deploy> " "[databricks bundle args...]",
             file=sys.stderr,
         )
         return 2
 
     subcmd, *rest = sys.argv[1:]
-    if subcmd not in {"validate", "plan", "deploy"}:
+    if subcmd not in {"validate", "plan", "summary", "deploy"}:
         print(
-            "usage: bundle_env.py <validate|plan|deploy> [databricks bundle args...]",
+            "usage: bundle_env.py <validate|plan|summary|deploy> " "[databricks bundle args...]",
             file=sys.stderr,
         )
         return 2
@@ -168,7 +169,7 @@ def main() -> int:
             if _is_real(genie):
                 env["GENIE_SPACE_ID"] = genie
 
-    if subcmd in {"plan", "deploy"}:
+    if subcmd in {"plan", "summary", "deploy"}:
         missing = []
         if not _is_real(warehouse):
             missing.append("DATABRICKS_WAREHOUSE_ID")

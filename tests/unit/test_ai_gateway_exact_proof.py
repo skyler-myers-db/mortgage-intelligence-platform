@@ -258,6 +258,48 @@ class _ProofSql:
         return request_id.strip("%")
 
 
+def _tool_span(*, count: int | bool = 42) -> dict[str, object]:
+    return {
+        "trace_id": "AAAAAAAAAAAAAAAAAAAAAQ==",
+        "span_id": "AAAAAAAAAAE=",
+        "parent_span_id": None,
+        "name": "mip__gold__fn_build_cohort",
+        "start_time_unix_nano": 1,
+        "end_time_unix_nano": 2,
+        "events": [],
+        "status": {"code": "STATUS_CODE_OK", "message": ""},
+        "attributes": {
+            "mlflow.traceRequestId": "tr-hosted-tool-test",
+            "mlflow.spanType": json.dumps("TOOL"),
+            "mlflow.spanInputs": json.dumps(
+                {"segment_codes": ["itm"], "segment_mode": "any", "states": ["CA"]}
+            ),
+            "mlflow.spanOutputs": json.dumps(
+                {
+                    "result": json.dumps(
+                        {
+                            "is_truncated": False,
+                            "columns": ["output"],
+                            "rows": [[count]],
+                        }
+                    )
+                }
+            ),
+        },
+        "links": [],
+    }
+
+
+def _platform_trace_response(spans: list[dict[str, object]]) -> dict[str, object]:
+    return {
+        "custom_outputs": {
+            "upstream_databricks_output": {
+                "trace": {"info": {"request_id": "trace-request"}, "data": {"spans": spans}}
+            }
+        }
+    }
+
+
 class _Workspace:
     def __init__(self) -> None:
         self.api_client = type(
@@ -266,7 +308,10 @@ class _Workspace:
             {
                 "do": lambda _self, *_args, **_kwargs: {
                     "status": "completed",
-                    "output": [{"content": [{"text": "Gateway logging acknowledged."}]}],
+                    **_platform_trace_response([_tool_span()]),
+                    "output": [
+                        {"content": [{"text": '{"tool":"fn_build_cohort","cohort_count":42}'}]}
+                    ],
                 }
             },
         )()
@@ -758,6 +803,8 @@ def test_verifier_send_wait_records_exact_verified_row(monkeypatch) -> None:
             _ENDPOINT,
             "--inference-table",
             _INFERENCE_TABLE,
+            "--expected-tool-count",
+            "42",
             "--timeout-s",
             "1",
             "--interval-s",
@@ -870,13 +917,13 @@ def test_verifier_requires_exact_client_request_id(monkeypatch) -> None:
 
     assert exit_code == 1
     assert lakebase.rows[0]["proof_id"] == pending.proof_id
-    assert lakebase.rows[0]["status"] == "pending"
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 def test_wait_for_exact_row_ignores_row_under_a_different_request_id() -> None:
     """A logged inference row under some OTHER client_request_id must not
     verify this pending proof -- the exact-id match is what makes the proof
-    trustworthy, so a wrong-id row leaves the proof pending."""
+    trustworthy, so a wrong-id row fails the in-process proof."""
     lakebase = _ProofLakebase()
     proof = insert_pending_proof(
         lakebase,
@@ -898,7 +945,7 @@ def test_wait_for_exact_row_ignores_row_under_a_different_request_id() -> None:
 
     assert verified == []
     assert lakebase.rows[0]["proof_id"] == proof.proof_id
-    assert lakebase.rows[0]["status"] == "pending"
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 def test_exact_row_check_defensively_ignores_nonliteral_prefix_table(
@@ -992,7 +1039,7 @@ def test_lakebase_schema_rejects_future_gateway_proof_writes() -> None:
     assert "CREATE TRIGGER trg_ai_gateway_proof_timestamp_bounds" in schema
 
 
-def test_wait_for_exact_row_timeout_leaves_pending() -> None:
+def test_wait_for_exact_row_timeout_fails_unattested_proof() -> None:
     lakebase = _ProofLakebase()
     proof = insert_pending_proof(
         lakebase,
@@ -1012,7 +1059,7 @@ def test_wait_for_exact_row_timeout_leaves_pending() -> None:
     )
 
     assert verified == []
-    assert lakebase.rows[0]["status"] == "pending"
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 def test_verify_pending_rejects_duplicate_exact_rows() -> None:
@@ -1037,6 +1084,154 @@ def test_verify_pending_rejects_duplicate_exact_rows() -> None:
 
     assert verified == []
     assert lakebase.rows[0]["status"] == "failed"
+
+
+def test_correct_count_without_structured_tool_call_is_not_proof() -> None:
+    response = {
+        "status": "completed",
+        "output": [
+            {
+                "type": "message",
+                "content": [{"text": '{"tool":"fn_build_cohort","cohort_count":42}'}],
+            }
+        ],
+    }
+
+    assert not verify_ai_gateway_exact_proof.response_proves_build_cohort_tool(
+        response,
+        expected_count=42,
+    )
+
+
+@pytest.mark.parametrize(
+    ("trace_overrides", "expected_count"),
+    [
+        ({"inputs": {"segment_codes": ["itm"], "segment_mode": "all", "states": ["CA"]}}, 42),
+        ({"outputs": {"cohort_count": 41}}, 42),
+        ({"status": {"status_code": "ERROR"}}, 42),
+    ],
+)
+def test_trace_requires_exact_successful_tool_arguments_and_result(
+    trace_overrides: dict[str, object],
+    expected_count: int,
+) -> None:
+    span = _tool_span()
+    if "status" in trace_overrides:
+        span["status"] = trace_overrides["status"]
+    attributes = dict(span["attributes"])  # type: ignore[arg-type]
+    if "inputs" in trace_overrides:
+        attributes["mlflow.spanInputs"] = json.dumps(trace_overrides["inputs"])
+    if "outputs" in trace_overrides:
+        attributes["mlflow.spanOutputs"] = json.dumps(trace_overrides["outputs"])
+    span["attributes"] = attributes
+    response = _platform_trace_response([span])
+
+    assert not verify_ai_gateway_exact_proof.response_proves_build_cohort_tool(
+        response,
+        expected_count=expected_count,
+    )
+
+
+def test_pending_function_call_is_not_execution_proof() -> None:
+    response = {
+        "custom_outputs": {
+            "databricks_trace": {
+                "spans": [
+                    {
+                        "name": "build_cohort",
+                        "span_type": "TOOL",
+                        "status": {"status_code": "IN_PROGRESS"},
+                        "inputs": {
+                            "segment_codes": [],
+                            "segment_mode": "any",
+                            "states": ["CA"],
+                        },
+                    }
+                ]
+            }
+        }
+    }
+
+    assert not verify_ai_gateway_exact_proof.response_proves_build_cohort_tool(
+        response,
+        expected_count=42,
+    )
+
+
+def test_negative_marker_substrings_and_unrelated_result_are_not_trace_proof() -> None:
+    response = {
+        "custom_outputs": {
+            "databricks_trace": {
+                "spans": [
+                    {
+                        "name": "not_build_cohort",
+                        "span_type": "NOT_A_TOOL",
+                        "status": {"status_code": "NOT_OK"},
+                        "inputs": {
+                            "segment_codes": [],
+                            "segment_mode": "any",
+                            "states": ["CA"],
+                        },
+                        "outputs": {"unrelated_total": 42},
+                    }
+                ]
+            }
+        }
+    }
+
+    assert not verify_ai_gateway_exact_proof.response_proves_build_cohort_tool(
+        response,
+        expected_count=42,
+    )
+
+
+@pytest.mark.parametrize("trace_key", ["evil_trace", "not_a_trace"])
+def test_trace_like_fields_outside_exact_proxy_path_are_not_proof(trace_key: str) -> None:
+    response = {
+        "output": [
+            {
+                trace_key: {
+                    "spans": [
+                        {
+                            "name": "build_cohort",
+                            "span_type": "TOOL",
+                            "status": {"status_code": "OK"},
+                            "inputs": {
+                                "segment_codes": [],
+                                "segment_mode": "any",
+                                "states": ["CA"],
+                            },
+                            "outputs": {"cohort_count": 42},
+                        }
+                    ]
+                }
+            }
+        ]
+    }
+
+    assert not verify_ai_gateway_exact_proof.response_proves_build_cohort_tool(
+        response,
+        expected_count=42,
+    )
+
+
+def test_duplicate_hosted_tool_spans_are_not_exact_execution_proof() -> None:
+    span = _tool_span()
+    response = _platform_trace_response([span, dict(span)])
+
+    assert not verify_ai_gateway_exact_proof.response_proves_build_cohort_tool(
+        response,
+        expected_count=42,
+    )
+
+
+def test_boolean_tool_result_is_not_numeric_count_proof() -> None:
+    response = _platform_trace_response([_tool_span(count=True)])
+
+    assert not verify_ai_gateway_exact_proof.response_proves_build_cohort_tool(
+        response,
+        expected_count=1,
+    )
 
 
 def test_wait_for_exact_row_rejects_duplicate_exact_rows() -> None:
@@ -1085,7 +1280,7 @@ def test_verify_pending_fails_closed_when_schema_cannot_substantiate_success() -
     )
 
     assert verified == []
-    assert lakebase.rows[0]["status"] == "pending"
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 @pytest.mark.parametrize(
@@ -1139,7 +1334,7 @@ def test_verify_pending_rejects_unsuccessful_or_nonterminal_row(
     "submission_error",
     [TimeoutError("request timed out"), RuntimeError("503 Service Unavailable")],
 )
-def test_exact_proof_timeout_or_503_is_pending_and_never_retried(
+def test_exact_proof_timeout_or_503_fails_and_is_never_retried(
     submission_error: Exception,
 ) -> None:
     lakebase = _ProofLakebase()
@@ -1158,13 +1353,15 @@ def test_exact_proof_timeout_or_503_is_pending_and_never_retried(
     workspace = _Workspace()
     workspace.api_client = _ApiClient()
 
-    proof = verify_ai_gateway_exact_proof.send_probe(
-        lakebase=lakebase,
-        workspace=workspace,
-        endpoint=_ENDPOINT,
-        inference_table=_INFERENCE_TABLE,
-        git_sha=_TEST_GIT_SHA,
-    )
+    with pytest.raises(RuntimeError, match="ambiguous and cannot become proof"):
+        verify_ai_gateway_exact_proof.send_probe(
+            lakebase=lakebase,
+            workspace=workspace,
+            endpoint=_ENDPOINT,
+            inference_table=_INFERENCE_TABLE,
+            git_sha=_TEST_GIT_SHA,
+            expected_tool_count=42,
+        )
 
     proof_ids = [
         request_id
@@ -1176,11 +1373,10 @@ def test_exact_proof_timeout_or_503_is_pending_and_never_retried(
         for request_id in workspace.api_client.request_ids
         if request_id.startswith("mip-warmup-")
     ]
-    assert proof.status == "pending"
-    assert proof_ids == [proof.client_request_id]
+    assert len(proof_ids) == 1
     assert len(warmup_ids) == 1
-    assert proof.client_request_id not in warmup_ids
-    assert lakebase.rows[0]["status"] == "pending"
+    assert proof_ids[0] not in warmup_ids
+    assert lakebase.rows[0]["status"] == "failed"
 
 
 def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
@@ -1208,6 +1404,8 @@ def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
             _ENDPOINT,
             "--inference-table",
             _INFERENCE_TABLE,
+            "--expected-tool-count",
+            "42",
             "--timeout-s",
             "0",
             "--interval-s",
@@ -1218,7 +1416,7 @@ def test_strict_send_wait_requires_the_sent_proof(monkeypatch, capsys) -> None:
     output = capsys.readouterr().out
     assert exit_code == 1
     assert lakebase.rows[0]["status"] == "verified"
-    assert lakebase.rows[1]["status"] == "pending"
+    assert lakebase.rows[1]["status"] == "failed"
     assert _ENDPOINT not in output
     assert _INFERENCE_TABLE not in output
     assert str(lakebase.rows[1]["client_request_id"]) not in output
@@ -1265,6 +1463,7 @@ def test_rejected_send_is_failed_and_later_row_cannot_promote(
             endpoint=_ENDPOINT,
             inference_table=_INFERENCE_TABLE,
             git_sha=_TEST_GIT_SHA,
+            expected_tool_count=42,
         )
 
     message = str(exc.value)
@@ -1272,6 +1471,33 @@ def test_rejected_send_is_failed_and_later_row_cannot_promote(
     assert _ENDPOINT not in message
     assert _INFERENCE_TABLE not in message
     assert len(lakebase.rows) == 1
+    assert lakebase.rows[0]["status"] == "failed"
+
+
+def test_acknowledgement_only_response_cannot_prove_tool_execution() -> None:
+    lakebase = _ProofLakebase()
+    workspace = _Workspace()
+    workspace.api_client = type(
+        "ApiClient",
+        (),
+        {
+            "do": lambda _self, *_args, **_kwargs: {
+                "status": "completed",
+                "output": [{"content": [{"text": "Gateway logging acknowledged."}]}],
+            }
+        },
+    )()
+
+    with pytest.raises(RuntimeError, match="did not prove reviewed fn_build_cohort execution"):
+        verify_ai_gateway_exact_proof.send_probe(
+            lakebase=lakebase,
+            workspace=workspace,
+            endpoint=_ENDPOINT,
+            inference_table=_INFERENCE_TABLE,
+            git_sha=_TEST_GIT_SHA,
+            expected_tool_count=42,
+        )
+
     assert lakebase.rows[0]["status"] == "failed"
 
     verified = verify_ai_gateway_exact_proof.verify_pending(

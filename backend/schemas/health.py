@@ -16,6 +16,7 @@ class HealthResponse(BaseModel):
     status: str
     mode: str
     git_sha: str | None = None
+    deployment_lease_id: str | None = None
     agent_gateway_binding_sha256: str | None = None
     dependencies: dict[str, str] = Field(default_factory=dict)
     circuit_breakers: dict[str, str] = Field(default_factory=dict)

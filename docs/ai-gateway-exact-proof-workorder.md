@@ -47,22 +47,25 @@ Reads from the app are fine (probe + admin surfaces).
 
 ### 1b. Verifier tool — `tools/databricks/verify_ai_gateway_exact_proof.py`
 
-One tool, two modes, "send-now / verify-previous" pattern so proof stays fresh regardless of lag:
+One tool, two fail-closed modes keeps proof fresh without promoting evidence
+whose hosted-tool trace was lost across a process boundary:
 
-1. **verify-pending:** for every `pending` ledger row for the current SHA (and optionally prior
-   SHAs), run `count_inference_log_rows(exact client_request_id)` (reuse the existing exact-id
-   helper — it already binds the id as a parameter). If and only if the count is exactly 1: set `verified`,
-   `verified_at=now()`, compute `verify_latency_s`. If older than a hard ceiling (default 6h,
-   `MIP_AI_GATEWAY_VERIFY_EXPIRY_S`): set `expired`.
-2. **send:** warm scale-to-zero separately with non-proof `mip-warmup-*` request ids, then mint
-   `mip-capability-{full-sha}-{uuid16}` (full deployment SHA), insert its `pending` ledger row,
-   and send that exact bounded request once. Never retry the proof id: timeout/503 after submission
-   is unresolved, so leave the row `pending` for later exact-row verification. A Responses API
-   result is accepted as serving proof only when its terminal status is `completed` and it has output.
-3. **--wait mode (deploy-time):** after send, poll the exact id every 30–60s up to
-   `MIP_AI_GATEWAY_VERIFY_TIMEOUT_S` (default 1200s, configurable up to 3600). On hit → mark
-   verified inline and print measured latency. On timeout → leave `pending` (the next scheduled
-   run verifies it) and exit per §1d gating.
+1. **verify-pending:** mark every interrupted `pending` row `failed`. An older
+   process cannot durably prove that its terminal Responses payload carried the
+   exact hosted `fn_build_cohort` tool trace, so an inference row alone is
+   insufficient and is never promoted.
+2. **send:** warm scale-to-zero separately with non-proof `mip-warmup-*` request
+   IDs, then mint `mip-capability-{full-sha}-{uuid16}`, insert its `pending`
+   ledger row, and send that exact bounded request once. The same process must
+   observe a terminal completed Responses payload and an exact hosted-tool trace
+   matching the independently computed cohort count. Timeout, 503, malformed
+   output, missing tool proof, or any ambiguous submission marks the row
+   `failed`; the proof request ID is never retried.
+3. **--wait mode (deploy-time):** only after the in-process trace succeeds, poll
+   the exact inference ID up to the configured timeout. Exactly one successful,
+   terminal, timestamp-bounded row promotes the proof to `verified` and records
+   latency. Duplicate, non-success, nonterminal, schema-unsubstantiated, or
+   timed-out evidence marks the row `failed`.
 
 Print measured `verify_latency_s` in all modes — this number is signoff evidence and informs
 window tuning. No secrets in output. Idempotent: re-running verify-pending is a no-op for
@@ -100,11 +103,14 @@ Detail strings (update all surfaces consistently, §4):
 - **deploy.sh:** after agentic provisioning, run the verifier `send --wait`. Under
   `MIP_REQUIRE_AI_GATEWAY_CLAIMABLE=1` (strict): exit non-zero if no verified proof exists for
   the deployed SHA after the wait (a prior-SHA verified proof does NOT count). Non-strict:
-  warn, leave `pending`, capability honestly reports `configured` until the nightly verifies.
-- **Nightly (extend `nightly.yml` or the monitors-job pattern):** run `verify-pending` then
-  `send` — this keeps a rolling verified proof fresher than `FRESHNESS` forever, regardless of
-  lag. If delivery breaks, verification stops, the newest proof ages past FRESHNESS, and the
-  capability self-heals to `configured` — preserve this property.
+  warn after the failed attempt is durably marked `failed`; capability honestly
+  reports `configured` until a fresh trace-attested send succeeds.
+- **Nightly (extend `nightly.yml` or the monitors-job pattern):** run
+  `verify-pending` to fail interrupted, trace-less attempts, then run a fresh
+  `send --wait` in one process. This keeps a rolling verified proof fresher than
+  `FRESHNESS` while refusing inference-only promotion. If delivery or trace
+  proof breaks, the newest proof ages past FRESHNESS and the capability
+  self-heals to `configured`.
 - Document both in `docs/deployment.md` (including the strict-mode admin-token note already
   there).
 
@@ -141,10 +147,11 @@ Probe traffic alone is not "integration." Required:
 
 Backend:
 - Ledger migration idempotency (re-run safe), status CHECK, unique client_request_id.
-- Verifier: pending→verified on row landing (id-aware SQL fake); timeout leaves pending;
-  timeout/503 never retries the exact proof id; duplicate exact rows remain unverified;
-  expiry→expired; latency recorded; SHA scoping; exit codes for strict/non-strict; verify-previous
-  works across invocations; re-run idempotency.
+- Verifier: pending→verified only when the same process first proves the exact
+  hosted-tool trace and then observes one exact row; timeout/503/malformed or
+  trace-less responses mark failed and never retry the proof ID; duplicate rows
+  fail; interrupted pending rows fail across invocations; latency, SHA scoping,
+  and strict/non-strict exit codes remain pinned.
 - Probe: claimable ONLY with fresh verified ledger row for current SHA. Rejection tests:
   wrong-SHA verified row; pending; failed/expired; stale verified_at (boundary ±1s); ledger row present
   but endpoint not READY now; ledger empty. Positive: fresh verified row + all pre-checks →

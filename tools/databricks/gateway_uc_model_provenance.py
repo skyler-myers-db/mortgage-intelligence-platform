@@ -1,0 +1,95 @@
+"""Validate immutable Gateway model families during the runtime UC audit."""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from backend.agents.gateway_contract import (
+    GATEWAY_PROXY_SOURCE_HASH_TAG,
+    GATEWAY_UPSTREAM_TAG,
+)
+from tools.databricks.gateway_model_attestation import (
+    gateway_model_attestation_record_key,
+    gateway_model_contract_from_tags,
+    verify_gateway_model_contract,
+)
+from tools.databricks.provision_gateway_responses_agent import gateway_resource_hash
+
+
+def assert_gateway_model_provenance(
+    *,
+    model_registry: Any,
+    full_name: str,
+    model_family: str,
+    experiment_base: str,
+    supervisor_id: str,
+    supervisor_endpoint_id: str,
+    runtime_application_id: str,
+    catalog: str,
+    genie_space_id: str,
+    inference_schema: str,
+    inference_table_prefix: str,
+    candidate_model: str,
+) -> None:
+    """Require signed source/allocation provenance for every visible family version."""
+
+    versions = list(model_registry.search_model_versions(f"name='{full_name}'"))
+    if not versions:
+        raise RuntimeError(f"Gateway model {full_name} has no registered versions")
+    for version in versions:
+        tags = dict(getattr(version, "tags", None) or {})
+        version_number = str(getattr(version, "version", None) or "").strip()
+        model_source = str(getattr(version, "source", None) or "").strip()
+        source_hash = str(tags.get(GATEWAY_PROXY_SOURCE_HASH_TAG) or "")
+        upstream = str(tags.get(GATEWAY_UPSTREAM_TAG) or "")
+        attested_contract = gateway_model_contract_from_tags(tags)
+        attested_supervisor_id = attested_contract["supervisor_id"]
+        attested_supervisor_endpoint_id = attested_contract["supervisor_endpoint_id"]
+        attested_runtime_application_id = attested_contract["runtime_application_id"]
+        if (
+            not version_number
+            or not model_source
+            or not re.fullmatch(r"[0-9a-f]{64}", source_hash)
+            or not upstream
+        ):
+            raise RuntimeError(f"Gateway model {full_name} has an incomplete version contract")
+        contract_hash = gateway_resource_hash(
+            source_hash=source_hash,
+            supervisor_id=attested_supervisor_id,
+            supervisor_endpoint_id=attested_supervisor_endpoint_id,
+            runtime_application_id=attested_runtime_application_id,
+            model_name=model_family,
+            experiment_name=experiment_base,
+            inference_schema=inference_schema,
+            inference_table_prefix=inference_table_prefix,
+            attestation_verify_key=gateway_model_attestation_record_key(tags),
+        )
+        if full_name.rsplit("_", 1)[-1] != contract_hash[:12]:
+            raise RuntimeError(f"Gateway model {full_name} lacks source-bound contract provenance")
+        contract = {
+            "full_name": full_name,
+            "model_source": model_source,
+            "source_hash": source_hash,
+            "supervisor_id": attested_supervisor_id,
+            "supervisor_endpoint_id": attested_supervisor_endpoint_id,
+            "upstream_endpoint": upstream,
+            "runtime_application_id": attested_runtime_application_id,
+            "model_family": model_family,
+            "experiment_base": experiment_base,
+            "catalog": catalog,
+            "genie_space_id": genie_space_id,
+            "inference_schema": inference_schema,
+            "inference_table_prefix": inference_table_prefix,
+        }
+        current = verify_gateway_model_contract(tags=tags, **contract)
+        candidate = f"Gateway candidate model {full_name} v{version_number}"
+        identity_changed = (
+            attested_supervisor_id != supervisor_id
+            or attested_supervisor_endpoint_id != supervisor_endpoint_id
+            or attested_runtime_application_id != runtime_application_id
+        )
+        if full_name == candidate_model and identity_changed:
+            raise RuntimeError(f"{candidate} uses a different immutable runtime identity")
+        if full_name == candidate_model and not current:
+            raise RuntimeError(f"{candidate} uses a previous attestation epoch")

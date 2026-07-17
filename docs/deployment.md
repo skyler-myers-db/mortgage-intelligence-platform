@@ -71,7 +71,7 @@ verified by the live smoke test.
 
 ### Per-run M2M identities
 
-Live app validation uses four service principals and stores only their OAuth
+Live app validation and agent ownership use five service principals and store only their OAuth
 client credentials. No bearer token is a GitHub secret or `.env.local` value:
 
 One-shot OAuth secrets are written only to the repository detected from the
@@ -86,27 +86,50 @@ does not require this binding and can run from a customer fork unchanged.
 | second app operator | `mip-nightly-operator2-ci-sp` | `DATABRICKS_OPERATOR2_CLIENT_ID`, `DATABRICKS_OPERATOR2_CLIENT_SECRET` |
 | app admin | `mip-nightly-admin-ci-sp` | `DATABRICKS_ADMIN_CLIENT_ID`, `DATABRICKS_ADMIN_CLIENT_SECRET` |
 | AI Gateway verifier | `mip-ai-gateway-verifier-ci-sp` | `DATABRICKS_VERIFIER_CLIENT_ID`, `DATABRICKS_VERIFIER_CLIENT_SECRET` |
+| agent resource runtime | `mip-agent-runtime-ci-sp` | `DATABRICKS_AGENT_RUNTIME_CLIENT_ID`, `DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET` |
 
-Run the provisioner once with workspace-admin credentials after the app and
-Lakebase instance exist. The live workspace does not initially contain
-`mip-admin`, so creating that group is a separately reviewed, explicit action:
+For a fresh workspace, create credentials **before** running deploy. The
+credentials-only mode never lists or grants an App, Lakebase instance, Gateway
+endpoint, or SQL warehouse; it creates/resolves the reserved service principal,
+optionally creates/joins the reviewed admin group, and sends only that role's
+client ID and one-shot client secret to the repository bound to `origin`.
+The live workspace does not initially contain `mip-admin`, so creating that
+group remains a separately reviewed, explicit action:
 
 ```bash
 python tools/databricks/provision_m2m_oauth.py \
-  --identity-role normal --set-gh-secrets \
+  --pre-app-bootstrap --identity-role normal --set-gh-secrets \
   --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
-  --identity-role operator2 --set-gh-secrets \
+  --pre-app-bootstrap --identity-role operator2 --set-gh-secrets \
   --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
-  --identity-role admin --create-group \
+  --pre-app-bootstrap --identity-role admin --create-group \
   --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
-  --identity-role verifier \
-  --gateway-endpoint "${MIP_AI_GATEWAY_ENDPOINT}" \
-  --warehouse-id "${DATABRICKS_WAREHOUSE_ID}" \
+  --pre-app-bootstrap --identity-role verifier \
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
+python tools/databricks/provision_m2m_oauth.py \
+  --pre-app-bootstrap --identity-role agent_runtime \
   --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 ```
+
+If a reserved principal already exists but its one-shot secret is unavailable,
+repeat that role's command with `--rotate`; credentials-only bootstrap refuses
+to report success for an existing principal without an explicit rotation.
+Create the separate account-SCIM OAuth principal and store
+`DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and
+`DATABRICKS_ACCOUNT_CLIENT_SECRET` independently; it must not reuse any of the
+five workspace client IDs. Also configure the two distinct Ed25519 private keys
+`MIP_AI_GATEWAY_PROOF_SIGNING_KEY` and
+`MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`, plus the runtime HMAC/masking
+secrets documented below. Store its derived public key separately as the
+`MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY` GitHub Actions variable; nightly
+read-only jobs never receive the private key. Only then run
+`./scripts/deploy.sh -t dev` or dispatch `deploy-dev.yml`. Immediately after bundle apply creates the App, deploy
+re-resolves its service principal and grants `CAN_USE` to the exact normal,
+operator2, and admin client IDs with `--no-mint-secret`; verifier/runtime
+resource reconciliation remains later, after their resources exist.
 
 Without `--create-group`, admin provisioning fails closed when `mip-admin` is
 missing. Re-running is idempotent: existing principals, group membership, and
@@ -121,10 +144,36 @@ or if any non-admin automation identity remains in `mip-admin`. A reused
 Lakebase verifier role must be reported by the SDK with
 `identity_type=SERVICE_PRINCIPAL`; `USER`, other identity types, and absent type
 metadata are rejected before endpoint, warehouse, or verifier grants.
+The agent-runtime identity is also excluded from the App and `mip-admin`; it
+gets no Lakebase role, SQL warehouse grant, borrower-table access, or verifier
+authority. Deployment re-audits those exclusions on every run. It grants
+persistent `USE CATALOG`, `USE SCHEMA`, and `EXECUTE` only for the three
+reviewed UC functions plus direct `CAN_RUN` on the one Genie space. `CREATE
+MODEL` and `CREATE TABLE` on `mip.audit` exist only while it owns/updates the
+exact registered proxy model and Gateway inference table; the deploy EXIT
+compensation revokes both privileges on success or failure. Databricks makes
+the endpoint creator the inference-table owner, so this runtime necessarily
+retains owner capabilities on that exact payload table. That does not expand
+the data it can observe: the same runtime already processes those request and
+response payloads in flight, and it receives no access to any other audit or
+borrower table.
+Before green activation, a principal-pinned workspace-admin global audit
+enumerates every admin-visible Genie space and customer-created serving
+endpoint. ID-less, creator-less Databricks foundation-model endpoints are
+routed to the fixed `system.ai` Unity Catalog inventory instead of being
+mistaken for customer ACL securables. The audit requires runtime direct
+`CAN_MANAGE` only on the exact green Supervisor/Gateway pair (plus any pinned,
+runtime-owned blue endpoint during side-by-side cutover), direct `CAN_RUN` only
+on the reviewed Genie space, and verifier direct `CAN_QUERY` only on the green
+Gateway. Inherited/group/broader access and access to any unrelated resource
+fail the deploy. The same endpoint audits run again after blue retirement.
+Isolation provisioning likewise enumerates every visible Databricks App and
+every Lakebase instance rather than checking only the named deployment.
 For an existing principal whose prior client secret is unavailable or being
 replaced, add `--rotate`; without it, the existing secret remains unchanged.
 
-For local `scripts/deploy.sh`, provide the same six client credential variables
+For local `scripts/deploy.sh`, provide the normal, admin, verifier, and
+agent-runtime client credential pairs plus the second-operator client ID
 through the process environment or `.env.local`. The script rejects reused
 client IDs, mints distinct normal/admin bearers at preflight, remints both
 immediately before Agent Evaluation, and remints the normal bearer again before
@@ -165,29 +214,175 @@ Strict deploys fail if grant convergence is incomplete.
 
 Product requests use the MIP-owned `mip-growth-agent-gateway` Agent Model
 endpoint. Its MLflow `ResponsesAgent` delegates the unchanged bounded input to
-the managed Mortgage Growth Agent Supervisor through a declared serving-endpoint
-resource, so Model Serving supplies scoped automatic authentication. The App is
+the managed Mortgage Growth Agent Supervisor. Both the managed Supervisor and
+outer Gateway endpoint are created by the stable `mip-agent-runtime-ci-sp`, not
+a human PAT. The logged model declares the upstream serving endpoint, exact
+Genie space, and all three reviewed UC functions as non-user-delegated MLflow
+resources. Those resource names and the pinned runtime requirements participate
+in the reviewed source hash. The App is
 granted `CAN_QUERY` only on the outer Agent Model endpoint; it does not receive a
 direct grant on the managed Supervisor endpoint. The runtime separately proves
-the configured Supervisor ID-to-managed-endpoint mapping and the outer
-endpoint's `agent/v1/responses` task before labeling a response as
-Supervisor-generated.
+the configured Supervisor ID-to-managed-endpoint mapping, the immutable creator
+of both endpoints and the Supervisor, and the outer endpoint's
+`agent/v1/responses` task before labeling a response as Supervisor-generated.
+
+Every Supervisor or proxy-contract change is blue/green and resumable,
+including the first migration from a human-owned Supervisor. Deployment derives
+contract-hashed Supervisor and outer-Gateway candidate names, creates and proves
+those runtime-owned resources without updating live endpoints in place, grants
+the App only the green outer endpoint,
+and deploys an authenticated-health-verified App snapshot on the green contract
+while the old Supervisor remains available. Only then does it re-read the old
+agent's pinned ID, endpoint, creator, and create time, revoke the old bypass,
+delete the exact old agent and any pinned orphan endpoint, delete a replaced
+outer Gateway only when its journaled ID and runtime creator still match, and
+rename the Supervisor replacement. The durable journal also resumes
+Gateway-only cleanup after interruption. Unexpected tools, examples,
+instructions, duplicate names, creator drift, model/source/inference drift, or
+a changed old identity stop the cutover before the destructive step.
+Each immutable proxy model version also carries an Ed25519 contract
+attestation binding its source hash, Supervisor object ID, managed Supervisor
+endpoint ID, runtime application ID, upstream name, Genie space, catalog functions,
+experiment family, inference-table family, model name, and immutable MLflow
+logged-model URI/ID (`models:/m-...`). Run, registered-version, and alias URIs
+are rejected because they do not prove the same logged-model identity.
+The `mip.proxy_contract_attestation_v3` envelope is the first governed durable
+schema; the unshipped v2 draft is deliberately not accepted as a compatibility
+format because it did not bind the immutable managed-endpoint ID.
+Registration attaches the complete signed envelope and
+source/upstream tags atomically to the newly created version. Retained
+historical versions are verified against their own signed source contract, not
+against today's proxy bytes, so a reviewed source upgrade can allocate a new
+blue/green family without making earlier evidence unverifiable. The model
+attestation public key is itself part of the allocation hash. A key rotation
+therefore creates a distinct current-key model, experiment, inference-table
+family, and Gateway endpoint while leaving signed blue resources untouched.
+Retained non-candidate models may remain signed by the bounded previous key
+only when their allocation suffix recomputes from that attestation record key;
+the exact release candidate must use the current key. Verification is
+read-only: deploy never rewrites retained model-version tags, and unsigned,
+source-drifted, or wrong-epoch versions fail closed.
+
+The deployed proxy also re-reads the immutable Supervisor ID, creator,
+description, instructions, exact four-tool set, zero-example contract, and the
+live Unity Catalog metadata/body hashes for all three reviewed SQL functions
+before every inference. A post-deploy mutation therefore fails the product
+request closed instead of remaining a nominally verified Supervisor path.
+
+App activation has a separate blue/green rollback contract. Before changing an
+existing App, deploy requires a server-owned
+`mip-app-rollback/app-last-good-v4-mip-app` secret whose Ed25519 signature and
+digest bind the full environment payload, exact health SHA, App service-
+principal client and SCIM IDs, Gateway binding, succeeded deployment ID,
+immutable `/Workspace/Users/.../src/...` source artifact, and the complete live
+Supervisor/Gateway/model/experiment/inference-table resource proof. Before any
+App start, endpoint ACL grant, rollback deployment, or treatment restoration,
+the rollback tool re-reads those immutable resource IDs, owners, exact endpoint
+configuration, signed model envelope/source, runtime-owned experiment name/ID,
+the experiment's normalized Workspace ACL (one direct runtime `CAN_MANAGE`, no
+other user/service-principal or non-admin group), catalog, App resource target
+IDs, and Genie input and rejects any drift. Capture additionally resolves the
+source-declared App bindings from `databricks bundle summary` and rejects every
+extra, missing, wrong-target, wrong-kind, or wrong-permission live binding
+before it can become signed last-good authority. It repeats that proof after
+health verification to close deployment races.
+
+Green activation remains treatment-quiesced through hosted tool proof, exact
+Gateway proof, evaluation, smoke, and authenticated health. Durable capture
+first persists and verifies the signed last-good contract while treatment is
+still quiesced, then restores treatment authority and repeats App health,
+resource, and lease proof. Deployment acquires an atomic, signed workspace
+lease under `/Shared/.mip-deployment-leases`; its directory ACL is pinned to the
+exact workspace-admin deployer and its one-minute heartbeat renews the signed
+fence. A losing contender reads the existing lease without changing that ACL,
+and a heartbeat exits without renewal as soon as it is no longer a child of the
+deployer that launched it. An expired lease is never auto-replaced: after a crashed runner, an
+administrator must first prove no deployment is active before removing the
+stale file. The lease UUID is injected into the App payload and authenticated
+health response, and capture revalidates the live signed lease before and after
+activation. Capture records the
+`green_treatment_pending_capture` compensation state and advances to
+`green_verified` only after the signed secret read-after-write matches and blue
+cleanup/global ACL postflights finish. Normal
+shell interruption in that window stops/quiesces green and restores signed blue
+while still quiesced; every subsequent deploy also quiesces before trusting a
+saved candidate. `--skip-smoke`, a missing smoke script, or
+`ALLOW_SMOKE_FAILURE=1` never certifies green. With signed blue, rollback proves
+blue while quiesced and restores authority only after exact blue health; on a
+first install it leaves the unproven App stopped and quiesced and exits nonzero.
+
+An existing legacy installation without this signed record cannot truthfully be
+treated as exact blue state because Databricks redacts historical environment
+values. Its one-time migration must set `MIP_REBASE_UNVERIFIED_APP=1`; deploy
+stops that unverified App and uses first-install fail-closed compensation until
+the new App passes the hosted-tool gate and is captured as the first signed
+last-good contract. Remove the flag after that one run. Routine CI must never
+set it. New installations capture their first record automatically. Override
+the dedicated scope only with the reviewed non-secret
+`MIP_APP_ROLLBACK_SECRET_SCOPE` setting.
 
 Databricks Agent Model endpoints currently support AI Gateway payload logging,
 but not Gateway rate limiting or usage tracking. The provisioner therefore
-creates the endpoint with exactly one inference-table configuration at
-`mip.audit.mip_agent_gateway_growth_agent`; request budgets remain enforced by
-the application's authenticated backpressure middleware. Do not add unsupported
-Gateway rate-limit fields to this Agent endpoint or describe them as live proof.
+creates each immutable endpoint with its own contract-hashed inference-table
+family under `<catalog>.audit.mip_agent_gateway_growth_agent_<resource-hash-12>`.
+The resource hash binds source, model family, experiment family, schema, table
+family, and the model-attestation public-key epoch. Databricks
+does not support pointing two endpoint creations at an existing inference
+table, so blue and green never reuse a table prefix. Historical table families
+are retained for audit; App and verifier grants converge to the exact current
+family. Request budgets remain enforced by the application's authenticated
+backpressure middleware. Do not add unsupported Gateway rate-limit fields to
+this Agent endpoint or describe them as live proof.
 
 Exact-row proof also requires an Ed25519 attestation from the verifier. Store
-`MIP_AI_GATEWAY_PROOF_SIGNING_KEY` only in deploy/nightly automation. The deploy
+`MIP_AI_GATEWAY_PROOF_SIGNING_KEY` only in deploy/verifier automation. It signs
+exact-row, App rollback, and cutover-journal evidence, but never model artifacts. The deploy
 script derives `MIP_AI_GATEWAY_PROOF_VERIFY_KEY` and injects only that public key
 into the App. Lakebase proof writers therefore cannot make AI Gateway claimable
 by inserting or editing a proof row; the runtime verifies the signature over
 the deployment SHA, request id, endpoint, inference table, and timestamps.
-Rotate the key by deploying the new public key and generating a fresh exact-row
-proof for that same SHA; rows signed by the prior key then fail closed.
+Rotate the key by setting the new signing key and temporarily setting
+`MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY` to the old public key. Early deploy
+reconciliation verifies the signed last-good record with that bounded previous
+key and immediately re-signs it with the new current key; the promoted App then
+receives only the new public key and generates a fresh exact-row proof. Remove
+the previous-key setting after that successful deploy. Any other key or rows
+signed by the prior key then fail closed.
+
+Proxy-model provenance uses an independent Ed25519 authority:
+`MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`. The deploy preflight rejects a
+model key whose derived public key equals the proof key. Only the bounded
+runtime-owner registration command receives the model private key; exact
+resource exporters and the deployed model receive
+`MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY` instead. Rotate model attestations
+with `MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY`, independently of the
+proof/rollback rotation. The new current public key allocates a separate green
+resource family; retained historical versions and blue endpoints are never
+re-signed or updated in place. The ordinary UC postflight is public-key-only
+and accepts the previous key only for a non-candidate model whose name suffix
+is bound to that exact record key. Keep the previous public key configured
+while any governed retained version still depends on it, or retire that
+historical family through the reviewed retention process before removing it.
+
+The App service principal does not receive direct Supervisor, registered-model,
+or MLflow-experiment access. App-side capability and generation checks
+authenticate the canonical signed resource envelope and re-read only the outer
+Gateway endpoint the App is authorized to query. The runtime-owned served proxy
+re-proves the private Supervisor definition, registered model/version,
+experiment owner/ACL, and UC functions before every inference. This separation
+keeps the product path functional without widening the App around the governed
+Gateway boundary.
+
+This attestation proves what the separated verifier observed at verification
+time; it is not a tamper-independent audit of the inference-table owner.
+Databricks makes the endpoint creator (`mip-agent-runtime-ci-sp`) the owner of
+the endpoint's inference tables, so that identity can modify those tables. The
+claimable row therefore means “a verifier-credentialed process observed and
+signed a timely exact delivery row after a tool-bearing live response,” not
+“the runtime owner was cryptographically unable to alter the source table.”
+Customers requiring owner-independent retention must export Gateway logs to a
+separately governed immutable sink; Module 0 does not claim that stronger
+control.
 
 `MIP_COTALITY_ID_MASK_SECRET` and `MIP_GENIE_ACTION_SECRET_CURRENT` are
 mandatory for sandbox, staging, customer, and production app payloads. Only

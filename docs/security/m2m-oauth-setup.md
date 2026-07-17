@@ -56,39 +56,58 @@ three secrets to the GitHub repo — runs from a single Python tool:
 #      an admin PAT in ~/.databrickscfg DEFAULT profile).
 #   2. `gh auth login` against the repo owner. Used to push the three
 #      GitHub secrets via stdin.
-#   3. `./scripts/deploy.sh -t dev` has been run at least once, or the
-#      lower-level bundle resource deploy plus app promotion has created the
-#      deployed App resource (`mip-app`) in the workspace.
+#   3. The reviewed `origin` remote names the GitHub repository that will
+#      receive each role-owned client ID and one-shot client secret.
 
 python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
     --identity-role normal \
-    --app-name mip-app \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
 
-# Repeat for the separately owned, non-admin recovery-check principal.
+# Repeat for the other four separated workspace identities. Group creation is
+# explicit and reviewed only for the admin role.
 python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
     --identity-role operator2 \
-    --app-name mip-app \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role admin \
+    --create-group \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role verifier \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role agent_runtime \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
 ```
 
 What this runs (in order, all via `databricks-sdk`):
 
-1. `w.service_principals.list(filter="displayName eq 'mip-nightly-ci-sp'")`
-   — idempotent lookup. If the SP exists, re-use it; else create it via
-   `w.service_principals.create(...)`.
-2. `w.apps.set_permissions("mip-app", access_control_list=[...CAN_USE...])`
-   — grants the SP `CAN USE` on the deployed App resource.
-3. `w.service_principal_secrets_proxy.create(service_principal_id=...)`
+1. Resolve or create only the reserved role-bound service principal. The admin
+   command also creates/joins only `mip-admin` because `--create-group` is
+   explicit.
+2. `w.service_principal_secrets_proxy.create(service_principal_id=...)`
    — mints a one-shot OAuth client_secret. The secret is returned in
    the response's `.secret` field and cannot be retrieved later.
-4. `gh secret set DATABRICKS_CLIENT_ID --repo ... <stdin>` (+ the
-   secret and `MIP_APP_URL`) — piped via stdin so the value never
-   appears in argv/ps. Each call is preceded by a GitHub Actions
-   `::add-mask::` directive so any accidental echo downstream is
-   redacted.
+3. `gh secret set ... --repo ... <stdin>` writes only that role's client ID and
+   client secret, piped via stdin so the value never appears in argv/ps.
+
+This mode performs no App, Lakebase, Gateway, or warehouse lookup or grant and
+does not write `MIP_APP_URL` before an App exists. If a reserved principal
+already exists, add `--rotate`; bootstrap otherwise refuses to mint implicitly.
+Provision the separate account-SCIM client credentials and the two distinct
+Gateway proof/model-attestation signing keys, then run `scripts/deploy.sh`.
+After bundle apply creates the App, deploy grants exact `CAN_USE` to normal,
+operator2, and admin with their expected application IDs and no secret rotation.
 
 The normal and operator2 principals are not assigned to an approver group.
 The deployed workflow writes their exact client IDs to
@@ -103,6 +122,7 @@ Flags of note:
 | Flag                    | Default                                          | Purpose                                                                                           |
 | ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
 | `--identity-role`       | `normal`                                         | Selects the reserved principal, client ID, grants, and GitHub sinks as one governance contract.   |
+| `--pre-app-bootstrap`   | off                                              | Credential-only first-install mode; requires the reviewed GitHub sink and forbids App/data-resource options. |
 | `--sp-name`             | role-specific reserved name                      | Optional assertion only; a different or cross-role name is rejected before external calls.        |
 | `--expected-application-id` | role-owned configured client ID, when present | Optional assertion; cross-role and duplicate configured client IDs fail before external calls.    |
 | client ID/secret sink flags | role-owned names                            | Optional assertions only; custom or cross-role GitHub secret destinations are rejected.            |

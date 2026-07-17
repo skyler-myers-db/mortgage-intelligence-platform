@@ -130,8 +130,8 @@ def probe_ai_gateway(
             return make_status(
                 True,
                 (
-                    "Live AI Gateway endpoint accepted a bounded query now; independently signed "
-                    "exact inference-row round-trip verified for deployment "
+                    "Live AI Gateway endpoint accepted a bounded query now; the separated "
+                    "verifier signed its observation; exact inference-row round-trip verified for deployment "
                     f"{sha} at {proof.verified_at.isoformat()} "
                     f"(delivery {proof.verify_latency_s:.1f}s). Current deployment inference rows "
                     f"visible: {current_sha_rows}."

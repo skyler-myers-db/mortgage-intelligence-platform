@@ -40,6 +40,10 @@ concurrency:
 env:
   PYTHON_VERSION: '3.11'
   NODE_VERSION: '22'
+  MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
+  MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
+  MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
+  MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
 
 permissions:
   contents: read
@@ -135,6 +139,9 @@ jobs:
         # agree before grants, proof, or expensive refreshes run.
         env:
           DATABRICKS_AUTH_TYPE: pat
+          DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
+          MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY: ${{ vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY }}
+          MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY }}
         run: |
           python -m tools.databricks.export_gateway_runtime_contract \
             --github-env "$GITHUB_ENV"
@@ -260,12 +267,30 @@ jobs:
             --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
             --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
             --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+      - name: Read independent agent tool expectation
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_AUTH_TYPE: pat
+        run: |
+          set -euo pipefail
+          unset DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+          count="$(python -m tools.databricks.read_agent_tool_probe_expectation \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
+            --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+            --state CA)"
+          if [[ ! "$count" =~ ^[0-9]+$ ]]; then
+            echo "::error::Independent fn_build_cohort expectation is invalid."
+            exit 1
+          fi
+          echo "MIP_AGENT_TOOL_EXPECTED_COUNT=$count" >> "$GITHUB_ENV"
       - name: Refresh and verify AI Gateway exact proof ledger
         # AI Gateway is claimable only when the deployment verifier has marked
         # an exact inference-log row for the current SHA in Lakebase. Verify
-        # older pending rows first, then send a fresh probe and wait for its
-        # exact row so an on-demand validation keeps the proof ledger fresh
-        # instead of accepting historical or prefix-count evidence.
+        # fail any interrupted pending rows first: without the original
+        # process's exact hosted-tool trace they can never become proof. Then
+        # send one fresh trace-attested probe and wait for its exact row so an
+        # on-demand validation never accepts historical/prefix-count evidence.
         env:
           DATABRICKS_AUTH_TYPE: oauth-m2m
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
@@ -302,7 +327,8 @@ jobs:
             --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
             --git-sha "$MIP_GIT_SHA" \
             --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
-            --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE"
+            --inference-table "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+            --expected-tool-count "$MIP_AGENT_TOOL_EXPECTED_COUNT"
       - name: SQL <-> Python parity
         run: pytest -q tests/integration/test_sql_python_parity.py
       - name: Lakeview widgets resolve (dashboards)
@@ -403,6 +429,10 @@ jobs:
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
+          GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
+          MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY: ${{ vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY }}
+          MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY }}
         run: |
           python -m tools.databricks.export_gateway_runtime_contract \
             --github-env "$GITHUB_ENV"
@@ -484,20 +514,37 @@ jobs:
             echo "::error::Operator A, operator B, admin, and verifier M2M client IDs must be distinct."
             exit 1
           fi
-          python tools/oauth_m2m_mint.py \
+          mint_m2m_token() {
+            local client_id="$1"
+            local client_secret="$2"
+            shift 2
+            # Selected credentials are intentionally scoped to this child.
+            # shellcheck disable=SC2030,SC2031
+            (
+              export -n DATABRICKS_TOKEN
+              export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+              export -n DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET
+              export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+              export -n DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET
+              export DATABRICKS_CLIENT_ID="$client_id"
+              export DATABRICKS_CLIENT_SECRET="$client_secret"
+              python tools/oauth_m2m_mint.py "$@"
+            )
+          }
+          # Parent credentials remain unchanged after each isolated mint child.
+          # shellcheck disable=SC2031
+          mint_m2m_token "$DATABRICKS_CLIENT_ID" "$DATABRICKS_CLIENT_SECRET" \
             --github-env MIP_NON_ADMIN_BEARER_TOKEN \
             --github-env MIP_BEARER_TOKEN
-          python tools/oauth_m2m_mint.py \
-            --client-id-env DATABRICKS_OPERATOR2_CLIENT_ID \
-            --client-secret-env DATABRICKS_OPERATOR2_CLIENT_SECRET \
+          mint_m2m_token \
+            "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+            "$DATABRICKS_OPERATOR2_CLIENT_SECRET" \
             --github-env MIP_OPERATOR2_BEARER_TOKEN
-          python tools/oauth_m2m_mint.py \
-            --client-id-env DATABRICKS_ADMIN_CLIENT_ID \
-            --client-secret-env DATABRICKS_ADMIN_CLIENT_SECRET \
+          mint_m2m_token "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_ADMIN_CLIENT_SECRET" \
             --github-env MIP_ADMIN_BEARER_TOKEN
-          python tools/oauth_m2m_mint.py \
-            --client-id-env DATABRICKS_VERIFIER_CLIENT_ID \
-            --client-secret-env DATABRICKS_VERIFIER_CLIENT_SECRET \
+          mint_m2m_token \
+            "$DATABRICKS_VERIFIER_CLIENT_ID" \
+            "$DATABRICKS_VERIFIER_CLIENT_SECRET" \
             --github-env MIP_VERIFIER_BEARER_TOKEN
           echo "::notice::Minted distinct per-run operator A, operator B, admin, and verifier M2M Bearers."
       - name: Authenticated non-admin smoke (M2M)
@@ -652,10 +699,25 @@ jobs:
             echo "::error::Normal and admin M2M client IDs must be distinct."
             exit 1
           fi
-          python tools/oauth_m2m_mint.py --github-env MIP_BEARER_TOKEN
-          python tools/oauth_m2m_mint.py \
-            --client-id-env DATABRICKS_ADMIN_CLIENT_ID \
-            --client-secret-env DATABRICKS_ADMIN_CLIENT_SECRET \
+          mint_m2m_token() {
+            local client_id="$1"
+            local client_secret="$2"
+            shift 2
+            # Selected credentials are intentionally scoped to this child.
+            # shellcheck disable=SC2030,SC2031
+            (
+              export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+              export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+              export DATABRICKS_CLIENT_ID="$client_id"
+              export DATABRICKS_CLIENT_SECRET="$client_secret"
+              python tools/oauth_m2m_mint.py "$@"
+            )
+          }
+          # Parent credentials remain unchanged after each isolated mint child.
+          # shellcheck disable=SC2031
+          mint_m2m_token "$DATABRICKS_CLIENT_ID" "$DATABRICKS_CLIENT_SECRET" \
+            --github-env MIP_BEARER_TOKEN
+          mint_m2m_token "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_ADMIN_CLIENT_SECRET" \
             --github-env MIP_ADMIN_BEARER_TOKEN
       - name: Growth Agent evaluation with admin identity proof
         env:

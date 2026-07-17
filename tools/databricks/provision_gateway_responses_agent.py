@@ -3,112 +3,189 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
 from typing import Any
 
 import mlflow
 from mlflow import MlflowClient
-from mlflow.models.resources import DatabricksServingEndpoint
+from mlflow.models.resources import (
+    DatabricksFunction,
+    DatabricksGenieSpace,
+    DatabricksServingEndpoint,
+)
 
 from backend.agents.gateway_contract import (
+    GATEWAY_BURST_SCALING_ENABLED,
+    GATEWAY_ENDPOINT_DESCRIPTION,
     GATEWAY_MODEL_REQUIREMENTS,
     GATEWAY_PROXY_SOURCE,
     GATEWAY_PROXY_SOURCE_HASH_TAG,
+    GATEWAY_ROUTE_OPTIMIZED,
+    GATEWAY_SCALE_TO_ZERO_ENABLED,
+    GATEWAY_STATIC_ENV,
+    GATEWAY_TRAFFIC_PERCENTAGE,
     GATEWAY_UPSTREAM_TAG,
-    gateway_proxy_source_hash,
+    GATEWAY_WORKLOAD_SIZE,
+    GATEWAY_WORKLOAD_TYPE,
+    gateway_experiment_base,
+    gateway_resource_allocation_hash,
 )
-from databricks.sdk.errors import NotFound
+from backend.agents.supervisor_contract import supervisor_contract_hash as supervisor_contract_hash
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from databricks.sdk.service.serving import (
-    AiGatewayConfig,
-    AiGatewayInferenceTableConfig,
     EndpointCoreConfigInput,
     EndpointTag,
-    Route,
-    ServedEntityInput,
-    TrafficConfig,
+    ServingModelWorkloadType,
 )
+from tools.databricks.agent_runtime_access import assert_runtime_creator
+from tools.databricks.experiment_acl_contract import resolve_exact_experiment_acl
+from tools.databricks.gateway_endpoint_contract import (
+    clear_deprecated_endpoint_rate_limits as _clear_deprecated_endpoint_rate_limits,
+)
+from tools.databricks.gateway_endpoint_contract import (
+    current_model_version,
+)
+from tools.databricks.gateway_endpoint_contract import (
+    endpoint_policy_matches as _endpoint_policy_matches,
+)
+from tools.databricks.gateway_endpoint_contract import endpoint_tags_match as _endpoint_tags_match
+from tools.databricks.gateway_endpoint_contract import gateway_config as _gateway_config
+from tools.databricks.gateway_endpoint_contract import gateway_matches as _gateway_matches
+from tools.databricks.gateway_endpoint_contract import (
+    model_version_from_config as _model_version_from_config,
+)
+from tools.databricks.gateway_endpoint_contract import proxy_config_matches as _proxy_config_matches
+from tools.databricks.gateway_endpoint_contract import served_entity as _served_entity
+from tools.databricks.gateway_model_attestation import (
+    gateway_model_attestation_record_key,
+    require_gateway_model_attestation_signing_authority,
+    sign_gateway_model_contract,
+    verify_gateway_model_contract,
+)
+from tools.databricks.gateway_resource_identity import (
+    GatewayAgentDeployment,
+    _resolve_exact_experiment,
+    _target_model_family,
+    gateway_agent_model_name,
+    gateway_agent_source_hash,
+    gateway_experiment_name,
+    gateway_inference_table_prefix,
+)
+from tools.databricks.mlflow_responses_packaging import responses_agent_packaging_validation
 
 AGENT_SOURCE = GATEWAY_PROXY_SOURCE
 SOURCE_HASH_TAG = GATEWAY_PROXY_SOURCE_HASH_TAG
 UPSTREAM_TAG = GATEWAY_UPSTREAM_TAG
-_STATIC_ENV = {
-    "ENABLE_LANGCHAIN_STREAMING": "true",
-    "ENABLE_MLFLOW_TRACING": "true",
-    "RETURN_REQUEST_ID_IN_RESPONSE": "true",
-}
+_STATIC_ENV = GATEWAY_STATIC_ENV
 _MODEL_REQUIREMENTS = GATEWAY_MODEL_REQUIREMENTS
-
-
-@dataclass(frozen=True)
-class GatewayAgentDeployment:
-    endpoint: str
-    upstream_endpoint: str
-    model_name: str
-    model_version: int
-    source_hash: str
-    inference_table: str
-
-
-def gateway_agent_source_hash(*, upstream_endpoint: str) -> str:
-    return gateway_proxy_source_hash(upstream_endpoint=upstream_endpoint)
-
-
-def _model_version_from_config(config: Any, *, model_name: str) -> int | None:
-    entities = getattr(config, "served_entities", None) or []
-    if len(entities) != 1:
-        return None
-    for entity in entities:
-        if str(getattr(entity, "entity_name", "") or "") != model_name:
-            continue
-        raw = getattr(entity, "entity_version", None)
-        try:
-            return int(str(raw))
-        except (TypeError, ValueError):
-            return None
-    return None
+_MLFLOW_LOG_MODEL = mlflow.pyfunc.log_model
+_WORKLOAD_SIZE = GATEWAY_WORKLOAD_SIZE
+_WORKLOAD_TYPE = ServingModelWorkloadType.CPU
+assert _WORKLOAD_TYPE.value == GATEWAY_WORKLOAD_TYPE
+_SCALE_TO_ZERO_ENABLED = GATEWAY_SCALE_TO_ZERO_ENABLED
+_BURST_SCALING_ENABLED = GATEWAY_BURST_SCALING_ENABLED
+_ROUTE_OPTIMIZED = GATEWAY_ROUTE_OPTIMIZED
+_TRAFFIC_PERCENTAGE = GATEWAY_TRAFFIC_PERCENTAGE
+_ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
 
 
 def _current_model_version(details: Any, *, model_name: str) -> int | None:
-    pending = _model_version_from_config(
-        getattr(details, "pending_config", None),
+    """Compatibility wrapper for callers that inspect interrupted updates."""
+
+    return current_model_version(details, model_name=model_name)
+
+
+def gateway_resource_hash(
+    *,
+    source_hash: str,
+    supervisor_id: str,
+    supervisor_endpoint_id: str,
+    runtime_application_id: str,
+    model_name: str,
+    experiment_name: str,
+    inference_schema: str,
+    inference_table_prefix: str,
+    attestation_verify_key: str,
+) -> str:
+    """Bind every mutable deployment input used to allocate green resources."""
+
+    return gateway_resource_allocation_hash(
+        source_hash=source_hash,
+        supervisor_id=supervisor_id,
+        supervisor_endpoint_id=supervisor_endpoint_id,
+        runtime_application_id=runtime_application_id,
         model_name=model_name,
-    )
-    if pending is not None:
-        return pending
-    return _model_version_from_config(getattr(details, "config", None), model_name=model_name)
-
-
-def _proxy_config_matches(details: Any, *, entity: ServedEntityInput) -> bool:
-    config = getattr(details, "config", None)
-    entities = getattr(config, "served_entities", None) or []
-    if len(entities) != 1:
-        return False
-    current = entities[0]
-    expected_environment = dict(entity.environment_vars or {})
-    current_environment = dict(getattr(current, "environment_vars", None) or {})
-    if (
-        str(getattr(current, "entity_name", "") or "") != str(entity.entity_name or "")
-        or str(getattr(current, "entity_version", "") or "") != str(entity.entity_version or "")
-        or str(getattr(current, "name", "") or "") != str(entity.name or "")
-        or current_environment != expected_environment
-    ):
-        return False
-    traffic = getattr(config, "traffic_config", None)
-    routes = getattr(traffic, "routes", None) or []
-    return (
-        len(routes) == 1
-        and str(getattr(routes[0], "served_model_name", "") or "") == str(entity.name or "")
-        and int(getattr(routes[0], "traffic_percentage", 0) or 0) == 100
+        experiment_name=experiment_name,
+        inference_schema=inference_schema,
+        inference_table_prefix=inference_table_prefix,
+        attestation_verify_key=attestation_verify_key,
+        environment=_STATIC_ENV,
+        workload_size=_WORKLOAD_SIZE,
+        workload_type=_WORKLOAD_TYPE.value,
+        scale_to_zero_enabled=_SCALE_TO_ZERO_ENABLED,
+        burst_scaling_enabled=_BURST_SCALING_ENABLED,
+        route_optimized=_ROUTE_OPTIMIZED,
+        traffic_percentage=_TRAFFIC_PERCENTAGE,
+        description=_ENDPOINT_DESCRIPTION,
     )
 
 
-def _existing_source_version(client: Any, *, model_name: str, source_hash: str) -> int | None:
+def _existing_source_version(
+    client: Any,
+    *,
+    model_name: str,
+    source_hash: str,
+    supervisor_id: str,
+    supervisor_endpoint_id: str,
+    upstream_endpoint: str,
+    runtime_application_id: str,
+    model_family: str,
+    experiment_base: str,
+    catalog: str,
+    genie_space_id: str,
+    inference_schema: str,
+    inference_table_prefix: str,
+) -> int | None:
     versions = client.search_model_versions(f"name='{model_name}'")
-    matches = [
-        int(version.version)
-        for version in versions
-        if (getattr(version, "tags", None) or {}).get(SOURCE_HASH_TAG) == source_hash
-    ]
+    matches: list[int] = []
+    for version in versions:
+        version_number = str(getattr(version, "version", "") or "")
+        model_source = str(getattr(version, "source", "") or "").strip()
+        if not version_number or not model_source:
+            raise RuntimeError("attested Gateway model version lacks immutable source metadata")
+        tags = {
+            str(key): str(value)
+            for key, value in dict(getattr(version, "tags", None) or {}).items()
+        }
+        contract = {
+            "full_name": model_name,
+            "model_source": model_source,
+            "source_hash": source_hash,
+            "supervisor_id": supervisor_id,
+            "supervisor_endpoint_id": supervisor_endpoint_id,
+            "upstream_endpoint": upstream_endpoint,
+            "runtime_application_id": runtime_application_id,
+            "model_family": model_family,
+            "experiment_base": experiment_base,
+            "catalog": catalog,
+            "genie_space_id": genie_space_id,
+            "inference_schema": inference_schema,
+            "inference_table_prefix": inference_table_prefix,
+        }
+        try:
+            current_attestation = verify_gateway_model_contract(
+                tags=tags,
+                **contract,
+            )
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"attested Gateway model version {model_name} v{version_number} drifted"
+            ) from exc
+        if not current_attestation:
+            raise RuntimeError(
+                f"Gateway candidate model {model_name} v{version_number} "
+                "uses a previous attestation epoch"
+            )
+        matches.append(int(version_number))
     return max(matches) if matches else None
 
 
@@ -116,89 +193,58 @@ def _start_mlflow_run() -> Any:
     return mlflow.start_run()
 
 
-def _log_responses_model(*, upstream_endpoint: str) -> Any:
-    return mlflow.pyfunc.log_model(
+def _log_responses_model(*, upstream_endpoint: str, catalog: str, genie_space_id: str) -> Any:
+    return _MLFLOW_LOG_MODEL(
         name="mortgage_growth_supervisor_proxy",
         python_model=str(AGENT_SOURCE),
-        resources=[DatabricksServingEndpoint(endpoint_name=upstream_endpoint)],
+        resources=[
+            DatabricksServingEndpoint(
+                endpoint_name=upstream_endpoint,
+                on_behalf_of_user=False,
+            ),
+            DatabricksFunction(
+                function_name=f"{catalog}.gold.fn_build_cohort",
+                on_behalf_of_user=False,
+            ),
+            DatabricksFunction(
+                function_name=f"{catalog}.gold.fn_segment_counts",
+                on_behalf_of_user=False,
+            ),
+            DatabricksFunction(
+                function_name=f"{catalog}.gold.fn_lead_queue_url",
+                on_behalf_of_user=False,
+            ),
+            DatabricksGenieSpace(
+                genie_space_id=genie_space_id,
+                on_behalf_of_user=False,
+            ),
+        ],
+        input_example={
+            "input": [
+                {
+                    "role": "user",
+                    "content": (
+                        "Use build_cohort to count a broad California refinance cohort; "
+                        "return only a governed aggregate and no borrower-level data."
+                    ),
+                }
+            ],
+            "max_output_tokens": 256,
+        },
         pip_requirements=list(_MODEL_REQUIREMENTS),
+        code_paths=[str(GATEWAY_PROXY_SOURCE.parents[1])],
     )
 
 
-def _log_gateway_model(*, upstream_endpoint: str) -> Any:
-    """Log code-from-model while MLflow live-validates the upstream delegation."""
+def _log_gateway_model(*, upstream_endpoint: str, catalog: str, genie_space_id: str) -> Any:
+    """Log code-from-model without invoking resources that do not exist yet."""
 
-    env_key = "MIP_UPSTREAM_SUPERVISOR_ENDPOINT"
-    previous = os.environ.get(env_key)
-    os.environ[env_key] = upstream_endpoint
-    try:
-        with _start_mlflow_run():
-            return _log_responses_model(upstream_endpoint=upstream_endpoint)
-    finally:
-        if previous is None:
-            os.environ.pop(env_key, None)
-        else:
-            os.environ[env_key] = previous
-
-
-def _served_entity(
-    *,
-    upstream_endpoint: str,
-    model_name: str,
-    model_version: int,
-    experiment_id: str,
-) -> tuple[ServedEntityInput, TrafficConfig]:
-    served_name = f"mip-growth-supervisor-proxy-{model_version}"
-    environment = {
-        **_STATIC_ENV,
-        "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream_endpoint,
-        "MLFLOW_EXPERIMENT_ID": experiment_id,
-    }
-    entity = ServedEntityInput(
-        entity_name=model_name,
-        entity_version=str(model_version),
-        environment_vars=environment,
-        name=served_name,
-        scale_to_zero_enabled=True,
-        workload_size="Small",
-    )
-    traffic = TrafficConfig(routes=[Route(served_model_name=served_name, traffic_percentage=100)])
-    return entity, traffic
-
-
-def _gateway_config(*, catalog: str, schema: str, table_prefix: str) -> AiGatewayConfig:
-    return AiGatewayConfig(
-        inference_table_config=AiGatewayInferenceTableConfig(
-            enabled=True,
-            catalog_name=catalog,
-            schema_name=schema,
-            table_name_prefix=table_prefix,
+    with responses_agent_packaging_validation(), _start_mlflow_run():
+        return _log_responses_model(
+            upstream_endpoint=upstream_endpoint,
+            catalog=catalog,
+            genie_space_id=genie_space_id,
         )
-    )
-
-
-def _gateway_matches(
-    details: Any,
-    *,
-    catalog: str,
-    schema: str,
-    table_prefix: str,
-) -> bool:
-    gateway = getattr(details, "ai_gateway", None)
-    inference = getattr(gateway, "inference_table_config", None)
-    return (
-        getattr(inference, "enabled", None) is True
-        and str(getattr(inference, "catalog_name", "") or "") == catalog
-        and str(getattr(inference, "schema_name", "") or "") == schema
-        and str(getattr(inference, "table_name_prefix", "") or "") == table_prefix
-    )
-
-
-def _endpoint_tags(details: Any) -> dict[str, str]:
-    tags = getattr(details, "tags", None) or []
-    return {
-        str(getattr(tag, "key", "") or ""): str(getattr(tag, "value", "") or "") for tag in tags
-    }
 
 
 def _verified_model_version_tags(
@@ -228,14 +274,14 @@ def _verified_model_version_tags(
         raise RuntimeError(
             "could not read the exact served Gateway Agent Model version from Unity Catalog"
         ) from exc
-    if (
-        str(getattr(version, "name", "") or "") != deployment.model_name
-        or str(getattr(version, "version", "") or "") != str(deployment.model_version)
-    ):
+    if str(getattr(version, "name", "") or "") != deployment.model_name or str(
+        getattr(version, "version", "") or ""
+    ) != str(deployment.model_version):
         raise RuntimeError("Unity Catalog returned an unexpected Gateway Agent Model version")
+    if str(getattr(version, "source", "") or "").strip() != deployment.model_source:
+        raise RuntimeError("served Gateway Agent Model version source drifted")
     tags = {
-        str(key): str(value)
-        for key, value in dict(getattr(version, "tags", None) or {}).items()
+        str(key): str(value) for key, value in dict(getattr(version, "tags", None) or {}).items()
     }
     if (
         tags.get(SOURCE_HASH_TAG) != deployment.source_hash
@@ -244,7 +290,60 @@ def _verified_model_version_tags(
         raise RuntimeError(
             "served Gateway Agent Model version tags do not bind its reviewed source"
         )
+    verify_gateway_model_contract(
+        tags=tags,
+        full_name=deployment.model_name,
+        model_source=deployment.model_source,
+        source_hash=deployment.source_hash,
+        supervisor_id=deployment.supervisor_id,
+        supervisor_endpoint_id=deployment.supervisor_endpoint_id,
+        upstream_endpoint=deployment.upstream_endpoint,
+        runtime_application_id=deployment.runtime_application_id,
+        model_family=deployment.model_family,
+        experiment_base=deployment.experiment_base,
+        catalog=deployment.catalog,
+        genie_space_id=deployment.genie_space_id,
+        inference_schema=deployment.inference_table.split(".", 2)[1],
+        inference_table_prefix=deployment.inference_table_prefix,
+    )
     return tags
+
+
+def gateway_endpoint_configuration_matches(
+    details: Any,
+    deployment: GatewayAgentDeployment,
+) -> bool:
+    """Return whether every readable endpoint configuration field is exact."""
+
+    expected_entity, _traffic = _served_entity(
+        supervisor_id=deployment.supervisor_id,
+        upstream_endpoint=deployment.upstream_endpoint,
+        runtime_application_id=deployment.runtime_application_id,
+        catalog=deployment.catalog,
+        genie_space_id=deployment.genie_space_id,
+        model_name=deployment.model_name,
+        model_version=deployment.model_version,
+        experiment_id=deployment.experiment_id,
+    )
+    catalog, schema, table_prefix = deployment.inference_table.split(".", 2)
+    return (
+        _proxy_config_matches(details, entity=expected_entity)
+        and _endpoint_policy_matches(details)
+        and str(getattr(details, "description", "") or "") == _ENDPOINT_DESCRIPTION
+        and _endpoint_tags_match(
+            details,
+            expected={
+                SOURCE_HASH_TAG: deployment.source_hash,
+                UPSTREAM_TAG: deployment.upstream_endpoint,
+            },
+        )
+        and _gateway_matches(
+            details,
+            catalog=catalog,
+            schema=schema,
+            table_prefix=table_prefix,
+        )
+    )
 
 
 def verify_gateway_responses_agent(
@@ -252,10 +351,63 @@ def verify_gateway_responses_agent(
     deployment: GatewayAgentDeployment,
     *,
     model_registry: Any | None = None,
+    tracking_client: Any | None = None,
 ) -> None:
     """Fail closed unless the ready endpoint proves the exact governed boundary."""
 
+    expected_resource_hash = gateway_resource_hash(
+        source_hash=deployment.source_hash,
+        supervisor_id=deployment.supervisor_id,
+        supervisor_endpoint_id=deployment.supervisor_endpoint_id,
+        runtime_application_id=deployment.runtime_application_id,
+        model_name=deployment.model_family,
+        experiment_name=deployment.experiment_base,
+        inference_schema=deployment.inference_table.split(".", 2)[1],
+        inference_table_prefix=deployment.inference_table_prefix,
+        attestation_verify_key=deployment.model_attestation_verify_key,
+    )
+    expected_model_name = gateway_agent_model_name(
+        base_model_name=deployment.model_family,
+        contract_hash=expected_resource_hash,
+    )
+    expected_experiment_name = gateway_experiment_name(
+        base_experiment_name=deployment.experiment_base,
+        contract_hash=expected_resource_hash,
+        runtime_application_id=deployment.runtime_application_id,
+    )
+    expected_table = ".".join(
+        [
+            deployment.catalog,
+            deployment.inference_table.split(".", 2)[1],
+            gateway_inference_table_prefix(
+                base_prefix=deployment.inference_table_prefix,
+                contract_hash=expected_resource_hash,
+            ),
+        ]
+    )
+    if (
+        deployment.resource_hash != expected_resource_hash
+        or deployment.model_name != expected_model_name
+        or deployment.experiment_name != expected_experiment_name
+        or deployment.inference_table != expected_table
+    ):
+        raise RuntimeError("Gateway ResponsesAgent resource allocation contract drifted")
+    upstream_details = workspace.serving_endpoints.get(deployment.upstream_endpoint)
+    assert_runtime_creator(
+        getattr(upstream_details, "creator", None),
+        application_id=deployment.runtime_application_id,
+        resource=f"managed Supervisor endpoint {deployment.upstream_endpoint}",
+    )
+    if str(getattr(upstream_details, "id", "") or "").strip() != (
+        deployment.supervisor_endpoint_id
+    ):
+        raise RuntimeError("managed Supervisor endpoint immutable identity drifted")
     details = workspace.serving_endpoints.get(deployment.endpoint)
+    assert_runtime_creator(
+        getattr(details, "creator", None),
+        application_id=deployment.runtime_application_id,
+        resource=f"Gateway endpoint {deployment.endpoint}",
+    )
     if getattr(details, "pending_config", None) is not None:
         raise RuntimeError(
             f"Gateway ResponsesAgent endpoint {deployment.endpoint} has a pending config update"
@@ -283,18 +435,28 @@ def verify_gateway_responses_agent(
             f"Gateway endpoint {deployment.endpoint} serves {deployment.model_name} "
             f"v{version or 'UNKNOWN'}, expected v{deployment.model_version}"
         )
-    config = getattr(details, "config", None)
-    entities = getattr(config, "served_entities", None) or []
-    if len(entities) != 1:
-        raise RuntimeError("Gateway ResponsesAgent must serve exactly one reviewed proxy model")
-    entity = entities[0]
-    environment = getattr(entity, "environment_vars", None) or {}
-    if environment.get("MIP_UPSTREAM_SUPERVISOR_ENDPOINT") != deployment.upstream_endpoint:
-        raise RuntimeError("Gateway ResponsesAgent upstream Supervisor binding is missing or stale")
-    tags = _endpoint_tags(details)
-    if (
-        tags.get(SOURCE_HASH_TAG) != deployment.source_hash
-        or tags.get(UPSTREAM_TAG) != deployment.upstream_endpoint
+    expected_entity, _traffic = _served_entity(
+        supervisor_id=deployment.supervisor_id,
+        upstream_endpoint=deployment.upstream_endpoint,
+        runtime_application_id=deployment.runtime_application_id,
+        catalog=deployment.catalog,
+        genie_space_id=deployment.genie_space_id,
+        model_name=deployment.model_name,
+        model_version=deployment.model_version,
+        experiment_id=deployment.experiment_id,
+    )
+    if not _proxy_config_matches(details, entity=expected_entity):
+        raise RuntimeError("Gateway ResponsesAgent serving configuration is missing or stale")
+    if not _endpoint_policy_matches(details):
+        raise RuntimeError("Gateway ResponsesAgent endpoint policy is missing or stale")
+    if str(getattr(details, "description", "") or "") != _ENDPOINT_DESCRIPTION:
+        raise RuntimeError("Gateway ResponsesAgent endpoint description is missing or stale")
+    if not _endpoint_tags_match(
+        details,
+        expected={
+            SOURCE_HASH_TAG: deployment.source_hash,
+            UPSTREAM_TAG: deployment.upstream_endpoint,
+        },
     ):
         raise RuntimeError("Gateway ResponsesAgent endpoint tags do not bind its reviewed source")
     catalog, schema, table_prefix = deployment.inference_table.split(".", 2)
@@ -307,123 +469,311 @@ def verify_gateway_responses_agent(
         raise RuntimeError(
             "Gateway ResponsesAgent inference-table configuration is missing or stale"
         )
+    registered_model = workspace.registered_models.get(deployment.model_name)
+    assert_runtime_creator(
+        getattr(registered_model, "owner", None),
+        application_id=deployment.runtime_application_id,
+        resource=f"registered model {deployment.model_name}",
+    )
     _verified_model_version_tags(deployment, model_registry=model_registry)
+    experiment_client = tracking_client or MlflowClient(tracking_uri="databricks")
+    _resolve_exact_experiment(
+        experiment_client,
+        experiment_name=deployment.experiment_name,
+        experiment_id=deployment.experiment_id,
+        runtime_application_id=deployment.runtime_application_id,
+    )
+    resolve_exact_experiment_acl(
+        workspace,
+        experiment_id=deployment.experiment_id,
+        runtime_application_id=deployment.runtime_application_id,
+    )
+    _clear_deprecated_endpoint_rate_limits(workspace, endpoint=deployment.endpoint)
 
 
 def ensure_gateway_responses_agent(
     workspace: Any,
     *,
     endpoint: str,
+    endpoint_prefix: str,
+    supervisor_id: str,
     upstream_endpoint: str,
     model_name: str,
     experiment_name: str,
     inference_catalog: str,
     inference_schema: str,
     inference_table_prefix: str,
+    genie_space_id: str,
+    expected_creator_application_id: str,
 ) -> GatewayAgentDeployment:
-    """Converge one source-bound Agent Model endpoint and its proof table."""
+    """Reuse an exact endpoint or create an immutable, versioned green endpoint."""
 
-    source_hash = gateway_agent_source_hash(upstream_endpoint=upstream_endpoint)
+    require_gateway_model_attestation_signing_authority()
+    attestation_verify_key = os.environ.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "").strip()
+    upstream_details = workspace.serving_endpoints.get(upstream_endpoint)
+    assert_runtime_creator(
+        getattr(upstream_details, "creator", None),
+        application_id=expected_creator_application_id,
+        resource=f"managed Supervisor endpoint {upstream_endpoint}",
+    )
+    supervisor_endpoint_id = str(getattr(upstream_details, "id", "") or "").strip()
+    if not supervisor_endpoint_id:
+        raise RuntimeError("managed Supervisor endpoint has no immutable ID")
+
+    model_family = _target_model_family(
+        configured=model_name,
+        catalog=inference_catalog,
+    )
+    experiment_family = experiment_name.strip()
+    gateway_experiment_base(
+        runtime_application_id=expected_creator_application_id,
+        experiment_family=experiment_family,
+    )
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint=upstream_endpoint,
+        catalog=inference_catalog,
+        genie_space_id=genie_space_id,
+    )
+    contract_hash = gateway_resource_hash(
+        source_hash=source_hash,
+        supervisor_id=supervisor_id,
+        supervisor_endpoint_id=supervisor_endpoint_id,
+        runtime_application_id=expected_creator_application_id,
+        model_name=model_family,
+        experiment_name=experiment_family,
+        inference_schema=inference_schema,
+        inference_table_prefix=inference_table_prefix,
+        attestation_verify_key=attestation_verify_key,
+    )
+    versioned_table_prefix = gateway_inference_table_prefix(
+        base_prefix=inference_table_prefix,
+        contract_hash=contract_hash,
+    )
+    versioned_model_name = gateway_agent_model_name(
+        base_model_name=model_family,
+        contract_hash=contract_hash,
+    )
+    versioned_experiment_name = gateway_experiment_name(
+        base_experiment_name=experiment_family,
+        contract_hash=contract_hash,
+        runtime_application_id=expected_creator_application_id,
+    )
     mlflow.set_tracking_uri("databricks")
     mlflow.set_registry_uri("databricks-uc")
-    experiment = mlflow.set_experiment(experiment_name)
+    selected_experiment = mlflow.set_experiment(versioned_experiment_name)
     client = MlflowClient()
+    experiment_id = str(getattr(selected_experiment, "experiment_id", "") or "").strip()
+    if not experiment_id:
+        raise RuntimeError("Gateway MLflow experiment has no immutable ID")
+    experiment = _resolve_exact_experiment(
+        client,
+        experiment_name=versioned_experiment_name,
+        experiment_id=experiment_id,
+        runtime_application_id=expected_creator_application_id,
+    )
     model_version = _existing_source_version(
         client,
-        model_name=model_name,
+        model_name=versioned_model_name,
         source_hash=source_hash,
+        supervisor_id=supervisor_id,
+        supervisor_endpoint_id=supervisor_endpoint_id,
+        upstream_endpoint=upstream_endpoint,
+        runtime_application_id=expected_creator_application_id,
+        model_family=model_family,
+        experiment_base=experiment_family,
+        catalog=inference_catalog,
+        genie_space_id=genie_space_id,
+        inference_schema=inference_schema,
+        inference_table_prefix=inference_table_prefix,
     )
     if model_version is None:
-        print(f"[agentic] logging Gateway Supervisor proxy: {model_name}")
-        logged = _log_gateway_model(upstream_endpoint=upstream_endpoint)
-        registered = mlflow.register_model(logged.model_uri, model_name)
+        print(f"[agentic] logging Gateway Supervisor proxy: {versioned_model_name}")
+        logged = _log_gateway_model(
+            upstream_endpoint=upstream_endpoint,
+            catalog=inference_catalog,
+            genie_space_id=genie_space_id,
+        )
+        model_source = str(getattr(logged, "model_uri", "") or "").strip()
+        if not model_source:
+            raise RuntimeError("logged Gateway model has no immutable model URI")
+        registration_tags = {
+            SOURCE_HASH_TAG: source_hash,
+            UPSTREAM_TAG: upstream_endpoint,
+            **sign_gateway_model_contract(
+                full_name=versioned_model_name,
+                model_source=model_source,
+                source_hash=source_hash,
+                supervisor_id=supervisor_id,
+                supervisor_endpoint_id=supervisor_endpoint_id,
+                upstream_endpoint=upstream_endpoint,
+                runtime_application_id=expected_creator_application_id,
+                model_family=model_family,
+                experiment_base=experiment_family,
+                catalog=inference_catalog,
+                genie_space_id=genie_space_id,
+                inference_schema=inference_schema,
+                inference_table_prefix=inference_table_prefix,
+            ),
+        }
+        registered = mlflow.register_model(
+            model_source,
+            versioned_model_name,
+            tags=registration_tags,
+        )
         model_version = int(registered.version)
-    # Converge the authoritative registered-version proof for both newly
-    # created and source-hash-matched legacy versions. Older provisioning
-    # wrote only the source tag; leaving the upstream tag absent would make
-    # the independent export postflight fail forever without repairing it.
-    client.set_model_version_tag(model_name, str(model_version), SOURCE_HASH_TAG, source_hash)
-    client.set_model_version_tag(
-        model_name,
-        str(model_version),
-        UPSTREAM_TAG,
-        upstream_endpoint,
+    model_details = workspace.registered_models.get(versioned_model_name)
+    assert_runtime_creator(
+        getattr(model_details, "owner", None),
+        application_id=expected_creator_application_id,
+        resource=f"registered model {versioned_model_name}",
     )
+    model_version_details = client.get_model_version(
+        versioned_model_name,
+        str(model_version),
+    )
+    model_version_tags = {
+        str(key): str(value)
+        for key, value in dict(getattr(model_version_details, "tags", None) or {}).items()
+    }
+    model_source = str(getattr(model_version_details, "source", "") or "").strip()
+    if not model_source:
+        raise RuntimeError("registered Gateway model version has no immutable source")
+    attestation_contract = {
+        "full_name": versioned_model_name,
+        "model_source": model_source,
+        "source_hash": source_hash,
+        "supervisor_id": supervisor_id,
+        "supervisor_endpoint_id": supervisor_endpoint_id,
+        "upstream_endpoint": upstream_endpoint,
+        "runtime_application_id": expected_creator_application_id,
+        "model_family": model_family,
+        "experiment_base": experiment_family,
+        "catalog": inference_catalog,
+        "genie_space_id": genie_space_id,
+        "inference_schema": inference_schema,
+        "inference_table_prefix": inference_table_prefix,
+    }
+    if not verify_gateway_model_contract(tags=model_version_tags, **attestation_contract):
+        raise RuntimeError("Gateway candidate model uses a previous attestation epoch")
+    if gateway_model_attestation_record_key(model_version_tags) != attestation_verify_key:
+        raise RuntimeError("Gateway candidate model attestation epoch drifted")
+    if (
+        model_version_tags.get(SOURCE_HASH_TAG) != source_hash
+        or model_version_tags.get(UPSTREAM_TAG) != upstream_endpoint
+    ):
+        raise RuntimeError("Gateway model version source-binding tags are not immutable")
 
     entity, traffic = _served_entity(
+        supervisor_id=supervisor_id,
         upstream_endpoint=upstream_endpoint,
-        model_name=model_name,
+        runtime_application_id=expected_creator_application_id,
+        catalog=inference_catalog,
+        genie_space_id=genie_space_id,
+        model_name=versioned_model_name,
         model_version=model_version,
         experiment_id=str(experiment.experiment_id),
     )
     gateway = _gateway_config(
         catalog=inference_catalog,
         schema=inference_schema,
-        table_prefix=inference_table_prefix,
+        table_prefix=versioned_table_prefix,
     )
     tags = [
         EndpointTag(SOURCE_HASH_TAG, source_hash),
         EndpointTag(UPSTREAM_TAG, upstream_endpoint),
     ]
-    try:
-        details = workspace.serving_endpoints.get(endpoint)
-    except NotFound:
-        details = None
+
+    def read(candidate: str, *, require_runtime_creator: bool) -> Any | None:
+        try:
+            current = workspace.serving_endpoints.get(candidate)
+        except (NotFound, ResourceDoesNotExist):
+            return None
+        creator = str(getattr(current, "creator", None) or "").strip()
+        if require_runtime_creator:
+            assert_runtime_creator(
+                creator,
+                application_id=expected_creator_application_id,
+                resource=f"Gateway endpoint {candidate}",
+            )
+        if (
+            creator == expected_creator_application_id
+            and getattr(current, "pending_config", None) is not None
+        ):
+            print(f"[agentic] waiting for interrupted endpoint update: {candidate}")
+            current = workspace.serving_endpoints.wait_get_serving_endpoint_not_updating(candidate)
+        return current
+
+    def exact(current: Any) -> bool:
+        return (
+            _proxy_config_matches(current, entity=entity)
+            and _gateway_matches(
+                current,
+                catalog=inference_catalog,
+                schema=inference_schema,
+                table_prefix=versioned_table_prefix,
+            )
+            and _endpoint_tags_match(
+                current,
+                expected={SOURCE_HASH_TAG: source_hash, UPSTREAM_TAG: upstream_endpoint},
+            )
+            and str(getattr(current, "description", "") or "") == _ENDPOINT_DESCRIPTION
+            and _endpoint_policy_matches(current)
+        )
+
+    details = read(endpoint, require_runtime_creator=False)
+    actual_endpoint = endpoint
+    if details is not None and (
+        str(getattr(details, "creator", None) or "").strip() != expected_creator_application_id
+        or not exact(details)
+    ):
+        actual_endpoint = f"{endpoint_prefix}-{contract_hash[:12]}"
+        if actual_endpoint == endpoint:
+            raise RuntimeError("Gateway green endpoint name collides with the live endpoint")
+        details = read(actual_endpoint, require_runtime_creator=True)
+        if details is not None and not exact(details):
+            raise RuntimeError(
+                "immutable green Gateway candidate drifted; refusing in-place repair"
+            )
 
     if details is None:
         print(
-            f"[agentic] creating Gateway Supervisor proxy: {endpoint} "
-            f"({model_name} v{model_version})"
+            f"[agentic] creating Gateway Supervisor proxy: {actual_endpoint} "
+            f"({versioned_model_name} v{model_version})"
         )
         workspace.serving_endpoints.create(
-            name=endpoint,
+            name=actual_endpoint,
             config=EndpointCoreConfigInput(
-                name=endpoint,
+                name=actual_endpoint,
                 served_entities=[entity],
                 traffic_config=traffic,
             ),
             ai_gateway=gateway,
             tags=tags,
-            description=(
-                "MIP governed ResponsesAgent boundary delegating product planning "
-                "to the managed Mortgage Growth Agent Supervisor."
-            ),
+            description=_ENDPOINT_DESCRIPTION,
+            route_optimized=_ROUTE_OPTIMIZED,
         )
     else:
-        if getattr(details, "pending_config", None) is not None:
-            print(f"[agentic] waiting for interrupted endpoint update: {endpoint}")
-            details = workspace.serving_endpoints.wait_get_serving_endpoint_not_updating(endpoint)
-        if not _proxy_config_matches(details, entity=entity):
-            print(
-                f"[agentic] reconciling Gateway Supervisor proxy: {endpoint} "
-                f"({model_name} v{model_version})"
-            )
-            details = workspace.serving_endpoints.update_config_and_wait(
-                name=endpoint,
-                served_entities=[entity],
-                traffic_config=traffic,
-            )
-        else:
-            print(f"[agentic] Gateway Supervisor proxy already current: {endpoint}")
-        if not _gateway_matches(
-            details,
-            catalog=inference_catalog,
-            schema=inference_schema,
-            table_prefix=inference_table_prefix,
-        ):
-            print(f"[agentic] reconciling AI Gateway inference table: {endpoint}")
-            workspace.serving_endpoints.put_ai_gateway(
-                name=endpoint,
-                inference_table_config=gateway.inference_table_config,
-            )
-        workspace.serving_endpoints.patch(name=endpoint, add_tags=tags)
+        print(f"[agentic] exact Gateway Supervisor proxy exists: {actual_endpoint}")
 
-    inference_table = ".".join([inference_catalog, inference_schema, inference_table_prefix])
+    inference_table = ".".join([inference_catalog, inference_schema, versioned_table_prefix])
     return GatewayAgentDeployment(
-        endpoint,
-        upstream_endpoint,
-        model_name,
-        model_version,
-        source_hash,
-        inference_table,
+        endpoint=actual_endpoint,
+        supervisor_id=supervisor_id,
+        supervisor_endpoint_id=supervisor_endpoint_id,
+        upstream_endpoint=upstream_endpoint,
+        runtime_application_id=expected_creator_application_id,
+        model_name=versioned_model_name,
+        model_version=model_version,
+        model_source=model_source,
+        model_attestation_verify_key=attestation_verify_key,
+        model_family=model_family,
+        source_hash=source_hash,
+        resource_hash=contract_hash,
+        inference_table=inference_table,
+        inference_table_prefix=inference_table_prefix,
+        experiment_base=experiment_family,
+        experiment_name=versioned_experiment_name,
+        experiment_id=str(experiment.experiment_id),
+        catalog=inference_catalog,
+        genie_space_id=genie_space_id,
     )

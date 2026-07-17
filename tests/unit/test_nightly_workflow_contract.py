@@ -9,6 +9,8 @@ the scoring job.
 
 from __future__ import annotations
 
+import subprocess
+import textwrap
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -16,6 +18,53 @@ NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
 LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
 CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
+
+
+def _workflow_run_block(step_name: str) -> str:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    step = text.index(f"- name: {step_name}")
+    run = text.index("        run: |", step)
+    end = text.find("\n      - name:", run + 1)
+    return textwrap.dedent(text[run + len("        run: |\n") : end if end != -1 else None])
+
+
+def _recorded_mint_environments(
+    tmp_path: Path,
+    *,
+    step_name: str,
+    credentials: dict[str, str],
+) -> list[dict[str, str]]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "mint-env.log"
+    recorder = bin_dir / "python"
+    recorder.write_text(
+        "#!/usr/bin/env bash\n"
+        "{\n"
+        "  echo '=== child ==='\n"
+        "  /usr/bin/env | /usr/bin/sort\n"
+        '} >> "$CHILD_ENV_LOG"\n',
+        encoding="utf-8",
+    )
+    recorder.chmod(0o755)
+    result = subprocess.run(
+        ["bash", "-c", _workflow_run_block(step_name)],
+        cwd=REPO,
+        env={
+            "PATH": f"{bin_dir}:/usr/bin:/bin",
+            "CHILD_ENV_LOG": str(log),
+            **credentials,
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    return [
+        dict(line.split("=", 1) for line in block.splitlines() if "=" in line)
+        for block in log.read_text(encoding="utf-8").split("=== child ===\n")
+        if block.strip()
+    ]
 
 
 def test_live_validation_is_manual_only() -> None:
@@ -75,6 +124,8 @@ def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
 
     assert "secrets.MIP_AI_GATEWAY_ENDPOINT" not in text
     assert "secrets.MIP_AI_GATEWAY_INFERENCE_TABLE" not in text
+    assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in text
+    assert text.count("vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") == 2
     assert text.count("-m tools.databricks.export_gateway_runtime_contract") == 2
 
 
@@ -140,6 +191,18 @@ def test_live_validation_renders_dev_demo_feeds_for_bundle_validation() -> None:
     assert 'python tools/render_sql.py --catalog "${MIP_DEFAULT_CATALOG:-mip}"' in block
 
 
+def test_live_validation_uses_the_same_optional_gateway_resource_families() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+
+    assert "MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}" in text
+    for name in (
+        "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY",
+        "MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE",
+        "MIP_AI_GATEWAY_TABLE_PREFIX",
+    ):
+        assert f"{name}: ${{{{ vars.{name} }}}}" in text
+
+
 def test_live_validation_mints_admin_token_for_every_admin_proof() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
@@ -149,16 +212,12 @@ def test_live_validation_mints_admin_token_for_every_admin_proof() -> None:
     assert "DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}" in text
     assert "DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}" in text
     assert (
-        "DATABRICKS_OPERATOR2_CLIENT_SECRET: "
-        "${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}"
+        "DATABRICKS_OPERATOR2_CLIENT_SECRET: " "${{ secrets.DATABRICKS_OPERATOR2_CLIENT_SECRET }}"
     ) in text
     assert "--github-env MIP_OPERATOR2_BEARER_TOKEN" in text
     assert "--github-env MIP_ADMIN_BEARER_TOKEN" in text
     assert "DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in text
-    assert (
-        "Operator A, operator B, admin, and verifier M2M client IDs must be distinct"
-        in text
-    )
+    assert "Operator A, operator B, admin, and verifier M2M client IDs must be distinct" in text
     assert "campaign-audit" in text
     assert "Growth Agent audit" in text
     assert "exit 1" in text
@@ -242,6 +301,107 @@ def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
     assert "continue-on-error" not in resolve_block
     assert "continue-on-error" not in bearer_block
     assert resolve_pos < bearer_pos < run_pos
+
+
+def test_live_playwright_mint_children_receive_only_the_selected_identity() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("- name: Mint per-run Playwright Bearer tokens")
+    end = text.index("\n      - name:", start + 1)
+    block = text[start:end]
+    function = block[
+        block.index("mint_m2m_token()") : block.index(
+            "          }", block.index("mint_m2m_token()")
+        )
+        + 11
+    ]
+
+    assert "export -n DATABRICKS_TOKEN" in function
+    for secret in (
+        "DATABRICKS_CLIENT_SECRET",
+        "DATABRICKS_OPERATOR2_CLIENT_SECRET",
+        "DATABRICKS_ADMIN_CLIENT_SECRET",
+        "DATABRICKS_VERIFIER_CLIENT_SECRET",
+    ):
+        assert secret in function
+    assert 'export DATABRICKS_CLIENT_ID="$client_id"' in function
+    assert 'export DATABRICKS_CLIENT_SECRET="$client_secret"' in function
+    assert 'python tools/oauth_m2m_mint.py "$@"' in function
+    assert "--client-secret-env" not in block
+
+
+def test_live_playwright_mint_subshells_enforce_identity_isolation(tmp_path: Path) -> None:
+    credentials = {
+        "DATABRICKS_HOST": "https://workspace.example",
+        "DATABRICKS_TOKEN": "deployer-pat",
+        "DATABRICKS_CLIENT_ID": "operator-a",
+        "DATABRICKS_CLIENT_SECRET": "operator-a-secret",
+        "DATABRICKS_OPERATOR2_CLIENT_ID": "operator-b",
+        "DATABRICKS_OPERATOR2_CLIENT_SECRET": "operator-b-secret",
+        "DATABRICKS_ADMIN_CLIENT_ID": "admin",
+        "DATABRICKS_ADMIN_CLIENT_SECRET": "admin-secret",
+        "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
+        "DATABRICKS_VERIFIER_CLIENT_SECRET": "verifier-secret",
+    }
+    children = _recorded_mint_environments(
+        tmp_path,
+        step_name="Mint per-run Playwright Bearer tokens",
+        credentials=credentials,
+    )
+
+    assert len(children) == 4
+    expected = (
+        ("operator-a", "operator-a-secret"),
+        ("operator-b", "operator-b-secret"),
+        ("admin", "admin-secret"),
+        ("verifier", "verifier-secret"),
+    )
+    for child, (client_id, secret) in zip(children, expected, strict=True):
+        assert child["DATABRICKS_CLIENT_ID"] == client_id
+        assert child["DATABRICKS_CLIENT_SECRET"] == secret
+        assert child["DATABRICKS_HOST"] == credentials["DATABRICKS_HOST"]
+        assert "DATABRICKS_TOKEN" not in child
+        for role_name in ("OPERATOR2", "ADMIN", "VERIFIER"):
+            assert f"DATABRICKS_{role_name}_CLIENT_ID" not in child
+            assert f"DATABRICKS_{role_name}_CLIENT_SECRET" not in child
+
+
+def test_agent_eval_remint_children_receive_only_the_selected_identity() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    start = text.index("- name: Remint per-run Bearers immediately before Agent Evaluation")
+    end = text.index("\n      - name:", start + 1)
+    block = text[start:end]
+
+    assert "mint_m2m_token()" in block
+    assert "export -n DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET" in block
+    assert "export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in block
+    assert 'export DATABRICKS_CLIENT_ID="$client_id"' in block
+    assert 'export DATABRICKS_CLIENT_SECRET="$client_secret"' in block
+    assert 'python tools/oauth_m2m_mint.py "$@"' in block
+    assert "--client-secret-env" not in block
+
+
+def test_agent_eval_remint_subshells_enforce_identity_isolation(tmp_path: Path) -> None:
+    credentials = {
+        "DATABRICKS_HOST": "https://workspace.example",
+        "DATABRICKS_CLIENT_ID": "operator-a",
+        "DATABRICKS_CLIENT_SECRET": "operator-a-secret",
+        "DATABRICKS_ADMIN_CLIENT_ID": "admin",
+        "DATABRICKS_ADMIN_CLIENT_SECRET": "admin-secret",
+    }
+    children = _recorded_mint_environments(
+        tmp_path,
+        step_name="Remint per-run Bearers immediately before Agent Evaluation",
+        credentials=credentials,
+    )
+
+    assert len(children) == 2
+    assert children[0]["DATABRICKS_CLIENT_ID"] == "operator-a"
+    assert children[0]["DATABRICKS_CLIENT_SECRET"] == "operator-a-secret"
+    assert children[1]["DATABRICKS_CLIENT_ID"] == "admin"
+    assert children[1]["DATABRICKS_CLIENT_SECRET"] == "admin-secret"
+    for child in children:
+        assert "DATABRICKS_ADMIN_CLIENT_ID" not in child
+        assert "DATABRICKS_ADMIN_CLIENT_SECRET" not in child
 
 
 def test_live_gate_runs_two_operator_recovery_contract() -> None:

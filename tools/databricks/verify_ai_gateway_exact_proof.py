@@ -49,13 +49,18 @@ from backend.services.capability_serving_probes import (
     _inference_table_columns,
     _split_three_part_relation,
     inference_log_table_names,
-    query_serving_endpoint,
     query_serving_endpoint_with_proof,
     serving_response_has_payload,
     serving_response_is_terminal_completed,
 )
 from backend.services.databricks_sql import DatabricksSqlClient
 from backend.services.lakebase import get_lakebase_client
+from tools.databricks.ai_gateway_tool_trace import (
+    TOOL_PROBE_PROMPT as _TOOL_PROBE_PROMPT,
+    is_cold_start_error as _is_cold_start_error,
+    response_proves_build_cohort_tool,
+    warm_endpoint_with_cold_start_patience,
+)
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -103,6 +108,11 @@ def _parser() -> argparse.ArgumentParser:
         "--warehouse-id",
         default=os.environ.get("DATABRICKS_WAREHOUSE_ID"),
         help="SQL warehouse used by the dedicated verifier identity.",
+    )
+    parser.add_argument(
+        "--expected-tool-count",
+        type=int,
+        help="Independent CA fn_build_cohort result required for send mode.",
     )
     parser.add_argument("--json", action="store_true", help="Emit a machine-readable summary.")
     return parser
@@ -306,6 +316,8 @@ def main(argv: list[str] | None = None) -> int:
             endpoint=endpoint,
             inference_table=inference_table,
             git_sha=git_sha,
+            expected_tool_count=args.expected_tool_count,
+            expected_tool_name=f"{inference_table.split('.', 1)[0]}__gold__fn_build_cohort",
         )
         if args.wait:
             verified.extend(
@@ -359,66 +371,6 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-_COLD_START_MARKERS = (
-    "timed out",
-    "timeout",
-    "temporarily unavailable",
-    "service unavailable",
-    "503",
-    "scaling from zero",
-    "no server available",
-)
-
-
-def _is_cold_start_error(exc: BaseException) -> bool:
-    if isinstance(exc, TimeoutError):
-        return True
-    message = str(exc).lower()
-    return any(marker in message for marker in _COLD_START_MARKERS)
-
-
-def warm_endpoint_with_cold_start_patience(
-    workspace: Any,
-    endpoint: str,
-    *,
-    prompt: str,
-    task: str,
-    warmup_timeout_s: float | None = None,
-    interval_s: float = 20.0,
-    sleep: Any = time.sleep,
-) -> Any:
-    """Warm the endpoint without ever reusing an exact-proof request id.
-
-    A cold llama endpoint can take minutes to warm; the platform holds the
-    request until the SDK read timeout trips (observed 2026-07-07, deploy
-    step 18). Each retry gets a fresh non-proof id because a timed-out request
-    may still execute server-side. Non-timeout errors raise immediately.
-    """
-    if warmup_timeout_s is None:
-        warmup_timeout_s = float(os.environ.get("MIP_AI_GATEWAY_WARMUP_TIMEOUT_S", "600"))
-    deadline = time.monotonic() + max(0.0, warmup_timeout_s)
-    attempt = 0
-    while True:
-        attempt += 1
-        warmup_request_id = f"mip-warmup-{uuid4().hex}"
-        try:
-            return query_serving_endpoint(
-                workspace,
-                endpoint,
-                task=task,
-                prompt=prompt,
-                client_request_id=warmup_request_id,
-            )
-        except Exception as exc:  # noqa: BLE001 - classified below, re-raised when not cold-start
-            if not _is_cold_start_error(exc) or time.monotonic() >= deadline:
-                raise
-            print(
-                "[ai-gateway-verify] configured endpoint looks cold "
-                f"(attempt {attempt}: {type(exc).__name__}); retrying in {int(interval_s)}s"
-            )
-            sleep(interval_s)
-
-
 def send_probe(
     *,
     lakebase: Any,
@@ -426,7 +378,11 @@ def send_probe(
     endpoint: str,
     inference_table: str,
     git_sha: str,
+    expected_tool_count: int | None,
+    expected_tool_name: str = "mip__gold__fn_build_cohort",
 ) -> AiGatewayVerifiedProof:
+    if expected_tool_count is None or expected_tool_count < 0:
+        raise ValueError("send mode requires a non-negative independent expected tool count")
     details = workspace.serving_endpoints.get(endpoint)
     task = getattr(details, "task", None)
     try:
@@ -456,19 +412,18 @@ def send_probe(
             workspace,
             endpoint,
             task=str(task or ""),
-            prompt=(
-                "Capability exact-proof check. Reply with a one-sentence acknowledgement "
-                "for Mortgage Intelligence Platform AI Gateway logging."
-            ),
+            prompt=_TOOL_PROBE_PROMPT,
             client_request_id=client_request_id,
+            max_tokens=128,
+            return_trace=True,
         )
     except Exception as exc:  # noqa: BLE001 - timeout/503 is an ambiguous submission result
         if _is_cold_start_error(exc):
-            print(
-                "[ai-gateway-proof] exact probe submission unresolved after one request; "
-                f"left pending proof_id={proof.proof_id}"
-            )
-            return proof
+            _mark_proof_failed_if_pending(lakebase, proof)
+            raise RuntimeError(
+                "exact probe submission was ambiguous and cannot become proof; "
+                "retry with a new request id"
+            ) from exc
         _mark_proof_failed_if_pending(lakebase, proof)
         raise
 
@@ -476,6 +431,15 @@ def send_probe(
         _mark_proof_failed_if_pending(lakebase, proof)
         raise RuntimeError(
             "Configured AI Gateway Responses endpoint did not return a terminal completed payload"
+        )
+    if not response_proves_build_cohort_tool(
+        execution.response,
+        expected_count=expected_tool_count,
+        expected_tool_name=expected_tool_name,
+    ):
+        _mark_proof_failed_if_pending(lakebase, proof)
+        raise RuntimeError(
+            "Configured AI Gateway response did not prove reviewed fn_build_cohort execution"
         )
     print(f"[ai-gateway-proof] sent probe proof_id={proof.proof_id}")
     return proof
@@ -490,26 +454,17 @@ def verify_pending(
     inference_table: str,
     limit: int,
 ) -> list[AiGatewayVerifiedProof]:
+    """Fail interrupted pending rows; only an in-process trace-verified send may promote."""
+
     verified: list[AiGatewayVerifiedProof] = []
     for proof in list_pending_proofs(lakebase, git_sha=git_sha, limit=limit):
         if proof.endpoint_name != endpoint or proof.inference_table != inference_table:
             continue
-        check = _check_exact_inference_row(sql_client, proof)
-        if check.outcome == "verified":
-            updated = _mark_proof_verified_if_pending(lakebase, proof)
-            if updated is None:
-                continue
+        if _mark_proof_failed_if_pending(lakebase, proof):
             print(
-                "[ai-gateway-proof] verified pending "
-                f"proof_id={updated.proof_id} latency_s={updated.verify_latency_s:.1f}"
+                "[ai-gateway-proof] rejected interrupted pending proof without durable "
+                f"tool-trace attestation proof_id={proof.proof_id}"
             )
-            verified.append(updated)
-        elif check.outcome == "failed":
-            if _mark_proof_failed_if_pending(lakebase, proof):
-                print(
-                    "[ai-gateway-proof] rejected deterministic inference evidence; "
-                    f"marked failed proof_id={proof.proof_id} reason={check.reason}"
-                )
     return verified
 
 
@@ -541,9 +496,10 @@ def wait_for_exact_row(
             )
             return []
         if time.monotonic() >= deadline:
+            _mark_proof_failed_if_pending(lakebase, proof)
             print(
                 "[ai-gateway-proof] exact row not visible before timeout; "
-                f"left pending proof_id={proof.proof_id}"
+                f"marked failed proof_id={proof.proof_id}"
             )
             return []
         time.sleep(interval_s)

@@ -15,6 +15,7 @@ DDL = Path("sql/ddl/001_catalogs_schemas.sql").read_text(encoding="utf-8")
 LAKEBASE_SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
 DEPLOY = Path("scripts/deploy.sh").read_text(encoding="utf-8")
+ROLLBACK = Path("tools/databricks/app_deployment_rollback.py").read_text(encoding="utf-8")
 GRANTS = Path("docs/security/GRANTS.md").read_text(encoding="utf-8")
 LIVE_IDEMPOTENCY = Path("tests/integration/test_lakebase_idempotency_live.py").read_text(
     encoding="utf-8"
@@ -53,7 +54,8 @@ def test_deploy_grants_and_postflights_exact_app_table_privileges() -> None:
     exact_table = "${_GRANTS_CATALOG}.audit.campaign_treatment_snapshot"
     assert "tools.databricks.converge_campaign_treatment_access" in DEPLOY
     assert "--mode quiesce" in DEPLOY
-    assert "--mode runtime" in DEPLOY
+    assert 'mode="runtime"' in ROLLBACK
+    assert "atomically restore treatment authority and persist the last-good App contract" in DEPLOY
     assert f"GRANT SELECT, MODIFY ON TABLE {exact_table} TO \\`" not in DEPLOY
     assert f"SHOW TBLPROPERTIES {exact_table}" in DEPLOY
     assert '"delta.appendOnly": "true"' in DEPLOY

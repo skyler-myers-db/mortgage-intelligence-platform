@@ -254,6 +254,75 @@ def assert_non_admin_service_principal(
         )
 
 
+def assert_agent_runtime_infrastructure_isolation(
+    client: Any,
+    *,
+    instance_name: str,
+    application_id: str,
+    effective_group_names: set[str],
+) -> None:
+    """Reject Lakebase roles on every visible instance and SQL access."""
+
+    del instance_name  # Compatibility-only: isolation is workspace-global.
+    assert_lakebase_role_scope(
+        client,
+        application_id=application_id,
+        allowed_instance_names=set(),
+        identity_role="agent_runtime",
+    )
+
+    from tools.databricks.warehouse_acl import assert_no_warehouse_access
+
+    assert_no_warehouse_access(
+        client,
+        service_principal=application_id,
+        effective_group_names=effective_group_names,
+    )
+
+
+def assert_lakebase_role_scope(
+    client: Any,
+    *,
+    application_id: str,
+    allowed_instance_names: set[str],
+    identity_role: str,
+) -> None:
+    """Reject an identity role on every Lakebase instance outside its scope."""
+
+    try:
+        instances = list(client.database.list_database_instances())
+    except Exception as exc:  # noqa: BLE001
+        raise wrap_admin_error(exc, step="list Lakebase instances") from exc
+    seen_instances: set[str] = set()
+    for instance in instances:
+        name = str(
+            (instance.get("name") if isinstance(instance, dict) else getattr(instance, "name", ""))
+            or ""
+        ).strip()
+        if not name:
+            raise SystemExit("Cannot audit Lakebase isolation: a visible instance has no name")
+        if name in seen_instances:
+            raise SystemExit(f"Cannot audit Lakebase isolation: duplicate instance {name!r}")
+        seen_instances.add(name)
+        try:
+            roles = list(client.database.list_database_instance_roles(name))
+        except Exception as exc:  # noqa: BLE001
+            raise wrap_admin_error(exc, step=f"audit Lakebase roles on {name}") from exc
+        has_role = any(
+            str(
+                (role.get("name") if isinstance(role, dict) else getattr(role, "name", ""))
+                or ""
+            )
+            == application_id
+            for role in roles
+        )
+        if has_role and name not in allowed_instance_names:
+            raise SystemExit(
+                f"{identity_role} service principal has forbidden Lakebase role "
+                f"{application_id!r} on instance {name!r}; remove it before deployment"
+            )
+
+
 def assert_no_app_permission(
     client: Any,
     *,
@@ -261,30 +330,55 @@ def assert_no_app_permission(
     sp_application_id: str,
     sp_display_name: str,
     effective_group_names: set[str],
+    identity_role: str = "verifier",
 ) -> None:
-    """Fail closed on any direct, inherited, or group-derived App access."""
+    """Fail closed on App access across every workspace-visible App.
+
+    ``app_name`` remains in the public signature for compatibility. It names
+    the reviewed product App in diagnostics; it does not narrow the audit.
+    """
+
+    del app_name
     try:
-        permissions = client.apps.get_permissions(app_name)
+        apps = list(client.apps.list())
     except Exception as exc:  # noqa: BLE001
-        raise wrap_admin_error(exc, step="inspect app permissions") from exc
-    for entry in getattr(permissions, "access_control_list", None) or []:
-        service_principal_name = str(getattr(entry, "service_principal_name", "") or "").strip()
-        entry_display_name = str(getattr(entry, "display_name", "") or "").strip()
-        group_name = str(getattr(entry, "group_name", "") or "").strip()
-        if service_principal_name in {sp_application_id, sp_display_name} or (
-            not service_principal_name and not group_name and entry_display_name == sp_display_name
-        ):
-            raise SystemExit(
-                "verifier service principal retains forbidden direct Databricks App "
-                f"permission on {app_name!r}, including inherited/effective permissions; "
-                "remove it before provisioning"
-            )
-        if group_name and group_name in effective_group_names:
-            raise SystemExit(
-                "verifier service principal retains forbidden effective Databricks App "
-                f"permission on {app_name!r} through group {group_name!r}; remove the group "
-                "grant or membership before provisioning"
-            )
+        raise wrap_admin_error(exc, step="list workspace Apps") from exc
+    seen_apps: set[str] = set()
+    for app in apps:
+        visible_name = str(
+            (app.get("name") if isinstance(app, dict) else getattr(app, "name", "")) or ""
+        ).strip()
+        if not visible_name:
+            raise SystemExit("Cannot audit App isolation: a visible App has no name")
+        if visible_name in seen_apps:
+            raise SystemExit(f"Cannot audit App isolation: duplicate App {visible_name!r}")
+        seen_apps.add(visible_name)
+        try:
+            permissions = client.apps.get_permissions(visible_name)
+        except Exception as exc:  # noqa: BLE001
+            raise wrap_admin_error(exc, step="inspect app permissions") from exc
+        for entry in getattr(permissions, "access_control_list", None) or []:
+            service_principal_name = str(
+                getattr(entry, "service_principal_name", "") or ""
+            ).strip()
+            entry_display_name = str(getattr(entry, "display_name", "") or "").strip()
+            group_name = str(getattr(entry, "group_name", "") or "").strip()
+            if service_principal_name in {sp_application_id, sp_display_name} or (
+                not service_principal_name
+                and not group_name
+                and entry_display_name == sp_display_name
+            ):
+                raise SystemExit(
+                    f"{identity_role} service principal retains forbidden direct "
+                    f"Databricks App permission on {visible_name!r}, including "
+                    "inherited/effective permissions; remove it before provisioning"
+                )
+            if group_name and group_name in effective_group_names:
+                raise SystemExit(
+                    f"{identity_role} service principal retains forbidden effective "
+                    f"Databricks App permission on {visible_name!r} through group "
+                    f"{group_name!r}; remove the group grant or membership before provisioning"
+                )
 
 
 def grant_can_query_on_endpoint(

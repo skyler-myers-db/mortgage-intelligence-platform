@@ -41,9 +41,29 @@ The Lakebase Postgres role is different: it is exactly the app resource's
 `service_principal_client_id` returned by `databricks apps get mip-app` /
 `WorkspaceClient().apps.get("mip-app")`. App names, service-principal display
 names, and numeric ids are not accepted as Lakebase role substitutes.
-Live automation has separate normal, admin, and AI Gateway verifier service
-principals. Only the admin principal is a member of `mip-admin`; the verifier is
-not app-admin and uses its OAuth application/client id as its Lakebase role.
+Live automation has separate normal, admin, AI Gateway verifier, and
+agent-runtime service principals. Only the admin principal is a member of
+`mip-admin`; the verifier is not app-admin and uses its OAuth application/client
+id as its Lakebase role. The agent runtime owns the managed Supervisor, outer
+Gateway endpoint, registered proxy model, MLflow experiment, and the exact
+inference tables Databricks creates for that endpoint. It has no App, Lakebase,
+warehouse, admin-group, campaign, borrower-table, or unrelated audit-table
+access.
+Deployment proves that negative claim globally: runtime-credentialed UC checks
+walk every effective catalog child, while an exact principal-pinned workspace
+admin enumerates all Apps, Lakebase instances, Genie spaces, and
+customer-created serving endpoints. ID-less, creator-less Databricks
+`system.ai` foundation endpoints are covered by the fixed UC system-model
+inventory rather than treated as customer serving ACLs. Runtime
+may hold exact direct `CAN_MANAGE` only on its reviewed green endpoints (and a
+pinned runtime-owned blue endpoint during cutover) plus exact direct `CAN_RUN`
+on the reviewed Genie space; verifier may hold exact direct `CAN_QUERY` only on
+the reviewed Gateway. Any unrelated, inherited, group-derived, or broader
+access fails closed, and the endpoint audits repeat after blue retirement.
+The App authenticates the deployer-signed exact resource envelope and inspects
+only the outer Gateway it can query; it never receives direct Supervisor,
+registered-model, or experiment permissions. The runtime-owned proxy performs
+the full private-resource and ACL proof before each inference.
 
 **Companion docs.** [`docs/se-onboarding.md`](../se-onboarding.md) is the
 end-to-end walkthrough; this file is the "grants reference" it links
@@ -89,8 +109,14 @@ rollout. The source-controlled App baseline carries
 `MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED=0`; the failure trap is armed before
 the existing App is inspected or quiesced; and the App remains read-only while
 constraints, table properties, ownership, and effective privileges converge.
-Only a promoted App snapshot carries marker `1`, and exact runtime `MODIFY` is
-restored after that promotion. A later failure must prove the App stopped; if
+Only a promoted App snapshot carries marker `1`. After green health and
+hosted-tool proof, the signed last-good record is persisted and verified while
+runtime `MODIFY` remains quiesced. Capture then restores exact treatment access
+and repeats App, resource, health, and signed-lease verification. The protected
+workspace lease binds the active deployment UUID into both payload and health;
+it renews continuously and is never auto-replaced merely because its signed TTL
+elapsed. Any persistence, lease, or active/pending-deployment drift immediately
+re-quiesces treatment authority. A later failure must prove the App stopped; if
 that proof fails, deployment also attempts treatment-write quiescence and exits
 with a dedicated compensation failure instead of reporting the original step
 as the complete failure state.
@@ -203,13 +229,21 @@ The `refresh_run_state` read fails silently and every gold table's
 GRANT USE CATALOG ON CATALOG mip TO `mip-app`;
 GRANT USE SCHEMA ON SCHEMA mip.audit TO `mip-app`;
 GRANT SELECT, MODIFY ON TABLE mip.audit.campaign_treatment_snapshot TO `mip-app`;
--- Table prefix comes from MIP_AI_GATEWAY_INFERENCE_TABLE. The default
--- provisioner value is mip.audit.mip_agent_gateway_growth_agent, which usually
--- materializes at least mip.audit.mip_agent_gateway_growth_agent_payload.
-GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload TO `mip-app`;
+-- Substitute only the exact contract-hashed payload table discovered by
+-- grant_ai_gateway_inference_table.py; never grant a fixed or family-wide name.
+GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload TO `mip-app`;
 GRANT USE CATALOG ON CATALOG mip TO `verifier-client-id`;
 GRANT USE SCHEMA ON SCHEMA mip.audit TO `verifier-client-id`;
-GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload TO `verifier-client-id`;
+GRANT SELECT ON TABLE mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload TO `verifier-client-id`;
+GRANT USE CATALOG ON CATALOG mip TO `agent-runtime-client-id`;
+GRANT USE SCHEMA ON SCHEMA mip.gold TO `agent-runtime-client-id`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_build_cohort TO `agent-runtime-client-id`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_segment_counts TO `agent-runtime-client-id`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `agent-runtime-client-id`;
+GRANT USE SCHEMA ON SCHEMA mip.audit TO `agent-runtime-client-id`;
+-- Bootstrap-only; deploy.sh revokes both on EXIT after exact resource convergence.
+GRANT CREATE MODEL ON SCHEMA mip.audit TO `agent-runtime-client-id`;
+GRANT CREATE TABLE ON SCHEMA mip.audit TO `agent-runtime-client-id`;
 ```
 
 **Objects covered.** The runtime app receives `SELECT, MODIFY` on the single
@@ -227,7 +261,9 @@ live staging drill before claiming this boundary is deployable.
 
 All other audit access is limited to the MIP-owned AI Gateway inference-log tables
 whose names match the configured prefix `MIP_AI_GATEWAY_INFERENCE_TABLE`
-(default prefix `mip.audit.mip_agent_gateway_growth_agent`). `scripts/deploy.sh`
+(generated prefix
+`<catalog>.audit.mip_agent_gateway_growth_agent_<resource-hash-12>`).
+`scripts/deploy.sh`
 runs `tools/databricks/grant_ai_gateway_inference_table.py` after AI
 Gateway provisioning to discover the concrete prefixed table names and grant
 `SELECT` on those tables only to both the runtime app and dedicated verifier.
@@ -236,6 +272,50 @@ converges `CAN_QUERY` on the configured serving endpoint. Both identities need
 the catalog's non-data-bearing `USE CATALOG` privilege before `USE SCHEMA` and
 table-scoped `SELECT` can take effect; neither identity gets schema-wide table
 reads.
+
+The fifth agent-runtime identity receives no explicit inference-table grant,
+but Databricks makes the endpoint creator the owner of its inference tables;
+ownership necessarily includes read and write capabilities on those exact
+payload tables. This is not treated as isolation from payloads the same runtime
+already processes in flight. The boundary instead forbids every unrelated
+audit table, borrower table, Lakebase role, warehouse grant, App permission,
+and admin membership. The deploy script re-audits those exclusions, proves
+direct Genie `CAN_RUN`, exact UC-function `EXECUTE`, and runtime creator fields.
+Temporary schema-level creation privileges are revoked before App promotion
+and by EXIT compensation after any failed run.
+Each deploy also audits that the runtime has no Lakebase role or effective SQL
+warehouse ACL, then runs credentialed negative probes proving App HTTP,
+App-permission administration, service-principal secret listing, and warehouse
+statement execution are denied. The exact Supervisor definition/tools and
+declared MLflow resources bound into the source hash are the runtime's only
+governed data paths.
+
+The Unity Catalog postflight is a runtime-credentialed, workspace-global
+visibility inventory. It authenticates as the dedicated agent runtime (never
+as the deployer), uses `include_browse` listings plus the authoritative Grants
+`get_effective` API, and reads every response page. A direct or inherited grant
+on a non-MIP child makes that catalog/schema/object visible to the runtime and
+therefore fails the release gate even when the runtime lacks `USE CATALOG`.
+Bounded parallel catalog walks keep this exact check practical without relying
+on a deployer whose inventory may be incomplete. Registered models are listed
+globally because the Databricks SDK rejects catalog-only model listings without
+a schema.
+
+The data-plane allowlist is `USE CATALOG` on MIP, `USE SCHEMA` on `gold` and
+`audit`, `EXECUTE` on the three reviewed functions, runtime ownership of the
+exact signed proxy-model family and contract-hashed inference-table families,
+and the documented metastore `USE_MARKETPLACE_ASSETS` baseline. Non-MIP
+exceptions are source- and inheritance-bound: the fixed Databricks-managed
+`system` schema/function/model inventory, the `System user`-owned `samples`
+catalog, direct `account users` metadata access to each catalog's fixed
+`information_schema` table set. New system models or metadata tables fail until
+reviewed. Even metadata-only `BROWSE`, and all `SELECT`, `MODIFY`, `MANAGE`, or
+creation authority inherited from `account users` on an ordinary customer
+catalog, fails the gate unless added to this fixed platform inventory after
+review; an identical action granted directly to the runtime also fails because
+the verifier preserves the principal and inheritance origin for every
+effective action. Shares and clean rooms still require separate governance
+because they are not catalog children.
 
 **What breaks if missing.** The AI Gateway capability row remains
 `configured` / non-claimable because the deployment verifier cannot mark a
@@ -251,9 +331,10 @@ the exact treatment-table grant above plus Gateway-prefix `SELECT`, while the
 verifier has only Gateway-prefix `SELECT`. The verifier must fail its identity
 boundary if `campaign_treatment_snapshot` is visible, must not join `mip-admin`,
 and the runtime app must not write the Lakebase proof ledger. The verifier
-boundary also rejects metastore privileges and any direct, inherited, or
-hidden-group privilege/ownership on non-target catalogs or schemas, including
-empty containers that would not appear in a table scan.
+boundary also rejects forbidden metastore privileges and any direct, inherited,
+or hidden-group privilege/ownership on non-target schemas and securables inside
+the complete MIP product catalog, including empty containers that would not
+appear in a table-only scan.
 
 ---
 
@@ -551,7 +632,8 @@ SHOW GRANTS `mip-app` ON CATALOG mip;
 SHOW GRANTS `mip-app` ON SCHEMA mip.gold;
 SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
 SHOW GRANTS `mip-app` ON SCHEMA mip.audit;
-SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_growth_agent_payload;
+-- Substitute the exact generated table printed by the grant postflight.
+SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload;
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.public;
 
 -- Cotality share (catalog name depends on customer) -- ETL/deploy identity only
@@ -563,7 +645,7 @@ SHOW GRANTS ON WAREHOUSE `mip_serverless_sql`;
 -- Concrete round-trip
 SELECT COUNT(*) FROM mip.gold.borrower_360;     -- expect > 0 after refresh
 SELECT COUNT(*) FROM mip.ref.offer_rules_config; -- expect > 0 after seed
-SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_growth_agent_payload
+SELECT COUNT(*) FROM mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload
 WHERE client_request_id LIKE 'mip-capability-%'; -- expect > 0 after live capability probe
 -- Optional ETL-only proof; run as `sp-mip-etl`, not `mip-app`.
 SELECT COUNT(*) FROM mip.silver.property_master;

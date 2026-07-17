@@ -170,3 +170,25 @@ def converge_exact_can_use(
             f"exact least-privilege CAN_USE postflight failed on warehouse {target!r}; "
             "remove inherited group access before retrying"
         )
+
+
+def assert_no_warehouse_access(
+    client: Any,
+    *,
+    service_principal: str,
+    effective_group_names: set[str],
+) -> None:
+    """Reject direct or group-derived access to every workspace warehouse."""
+
+    for warehouse in client.warehouses.list():
+        warehouse_id = _warehouse_id(warehouse)
+        permissions = client.warehouses.get_permissions(warehouse_id)
+        entry = _principal_entry(permissions, service_principal)
+        group_access = _group_access(
+            permissions,
+            effective_group_names=effective_group_names,
+        )
+        if (entry is not None and _effective_level(entry) is not None) or group_access is not None:
+            raise RuntimeError(
+                f"agent-runtime retains effective SQL warehouse access on {warehouse_id!r}"
+            )

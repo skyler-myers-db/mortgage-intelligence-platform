@@ -32,6 +32,11 @@ the code under review changes app, bundle, job, SQL, or frontend behavior. The
 workflow has a single non-cancelling concurrency lane (`mip-dev-deploy`) because
 parallel deploys overlap expensive refresh jobs and app promotion.
 
+The `rebase_unverified_app` input is a one-time adoption control, defaulting to
+false. Select it only when the existing dev App predates the signed server-owned
+rollback record; that run stops the unverified App and must prove/capture a new
+green contract before service resumes. Routine roll-forwards leave it false.
+
 ---
 
 ## Required repo secrets (dev deploy and live validation)
@@ -44,12 +49,14 @@ var.
 | Secret | What it is | How to obtain |
 |---|---|---|
 | `DATABRICKS_HOST` | Workspace URL (e.g. `https://<id>.cloud.databricks.com`). | Databricks UI → workspace URL in browser address bar. |
-| `DATABRICKS_TOKEN` | Personal Access Token with permissions to read `mip.*` and run statements on the dev warehouse. It is not treated as an app-admin token. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Rotate every 90 days (see `docs/runbook.md` §5). |
+| `DATABRICKS_TOKEN` | Workspace-admin Personal Access Token used as the principal-pinned full-inventory/deployment authority. It is not reused as an app bearer or treated as the product app-admin identity. | Databricks UI → User Settings → Developer → Access Tokens → Generate new token. Confirm `current-user me` contains the `admins` group; rotate every 90 days (see `docs/runbook.md` §5). |
 | `DATABRICKS_WAREHOUSE_ID` | ID of the dev serverless SQL warehouse. Same value `databricks bundle validate` resolves from `databricks.yml`. | Databricks UI → SQL Warehouses → click the warehouse → copy from URL or Connection Details. |
 | `GENIE_SPACE_ID` | Mortgage Lead Intelligence Genie Space ID. | Databricks UI → Genie → open the space → copy ID from URL. Also tracked at `genie/space_id.txt`. |
 | `DATABRICKS_CLIENT_ID` | Non-admin service-principal OAuth client ID used by deployed Playwright and the non-admin RBAC smoke. | Provision with `tools/databricks/provision_m2m_oauth.py` or `docs/security/m2m-oauth-setup.md`. |
-| `DATABRICKS_ACCOUNT_ID` | Databricks account UUID used by the manual live gate to prove the verifier cannot enumerate account service principals. | Copy from the Databricks account console; this is an identifier, not a credential. |
-| `DATABRICKS_ACCOUNT_HOST` | Databricks account-console host for the verifier's read-only account-admin denial probe. | Optional on AWS (`https://accounts.cloud.databricks.com` is the workflow default); set explicitly for another cloud. |
+| `DATABRICKS_ACCOUNT_ID` | Databricks account UUID used by deploy identity proof and the verifier's account-admin denial probe. | Copy from the Databricks account console; this is an identifier, not a credential. |
+| `DATABRICKS_ACCOUNT_HOST` | Databricks account-console host for exact SCIM identity proof and the verifier's read-only account-admin denial probe. | Optional on AWS (`https://accounts.cloud.databricks.com` is the workflow default); set explicitly for another cloud. |
+| `DATABRICKS_ACCOUNT_CLIENT_ID` | Dedicated account-SCIM OAuth client used to inspect exact service-principal identity/roles. | Must differ from the App, operator, admin, verifier, and agent-runtime clients. Deployment fails before mutation if absent. |
+| `DATABRICKS_ACCOUNT_CLIENT_SECRET` | Secret for the dedicated account-SCIM OAuth client. | Used only by the bounded identity/role verifier; workspace PAT credentials are never reused. |
 | `DATABRICKS_CLIENT_SECRET` | Secret for the non-admin OAuth client. Live validation fails if this is absent; it must not fall back to the admin PAT. | Rotate with the same cadence as the workspace token. |
 | `DATABRICKS_OPERATOR2_CLIENT_ID` | Dedicated second non-admin operator client ID for the live per-actor recovery/isolation proof. | Must differ from the normal, admin, and verifier client IDs. Provision with `--identity-role operator2`. |
 | `DATABRICKS_OPERATOR2_CLIENT_SECRET` | Secret for the second non-admin operator OAuth client. | Used only to mint the short-lived `MIP_OPERATOR2_BEARER_TOKEN` in the on-demand live gate. |
@@ -57,7 +64,13 @@ var.
 | `DATABRICKS_ADMIN_CLIENT_SECRET` | Secret for the dedicated app-admin OAuth client. | The workflow mints a fresh `MIP_ADMIN_BEARER_TOKEN`; no bearer is stored as a repository secret. |
 | `DATABRICKS_VERIFIER_CLIENT_ID` | Dedicated AI Gateway verifier service-principal OAuth client ID. | Must have no App permission or admin membership. |
 | `DATABRICKS_VERIFIER_CLIENT_SECRET` | Secret for the dedicated AI Gateway verifier OAuth client. | Used only for exact inference-row and verifier-identity proof. |
-| `MIP_AI_GATEWAY_PROOF_SIGNING_KEY` | Ed25519 private signing key for exact Gateway proof attestations. | Store only in deploy/nightly automation; the App receives only the derived public verification key. |
+| `DATABRICKS_AGENT_RUNTIME_CLIENT_ID` | Dedicated runtime-owner service-principal application ID. | Owns only the reviewed Supervisor, Gateway, model, and per-runtime MLflow experiment; it must have no App, Lakebase, or warehouse access. |
+| `DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET` | Secret for the isolated runtime-owner OAuth client. | Exposed only to allowlisted provisioning/verification subprocesses and never to the App. |
+| `MIP_AI_GATEWAY_PROOF_SIGNING_KEY` | Ed25519 private signing key for exact inference-row, App rollback, and destructive cutover-journal attestations. | Store only in deploy/verifier automation. The App and agent runtime receive only the derived public key; neither receives this private key. |
+| `MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY` | Optional prior proof/rollback Ed25519 public key during a bounded rotation. | Remove after every signed App and exact-proof record has converged to the current key. Never store a prior private key. |
+| `MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY` | Independent Ed25519 private key for immutable proxy-model registration attestations. | Must differ from `MIP_AI_GATEWAY_PROOF_SIGNING_KEY`. Expose it only to the bounded runtime-owner model-registration command. |
+| `MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY` | Public Ed25519 verification key derived from the model-attestation signing key. | Store as a GitHub Actions variable; nightly read-only jobs must never receive the private signing key. |
+| `MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY` | Optional prior model-attestation public key during a bounded model-key rotation. | Keep it while any retained non-candidate model remains signed by that epoch. Deploy allocates a distinct current-key green family and never rewrites retained model tags. |
 
 The Gateway endpoint, Agent Model version, managed Supervisor identity, and
 inference table are not repository secrets. Live validation discovers them
@@ -78,6 +91,17 @@ app-admin access to the Databricks PAT owner.
 |---|---|---|
 | `MIP_ADMIN_EMAILS` | Comma-separated app-admin email allowlist for the dev app. | Use when a named operator must access `/api/v1/admin/*`. |
 | `MIP_ADMIN_GROUP_NAME` | Optional local/test compatibility group name. | Deployed automation uses the exact `MIP_ADMIN_IDENTITIES` value derived from `DATABRICKS_ADMIN_CLIENT_ID`; group headers are not authoritative in sandbox/production. |
+| `MIP_DEFAULT_CATALOG` | Target Unity Catalog name. | Defaults to `mip`; deploy and every nightly proof/render step use the same value. |
+
+Optional non-secret Gateway family variables are `MIP_AI_GATEWAY_AGENT_MODEL_FAMILY`
+(default `<catalog>.audit.mortgage_growth_supervisor_proxy`),
+`MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE` (default
+`mip-agent-runtime-gateway-proxy`), and `MIP_AI_GATEWAY_TABLE_PREFIX` (default
+`mip_agent_gateway_growth_agent`). The experiment value is a family name, not
+a `/Shared` path. Provisioning derives the runtime-owned `/Users/<runtime-id>/...`
+experiment and contract-hashed endpoint, model, and table-family names. Do not
+store those generated names or their binding/resource digests as secrets; the
+deploy and nightly jobs export and verify them from live immutable resources.
 
 ## Optional secrets (live validation, gated features)
 

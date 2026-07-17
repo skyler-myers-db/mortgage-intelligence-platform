@@ -17,6 +17,7 @@ from tests.fixtures.supervisor_runtime import (
     GATEWAY_ENDPOINT,
     gateway_endpoint_details,
     runtime_settings,
+    supervisor_endpoint_details,
     supervisor_metadata,
 )
 
@@ -231,6 +232,8 @@ class _ApiClient:
 
 class _ServingEndpoints:
     def get(self, endpoint: str):
+        if endpoint != GATEWAY_ENDPOINT:
+            return supervisor_endpoint_details()
         assert endpoint == GATEWAY_ENDPOINT
         return gateway_endpoint_details()
 
