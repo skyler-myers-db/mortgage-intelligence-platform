@@ -8,6 +8,7 @@ import json
 import os
 import re
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from cryptography.exceptions import InvalidSignature
@@ -24,6 +25,45 @@ LEGACY_GATEWAY_ENDPOINT = "mip-agent-gateway"
 DEFAULT_GATEWAY_INFERENCE_TABLE = "mip.audit.mip_agent_gateway_growth_agent"
 GATEWAY_PROXY_SOURCE_HASH_TAG = "mip.proxy_source_hash"
 GATEWAY_UPSTREAM_TAG = "mip.upstream_supervisor_endpoint"
+GATEWAY_MODEL_SOURCE_HASH_TAG = "mip_proxy_source_hash"
+GATEWAY_MODEL_UPSTREAM_TAG = "mip_upstream_supervisor_endpoint"
+GATEWAY_MODEL_CONTRACT_TAG_PREFIX = "mip_proxy_contract_v3_"
+GATEWAY_MODEL_ATTESTATION_ALGORITHM_TAG = f"{GATEWAY_MODEL_CONTRACT_TAG_PREFIX}alg"
+GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG = f"{GATEWAY_MODEL_CONTRACT_TAG_PREFIX}signature"
+GATEWAY_MODEL_ATTESTATION_VERIFY_KEY_TAG = f"{GATEWAY_MODEL_CONTRACT_TAG_PREFIX}verify_key"
+GATEWAY_MODEL_CONTRACT_FIELDS = frozenset(
+    {
+        "catalog",
+        "experiment_base",
+        "full_name",
+        "genie_space_id",
+        "inference_schema",
+        "inference_table_prefix",
+        "model_family",
+        "model_source",
+        "runtime_application_id",
+        "source_hash",
+        "supervisor_endpoint_id",
+        "supervisor_id",
+        "upstream_endpoint",
+    }
+)
+GATEWAY_MODEL_CONTRACT_FIELD_TAGS = {
+    **{
+        field: f"{GATEWAY_MODEL_CONTRACT_TAG_PREFIX}{field}"
+        for field in GATEWAY_MODEL_CONTRACT_FIELDS - {"source_hash", "upstream_endpoint"}
+    },
+    "source_hash": GATEWAY_MODEL_SOURCE_HASH_TAG,
+    "upstream_endpoint": GATEWAY_MODEL_UPSTREAM_TAG,
+}
+GATEWAY_MODEL_CANONICAL_TAGS = frozenset(
+    {
+        *GATEWAY_MODEL_CONTRACT_FIELD_TAGS.values(),
+        GATEWAY_MODEL_ATTESTATION_ALGORITHM_TAG,
+        GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG,
+        GATEWAY_MODEL_ATTESTATION_VERIFY_KEY_TAG,
+    }
+)
 GATEWAY_MODEL_REQUIREMENTS = (
     "mlflow==3.14.0",
     "databricks-sdk==0.103.0",
@@ -107,6 +147,61 @@ _GATEWAY_RUNTIME_RESOURCE_FIELDS = frozenset(
     }
 )
 _UC_IDENTIFIER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*\Z")
+
+
+@dataclass(frozen=True)
+class GatewayModelVersionTags:
+    """Resolved signed model contract from exactly one storage schema."""
+
+    contract: Mapping[str, str]
+    algorithm: str
+    signature: str
+    verify_key: str
+
+
+def gateway_model_version_tags(tags: Mapping[str, str]) -> GatewayModelVersionTags:
+    """Resolve the complete canonical model-version tag epoch.
+
+    Serving Endpoint tags retain their dotted keys. Unity Catalog model-version
+    tags use underscore-only fixed fields because UC rejects dotted keys and
+    values over 256 characters. The dotted model encoding never shipped;
+    incomplete, mixed, dotted, and extra fields therefore fail closed.
+    """
+
+    if any(not isinstance(key, str) or not isinstance(value, str) for key, value in tags.items()):
+        raise RuntimeError("Gateway model contract attestation envelope tag scheme is invalid")
+    normalized = dict(tags)
+    required_tags = GATEWAY_MODEL_CANONICAL_TAGS
+    if set(normalized) != required_tags or any(
+        not normalized[key]
+        or normalized[key] != normalized[key].strip()
+        or len(normalized[key]) > 256
+        for key in required_tags
+    ):
+        raise RuntimeError("Gateway model contract attestation envelope tag scheme is invalid")
+    return GatewayModelVersionTags(
+        contract={
+            field: normalized[tag] for field, tag in GATEWAY_MODEL_CONTRACT_FIELD_TAGS.items()
+        },
+        algorithm=normalized[GATEWAY_MODEL_ATTESTATION_ALGORITHM_TAG],
+        signature=normalized[GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG],
+        verify_key=normalized[GATEWAY_MODEL_ATTESTATION_VERIFY_KEY_TAG],
+    )
+
+
+def decode_gateway_attestation_base64(value: str, *, length: int) -> bytes:
+    """Decode one canonical unpadded URL-safe attestation value."""
+
+    if re.fullmatch(r"[A-Za-z0-9_-]+", value) is None:
+        raise RuntimeError("Gateway attestation base64 value is invalid")
+    try:
+        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Gateway attestation base64 value is invalid") from exc
+    canonical = base64.urlsafe_b64encode(decoded).decode("ascii").rstrip("=")
+    if len(decoded) != length or canonical != value:
+        raise RuntimeError("Gateway attestation base64 value is invalid")
+    return decoded
 
 
 def _catalog(value: str) -> str:
@@ -299,12 +394,9 @@ def parse_gateway_runtime_resource_contract(value: str) -> dict[str, str]:
 
 def _attestation_key(value: str, *, length: int) -> bytes:
     try:
-        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    except (TypeError, ValueError) as exc:
+        return decode_gateway_attestation_base64(value, length=length)
+    except RuntimeError as exc:
         raise RuntimeError("Gateway runtime resource attestation key is invalid") from exc
-    if len(decoded) != length:
-        raise RuntimeError("Gateway runtime resource attestation key has an invalid length")
-    return decoded
 
 
 def _resource_attestation_payload(contract_json: str) -> bytes:

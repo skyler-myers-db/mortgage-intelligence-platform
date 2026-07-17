@@ -13,6 +13,7 @@ from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_AGENT_EXPERIMENT,
     GATEWAY_BURST_SCALING_ENABLED,
     GATEWAY_ENDPOINT_DESCRIPTION,
+    GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG,
     GATEWAY_PROXY_SOURCE_HASH_TAG,
     GATEWAY_ROUTE_OPTIMIZED,
     GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
@@ -108,6 +109,25 @@ def test_signed_resource_environment_recomputes_canonical_digest(
     assert environment["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"] == (
         gateway_exact_resource_digest(contract)
     )
+
+
+def test_runtime_resource_environment_rejects_noncanonical_base64_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    signing = base64.urlsafe_b64encode(b"r" * 32).decode("ascii").rstrip("=")
+    verify = derive_gateway_proof_verify_key(signing)
+    monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", signing)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", verify)
+    contract = _contract()
+    environment = gateway_runtime_resource_environment(
+        contract,
+        signature=f"{sign_gateway_runtime_resource_contract(contract)}!!!",
+        current_verify_key=verify,
+    )
+
+    with pytest.raises(RuntimeError, match="attestation key is invalid"):
+        verified_gateway_runtime_resource_environment(environment)
 
 
 def test_arbitrary_digest_or_contract_drift_cannot_establish_runtime_trust(
@@ -473,20 +493,19 @@ def test_live_gateway_runtime_resources_reject_endpoint_drift(drift: str) -> Non
         _verify_live(resources)
 
 
-@pytest.mark.parametrize("drift", ["source", "signature"])
+@pytest.mark.parametrize("drift", ["source", "signature", "signature_encoding"])
 def test_live_gateway_runtime_resources_reject_model_drift(drift: str) -> None:
     resources = _live_resources()
     if drift == "source":
         resources.model_version.source = "models:/m-attacker-replacement"
         error = "model-version source contract drifted"
-    else:
-        envelope = json.loads(resources.model_version.tags["mip.proxy_contract_attestation_v3"])
-        envelope["signature"] = base64.urlsafe_b64encode(b"x" * 64).decode().rstrip("=")
-        resources.model_version.tags["mip.proxy_contract_attestation_v3"] = json.dumps(
-            envelope,
-            sort_keys=True,
-            separators=(",", ":"),
+    elif drift == "signature":
+        resources.model_version.tags[GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG] = (
+            base64.urlsafe_b64encode(b"x" * 64).decode().rstrip("=")
         )
+        error = "attestation signature is invalid"
+    else:
+        resources.model_version.tags[GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG] += "!!!"
         error = "attestation signature is invalid"
 
     with pytest.raises(RuntimeError, match=error):

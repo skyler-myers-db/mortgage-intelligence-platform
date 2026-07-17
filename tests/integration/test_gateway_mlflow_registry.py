@@ -6,9 +6,9 @@ from pathlib import Path
 import mlflow
 import pytest
 
+from backend.agents.gateway_contract import GATEWAY_MODEL_CANONICAL_TAGS
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks.gateway_model_attestation import (
-    ATTESTATION_TAG,
     sign_gateway_model_contract,
     verify_gateway_model_contract,
 )
@@ -57,11 +57,7 @@ def test_mlflow_3_14_register_model_persists_atomic_gateway_tags(
             "inference_schema": "audit",
             "inference_table_prefix": "mip_agent_gateway_growth_agent",
         }
-        registration_tags = {
-            "mip.proxy_source_hash": contract["source_hash"],
-            "mip.upstream_supervisor_endpoint": contract["upstream_endpoint"],
-            **sign_gateway_model_contract(**contract),
-        }
+        registration_tags = sign_gateway_model_contract(**contract)
 
         registered = mlflow.register_model(
             model_source,
@@ -73,7 +69,8 @@ def test_mlflow_3_14_register_model_persists_atomic_gateway_tags(
 
         assert exact.source == model_source
         assert exact.tags == registration_tags
-        assert ATTESTATION_TAG in exact.tags
+        assert set(exact.tags) == GATEWAY_MODEL_CANONICAL_TAGS
+        assert all(len(key) <= 256 and len(value) <= 256 for key, value in exact.tags.items())
         assert verify_gateway_model_contract(tags=exact.tags, **contract)
     finally:
         mlflow.set_tracking_uri(original_tracking)

@@ -32,6 +32,77 @@ _PREVIOUS_MODEL_SIGNING_KEY = base64.urlsafe_b64encode(b"p" * 32).decode("ascii"
 _PREVIOUS_MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(_PREVIOUS_MODEL_SIGNING_KEY)
 
 
+def _production_model_tags(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
+    monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    return attestation.sign_gateway_model_contract(
+        full_name="mip.audit.proxy_deadbeef1234",
+        model_source="models:/m-reviewed-proxy",
+        source_hash="a" * 64,
+        supervisor_id=_SUPERVISOR_ID,
+        supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        model_family="mip.audit.proxy",
+        experiment_base="mip-agent-runtime-gateway-proxy",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        inference_schema="audit",
+        inference_table_prefix="mip_agent_gateway_growth_agent",
+    )
+
+
+def test_gateway_model_version_tags_are_within_exact_uc_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tags = _production_model_tags(monkeypatch)
+
+    assert len(tags) == 16
+    assert len(tags) <= gateway._UC_MODEL_VERSION_TAG_LIMIT
+    assert all(gateway._UC_MODEL_VERSION_TAG_KEY.fullmatch(key) for key in tags)
+    assert max(map(len, tags.values())) <= gateway._UC_MODEL_VERSION_TAG_VALUE_LIMIT
+    assert gateway.validated_model_version_tags(tags) == tags
+    assert gateway._UC_MODEL_VERSION_TAG_KEY.fullmatch("a" * 256)
+    assert gateway._UC_MODEL_VERSION_TAG_KEY.fullmatch("a" * 257) is None
+
+
+@pytest.mark.parametrize(
+    "invalid", [".", ",", "-", "=", "/", ":", ">", "<", "%", "&", "?", "\\", " "]
+)
+def test_gateway_model_version_tag_validator_rejects_reserved_key_characters(
+    monkeypatch: pytest.MonkeyPatch,
+    invalid: str,
+) -> None:
+    tags = _production_model_tags(monkeypatch)
+    key, value = tags.popitem()
+    tags[f"{key}{invalid}"] = value
+
+    with pytest.raises(ValueError, match="invalid for Unity Catalog"):
+        gateway.validated_model_version_tags(tags)
+
+
+@pytest.mark.parametrize("value", ["x" * 257, " leading", "trailing ", ""])
+def test_gateway_model_version_tag_validator_rejects_invalid_values(
+    monkeypatch: pytest.MonkeyPatch,
+    value: str,
+) -> None:
+    tags = _production_model_tags(monkeypatch)
+    tags[gateway_contract.GATEWAY_MODEL_CONTRACT_FIELD_TAGS["catalog"]] = value
+
+    with pytest.raises(ValueError, match="invalid for Unity Catalog"):
+        gateway.validated_model_version_tags(tags)
+
+
+def test_gateway_model_version_tag_validator_accepts_256_character_value(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    tags = _production_model_tags(monkeypatch)
+    tags[gateway_contract.GATEWAY_MODEL_CONTRACT_FIELD_TAGS["catalog"]] = "x" * 256
+
+    assert gateway.validated_model_version_tags(tags) == tags
+
+
 def test_gateway_agent_source_hash_binds_code_and_upstream_endpoint() -> None:
     first = gateway_agent_source_hash(
         upstream_endpoint="supervisor-a",
@@ -385,6 +456,37 @@ def _patch_mlflow(monkeypatch, *, client: _Client) -> None:
     monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    for version in client.versions:
+        raw_tags = dict(getattr(version, "tags", None) or {})
+        if set(raw_tags) == gateway.GATEWAY_MODEL_CANONICAL_TAGS:
+            continue
+        source_hash = str(
+            raw_tags.get(gateway.MODEL_SOURCE_HASH_TAG)
+            or raw_tags.get(gateway.SOURCE_HASH_TAG)
+            or ""
+        )
+        upstream = str(
+            raw_tags.get(gateway.MODEL_UPSTREAM_TAG) or raw_tags.get(gateway.UPSTREAM_TAG) or ""
+        )
+        if not source_hash or not upstream:
+            continue
+        canonical_tags = attestation.sign_gateway_model_contract(
+            full_name="mip.audit.test_proxy_deadbeef1234",
+            model_source=str(getattr(version, "source", "models:/m-reviewed") or ""),
+            source_hash=source_hash,
+            supervisor_id=_SUPERVISOR_ID,
+            supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+            upstream_endpoint=upstream,
+            runtime_application_id=_RUNTIME_APPLICATION_ID,
+            model_family="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_base="mip-agent-runtime-gateway-proxy",
+            catalog=_CATALOG,
+            genie_space_id=_GENIE_SPACE_ID,
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+        )
+        version.tags = canonical_tags
+        client.version_tags[str(getattr(version, "version", ""))] = canonical_tags
     monkeypatch.setattr(gateway, "MlflowClient", lambda: client)
     monkeypatch.setattr(gateway.mlflow, "set_tracking_uri", lambda _uri: None)
     monkeypatch.setattr(gateway.mlflow, "set_registry_uri", lambda _uri: None)
@@ -712,11 +814,7 @@ def test_ensure_gateway_agent_creates_one_responses_endpoint_with_exact_gateway_
 
     assert deployment.model_version == 4
     assert deployment.experiment_name.startswith(f"/Users/{_RUNTIME_APPLICATION_ID}/")
-    assert set(client.version_tags["4"]) == {
-        gateway.SOURCE_HASH_TAG,
-        gateway.UPSTREAM_TAG,
-        attestation.ATTESTATION_TAG,
-    }
+    assert set(client.version_tags["4"]) == gateway.GATEWAY_MODEL_CANONICAL_TAGS
     registered_contract = attestation.gateway_model_contract_from_tags(client.version_tags["4"])
     assert registered_contract["full_name"] == deployment.model_name
     assert registered_contract["model_source"] == "models:/m-reviewed-proxy"
@@ -731,6 +829,14 @@ def test_ensure_gateway_agent_creates_one_responses_endpoint_with_exact_gateway_
     assert len(serving.created) == 1
     created = serving.created[0]
     assert created["route_optimized"] is False
+    assert {(tag.key, tag.value) for tag in created["tags"]} == {
+        ("mip.proxy_source_hash", deployment.source_hash),
+        ("mip.upstream_supervisor_endpoint", "managed-supervisor"),
+    }
+    assert gateway.SOURCE_HASH_TAG == "mip.proxy_source_hash"
+    assert gateway.UPSTREAM_TAG == "mip.upstream_supervisor_endpoint"
+    assert gateway.MODEL_SOURCE_HASH_TAG == "mip_proxy_source_hash"
+    assert gateway.MODEL_UPSTREAM_TAG == "mip_upstream_supervisor_endpoint"
     entity = created["config"].served_entities[0]
     assert entity.entity_name == gateway.gateway_agent_model_name(
         base_model_name="mip.audit.mortgage_growth_supervisor_proxy",
@@ -749,6 +855,54 @@ def test_ensure_gateway_agent_creates_one_responses_endpoint_with_exact_gateway_
     )
     assert created["ai_gateway"].rate_limits is None
     assert serving.gateway_updates == []
+
+
+def test_invalid_model_version_tags_fail_before_registration_or_endpoint_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _Client()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-reviewed-proxy"),
+    )
+    monkeypatch.setattr(
+        gateway,
+        "sign_gateway_model_contract",
+        lambda **_kwargs: {"mip.invalid": "invalid"},
+    )
+    registrations: list[object] = []
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda *_args, **_kwargs: registrations.append(object()),
+    )
+    serving = _ServingEndpoints()
+
+    with pytest.raises(ValueError, match="invalid for Unity Catalog"):
+        ensure_gateway_responses_agent(
+            SimpleNamespace(
+                serving_endpoints=serving,
+                registered_models=SimpleNamespace(
+                    get=lambda _name: SimpleNamespace(owner=_RUNTIME_APPLICATION_ID)
+                ),
+            ),
+            endpoint="mip-growth-agent-gateway",
+            endpoint_prefix="mip-growth-agent-gateway",
+            supervisor_id=_SUPERVISOR_ID,
+            upstream_endpoint="managed-supervisor",
+            model_name="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_name="mip-agent-runtime-gateway-proxy",
+            inference_catalog="mip",
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+            genie_space_id=_GENIE_SPACE_ID,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert registrations == []
+    assert serving.created == []
 
 
 def test_ensure_gateway_agent_creates_versioned_green_without_mutating_live_drift(
@@ -1367,11 +1521,7 @@ def test_gateway_agent_postflight_verifies_signed_v2_contract_and_exact_experime
         "inference_schema": "audit",
         "inference_table_prefix": deployment.inference_table_prefix,
     }
-    model_tags = {
-        gateway.SOURCE_HASH_TAG: source_hash,
-        gateway.UPSTREAM_TAG: "managed-supervisor",
-        **attestation.sign_gateway_model_contract(**contract),
-    }
+    model_tags = attestation.sign_gateway_model_contract(**contract)
     model_registry = SimpleNamespace(
         get_model_version=lambda name, version: SimpleNamespace(
             name=name,
@@ -1443,15 +1593,15 @@ def test_gateway_agent_postflight_rejects_rogue_served_model_version_tags() -> N
     details.state = SimpleNamespace(ready="READY")
     details.task = "agent/v1/responses"
     deployment = _exact_deployment(source_hash=source_hash, model_version=7)
+    rogue_tags = {key: "x" for key in gateway.GATEWAY_MODEL_CANONICAL_TAGS}
+    rogue_tags[gateway.MODEL_SOURCE_HASH_TAG] = "b" * 64
+    rogue_tags[gateway.MODEL_UPSTREAM_TAG] = "rogue-supervisor"
     rogue_registry = SimpleNamespace(
         get_model_version=lambda name, version: SimpleNamespace(
             name=name,
             version=version,
             source=deployment.model_source,
-            tags={
-                gateway.SOURCE_HASH_TAG: "b" * 64,
-                gateway.UPSTREAM_TAG: "rogue-supervisor",
-            },
+            tags=rogue_tags,
         )
     )
 

@@ -294,11 +294,16 @@ endpoint ID, runtime application ID, upstream name, Genie space, catalog functio
 experiment family, inference-table family, model name, and immutable MLflow
 logged-model URI/ID (`models:/m-...`). Run, registered-version, and alias URIs
 are rejected because they do not prove the same logged-model identity.
-The `mip.proxy_contract_attestation_v3` envelope is the first governed durable
-schema; the unshipped v2 draft is deliberately not accepted as a compatibility
-format because it did not bind the immutable managed-endpoint ID.
-Registration attaches the complete signed envelope and
-source/upstream tags atomically to the newly created version. Retained
+The v3 signed payload is the first governed durable schema; the unshipped v2
+draft is deliberately not accepted because it did not bind the immutable
+managed-endpoint ID. Unity Catalog model-version metadata stores that payload as
+16 fixed, underscore-only `mip_proxy_*` fields: the 13 contract values plus its
+algorithm, signature, and public verification key. Every key and value is
+validated against Unity Catalog's 256-character limits before registration.
+The earlier dotted single-envelope transport never produced a model version and
+is rejected; dotted tags remain only on the separate Serving Endpoint API.
+Registration attaches the complete signed field set atomically to the newly
+created version. Retained
 historical versions are verified against their own signed source contract, not
 against today's proxy bytes, so a reviewed source upgrade can allocate a new
 blue/green family without making earlier evidence unverifiable. The model

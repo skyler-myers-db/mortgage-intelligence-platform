@@ -9,6 +9,10 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from backend.agents.gateway_contract import (
+    GATEWAY_MODEL_ATTESTATION_ALGORITHM_TAG,
+    GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG,
+    GATEWAY_MODEL_ATTESTATION_VERIFY_KEY_TAG,
+    GATEWAY_MODEL_CONTRACT_FIELD_TAGS,
     GATEWAY_RUNTIME_RESOURCE_ATTESTATION_ALG,
     GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
     canonical_gateway_runtime_resource_contract,
@@ -105,7 +109,7 @@ def signed_gateway_runtime_environment(contract: dict[str, str]) -> dict[str, st
 
 
 def signed_gateway_model_tags(contract: dict[str, str]) -> dict[str, str]:
-    """Return a valid production-shaped model-version attestation tag."""
+    """Return a valid production-shaped UC-safe model-version tag set."""
 
     payload_contract = {**contract, "version": 3}
     payload = b"mip-gateway-model-contract-v3\0" + json.dumps(
@@ -114,16 +118,9 @@ def signed_gateway_model_tags(contract: dict[str, str]) -> dict[str, str]:
         separators=(",", ":"),
     ).encode("utf-8")
     signature = base64.urlsafe_b64encode(_PRIVATE.sign(payload)).decode("ascii").rstrip("=")
-    envelope = {
-        "alg": AI_GATEWAY_PROOF_ATTESTATION_ALG,
-        "contract": contract,
-        "signature": signature,
-        "verify_key": TEST_GATEWAY_VERIFY_KEY,
-    }
     return {
-        "mip.proxy_contract_attestation_v3": json.dumps(
-            envelope,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        **{GATEWAY_MODEL_CONTRACT_FIELD_TAGS[field]: value for field, value in contract.items()},
+        GATEWAY_MODEL_ATTESTATION_ALGORITHM_TAG: AI_GATEWAY_PROOF_ATTESTATION_ALG,
+        GATEWAY_MODEL_ATTESTATION_SIGNATURE_TAG: signature,
+        GATEWAY_MODEL_ATTESTATION_VERIFY_KEY_TAG: TEST_GATEWAY_VERIFY_KEY,
     }

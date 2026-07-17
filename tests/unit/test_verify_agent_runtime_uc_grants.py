@@ -8,8 +8,6 @@ import pytest
 
 from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_AGENT_EXPERIMENT,
-    GATEWAY_PROXY_SOURCE_HASH_TAG,
-    GATEWAY_UPSTREAM_TAG,
 )
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import verify_agent_runtime_uc_grants as verifier
@@ -227,28 +225,21 @@ def _provenance(
     supervisor_endpoint_id: str = SUPERVISOR_ENDPOINT_ID,
     runtime_application_id: str = APPLICATION_ID,
 ) -> dict[str, str]:
-    base = {
-        GATEWAY_PROXY_SOURCE_HASH_TAG: source_hash,
-        GATEWAY_UPSTREAM_TAG: upstream,
-    }
-    base.update(
-        sign_gateway_model_contract(
-            full_name=full_name,
-            model_source=model_source,
-            source_hash=source_hash,
-            supervisor_id=supervisor_id,
-            supervisor_endpoint_id=supervisor_endpoint_id,
-            upstream_endpoint=upstream,
-            runtime_application_id=runtime_application_id,
-            model_family=MODEL_FAMILY,
-            experiment_base=experiment,
-            catalog=CATALOG,
-            genie_space_id=GENIE_SPACE_ID,
-            inference_schema="audit",
-            inference_table_prefix=TABLE_PREFIX,
-        )
+    return sign_gateway_model_contract(
+        full_name=full_name,
+        model_source=model_source,
+        source_hash=source_hash,
+        supervisor_id=supervisor_id,
+        supervisor_endpoint_id=supervisor_endpoint_id,
+        upstream_endpoint=upstream,
+        runtime_application_id=runtime_application_id,
+        model_family=MODEL_FAMILY,
+        experiment_base=experiment,
+        catalog=CATALOG,
+        genie_space_id=GENIE_SPACE_ID,
+        inference_schema="audit",
+        inference_table_prefix=TABLE_PREFIX,
     )
-    return base
 
 
 def _workspace(

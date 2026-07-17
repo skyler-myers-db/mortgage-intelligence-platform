@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import re
 from typing import Any
 
 import mlflow
@@ -16,7 +17,10 @@ from mlflow.models.resources import (
 from backend.agents.gateway_contract import (
     GATEWAY_BURST_SCALING_ENABLED,
     GATEWAY_ENDPOINT_DESCRIPTION,
+    GATEWAY_MODEL_CANONICAL_TAGS,
     GATEWAY_MODEL_REQUIREMENTS,
+    GATEWAY_MODEL_SOURCE_HASH_TAG,
+    GATEWAY_MODEL_UPSTREAM_TAG,
     GATEWAY_PROXY_SOURCE,
     GATEWAY_PROXY_SOURCE_HASH_TAG,
     GATEWAY_ROUTE_OPTIMIZED,
@@ -27,6 +31,7 @@ from backend.agents.gateway_contract import (
     GATEWAY_WORKLOAD_SIZE,
     GATEWAY_WORKLOAD_TYPE,
     gateway_experiment_base,
+    gateway_model_version_tags,
     gateway_resource_allocation_hash,
 )
 from backend.agents.supervisor_contract import supervisor_contract_hash as supervisor_contract_hash
@@ -75,6 +80,8 @@ from tools.databricks.mlflow_responses_packaging import responses_agent_packagin
 AGENT_SOURCE = GATEWAY_PROXY_SOURCE
 SOURCE_HASH_TAG = GATEWAY_PROXY_SOURCE_HASH_TAG
 UPSTREAM_TAG = GATEWAY_UPSTREAM_TAG
+MODEL_SOURCE_HASH_TAG = GATEWAY_MODEL_SOURCE_HASH_TAG
+MODEL_UPSTREAM_TAG = GATEWAY_MODEL_UPSTREAM_TAG
 _STATIC_ENV = GATEWAY_STATIC_ENV
 _MODEL_REQUIREMENTS = GATEWAY_MODEL_REQUIREMENTS
 _MLFLOW_LOG_MODEL = mlflow.pyfunc.log_model
@@ -86,6 +93,29 @@ _BURST_SCALING_ENABLED = GATEWAY_BURST_SCALING_ENABLED
 _ROUTE_OPTIMIZED = GATEWAY_ROUTE_OPTIMIZED
 _TRAFFIC_PERCENTAGE = GATEWAY_TRAFFIC_PERCENTAGE
 _ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
+_UC_MODEL_VERSION_TAG_KEY = re.compile(r"[A-Za-z0-9_]{1,256}\Z")
+_UC_MODEL_VERSION_TAG_LIMIT = 50
+_UC_MODEL_VERSION_TAG_VALUE_LIMIT = 256
+
+
+def validated_model_version_tags(tags: dict[str, str]) -> dict[str, str]:
+    """Reject tag keys that Unity Catalog model versions cannot persist."""
+
+    if len(tags) > _UC_MODEL_VERSION_TAG_LIMIT or set(tags) != GATEWAY_MODEL_CANONICAL_TAGS:
+        raise ValueError("Gateway model version tag set is invalid for Unity Catalog")
+    normalized = dict(tags)
+    if any(
+        not isinstance(key, str)
+        or _UC_MODEL_VERSION_TAG_KEY.fullmatch(key) is None
+        or not isinstance(value, str)
+        or not value
+        or value != value.strip()
+        or len(value) > _UC_MODEL_VERSION_TAG_VALUE_LIMIT
+        for key, value in normalized.items()
+    ):
+        raise ValueError("Gateway model version tag key or value is invalid for Unity Catalog")
+    gateway_model_version_tags(normalized)
+    return normalized
 
 
 def _current_model_version(details: Any, *, model_name: str) -> int | None:
@@ -283,9 +313,10 @@ def _verified_model_version_tags(
     tags = {
         str(key): str(value) for key, value in dict(getattr(version, "tags", None) or {}).items()
     }
+    model_tags = gateway_model_version_tags(tags)
     if (
-        tags.get(SOURCE_HASH_TAG) != deployment.source_hash
-        or tags.get(UPSTREAM_TAG) != deployment.upstream_endpoint
+        model_tags.contract["source_hash"] != deployment.source_hash
+        or model_tags.contract["upstream_endpoint"] != deployment.upstream_endpoint
     ):
         raise RuntimeError(
             "served Gateway Agent Model version tags do not bind its reviewed source"
@@ -596,10 +627,8 @@ def ensure_gateway_responses_agent(
         model_source = str(getattr(logged, "model_uri", "") or "").strip()
         if not model_source:
             raise RuntimeError("logged Gateway model has no immutable model URI")
-        registration_tags = {
-            SOURCE_HASH_TAG: source_hash,
-            UPSTREAM_TAG: upstream_endpoint,
-            **sign_gateway_model_contract(
+        registration_tags = validated_model_version_tags(
+            sign_gateway_model_contract(
                 full_name=versioned_model_name,
                 model_source=model_source,
                 source_hash=source_hash,
@@ -613,8 +642,8 @@ def ensure_gateway_responses_agent(
                 genie_space_id=genie_space_id,
                 inference_schema=inference_schema,
                 inference_table_prefix=inference_table_prefix,
-            ),
-        }
+            )
+        )
         registered = mlflow.register_model(
             model_source,
             versioned_model_name,
@@ -657,9 +686,10 @@ def ensure_gateway_responses_agent(
         raise RuntimeError("Gateway candidate model uses a previous attestation epoch")
     if gateway_model_attestation_record_key(model_version_tags) != attestation_verify_key:
         raise RuntimeError("Gateway candidate model attestation epoch drifted")
+    persisted_model_tags = gateway_model_version_tags(model_version_tags)
     if (
-        model_version_tags.get(SOURCE_HASH_TAG) != source_hash
-        or model_version_tags.get(UPSTREAM_TAG) != upstream_endpoint
+        persisted_model_tags.contract["source_hash"] != source_hash
+        or persisted_model_tags.contract["upstream_endpoint"] != upstream_endpoint
     ):
         raise RuntimeError("Gateway model version source-binding tags are not immutable")
 

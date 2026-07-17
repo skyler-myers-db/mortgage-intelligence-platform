@@ -5,10 +5,7 @@ from __future__ import annotations
 import re
 from typing import Any
 
-from backend.agents.gateway_contract import (
-    GATEWAY_PROXY_SOURCE_HASH_TAG,
-    GATEWAY_UPSTREAM_TAG,
-)
+from backend.agents.gateway_contract import gateway_model_version_tags
 from tools.databricks.gateway_model_attestation import (
     gateway_model_attestation_record_key,
     gateway_model_contract_from_tags,
@@ -41,8 +38,9 @@ def assert_gateway_model_provenance(
         tags = dict(getattr(version, "tags", None) or {})
         version_number = str(getattr(version, "version", None) or "").strip()
         model_source = str(getattr(version, "source", None) or "").strip()
-        source_hash = str(tags.get(GATEWAY_PROXY_SOURCE_HASH_TAG) or "")
-        upstream = str(tags.get(GATEWAY_UPSTREAM_TAG) or "")
+        resolved_tags = gateway_model_version_tags(tags)
+        source_hash = resolved_tags.contract["source_hash"]
+        upstream = resolved_tags.contract["upstream_endpoint"]
         attested_contract = gateway_model_contract_from_tags(tags)
         attested_supervisor_id = attested_contract["supervisor_id"]
         attested_supervisor_endpoint_id = attested_contract["supervisor_endpoint_id"]

@@ -279,11 +279,7 @@ def _model_registry(*, source_hash: str | None = None, upstream: str = _UPSTREAM
         "inference_schema": "audit",
         "inference_table_prefix": "mip_agent_gateway_growth_agent",
     }
-    tags = {
-        GATEWAY_PROXY_SOURCE_HASH_TAG: reviewed_hash,
-        GATEWAY_UPSTREAM_TAG: upstream,
-        **attestation.sign_gateway_model_contract(**contract),
-    }
+    tags = attestation.sign_gateway_model_contract(**contract)
     return SimpleNamespace(
         get_model_version=lambda name, version: SimpleNamespace(
             name=name,

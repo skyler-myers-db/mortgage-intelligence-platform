@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import json
 import re
@@ -18,6 +17,7 @@ try:
     from backend.agents.gateway_contract import (
         GATEWAY_BURST_SCALING_ENABLED,
         GATEWAY_ENDPOINT_DESCRIPTION,
+        GATEWAY_MODEL_CONTRACT_FIELDS,
         GATEWAY_PROXY_SOURCE_HASH_TAG,
         GATEWAY_ROUTE_OPTIMIZED,
         GATEWAY_RUNTIME_RESOURCE_ENV,
@@ -27,6 +27,8 @@ try:
         GATEWAY_UPSTREAM_TAG,
         GATEWAY_WORKLOAD_SIZE,
         GATEWAY_WORKLOAD_TYPE,
+        decode_gateway_attestation_base64,
+        gateway_model_version_tags,
         gateway_proxy_source_hash,
         gateway_resource_allocation_hash,
         verified_gateway_runtime_resource_environment,
@@ -42,6 +44,7 @@ except ModuleNotFoundError:  # MLflow may place backend/ directly on sys.path.
     from agents.gateway_contract import (  # type: ignore[no-redef]
         GATEWAY_BURST_SCALING_ENABLED,
         GATEWAY_ENDPOINT_DESCRIPTION,
+        GATEWAY_MODEL_CONTRACT_FIELDS,
         GATEWAY_PROXY_SOURCE_HASH_TAG,
         GATEWAY_ROUTE_OPTIMIZED,
         GATEWAY_RUNTIME_RESOURCE_ENV,
@@ -51,6 +54,8 @@ except ModuleNotFoundError:  # MLflow may place backend/ directly on sys.path.
         GATEWAY_UPSTREAM_TAG,
         GATEWAY_WORKLOAD_SIZE,
         GATEWAY_WORKLOAD_TYPE,
+        decode_gateway_attestation_base64,
+        gateway_model_version_tags,
         gateway_proxy_source_hash,
         gateway_resource_allocation_hash,
         verified_gateway_runtime_resource_environment,
@@ -63,25 +68,8 @@ except ModuleNotFoundError:  # MLflow may place backend/ directly on sys.path.
         AI_GATEWAY_PROOF_ATTESTATION_ALG,
     )
 
-_MODEL_ATTESTATION_TAG = "mip.proxy_contract_attestation_v3"
 _IMMUTABLE_MODEL_SOURCE = re.compile(r"models:/m-[A-Za-z0-9][A-Za-z0-9_-]*\Z")
-_MODEL_CONTRACT_FIELDS = frozenset(
-    {
-        "catalog",
-        "experiment_base",
-        "full_name",
-        "genie_space_id",
-        "inference_schema",
-        "inference_table_prefix",
-        "model_family",
-        "model_source",
-        "runtime_application_id",
-        "source_hash",
-        "supervisor_endpoint_id",
-        "supervisor_id",
-        "upstream_endpoint",
-    }
-)
+_MODEL_CONTRACT_FIELDS = GATEWAY_MODEL_CONTRACT_FIELDS
 
 
 def _field(value: object, name: str) -> Any:
@@ -107,12 +95,9 @@ def _mapping(value: object, *, resource: str) -> Mapping[str, Any]:
 
 def _decode(value: str, *, length: int) -> bytes:
     try:
-        decoded = base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
-    except (TypeError, ValueError) as exc:
+        return decode_gateway_attestation_base64(value, length=length)
+    except RuntimeError as exc:
         raise RuntimeError("Gateway model attestation is invalid") from exc
-    if len(decoded) != length:
-        raise RuntimeError("Gateway model attestation is invalid")
-    return decoded
 
 
 def _model_payload(contract: Mapping[str, str]) -> bytes:
@@ -128,26 +113,12 @@ def _verify_model_attestation(
     current_verify_key: str,
     previous_verify_key: str,
 ) -> None:
-    try:
-        envelope = json.loads(str(tags.get(_MODEL_ATTESTATION_TAG) or ""))
-    except (TypeError, json.JSONDecodeError) as exc:
-        raise RuntimeError("Gateway model contract attestation envelope is invalid") from exc
-    if not isinstance(envelope, dict) or set(envelope) != {
-        "alg",
-        "contract",
-        "signature",
-        "verify_key",
-    }:
-        raise RuntimeError("Gateway model contract attestation envelope is invalid")
-    contract = envelope.get("contract")
-    if (
-        not isinstance(contract, dict)
-        or set(contract) != _MODEL_CONTRACT_FIELDS
-        or contract != expected
-    ):
+    record = gateway_model_version_tags(tags)
+    contract = dict(record.contract)
+    if set(contract) != _MODEL_CONTRACT_FIELDS or contract != expected:
         raise RuntimeError("Gateway model contract attestation identity is invalid")
-    record_key = str(envelope.get("verify_key") or "").strip()
-    if envelope.get("alg") != AI_GATEWAY_PROOF_ATTESTATION_ALG or record_key not in {
+    record_key = record.verify_key.strip()
+    if record.algorithm != AI_GATEWAY_PROOF_ATTESTATION_ALG or record_key not in {
         current_verify_key,
         previous_verify_key,
     } - {""}:
@@ -155,7 +126,7 @@ def _verify_model_attestation(
     try:
         public = Ed25519PublicKey.from_public_bytes(_decode(record_key, length=32))
         public.verify(
-            _decode(str(envelope.get("signature") or ""), length=64),
+            _decode(record.signature, length=64),
             _model_payload(expected),
         )
     except (InvalidSignature, RuntimeError, ValueError) as exc:

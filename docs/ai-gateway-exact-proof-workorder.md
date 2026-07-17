@@ -125,8 +125,10 @@ Probe traffic alone is not "integration." Required:
    `agent_framework` runs produce inference rows (request ids should carry a distinguishable
    prefix, e.g. `mip-agent-run-{full-sha}-…`).
    Deployment/export postflight must independently read the exact Unity Catalog model version
-   receiving endpoint traffic and require its `mip.proxy_source_hash` and
-   `mip.upstream_supervisor_endpoint` tags to match the reviewed proxy source and Supervisor.
+   receiving endpoint traffic and require its signed, fixed-field
+   `mip_proxy_source_hash` and `mip_upstream_supervisor_endpoint` metadata to match the reviewed
+   proxy source and Supervisor. Dotted source/upstream tags belong only to the separate Serving
+   Endpoint API.
    Endpoint tags alone are not authoritative because they can be changed independently of the
    served registered-model version.
 2. **Run-card governance chip binds to a real, synchronously-true signal:** for
