@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -420,6 +421,10 @@ def test_ensure_synced_tables_validates_existing_source_catalog(monkeypatch) -> 
 
     class _ExistingTable:
         def __init__(self, source: str, keys: list[str]) -> None:
+            self.database_instance_name = "mip-app-state"
+            self.logical_database_name = "mip_app_state"
+            self.effective_database_instance_name = "mip-app-state"
+            self.effective_logical_database_name = "mip_app_state"
             self.spec = SyncedTableSpec(
                 source_table_full_name=source,
                 primary_key_columns=keys,
@@ -470,6 +475,10 @@ def test_ensure_synced_tables_validates_existing_source_catalog(monkeypatch) -> 
 
 def test_ensure_synced_tables_rejects_existing_wrong_source_catalog(monkeypatch) -> None:
     class _ExistingTable:
+        database_instance_name = "mip-app-state"
+        logical_database_name = "mip_app_state"
+        effective_database_instance_name = "mip-app-state"
+        effective_logical_database_name = "mip_app_state"
         spec = SyncedTableSpec(
             source_table_full_name="mip.gold.source_readiness",
             primary_key_columns=["source_name"],
@@ -498,6 +507,139 @@ def test_ensure_synced_tables_rejects_existing_wrong_source_catalog(monkeypatch)
             storage_catalog="acme_mip",
             storage_schema="app",
             timeout_s=1,
+        )
+
+
+@pytest.mark.parametrize(
+    ("database_instance", "logical_database", "message"),
+    [
+        ("wrong-instance", "mip_app_state", "wrong-instance; expected mip-app-state"),
+        ("mip-app-state", "wrong_database", "wrong_database; expected mip_app_state"),
+    ],
+)
+def test_ensure_synced_tables_rejects_existing_wrong_lakebase_target(
+    monkeypatch,
+    database_instance: str,
+    logical_database: str,
+    message: str,
+) -> None:
+    class _ExistingTable:
+        spec = SyncedTableSpec(
+            source_table_full_name="acme_mip.gold.source_readiness",
+            primary_key_columns=["source_name"],
+            scheduling_policy=SyncedTableSchedulingPolicy.SNAPSHOT,
+        )
+
+        def __init__(self) -> None:
+            self.database_instance_name = None
+            self.logical_database_name = None
+            self.effective_database_instance_name = database_instance
+            self.effective_logical_database_name = logical_database
+
+    class _Database:
+        def get_synced_database_table(self, name: str) -> _ExistingTable:
+            _ = name
+            return _ExistingTable()
+
+        def create_synced_database_table(self, table: Any) -> None:
+            raise AssertionError(f"wrong-target table should not be recreated silently: {table}")
+
+    class _Workspace:
+        database = _Database()
+
+    with pytest.raises(RuntimeError, match=re.escape(message)):
+        provision_agentic_resources.ensure_synced_tables(
+            _Workspace(),  # type: ignore[arg-type]
+            source_catalog="acme_mip",
+            catalog="acme_app_state",
+            schema="mip_sync",
+            database_instance="mip-app-state",
+            logical_database="mip_app_state",
+            storage_catalog="acme_mip",
+            storage_schema="app",
+            timeout_s=1,
+            table_definitions=(provision_agentic_resources.DEFAULT_SYNC_TABLES[0],),
+        )
+
+
+def test_existing_registered_catalog_uses_authoritative_effective_lakebase_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ExistingTable:
+        database_instance_name = None
+        logical_database_name = None
+        effective_database_instance_name = "mip-app-state"
+        effective_logical_database_name = "mip_app_state"
+        spec = SyncedTableSpec(
+            source_table_full_name="acme_mip.gold.source_readiness",
+            primary_key_columns=["source_name"],
+            scheduling_policy=SyncedTableSchedulingPolicy.SNAPSHOT,
+        )
+
+    class _Database:
+        def get_synced_database_table(self, name: str) -> _ExistingTable:
+            assert name == "acme_app_state.mip_sync.source_readiness"
+            return _ExistingTable()
+
+        def create_synced_database_table(self, table: Any) -> None:
+            raise AssertionError(f"existing registered table must be reused: {table}")
+
+    class _Workspace:
+        database = _Database()
+
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "_wait_synced_table_online",
+        lambda *_args, **_kwargs: None,
+    )
+
+    assert provision_agentic_resources.ensure_synced_tables(
+        _Workspace(),  # type: ignore[arg-type]
+        source_catalog="acme_mip",
+        catalog="acme_app_state",
+        schema="mip_sync",
+        database_instance="mip-app-state",
+        logical_database="mip_app_state",
+        storage_catalog="acme_mip",
+        storage_schema="app",
+        timeout_s=1,
+        table_definitions=(provision_agentic_resources.DEFAULT_SYNC_TABLES[0],),
+    ) == ("source_readiness",)
+
+
+def test_existing_synced_table_rejects_configured_target_drift_even_when_effective_matches(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _ExistingTable:
+        database_instance_name = "wrong-configured-instance"
+        logical_database_name = "mip_app_state"
+        effective_database_instance_name = "mip-app-state"
+        effective_logical_database_name = "mip_app_state"
+        spec = SyncedTableSpec(
+            source_table_full_name="acme_mip.gold.source_readiness",
+            primary_key_columns=["source_name"],
+            scheduling_policy=SyncedTableSchedulingPolicy.SNAPSHOT,
+        )
+
+    class _Database:
+        def get_synced_database_table(self, _name: str) -> _ExistingTable:
+            return _ExistingTable()
+
+    class _Workspace:
+        database = _Database()
+
+    with pytest.raises(RuntimeError, match="configured for Lakebase instance"):
+        provision_agentic_resources.ensure_synced_tables(
+            _Workspace(),  # type: ignore[arg-type]
+            source_catalog="acme_mip",
+            catalog="acme_app_state",
+            schema="mip_sync",
+            database_instance="mip-app-state",
+            logical_database="mip_app_state",
+            storage_catalog="acme_mip",
+            storage_schema="app",
+            timeout_s=1,
+            table_definitions=(provision_agentic_resources.DEFAULT_SYNC_TABLES[0],),
         )
 
 
@@ -633,14 +775,17 @@ def test_main_defaults_ai_gateway_to_dedicated_endpoint(monkeypatch, tmp_path) -
     assert "MIP_AI_GATEWAY_AGENT_MODEL_VERSION=7" in out_env.read_text(encoding="utf-8")
 
 
-def test_isolated_skip_sync_child_preserves_explicit_nondefault_sync_contract(
+def test_isolated_skip_sync_child_rejects_unreviewed_sync_table_names(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
     out_env = tmp_path / "agentic.env"
     monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", object)
 
-    assert (
+    with pytest.raises(
+        ValueError,
+        match="names without reviewed source/key contracts: daily_funnel_v2, source_status_v2",
+    ):
         provision_agentic_resources.main(
             [
                 "--skip-sync",
@@ -656,15 +801,7 @@ def test_isolated_skip_sync_child_preserves_explicit_nondefault_sync_contract(
                 str(out_env),
             ]
         )
-        == 0
-    )
-
-    assert out_env.read_text(encoding="utf-8").splitlines() == [
-        "MIP_LAKEBASE_SYNC=1",
-        "MIP_LAKEBASE_SYNC_CATALOG=acme_app_state",
-        "MIP_LAKEBASE_SYNC_SCHEMA=acme_sync",
-        "MIP_LAKEBASE_SYNC_TABLES=source_status_v2,daily_funnel_v2",
-    ]
+    assert not out_env.exists()
 
 
 def test_main_rejects_gateway_equal_to_supervisor_before_proxy_mutation(monkeypatch) -> None:

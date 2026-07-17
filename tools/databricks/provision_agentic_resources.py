@@ -9,22 +9,18 @@ does not control.
 
 from __future__ import annotations
 
-import argparse
 import json
-import os
 import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, TypeAlias
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from backend.agents.gateway_contract import (  # noqa: E402
-    DEFAULT_GATEWAY_AGENT_EXPERIMENT,
-    DEFAULT_GATEWAY_AGENT_MODEL,
     DEFAULT_GATEWAY_ENDPOINT,
     LEGACY_GATEWAY_ENDPOINT,
 )
@@ -40,6 +36,7 @@ from tools.databricks.agent_runtime_access import (  # noqa: E402
     assert_current_runtime_identity,
     assert_runtime_creator,
 )
+from tools.databricks.agentic_provisioning_cli import build_parser  # noqa: E402
 from tools.databricks.agentic_resource_contract import (  # noqa: E402
     ProvisionedResources,
     SupervisorAgentBinding,
@@ -67,7 +64,9 @@ from tools.databricks.supervisor_agent_contract import (  # noqa: E402
     supervisor_tool_specs as _supervisor_tool_specs,
 )
 
-DEFAULT_SYNC_TABLES = (
+SyncTableDefinition: TypeAlias = tuple[str, str, tuple[str, ...]]
+
+DEFAULT_SYNC_TABLES: tuple[SyncTableDefinition, ...] = (
     ("source_readiness", "source_readiness", ("source_name",)),
     ("segment_population", "segment_population", ("segment_code", "state")),
     (
@@ -133,7 +132,35 @@ def _validate_existing_synced_table(
     keys: tuple[str, ...],
     storage_catalog: str,
     storage_schema: str,
+    database_instance: str,
+    logical_database: str,
 ) -> None:
+    effective_database_instance = str(
+        _field(table, "effective_database_instance_name") or ""
+    ).strip()
+    effective_logical_database = str(_field(table, "effective_logical_database_name") or "").strip()
+    configured_database_instance = str(_field(table, "database_instance_name") or "").strip()
+    configured_logical_database = str(_field(table, "logical_database_name") or "").strip()
+    if effective_database_instance != database_instance:
+        raise RuntimeError(
+            f"{name} effectively targets Lakebase instance "
+            f"{effective_database_instance or '<unknown>'}; expected {database_instance}."
+        )
+    if effective_logical_database != logical_database:
+        raise RuntimeError(
+            f"{name} effectively targets logical database "
+            f"{effective_logical_database or '<unknown>'}; expected {logical_database}."
+        )
+    if configured_database_instance and configured_database_instance != database_instance:
+        raise RuntimeError(
+            f"{name} is configured for Lakebase instance {configured_database_instance}; "
+            f"expected {database_instance}."
+        )
+    if configured_logical_database and configured_logical_database != logical_database:
+        raise RuntimeError(
+            f"{name} is configured for logical database {configured_logical_database}; "
+            f"expected {logical_database}."
+        )
     spec = _field(table, "spec")
     source_table = _field(spec, "source_table_full_name") if spec is not None else None
     primary_keys = _field(spec, "primary_key_columns") if spec is not None else None
@@ -180,9 +207,10 @@ def ensure_synced_tables(
     storage_catalog: str,
     storage_schema: str,
     timeout_s: int,
+    table_definitions: tuple[SyncTableDefinition, ...] = DEFAULT_SYNC_TABLES,
 ) -> tuple[str, ...]:
     synced: list[str] = []
-    for table, source_table, keys in DEFAULT_SYNC_TABLES:
+    for table, source_table, keys in table_definitions:
         name = _target_table(catalog, schema, table)
         source = _source_gold_table(source_catalog, source_table)
         try:
@@ -194,6 +222,8 @@ def ensure_synced_tables(
                 keys=keys,
                 storage_catalog=storage_catalog,
                 storage_schema=storage_schema,
+                database_instance=database_instance,
+                logical_database=logical_database,
             )
             print(f"[agentic] synced table exists: {name}")
         except (NotFound, ResourceDoesNotExist):
@@ -218,6 +248,21 @@ def ensure_synced_tables(
         _wait_synced_table_online(workspace, name, timeout_s=timeout_s)
         synced.append(table)
     return tuple(synced)
+
+
+def _resolve_sync_table_definitions(
+    table_names: tuple[str, ...],
+) -> tuple[SyncTableDefinition, ...]:
+    """Bind configured names to reviewed source/key contracts or fail closed."""
+
+    definitions = {definition[0]: definition for definition in DEFAULT_SYNC_TABLES}
+    unknown = sorted(set(table_names) - set(definitions))
+    if unknown:
+        raise ValueError(
+            "--lakebase-sync-tables contains names without reviewed source/key contracts: "
+            + ", ".join(unknown)
+        )
+    return tuple(definitions[name] for name in table_names)
 
 
 def _wait_synced_table_online(workspace: WorkspaceClient, name: str, *, timeout_s: int) -> None:
@@ -643,90 +688,10 @@ def _write_env(path: Path, resources: ProvisionedResources) -> None:
     print(f"[agentic] wrote env file: {path}")
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--catalog", default=os.environ.get("MIP_DEFAULT_CATALOG", "mip"))
-    parser.add_argument(
-        "--lakebase-catalog", default=os.environ.get("MIP_LAKEBASE_SYNC_CATALOG", "mip_app_state")
-    )
-    parser.add_argument(
-        "--lakebase-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_SCHEMA", "mip_sync")
-    )
-    parser.add_argument(
-        "--lakebase-sync-tables",
-        default=os.environ.get(
-            "MIP_LAKEBASE_SYNC_TABLES",
-            ",".join(row[0] for row in DEFAULT_SYNC_TABLES),
-        ),
-        help=(
-            "Comma-separated synced table names to preserve when --skip-sync runs "
-            "under the isolated agent-runtime identity."
-        ),
-    )
-    parser.add_argument(
-        "--database-instance", default=os.environ.get("MIP_LAKEBASE_INSTANCE", "mip-app-state")
-    )
-    parser.add_argument(
-        "--logical-database", default=os.environ.get("MIP_LAKEBASE_DATABASE_NAME", "mip_app_state")
-    )
-    parser.add_argument(
-        "--storage-schema", default=os.environ.get("MIP_LAKEBASE_SYNC_STORAGE_SCHEMA", "app")
-    )
-    parser.add_argument(
-        "--gateway-endpoint",
-        default=os.environ.get("MIP_AI_GATEWAY_ENDPOINT", DEFAULT_GATEWAY_ENDPOINT),
-        help=(
-            "MIP-owned ResponsesAgent endpoint that delegates to the managed Supervisor "
-            "and accepts per-endpoint AI Gateway governance."
-        ),
-    )
-    parser.add_argument(
-        "--gateway-endpoint-prefix",
-        default=DEFAULT_GATEWAY_ENDPOINT,
-        help="Stable prefix for deterministic contract-versioned green endpoints.",
-    )
-    parser.add_argument(
-        "--gateway-schema", default=os.environ.get("MIP_AI_GATEWAY_SCHEMA", "audit")
-    )
-    parser.add_argument(
-        "--gateway-table-prefix",
-        default=os.environ.get("MIP_AI_GATEWAY_TABLE_PREFIX", "mip_agent_gateway_growth_agent"),
-    )
-    parser.add_argument(
-        "--gateway-agent-model",
-        default=os.environ.get(
-            "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY",
-            DEFAULT_GATEWAY_AGENT_MODEL,
-        ),
-    )
-    parser.add_argument(
-        "--gateway-agent-experiment",
-        default=os.environ.get(
-            "MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE",
-            DEFAULT_GATEWAY_AGENT_EXPERIMENT,
-        ),
-    )
-    parser.add_argument(
-        "--supervisor-name",
-        default=os.environ.get("MIP_AGENT_SUPERVISOR_NAME", "Mortgage Growth Agent"),
-    )
-    parser.add_argument("--app-name", default=os.environ.get("MIP_APP_NAME", "mip-app"))
-    parser.add_argument("--genie-space-id", default=os.environ.get("GENIE_SPACE_ID", ""))
-    parser.add_argument(
-        "--expected-runtime-application-id",
-        default=os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", ""),
-    )
-    parser.add_argument("--skip-sync", action="store_true")
-    parser.add_argument("--skip-gateway", action="store_true")
-    parser.add_argument("--skip-supervisor", action="store_true")
-    parser.add_argument("--skip-app-permissions", action="store_true")
-    parser.add_argument("--timeout-s", type=int, default=900)
-    parser.add_argument("--out-env", type=Path)
-    return parser
-
-
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = build_parser(
+        default_sync_tables=tuple(row[0] for row in DEFAULT_SYNC_TABLES)
+    ).parse_args(argv)
     workspace = WorkspaceClient()
     tables = tuple(
         name for raw_name in args.lakebase_sync_tables.split(",") if (name := raw_name.strip())
@@ -735,6 +700,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ValueError("at least one --lakebase-sync-tables value is required")
     if len(tables) != len(set(tables)):
         raise ValueError("--lakebase-sync-tables contains duplicate table names")
+    table_definitions = _resolve_sync_table_definitions(tables)
     if not args.skip_sync:
         tables = ensure_synced_tables(
             workspace,
@@ -746,6 +712,7 @@ def main(argv: list[str] | None = None) -> int:
             storage_catalog=args.catalog,
             storage_schema=args.storage_schema,
             timeout_s=args.timeout_s,
+            table_definitions=table_definitions,
         )
     supervisor_id: str | None = None
     supervisor_endpoint: str | None = None

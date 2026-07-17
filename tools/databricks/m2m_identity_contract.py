@@ -10,7 +10,14 @@ from typing import Literal
 DEFAULT_ADMIN_GROUP = "mip-admin"
 DEFAULT_LAKEBASE_INSTANCE = "mip-app-state"
 
-IdentityRole = Literal["normal", "operator2", "admin", "verifier", "agent_runtime"]
+IdentityRole = Literal[
+    "normal",
+    "operator2",
+    "admin",
+    "release_probe",
+    "verifier",
+    "agent_runtime",
+]
 
 
 @dataclass(frozen=True)
@@ -50,6 +57,15 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         app_url_secret_name=None,
         group_name=DEFAULT_ADMIN_GROUP,
         grant_can_use=True,
+        lakebase_instance=None,
+    ),
+    "release_probe": IdentityDefaults(
+        sp_name="mip-release-probe-ci-sp",
+        client_id_secret_name="DATABRICKS_RELEASE_PROBE_CLIENT_ID",
+        client_secret_secret_name="DATABRICKS_RELEASE_PROBE_CLIENT_SECRET",
+        app_url_secret_name=None,
+        group_name=DEFAULT_ADMIN_GROUP,
+        grant_can_use=False,
         lakebase_instance=None,
     ),
     "verifier": IdentityDefaults(
@@ -116,9 +132,7 @@ def validate_identity_role_binding(
         )
 
     configured_source = (
-        configured_identity_client_ids()
-        if configured_client_ids is None
-        else configured_client_ids
+        configured_identity_client_ids() if configured_client_ids is None else configured_client_ids
     )
     configured = {
         role: str(client_id).strip()
@@ -154,7 +168,7 @@ def validate_app_access_contract(
 ) -> None:
     """Reject isolated-role App access before any external side effect."""
 
-    if identity_role in {"verifier", "agent_runtime"} and grant_can_use:
+    if identity_role in {"release_probe", "verifier", "agent_runtime"} and grant_can_use:
         raise ValueError(
             f"--identity-role {identity_role} forbids Databricks App CAN_USE; "
             "remove --grant-can-use before provisioning"

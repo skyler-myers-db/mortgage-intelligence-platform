@@ -76,6 +76,7 @@ for _PRIVATE_CREDENTIAL in \
   DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
   DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+  DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
   DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
   DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
   DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
@@ -281,6 +282,20 @@ APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
 AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
+APP_ACCESS_QUARANTINED=0
+
+restore_deployment_sync_contract() {
+  local source_label="${1:-agentic environment}"
+  if [[ "${MIP_LAKEBASE_SYNC_CATALOG:-}" != "$DEPLOYMENT_SYNC_CATALOG" || \
+        "${MIP_LAKEBASE_SYNC_SCHEMA:-}" != "$DEPLOYMENT_SYNC_SCHEMA" || \
+        "${MIP_LAKEBASE_SYNC_TABLES:-}" != "$DEPLOYMENT_SYNC_TABLES" ]]; then
+    echo "[deploy] ignoring stale Lakebase Sync names from ${source_label}; deployment controls are authoritative"
+  fi
+  MIP_LAKEBASE_SYNC_CATALOG="$DEPLOYMENT_SYNC_CATALOG"
+  MIP_LAKEBASE_SYNC_SCHEMA="$DEPLOYMENT_SYNC_SCHEMA"
+  MIP_LAKEBASE_SYNC_TABLES="$DEPLOYMENT_SYNC_TABLES"
+  export MIP_LAKEBASE_SYNC_CATALOG MIP_LAKEBASE_SYNC_SCHEMA MIP_LAKEBASE_SYNC_TABLES
+}
 
 converge_app_treatment_access() {
   local mode="$1" principal
@@ -298,10 +313,31 @@ converge_app_treatment_access() {
     --mode "$mode"
 }
 
+mint_signed_app_proof_token() {
+  if [[ "${APP_ACCESS_QUARANTINED:-0}" -eq 1 ]]; then
+    mint_m2m_token MIP_BEARER_TOKEN \
+      DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET
+  else
+    mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+  fi
+}
+
+converge_runtime_app_release_access() {
+  if [[ "${APP_ACCESS_QUARANTINED:-0}" -eq 1 ]]; then
+    "$PYTHON" -m tools.databricks.converge_app_release_access \
+      --mode runtime \
+      --app-name "$APP_FAIL_CLOSED_NAME" \
+      --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+      --normal-application-id "$DATABRICKS_CLIENT_ID" \
+      --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" || return 1
+  fi
+}
+
 restore_signed_blue_while_quiesced() {
   [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]] || return 1
   if declare -F mint_m2m_token >/dev/null; then
-    mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET || return 1
+    mint_signed_app_proof_token || return 1
   fi
   run_with_proof_signing_authority \
     "$PYTHON" -m tools.databricks.app_deployment_rollback restore \
@@ -312,7 +348,9 @@ restore_signed_blue_while_quiesced() {
     --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
     --treatment-catalog "$_GRANTS_CATALOG" \
     --revoke-endpoint "${MIP_AI_GATEWAY_ENDPOINT:-}" || return 1
+  converge_runtime_app_release_access || return 1
   converge_app_treatment_access runtime || return 1
+  APP_ACCESS_QUARANTINED=0
   TREATMENT_RUNTIME_QUIESCED=0
   APP_UPGRADE_STATE="blue_active"
 }
@@ -349,6 +387,20 @@ stop_and_quiesce_unproven_app() {
     TREATMENT_RUNTIME_QUIESCED=1
     return 0
   fi
+  if [[ "${APP_ACCESS_QUARANTINED:-0}" -eq 1 ]]; then
+    if "$PYTHON" -m tools.databricks.converge_app_release_access \
+      --mode quarantine \
+      --app-name "$APP_FAIL_CLOSED_NAME" \
+      --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+      --normal-application-id "$DATABRICKS_CLIENT_ID" \
+      --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"; then
+      APP_ACCESS_QUARANTINED=1
+    else
+      echo "${RED}[deploy] failed to re-quarantine temporary App release access.${RST}" >&2
+      failed=1
+    fi
+  fi
   principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}"
   if [[ -z "$principal" ]]; then
     app_json="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null || true)"
@@ -369,6 +421,7 @@ print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
 }
 
 converge_green_only_app_access() {
+  converge_runtime_app_release_access || return 1
   "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor converge-app-acl \
     --gateway-endpoint "${MIP_AI_GATEWAY_ENDPOINT:?green Gateway is required}" \
     --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:?green Supervisor is required}" \
@@ -378,7 +431,8 @@ converge_green_only_app_access() {
     --expected-inventory-principal "${DEPLOY_INVENTORY_PRINCIPAL:?}" \
     --expected-serving-permission CAN_QUERY \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
-    --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+    --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT" || return 1
+  APP_ACCESS_QUARANTINED=0
 }
 
 stop_app_after_failed_deploy() {
@@ -833,6 +887,7 @@ mint_m2m_token() {
       MIP_BEARER_TOKEN MIP_OPERATOR2_BEARER_TOKEN MIP_ADMIN_BEARER_TOKEN \
       DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
       DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_SECRET \
+      DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
       DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
       DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
       DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
@@ -856,6 +911,19 @@ mint_m2m_token() {
   rm -f "$token_file"
   printf -v "$output_name" '%s' "$token"
   export "${output_name?}"
+}
+
+mint_app_automation_tokens() {
+  if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+    mint_m2m_token MIP_BEARER_TOKEN \
+      DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET
+    MIP_ADMIN_BEARER_TOKEN="$MIP_BEARER_TOKEN"
+    export MIP_ADMIN_BEARER_TOKEN
+  else
+    mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+    mint_m2m_token MIP_ADMIN_BEARER_TOKEN \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+  fi
 }
 
 run_as_m2m_identity() {
@@ -1066,11 +1134,17 @@ fi
 LAKEBASE_DATABASE="${_LAKEBASE_DATABASE:-${_MIP_LAKEBASE_DATABASE_NAME:-mip_app_state}}"
 MIP_LAKEBASE_DATABASE_NAME="$LAKEBASE_DATABASE"
 MIP_LAKEBASE_SYNC_CATALOG="$(deployment_control_value MIP_LAKEBASE_SYNC_CATALOG mip_app_state)"
+MIP_LAKEBASE_SYNC_SCHEMA="$(deployment_control_value MIP_LAKEBASE_SYNC_SCHEMA mip_sync)"
+MIP_LAKEBASE_SYNC_TABLES="$(deployment_control_value MIP_LAKEBASE_SYNC_TABLES 'source_readiness,segment_population,funnel_snapshot_daily')"
+DEPLOYMENT_SYNC_CATALOG="$MIP_LAKEBASE_SYNC_CATALOG"
+DEPLOYMENT_SYNC_SCHEMA="$MIP_LAKEBASE_SYNC_SCHEMA"
+DEPLOYMENT_SYNC_TABLES="$MIP_LAKEBASE_SYNC_TABLES"
 MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME 'Mortgage Lead Intelligence')"
 MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"
 MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE mip-app-rollback)"
 export MIP_DEFAULT_CATALOG MIP_APP_NAME MIP_LAKEBASE_INSTANCE LAKEBASE_INSTANCE_NAME
 export LAKEBASE_DATABASE MIP_LAKEBASE_DATABASE_NAME MIP_LAKEBASE_SYNC_CATALOG
+export MIP_LAKEBASE_SYNC_SCHEMA MIP_LAKEBASE_SYNC_TABLES
 export MIP_GENIE_SPACE_NAME MIP_RUNTIME_SECRET_SCOPE MIP_APP_ROLLBACK_SECRET_SCOPE
 APP_ROLLBACK_SECRET_SCOPE="$MIP_APP_ROLLBACK_SECRET_SCOPE"
 if [[ ! "$MIP_APP_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
@@ -1083,8 +1157,21 @@ if [[ ! "$MIP_LAKEBASE_INSTANCE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; the
 fi
 if [[ ! "$MIP_DEFAULT_CATALOG" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
       ! "$MIP_LAKEBASE_SYNC_CATALOG" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
+      ! "$MIP_LAKEBASE_SYNC_SCHEMA" =~ ^[a-z_][a-z0-9_]{0,254}$ || \
       ! "$LAKEBASE_DATABASE" =~ ^[a-z_][a-z0-9_]{0,254}$ ]]; then
-  echo "${RED}[deploy] UC/Lakebase catalog and database must be lowercase unquoted identifiers.${RST}" >&2
+  echo "${RED}[deploy] UC/Lakebase catalog, schema, and database must be lowercase unquoted identifiers.${RST}" >&2
+  exit 2
+fi
+if ! "$PYTHON" - "$MIP_LAKEBASE_SYNC_TABLES" <<'PYEOF'
+import re
+import sys
+
+names = sys.argv[1].split(",")
+valid = re.compile(r"^[a-z_][a-z0-9_]{0,254}$").fullmatch
+raise SystemExit(0 if names and len(names) == len(set(names)) and all(valid(name) for name in names) else 1)
+PYEOF
+then
+  echo "${RED}[deploy] MIP_LAKEBASE_SYNC_TABLES must be a unique comma-separated list of lowercase unquoted identifiers.${RST}" >&2
   exit 2
 fi
 if [[ ! "$MIP_RUNTIME_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
@@ -1296,13 +1383,15 @@ PYEOF
   echo "  Gateway model attestation: separated model-provenance key configured"
 fi
 
-# App-facing and agent-runtime automation use separated long-lived client credentials but no stored
-# bearer tokens. Normal/admin tokens are minted per run and reminted before
-# evaluation; the verifier client is used only for deployment-side Gateway
-# proof writes. The verifier is intentionally not a member of mip-admin.
+# App-facing, release-probe, and agent-runtime automation use separated
+# long-lived client credentials but no stored bearer tokens. Normal/admin
+# tokens are minted per run; a quarantined rebase uses only the dedicated
+# release-probe token until signed capture. The verifier client is used only
+# for deployment-side Gateway proof writes and is not a member of mip-admin.
 for _M2M_NAME in \
   DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+  DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
   DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
   DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET; do
   resolve_m2m_credential "$_M2M_NAME" shell
@@ -1313,6 +1402,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   for _M2M_NAME in \
     DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
     DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
+    DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
     DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
     DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
     DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID \
@@ -1329,7 +1419,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" ]]; then
     for _SEPARATED_CLIENT_ENV in \
       DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID \
-      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID \
+      DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID \
+      DATABRICKS_VERIFIER_CLIENT_ID \
       DATABRICKS_AGENT_RUNTIME_CLIENT_ID; do
       if [[ -n "${!_SEPARATED_CLIENT_ENV:-}" && \
             "$DATABRICKS_ACCOUNT_CLIENT_ID" == "${!_SEPARATED_CLIENT_ENV}" ]]; then
@@ -1342,7 +1433,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # shellcheck disable=SC2031
   if ! "$PYTHON" - \
     "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-    "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+    "$DATABRICKS_VERIFIER_CLIENT_ID" \
     "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" <<'PYEOF'
 import sys
 
@@ -1350,9 +1442,26 @@ values = [value.strip() for value in sys.argv[1:]]
 raise SystemExit(0 if all(values) and len(values) == len(set(values)) else 1)
 PYEOF
   then
-    echo "${RED}[deploy] ERROR: normal, operator2, admin, verifier, and agent-runtime M2M client IDs must be pairwise distinct.${RST}" >&2
+    echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs must be pairwise distinct.${RST}" >&2
     exit 1
   fi
+  _CONFIGURED_ADMIN_IDENTITIES="$(deployment_control_value MIP_ADMIN_IDENTITIES)"
+  MIP_ADMIN_IDENTITIES="$("$PYTHON" - \
+    "$_CONFIGURED_ADMIN_IDENTITIES" \
+    "$DATABRICKS_ADMIN_CLIENT_ID" \
+    "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" <<'PYEOF'
+import sys
+
+configured, admin_id, release_probe_id = sys.argv[1:]
+values = []
+for candidate in (*configured.split(","), admin_id, release_probe_id):
+    value = candidate.strip()
+    if value and value not in values:
+        values.append(value)
+print(",".join(values))
+PYEOF
+)"
+  export MIP_ADMIN_IDENTITIES
   export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.
@@ -1444,6 +1553,16 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       step "explicitly stop an unverified legacy App before fail-closed rebase"
       run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
         --app-name "$_GRANTS_APP_NAME"
+      step "quarantine all non-manager App access for the unsigned rebase"
+      # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
+      run "$PYTHON" -m tools.databricks.converge_app_release_access \
+        --mode quarantine \
+        --app-name "$_GRANTS_APP_NAME" \
+        --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+        --normal-application-id "$DATABRICKS_CLIENT_ID" \
+        --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+      APP_ACCESS_QUARANTINED=1
       step "quiesce the stopped legacy App treatment grant before fail-closed rebase"
       run_with_account_identity \
         "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
@@ -1612,7 +1731,8 @@ _PIPELINE_NAMESPACE_ARGS=(
 # shellcheck disable=SC2031  # Parent-shell M2M ids survive bounded subshells.
 for _FORBIDDEN_OWNER in \
   "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-  "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+  "$DATABRICKS_VERIFIER_CLIENT_ID" \
   "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; do
   _PIPELINE_NAMESPACE_ARGS+=(--forbidden-owner-principal "$_FORBIDDEN_OWNER")
 done
@@ -1684,24 +1804,35 @@ fi
 # exist yet. As soon as bundle apply has created/resolved the App, converge the
 # three App-facing identities by their reserved role and immutable client ID.
 # Secret minting remains a separate pre-App operation; deploy never rotates it.
-step "reconcile normal operator access to the deployed App"
-# shellcheck disable=SC2031  # Parent-shell identity is unchanged by M2M mint subshells.
+if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+  step "keep normal, second-operator, and admin App access quarantined until signed capture"
+else
+  step "reconcile normal operator access to the deployed App"
+  # shellcheck disable=SC2031  # Parent-shell identity is unchanged by M2M mint subshells.
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role normal \
+    --expected-application-id "$DATABRICKS_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --no-mint-secret
+  step "reconcile second-operator access to the deployed App"
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role operator2 \
+    --expected-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --no-mint-secret
+  step "reconcile admin identity and reviewed group access to the deployed App"
+  run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+    --identity-role admin \
+    --expected-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --no-mint-secret
+fi
+step "audit the dedicated release probe remains isolated before candidate activation"
 run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
-  --identity-role normal \
-  --expected-application-id "$DATABRICKS_CLIENT_ID" \
+  --identity-role release_probe \
+  --expected-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
   --app-name "$_GRANTS_APP_NAME" \
-  --no-mint-secret
-step "reconcile second-operator access to the deployed App"
-run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
-  --identity-role operator2 \
-  --expected-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-  --app-name "$_GRANTS_APP_NAME" \
-  --no-mint-secret
-step "reconcile admin identity and reviewed group access to the deployed App"
-run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
-  --identity-role admin \
-  --expected-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
-  --app-name "$_GRANTS_APP_NAME" \
+  --no-grant-can-use \
   --no-mint-secret
 # The first migration grants the dedicated verifier's proof-ledger role. On a
 # fresh workspace that Lakebase OAuth role does not exist merely because the
@@ -1734,10 +1865,27 @@ run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
 
-# The governed treatment Delta table is declared in 001_catalogs_schemas.sql.
-# Run its dedicated, idempotent bootstrap before table-level grants. The
-# silver/FRED jobs also include this DDL, but they execute later and may be
-# intentionally skipped; grant ordering must not depend on refresh policy.
+# Historical releases granted the App's UC identity directly on the Lakebase
+# ``public``/``mip_app`` schemas.  Remove that residue (and any pre-existing
+# sync-schema access) before rebuilding the reviewed sync target.  The helper
+# resolves nested groups and proves the effective boundary, so a broader group
+# grant or ownership path fails the release instead of being hidden by a
+# successful direct REVOKE.
+step "quiesce legacy and target Lakebase synced-catalog access"
+run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
+  --mode quiesce \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --app-application-id "$APP_SP_CLIENT_ID" \
+  --app-scim-id "$APP_SP_SCIM_ID" \
+  --sync-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --sync-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --sync-tables "$DEPLOYMENT_SYNC_TABLES"
+
+# Run the dedicated, idempotent UC bootstrap before object-level grants. Its
+# DAG creates the governed treatment table, the ref/gold contracts, and the
+# three reviewed Growth Agent functions. The silver/gold jobs repeat these DDL
+# files later, but they may be intentionally skipped; grant ordering must not
+# depend on refresh policy.
 step "quiesce app treatment writes immediately before treatment-table DDL"
 run_with_account_identity \
   "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
@@ -1746,7 +1894,7 @@ run_with_account_identity \
   --principal "$APP_SP_CLIENT_ID" \
   --mode quiesce
 TREATMENT_RUNTIME_QUIESCED=1
-step "initialize UC catalog schemas and governed treatment table (idempotent)"
+step "initialize every pre-refresh UC grant target (idempotent)"
 run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"
 
 # CHECK constraints must be added through ALTER TABLE in Databricks SQL; the
@@ -1776,25 +1924,25 @@ step "keep treatment writes quiesced until the green App is proven and captured"
 # GRANTS.md remains the audit-readable matrix; Lakebase role grants are
 # applied by jobs/lakebase_migrate.py in step 4b.
 step "apply UC grants to the app service principal (idempotent)"
-_GRANTS_SYNC_CATALOG="${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}"
-_GRANTS_SYNC_SCHEMA="${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   # These two schema-creation privileges exist only while the dedicated runtime
   # creates/updates its exact registered model and Gateway inference table.
   # The EXIT compensation revokes them on both success and failure.
   AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1
 fi
-while IFS= read -r _grant_stmt; do
-  [[ -z "$_grant_stmt" ]] && continue
+apply_uc_grant() {
+  local _grant_stmt="$1"
+  local _grant_state=""
+  local _grant_resp=""
+  local _grant_try
   if [[ "$DRY_RUN" -eq 1 ]]; then
     echo "  would grant: ${_grant_stmt}"
-    continue
+    return 0
   fi
   # Re-audit 2026-06-11: a single 50s/CANCEL attempt reported a cold or
   # queued warehouse as a misleading "grant failed". Retry the statement
   # up to 3 attempts (the wait_timeout API ceiling is 50s per call) so
   # warm-up latency is absorbed; a genuine authority failure still exits.
-  _grant_state=""
   for _grant_try in 1 2 3; do
     _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
       "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
@@ -1815,6 +1963,11 @@ while IFS= read -r _grant_stmt; do
     exit 4
   fi
   echo "  granted: ${_grant_stmt}"
+}
+
+while IFS= read -r _grant_stmt; do
+  [[ -z "$_grant_stmt" ]] && continue
+  apply_uc_grant "$_grant_stmt"
 done <<GRANTS_EOF
 GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${APP_SP_CLIENT_ID}\`
@@ -1825,8 +1978,6 @@ GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${APP_SP_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${APP_SP_CLIENT_ID}\`
-GRANT USE CATALOG ON CATALOG ${_GRANTS_SYNC_CATALOG} TO \`${APP_SP_CLIENT_ID}\`
-GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_SYNC_CATALOG}.${_GRANTS_SYNC_SCHEMA} TO \`${APP_SP_CLIENT_ID}\`
 GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
@@ -2029,10 +2180,6 @@ capture_last_good_app() {
   run_with_proof_signing_authority "$PYTHON" "${args[@]}"
 }
 
-if [[ "$DRY_RUN" -eq 0 && -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
-  wait_for_app_deployable
-fi
-
 if [[ "$DRY_RUN" -eq 0 ]]; then
   APP_BUNDLE_SUMMARY="$(mktemp -t mip-bundle-summary.XXXXXX.json)"
   databricks bundle summary -t "$TARGET" -o json > "$APP_BUNDLE_SUMMARY"
@@ -2068,8 +2215,12 @@ if [[ "$DRY_RUN" -eq 0 && -f "$AGENTIC_ENV_CACHE" && \
   # shellcheck disable=SC1090
   . "$AGENTIC_ENV_CACHE"
   set +a
+  restore_deployment_sync_contract "$AGENTIC_ENV_CACHE"
 fi
-if [[ -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
+if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    wait_for_app_deployable
+  fi
   deploy_app_snapshot "deploy first-install Databricks App snapshot from uploaded bundle source"
 else
   step "preserve prior App source and runtime binding until green activation"
@@ -2147,8 +2298,22 @@ AGENTIC_ENV_FILE="$(mktemp -t mip-agentic.XXXXXX.env)"
 run "$PYTHON" -m tools.databricks.provision_agentic_resources \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --lakebase-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --lakebase-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
+  --database-instance "$MIP_LAKEBASE_INSTANCE" \
+  --logical-database "$LAKEBASE_DATABASE" \
   --skip-supervisor \
   --skip-gateway
+step "converge exact app read-only access to proven Lakebase synced tables"
+run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
+  --mode runtime \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --app-application-id "$APP_SP_CLIENT_ID" \
+  --app-scim-id "$APP_SP_SCIM_ID" \
+  --sync-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --sync-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --sync-tables "$DEPLOYMENT_SYNC_TABLES"
 step "grant exact Genie CAN_RUN to the dedicated agent-runtime identity"
 run "$PYTHON" -m tools.databricks.agent_runtime_access \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
@@ -2166,9 +2331,9 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
   --gateway-agent-model "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
   --gateway-agent-experiment "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
   --gateway-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
-  --lakebase-catalog "${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}" \
-  --lakebase-schema "${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}" \
-  --lakebase-sync-tables "${MIP_LAKEBASE_SYNC_TABLES:-source_readiness,segment_population,funnel_snapshot_daily}" \
+  --lakebase-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --lakebase-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
   --skip-sync \
   --skip-app-permissions \
   --out-env "$AGENTIC_ENV_FILE"
@@ -2315,17 +2480,6 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --gateway-experiment-base "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
       --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
       --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}"
-    step "prove agent-runtime negative authorization boundary"
-    run_as_m2m_identity \
-      agent-runtime \
-      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
-      DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
-      "$PYTHON" -m tools.databricks.verify_agent_runtime_identity_boundary \
-      --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-      --app-name "$_GRANTS_APP_NAME" \
-      --app-url "${MIP_APP_URL:?deployed app URL is required}" \
-      --protected-service-principal-id "$APP_SP_SCIM_ID" \
-      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
     step "prepare runtime-owned Gateway access while preserving the live old Supervisor"
     run "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor prepare \
       "${AGENT_RUNTIME_GREEN_ARGS[@]}"
@@ -2405,6 +2559,29 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     wait_for_app_deployable
     mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
     deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"
+    step "prove agent-runtime negative authorization boundary before positive App probes"
+    run_as_m2m_identity \
+      agent-runtime \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+      DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+      "$PYTHON" -m tools.databricks.verify_agent_runtime_identity_boundary \
+      --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --app-name "$_GRANTS_APP_NAME" \
+      --app-url "${MIP_APP_URL:?deployed app URL is required}" \
+      --protected-service-principal-id "$APP_SP_SCIM_ID" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+    if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+      step "grant only the dedicated release probe temporary candidate access"
+      # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
+      run "$PYTHON" -m tools.databricks.converge_app_release_access \
+        --mode probe \
+        --app-name "$_GRANTS_APP_NAME" \
+        --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+        --normal-application-id "$DATABRICKS_CLIENT_ID" \
+        --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+      mint_app_automation_tokens
+    fi
     AGENT_RUNTIME_BINDING_SHA256="$($PYTHON - \
       "$MIP_AGENT_SERVING_ENDPOINT" \
       "$MIP_AGENT_SUPERVISOR_ID" \
@@ -2556,9 +2733,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # A full deploy can exceed the workspace OAuth TTL before eval starts.
   # Remint both identities immediately before the proof and never substitute
   # the deployment PAT for either app-facing role.
-  mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
-  mint_m2m_token MIP_ADMIN_BEARER_TOKEN \
-    DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET
+  mint_app_automation_tokens
 fi
 step "run live Agent Evaluation — golden Growth Agent workflows"
 mkdir -p dist
@@ -2576,7 +2751,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
 fi
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
-  mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+  mint_app_automation_tokens
   wait_for_app_deployable
 fi
 deploy_app_snapshot "deploy Databricks App snapshot with Agent Evaluation proof"
@@ -2595,7 +2770,7 @@ else
     # TTL, and smoke 401'd on geo rollups after passing nine checks). The
     # smoke sweep always deserves a fresh full-lifetime bearer.
     if [[ "$DRY_RUN" -eq 0 && -n "${MIP_APP_URL:-}" ]]; then
-      mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+      mint_app_automation_tokens
     fi
     step "live smoke — scripts/smoke_live.sh against the deployed app"
     export MIP_EXPECT_AGENTIC_CAPABILITIES="${MIP_EXPECT_AGENTIC_CAPABILITIES:-1}"
@@ -2618,12 +2793,24 @@ else
 fi
 
 if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
-  mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
+  mint_app_automation_tokens
   APP_UPGRADE_STATE="green_treatment_pending_capture"
   step "atomically restore treatment authority and persist the last-good App contract"
   capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"
   TREATMENT_RUNTIME_QUIESCED=0
   APP_UPGRADE_STATE="green_captured_cleanup_pending"
+  if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
+    step "replace release-probe access with exact runtime operator access after signed capture"
+    # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
+    run "$PYTHON" -m tools.databricks.converge_app_release_access \
+      --mode runtime \
+      --app-name "$_GRANTS_APP_NAME" \
+      --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+      --normal-application-id "$DATABRICKS_CLIENT_ID" \
+      --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+    APP_ACCESS_QUARANTINED=0
+  fi
   step "retire pinned blue runtime resources only after every green release gate"
   AGENT_RUNTIME_RETIRE_ARGS=(
     -m tools.databricks.cutover_agent_runtime_supervisor retire
@@ -2701,7 +2888,6 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     "$AGENTIC_ENV_FILE" > "$AGENTIC_ENV_CACHE"
   APP_UPGRADE_STATE="green_verified"
 elif [[ "$DRY_RUN" -eq 0 ]]; then
-  mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
   step "stop the unproven candidate before signed-blue rollback"
   run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
     --app-name "$APP_NAME"
@@ -2714,19 +2900,7 @@ elif [[ "$DRY_RUN" -eq 0 ]]; then
   fi
   APP_UPGRADE_STATE="green_activating_quiesced"
   step "restore the signed last-good App because final smoke proof is absent"
-  run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.app_deployment_rollback restore \
-    --app-name "$APP_NAME" \
-    --scope "$APP_ROLLBACK_SECRET_SCOPE" \
-    --base-url "${MIP_APP_URL:?App URL is required for exact rollback proof}" \
-    --token-env MIP_BEARER_TOKEN \
-    --treatment-warehouse-id "$_GRANTS_WAREHOUSE_ID" \
-    --treatment-catalog "$_GRANTS_CATALOG" \
-    --revoke-endpoint "${MIP_AI_GATEWAY_ENDPOINT:-}"
-  step "restore and postflight signed-blue treatment authority after rollback health proof"
-  run converge_app_treatment_access runtime
-  TREATMENT_RUNTIME_QUIESCED=0
-  APP_UPGRADE_STATE="blue_active"
+  run restore_signed_blue_while_quiesced
 fi
 
 # -----------------------------------------------------------------------------

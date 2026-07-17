@@ -348,9 +348,12 @@ resources:
       auto_stop_mins: 10
 
   jobs:
-    # Dedicated first-install bootstrap. Deploy runs this single idempotent
-    # task before applying table grants, so --skip-silver deployments do not
-    # depend on a later refresh job to create governed audit relations.
+    # Dedicated first-install bootstrap. Deploy runs this idempotent DAG before
+    # applying UC grants, so a fresh or --skip-silver deployment never grants
+    # a schema, table, or reviewed Growth Agent function before it exists.
+    # mip_refresh_silver / mip_refresh_scores intentionally repeat the same DDL
+    # later to seed and refresh data; these first-install tasks create only the
+    # empty governed contracts needed for fail-closed grant convergence.
     mip_init_catalog_schemas:
       name: mip_init_catalog_schemas
       tags:
@@ -361,11 +364,51 @@ resources:
       max_concurrent_runs: 1
       tasks:
         - task_key: init_catalog_schemas
-          description: "Idempotent CREATE CATALOG/SCHEMA and governed first-install tables."
+          description: "Create the managed catalog, core schemas, first-party contracts, and governed audit treatment table."
           sql_task:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/ddl/001_catalogs_schemas.sql
+        - task_key: init_ref_tables
+          description: "Create the governed ref schema and empty reference-data contracts before its schema grant."
+          depends_on:
+            - task_key: init_catalog_schemas
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/004_ref_tables.sql
+        - task_key: init_governed_gold_tables
+          description: "Create every empty governed gold contract, including both app-writable lifecycle tables."
+          depends_on:
+            - task_key: init_ref_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/ddl/003_gold_tables.sql
+        - task_key: publish_fn_build_cohort
+          description: "Create the reviewed read-only broad-cohort function before granting EXECUTE."
+          depends_on:
+            - task_key: init_governed_gold_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_build_cohort.sql
+        - task_key: publish_fn_segment_counts
+          description: "Create the reviewed eligibility-gated cohort function before granting EXECUTE."
+          depends_on:
+            - task_key: init_governed_gold_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_segment_counts.sql
+        - task_key: publish_fn_lead_queue_url
+          description: "Create the reviewed app-internal handoff function before granting EXECUTE."
+          depends_on:
+            - task_key: init_governed_gold_tables
+          sql_task:
+            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
+            file:
+              path: sql/_rendered/uc_functions/fn_lead_queue_url.sql
 
     # Slice 2 real-data migration: refresh silver by running the Lakeflow
     # (DLT) feature pipeline. Step 1 applies the idempotent DDL (catalog +

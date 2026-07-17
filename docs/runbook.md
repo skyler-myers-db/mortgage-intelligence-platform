@@ -283,8 +283,14 @@ The normal deploy creates and verifies only the empty managed
 `<MIP_DEFAULT_CATALOG>.silver` pipeline namespace before bundle apply. This
 breaks the first-install pipeline dependency cycle; the bundle's dedicated
 `mip_init_catalog_schemas` job still owns the full governed schema/table DDL and
-runs before table grants. Namespace readback must match the current workspace
-metastore, and every owner resolves to one immutable SCIM principal while the
+runs before schema, table, and reviewed-function grants. It creates the empty
+gold/ref contracts and the three Growth Agent UC functions even when a refresh
+is skipped. Lakebase Sync access is granted separately only after the
+synced-table API has created and proven the configured schema and exact reviewed
+table allowlist. The App receives `USE SCHEMA` plus table-scoped `SELECT`, never
+schema-wide table reads. Namespace readback must
+match the current workspace metastore, and every owner resolves to one immutable
+SCIM principal while the
 target App and all app-facing M2M identities are excluded, including through
 approved owner groups. Catalog and schema identifiers are lowercase unquoted
 UC names of at most 255 characters.
@@ -590,7 +596,10 @@ The `/api/v1/admin/*` endpoints are gated by
 [`backend/services/rbac.py`](../backend/services/rbac.py). Sandbox and
 production admission requires an exact resolved actor in
 `MIP_ADMIN_IDENTITIES` or `MIP_ADMIN_EMAILS`. The deploy workflow derives the
-automation identity from the dedicated admin service-principal client ID.
+automation identities from the dedicated admin and candidate release-probe
+service-principal client IDs. The release probe has no persistent App
+`CAN_USE`; it is reachable only during the signed-capture gate for an explicit
+unsigned-App rebase.
 
 `X-Forwarded-Groups` is not a documented Databricks Apps identity-header
 contract. The configured group (default `mip-admin`) and the `admins` fallback

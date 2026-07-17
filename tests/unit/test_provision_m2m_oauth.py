@@ -262,6 +262,12 @@ def test_role_contract_helpers_remain_reexported_for_callers() -> None:
             "DATABRICKS_ADMIN_CLIENT_SECRET",
         ),
         (
+            "release_probe",
+            "mip-release-probe-ci-sp",
+            "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
+            "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET",
+        ),
+        (
             "verifier",
             "mip-ai-gateway-verifier-ci-sp",
             "DATABRICKS_VERIFIER_CLIENT_ID",
@@ -289,7 +295,7 @@ def test_role_defaults_are_distinct(
 
 @pytest.mark.parametrize(
     "role",
-    ["normal", "operator2", "admin", "verifier", "agent_runtime"],
+    ["normal", "operator2", "admin", "release_probe", "verifier", "agent_runtime"],
 )
 def test_pre_app_bootstrap_mints_only_role_owned_credentials_without_resource_calls(
     role: str,
@@ -301,7 +307,7 @@ def test_pre_app_bootstrap_mints_only_role_owned_credentials_without_resource_ca
         application_id=f"{role}-application-id",
     )
     client = _make_client(create_returns=new_sp)
-    if role == "admin":
+    if role in {"admin", "release_probe"}:
         client.groups.create.return_value = SimpleNamespace(
             id="mip-admin-group-id",
             display_name=pmo.DEFAULT_ADMIN_GROUP,
@@ -315,7 +321,7 @@ def test_pre_app_bootstrap_mints_only_role_owned_credentials_without_resource_ca
             app_name="",
             grant_can_use=False,
             group_name=defaults.group_name,
-            create_group=role == "admin",
+            create_group=role in {"admin", "release_probe"},
             lakebase_instance=None,
             gateway_endpoint=None,
             warehouse_id=None,
@@ -485,12 +491,14 @@ def test_dry_run_does_not_touch_sdk() -> None:
     mock_provision.assert_not_called()
 
 
+@pytest.mark.parametrize("role", ["release_probe", "verifier"])
 @pytest.mark.parametrize("dry_run", [False, True], ids=["live", "dry-run"])
-def test_cli_rejects_verifier_app_can_use_before_provision(
+def test_cli_rejects_isolated_role_app_can_use_before_provision(
+    role: str,
     dry_run: bool,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    argv = ["--identity-role", "verifier", "--grant-can-use"]
+    argv = ["--identity-role", role, "--grant-can-use"]
     if dry_run:
         argv.append("--dry-run")
 
@@ -501,7 +509,7 @@ def test_cli_rejects_verifier_app_can_use_before_provision(
         pmo.main(argv)
 
     assert exc.value.code == 2
-    assert "verifier forbids Databricks App CAN_USE" in capsys.readouterr().err
+    assert f"{role} forbids Databricks App CAN_USE" in capsys.readouterr().err
     mock_provision.assert_not_called()
 
 
@@ -698,11 +706,14 @@ def test_normal_secret_sink_discovers_the_exact_live_app_url() -> None:
         _provision(client, app_name="mip-app-pr105-staging", app_url=None)
 
     client.apps.get.assert_called_once_with("mip-app-pr105-staging")
-    assert call(
-        _CANONICAL_GH_REPO,
-        "MIP_APP_URL",
-        "https://mip-app-live.aws.databricksapps.com",
-    ) in set_secret.call_args_list
+    assert (
+        call(
+            _CANONICAL_GH_REPO,
+            "MIP_APP_URL",
+            "https://mip-app-live.aws.databricksapps.com",
+        )
+        in set_secret.call_args_list
+    )
 
 
 def test_missing_live_app_url_fails_before_identity_mutation() -> None:
@@ -1238,6 +1249,130 @@ def test_verifier_fails_closed_on_nested_group_app_permission() -> None:
     client.apps.update_permissions.assert_not_called()
     client.service_principal_secrets_proxy.create.assert_not_called()
     set_secret.assert_not_called()
+
+
+def test_release_probe_rechecks_app_isolation_after_group_membership_repair() -> None:
+    release_probe = _sp(
+        "mip-release-probe-ci-sp",
+        sp_id="release-probe-scim-id",
+        application_id="release-probe-application-id",
+    )
+    admin_group = SimpleNamespace(
+        id="mip-admin-group-id",
+        display_name="mip-admin",
+        members=[],
+    )
+    client = _make_client(existing_sp=release_probe, groups=[admin_group])
+    client.apps.list.side_effect = lambda: iter([SimpleNamespace(name="mip-app")])
+    client.apps.get_permissions.return_value = SimpleNamespace(
+        access_control_list=[
+            SimpleNamespace(
+                group_name="mip-admin",
+                all_permissions=[SimpleNamespace(inherited=False)],
+            )
+        ]
+    )
+
+    # The initial principal and target-group checks see no effective App
+    # grant. Only the authoritative post-repair membership hydration exposes
+    # the mip-admin group grant that provisioning must reject.
+    release_probe_hydrations = 0
+
+    def resolve_effective_groups(_client: object, *, sp_id: str) -> dict[str, str]:
+        nonlocal release_probe_hydrations
+        if sp_id != "release-probe-scim-id":
+            return {}
+        release_probe_hydrations += 1
+        if release_probe_hydrations == 1:
+            return {}
+        return {"mip-admin-group-id": "mip-admin"}
+
+    with (
+        patch.object(
+            pmo,
+            "_resolve_effective_groups",
+            side_effect=resolve_effective_groups,
+        ),
+        pytest.raises(SystemExit, match="through group 'mip-admin'"),
+    ):
+        _provision(
+            client,
+            sp_name=release_probe.display_name,
+            expected_application_id=release_probe.application_id,
+            identity_role="release_probe",
+            group_name="mip-admin",
+            grant_can_use=False,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.groups.patch.assert_called_once()
+    assert release_probe_hydrations == 2
+    assert client.apps.get_permissions.call_count == 2
+    client.service_principal_secrets_proxy.create.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("identity_role", "display_name", "application_id"),
+    [
+        ("normal", "mip-nightly-ci-sp", "normal-application-id"),
+        ("operator2", "mip-nightly-operator2-ci-sp", "operator2-application-id"),
+        ("admin", "mip-nightly-admin-ci-sp", "admin-application-id"),
+    ],
+)
+def test_runtime_user_role_rejects_effective_app_manager_group_before_grant_or_mint(
+    identity_role: str,
+    display_name: str,
+    application_id: str,
+) -> None:
+    principal = _sp(
+        display_name,
+        sp_id=f"{identity_role}-scim-id",
+        application_id=application_id,
+    )
+    manager_group = SimpleNamespace(
+        id="release-managers-id",
+        display_name="release-managers",
+        members=[SimpleNamespace(value=f"{identity_role}-scim-id")],
+    )
+    groups = [manager_group]
+    bound_group_name = pmo.IDENTITY_DEFAULTS[identity_role].group_name
+    if bound_group_name:
+        groups.append(
+            SimpleNamespace(
+                id=f"{bound_group_name}-id",
+                display_name=bound_group_name,
+                members=[SimpleNamespace(value=f"{identity_role}-scim-id")],
+            )
+        )
+    client = _make_client(existing_sp=principal, groups=groups)
+    client.apps.get_permissions.return_value = SimpleNamespace(
+        access_control_list=[
+            SimpleNamespace(
+                group_name="release-managers",
+                service_principal_name=None,
+                display_name="release-managers",
+                all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE", inherited=False)],
+            )
+        ]
+    )
+
+    with pytest.raises(SystemExit, match="effective Databricks App CAN_MANAGE"):
+        _provision(
+            client,
+            sp_name=display_name,
+            expected_application_id=application_id,
+            identity_role=identity_role,
+            group_name=bound_group_name,
+            grant_can_use=True,
+            mint_secret=False,
+            set_gh_secrets=False,
+            gh_repo=None,
+        )
+
+    client.apps.update_permissions.assert_not_called()
+    client.service_principal_secrets_proxy.create.assert_not_called()
 
 
 def test_non_admin_identity_fails_closed_on_admin_group_membership() -> None:

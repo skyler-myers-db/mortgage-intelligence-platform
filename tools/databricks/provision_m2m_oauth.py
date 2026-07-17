@@ -30,6 +30,7 @@ from tools.databricks.m2m_identity_contract import (  # noqa: E402
     validate_app_access_contract,
     validate_provisioning_contract,
 )
+from tools.databricks.m2m_provisioning_summary import print_summary as _print_summary  # noqa: E402
 
 _GH_SECRET_NAME_RE = _github_helpers.GH_SECRET_NAME_RE
 _gh_available = _github_helpers.gh_available
@@ -385,21 +386,25 @@ def provision(
             "--pre-app-bootstrap found an existing service principal; pass --rotate "
             "to mint and deliver a new one-shot credential"
         )
-    effective_groups: dict[str, str] = {}
+    effective_groups: dict[str, str] = _resolve_effective_groups(client, sp_id=sp.id)
     if identity_role != "admin":
-        effective_groups = _resolve_effective_groups(client, sp_id=sp.id)
-        _assert_not_admin_group_member(
-            group_name=DEFAULT_ADMIN_GROUP,
-            effective_groups=effective_groups,
-            identity_role=identity_role,
-        )
+        if identity_role != "release_probe":
+            _assert_not_admin_group_member(
+                group_name=DEFAULT_ADMIN_GROUP,
+                effective_groups=effective_groups,
+                identity_role=identity_role,
+            )
         _assert_non_admin_service_principal(
             client,
             sp_id=sp.id,
             effective_groups=effective_groups,
             identity_role=identity_role,
         )
-    if not pre_app_bootstrap and identity_role in {"verifier", "agent_runtime"}:
+    if not pre_app_bootstrap and identity_role in {
+        "release_probe",
+        "verifier",
+        "agent_runtime",
+    }:
         _assert_no_app_permission(
             client,
             app_name=app_name,
@@ -452,19 +457,46 @@ def provision(
             sp_id=sp.id,
             create_group=create_group,
         )
+        effective_groups = _resolve_effective_groups(client, sp_id=sp.id)
         if identity_role != "admin":
-            effective_groups = _resolve_effective_groups(client, sp_id=sp.id)
-            _assert_not_admin_group_member(
-                group_name=DEFAULT_ADMIN_GROUP,
-                effective_groups=effective_groups,
-                identity_role=identity_role,
-            )
+            if identity_role != "release_probe":
+                _assert_not_admin_group_member(
+                    group_name=DEFAULT_ADMIN_GROUP,
+                    effective_groups=effective_groups,
+                    identity_role=identity_role,
+                )
             _assert_non_admin_service_principal(
                 client,
                 sp_id=sp.id,
                 effective_groups=effective_groups,
                 identity_role=identity_role,
             )
+            if not pre_app_bootstrap and identity_role in {
+                "release_probe",
+                "verifier",
+                "agent_runtime",
+            }:
+                # Group repair can change effective App access after the first
+                # isolation preflight. Re-read every App ACL against the
+                # authoritative post-mutation memberships before provisioning
+                # any downstream capability or credential.
+                _assert_no_app_permission(
+                    client,
+                    app_name=app_name,
+                    sp_application_id=sp.application_id,
+                    sp_display_name=sp.display_name,
+                    effective_group_names=set(effective_groups.values()),
+                    identity_role=identity_role,
+                )
+
+    if not pre_app_bootstrap and identity_role in {"normal", "operator2", "admin"}:
+        _access_policy.assert_no_app_manager_permission(
+            client,
+            sp_application_id=sp.application_id,
+            sp_display_name=sp.display_name,
+            effective_group_names=set(effective_groups.values()),
+            identity_role=identity_role,
+        )
 
     created_lakebase_role = False
     if lakebase_instance:
@@ -567,44 +599,12 @@ def provision(
     )
 
 
-def _print_summary(result: ProvisionResult) -> None:
-    """Human-readable, secret-free summary on stderr."""
-    lines = [
-        "",
-        "=== M2M OAuth provisioning summary ===",
-        f"  service_principal:        {result.sp_display_name} (id={result.sp_id})",
-        f"  application_id (client_id): {result.client_id}",
-        f"  created this run:         {result.created_sp}",
-        f"  granted CAN_USE on app:   {result.granted_can_use}",
-        f"  identity group:           {result.group_name or '(none)'}",
-        f"  group membership added:   {result.added_to_group}",
-        f"  Lakebase instance:        {result.lakebase_instance or '(none)'}",
-        f"  Lakebase role created:    {result.created_lakebase_role}",
-        f"  Gateway endpoint:         {result.gateway_endpoint or '(none)'}",
-        f"  granted CAN_QUERY:        {result.granted_can_query}",
-        f"  SQL warehouse:            {result.warehouse_id or '(none)'}",
-        f"  granted warehouse CAN_USE:{result.granted_warehouse_can_use}",
-        f"  OAuth secret minted:      {result.secret_minted}",
-        f"  GitHub secrets updated:   {result.secret_written_to_gh}",
-    ]
-    if result.secret_written_to_gh:
-        lines.append(f"  gh repo:                  {result.gh_repo}")
-    lines.append("")
-    for line in lines:
-        _diag(line)
-
-
-# ---------------------------------------------------------------------------
-# CLI
-# ---------------------------------------------------------------------------
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="provision_m2m_oauth",
         description=(
-            "Create or converge an operator, admin, verifier, or agent-runtime M2M identity "
-            "without printing one-shot OAuth secrets."
+            "Create or converge an operator, admin, release-probe, verifier, or "
+            "agent-runtime M2M identity without printing one-shot OAuth secrets."
         ),
     )
     parser.add_argument(
@@ -663,7 +663,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Role-reserved group (admin default: "
-            f"{DEFAULT_ADMIN_GROUP}; normal/operator2/verifier/agent_runtime: none)."
+            f"{DEFAULT_ADMIN_GROUP}; release_probe also uses that group; "
+            "normal/operator2/verifier/agent_runtime: none)."
         ),
     )
     parser.add_argument(

@@ -65,7 +65,7 @@ python tools/databricks/provision_m2m_oauth.py \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
 
-# Repeat for the other four separated workspace identities. Group creation is
+# Repeat for the other five separated workspace identities. Group creation is
 # explicit and reviewed only for the admin role.
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
@@ -76,6 +76,11 @@ python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role admin \
     --create-group \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role release_probe \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
@@ -106,13 +111,16 @@ does not write `MIP_APP_URL` before an App exists. If a reserved principal
 already exists, add `--rotate`; bootstrap otherwise refuses to mint implicitly.
 Provision the separate account-SCIM client credentials and the two distinct
 Gateway proof/model-attestation signing keys, then run `scripts/deploy.sh`.
-After bundle apply creates the App, deploy grants exact `CAN_USE` to normal,
-operator2, and admin with their expected application IDs and no secret rotation.
+After bundle apply creates the App, deploy grants exact persistent `CAN_USE` to
+normal, operator2, and admin with their expected application IDs and no secret
+rotation. The release probe receives candidate-only access during an explicit
+unsigned-App rebase and loses it immediately after signed capture.
 
 The normal and operator2 principals are not assigned to an approver group.
 The deployed workflow writes their exact client IDs to
-`MIP_APPROVER_IDENTITIES`; the admin client ID is written to
-`MIP_ADMIN_IDENTITIES`. Those server-owned exact allowlists are the automation
+`MIP_APPROVER_IDENTITIES`; the admin and release-probe client IDs are written to
+`MIP_ADMIN_IDENTITIES`. Workspace App ACLs keep the release probe unreachable
+outside its bounded candidate gate. Those server-owned exact allowlists are the automation
 authorization boundary. `X-Forwarded-Groups` is not part of the documented
 Databricks Apps identity-header contract and is only a local/test compatibility
 path in the application.
@@ -130,7 +138,7 @@ Flags of note:
 | `--gh-repo`             | inferred from `git remote get-url origin`        | Must match the detected origin or `MIP_M2M_GITHUB_REPOSITORY`; a different secret sink is rejected before SDK calls or minting. |
 | `--set-gh-secrets`      | off (explicit opt-in)                            | Required for minting and upload; the tool never prints or stores the one-shot client secret.       |
 | `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
-| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control the App grant for both operator identities and the admin identity. The verifier role always forbids App `CAN_USE` and rejects `--grant-can-use`, including under `--dry-run`. |
+| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control persistent App grants for both operator identities and the admin identity. Release-probe, verifier, and agent-runtime roles always forbid persistent App `CAN_USE` and reject `--grant-can-use`, including under `--dry-run`. |
 | `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
 
 Rotation (replaces the "Rotation cadence" section below when you use

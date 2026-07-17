@@ -96,7 +96,7 @@ verified by the live smoke test.
 
 ### Per-run M2M identities
 
-Live app validation and agent ownership use five service principals and store only their OAuth
+Live app validation and agent ownership use six service principals and store only their OAuth
 client credentials. No bearer token is a GitHub secret or `.env.local` value:
 
 One-shot OAuth secrets are written only to the repository detected from the
@@ -110,6 +110,7 @@ does not require this binding and can run from a customer fork unchanged.
 | normal app user | `mip-nightly-ci-sp` | `DATABRICKS_CLIENT_ID`, `DATABRICKS_CLIENT_SECRET` |
 | second app operator | `mip-nightly-operator2-ci-sp` | `DATABRICKS_OPERATOR2_CLIENT_ID`, `DATABRICKS_OPERATOR2_CLIENT_SECRET` |
 | app admin | `mip-nightly-admin-ci-sp` | `DATABRICKS_ADMIN_CLIENT_ID`, `DATABRICKS_ADMIN_CLIENT_SECRET` |
+| candidate release probe | `mip-release-probe-ci-sp` | `DATABRICKS_RELEASE_PROBE_CLIENT_ID`, `DATABRICKS_RELEASE_PROBE_CLIENT_SECRET` |
 | AI Gateway verifier | `mip-ai-gateway-verifier-ci-sp` | `DATABRICKS_VERIFIER_CLIENT_ID`, `DATABRICKS_VERIFIER_CLIENT_SECRET` |
 | agent resource runtime | `mip-agent-runtime-ci-sp` | `DATABRICKS_AGENT_RUNTIME_CLIENT_ID`, `DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET` |
 
@@ -132,6 +133,9 @@ python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role admin --create-group \
   --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
+  --pre-app-bootstrap --identity-role release_probe \
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
+python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role verifier \
   --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
@@ -145,10 +149,10 @@ to report success for an existing principal without an explicit rotation.
 Create the separate account-SCIM OAuth principal and store
 `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and
 `DATABRICKS_ACCOUNT_CLIENT_SECRET` independently; it must not reuse any of the
-five workspace client IDs. A first install with an approved group owner requires
+six workspace client IDs. A first install with an approved group owner requires
 account-admin authority because the bundle-created target App cannot be
 delegated in advance. After that install, downscope the account principal to
-Service Principal Manager on every forbidden normal, operator2, admin,
+Service Principal Manager on every normal, operator2, admin, release-probe,
 verifier, agent-runtime, and now-existing target-App principal so later deploys
 can create and revoke each five-minute target-identity proof credential. Also
 configure the two distinct Ed25519 private keys
@@ -159,14 +163,26 @@ secrets documented below. Store its derived public key separately as the
 read-only jobs never receive the private key. Only then run
 `./scripts/deploy.sh -t dev` or dispatch `deploy-dev.yml`. Immediately after bundle apply creates the App, deploy
 re-resolves its service principal and grants `CAN_USE` to the exact normal,
-operator2, and admin client IDs with `--no-mint-secret`; verifier/runtime
-resource reconciliation remains later, after their resources exist.
+operator2, and admin client IDs with `--no-mint-secret`. The release probe,
+verifier, and runtime retain no persistent App access; verifier/runtime resource
+reconciliation remains later, after their resources exist.
+
+An explicit unsigned-App rebase stops the App and removes all direct non-manager
+`CAN_USE` before any restart. After the green candidate deploy, the script first
+proves the agent-runtime identity cannot reach the App, then temporarily grants
+only the release probe `CAN_USE` for authenticated release checks. Normal,
+second-operator, and admin access is restored only after the treatment authority
+and exact last-good contract are durably captured. A pre-capture failure stops
+the App and leaves operator access withheld.
 
 Without `--create-group`, admin provisioning fails closed when `mip-admin` is
 missing. Re-running is idempotent: existing principals, group membership, and
 the verifier Lakebase OAuth role are reused. Client ID and secret sink flags
 are assertions for the reserved role-owned names; custom or cross-role sink
-names are rejected. The verifier is never added to `mip-admin` and receives no
+names are rejected. The release probe is admin-capable inside the product but
+receives no persistent Databricks App permission; its temporary candidate access
+is converged directly by the signed-release gate and removed after capture. The
+verifier is never added to `mip-admin` and receives no
 Databricks App `CAN_USE` permission by default. It receives only `CAN_USE`
 on the named SQL warehouse, `CAN_QUERY` on the AI Gateway endpoint, read-only
 access to the exact inference tables, and verifier-only Lakebase proof-ledger
@@ -203,12 +219,13 @@ every Lakebase instance rather than checking only the named deployment.
 For an existing principal whose prior client secret is unavailable or being
 replaced, add `--rotate`; without it, the existing secret remains unchanged.
 
-For local `scripts/deploy.sh`, provide the normal, admin, verifier, and
-agent-runtime client credential pairs plus the second-operator client ID
+For local `scripts/deploy.sh`, provide the normal, admin, release-probe,
+verifier, and agent-runtime client credential pairs plus the second-operator client ID
 through the process environment or `.env.local`. The script rejects reused
-client IDs, mints distinct normal/admin bearers at preflight, remints both
-immediately before Agent Evaluation, and remints the normal bearer again before
-the final smoke sweep. GitHub workflows use `tools/oauth_m2m_mint.py` to append
+client IDs, mints distinct normal/admin bearers at preflight, and uses only the
+release-probe bearer while an unsigned rebase remains quarantined. It remints
+the active automation bearers immediately before Agent Evaluation and the final
+smoke sweep. GitHub workflows use `tools/oauth_m2m_mint.py` to append
 fresh values directly to `$GITHUB_ENV`; minted values are not printed.
 The second-operator credential pair is intentionally required only by the
 on-demand `nightly.yml` isolation gate; deployment does not impersonate that

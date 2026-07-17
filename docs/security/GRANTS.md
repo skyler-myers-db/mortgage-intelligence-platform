@@ -383,8 +383,31 @@ of grant:
 
 ```sql
 GRANT USE CATALOG ON CATALOG mip_app_state TO `mip-app`;
-GRANT USE SCHEMA, SELECT ON SCHEMA mip_app_state.public TO `mip-app`;
+GRANT USE SCHEMA ON SCHEMA mip_app_state.mip_sync TO `mip-app`;
+GRANT SELECT ON TABLE mip_app_state.mip_sync.source_readiness TO `mip-app`;
+GRANT SELECT ON TABLE mip_app_state.mip_sync.segment_population TO `mip-app`;
+GRANT SELECT ON TABLE mip_app_state.mip_sync.funnel_snapshot_daily TO `mip-app`;
 ```
+
+The deploy applies these grants only after the Databricks synced-table
+API has created and proven `mip_app_state.mip_sync`; a fresh database catalog
+initially exposes Postgres system/`public`/`mip_app` schemas, not `mip_sync`.
+Granting the configured sync schema earlier is therefore a first-install race.
+The app does not receive UC `SELECT` on the authoritative `mip_app` Postgres
+schema; primary Lakebase reads and writes use its separately constrained
+Postgres role. Before synced-table provisioning, deploy inventories the entire
+registered database catalog and removes all direct App catalog, table, and
+schema privileges from every non-system schema, including `public`, `mip_app`,
+and the configured sync schema. Because Unity Catalog excludes `MANAGE` and
+`EXTERNAL USE SCHEMA` from `ALL PRIVILEGES`, convergence revokes those
+privileges explicitly on each applicable catalog/schema/table object as well.
+After provisioning it restores only direct `USE CATALOG`, direct `USE SCHEMA`,
+and direct table-scoped `SELECT` for the exact reviewed
+`MIP_LAKEBASE_SYNC_TABLES` allowlist. It never grants schema-wide `SELECT`.
+The catalog-wide postflight resolves nested workspace groups and fails on any
+unreviewed schema/table access, broader inherited privileges, or App/group
+ownership. `information_schema` is inventoried explicitly as UC-owned system
+metadata and is never included in the mutable application-schema set.
 
 **5b. Lakebase Postgres role (primary write path).** The `mip-app`
 binding declared in [`databricks.yml`](../../databricks.yml) lines
@@ -646,7 +669,13 @@ SHOW GRANTS `mip-app` ON SCHEMA mip.ref;
 SHOW GRANTS `mip-app` ON SCHEMA mip.audit;
 -- Substitute the exact generated table printed by the grant postflight.
 SHOW GRANTS `mip-app` ON TABLE mip.audit.mip_agent_gateway_growth_agent_<resource-hash-12>_payload;
+SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.mip_sync;
+SHOW GRANTS `mip-app` ON TABLE mip_app_state.mip_sync.source_readiness;
+SHOW GRANTS `mip-app` ON TABLE mip_app_state.mip_sync.segment_population;
+SHOW GRANTS `mip-app` ON TABLE mip_app_state.mip_sync.funnel_snapshot_daily;
+-- Expect no App or effective App-group privilege on either legacy schema:
 SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.public;
+SHOW GRANTS `mip-app` ON SCHEMA mip_app_state.mip_app;
 
 -- Cotality share (catalog name depends on customer) -- ETL/deploy identity only
 SHOW GRANTS `sp-mip-etl` ON CATALOG cotality_mortgage_data;

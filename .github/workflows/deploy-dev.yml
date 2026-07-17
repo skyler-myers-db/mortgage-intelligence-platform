@@ -61,6 +61,8 @@ jobs:
           MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
           LAKEBASE_DATABASE: ${{ vars.LAKEBASE_DATABASE || 'mip_app_state' }}
           MIP_LAKEBASE_SYNC_CATALOG: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG || 'mip_app_state' }}
+          MIP_LAKEBASE_SYNC_SCHEMA: ${{ vars.MIP_LAKEBASE_SYNC_SCHEMA || 'mip_sync' }}
+          MIP_LAKEBASE_SYNC_TABLES: ${{ vars.MIP_LAKEBASE_SYNC_TABLES || 'source_readiness,segment_population,funnel_snapshot_daily' }}
           MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
           MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE || 'mip-app-rollback' }}
           MIP_GENIE_SPACE_NAME: ${{ vars.MIP_GENIE_SPACE_NAME || 'Mortgage Lead Intelligence' }}
@@ -70,6 +72,7 @@ jobs:
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
           DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_RELEASE_PROBE_CLIENT_ID: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID }}
           DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
           DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
           DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
@@ -79,7 +82,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi
@@ -100,7 +103,8 @@ jobs:
           export -n MIP_ADMIN_EMAILS MIP_ADMIN_GROUP_NAME MIP_APPROVER_GROUP_NAME
           export -n MIP_UC_APPROVED_OWNER_PRINCIPALS MIP_DEFAULT_CATALOG
           export -n MIP_APP_NAME MIP_LAKEBASE_INSTANCE LAKEBASE_DATABASE
-          export -n MIP_LAKEBASE_SYNC_CATALOG MIP_RUNTIME_SECRET_SCOPE
+          export -n MIP_LAKEBASE_SYNC_CATALOG MIP_LAKEBASE_SYNC_SCHEMA
+          export -n MIP_LAKEBASE_SYNC_TABLES MIP_RUNTIME_SECRET_SCOPE
           export -n MIP_APP_ROLLBACK_SECRET_SCOPE
           export -n MIP_GENIE_SPACE_NAME
           export -n MIP_AI_GATEWAY_AGENT_MODEL_FAMILY MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE
@@ -113,18 +117,20 @@ jobs:
               "DATABRICKS_CLIENT_ID",
               "DATABRICKS_OPERATOR2_CLIENT_ID",
               "DATABRICKS_ADMIN_CLIENT_ID",
+              "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
               "DATABRICKS_VERIFIER_CLIENT_ID",
               "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
           )
           values = [os.environ[name].strip() for name in names]
           if len(set(values)) != len(values):
-              raise SystemExit("Normal, operator2, admin, verifier, and agent-runtime M2M client IDs must be pairwise distinct.")
+              raise SystemExit("Normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs must be pairwise distinct.")
           account_client_id = os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", "").strip()
           if account_client_id and account_client_id in values:
               raise SystemExit("Account-SCIM OAuth client must be distinct from every app-facing M2M client ID.")
           PY
           export -n DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID
-          export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID
+          export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID
+          export -n DATABRICKS_VERIFIER_CLIENT_ID
           export -n DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_ID
           {
             echo "[DEFAULT]"
@@ -146,13 +152,15 @@ jobs:
             echo "LAKEBASE_DATABASE=${LAKEBASE_DATABASE:-mip_app_state}"
             echo "MIP_LAKEBASE_DATABASE_NAME=${LAKEBASE_DATABASE:-mip_app_state}"
             echo "MIP_LAKEBASE_SYNC_CATALOG=${MIP_LAKEBASE_SYNC_CATALOG:-mip_app_state}"
+            echo "MIP_LAKEBASE_SYNC_SCHEMA=${MIP_LAKEBASE_SYNC_SCHEMA:-mip_sync}"
+            echo "MIP_LAKEBASE_SYNC_TABLES=${MIP_LAKEBASE_SYNC_TABLES:-source_readiness,segment_population,funnel_snapshot_daily}"
             echo "MIP_RUNTIME_SECRET_SCOPE=${MIP_RUNTIME_SECRET_SCOPE:-mip-runtime}"
             echo "MIP_APP_ROLLBACK_SECRET_SCOPE=${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
             echo "MIP_GENIE_SPACE_NAME=${MIP_GENIE_SPACE_NAME:-Mortgage Lead Intelligence}"
             echo "MIP_DEFAULT_SCHEMA=gold"
             echo "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS=1"
             echo "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}"
-            echo "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID}"
+            echo "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID},${DATABRICKS_RELEASE_PROBE_CLIENT_ID}"
             if [ -n "${MIP_GENIE_ACTION_SECRET_KID:-}" ]; then
               echo "MIP_GENIE_ACTION_SECRET_KID=${MIP_GENIE_ACTION_SECRET_KID}"
             fi
@@ -192,6 +200,8 @@ jobs:
           DATABRICKS_OPERATOR2_CLIENT_ID: ${{ secrets.DATABRICKS_OPERATOR2_CLIENT_ID }}
           DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
           DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
+          DATABRICKS_RELEASE_PROBE_CLIENT_ID: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID }}
+          DATABRICKS_RELEASE_PROBE_CLIENT_SECRET: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET }}
           DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
           DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
           DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
@@ -213,6 +223,8 @@ jobs:
           MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
           LAKEBASE_DATABASE: ${{ vars.LAKEBASE_DATABASE || 'mip_app_state' }}
           MIP_LAKEBASE_SYNC_CATALOG: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG || 'mip_app_state' }}
+          MIP_LAKEBASE_SYNC_SCHEMA: ${{ vars.MIP_LAKEBASE_SYNC_SCHEMA || 'mip_sync' }}
+          MIP_LAKEBASE_SYNC_TABLES: ${{ vars.MIP_LAKEBASE_SYNC_TABLES || 'source_readiness,segment_population,funnel_snapshot_daily' }}
           MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
           MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE || 'mip-app-rollback' }}
           MIP_GENIE_SPACE_NAME: ${{ vars.MIP_GENIE_SPACE_NAME || 'Mortgage Lead Intelligence' }}

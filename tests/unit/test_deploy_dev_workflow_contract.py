@@ -49,6 +49,106 @@ def _workflow_run_block(path: Path, step_name: str) -> str:
     return textwrap.dedent(text[run + len("        run: |\n") : end if end != -1 else None])
 
 
+def _sql_without_comments(sql: str) -> str:
+    """Remove SQL comments so governance tests only accept executable DDL."""
+
+    output: list[str] = []
+    index = 0
+    state = "code"
+    delimiters = {"single": "'", "double": '"', "backtick": "`"}
+    while index < len(sql):
+        current = sql[index]
+        following = sql[index + 1] if index + 1 < len(sql) else ""
+        if state == "code":
+            if current == "-" and following == "-":
+                state = "line_comment"
+                index += 2
+                continue
+            if current == "/" and following == "*":
+                state = "block_comment"
+                index += 2
+                continue
+            if current in {"'", '"', "`"}:
+                state = {"'": "single", '"': "double", "`": "backtick"}[current]
+            output.append(current)
+            index += 1
+            continue
+        if state == "line_comment":
+            if current == "\n":
+                output.append(current)
+                state = "code"
+            index += 1
+            continue
+        if state == "block_comment":
+            if current == "*" and following == "/":
+                state = "code"
+                index += 2
+                continue
+            if current == "\n":
+                output.append(current)
+            index += 1
+            continue
+
+        delimiter = delimiters[state]
+        output.append(current)
+        if current == delimiter:
+            if following == delimiter:
+                output.append(following)
+                index += 2
+                continue
+            state = "code"
+        index += 1
+    return "".join(output)
+
+
+def _continued_command_tokens(block: str, command_fragment: str) -> list[str]:
+    """Return one executable continued shell command as parsed argv tokens."""
+
+    lines = block.splitlines()
+    starts = [index for index, line in enumerate(lines) if command_fragment in line]
+    assert len(starts) == 1, f"expected one command containing {command_fragment!r}"
+    command_lines: list[str] = []
+    index = starts[0]
+    while index < len(lines):
+        line = lines[index].strip()
+        command_lines.append(line[:-1].rstrip() if line.endswith("\\") else line)
+        if not line.endswith("\\"):
+            break
+        index += 1
+    else:  # pragma: no cover - an unterminated command is itself the assertion failure
+        raise AssertionError(f"unterminated command containing {command_fragment!r}")
+    return shlex.split(" ".join(command_lines))
+
+
+def _shell_function(name: str) -> str:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = script.index(f"{name}() {{")
+    end = script.index("\n}\n", start) + len("\n}\n")
+    return script[start:end]
+
+
+def test_sql_contract_scanner_rejects_commented_ddl_without_corrupting_literals() -> None:
+    sql = """
+    -- CREATE TABLE IF NOT EXISTS mip.gold.hidden_line (id INT);
+    /* CREATE TABLE IF NOT EXISTS mip.gold.hidden_block (id INT); */
+    SELECT '/api/*' AS route, '-- not a comment' AS label;
+    CREATE TABLE IF NOT EXISTS mip.gold.visible (id INT);
+    /* CREATE TABLE IF NOT EXISTS mip.gold.hidden_unclosed (id INT);
+    """
+
+    executable = _sql_without_comments(sql)
+
+    assert "hidden_line" not in executable
+    assert "hidden_block" not in executable
+    assert "hidden_unclosed" not in executable
+    assert "'/api/*'" in executable
+    assert "'-- not a comment'" in executable
+    assert re.search(
+        r"(?im)^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+mip\.gold\.visible\b",
+        executable,
+    )
+
+
 def _install_environment_recorder(tmp_path: Path) -> tuple[Path, Path]:
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
@@ -102,6 +202,29 @@ def _proof_heartbeat_launcher_block() -> str:
     return text[start:end]
 
 
+def _first_snapshot_decision_block() -> str:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = text.index('if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then')
+    end = text.index(
+        "\nfi\n\n# -----------------------------------------------------------------------------",
+        start,
+    )
+    end += len("\nfi\n")
+    return text[start:end]
+
+
+def _unsigned_candidate_rollback_block() -> str:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    release_gate = text.index('if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then')
+    start = text.index('elif [[ "$DRY_RUN" -eq 0 ]]; then', release_gate)
+    end = text.index(
+        "\nfi\n\n# -----------------------------------------------------------------------------",
+        start,
+    )
+    block = text[start : end + len("\nfi\n")]
+    return block.replace("elif [[", "if [[", 1)
+
+
 def _read_env_log(path: Path) -> dict[str, str]:
     return dict(
         line.split("=", 1) for line in path.read_text(encoding="utf-8").splitlines() if "=" in line
@@ -121,6 +244,8 @@ def _run_deploy_auth_harness(tmp_path: Path, *, mode: str) -> dict[str, Any]:
         "DATABRICKS_CLIENT_SECRET=normal-app-secret",
         "DATABRICKS_ADMIN_CLIENT_ID=admin-app-client",
         "DATABRICKS_ADMIN_CLIENT_SECRET=admin-app-secret",
+        "DATABRICKS_RELEASE_PROBE_CLIENT_ID=release-probe-client",
+        "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET=release-probe-secret",
         "DATABRICKS_VERIFIER_CLIENT_ID=verifier-client",
         "DATABRICKS_VERIFIER_CLIENT_SECRET=verifier-secret",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client",
@@ -198,6 +323,8 @@ resolve_m2m_credential DATABRICKS_CLIENT_ID shell
 resolve_m2m_credential DATABRICKS_CLIENT_SECRET shell
 resolve_m2m_credential DATABRICKS_ADMIN_CLIENT_ID shell
 resolve_m2m_credential DATABRICKS_ADMIN_CLIENT_SECRET shell
+resolve_m2m_credential DATABRICKS_RELEASE_PROBE_CLIENT_ID shell
+resolve_m2m_credential DATABRICKS_RELEASE_PROBE_CLIENT_SECRET shell
 resolve_m2m_credential DATABRICKS_VERIFIER_CLIENT_ID shell
 resolve_m2m_credential DATABRICKS_VERIFIER_CLIENT_SECRET shell
 resolve_m2m_credential DATABRICKS_AGENT_RUNTIME_CLIENT_ID shell
@@ -405,6 +532,8 @@ def _run_app_failure_compensation_harness(
     stop_outcome: str = "stopped",
     app_principal: str = "app-client",
     stop_outcome_record: str | None = None,
+    access_quarantined: bool = False,
+    release_acl_result: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     calls = tmp_path / f"app-compensation-{state}.log"
     fake_python = tmp_path / f"fake-python-{state}.sh"
@@ -413,6 +542,7 @@ def _run_app_failure_compensation_harness(
         "#!/usr/bin/env bash\n"
         f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
         f'if [[ "$*" == *app_deployment_rollback* ]]; then exit {rollback_result}; fi\n'
+        f'if [[ "$*" == *converge_app_release_access* ]]; then exit {release_acl_result}; fi\n'
         'if [[ "$*" == *stop_app_fail_closed* ]]; then\n'
         f"  [[ {stop_result} -eq 0 ]] || exit {stop_result}\n"
         '  outcome_file=""\n'
@@ -441,6 +571,11 @@ APP_SIGNED_BLUE_AVAILABLE=1
 TREATMENT_RUNTIME_QUIESCED={0 if state in {"blue_active", "green_verified", "green_treatment_pending_capture"} else 1}
 APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 _EXISTING_APP_SP_CLIENT_ID={shlex.quote(app_principal)}
+APP_ACCESS_QUARANTINED={1 if access_quarantined else 0}
+DATABRICKS_RELEASE_PROBE_CLIENT_ID=release-probe
+DATABRICKS_CLIENT_ID=normal
+DATABRICKS_OPERATOR2_CLIENT_ID=operator2
+DATABRICKS_ADMIN_CLIENT_ID=admin
 _GRANTS_WAREHOUSE_ID=warehouse-id
 _GRANTS_CATALOG=mip
 MIP_APP_URL=https://mip.example
@@ -451,6 +586,7 @@ YLW=""
 RST=""
 run_with_account_identity() {{ "$@"; }}
 run_with_proof_signing_authority() {{ "$@"; }}
+mint_m2m_token() {{ printf 'mint %s\n' "$*" >> {shlex.quote(str(calls))}; }}
 {_app_failure_compensation_block()}
 stop_app_after_failed_deploy
 """,
@@ -652,7 +788,7 @@ def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None
     assert "databricks auth token" not in text
     assert "DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in text
     assert (
-        "normal, operator2, admin, verifier, and agent-runtime M2M client IDs "
+        "normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs "
         "must be pairwise distinct" in text
     )
     assert (
@@ -951,14 +1087,216 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers(
     assert "mint_m2m_token MIP_BEARER_TOKEN" in script
     assert "mint_m2m_token MIP_ADMIN_BEARER_TOKEN" in script
     assert (
-        "Normal, operator2, admin, verifier, and agent-runtime M2M client IDs "
+        "Normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs "
         "must be pairwise distinct." in text
     )
     assert (
         "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}" in text
     )
-    assert "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID}" in text
+    assert (
+        "MIP_ADMIN_IDENTITIES=${DATABRICKS_ADMIN_CLIENT_ID},"
+        "${DATABRICKS_RELEASE_PROBE_CLIENT_ID}" in text
+    )
     assert "Configure MIP_ADMIN_EMAILS or MIP_ADMIN_GROUP_NAME" not in text
+
+
+def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() -> None:
+    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert (
+        workflow.count(
+            "DATABRICKS_RELEASE_PROBE_CLIENT_ID: "
+            "${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID }}"
+        )
+        == 2
+    )
+    assert (
+        workflow.count(
+            "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET: "
+            "${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_SECRET }}"
+        )
+        == 1
+    )
+    required_loop = workflow[workflow.index('missing=""') : workflow.index("python - <<'PY'")]
+    assert "DATABRICKS_RELEASE_PROBE_CLIENT_ID" in required_loop
+    assert "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET" not in required_loop
+    assert "export MIP_ADMIN_IDENTITIES" in script
+    assert "\"$DATABRICKS_RELEASE_PROBE_CLIENT_ID\" <<'PYEOF'" in script
+
+    rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]')
+    stop = script.index("tools.databricks.stop_app_fail_closed", rebase)
+    quarantine = script.index("tools.databricks.converge_app_release_access", stop)
+    quarantined_state = script.index("APP_ACCESS_QUARANTINED=1", quarantine)
+    treatment_quiesce = script.index(
+        "tools.databricks.converge_campaign_treatment_access", quarantined_state
+    )
+    rebase_first_install = script.index('APP_UPGRADE_STATE="first_install"', treatment_quiesce)
+    first_snapshot_guard = script.index(
+        'if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then', rebase_first_install
+    )
+    first_snapshot = script.index(
+        'deploy_app_snapshot "deploy first-install Databricks App snapshot from uploaded bundle source"',
+        first_snapshot_guard,
+    )
+    first_snapshot_else = script.index("\nelse\n", first_snapshot)
+    assert stop < quarantine < quarantined_state < treatment_quiesce < rebase_first_install
+    assert rebase_first_install < first_snapshot_guard < first_snapshot < first_snapshot_else
+    assert "_EXISTING_APP_SP_CLIENT_ID" not in script[first_snapshot_guard:first_snapshot]
+
+    candidate = script.index(
+        'deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"'
+    )
+    negative = script.index(
+        'step "prove agent-runtime negative authorization boundary before positive App probes"',
+        candidate,
+    )
+    probe_access = script.index("--mode probe", negative)
+    positive = script.index("tools/verify_deployed_app_contract.py", probe_access)
+    capture = script.index('capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"', positive)
+    runtime_access = script.index("--mode runtime", capture)
+    retire = script.index(
+        'step "retire pinned blue runtime resources only after every green release gate"',
+        runtime_access,
+    )
+    assert candidate < negative < probe_access < positive < capture < runtime_access < retire
+    probe_block = script[negative:positive]
+    assert (
+        "mint_m2m_token MIP_BEARER_TOKEN \\\n"
+        "      DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET" in script
+    )
+    assert "mint_app_automation_tokens" in probe_block
+
+
+def test_cached_agentic_env_cannot_override_deployment_sync_contract(tmp_path: Path) -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    cache_source = script.index('. "$AGENTIC_ENV_CACHE"')
+    production_restore = script.index(
+        'restore_deployment_sync_contract "$AGENTIC_ENV_CACHE"', cache_source
+    )
+    first_snapshot_guard = script.index(
+        'if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then', production_restore
+    )
+    assert cache_source < production_restore < first_snapshot_guard
+
+    harness = tmp_path / "sync-contract-harness.sh"
+    harness.write_text(
+        textwrap.dedent(
+            f"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            {_shell_function("restore_deployment_sync_contract")}
+            DEPLOYMENT_SYNC_CATALOG=reviewed_catalog
+            DEPLOYMENT_SYNC_SCHEMA=reviewed_schema
+            DEPLOYMENT_SYNC_TABLES=one,two,three
+            MIP_LAKEBASE_SYNC_CATALOG=stale_catalog
+            MIP_LAKEBASE_SYNC_SCHEMA=stale_schema
+            MIP_LAKEBASE_SYNC_TABLES=stale_one
+            restore_deployment_sync_contract .databricks/mip-agentic.env
+            printf '%s\n' \\
+              "$MIP_LAKEBASE_SYNC_CATALOG" \\
+              "$MIP_LAKEBASE_SYNC_SCHEMA" \\
+              "$MIP_LAKEBASE_SYNC_TABLES"
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.splitlines() == [
+        "[deploy] ignoring stale Lakebase Sync names from "
+        ".databricks/mip-agentic.env; deployment controls are authoritative",
+        "reviewed_catalog",
+        "reviewed_schema",
+        "one,two,three",
+    ]
+
+
+def test_rebase_first_install_waits_for_stopped_existing_app_before_snapshot(
+    tmp_path: Path,
+) -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    guard = script.index('if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then')
+    wait = script.index("wait_for_app_deployable", guard)
+    snapshot = script.index(
+        'deploy_app_snapshot "deploy first-install Databricks App snapshot from uploaded bundle source"',
+        wait,
+    )
+    branch_else = script.index("\nelse\n", snapshot)
+    assert guard < wait < snapshot < branch_else
+
+    calls = tmp_path / "first-snapshot.log"
+    harness = tmp_path / "first-snapshot.sh"
+    harness.write_text(
+        textwrap.dedent(
+            f"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            APP_UPGRADE_STATE=first_install
+            DRY_RUN=0
+            _EXISTING_APP_SP_CLIENT_ID=existing-app-client
+            wait_for_app_deployable() {{ printf 'wait\n' >> {shlex.quote(str(calls))}; }}
+            deploy_app_snapshot() {{ printf 'deploy:%s\n' "$1" >> {shlex.quote(str(calls))}; }}
+            step() {{ printf 'preserve\n' >> {shlex.quote(str(calls))}; }}
+            {_first_snapshot_decision_block()}
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "wait",
+        "deploy:deploy first-install Databricks App snapshot from uploaded bundle source",
+    ]
+
+
+def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_restore(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "unsigned-rollback.log"
+    harness = tmp_path / "unsigned-rollback.sh"
+    harness.write_text(
+        textwrap.dedent(
+            f"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            DRY_RUN=0
+            APP_NAME=mip-app
+            APP_SIGNED_BLUE_AVAILABLE=1
+            APP_UPGRADE_STATE=green_unverified
+            TREATMENT_RUNTIME_QUIESCED=0
+            PYTHON=/nonexistent/python
+            step() {{ printf 'step:%s\n' "$1" >> {shlex.quote(str(calls))}; }}
+            converge_app_treatment_access() {{ printf 'treatment:%s\n' "$1" >> {shlex.quote(str(calls))}; }}
+            restore_signed_blue_while_quiesced() {{ printf 'restore-helper\n' >> {shlex.quote(str(calls))}; }}
+            run() {{
+              printf 'run:%s\n' "$*" >> {shlex.quote(str(calls))}
+              if declare -F "$1" >/dev/null; then "$@"; fi
+            }}
+            {_unsigned_candidate_rollback_block()}
+            """
+        ),
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    log = calls.read_text(encoding="utf-8")
+    assert log.index("stop the unproven candidate") < log.index("treatment:quiesce")
+    assert log.index("treatment:quiesce") < log.index("restore-helper")
+    assert "mint_m2m_token" not in log
 
 
 def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
@@ -1097,11 +1435,12 @@ def test_deploy_reconciles_every_app_facing_identity_only_after_app_creation() -
         ("normal", "DATABRICKS_CLIENT_ID"),
         ("operator2", "DATABRICKS_OPERATOR2_CLIENT_ID"),
         ("admin", "DATABRICKS_ADMIN_CLIENT_ID"),
+        ("release_probe", "DATABRICKS_RELEASE_PROBE_CLIENT_ID"),
     ):
         assert f"--identity-role {role}" in grant_block
         assert f'--expected-application-id "${client_id}"' in grant_block
-    assert grant_block.count('--app-name "$_GRANTS_APP_NAME"') == 3
-    assert grant_block.count("--no-mint-secret") == 3
+    assert grant_block.count('--app-name "$_GRANTS_APP_NAME"') == 4
+    assert grant_block.count("--no-mint-secret") == 4
     assert "--pre-app-bootstrap" not in grant_block
 
 
@@ -1182,7 +1521,7 @@ def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
 
 def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-    bundle = (REPO / "databricks.yml").read_text(encoding="utf-8")
+    bundle = yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))
 
     migration = script.index(
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
@@ -1230,8 +1569,59 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
         'step "atomically restore treatment authority and persist the last-good App contract"'
     )
     assert atomic_restore_and_capture < first_green_capture
-    assert "mip_init_catalog_schemas:" in bundle
-    assert "path: sql/_rendered/ddl/001_catalogs_schemas.sql" in bundle
+    bootstrap_tasks = bundle["resources"]["jobs"]["mip_init_catalog_schemas"]["tasks"]
+    task_by_key = {task["task_key"]: task for task in bootstrap_tasks}
+    expected_paths = {
+        "init_catalog_schemas": "sql/_rendered/ddl/001_catalogs_schemas.sql",
+        "init_ref_tables": "sql/_rendered/ddl/004_ref_tables.sql",
+        "init_governed_gold_tables": "sql/_rendered/ddl/003_gold_tables.sql",
+        "publish_fn_build_cohort": "sql/_rendered/uc_functions/fn_build_cohort.sql",
+        "publish_fn_segment_counts": "sql/_rendered/uc_functions/fn_segment_counts.sql",
+        "publish_fn_lead_queue_url": "sql/_rendered/uc_functions/fn_lead_queue_url.sql",
+    }
+    assert set(task_by_key) == set(expected_paths)
+    for task_key, path in expected_paths.items():
+        assert task_by_key[task_key]["sql_task"]["file"]["path"] == path
+    assert "depends_on" not in task_by_key["init_catalog_schemas"]
+    assert task_by_key["init_ref_tables"]["depends_on"] == [{"task_key": "init_catalog_schemas"}]
+    assert task_by_key["init_governed_gold_tables"]["depends_on"] == [
+        {"task_key": "init_ref_tables"}
+    ]
+    for task_key in (
+        "publish_fn_build_cohort",
+        "publish_fn_segment_counts",
+        "publish_fn_lead_queue_url",
+    ):
+        assert task_by_key[task_key]["depends_on"] == [{"task_key": "init_governed_gold_tables"}]
+
+    ddl_sources = {
+        path: _sql_without_comments(
+            (REPO / path.replace("sql/_rendered/", "sql/")).read_text(encoding="utf-8")
+        )
+        for path in expected_paths.values()
+    }
+    assert re.search(
+        r"(?im)^\s*CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+mip\.gold\b",
+        ddl_sources[expected_paths["init_catalog_schemas"]],
+    )
+    assert re.search(
+        r"(?im)^\s*CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+mip\.audit\b",
+        ddl_sources[expected_paths["init_catalog_schemas"]],
+    )
+    assert re.search(
+        r"(?im)^\s*CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+mip\.ref\b",
+        ddl_sources[expected_paths["init_ref_tables"]],
+    )
+    for table in ("borrower_lifecycle_state", "funnel_snapshot_daily"):
+        assert re.search(
+            rf"(?im)^\s*CREATE\s+TABLE\s+IF\s+NOT\s+EXISTS\s+" rf"mip\.gold\.{re.escape(table)}\b",
+            ddl_sources[expected_paths["init_governed_gold_tables"]],
+        )
+    for function in ("fn_build_cohort", "fn_segment_counts", "fn_lead_queue_url"):
+        assert re.search(
+            rf"(?im)^\s*CREATE\s+OR\s+REPLACE\s+FUNCTION\s+" rf"mip\.gold\.{re.escape(function)}\b",
+            ddl_sources[expected_paths[f"publish_{function}"]],
+        )
     namespace_block = script[namespace_setup:bundle_apply]
     assert '--catalog "${MIP_DEFAULT_CATALOG:-mip}"' in namespace_block
     assert "--schema silver" in namespace_block
@@ -1242,12 +1632,145 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
         '"$DATABRICKS_CLIENT_ID"',
         '"$DATABRICKS_OPERATOR2_CLIENT_ID"',
         '"$DATABRICKS_ADMIN_CLIENT_ID"',
+        '"$DATABRICKS_RELEASE_PROBE_CLIENT_ID"',
         '"$DATABRICKS_VERIFIER_CLIENT_ID"',
         '"$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"',
     ):
         assert forbidden_client_id in namespace_block
     assert '"$_EXISTING_APP_SP_CLIENT_ID"' in namespace_block
     assert "mip_init_catalog_schemas" not in namespace_block
+
+
+def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    migration = script.index(
+        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
+    )
+    quiesce = script.index('step "quiesce legacy and target Lakebase synced-catalog access"')
+    base_grants = script.index('step "apply UC grants to the app service principal')
+    sync_provision = script.index('step "prove agentic Lakebase Sync under deployer authority"')
+    runtime_convergence = script.index(
+        'step "converge exact app read-only access to proven Lakebase synced tables"'
+    )
+    app_snapshot_with_agentic_proof = script.index(
+        'deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"'
+    )
+
+    assert migration < quiesce < base_grants < sync_provision < runtime_convergence
+    assert runtime_convergence < app_snapshot_with_agentic_proof
+    base_grant_block = script[base_grants:sync_provision]
+    assert "converge_app_lakebase_sync_access" not in base_grant_block
+    executable_grants = [
+        line.strip().replace("\\`", "`")
+        for line in base_grant_block.splitlines()
+        if line.lstrip().startswith("GRANT ")
+    ]
+    assert executable_grants == [
+        "GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO `${APP_SP_CLIENT_ID}`",
+        "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.gold TO `${APP_SP_CLIENT_ID}`",
+        "GRANT MODIFY ON TABLE ${_GRANTS_CATALOG}.gold.borrower_lifecycle_state TO `${APP_SP_CLIENT_ID}`",
+        "GRANT MODIFY ON TABLE ${_GRANTS_CATALOG}.gold.funnel_snapshot_daily TO `${APP_SP_CLIENT_ID}`",
+        "GRANT USE SCHEMA, SELECT ON SCHEMA ${_GRANTS_CATALOG}.ref TO `${APP_SP_CLIENT_ID}`",
+        "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${APP_SP_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO `${APP_SP_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO `${APP_SP_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO `${APP_SP_CLIENT_ID}`",
+        "GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT CREATE MODEL ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT CREATE TABLE ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+    ]
+    assert not any(
+        token in base_grant_block
+        for token in (
+            "DEPLOYMENT_SYNC_CATALOG",
+            "MIP_LAKEBASE_SYNC_CATALOG",
+            "mip_app_state.public",
+            "mip_app_state.mip_app",
+            "mip_app_state.mip_sync",
+        )
+    )
+
+    quiesce_block = script[quiesce:base_grants]
+    quiesce_tokens = _continued_command_tokens(
+        quiesce_block, "tools.databricks.converge_app_lakebase_sync_access"
+    )
+    runtime_block = script[runtime_convergence:app_snapshot_with_agentic_proof]
+    runtime_tokens = _continued_command_tokens(
+        runtime_block, "tools.databricks.converge_app_lakebase_sync_access"
+    )
+    common = [
+        "--warehouse-id",
+        "$_GRANTS_WAREHOUSE_ID",
+        "--app-application-id",
+        "$APP_SP_CLIENT_ID",
+        "--app-scim-id",
+        "$APP_SP_SCIM_ID",
+        "--sync-catalog",
+        "$DEPLOYMENT_SYNC_CATALOG",
+        "--sync-schema",
+        "$DEPLOYMENT_SYNC_SCHEMA",
+        "--sync-tables",
+        "$DEPLOYMENT_SYNC_TABLES",
+    ]
+    assert quiesce_tokens == [
+        "run",
+        "$PYTHON",
+        "-m",
+        "tools.databricks.converge_app_lakebase_sync_access",
+        "--mode",
+        "quiesce",
+        *common,
+    ]
+    assert runtime_tokens == [
+        "run",
+        "$PYTHON",
+        "-m",
+        "tools.databricks.converge_app_lakebase_sync_access",
+        "--mode",
+        "runtime",
+        *common,
+    ]
+
+
+def test_deployer_sync_provision_command_is_exact_and_cannot_skip_sync() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = script.index('step "prove agentic Lakebase Sync under deployer authority"')
+    end = script.index(
+        'step "converge exact app read-only access to proven Lakebase synced tables"', start
+    )
+    tokens = _continued_command_tokens(
+        script[start:end], "tools.databricks.provision_agentic_resources"
+    )
+
+    assert tokens == [
+        "run",
+        "$PYTHON",
+        "-m",
+        "tools.databricks.provision_agentic_resources",
+        "--catalog",
+        "${MIP_DEFAULT_CATALOG:-mip}",
+        "--genie-space-id",
+        "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}",
+        "--lakebase-catalog",
+        "$DEPLOYMENT_SYNC_CATALOG",
+        "--lakebase-schema",
+        "$DEPLOYMENT_SYNC_SCHEMA",
+        "--lakebase-sync-tables",
+        "$DEPLOYMENT_SYNC_TABLES",
+        "--database-instance",
+        "$MIP_LAKEBASE_INSTANCE",
+        "--logical-database",
+        "$LAKEBASE_DATABASE",
+        "--skip-supervisor",
+        "--skip-gateway",
+    ]
+    assert "--skip-sync" not in tokens
 
 
 def test_pipeline_namespace_bootstrap_is_leased_and_precedes_bundle_apply() -> None:
@@ -1551,6 +2074,7 @@ def test_deploy_unexports_private_signing_keys_before_first_child_process() -> N
     for secret in (
         "DATABRICKS_CLIENT_SECRET",
         "DATABRICKS_ADMIN_CLIENT_SECRET",
+        "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET",
         "DATABRICKS_VERIFIER_CLIENT_SECRET",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
         "DATABRICKS_ACCOUNT_CLIENT_SECRET",
@@ -1584,6 +2108,7 @@ def test_deploy_workflow_identity_check_inherits_only_public_client_ids() -> Non
         "DATABRICKS_CLIENT_ID",
         "DATABRICKS_OPERATOR2_CLIENT_ID",
         "DATABRICKS_ADMIN_CLIENT_ID",
+        "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
         "DATABRICKS_VERIFIER_CLIENT_ID",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
         "DATABRICKS_ACCOUNT_CLIENT_ID",
@@ -1612,6 +2137,7 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_CLIENT_ID": "operator-a",
         "DATABRICKS_OPERATOR2_CLIENT_ID": "operator-b",
         "DATABRICKS_ADMIN_CLIENT_ID": "admin",
+        "DATABRICKS_RELEASE_PROBE_CLIENT_ID": "release-probe",
         "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "runtime",
         "DATABRICKS_ACCOUNT_HOST": "https://accounts.example",
@@ -1639,6 +2165,7 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_CLIENT_ID",
         "DATABRICKS_OPERATOR2_CLIENT_ID",
         "DATABRICKS_ADMIN_CLIENT_ID",
+        "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
         "DATABRICKS_VERIFIER_CLIENT_ID",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
         "DATABRICKS_ACCOUNT_CLIENT_ID",
@@ -1728,7 +2255,12 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
         'deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"'
     )
     assert first_snapshot < preserve_old < activate_green
-    assert 'if [[ -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then' in script
+    rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]')
+    rebase_first_install = script.index('APP_UPGRADE_STATE="first_install"', rebase)
+    first_snapshot_guard = script.index(
+        'if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then', rebase_first_install
+    )
+    assert rebase < rebase_first_install < first_snapshot_guard < first_snapshot
     assert 'kind != "apps"' in script
     assert 'BUNDLE_NON_APP_ARGS+=(--select "$_bundle_selector")' in script
     assert script.index('APP_UPGRADE_STATE="blue_active"') < preserve_old
@@ -1874,6 +2406,32 @@ def test_app_failure_compensation_restores_blue_during_green_activation(
     assert "stop_app_fail_closed" not in calls
 
 
+def test_quarantined_blue_restore_uses_probe_then_restores_runtime_acl(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="green_activating_quiesced",
+        rollback_result=0,
+        stop_result=1,
+        access_quarantined=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    probe_mint = (
+        "mint MIP_BEARER_TOKEN DATABRICKS_RELEASE_PROBE_CLIENT_ID "
+        "DATABRICKS_RELEASE_PROBE_CLIENT_SECRET"
+    )
+    assert probe_mint in calls
+    assert calls.index(probe_mint) < calls.index("app_deployment_rollback restore")
+    assert calls.index("app_deployment_rollback restore") < calls.index(
+        "converge_app_release_access --mode runtime"
+    )
+    assert calls.index("converge_app_release_access --mode runtime") < calls.index(
+        "converge_campaign_treatment_access"
+    )
+
+
 def test_app_failure_compensation_stops_when_exact_restore_fails(
     tmp_path: Path,
 ) -> None:
@@ -1943,6 +2501,42 @@ def test_app_failure_compensation_stops_green_with_unproven_treatment_restore(
     assert result.returncode == 0, result.stderr
     assert calls.index("stop_app_fail_closed") < calls.index("app_deployment_rollback restore")
     assert "stop_app_fail_closed" in calls
+
+
+def test_app_failure_compensation_requarantines_probe_before_treatment_rollback(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="green_treatment_pending_capture",
+        rollback_result=0,
+        stop_result=0,
+        access_quarantined=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls.index("stop_app_fail_closed") < calls.index("converge_app_release_access")
+    assert calls.index("converge_app_release_access") < calls.index(
+        "converge_campaign_treatment_access"
+    )
+    assert "--mode quarantine" in calls
+
+
+def test_app_failure_compensation_fails_if_probe_requarantine_cannot_be_proven(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="first_install",
+        rollback_result=1,
+        stop_result=0,
+        access_quarantined=True,
+        release_acl_result=1,
+    )
+
+    assert result.returncode == 1
+    assert "failed to re-quarantine temporary App release access" in result.stderr
+    assert "converge_campaign_treatment_access" in calls
 
 
 def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflight() -> None:

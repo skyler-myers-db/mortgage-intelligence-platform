@@ -212,28 +212,18 @@ def assert_non_admin_service_principal(
 
     def _values(items: Iterable[Any] | None) -> set[str]:
         return {
-            str(
-                getattr(item, "value", None)
-                or getattr(item, "display", None)
-                or item
-                or ""
-            )
+            str(getattr(item, "value", None) or getattr(item, "display", None) or item or "")
             .strip()
             .casefold()
             for item in (items or [])
             if str(
-                getattr(item, "value", None)
-                or getattr(item, "display", None)
-                or item
-                or ""
+                getattr(item, "value", None) or getattr(item, "display", None) or item or ""
             ).strip()
         }
 
     roles = _values(getattr(principal, "roles", None))
     forbidden_roles = {
-        role
-        for role in roles
-        if any(token in role for token in ("admin", "manager", "metastore"))
+        role for role in roles if any(token in role for token in ("admin", "manager", "metastore"))
     }
     if forbidden_roles:
         raise SystemExit(
@@ -309,10 +299,7 @@ def assert_lakebase_role_scope(
         except Exception as exc:  # noqa: BLE001
             raise wrap_admin_error(exc, step=f"audit Lakebase roles on {name}") from exc
         has_role = any(
-            str(
-                (role.get("name") if isinstance(role, dict) else getattr(role, "name", ""))
-                or ""
-            )
+            str((role.get("name") if isinstance(role, dict) else getattr(role, "name", "")) or "")
             == application_id
             for role in roles
         )
@@ -358,9 +345,7 @@ def assert_no_app_permission(
         except Exception as exc:  # noqa: BLE001
             raise wrap_admin_error(exc, step="inspect app permissions") from exc
         for entry in getattr(permissions, "access_control_list", None) or []:
-            service_principal_name = str(
-                getattr(entry, "service_principal_name", "") or ""
-            ).strip()
+            service_principal_name = str(getattr(entry, "service_principal_name", "") or "").strip()
             entry_display_name = str(getattr(entry, "display_name", "") or "").strip()
             group_name = str(getattr(entry, "group_name", "") or "").strip()
             if service_principal_name in {sp_application_id, sp_display_name} or (
@@ -378,6 +363,70 @@ def assert_no_app_permission(
                     f"{identity_role} service principal retains forbidden effective "
                     f"Databricks App permission on {visible_name!r} through group "
                     f"{group_name!r}; remove the group grant or membership before provisioning"
+                )
+
+
+def assert_no_app_manager_permission(
+    client: Any,
+    *,
+    sp_application_id: str,
+    sp_display_name: str,
+    effective_group_names: set[str],
+    identity_role: str,
+) -> None:
+    """Reject effective CAN_MANAGE on every visible App for a runtime user role."""
+
+    try:
+        apps = list(client.apps.list())
+    except Exception as exc:  # noqa: BLE001
+        raise wrap_admin_error(exc, step="list workspace Apps") from exc
+    seen_apps: set[str] = set()
+    for app in apps:
+        visible_name = str(
+            (app.get("name") if isinstance(app, dict) else getattr(app, "name", "")) or ""
+        ).strip()
+        if not visible_name:
+            raise SystemExit("Cannot audit App manager isolation: a visible App has no name")
+        if visible_name in seen_apps:
+            raise SystemExit(f"Cannot audit App manager isolation: duplicate App {visible_name!r}")
+        seen_apps.add(visible_name)
+        try:
+            permissions = client.apps.get_permissions(visible_name)
+        except Exception as exc:  # noqa: BLE001
+            raise wrap_admin_error(exc, step="inspect app manager permissions") from exc
+        for entry in getattr(permissions, "access_control_list", None) or []:
+            levels = getattr(entry, "all_permissions", None)
+            if not isinstance(levels, list | tuple) or not levels:
+                raise SystemExit("Cannot audit App manager isolation: malformed permission list")
+            normalized_levels: set[str] = set()
+            for permission in levels:
+                raw_level = getattr(permission, "permission_level", None)
+                level = str(getattr(raw_level, "value", raw_level) or "").strip().upper()
+                if level not in {"CAN_MANAGE", "CAN_USE"}:
+                    raise SystemExit(
+                        "Cannot audit App manager isolation: unexpected permission level"
+                    )
+                normalized_levels.add(level)
+            if "CAN_MANAGE" not in normalized_levels:
+                continue
+            service_principal_name = str(getattr(entry, "service_principal_name", "") or "").strip()
+            entry_display_name = str(getattr(entry, "display_name", "") or "").strip()
+            group_name = str(getattr(entry, "group_name", "") or "").strip()
+            direct_match = service_principal_name in {
+                sp_application_id,
+                sp_display_name,
+            } or (
+                not service_principal_name
+                and not group_name
+                and entry_display_name == sp_display_name
+            )
+            group_match = bool(group_name and group_name in effective_group_names)
+            if direct_match or group_match:
+                path = f" through group {group_name!r}" if group_match else ""
+                raise SystemExit(
+                    f"{identity_role} service principal retains forbidden effective "
+                    f"Databricks App CAN_MANAGE on {visible_name!r}{path}; remove manager "
+                    "access before provisioning"
                 )
 
 
