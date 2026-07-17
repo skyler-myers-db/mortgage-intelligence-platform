@@ -39,6 +39,14 @@ def test_bundle_sql_warehouse_uses_minimal_idle_timeout():
     ), "mip_serverless_sql should use a 10 minute auto-stop"
 
 
+def test_bundle_feature_pipeline_uses_serverless_compute():
+    content = (REPO / "databricks.yml").read_text(encoding="utf-8")
+    assert re.search(
+        r"(?ms)mip_feature_pipeline:.*?serverless: true",
+        content,
+    ), "mip_feature_pipeline should deploy in serverless-only workspaces"
+
+
 def test_databricks_yml_contains_required_resource_names():
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
     for token in [
@@ -55,7 +63,7 @@ def test_databricks_yml_contains_required_resource_names():
         "mip_segment_dashboard",
         "mortgage_lead_intelligence",
         "mip_app_state",
-        "/Shared/mip/lead-scoring",
+        "/mip-lead-scoring",
         "mip",
         "raw,silver,gold,semantics,app,audit",
     ]:

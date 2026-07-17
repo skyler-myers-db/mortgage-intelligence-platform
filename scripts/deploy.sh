@@ -318,9 +318,48 @@ restore_signed_blue_while_quiesced() {
 }
 
 stop_and_quiesce_unproven_app() {
-  local failed=0
-  "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-    --app-name "$APP_FAIL_CLOSED_NAME" || failed=1
+  local failed=0 outcome_file outcome_line="" extra_line="" outcome="" principal app_json
+  outcome_file="$(mktemp -t mip-app-stop-outcome.XXXXXX.env)"
+  chmod 600 "$outcome_file"
+  if ! "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    --out-env "$outcome_file"; then
+    rm -f "$outcome_file"
+    return 1
+  fi
+  {
+    IFS= read -r outcome_line || true
+    if IFS= read -r extra_line || [[ -n "$extra_line" ]]; then
+      outcome_line=""
+    fi
+  } < "$outcome_file"
+  rm -f "$outcome_file"
+  case "$outcome_line" in
+    MIP_APP_STOP_OUTCOME=absent) outcome="absent" ;;
+    MIP_APP_STOP_OUTCOME=stopped) outcome="stopped" ;;
+  esac
+  if [[ -z "$outcome" ]]; then
+    echo "${RED}[deploy] fail-closed App stop returned no authenticated outcome.${RST}" >&2
+    return 1
+  fi
+  # Authoritative absence proves that no target App identity can write the
+  # treatment table. Requiring a nonexistent principal here turns a safe
+  # first-install bundle failure into an unprovable secondary failure.
+  if [[ "$outcome" == "absent" ]]; then
+    TREATMENT_RUNTIME_QUIESCED=1
+    return 0
+  fi
+  principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}"
+  if [[ -z "$principal" ]]; then
+    app_json="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null || true)"
+    if [[ -n "$app_json" ]]; then
+      principal="$(printf '%s' "$app_json" | "$PYTHON" -c '
+import json, sys
+print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
+' 2>/dev/null || true)"
+    fi
+    APP_SP_CLIENT_ID="$principal"
+  fi
   if converge_app_treatment_access quiesce; then
     TREATMENT_RUNTIME_QUIESCED=1
   else
@@ -410,12 +449,15 @@ stop_app_after_failed_deploy() {
 }
 
 quiesce_app_treatment_after_failed_stop() {
-  local principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}"
+  local principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}" app_json=""
   if [[ -z "$principal" && -n "$APP_FAIL_CLOSED_NAME" ]]; then
-    principal="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null | "$PYTHON" -c '
+    app_json="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null || true)"
+    if [[ -n "$app_json" ]]; then
+      principal="$(printf '%s' "$app_json" | "$PYTHON" -c '
 import json, sys
 print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())
-' || true)"
+' 2>/dev/null || true)"
+    fi
   fi
   if [[ -z "$principal" || -z "${_GRANTS_WAREHOUSE_ID:-}" || \
         -z "${_GRANTS_CATALOG:-}" ]]; then
@@ -1320,6 +1362,7 @@ PYEOF
   # shellcheck disable=SC1090
   . "$APP_DEPLOYMENT_LEASE_ENV"
   set +a
+  APP_DEPLOYMENT_LEASE_ID="${MIP_APP_DEPLOYMENT_LEASE_ID:?lease acquisition returned no id}"
   export MIP_APP_DEPLOYMENT_LEASE_ID
   start_proof_signing_heartbeat \
     "$PYTHON" -m tools.databricks.app_deployment_lease heartbeat \

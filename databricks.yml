@@ -1165,6 +1165,9 @@ resources:
       catalog: ${var.uc_catalog}
       schema: silver
       photon: true
+      # Fresh serverless-only workspaces reject pipelines that omit this flag.
+      # Serverless is also the governed production posture for this pipeline.
+      serverless: true
       # `development` is intentionally NOT set here -- bundle target mode
       # (`mode: development` vs `mode: production`) flips the pipeline's
       # development flag automatically. Hardcoding `development: true` here
@@ -1194,9 +1197,9 @@ resources:
       file_path: dashboards/segment_dashboard.lvdash.json
       warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
 
-  # Canonical experiment path is /Shared/mip/lead-scoring; the parent
-  # /Shared/mip directory is auto-created by the bundle deploy. Under
-  # `mode: development` (the dev target), Databricks Asset Bundles
+  # Keep the experiment directly under the workspace root. Nested experiment
+  # paths require a separately-created parent directory, which breaks a fresh
+  # zero-click bundle apply. Under `mode: development` (the dev target), DAB
   # automatically prefixes the experiment name with `[dev <username>]`
   # to sandbox per-user experiments — so we don't need a manual
   # `${workspace.current_user.userName}` template that would force
@@ -1204,7 +1207,7 @@ resources:
   # resolve the path (making PR CI impossible without real secrets).
   experiments:
     mip_lead_scoring:
-      name: /Shared/mip/lead-scoring
+      name: /mip-lead-scoring
 
 # Genie spaces (mortgage_lead_intelligence) are still provisioned out-of-
 # bundle via tools/databricks/provision_genie_space.py (see AGENTS.md).

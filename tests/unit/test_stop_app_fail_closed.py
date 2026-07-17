@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
+from tools.databricks import stop_app_fail_closed as stop_module
 from tools.databricks.stop_app_fail_closed import stop_app_fail_closed
 
 
@@ -72,3 +74,16 @@ def test_stop_compensation_fails_when_terminal_state_is_unproven() -> None:
             attempts=2,
             interval_s=0,
         )
+
+
+def test_cli_writes_machine_readable_proven_outcome(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    outcome = tmp_path / "stop.env"
+    workspace = SimpleNamespace(apps=SimpleNamespace(list=lambda: iter([])))
+    monkeypatch.setattr(stop_module, "deployment_workspace_client", lambda: workspace)
+
+    assert stop_module.main(["--app-name", "mip-app", "--out-env", str(outcome)]) == 0
+    assert outcome.read_text(encoding="utf-8") == "MIP_APP_STOP_OUTCOME=absent\n"
+    assert outcome.stat().st_mode & 0o777 == 0o600

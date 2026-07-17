@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
 from tools.databricks.workspace_auth import deployment_workspace_client
@@ -68,6 +70,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--attempts", type=int, default=30)
     parser.add_argument("--interval-s", type=float, default=2.0)
+    parser.add_argument(
+        "--out-env",
+        type=Path,
+        help="Write the proven absent/stopped outcome for fail-closed compensation.",
+    )
     return parser
 
 
@@ -78,6 +85,12 @@ def main(argv: list[str] | None = None) -> int:
         attempts=args.attempts,
         interval_s=args.interval_s,
     )
+    if args.out_env is not None:
+        args.out_env.write_text(
+            f"MIP_APP_STOP_OUTCOME={shlex.quote(outcome)}\n",
+            encoding="utf-8",
+        )
+        args.out_env.chmod(0o600)
     print(f"fail-closed App compensation verified: {outcome}")
     return 0
 

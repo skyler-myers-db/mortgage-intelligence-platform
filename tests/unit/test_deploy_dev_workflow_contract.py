@@ -333,20 +333,76 @@ exit {original_rc}
     )
 
 
+def _run_deploy_lease_cleanup_harness(
+    tmp_path: Path,
+    *,
+    original_rc: int,
+) -> tuple[subprocess.CompletedProcess[str], Path]:
+    release_log = tmp_path / f"lease-release-{original_rc}.log"
+    harness = tmp_path / f"lease-release-{original_rc}.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+APP_DEPLOY_PAYLOAD=""
+AGENTIC_ENV_FILE=""
+AGENT_EVAL_ENV_FILE=""
+APP_DEPLOYMENT_LEASE_ID=lease-id
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+_GRANTS_APP_NAME=mip-app
+RED=""
+YLW=""
+DIM=""
+RST=""
+PYTHON=python3
+stop_app_after_failed_deploy() {{ return 0; }}
+quiesce_app_treatment_after_failed_stop() {{ return 0; }}
+run_with_proof_signing_authority() {{ printf '%s\n' "$*" > {shlex.quote(str(release_log))}; }}
+{_deploy_exit_trap_block()}
+exit {original_rc}
+""",
+        encoding="utf-8",
+    )
+    return (
+        subprocess.run(
+            ["bash", str(harness)],
+            text=True,
+            capture_output=True,
+            check=False,
+        ),
+        release_log,
+    )
+
+
 def _run_app_failure_compensation_harness(
     tmp_path: Path,
     *,
     state: str,
     rollback_result: int,
     stop_result: int,
+    stop_outcome: str = "stopped",
+    app_principal: str = "app-client",
+    stop_outcome_record: str | None = None,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     calls = tmp_path / f"app-compensation-{state}.log"
     fake_python = tmp_path / f"fake-python-{state}.sh"
+    outcome_record = stop_outcome_record or f"MIP_APP_STOP_OUTCOME={stop_outcome}\n"
     fake_python.write_text(
         "#!/usr/bin/env bash\n"
         f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
         f'if [[ "$*" == *app_deployment_rollback* ]]; then exit {rollback_result}; fi\n'
-        f'if [[ "$*" == *stop_app_fail_closed* ]]; then exit {stop_result}; fi\n'
+        'if [[ "$*" == *stop_app_fail_closed* ]]; then\n'
+        f"  [[ {stop_result} -eq 0 ]] || exit {stop_result}\n"
+        "  outcome_file=\"\"\n"
+        "  while (( $# )); do\n"
+        "    if [[ \"$1\" == --out-env && $# -ge 2 ]]; then outcome_file=\"$2\"; break; fi\n"
+        "    shift\n"
+        "  done\n"
+        "  [[ -n \"$outcome_file\" ]] || exit 64\n"
+        f"  printf %s {shlex.quote(outcome_record)} > \"$outcome_file\"\n"
+        "  exit 0\n"
+        "fi\n"
         "exit 0\n",
         encoding="utf-8",
     )
@@ -362,8 +418,8 @@ APP_UPGRADE_STATE={shlex.quote(state)}
 APP_ROLLBACK_SECRET_SCOPE=mip
 APP_SIGNED_BLUE_AVAILABLE=1
 TREATMENT_RUNTIME_QUIESCED={0 if state in {"blue_active", "green_verified", "green_treatment_pending_capture"} else 1}
-APP_SP_CLIENT_ID=app-client
-_EXISTING_APP_SP_CLIENT_ID=app-client
+APP_SP_CLIENT_ID={shlex.quote(app_principal)}
+_EXISTING_APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 _GRANTS_WAREHOUSE_ID=warehouse-id
 _GRANTS_CATALOG=mip
 MIP_APP_URL=https://mip.example
@@ -1092,6 +1148,20 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
     assert "--warehouse-id" not in bootstrap_block
 
 
+def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    source_lease = script.index('. "$APP_DEPLOYMENT_LEASE_ENV"')
+    cleanup_guard = script.index('-n "${APP_DEPLOYMENT_LEASE_ID:-}"')
+    cleanup_release = script.index('--lease-id "$APP_DEPLOYMENT_LEASE_ID"')
+
+    assignment = script.index(
+        'APP_DEPLOYMENT_LEASE_ID="${MIP_APP_DEPLOYMENT_LEASE_ID:',
+        source_lease,
+    )
+    heartbeat = script.index('--lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"', assignment)
+    assert cleanup_guard < cleanup_release < source_lease < assignment < heartbeat
+
+
 def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     bundle = (REPO / "databricks.yml").read_text(encoding="utf-8")
@@ -1702,6 +1772,23 @@ def test_deploy_exit_trap_preserves_failure_or_fails_closed(
         assert "original failure was followed by unproven App shutdown" in result.stderr
 
 
+@pytest.mark.parametrize("original_rc", (0, 7))
+def test_deploy_exit_trap_releases_exact_lease_on_success_and_failure(
+    tmp_path: Path,
+    original_rc: int,
+) -> None:
+    result, release_log = _run_deploy_lease_cleanup_harness(
+        tmp_path,
+        original_rc=original_rc,
+    )
+
+    assert result.returncode == original_rc, result.stderr
+    assert release_log.read_text(encoding="utf-8") == (
+        "python3 -m tools.databricks.app_deployment_lease release "
+        "--app-name mip-app --lease-id lease-id\n"
+    )
+
+
 @pytest.mark.parametrize("state", ("blue_active", "green_verified"))
 def test_app_failure_compensation_preserves_proven_deployment(
     tmp_path: Path,
@@ -1745,6 +1832,48 @@ def test_app_failure_compensation_stops_when_exact_restore_fails(
 
     assert result.returncode == 0, result.stderr
     assert calls.index("app_deployment_rollback restore") < calls.index("stop_app_fail_closed")
+
+
+def test_first_install_compensation_accepts_authoritative_app_absence(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="first_install",
+        rollback_result=1,
+        stop_result=0,
+        stop_outcome="absent",
+        app_principal="",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "stop_app_fail_closed" in calls
+    assert "converge_campaign_treatment_access" not in calls
+
+
+@pytest.mark.parametrize(
+    "record",
+    (
+        "MIP_APP_STOP_OUTCOME=absent\nATTACKER_BYTES\n",
+        "MIP_APP_STOP_OUTCOME=absent\nATTACKER_BYTES",
+    ),
+)
+def test_first_install_compensation_rejects_extra_outcome_lines(
+    tmp_path: Path,
+    record: str,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="first_install",
+        rollback_result=1,
+        stop_result=0,
+        app_principal="",
+        stop_outcome_record=record,
+    )
+
+    assert result.returncode == 1
+    assert "no authenticated outcome" in result.stderr
+    assert "converge_campaign_treatment_access" not in calls
 
 
 def test_app_failure_compensation_stops_green_with_unproven_treatment_restore(
