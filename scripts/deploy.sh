@@ -1089,6 +1089,15 @@ echo "  target:     ${TARGET}"
 echo "  dry-run:    ${DRY_RUN}"
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
+  # Unity Catalog model registration validates the uploaded artifact through
+  # the metastore's cloud storage before the version becomes ready. Fail before
+  # the first workspace lookup/mutation when the runtime lacks that AWS
+  # artifact client. Dry-runs intentionally validate config without requiring
+  # the deployment-only Python dependency set.
+  if ! "$PYTHON" -c 'import boto3, mlflow' >/dev/null 2>&1; then
+    echo "${RED}[deploy] MLflow Unity Catalog artifact dependencies are unavailable (mlflow + boto3 required).${RST}" >&2
+    exit 2
+  fi
   DEPLOY_INVENTORY_PRINCIPAL="$("$PYTHON" - <<'PY'
 from databricks.sdk import WorkspaceClient
 

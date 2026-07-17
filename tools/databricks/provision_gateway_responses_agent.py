@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import os
-import re
 from typing import Any
 
 import mlflow
@@ -17,7 +16,6 @@ from mlflow.models.resources import (
 from backend.agents.gateway_contract import (
     GATEWAY_BURST_SCALING_ENABLED,
     GATEWAY_ENDPOINT_DESCRIPTION,
-    GATEWAY_MODEL_CANONICAL_TAGS,
     GATEWAY_MODEL_REQUIREMENTS,
     GATEWAY_MODEL_SOURCE_HASH_TAG,
     GATEWAY_MODEL_UPSTREAM_TAG,
@@ -66,6 +64,27 @@ from tools.databricks.gateway_model_attestation import (
     sign_gateway_model_contract,
     verify_gateway_model_contract,
 )
+from tools.databricks.gateway_registration_recovery import (
+    DurableRegistrationJournal,
+    RegistrationJournalVisibilityError,
+    RegistrationReconciliationPendingError,
+    attested_source_versions,
+    clear_registration_journal,
+    compensate_unregistered_logged_model,
+    persist_registration_journal,
+    reconcile_incomplete_source_versions,
+    require_no_unjournaled_gateway_sources,
+    validated_model_version_tags,
+)
+from tools.databricks.gateway_registration_recovery import (
+    compensate_failed_model_registration as _compensate_failed_model_registration,
+)
+from tools.databricks.gateway_registration_recovery import (
+    registration_cleanup_journal as _registration_cleanup_journal,
+)
+from tools.databricks.gateway_registration_recovery import (
+    require_ready_model_version as _require_ready_model_version,
+)
 from tools.databricks.gateway_resource_identity import (
     GatewayAgentDeployment,
     _resolve_exact_experiment,
@@ -93,29 +112,6 @@ _BURST_SCALING_ENABLED = GATEWAY_BURST_SCALING_ENABLED
 _ROUTE_OPTIMIZED = GATEWAY_ROUTE_OPTIMIZED
 _TRAFFIC_PERCENTAGE = GATEWAY_TRAFFIC_PERCENTAGE
 _ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
-_UC_MODEL_VERSION_TAG_KEY = re.compile(r"[A-Za-z0-9_]{1,256}\Z")
-_UC_MODEL_VERSION_TAG_LIMIT = 50
-_UC_MODEL_VERSION_TAG_VALUE_LIMIT = 256
-
-
-def validated_model_version_tags(tags: dict[str, str]) -> dict[str, str]:
-    """Reject tag keys that Unity Catalog model versions cannot persist."""
-
-    if len(tags) > _UC_MODEL_VERSION_TAG_LIMIT or set(tags) != GATEWAY_MODEL_CANONICAL_TAGS:
-        raise ValueError("Gateway model version tag set is invalid for Unity Catalog")
-    normalized = dict(tags)
-    if any(
-        not isinstance(key, str)
-        or _UC_MODEL_VERSION_TAG_KEY.fullmatch(key) is None
-        or not isinstance(value, str)
-        or not value
-        or value != value.strip()
-        or len(value) > _UC_MODEL_VERSION_TAG_VALUE_LIMIT
-        for key, value in normalized.items()
-    ):
-        raise ValueError("Gateway model version tag key or value is invalid for Unity Catalog")
-    gateway_model_version_tags(normalized)
-    return normalized
 
 
 def _current_model_version(details: Any, *, model_name: str) -> int | None:
@@ -175,48 +171,29 @@ def _existing_source_version(
     inference_schema: str,
     inference_table_prefix: str,
 ) -> int | None:
-    versions = client.search_model_versions(f"name='{model_name}'")
-    matches: list[int] = []
-    for version in versions:
-        version_number = str(getattr(version, "version", "") or "")
-        model_source = str(getattr(version, "source", "") or "").strip()
-        if not version_number or not model_source:
-            raise RuntimeError("attested Gateway model version lacks immutable source metadata")
-        tags = {
-            str(key): str(value)
-            for key, value in dict(getattr(version, "tags", None) or {}).items()
-        }
-        contract = {
-            "full_name": model_name,
-            "model_source": model_source,
-            "source_hash": source_hash,
-            "supervisor_id": supervisor_id,
-            "supervisor_endpoint_id": supervisor_endpoint_id,
-            "upstream_endpoint": upstream_endpoint,
-            "runtime_application_id": runtime_application_id,
-            "model_family": model_family,
-            "experiment_base": experiment_base,
-            "catalog": catalog,
-            "genie_space_id": genie_space_id,
-            "inference_schema": inference_schema,
-            "inference_table_prefix": inference_table_prefix,
-        }
-        try:
-            current_attestation = verify_gateway_model_contract(
-                tags=tags,
-                **contract,
-            )
-        except RuntimeError as exc:
-            raise RuntimeError(
-                f"attested Gateway model version {model_name} v{version_number} drifted"
-            ) from exc
-        if not current_attestation:
-            raise RuntimeError(
-                f"Gateway candidate model {model_name} v{version_number} "
-                "uses a previous attestation epoch"
-            )
-        matches.append(int(version_number))
-    return max(matches) if matches else None
+    ready, incomplete = attested_source_versions(
+        client,
+        model_name=model_name,
+        source_hash=source_hash,
+        supervisor_id=supervisor_id,
+        supervisor_endpoint_id=supervisor_endpoint_id,
+        upstream_endpoint=upstream_endpoint,
+        runtime_application_id=runtime_application_id,
+        model_family=model_family,
+        experiment_base=experiment_base,
+        catalog=catalog,
+        genie_space_id=genie_space_id,
+        inference_schema=inference_schema,
+        inference_table_prefix=inference_table_prefix,
+        verify_attestation=verify_gateway_model_contract,
+    )
+    if incomplete:
+        candidate = incomplete[0]
+        raise RuntimeError(
+            f"Gateway candidate model {model_name} v{candidate.version} "
+            f"is not ready ({candidate.status})"
+        )
+    return max(ready) if ready else None
 
 
 def _start_mlflow_run() -> Any:
@@ -310,6 +287,12 @@ def _verified_model_version_tags(
         raise RuntimeError("Unity Catalog returned an unexpected Gateway Agent Model version")
     if str(getattr(version, "source", "") or "").strip() != deployment.model_source:
         raise RuntimeError("served Gateway Agent Model version source drifted")
+    _require_ready_model_version(
+        version,
+        resource=(
+            f"served Gateway Agent Model {deployment.model_name} v{deployment.model_version}"
+        ),
+    )
     tags = {
         str(key): str(value) for key, value in dict(getattr(version, "tags", None) or {}).items()
     }
@@ -602,9 +585,12 @@ def ensure_gateway_responses_agent(
         experiment_id=experiment_id,
         runtime_application_id=expected_creator_application_id,
     )
-    model_version = _existing_source_version(
+    recovery = reconcile_incomplete_source_versions(
         client,
+        workspace,
         model_name=versioned_model_name,
+        experiment_id=experiment_id,
+        expected_creator_application_id=expected_creator_application_id,
         source_hash=source_hash,
         supervisor_id=supervisor_id,
         supervisor_endpoint_id=supervisor_endpoint_id,
@@ -616,40 +602,116 @@ def ensure_gateway_responses_agent(
         genie_space_id=genie_space_id,
         inference_schema=inference_schema,
         inference_table_prefix=inference_table_prefix,
+        verify_attestation=verify_gateway_model_contract,
     )
-    if model_version is None:
-        print(f"[agentic] logging Gateway Supervisor proxy: {versioned_model_name}")
-        logged = _log_gateway_model(
+    active_durable = recovery.durable if recovery and recovery.journal_requires_clear else None
+    model_version = recovery.ready_version if recovery else None
+    if recovery is None:
+        model_version = _existing_source_version(
+            client,
+            model_name=versioned_model_name,
+            source_hash=source_hash,
+            supervisor_id=supervisor_id,
+            supervisor_endpoint_id=supervisor_endpoint_id,
             upstream_endpoint=upstream_endpoint,
+            runtime_application_id=expected_creator_application_id,
+            model_family=model_family,
+            experiment_base=experiment_family,
             catalog=inference_catalog,
             genie_space_id=genie_space_id,
+            inference_schema=inference_schema,
+            inference_table_prefix=inference_table_prefix,
         )
-        model_source = str(getattr(logged, "model_uri", "") or "").strip()
-        if not model_source:
-            raise RuntimeError("logged Gateway model has no immutable model URI")
-        registration_tags = validated_model_version_tags(
-            sign_gateway_model_contract(
-                full_name=versioned_model_name,
-                model_source=model_source,
-                source_hash=source_hash,
-                supervisor_id=supervisor_id,
-                supervisor_endpoint_id=supervisor_endpoint_id,
+    if model_version is None:
+        if recovery is not None:
+            cleanup_journal = recovery.durable.journal
+            model_source = cleanup_journal.model_source
+            registration_tags = recovery.durable.registration_tags
+        else:
+            require_no_unjournaled_gateway_sources(
+                client,
+                experiment_id=experiment_id,
+                expected_logged_model_name="mortgage_growth_supervisor_proxy",
+            )
+            print(f"[agentic] logging Gateway Supervisor proxy: {versioned_model_name}")
+            logged = _log_gateway_model(
                 upstream_endpoint=upstream_endpoint,
-                runtime_application_id=expected_creator_application_id,
-                model_family=model_family,
-                experiment_base=experiment_family,
                 catalog=inference_catalog,
                 genie_space_id=genie_space_id,
-                inference_schema=inference_schema,
-                inference_table_prefix=inference_table_prefix,
             )
-        )
-        registered = mlflow.register_model(
-            model_source,
-            versioned_model_name,
-            tags=registration_tags,
-        )
-        model_version = int(registered.version)
+            model_source = str(getattr(logged, "model_uri", "") or "").strip()
+            if not model_source:
+                raise RuntimeError("logged Gateway model has no immutable model URI")
+            registration_tags = validated_model_version_tags(
+                sign_gateway_model_contract(
+                    full_name=versioned_model_name,
+                    model_source=model_source,
+                    source_hash=source_hash,
+                    supervisor_id=supervisor_id,
+                    supervisor_endpoint_id=supervisor_endpoint_id,
+                    upstream_endpoint=upstream_endpoint,
+                    runtime_application_id=expected_creator_application_id,
+                    model_family=model_family,
+                    experiment_base=experiment_family,
+                    catalog=inference_catalog,
+                    genie_space_id=genie_space_id,
+                    inference_schema=inference_schema,
+                    inference_table_prefix=inference_table_prefix,
+                )
+            )
+            try:
+                cleanup_journal = _registration_cleanup_journal(
+                    client,
+                    model_source=model_source,
+                    expected_experiment_id=experiment_id,
+                    logged=logged,
+                )
+            except RegistrationJournalVisibilityError as journal_error:
+                try:
+                    compensate_unregistered_logged_model(client, journal_error.journal)
+                except Exception as cleanup_error:  # noqa: BLE001 - preserve both causes
+                    raise RuntimeError(
+                        "Gateway model journaling failed and pre-registration cleanup "
+                        f"did not converge: {cleanup_error}"
+                    ) from journal_error
+                raise
+            active_durable = DurableRegistrationJournal(
+                model_name=versioned_model_name,
+                journal=cleanup_journal,
+                registration_tags=registration_tags,
+            )
+            persist_registration_journal(client, active_durable)
+        try:
+            registered = mlflow.register_model(
+                model_source,
+                versioned_model_name,
+                tags=registration_tags,
+            )
+        except Exception as registration_error:  # noqa: BLE001 - compensate exact UC write
+            try:
+                recovered_version = _compensate_failed_model_registration(
+                    client,
+                    workspace,
+                    model_name=versioned_model_name,
+                    journal=cleanup_journal,
+                    registration_tags=registration_tags,
+                    expected_creator_application_id=expected_creator_application_id,
+                )
+            except RegistrationReconciliationPendingError as cleanup_error:
+                raise cleanup_error from registration_error
+            except Exception as cleanup_error:  # noqa: BLE001 - preserve both failure causes
+                raise RuntimeError(
+                    "Gateway model registration failed and cleanup did not converge: "
+                    f"{cleanup_error}"
+                ) from registration_error
+            if recovered_version is None:
+                raise RegistrationReconciliationPendingError(
+                    "incomplete Gateway registration was removed; preserving the durable "
+                    "journal and source for exact retry"
+                ) from registration_error
+            model_version = recovered_version
+        else:
+            model_version = int(registered.version)
     model_details = workspace.registered_models.get(versioned_model_name)
     assert_runtime_creator(
         getattr(model_details, "owner", None),
@@ -659,6 +721,14 @@ def ensure_gateway_responses_agent(
     model_version_details = client.get_model_version(
         versioned_model_name,
         str(model_version),
+    )
+    if str(getattr(model_version_details, "name", "") or "").strip() != versioned_model_name or str(
+        getattr(model_version_details, "version", "") or ""
+    ).strip() != str(model_version):
+        raise RuntimeError("Unity Catalog returned an unexpected Gateway model version")
+    _require_ready_model_version(
+        model_version_details,
+        resource=f"Gateway candidate model {versioned_model_name} v{model_version}",
     )
     model_version_tags = {
         str(key): str(value)
@@ -692,6 +762,13 @@ def ensure_gateway_responses_agent(
         or persisted_model_tags.contract["upstream_endpoint"] != upstream_endpoint
     ):
         raise RuntimeError("Gateway model version source-binding tags are not immutable")
+    if active_durable is not None:
+        if (
+            model_source != active_durable.journal.model_source
+            or model_version_tags != active_durable.registration_tags
+        ):
+            raise RuntimeError("READY Gateway version does not match its durable journal")
+        clear_registration_journal(client, active_durable)
 
     entity, traffic = _served_entity(
         supervisor_id=supervisor_id,

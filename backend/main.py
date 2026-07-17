@@ -157,19 +157,13 @@ def _warm_lakebase() -> None:
     continues, and the audit router's 503 + resilience-aware UI
     banner cover the gap until the first real request succeeds.
     """
-    from backend.services.lakebase import get_lakebase_client
-
-    # If Lakebase connection hints are absent, skip silently -- the
-    # audit router already surfaces 503 on its own when the creds are
-    # missing, and we don't want to duplicate that signal at startup.
-    #
-    # Deployed Databricks Apps may provide PGHOST / PGUSER plus a
-    # workspace-token password provider instead of LAKEBASE_* vars, so
-    # the warm-start gate must mirror the Lakebase client resolver's
-    # supported connection hints rather than only settings fields.
+    # If the host hint is absent, skip silently -- the audit router already
+    # surfaces 503 on its own when the binding is missing. PGHOST alone is a
+    # complete deployed-App hint: get_lakebase_client uses the same resolver
+    # as every request and obtains a missing user plus the short-lived token
+    # from workspace identity.
     host_hint = settings.lakebase_host or os.environ.get("PGHOST")
-    user_hint = settings.lakebase_user or os.environ.get("PGUSER")
-    if not host_hint or not user_hint:
+    if not host_hint:
         emit(
             log,
             "lakebase_warm_start_skipped",
@@ -180,9 +174,21 @@ def _warm_lakebase() -> None:
         return
     start = time.monotonic()
     try:
-        client = get_lakebase_client()
-        client.fetchone("SELECT 1 AS warm")
+        from backend.services.health_probes import cached_probe, probe_lakebase
+
+        is_up = cached_probe("lakebase", probe_lakebase)
         took_ms = int((time.monotonic() - start) * 1000)
+        if not is_up:
+            emit(
+                log,
+                "lakebase_warm_start_failed",
+                level=logging.WARNING,
+                dependency="lakebase",
+                outcome="error",
+                duration_ms=took_ms,
+                reason="bounded_health_probe_reported_down",
+            )
+            return
         emit(
             log,
             "lakebase_warm_start_succeeded",

@@ -10,12 +10,16 @@ about.
 
 | Package | Use | License | Commercial posture |
 |---|---|---|---|
+| `boto3` / `botocore` | MLflow Unity Catalog model-artifact access on AWS | `Apache-2.0` | Permissive. Required at runtime because MLflow loads the AWS artifact client dynamically during model registration. Preserve the upstream copyright, license, and NOTICE materials in distributions. |
 | `psycopg` / `psycopg-binary` | Lakebase PostgreSQL client | `LGPL-3.0-only` | Allowed for commercial use as an unmodified, dynamically loaded Python package. Include this notice and the LGPL license text/reference in distribution materials. |
 | `us-atlas` | U.S. state TopoJSON for browser maps | `ISC` | Permissive. Replaced the prior no-commercial-use map package. |
 | `topojson-client` | Runtime TopoJSON-to-GeoJSON decoding | `ISC` | Permissive. |
 
 LGPL-3.0-only license text for `psycopg` is available from the GNU project:
 https://www.gnu.org/licenses/lgpl-3.0.en.html
+
+Apache-2.0 license and NOTICE materials for `boto3` and `botocore` are included
+in their Python distributions and upstream source repositories.
 
 ISC license text for `us-atlas` and `topojson-client` is included in their npm
 packages and permits commercial use, copying, modification, and distribution

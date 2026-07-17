@@ -17,7 +17,7 @@ import re
 from collections.abc import Callable
 from functools import lru_cache
 
-from pydantic import AliasChoices, Field, SecretStr
+from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from backend.schemas._validators import set_public_lender_name_provider
@@ -522,9 +522,48 @@ class Settings(BaseSettings):
     # intentionally matches mip_lakebase_concurrency_limit so pool checkout
     # does not bottleneck before the app-side semaphore. Set max size to 0
     # to force one-connection-per-call behavior for local diagnostics.
-    mip_lakebase_pool_max_size: int = 16
-    mip_lakebase_pool_timeout_s: float = 2.0
-    mip_lakebase_pool_max_lifetime_s: float = 3000.0
+    mip_lakebase_pool_max_size: int = Field(default=16, ge=0)
+    mip_lakebase_pool_timeout_s: float = Field(
+        default=2.0,
+        ge=0,
+        allow_inf_nan=False,
+    )
+    mip_lakebase_pool_max_lifetime_s: float = Field(
+        default=3000.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    mip_lakebase_connect_timeout_s: int = Field(default=2, ge=1)
+    mip_lakebase_transport_timeout_s: int = Field(default=2, ge=1)
+    mip_lakebase_health_statement_timeout_s: float = Field(
+        default=2.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+    # Authenticated health callers wait against one request-level deadline.
+    # Keep it above each Lakebase I/O phase ceiling so a contended but healthy
+    # connection is not mislabeled down; late work still updates the health
+    # cache after an individual caller stops waiting.
+    mip_health_cold_wait_budget_s: float = Field(
+        default=3.0,
+        gt=0,
+        allow_inf_nan=False,
+    )
+
+    @model_validator(mode="after")
+    def _validate_health_wait_budget(self) -> Settings:
+        dependency_deadline_floor = max(
+            float(self.mip_lakebase_pool_timeout_s),
+            float(self.mip_lakebase_connect_timeout_s),
+            float(self.mip_lakebase_transport_timeout_s),
+            self.mip_lakebase_health_statement_timeout_s,
+        )
+        if self.mip_health_cold_wait_budget_s <= dependency_deadline_floor:
+            raise ValueError(
+                "mip_health_cold_wait_budget_s must be strictly greater than "
+                "the Lakebase pool, connect, transport, and health-statement timeouts"
+            )
+        return self
 
     def require_databricks_creds(self) -> tuple[str, Callable[[], str], str]:
         """Return ``(host, token_provider, warehouse_id)`` or raise at startup.

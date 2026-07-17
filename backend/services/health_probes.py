@@ -4,8 +4,6 @@ from __future__ import annotations
 import logging
 import os
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from concurrent.futures import TimeoutError as FuturesTimeoutError
 from typing import Any
 
 from backend.config.settings import settings
@@ -13,8 +11,6 @@ from backend.services.observability import emit
 from backend.services.resilience import StaleWhileRevalidateCache, all_breakers
 
 log = logging.getLogger(__name__)
-
-_PROBE_TIMEOUT_S = 1.0
 
 # Stale-while-revalidate cache around each dependency probe.
 #
@@ -42,7 +38,11 @@ def _emit_probe_warning(event: str, *, dependency: str, exc: BaseException | Non
 
 
 def probe_warehouse() -> bool:
-    """Return True when a 1s ``SELECT 1`` against the warehouse succeeds."""
+    """Return True when ``SELECT 1`` against the warehouse succeeds.
+
+    The shared health cache owns the caller deadline and single-flight work;
+    this function performs only the real dependency call.
+    """
 
     try:
         from backend.services.databricks_sql import get_sql_client
@@ -54,28 +54,16 @@ def probe_warehouse() -> bool:
     except Exception as exc:  # noqa: BLE001
         _emit_probe_warning("health_probe_client_construction_failed", dependency="warehouse", exc=exc)
         return False
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(lambda: client.execute_one("SELECT 1 AS one"))
-        try:
-            result = fut.result(timeout=_PROBE_TIMEOUT_S)
-        except FuturesTimeoutError:
-            emit(
-                log,
-                "health_probe_timeout",
-                level=logging.WARNING,
-                dependency="warehouse",
-                timeout_s=_PROBE_TIMEOUT_S,
-                outcome="error",
-            )
-            return False
-        except Exception as exc:  # noqa: BLE001
-            _emit_probe_warning("health_probe_failed", dependency="warehouse", exc=exc)
-            return False
+    try:
+        result = client.execute_one("SELECT 1 AS one")
+    except Exception as exc:  # noqa: BLE001
+        _emit_probe_warning("health_probe_failed", dependency="warehouse", exc=exc)
+        return False
     return bool(result)
 
 
 def probe_lakebase() -> bool:
-    """Return True when a 1s ``SELECT 1`` against Lakebase succeeds."""
+    """Return True when ``SELECT 1`` against Lakebase succeeds."""
 
     host = settings.lakebase_host or os.environ.get("PGHOST") or ""
     if not host:
@@ -90,28 +78,21 @@ def probe_lakebase() -> bool:
     except Exception as exc:  # noqa: BLE001
         _emit_probe_warning("health_probe_client_construction_failed", dependency="lakebase", exc=exc)
         return False
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(lambda: client.fetchone("SELECT 1 AS one"))
-        try:
-            fut.result(timeout=_PROBE_TIMEOUT_S)
-        except FuturesTimeoutError:
-            emit(
-                log,
-                "health_probe_timeout",
-                level=logging.WARNING,
-                dependency="lakebase",
-                timeout_s=_PROBE_TIMEOUT_S,
-                outcome="error",
-            )
-            return False
-        except Exception as exc:  # noqa: BLE001
-            _emit_probe_warning("health_probe_failed", dependency="lakebase", exc=exc)
-            return False
+    try:
+        healthcheck = getattr(client, "healthcheck", None)
+        if callable(healthcheck):
+            return bool(healthcheck())
+        # Test doubles and legacy injected clients retain the narrow fetch seam;
+        # the production Lakebase client always exposes bounded ``healthcheck``.
+        client.fetchone("SELECT 1 AS one")
+    except Exception as exc:  # noqa: BLE001
+        _emit_probe_warning("health_probe_failed", dependency="lakebase", exc=exc)
+        return False
     return True
 
 
 def probe_genie() -> bool:
-    """Return True when a 1s ping against the Genie space succeeds."""
+    """Return True when a ping against the Genie space succeeds."""
 
     try:
         from backend.config.settings import settings as _settings
@@ -131,23 +112,11 @@ def probe_genie() -> bool:
     except Exception as exc:  # noqa: BLE001
         _emit_probe_warning("health_probe_client_construction_failed", dependency="genie", exc=exc)
         return False
-    with ThreadPoolExecutor(max_workers=1) as pool:
-        fut = pool.submit(client.ping)
-        try:
-            return bool(fut.result(timeout=_PROBE_TIMEOUT_S))
-        except FuturesTimeoutError:
-            emit(
-                log,
-                "health_probe_timeout",
-                level=logging.WARNING,
-                dependency="genie",
-                timeout_s=_PROBE_TIMEOUT_S,
-                outcome="error",
-            )
-            return False
-        except Exception as exc:  # noqa: BLE001
-            _emit_probe_warning("health_probe_failed", dependency="genie", exc=exc)
-            return False
+    try:
+        return bool(client.ping())
+    except Exception as exc:  # noqa: BLE001
+        _emit_probe_warning("health_probe_failed", dependency="genie", exc=exc)
+        return False
 
 
 def breaker_states() -> dict[str, str]:
@@ -165,13 +134,27 @@ def breaker_states() -> dict[str, str]:
 def cached_probe(name: str, probe: Callable[[], Any]) -> bool:
     """Return the probe result through the shared SWR cache."""
 
-    return bool(_probe_cache.get_or_refresh(name, probe))
+    return bool(
+        _probe_cache.get_or_refresh(
+            name,
+            probe,
+            wait_timeout_s=settings.mip_health_cold_wait_budget_s,
+        )
+    )
 
 
 def probe_snapshot() -> tuple[str, dict[str, str]]:
-    warehouse_up = cached_probe("warehouse", probe_warehouse)
-    lakebase_up = cached_probe("lakebase", probe_lakebase)
-    genie_up = cached_probe("genie", probe_genie)
+    results = _probe_cache.get_or_refresh_many(
+        {
+            "warehouse": probe_warehouse,
+            "lakebase": probe_lakebase,
+            "genie": probe_genie,
+        },
+        wait_timeout_s=settings.mip_health_cold_wait_budget_s,
+    )
+    warehouse_up = bool(results["warehouse"])
+    lakebase_up = bool(results["lakebase"])
+    genie_up = bool(results["genie"])
     status = "ok" if (warehouse_up and lakebase_up and genie_up) else "degraded"
     deps = {
         "warehouse": "up" if warehouse_up else "down",

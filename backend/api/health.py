@@ -23,10 +23,12 @@ A degraded response STILL returns HTTP 200 so the Databricks App load
 balancer doesn't yank the container. Degraded state is carried in the
 body, which the frontend reads to show the banner.
 
-Authenticated dependency probes are lightweight pings with a 1-second
-timeout. Warehouse / Lakebase probes issue ``SELECT 1``; Genie probes
-hit ``GET /spaces/{id}``. Failures do not raise; they flip the
-dependency status to ``down`` and bump the breaker's failure counter.
+Authenticated dependency probes are lightweight pings sharing one
+configurable request deadline. Warehouse / Lakebase probes issue ``SELECT
+1``; Lakebase also enforces bounded connect, TCP transport, and server-side
+statement deadlines, while Genie hits ``GET /spaces/{id}``. Failures do not raise;
+they flip the dependency status to ``down`` and bump the breaker's failure
+counter.
 Anonymous load-balancer/liveness requests intentionally do not run those
 probes, so external monitoring cannot keep billable dependencies warm.
 The frontend's degraded banner auto-retries until ``status == "ok"``.

@@ -285,6 +285,7 @@ def _model_registry(*, source_hash: str | None = None, upstream: str = _UPSTREAM
             name=name,
             version=version,
             source="models:/m-reviewed-proxy",
+            status="READY",
             tags=tags,
         )
     )

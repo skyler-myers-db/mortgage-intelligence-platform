@@ -21,6 +21,8 @@ from __future__ import annotations
 import base64
 import json
 import time
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event, Lock
 from typing import Any
 
 import pytest
@@ -313,6 +315,61 @@ def test_health_bursts_share_one_probe_per_dependency(
     # First hit is a sync miss; the other four are cache hits under the
     # 2 s soft TTL. None of those follow-ons may run the probe.
     assert counts == {"warehouse": 1, "lakebase": 1, "genie": 1}
+
+
+def test_twenty_simultaneous_cold_snapshots_share_each_dependency_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    counts = {"warehouse": 0, "lakebase": 0, "genie": 0}
+    counts_lock = Lock()
+    all_started = Event()
+    release = Event()
+
+    def _probe(name: str) -> bool:
+        with counts_lock:
+            counts[name] += 1
+            if sum(counts.values()) == 3:
+                all_started.set()
+        release.wait(timeout=2.0)
+        return True
+
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: _probe("warehouse"))
+    monkeypatch.setattr(health_probes, "probe_lakebase", lambda: _probe("lakebase"))
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: _probe("genie"))
+
+    with ThreadPoolExecutor(max_workers=20) as callers:
+        futures = [callers.submit(health_probes.probe_snapshot) for _ in range(20)]
+        assert all_started.wait(timeout=1.0)
+        release.set()
+        snapshots = [future.result(timeout=1.0) for future in futures]
+
+    assert snapshots == [
+        ("ok", {"warehouse": "up", "lakebase": "up", "genie": "up"})
+    ] * 20
+    assert counts == {"warehouse": 1, "lakebase": 1, "genie": 1}
+
+
+def test_health_waits_long_enough_for_successful_lakebase_pool_checkout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A healthy Lakebase call taking more than the removed 1s cutoff is up."""
+
+    def slow_but_healthy_lakebase() -> bool:
+        time.sleep(1.05)
+        return True
+
+    monkeypatch.setattr(health_probes, "probe_warehouse", lambda: True)
+    monkeypatch.setattr(health_probes, "probe_lakebase", slow_but_healthy_lakebase)
+    monkeypatch.setattr(health_probes, "probe_genie", lambda: True)
+
+    started = time.monotonic()
+    res = client.get("/api/health", headers={"X-Forwarded-Email": "ops@example.com"})
+    elapsed = time.monotonic() - started
+
+    assert res.status_code == 200
+    assert res.json()["dependencies"]["lakebase"] == "up"
+    assert elapsed >= 1.0
+    assert elapsed < health_probes.settings.mip_health_cold_wait_budget_s
 
 
 def test_health_returns_cached_value_during_stale_window(

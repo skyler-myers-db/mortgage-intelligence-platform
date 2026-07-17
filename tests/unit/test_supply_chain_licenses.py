@@ -49,6 +49,9 @@ def test_third_party_license_notice_covers_weak_copyleft_and_map_data() -> None:
     notice = (ROOT / "docs" / "THIRD_PARTY_LICENSES.md").read_text(encoding="utf-8")
 
     for required in (
+        "boto3",
+        "botocore",
+        "Apache-2.0",
         "psycopg",
         "LGPL-3.0-only",
         "@axe-core/playwright",
@@ -73,7 +76,9 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "-r requirements.in" in lock
     assert "uvicorn[standard]==0.47.0" in requirements_in
     assert "databricks-sql-connector==4.2.6" in requirements_in
+    assert "boto3==1.43.50" in requirements_in
     for required_pin in (
+        "boto3==1.43.50",
         "uvicorn==0.47.0",
         "databricks-sql-connector==4.2.6",
         "pyjwt==2.13.0",
@@ -81,3 +86,9 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
         "opentelemetry-sdk==1.41.1",
     ):
         assert required_pin in lock
+
+    deploy = (ROOT / "scripts" / "deploy.sh").read_text(encoding="utf-8")
+    assert "import boto3, mlflow" in deploy
+    assert deploy.index("import boto3, mlflow") < deploy.index(
+        "DEPLOY_INVENTORY_PRINCIPAL="
+    )

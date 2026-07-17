@@ -104,9 +104,71 @@ def test_primary_documented_env_var_loads_settings_field(
     env_name = _primary_env_name(field_name)
     raw, expected = _sample_for_field(field_name)
     monkeypatch.setenv(env_name, raw)
+    if field_name in {
+        "mip_lakebase_pool_timeout_s",
+        "mip_lakebase_connect_timeout_s",
+        "mip_lakebase_transport_timeout_s",
+        "mip_lakebase_health_statement_timeout_s",
+    }:
+        # This field participates in the health deadline invariant; keep the
+        # independently sampled health budget strictly above it.
+        monkeypatch.setenv("MIP_HEALTH_COLD_WAIT_BUDGET_S", "124.5")
 
     settings = Settings(_env_file=None)
     assert _field_value(settings, field_name) == expected
+
+
+@pytest.mark.parametrize(
+    "bounded_setting",
+    (
+        "MIP_LAKEBASE_POOL_TIMEOUT_S",
+        "MIP_LAKEBASE_CONNECT_TIMEOUT_S",
+        "MIP_LAKEBASE_TRANSPORT_TIMEOUT_S",
+        "MIP_LAKEBASE_HEALTH_STATEMENT_TIMEOUT_S",
+    ),
+)
+def test_health_wait_budget_must_exceed_lakebase_dependency_deadlines(
+    bounded_setting: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(bounded_setting, "3")
+    monkeypatch.setenv("MIP_HEALTH_COLD_WAIT_BUDGET_S", "3.0")
+
+    with pytest.raises(
+        ValidationError,
+        match="must be strictly greater than the Lakebase",
+    ):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize("invalid", ("inf", "nan"))
+def test_health_wait_budget_must_be_finite(
+    invalid: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_HEALTH_COLD_WAIT_BUDGET_S", invalid)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "MIP_LAKEBASE_POOL_TIMEOUT_S",
+        "MIP_LAKEBASE_POOL_MAX_LIFETIME_S",
+    ),
+)
+@pytest.mark.parametrize("invalid", ("inf", "nan"))
+def test_lakebase_pool_deadlines_must_be_finite(
+    field: str,
+    invalid: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(field, invalid)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None)
 
 
 def test_mip_prefixed_admin_and_trust_env_vars_win_over_legacy_aliases(

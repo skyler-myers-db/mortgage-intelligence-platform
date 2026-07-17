@@ -25,6 +25,12 @@ attrs==26.1.0
     #   hypothesis
 blinker==1.9.0
     # via flask
+boto3==1.43.50
+    # via -r requirements.in
+botocore==1.43.50
+    # via
+    #   boto3
+    #   s3transfer
 cachetools==7.1.4
     # via
     #   mlflow-skinny
@@ -137,6 +143,10 @@ itsdangerous==2.2.0
     # via flask
 jinja2==3.1.6
     # via flask
+jmespath==1.1.0
+    # via
+    #   boto3
+    #   botocore
 joblib==1.5.3
     # via scikit-learn
 kiwisolver==1.5.0
@@ -295,6 +305,7 @@ pytest-xdist==3.8.0
     # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via
+    #   botocore
     #   databricks-sql-connector
     #   graphene
     #   matplotlib
@@ -320,6 +331,8 @@ requests==2.34.2
     #   opentelemetry-exporter-otlp-proto-http
 ruff==0.8.6
     # via -r requirements.in
+s3transfer==0.19.1
+    # via boto3
 scikit-learn==1.9.0
     # via
     #   mlflow
@@ -382,6 +395,7 @@ tzdata==2026.2
     # via pandas
 urllib3==2.7.0
     # via
+    #   botocore
     #   databricks-sql-connector
     #   docker
     #   requests

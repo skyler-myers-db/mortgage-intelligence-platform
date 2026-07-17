@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import select
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
@@ -44,6 +45,7 @@ from typing import Any
 
 import psycopg
 from psycopg import Connection
+from psycopg.pq import ExecStatus
 from psycopg.rows import dict_row
 
 from backend.config.settings import settings
@@ -134,6 +136,9 @@ class LakebaseClient:
         pool_max_size: int | None = None,
         pool_timeout_s: float | None = None,
         pool_max_lifetime_s: float | None = None,
+        connect_timeout_s: int | None = None,
+        transport_timeout_s: int | None = None,
+        health_statement_timeout_s: float | None = None,
         now: Callable[[], float] = time.monotonic,
     ) -> None:
         if not host:
@@ -179,12 +184,33 @@ class LakebaseClient:
             if pool_max_lifetime_s is None
             else pool_max_lifetime_s
         )
+        self._connect_timeout_s = (
+            settings.mip_lakebase_connect_timeout_s
+            if connect_timeout_s is None
+            else connect_timeout_s
+        )
+        self._transport_timeout_s = (
+            settings.mip_lakebase_transport_timeout_s
+            if transport_timeout_s is None
+            else transport_timeout_s
+        )
+        self._health_statement_timeout_s = (
+            settings.mip_lakebase_health_statement_timeout_s
+            if health_statement_timeout_s is None
+            else health_statement_timeout_s
+        )
         if self._pool_max_size < 0:
             raise LakebaseError("Lakebase pool max size must be >= 0")
         if self._pool_timeout_s < 0:
             raise LakebaseError("Lakebase pool timeout must be >= 0")
         if self._pool_max_lifetime_s <= 0:
             raise LakebaseError("Lakebase pool max lifetime must be > 0")
+        if self._connect_timeout_s < 1:
+            raise LakebaseError("Lakebase connect timeout must be >= 1")
+        if self._transport_timeout_s < 1:
+            raise LakebaseError("Lakebase transport timeout must be >= 1")
+        if self._health_statement_timeout_s <= 0:
+            raise LakebaseError("Lakebase health statement timeout must be > 0")
         self._now = now
         self._pool: LifoQueue[_PooledConnection] = LifoQueue(
             maxsize=max(self._pool_max_size, 1)
@@ -213,7 +239,12 @@ class LakebaseClient:
             f"dbname={self._database} "
             f"user={self._user} "
             f"password='{pwd_escaped}' "
-            f"sslmode={self._sslmode}"
+            f"sslmode={self._sslmode} "
+            f"connect_timeout={self._connect_timeout_s} "
+            "keepalives=1 "
+            f"keepalives_idle={self._transport_timeout_s} "
+            "keepalives_interval=1 keepalives_count=1 "
+            f"tcp_user_timeout={self._transport_timeout_s * 1000}"
         )
 
     def _connect(self) -> Connection[Any]:
@@ -411,6 +442,111 @@ class LakebaseClient:
             raise LakebaseError(f"Lakebase fetchone failed: {exc}") from exc
         _emit_end("fetchone", stmt_hash, start, rows_returned=1)
         return result
+
+    def healthcheck(self) -> bool:
+        """Run a server- and client-bounded Lakebase liveness query.
+
+        ``connect_timeout`` bounds a cold handshake. Once connected, this
+        probe drives libpq in nonblocking mode against one absolute transport
+        deadline. The query also sets a transaction-local PostgreSQL
+        ``statement_timeout``. If a peer ACKs traffic but never returns a
+        result, the client deadline closes the socket and retires the pooled
+        connection instead of pinning the shared health worker forever.
+        """
+
+        statement_timeout_ms = max(
+            1,
+            int(self._health_statement_timeout_s * 1000),
+        )
+        query = (
+            "BEGIN; "
+            f"SET LOCAL statement_timeout = {statement_timeout_ms}; "
+            "SELECT 1 AS one; "
+            "COMMIT"
+        ).encode("ascii")
+        stmt_hash, start = _emit_start("healthcheck", "SELECT 1 AS one")
+        pooled: _PooledConnection | None = None
+        try:
+            pooled = self._checkout()
+            pgconn = pooled.conn.pgconn
+            pgconn.nonblocking = 1
+            deadline = time.monotonic() + float(self._transport_timeout_s)
+            pgconn.send_query(query)
+
+            while True:
+                flush_state = pgconn.flush()
+                if flush_state == 0:
+                    break
+                if flush_state != 1:
+                    raise LakebaseError("Lakebase healthcheck transport write failed")
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise LakebaseError("Lakebase healthcheck transport write timed out")
+                _readable, writable, _errors = select.select(
+                    [],
+                    [pgconn.socket],
+                    [],
+                    remaining,
+                )
+                if not writable:
+                    raise LakebaseError("Lakebase healthcheck transport write timed out")
+
+            saw_row = False
+            while True:
+                while pgconn.is_busy():
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise LakebaseError("Lakebase healthcheck transport read timed out")
+                    readable, _writable, _errors = select.select(
+                        [pgconn.socket],
+                        [],
+                        [],
+                        remaining,
+                    )
+                    if not readable:
+                        raise LakebaseError("Lakebase healthcheck transport read timed out")
+                    pgconn.consume_input()
+                result = pgconn.get_result()
+                if result is None:
+                    break
+                if result.status in {
+                    ExecStatus.BAD_RESPONSE,
+                    ExecStatus.FATAL_ERROR,
+                    ExecStatus.NONFATAL_ERROR,
+                    ExecStatus.PIPELINE_ABORTED,
+                }:
+                    message = bytes(result.error_message or b"").decode(
+                        "utf-8",
+                        errors="replace",
+                    )
+                    raise LakebaseError(
+                        "Lakebase healthcheck query failed: " + message[:500]
+                    )
+                if result.status in {ExecStatus.TUPLES_OK, ExecStatus.SINGLE_TUPLE}:
+                    saw_row = saw_row or result.ntuples > 0
+            if not saw_row:
+                raise LakebaseError("Lakebase healthcheck returned no row")
+            pgconn.nonblocking = 0
+        except BaseException as exc:
+            if pooled is not None:
+                self._close_pooled(pooled)
+                if pooled.pool_managed:
+                    assert self._pool_slots is not None
+                    self._pool_slots.release()
+            _emit_err("healthcheck", stmt_hash, start, exc)
+            if isinstance(exc, LakebaseError):
+                raise
+            if isinstance(exc, psycopg.Error):
+                raise LakebaseError(f"Lakebase healthcheck failed: {exc}") from exc
+            if isinstance(exc, Exception):
+                raise LakebaseError(
+                    f"Lakebase healthcheck transport failed: {exc}"
+                ) from exc
+            raise
+        assert pooled is not None
+        self._release(pooled)
+        _emit_end("healthcheck", stmt_hash, start, rows_returned=1)
+        return True
 
     def fetchall(
         self,
@@ -683,6 +819,11 @@ class ResilientLakebaseClient:
         self, sql: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any] | None:
         return self._resilient.call(lambda: self._client.fetchone(sql, params))
+
+    def healthcheck(self) -> bool:
+        """Run the raw client's bounded probe through the shared breaker."""
+
+        return bool(self._resilient.call(self._client.healthcheck))
 
     def fetchall(
         self,

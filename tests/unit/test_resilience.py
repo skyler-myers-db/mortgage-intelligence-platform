@@ -13,6 +13,7 @@ the suite runs in milliseconds with no flakiness.
 """
 from __future__ import annotations
 
+import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
 
@@ -606,82 +607,218 @@ def test_swr_cache_rejects_bad_ttls() -> None:
 
 
 # ---------------------------------------------------------------------------
-# R5-06: SWR probe-timeout + atexit-shutdown hardening
+# Health-probe single-flight, caller deadline, and atexit hardening
 # ---------------------------------------------------------------------------
 
 
-def test_swr_background_probe_timeout_clears_in_flight_flag() -> None:
-    """R5-06: a probe that hangs past ``_SWR_PROBE_TIMEOUT_S`` must NOT
-    wedge the refresh slot forever.
-
-    Regression: pre-fix, a hung probe held the in-flight flag for the
-    full underlying client timeout (tens of seconds). With only three
-    SWR slots, a TCP-black-hole warehouse could exhaust the pool and
-    every subsequent health request fell to the sync-miss path,
-    defeating the cache.
-
-    Assertion: after the timeout the worker clears the flag so a
-    subsequent stale-but-fresh call is eligible to schedule a fresh
-    refresh. The orphaned probe thread is daemonic and does not block
-    test teardown.
-    """
-    from backend.services import resilience as res
-
+def test_swr_stale_slow_refresh_has_no_fanout_and_late_result_wins() -> None:
     clock = _FakeClock()
-    cache = StaleWhileRevalidateCache(
-        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor(), now=clock
-    )
-    # Seed with a fast probe so the cache has a cached value; the
-    # slow probe below only runs on the stale-window refresh path.
-    assert cache.get_or_refresh("warehouse", lambda: "seed") == "seed"
-
-    # Shrink the probe timeout so the test doesn't wait a full second.
-    # We only touch the module-level constant inside this test; the
-    # try/finally restores it.
-    original_timeout = res._SWR_PROBE_TIMEOUT_S
-    res._SWR_PROBE_TIMEOUT_S = 0.05
-
     probe_started = Event()
     release = Event()
-    second_probe_calls = {"n": 0}
+    calls = {"n": 0}
 
-    def hang_probe() -> str:
+    def slow_probe() -> str:
+        calls["n"] += 1
         probe_started.set()
-        # Block past the per-probe timeout so the SWR worker gives up.
-        release.wait(timeout=1.0)
-        return "should-be-ignored"
+        release.wait(timeout=2.0)
+        return "late-fresh"
 
-    def fast_probe() -> str:
-        second_probe_calls["n"] += 1
-        return "fresh"
-
+    pool = ThreadPoolExecutor(max_workers=1)
     try:
-        clock.advance(3.0)
-        # _InlineExecutor runs the worker inline; the worker in turn
-        # spawns a daemon probe thread and joins with timeout. After
-        # the timeout the worker returns (cached seed is still served).
-        assert cache.get_or_refresh("warehouse", hang_probe) == "seed"
-        assert probe_started.is_set(), "worker should have launched the probe"
-
-        # The in-flight flag must be cleared: the next stale-window
-        # caller has to be able to schedule a fresh refresh and it
-        # must actually run (not be skipped because refreshing==True).
-        clock.advance(0.1)  # still within the stale-but-fresh window
-        cache.get_or_refresh("warehouse", fast_probe)
-        assert second_probe_calls["n"] == 1, (
-            "in-flight flag was not cleared -- next stale caller did "
-            "not schedule a refresh"
+        cache = StaleWhileRevalidateCache(
+            soft_ttl_s=2.0, hard_ttl_s=10.0, executor=pool, now=clock
         )
+        assert cache.get_or_refresh("warehouse", lambda: "seed") == "seed"
+        clock.advance(3.0)
+
+        assert cache.get_or_refresh("warehouse", slow_probe) == "seed"
+        assert probe_started.wait(timeout=1.0)
+        for _ in range(20):
+            assert cache.get_or_refresh("warehouse", slow_probe) == "seed"
+        assert calls["n"] == 1
+
+        release.set()
+    finally:
+        pool.shutdown(wait=True)
+
+    assert cache.get_or_refresh("warehouse", slow_probe) == "late-fresh"
+    assert calls["n"] == 1
+
+
+def test_swr_twenty_concurrent_cold_callers_share_one_probe() -> None:
+    probe_started = Event()
+    release = Event()
+    calls = {"n": 0}
+    calls_lock = Lock()
+
+    def probe() -> bool:
+        with calls_lock:
+            calls["n"] += 1
+        probe_started.set()
+        release.wait(timeout=2.0)
+        return True
+
+    worker_pool = ThreadPoolExecutor(max_workers=1)
+    caller_pool = ThreadPoolExecutor(max_workers=20)
+    try:
+        cache = StaleWhileRevalidateCache(
+            soft_ttl_s=2.0, hard_ttl_s=10.0, executor=worker_pool
+        )
+        futures = [
+            caller_pool.submit(
+                cache.get_or_refresh,
+                "lakebase",
+                probe,
+                wait_timeout_s=1.0,
+            )
+            for _ in range(20)
+        ]
+        assert probe_started.wait(timeout=1.0)
+        release.set()
+        assert [future.result(timeout=1.0) for future in futures] == [True] * 20
     finally:
         release.set()
-        res._SWR_PROBE_TIMEOUT_S = original_timeout
+        caller_pool.shutdown(wait=True)
+        worker_pool.shutdown(wait=True)
+
+    assert calls["n"] == 1
+
+
+def test_swr_caller_timeout_is_not_cached_and_late_completion_updates_cache() -> None:
+    release = Event()
+    calls = {"n": 0}
+
+    def slow_probe() -> bool:
+        calls["n"] += 1
+        release.wait(timeout=2.0)
+        return True
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        cache = StaleWhileRevalidateCache(
+            soft_ttl_s=2.0, hard_ttl_s=10.0, executor=pool
+        )
+        started = time.monotonic()
+        assert (
+            cache.get_or_refresh(
+                "lakebase", slow_probe, wait_timeout_s=0.05
+            )
+            is None
+        )
+        assert time.monotonic() - started < 0.25
+        assert "lakebase" not in cache._entries
+
+        # A second timed-out caller joins the same real work; it cannot
+        # create a replacement probe while the first is still running.
+        assert (
+            cache.get_or_refresh(
+                "lakebase", slow_probe, wait_timeout_s=0.01
+            )
+            is None
+        )
+        assert calls["n"] == 1
+        release.set()
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+
+    assert cache.get_or_refresh("lakebase", slow_probe) is True
+    assert calls["n"] == 1
+
+
+def test_swr_clear_fences_late_single_flight_completion() -> None:
+    release = Event()
+
+    def slow_probe() -> bool:
+        release.wait(timeout=2.0)
+        return True
+
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        cache = StaleWhileRevalidateCache(
+            soft_ttl_s=2.0, hard_ttl_s=10.0, executor=pool
+        )
+        assert cache.get_or_refresh("lakebase", slow_probe, wait_timeout_s=0.01) is None
+        cache.clear()
+        release.set()
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+
+    assert "lakebase" not in cache._entries
+    assert "lakebase" not in cache._inflight
+
+
+def test_swr_batch_uses_one_request_deadline_for_nonreturning_dependencies() -> None:
+    release = Event()
+    calls = {"warehouse": 0, "lakebase": 0, "genie": 0}
+
+    def probe(name: str) -> bool:
+        calls[name] += 1
+        release.wait(timeout=2.0)
+        return True
+
+    pool = ThreadPoolExecutor(max_workers=3)
+    try:
+        cache = StaleWhileRevalidateCache(
+            soft_ttl_s=2.0, hard_ttl_s=10.0, executor=pool
+        )
+        probes = {name: (lambda name=name: probe(name)) for name in calls}
+        started = time.monotonic()
+        assert cache.get_or_refresh_many(probes, wait_timeout_s=0.05) == {
+            "warehouse": None,
+            "lakebase": None,
+            "genie": None,
+        }
+        assert time.monotonic() - started < 0.25
+
+        # A new request shares the same three active probes.
+        cache.get_or_refresh_many(probes, wait_timeout_s=0.01)
+        assert calls == {"warehouse": 1, "lakebase": 1, "genie": 1}
+        release.set()
+    finally:
+        release.set()
+        pool.shutdown(wait=True)
+
+
+def test_swr_probe_exception_then_recovery_is_not_poisoned() -> None:
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0, hard_ttl_s=10.0, executor=_InlineExecutor()
+    )
+    calls = {"n": 0}
+
+    def probe() -> bool:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("temporary")
+        return True
+
+    assert cache.get_or_refresh("lakebase", probe) is None
+    assert "lakebase" not in cache._entries
+    assert cache.get_or_refresh("lakebase", probe) is True
+    assert calls["n"] == 2
+
+
+def test_swr_real_down_result_recovers_on_next_stale_refresh() -> None:
+    clock = _FakeClock()
+    cache = StaleWhileRevalidateCache(
+        soft_ttl_s=2.0,
+        hard_ttl_s=10.0,
+        executor=_InlineExecutor(),
+        now=clock,
+    )
+    values = iter([False, True])
+
+    assert cache.get_or_refresh("lakebase", lambda: next(values)) is False
+    clock.advance(3.0)
+    # Stale callers retain the completed down result while the one refresh
+    # runs. The inline executor makes its recovery deterministic here.
+    assert cache.get_or_refresh("lakebase", lambda: next(values)) is False
+    assert cache.get_or_refresh("lakebase", lambda: False) is True
 
 
 def test_swr_executor_shutdown_registered_at_import() -> None:
-    """R5-06: the module-level SWR executor must be handed to ``atexit``
-    at import time so uvicorn reload / worker restart does not leak the
-    pool (threads blocked on socket reads would otherwise keep the
-    interpreter from exiting cleanly).
+    """The module-level bounded executor is handed to ``atexit``.
 
     We can't observe ``atexit._exithandlers`` portably across CPython
     versions; instead, we verify that the module exposes the shutdown

@@ -8,10 +8,12 @@ from typing import Any
 
 import pytest
 from databricks.sdk.errors import NotFound
+from mlflow.exceptions import RestException
 
 import backend.agents.gateway_contract as gateway_contract
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import gateway_model_attestation as attestation
+from tools.databricks import gateway_registration_recovery as registration_recovery
 from tools.databricks import provision_gateway_responses_agent as gateway
 from tools.databricks.provision_gateway_responses_agent import (
     GatewayAgentDeployment,
@@ -59,12 +61,27 @@ def test_gateway_model_version_tags_are_within_exact_uc_limits(
     tags = _production_model_tags(monkeypatch)
 
     assert len(tags) == 16
-    assert len(tags) <= gateway._UC_MODEL_VERSION_TAG_LIMIT
-    assert all(gateway._UC_MODEL_VERSION_TAG_KEY.fullmatch(key) for key in tags)
-    assert max(map(len, tags.values())) <= gateway._UC_MODEL_VERSION_TAG_VALUE_LIMIT
+    assert len(tags) <= registration_recovery._UC_MODEL_VERSION_TAG_LIMIT
+    assert all(registration_recovery._UC_MODEL_VERSION_TAG_KEY.fullmatch(key) for key in tags)
+    assert max(map(len, tags.values())) <= registration_recovery._UC_MODEL_VERSION_TAG_VALUE_LIMIT
     assert gateway.validated_model_version_tags(tags) == tags
-    assert gateway._UC_MODEL_VERSION_TAG_KEY.fullmatch("a" * 256)
-    assert gateway._UC_MODEL_VERSION_TAG_KEY.fullmatch("a" * 257) is None
+    assert registration_recovery._UC_MODEL_VERSION_TAG_KEY.fullmatch("a" * 256)
+    assert registration_recovery._UC_MODEL_VERSION_TAG_KEY.fullmatch("a" * 257) is None
+
+
+@pytest.mark.parametrize("error_code", ("NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"))
+def test_registration_recovery_recognizes_real_mlflow_missing_errors(
+    error_code: str,
+) -> None:
+    exc = RestException({"error_code": error_code, "message": "missing"})
+
+    assert registration_recovery._missing_resource(exc) is True
+    assert (
+        registration_recovery._missing_resource(
+            RestException({"error_code": "PERMISSION_DENIED", "message": "denied"})
+        )
+        is False
+    )
 
 
 @pytest.mark.parametrize(
@@ -306,6 +323,9 @@ class _Client:
         experiment_owner: str = _RUNTIME_APPLICATION_ID,
     ) -> None:
         self.versions = versions or []
+        for version in self.versions:
+            if not hasattr(version, "status"):
+                version.status = "READY"
         self.experiment_owner = experiment_owner
         self.version_tags = {
             str(getattr(item, "version", "")): dict(getattr(item, "tags", None) or {})
@@ -317,12 +337,55 @@ class _Client:
             )
             for item in self.versions
         }
+        self.version_statuses = {
+            str(getattr(item, "version", "")): str(getattr(item, "status", "") or "")
+            for item in self.versions
+        }
         self.experiments_by_name: dict[str, object] = {}
         self.experiments_by_id: dict[str, object] = {}
+        self.logged_models: dict[str, object] = {}
+        self.runs: dict[str, object] = {}
+        self.model_version_searches: list[str | None] = []
+        self.fail_experiment_tag_set = False
+        self.fail_experiment_tag_delete = False
 
-    def search_model_versions(self, query: str) -> list[object]:
-        assert query.startswith("name='mip.audit.mortgage_growth_supervisor_proxy_")
-        return self.versions
+    def search_model_versions(
+        self,
+        query: str | None = None,
+        *,
+        filter_string: str | None = None,
+        max_results: int | None = None,
+        page_token: str | None = None,
+    ) -> list[object]:
+        assert max_results in (None, registration_recovery._MODEL_VERSION_SEARCH_PAGE_SIZE)
+        assert page_token is None
+        assert query is None or filter_string is None
+        query = filter_string if filter_string is not None else query
+        self.model_version_searches.append(query)
+        if query is None:
+            return self.versions
+        field, expected_value = query.split("='", 1)
+        expected_value = expected_value.removesuffix("'")
+        if field == "source_path":
+            return [
+                version
+                for version in self.versions
+                if str(getattr(version, "source", "") or "").strip() == expected_value
+            ]
+        if field == "run_id":
+            return [
+                version
+                for version in self.versions
+                if str(getattr(version, "run_id", "") or "").strip() == expected_value
+            ]
+        assert field == "name"
+        assert expected_value.startswith("mip.audit.mortgage_growth_supervisor_proxy_")
+        return [
+            version
+            for version in self.versions
+            if not str(getattr(version, "name", "") or "").strip()
+            or str(getattr(version, "name", "") or "").strip() == expected_value
+        ]
 
     def set_model_version_tag(self, *args: str) -> None:
         raise AssertionError(f"Gateway model tags must be immutable: {args!r}")
@@ -333,9 +396,45 @@ class _Client:
             version=version,
             source=self.version_sources.get(version, "models:/m-reviewed-proxy"),
             tags=dict(self.version_tags.get(version, {})),
+            status=self.version_statuses.get(version, "READY"),
         )
 
+    def get_logged_model(self, model_id: str) -> object:
+        if model_id not in self.logged_models:
+            run_id = f"run-{model_id}"
+            self.logged_models[model_id] = SimpleNamespace(
+                model_id=model_id,
+                source_run_id=run_id,
+                experiment_id="experiment-7",
+            )
+            self.runs[run_id] = SimpleNamespace(info=SimpleNamespace(experiment_id="experiment-7"))
+        return self.logged_models[model_id]
+
+    def get_run(self, run_id: str) -> object:
+        return self.runs.setdefault(
+            run_id,
+            SimpleNamespace(info=SimpleNamespace(experiment_id="experiment-7")),
+        )
+
+    def search_logged_models(
+        self,
+        *,
+        experiment_ids: list[str],
+        max_results: int | None = None,
+        page_token: str | None = None,
+    ) -> list[object]:
+        assert experiment_ids == ["experiment-7"]
+        assert max_results in (None, registration_recovery._LOGGED_MODEL_SEARCH_PAGE_SIZE)
+        assert page_token is None
+        return [
+            logged_model
+            for logged_model in self.logged_models.values()
+            if str(getattr(logged_model, "experiment_id", "") or "") in experiment_ids
+        ]
+
     def set_experiment(self, name: str) -> object:
+        if name in self.experiments_by_name:
+            return self.experiments_by_name[name]
         experiment = SimpleNamespace(
             experiment_id="experiment-7",
             name=name,
@@ -351,6 +450,18 @@ class _Client:
 
     def get_experiment(self, experiment_id: str) -> object | None:
         return self.experiments_by_id.get(experiment_id)
+
+    def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+        if self.fail_experiment_tag_set:
+            raise RuntimeError("experiment tag persistence failed")
+        experiment = self.experiments_by_id[experiment_id]
+        experiment.tags[key] = value
+
+    def delete_experiment_tag(self, experiment_id: str, key: str) -> None:
+        if self.fail_experiment_tag_delete:
+            raise RuntimeError("experiment tag deletion failed")
+        experiment = self.experiments_by_id[experiment_id]
+        experiment.tags.pop(key, None)
 
 
 def test_existing_source_scan_rejects_previous_epoch_without_mutation(
@@ -456,9 +567,10 @@ def _patch_mlflow(monkeypatch, *, client: _Client) -> None:
     monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
     for version in client.versions:
         raw_tags = dict(getattr(version, "tags", None) or {})
-        if set(raw_tags) == gateway.GATEWAY_MODEL_CANONICAL_TAGS:
+        if set(raw_tags) == gateway_contract.GATEWAY_MODEL_CANONICAL_TAGS:
             continue
         source_hash = str(
             raw_tags.get(gateway.MODEL_SOURCE_HASH_TAG)
@@ -516,7 +628,182 @@ def _registered(
 ) -> object:
     client.version_tags[version] = dict(tags)
     client.version_sources[version] = model_uri
+    client.version_statuses[version] = "READY"
     return SimpleNamespace(version=version, source=model_uri)
+
+
+class _CleanupClient(_Client):
+    def __init__(self, versions: list[object] | None = None) -> None:
+        super().__init__(versions)
+        self.deleted_versions: list[tuple[str, str]] = []
+        self.deleted_registered_models: list[str] = []
+        self.deleted_logged_models: list[str] = []
+        self.deleted_runs: list[str] = []
+        self.fail_version_deletes: set[str] = set()
+        self.fail_registered_model_delete = False
+
+    def delete_model_version(self, name: str, version: str) -> None:
+        self.deleted_versions.append((name, version))
+        if version in self.fail_version_deletes:
+            raise RuntimeError(f"delete-{version}-failed")
+        self.versions = [
+            item
+            for item in self.versions
+            if not (
+                str(getattr(item, "version", "") or "") == version
+                and (
+                    not str(getattr(item, "name", "") or "").strip()
+                    or str(getattr(item, "name", "") or "").strip() == name
+                )
+            )
+        ]
+
+    def delete_registered_model(self, name: str) -> None:
+        self.deleted_registered_models.append(name)
+        if self.fail_registered_model_delete:
+            raise RuntimeError("delete-registered-model-failed")
+
+    def delete_logged_model(self, model_id: str) -> None:
+        self.deleted_logged_models.append(model_id)
+        self.logged_models.pop(model_id, None)
+
+    def delete_run(self, run_id: str) -> None:
+        self.deleted_runs.append(run_id)
+        self.runs.pop(run_id, None)
+
+
+def _cleanup_journal(
+    client: _Client,
+    *,
+    model_source: str,
+) -> registration_recovery.RegistrationCleanupJournal:
+    client.get_logged_model(model_source.removeprefix("models:/"))
+    return gateway._registration_cleanup_journal(
+        client,
+        model_source=model_source,
+        expected_experiment_id="experiment-7",
+    )
+
+
+def _cleanup_tags(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    model_name: str,
+    model_source: str,
+) -> dict[str, str]:
+    monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    return attestation.sign_gateway_model_contract(
+        full_name=model_name,
+        model_source=model_source,
+        source_hash="a" * 64,
+        supervisor_id=_SUPERVISOR_ID,
+        supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        model_family="mip.audit.mortgage_growth_supervisor_proxy",
+        experiment_base="mip-agent-runtime-gateway-proxy",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        inference_schema="audit",
+        inference_table_prefix="mip_agent_gateway_growth_agent",
+    )
+
+
+def _runtime_workspace(serving: _ServingEndpoints | None = None) -> object:
+    return SimpleNamespace(
+        serving_endpoints=serving or _ServingEndpoints(),
+        registered_models=SimpleNamespace(
+            get=lambda _name: SimpleNamespace(owner=_RUNTIME_APPLICATION_ID)
+        ),
+    )
+
+
+def _recovery_contract() -> dict[str, str]:
+    return {
+        "source_hash": "a" * 64,
+        "supervisor_id": _SUPERVISOR_ID,
+        "supervisor_endpoint_id": _SUPERVISOR_ENDPOINT_ID,
+        "upstream_endpoint": "managed-supervisor",
+        "runtime_application_id": _RUNTIME_APPLICATION_ID,
+        "model_family": "mip.audit.mortgage_growth_supervisor_proxy",
+        "experiment_base": "mip-agent-runtime-gateway-proxy",
+        "catalog": _CATALOG,
+        "genie_space_id": _GENIE_SPACE_ID,
+        "inference_schema": "audit",
+        "inference_table_prefix": "mip_agent_gateway_growth_agent",
+    }
+
+
+def _persisted_recovery(
+    monkeypatch: pytest.MonkeyPatch,
+    client: _Client,
+    *,
+    model_name: str,
+    model_source: str,
+    tags: dict[str, str] | None = None,
+) -> registration_recovery.DurableRegistrationJournal:
+    client.set_experiment("/Users/runtime-client/gateway-recovery")
+    durable = registration_recovery.DurableRegistrationJournal(
+        model_name=model_name,
+        journal=_cleanup_journal(client, model_source=model_source),
+        registration_tags=tags
+        or _cleanup_tags(monkeypatch, model_name=model_name, model_source=model_source),
+    )
+    registration_recovery.persist_registration_journal(client, durable)
+    return durable
+
+
+def _add_logged_source(
+    client: _Client,
+    model_id: str,
+    *,
+    name: str = "mortgage_growth_supervisor_proxy",
+) -> str:
+    run_id = f"run-{model_id}"
+    client.logged_models[model_id] = SimpleNamespace(
+        model_id=model_id,
+        name=name,
+        source_run_id=run_id,
+        experiment_id="experiment-7",
+    )
+    client.runs[run_id] = SimpleNamespace(info=SimpleNamespace(experiment_id="experiment-7"))
+    return f"models:/{model_id}"
+
+
+def _reconcile_recovery(
+    client: _Client,
+    *,
+    model_name: str,
+    verify: Any = attestation.verify_gateway_model_contract,
+) -> registration_recovery.RegistrationRecovery | None:
+    return registration_recovery.reconcile_incomplete_source_versions(
+        client,
+        _runtime_workspace(),
+        model_name=model_name,
+        experiment_id="experiment-7",
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        **_recovery_contract(),
+        verify_attestation=verify,
+    )
+
+
+def _ensure_gateway(workspace: object) -> GatewayAgentDeployment:
+    return ensure_gateway_responses_agent(
+        workspace,
+        endpoint="mip-growth-agent-gateway",
+        endpoint_prefix="mip-growth-agent-gateway",
+        supervisor_id=_SUPERVISOR_ID,
+        upstream_endpoint="managed-supervisor",
+        model_name="mip.audit.mortgage_growth_supervisor_proxy",
+        experiment_name="mip-agent-runtime-gateway-proxy",
+        inference_catalog="mip",
+        inference_schema="audit",
+        inference_table_prefix="mip_agent_gateway_growth_agent",
+        genie_space_id=_GENIE_SPACE_ID,
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+    )
 
 
 def _resource_hash(
@@ -814,7 +1101,7 @@ def test_ensure_gateway_agent_creates_one_responses_endpoint_with_exact_gateway_
 
     assert deployment.model_version == 4
     assert deployment.experiment_name.startswith(f"/Users/{_RUNTIME_APPLICATION_ID}/")
-    assert set(client.version_tags["4"]) == gateway.GATEWAY_MODEL_CANONICAL_TAGS
+    assert set(client.version_tags["4"]) == gateway_contract.GATEWAY_MODEL_CANONICAL_TAGS
     registered_contract = attestation.gateway_model_contract_from_tags(client.version_tags["4"])
     assert registered_contract["full_name"] == deployment.model_name
     assert registered_contract["model_source"] == "models:/m-reviewed-proxy"
@@ -902,6 +1189,1402 @@ def test_invalid_model_version_tags_fail_before_registration_or_endpoint_creatio
         )
 
     assert registrations == []
+    assert serving.created == []
+
+
+@pytest.mark.parametrize("status", [None, "COPYING"])
+def test_fresh_registration_requires_explicit_authoritative_ready_status(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str | None,
+) -> None:
+    client = _Client()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-fresh-status"),
+    )
+
+    def register(model_uri: str, _name: str, *, tags: dict[str, str]) -> object:
+        registered = _registered(client, model_uri, version="4", tags=tags)
+        client.version_statuses["4"] = status
+        return registered
+
+    monkeypatch.setattr(gateway.mlflow, "register_model", register)
+    serving = _ServingEndpoints()
+
+    with pytest.raises(RuntimeError, match="status|not ready"):
+        ensure_gateway_responses_agent(
+            _runtime_workspace(serving),
+            endpoint="mip-growth-agent-gateway",
+            endpoint_prefix="mip-growth-agent-gateway",
+            supervisor_id=_SUPERVISOR_ID,
+            upstream_endpoint="managed-supervisor",
+            model_name="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_name="mip-agent-runtime-gateway-proxy",
+            inference_catalog="mip",
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+            genie_space_id=_GENIE_SPACE_ID,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert serving.created == []
+
+
+def test_failed_registration_compensates_exact_pending_uc_artifacts(monkeypatch) -> None:
+    class CleanupClient(_Client):
+        def __init__(self) -> None:
+            super().__init__()
+            self.deleted_versions: list[tuple[str, str]] = []
+            self.deleted_registered_models: list[str] = []
+            self.deleted_logged_models: list[str] = []
+            self.deleted_runs: list[str] = []
+
+        def delete_model_version(self, name: str, version: str) -> None:
+            self.deleted_versions.append((name, version))
+            self.versions = [
+                item for item in self.versions if str(getattr(item, "version", "")) != version
+            ]
+
+        def delete_registered_model(self, name: str) -> None:
+            self.deleted_registered_models.append(name)
+
+        def delete_logged_model(self, model_id: str) -> None:
+            self.deleted_logged_models.append(model_id)
+            self.logged_models.pop(model_id, None)
+
+        def delete_run(self, run_id: str) -> None:
+            self.deleted_runs.append(run_id)
+
+    client = CleanupClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-partial-registration"),
+    )
+
+    def fail_after_uc_create(model_uri: str, name: str, *, tags: dict[str, str]) -> object:
+        version = SimpleNamespace(
+            version="1",
+            source=model_uri,
+            tags=dict(tags),
+            status="PENDING_REGISTRATION",
+            run_id="run-m-partial-registration",
+        )
+        client.versions.append(version)
+        client.version_tags["1"] = dict(tags)
+        client.version_sources["1"] = model_uri
+        raise ModuleNotFoundError("No module named 'boto3'")
+
+    monkeypatch.setattr(gateway.mlflow, "register_model", fail_after_uc_create)
+    serving = _ServingEndpoints()
+    workspace = SimpleNamespace(
+        serving_endpoints=serving,
+        registered_models=SimpleNamespace(
+            get=lambda _name: SimpleNamespace(owner=_RUNTIME_APPLICATION_ID)
+        ),
+    )
+
+    with pytest.raises(
+        registration_recovery.RegistrationReconciliationPendingError,
+        match="preserving the durable journal",
+    ):
+        ensure_gateway_responses_agent(
+            workspace,
+            endpoint="mip-growth-agent-gateway",
+            endpoint_prefix="mip-growth-agent-gateway",
+            supervisor_id=_SUPERVISOR_ID,
+            upstream_endpoint="managed-supervisor",
+            model_name="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_name="mip-agent-runtime-gateway-proxy",
+            inference_catalog="mip",
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+            genie_space_id=_GENIE_SPACE_ID,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert len(client.deleted_versions) == 1
+    deleted_name, deleted_version = client.deleted_versions[0]
+    assert deleted_name.startswith("mip.audit.mortgage_growth_supervisor_proxy_")
+    assert deleted_version == "1"
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    experiment = client.get_experiment("experiment-7")
+    assert registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG in experiment.tags
+    assert serving.created == []
+
+
+def test_ambiguous_registration_failure_surfaces_retryable_pending_state(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(registration_recovery, "_REGISTRATION_VISIBILITY_ATTEMPTS", 2)
+    monkeypatch.setattr(registration_recovery, "_REGISTRATION_VISIBILITY_INTERVAL_S", 0.0)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-ambiguous-registration"),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ConnectionError("response lost")),
+    )
+    serving = _ServingEndpoints()
+
+    with pytest.raises(
+        registration_recovery.RegistrationReconciliationPendingError,
+        match="preserving the durable journal",
+    ) as exc_info:
+        ensure_gateway_responses_agent(
+            _runtime_workspace(serving),
+            endpoint="mip-growth-agent-gateway",
+            endpoint_prefix="mip-growth-agent-gateway",
+            supervisor_id=_SUPERVISOR_ID,
+            upstream_endpoint="managed-supervisor",
+            model_name="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_name="mip-agent-runtime-gateway-proxy",
+            inference_catalog="mip",
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+            genie_space_id=_GENIE_SPACE_ID,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert isinstance(exc_info.value.__cause__, ConnectionError)
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    assert serving.created == []
+
+
+def test_existing_source_scan_rejects_incomplete_attested_version(monkeypatch) -> None:
+    source_hash = "a" * 64
+    version = SimpleNamespace(
+        version="3",
+        source="models:/m-reviewed",
+        tags={gateway.SOURCE_HASH_TAG: source_hash, gateway.UPSTREAM_TAG: "managed-supervisor"},
+        status="PENDING_REGISTRATION",
+    )
+    client = _Client([version])
+    _patch_mlflow(monkeypatch, client=client)
+
+    with pytest.raises(RuntimeError, match="is not ready .*PENDING_REGISTRATION"):
+        gateway._existing_source_version(
+            client,
+            model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+            source_hash=source_hash,
+            supervisor_id=_SUPERVISOR_ID,
+            supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+            upstream_endpoint="managed-supervisor",
+            runtime_application_id=_RUNTIME_APPLICATION_ID,
+            model_family="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_base="mip-agent-runtime-gateway-proxy",
+            catalog=_CATALOG,
+            genie_space_id=_GENIE_SPACE_ID,
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+        )
+
+
+@pytest.mark.parametrize("status", [None, "COPYING"])
+def test_existing_source_scan_requires_explicit_supported_status(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str | None,
+) -> None:
+    source_hash = "a" * 64
+    version = SimpleNamespace(
+        version="3",
+        source="models:/m-reviewed",
+        tags={gateway.SOURCE_HASH_TAG: source_hash, gateway.UPSTREAM_TAG: "managed-supervisor"},
+        status=status,
+    )
+    client = _Client([version])
+    _patch_mlflow(monkeypatch, client=client)
+
+    with pytest.raises(RuntimeError, match="status"):
+        gateway._existing_source_version(
+            client,
+            model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+            source_hash=source_hash,
+            supervisor_id=_SUPERVISOR_ID,
+            supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+            upstream_endpoint="managed-supervisor",
+            runtime_application_id=_RUNTIME_APPLICATION_ID,
+            model_family="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_base="mip-agent-runtime-gateway-proxy",
+            catalog=_CATALOG,
+            genie_space_id=_GENIE_SPACE_ID,
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+        )
+
+
+def test_registration_cleanup_preserves_ready_same_source_and_its_artifacts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-shared-ready-source"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=model_source,
+                run_id="run-m-shared-ready-source",
+                tags=tags,
+                status="PENDING_REGISTRATION",
+            ),
+            SimpleNamespace(
+                name="mip.audit.other_model",
+                version="8",
+                source=model_source,
+                run_id="run-m-shared-ready-source",
+                tags={"other": "contract"},
+                status="READY",
+            ),
+        ]
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+
+    gateway._compensate_failed_model_registration(
+        client,
+        _runtime_workspace(),
+        model_name=model_name,
+        journal=journal,
+        registration_tags=tags,
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+    )
+
+    assert client.deleted_versions == [(model_name, "1")]
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    assert [version.version for version in client.versions] == ["8"]
+
+
+@pytest.mark.parametrize("status", [None, "COPYING"])
+def test_registration_cleanup_rejects_missing_or_unknown_status_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str | None,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-ambiguous-status"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=model_source,
+                run_id="run-m-ambiguous-status",
+                tags=tags,
+                status=status,
+            )
+        ]
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+
+    with pytest.raises(RuntimeError, match="status"):
+        gateway._compensate_failed_model_registration(
+            client,
+            _runtime_workspace(),
+            model_name=model_name,
+            journal=journal,
+            registration_tags=tags,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_registration_cleanup_journal_polls_logged_model_and_run_visibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DelayedJournalClient(_Client):
+        logged_reads = 0
+        run_reads = 0
+
+        def get_logged_model(self, model_id: str) -> object:
+            self.logged_reads += 1
+            if self.logged_reads == 1:
+                raise NotFound("logged model not visible yet")
+            return super().get_logged_model(model_id)
+
+        def get_run(self, run_id: str) -> object:
+            self.run_reads += 1
+            if self.run_reads == 1:
+                raise NotFound("run not visible yet")
+            return super().get_run(run_id)
+
+    client = DelayedJournalClient()
+    monkeypatch.setattr(registration_recovery, "_JOURNAL_VISIBILITY_INTERVAL_S", 0.0)
+
+    journal = registration_recovery.registration_cleanup_journal(
+        client,
+        model_source="models:/m-delayed-journal",
+        expected_experiment_id="experiment-7",
+        logged=SimpleNamespace(
+            model_id="m-delayed-journal",
+            run_id="run-m-delayed-journal",
+        ),
+    )
+
+    assert journal.logged_model_id == "m-delayed-journal"
+    assert journal.source_run_id == "run-m-delayed-journal"
+    assert client.logged_reads == 2
+    assert client.run_reads == 2
+
+
+def test_journal_visibility_failure_cleans_fresh_log_before_registration(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class InvisibleJournalClient(_CleanupClient):
+        def get_logged_model(self, model_id: str) -> object:
+            raise NotFound(f"{model_id} is not visible")
+
+    client = InvisibleJournalClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(registration_recovery, "_JOURNAL_VISIBILITY_ATTEMPTS", 2)
+    monkeypatch.setattr(registration_recovery, "_JOURNAL_VISIBILITY_INTERVAL_S", 0.0)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(
+            model_uri="models:/m-invisible-journal",
+            model_id="m-invisible-journal",
+            run_id="run-m-invisible-journal",
+        ),
+    )
+    registrations: list[object] = []
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda *_args, **_kwargs: registrations.append(object()),
+    )
+    serving = _ServingEndpoints()
+
+    with pytest.raises(
+        registration_recovery.RegistrationJournalVisibilityError,
+        match="authoritatively visible",
+    ):
+        ensure_gateway_responses_agent(
+            _runtime_workspace(serving),
+            endpoint="mip-growth-agent-gateway",
+            endpoint_prefix="mip-growth-agent-gateway",
+            supervisor_id=_SUPERVISOR_ID,
+            upstream_endpoint="managed-supervisor",
+            model_name="mip.audit.mortgage_growth_supervisor_proxy",
+            experiment_name="mip-agent-runtime-gateway-proxy",
+            inference_catalog="mip",
+            inference_schema="audit",
+            inference_table_prefix="mip_agent_gateway_growth_agent",
+            genie_space_id=_GENIE_SPACE_ID,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert registrations == []
+    assert client.deleted_logged_models == ["m-invisible-journal"]
+    assert client.deleted_runs == ["run-m-invisible-journal"]
+    assert serving.created == []
+
+
+def test_registration_cleanup_rejects_exact_source_with_tag_drift_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-tag-drift"
+    registration_tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    drifted_tags = dict(registration_tags)
+    drifted_tags[gateway.MODEL_UPSTREAM_TAG] = "drifted-supervisor"
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=model_source,
+                run_id="run-m-tag-drift",
+                tags=drifted_tags,
+                status="FAILED_REGISTRATION",
+            )
+        ]
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+
+    with pytest.raises(RuntimeError, match="drifted registration tags"):
+        gateway._compensate_failed_model_registration(
+            client,
+            _runtime_workspace(),
+            model_name=model_name,
+            journal=journal,
+            registration_tags=registration_tags,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_registration_cleanup_handles_no_visible_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-no-candidate"
+    client = _CleanupClient()
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+    monkeypatch.setattr(registration_recovery, "_REGISTRATION_VISIBILITY_ATTEMPTS", 2)
+    monkeypatch.setattr(registration_recovery, "_REGISTRATION_VISIBILITY_INTERVAL_S", 0.0)
+
+    with pytest.raises(
+        registration_recovery.RegistrationReconciliationPendingError,
+        match="preserving the durable journal",
+    ):
+        gateway._compensate_failed_model_registration(
+            client,
+            _runtime_workspace(),
+            model_name=model_name,
+            journal=journal,
+            registration_tags=tags,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_registration_cleanup_preserves_candidate_hidden_past_visibility_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-late-after-bound"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+
+    class LateClient(_CleanupClient):
+        target_searches = 0
+
+        def search_model_versions(
+            self,
+            query: str | None = None,
+            *,
+            filter_string: str | None = None,
+            max_results: int | None = None,
+            page_token: str | None = None,
+        ) -> list[object]:
+            query = filter_string if filter_string is not None else query
+            if query == f"name='{model_name}'":
+                self.target_searches += 1
+                if self.target_searches <= 2:
+                    return []
+            return super().search_model_versions(
+                query,
+                max_results=max_results,
+                page_token=page_token,
+            )
+
+    client = LateClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=model_source,
+                run_id="run-m-late-after-bound",
+                tags=tags,
+                status="FAILED_REGISTRATION",
+            )
+        ]
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+    monkeypatch.setattr(registration_recovery, "_REGISTRATION_VISIBILITY_ATTEMPTS", 2)
+    monkeypatch.setattr(registration_recovery, "_REGISTRATION_VISIBILITY_INTERVAL_S", 0.0)
+
+    with pytest.raises(registration_recovery.RegistrationReconciliationPendingError):
+        gateway._compensate_failed_model_registration(
+            client,
+            _runtime_workspace(),
+            model_name=model_name,
+            journal=journal,
+            registration_tags=tags,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    assert client.target_searches == 2
+    assert [(version.version, version.source) for version in client.versions] == [
+        ("1", model_source)
+    ]
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_registration_cleanup_polls_for_delayed_candidate_visibility(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-delayed-candidate"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+
+    class DelayedClient(_CleanupClient):
+        target_searches = 0
+
+        def search_model_versions(
+            self,
+            query: str | None = None,
+            *,
+            filter_string: str | None = None,
+            max_results: int | None = None,
+            page_token: str | None = None,
+        ) -> list[object]:
+            query = filter_string if filter_string is not None else query
+            if query is not None:
+                self.target_searches += 1
+                if self.target_searches == 1:
+                    return []
+            return super().search_model_versions(
+                query,
+                max_results=max_results,
+                page_token=page_token,
+            )
+
+    client = DelayedClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="2",
+                source=model_source,
+                run_id="run-m-delayed-candidate",
+                tags=tags,
+                status="FAILED_REGISTRATION",
+            )
+        ]
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+    monkeypatch.setattr(registration_recovery, "_REGISTRATION_VISIBILITY_INTERVAL_S", 0.0)
+
+    gateway._compensate_failed_model_registration(
+        client,
+        _runtime_workspace(),
+        model_name=model_name,
+        journal=journal,
+        registration_tags=tags,
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+    )
+
+    assert client.target_searches >= 2
+    assert client.deleted_versions == [(model_name, "2")]
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_registration_cleanup_aggregates_independent_delete_failures(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-delete-failures"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version=version,
+                source=model_source,
+                run_id="run-m-delete-failures",
+                tags=tags,
+                status="PENDING_REGISTRATION",
+            )
+            for version in ("1", "2")
+        ]
+    )
+    client.fail_version_deletes = {"1", "2"}
+    journal = _cleanup_journal(client, model_source=model_source)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        gateway._compensate_failed_model_registration(
+            client,
+            _runtime_workspace(),
+            model_name=model_name,
+            journal=journal,
+            registration_tags=tags,
+            expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        )
+
+    message = str(exc_info.value)
+    assert "delete-1-failed" in message
+    assert "delete-2-failed" in message
+    assert client.deleted_versions == [(model_name, "1"), (model_name, "2")]
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_registration_cleanup_never_deletes_registered_model_container(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-model-delete-failure"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=model_source,
+                run_id="run-m-model-delete-failure",
+                tags=tags,
+                status="FAILED_REGISTRATION",
+            )
+        ]
+    )
+    client.fail_registered_model_delete = True
+    journal = _cleanup_journal(client, model_source=model_source)
+
+    gateway._compensate_failed_model_registration(
+        client,
+        _runtime_workspace(),
+        model_name=model_name,
+        journal=journal,
+        registration_tags=tags,
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+    )
+
+    assert client.deleted_versions == [(model_name, "1")]
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+@pytest.mark.parametrize("reference_field", ["source", "run_id"])
+def test_registration_cleanup_preserves_artifacts_referenced_by_any_surviving_version(
+    monkeypatch: pytest.MonkeyPatch,
+    reference_field: str,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-cross-model-reference"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    surviving = {
+        "name": "mip.audit.unrelated_model",
+        "version": "9",
+        "source": "models:/m-unrelated",
+        "run_id": "run-unrelated",
+        "tags": {"unrelated": "tag"},
+        "status": "READY",
+    }
+    surviving[reference_field] = (
+        model_source if reference_field == "source" else "run-m-cross-model-reference"
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=model_source,
+                run_id="run-m-cross-model-reference",
+                tags=tags,
+                status="PENDING_REGISTRATION",
+            ),
+            SimpleNamespace(**surviving),
+        ]
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+
+    gateway._compensate_failed_model_registration(
+        client,
+        _runtime_workspace(),
+        model_name=model_name,
+        journal=journal,
+        registration_tags=tags,
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+    )
+
+    assert client.deleted_versions == [(model_name, "1")]
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_registration_cleanup_preserves_run_referenced_by_another_logged_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    model_source = "models:/m-shared-logged-run"
+    tags = _cleanup_tags(
+        monkeypatch,
+        model_name=model_name,
+        model_source=model_source,
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=model_source,
+                run_id="run-m-shared-logged-run",
+                tags=tags,
+                status="PENDING_REGISTRATION",
+            )
+        ]
+    )
+    journal = _cleanup_journal(client, model_source=model_source)
+    client.logged_models["m-other-on-run"] = SimpleNamespace(
+        model_id="m-other-on-run",
+        source_run_id=journal.source_run_id,
+        experiment_id=journal.experiment_id,
+    )
+
+    gateway._compensate_failed_model_registration(
+        client,
+        _runtime_workspace(),
+        model_name=model_name,
+        journal=journal,
+        registration_tags=tags,
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+    )
+
+    assert client.deleted_versions == [(model_name, "1")]
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_interrupted_registration_retry_reconciles_then_creates_fresh_ready_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    resource_hash = _resource_hash(source_hash)
+    model_name = gateway.gateway_agent_model_name(
+        base_model_name="mip.audit.mortgage_growth_supervisor_proxy",
+        contract_hash=resource_hash,
+    )
+    prior_source = "models:/m-interrupted-retry"
+    monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    prior_tags = attestation.sign_gateway_model_contract(
+        full_name=model_name,
+        model_source=prior_source,
+        source_hash=source_hash,
+        supervisor_id=_SUPERVISOR_ID,
+        supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        model_family="mip.audit.mortgage_growth_supervisor_proxy",
+        experiment_base="mip-agent-runtime-gateway-proxy",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        inference_schema="audit",
+        inference_table_prefix="mip_agent_gateway_growth_agent",
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=prior_source,
+                run_id="run-m-interrupted-retry",
+                tags=prior_tags,
+                status="FAILED_REGISTRATION",
+            )
+        ]
+    )
+    _patch_mlflow(monkeypatch, client=client)
+    experiment_name = gateway.gateway_experiment_name(
+        base_experiment_name="mip-agent-runtime-gateway-proxy",
+        contract_hash=resource_hash,
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+    )
+    client.set_experiment(experiment_name)
+    durable = registration_recovery.DurableRegistrationJournal(
+        model_name=model_name,
+        journal=_cleanup_journal(client, model_source=prior_source),
+        registration_tags=prior_tags,
+    )
+    registration_recovery.persist_registration_journal(client, durable)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: pytest.fail("durable retry must reuse the preserved source"),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, _name, *, tags: _registered(
+            client,
+            model_uri,
+            version="2",
+            tags=tags,
+        ),
+    )
+    serving = _ServingEndpoints()
+
+    deployment = ensure_gateway_responses_agent(
+        _runtime_workspace(serving),
+        endpoint="mip-growth-agent-gateway",
+        endpoint_prefix="mip-growth-agent-gateway",
+        supervisor_id=_SUPERVISOR_ID,
+        upstream_endpoint="managed-supervisor",
+        model_name="mip.audit.mortgage_growth_supervisor_proxy",
+        experiment_name="mip-agent-runtime-gateway-proxy",
+        inference_catalog="mip",
+        inference_schema="audit",
+        inference_table_prefix="mip_agent_gateway_growth_agent",
+        genie_space_id=_GENIE_SPACE_ID,
+        expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+    )
+
+    assert client.deleted_versions == [(model_name, "1")]
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    assert deployment.model_version == 2
+    assert deployment.model_source == prior_source
+    assert (
+        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+        not in client.get_experiment("experiment-7").tags
+    )
+    assert len(serving.created) == 1
+
+
+def test_durable_restart_without_candidate_reuses_preserved_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    source = "models:/m-crash-restart"
+    client = _CleanupClient()
+    _persisted_recovery(monkeypatch, client, model_name=model_name, model_source=source)
+
+    recovery = _reconcile_recovery(client, model_name=model_name)
+
+    assert recovery is not None
+    assert recovery.ready_version is None
+    assert recovery.durable.journal.model_source == source
+    assert (
+        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+        in client.get_experiment("experiment-7").tags
+    )
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_durable_restart_preserves_hidden_incomplete_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    source = "models:/m-hidden-restart"
+    tags = _cleanup_tags(monkeypatch, model_name=model_name, model_source=source)
+
+    class HiddenClient(_CleanupClient):
+        def search_model_versions(self, query=None, **kwargs):  # type: ignore[no-untyped-def]
+            selected = kwargs.get("filter_string") or query
+            if selected == f"name='{model_name}'":
+                return []
+            return super().search_model_versions(query, **kwargs)
+
+    client = HiddenClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=source,
+                run_id="run-m-hidden-restart",
+                tags=tags,
+                status="PENDING_REGISTRATION",
+            )
+        ]
+    )
+    _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name=model_name,
+        model_source=source,
+        tags=tags,
+    )
+
+    recovery = _reconcile_recovery(client, model_name=model_name)
+
+    assert recovery is not None and recovery.ready_version is None
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_durable_journal_tamper_fails_closed_without_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    source = "models:/m-tampered-journal"
+    client = _CleanupClient()
+    _persisted_recovery(monkeypatch, client, model_name=model_name, model_source=source)
+    experiment = client.get_experiment("experiment-7")
+    key = registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+    experiment.tags[key] = experiment.tags[key].replace(model_name, f"{model_name}x")
+
+    with pytest.raises(RuntimeError, match="identity drifted"):
+        _reconcile_recovery(client, model_name=model_name)
+
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+@pytest.mark.parametrize("invalid", ["{}", "[]", "x" * 5001])
+def test_durable_journal_parser_rejects_noncanonical_shapes(invalid: str) -> None:
+    with pytest.raises(RuntimeError, match="journal"):
+        registration_recovery._parse_durable_journal(invalid)
+
+
+def test_durable_journal_rejects_previous_attestation_epoch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    source = "models:/m-previous-epoch"
+    monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _PREVIOUS_MODEL_SIGNING_KEY)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _PREVIOUS_MODEL_VERIFY_KEY)
+    tags = attestation.sign_gateway_model_contract(
+        full_name=model_name,
+        model_source=source,
+        **_recovery_contract(),
+    )
+    client = _CleanupClient()
+    _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name=model_name,
+        model_source=source,
+        tags=tags,
+    )
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    monkeypatch.setenv(
+        "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
+        _PREVIOUS_MODEL_VERIFY_KEY,
+    )
+
+    with pytest.raises(RuntimeError, match="previous attestation epoch"):
+        _reconcile_recovery(client, model_name=model_name)
+
+    assert client.deleted_versions == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_durable_reconcile_removes_multiple_exact_incomplete_versions_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    source = "models:/m-multiple-incomplete"
+    tags = _cleanup_tags(monkeypatch, model_name=model_name, model_source=source)
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version=str(version),
+                source=source,
+                run_id="run-m-multiple-incomplete",
+                tags=tags,
+                status=status,
+            )
+            for version, status in ((1, "PENDING_REGISTRATION"), (2, "FAILED_REGISTRATION"))
+        ]
+    )
+    _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name=model_name,
+        model_source=source,
+        tags=tags,
+    )
+
+    recovery = _reconcile_recovery(client, model_name=model_name)
+
+    assert recovery is not None and recovery.ready_version is None
+    assert client.deleted_versions == [(model_name, "1"), (model_name, "2")]
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    assert (
+        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+        in client.get_experiment("experiment-7").tags
+    )
+
+
+def test_durable_persist_retries_exact_write_after_definite_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RetryClient(_CleanupClient):
+        tag_writes = 0
+
+        def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+            self.tag_writes += 1
+            if self.tag_writes == 1:
+                raise RuntimeError("write rejected before commit")
+            super().set_experiment_tag(experiment_id, key, value)
+
+    client = RetryClient()
+    client.set_experiment("/Users/runtime-client/gateway-recovery")
+    durable = registration_recovery.DurableRegistrationJournal(
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        journal=_cleanup_journal(client, model_source="models:/m-retry-write"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+            model_source="models:/m-retry-write",
+        ),
+    )
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
+
+    registration_recovery.persist_registration_journal(client, durable)
+
+    assert client.tag_writes == 2
+    assert (
+        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+        in client.get_experiment("experiment-7").tags
+    )
+
+
+def test_durable_persist_survives_lost_response_and_readback_exception(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LostResponseClient(_CleanupClient):
+        fail_readback = False
+        tag_writes = 0
+
+        def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+            self.tag_writes += 1
+            super().set_experiment_tag(experiment_id, key, value)
+            self.fail_readback = True
+            raise ConnectionError("response lost after commit")
+
+        def get_experiment(self, experiment_id: str) -> object:
+            if self.fail_readback:
+                self.fail_readback = False
+                raise ConnectionError("readback temporarily unavailable")
+            return super().get_experiment(experiment_id)
+
+    client = LostResponseClient()
+    client.set_experiment("/Users/runtime-client/gateway-recovery")
+    durable = registration_recovery.DurableRegistrationJournal(
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        journal=_cleanup_journal(client, model_source="models:/m-lost-write-response"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+            model_source="models:/m-lost-write-response",
+        ),
+    )
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
+
+    registration_recovery.persist_registration_journal(client, durable)
+
+    assert client.tag_writes == 1
+    assert (
+        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+        in client.get_experiment("experiment-7").tags
+    )
+
+
+def test_definite_journal_write_failure_quarantines_orphan_on_fresh_process(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    client.fail_experiment_tag_set = True
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-definite-write-failure"),
+    )
+    registrations: list[str] = []
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, *_args, **_kwargs: registrations.append(model_uri),
+    )
+    serving = _ServingEndpoints()
+
+    with pytest.raises(
+        registration_recovery.RegistrationJournalPersistencePendingError,
+        match="preserving source",
+    ):
+        _ensure_gateway(_runtime_workspace(serving))
+
+    assert registrations == []
+    assert "m-definite-write-failure" in client.logged_models
+    assert "run-m-definite-write-failure" in client.runs
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    assert serving.created == []
+
+    client.fail_experiment_tag_set = False
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: pytest.fail("quarantined process must not log another source"),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, _name, *, tags: _registered(
+            client,
+            model_uri,
+            version="4",
+            tags=tags,
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="operator quarantine required"):
+        _ensure_gateway(_runtime_workspace(serving))
+
+    assert registrations == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    assert serving.created == []
+
+
+def test_orphan_discovery_fails_closed_on_multiple_sources_without_mutation() -> None:
+    client = _CleanupClient()
+    _add_logged_source(client, "m-first-orphan")
+    _add_logged_source(client, "m-second-orphan")
+
+    with pytest.raises(RuntimeError, match="unjournaled.*m-first-orphan,m-second-orphan"):
+        registration_recovery.require_no_unjournaled_gateway_sources(
+            client,
+            experiment_id="experiment-7",
+            expected_logged_model_name="mortgage_growth_supervisor_proxy",
+        )
+
+    assert client.deleted_versions == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_orphan_discovery_ignores_exact_registered_references() -> None:
+    source = "models:/m-referenced-log"
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name="mip.audit.other_model",
+                version="9",
+                source=source,
+                run_id="run-m-referenced-log",
+                tags={},
+                status="READY",
+            )
+        ]
+    )
+    _add_logged_source(client, "m-referenced-log")
+
+    registration_recovery.require_no_unjournaled_gateway_sources(
+        client,
+        experiment_id="experiment-7",
+        expected_logged_model_name="mortgage_growth_supervisor_proxy",
+    )
+    assert client.deleted_versions == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+
+
+def test_orphan_discovery_exhausts_pages_before_selecting_source() -> None:
+    class Page(list[object]):
+        def __init__(self, values: list[object], token: str = "") -> None:
+            super().__init__(values)
+            self.token = token
+
+    class PaginatedClient(_CleanupClient):
+        logged_page_tokens: list[str | None] = []
+
+        def search_logged_models(
+            self,
+            *,
+            experiment_ids: list[str],
+            max_results: int | None = None,
+            page_token: str | None = None,
+        ) -> Page:
+            assert experiment_ids == ["experiment-7"]
+            assert max_results == registration_recovery._LOGGED_MODEL_SEARCH_PAGE_SIZE
+            self.logged_page_tokens.append(page_token)
+            values = list(self.logged_models.values())
+            return Page(values[:1], "next") if page_token is None else Page(values[1:])
+
+    client = PaginatedClient()
+    _add_logged_source(client, "m-page-one")
+    _add_logged_source(client, "m-page-two")
+    client.versions.append(
+        SimpleNamespace(
+            name="mip.audit.other_model",
+            version="8",
+            source="models:/m-page-one",
+            run_id="run-m-page-one",
+            tags={},
+            status="READY",
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="operator quarantine required: m-page-two"):
+        registration_recovery.require_no_unjournaled_gateway_sources(
+            client,
+            experiment_id="experiment-7",
+            expected_logged_model_name="mortgage_growth_supervisor_proxy",
+        )
+
+    assert client.logged_page_tokens == [None, "next"]
+
+
+def test_orphan_discovery_rejects_name_and_identity_drift() -> None:
+    wrong_name = _CleanupClient()
+    _add_logged_source(wrong_name, "m-wrong-name", name="another_model")
+    with pytest.raises(RuntimeError, match="unexpected logged model"):
+        registration_recovery.require_no_unjournaled_gateway_sources(
+            wrong_name,
+            experiment_id="experiment-7",
+            expected_logged_model_name="mortgage_growth_supervisor_proxy",
+        )
+
+    wrong_identity = _CleanupClient()
+    _add_logged_source(wrong_identity, "m-wrong-identity")
+    wrong_identity.logged_models["m-wrong-identity"].source_run_id = "run-drifted"
+    wrong_identity.runs["run-drifted"] = SimpleNamespace(
+        info=SimpleNamespace(experiment_id="another-experiment")
+    )
+    with pytest.raises(RuntimeError, match="experiment identity drifted"):
+        registration_recovery.require_no_unjournaled_gateway_sources(
+            wrong_identity,
+            experiment_id="experiment-7",
+            expected_logged_model_name="mortgage_growth_supervisor_proxy",
+        )
+
+
+def test_registration_lost_response_reuses_authoritative_ready_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-ready-after-lost-response"),
+    )
+
+    def lost_registration_response(model_uri: str, name: str, *, tags: dict[str, str]) -> object:
+        version = SimpleNamespace(
+            name=name,
+            version="7",
+            source=model_uri,
+            run_id="run-m-ready-after-lost-response",
+            tags=dict(tags),
+            status="READY",
+        )
+        client.versions.append(version)
+        client.version_tags["7"] = dict(tags)
+        client.version_sources["7"] = model_uri
+        client.version_statuses["7"] = "READY"
+        raise ConnectionError("registration response lost after commit")
+
+    monkeypatch.setattr(gateway.mlflow, "register_model", lost_registration_response)
+    serving = _ServingEndpoints()
+
+    deployment = _ensure_gateway(_runtime_workspace(serving))
+
+    assert deployment.model_version == 7
+    assert client.deleted_versions == []
+    assert client.deleted_registered_models == []
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
+    assert (
+        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+        not in client.get_experiment("experiment-7").tags
+    )
+    assert len(serving.created) == 1
+
+
+def test_journal_clear_failure_prevents_endpoint_and_preserves_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    client.fail_experiment_tag_delete = True
+    _patch_mlflow(monkeypatch, client=client)
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: SimpleNamespace(model_uri="models:/m-clear-failure"),
+    )
+    monkeypatch.setattr(
+        gateway.mlflow,
+        "register_model",
+        lambda model_uri, _name, *, tags: _registered(
+            client,
+            model_uri,
+            version="5",
+            tags=tags,
+        ),
+    )
+    serving = _ServingEndpoints()
+
+    with pytest.raises(RuntimeError, match="experiment tag deletion failed"):
+        _ensure_gateway(_runtime_workspace(serving))
+
+    assert (
+        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+        in client.get_experiment("experiment-7").tags
+    )
+    assert client.deleted_logged_models == []
+    assert client.deleted_runs == []
     assert serving.created == []
 
 
@@ -1528,6 +3211,7 @@ def test_gateway_agent_postflight_verifies_signed_v2_contract_and_exact_experime
             version=version,
             source=deployment.model_source,
             tags=model_tags,
+            status="READY",
         )
     )
 
@@ -1593,7 +3277,7 @@ def test_gateway_agent_postflight_rejects_rogue_served_model_version_tags() -> N
     details.state = SimpleNamespace(ready="READY")
     details.task = "agent/v1/responses"
     deployment = _exact_deployment(source_hash=source_hash, model_version=7)
-    rogue_tags = {key: "x" for key in gateway.GATEWAY_MODEL_CANONICAL_TAGS}
+    rogue_tags = {key: "x" for key in gateway_contract.GATEWAY_MODEL_CANONICAL_TAGS}
     rogue_tags[gateway.MODEL_SOURCE_HASH_TAG] = "b" * 64
     rogue_tags[gateway.MODEL_UPSTREAM_TAG] = "rogue-supervisor"
     rogue_registry = SimpleNamespace(
@@ -1602,6 +3286,7 @@ def test_gateway_agent_postflight_rejects_rogue_served_model_version_tags() -> N
             version=version,
             source=deployment.model_source,
             tags=rogue_tags,
+            status="READY",
         )
     )
 
