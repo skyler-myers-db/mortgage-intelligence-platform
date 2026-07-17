@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from databricks.sdk.service.workspace import ImportFormat
 from tools.databricks.cutover_journal_attestation import (
     sign_cutover_journal,
     verify_cutover_journal,
@@ -170,6 +171,7 @@ def persist_cutover_journal(
     workspace.workspace.upload(
         path,
         io.BytesIO(json.dumps(signed_payload, sort_keys=True).encode("utf-8")),
+        format=ImportFormat.AUTO,
         overwrite=True,
     )
 

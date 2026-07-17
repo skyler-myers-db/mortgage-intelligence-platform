@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from databricks.sdk.errors import ResourceDoesNotExist
+from databricks.sdk.service.workspace import ImportFormat
 
 from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_AGENT_EXPERIMENT,
@@ -589,7 +590,15 @@ class _WorkspaceFiles:
     def mkdirs(self, _path: str) -> None:
         return None
 
-    def upload(self, path: str, content: io.BytesIO, *, overwrite: bool) -> None:
+    def upload(
+        self,
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        assert format is ImportFormat.AUTO
         assert overwrite is True
         self.upload_count += 1
         self.data[path] = content.read()

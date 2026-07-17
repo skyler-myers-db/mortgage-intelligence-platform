@@ -28,6 +28,7 @@ from databricks.sdk.errors import (
     ResourceDoesNotExist,
 )
 from databricks.sdk.service.workspace import (
+    ImportFormat,
     WorkspaceObjectAccessControlRequest,
     WorkspaceObjectPermissionLevel,
 )
@@ -285,6 +286,7 @@ def acquire(
         workspace.workspace.upload(
             path,
             io.BytesIO(json.dumps(signed, sort_keys=True).encode("utf-8")),
+            format=ImportFormat.AUTO,
             overwrite=False,
         )
     except (AlreadyExists, ResourceAlreadyExists):
@@ -389,6 +391,7 @@ def renew(
     workspace.workspace.upload(
         _path(app_name),
         io.BytesIO(json.dumps(refreshed, sort_keys=True).encode("utf-8")),
+        format=ImportFormat.AUTO,
         overwrite=True,
     )
     if _download(workspace, app_name=app_name) != refreshed:

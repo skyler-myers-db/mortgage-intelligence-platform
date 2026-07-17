@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 from databricks.sdk.errors import ResourceAlreadyExists, ResourceDoesNotExist
+from databricks.sdk.service.workspace import ImportFormat
 
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import app_deployment_lease as lease
@@ -48,7 +49,15 @@ class _Files:
     def get_permissions(self, _object_type: str, _object_id: str) -> object:
         return SimpleNamespace(access_control_list=self.access_control_list)
 
-    def upload(self, path: str, content: io.BytesIO, *, overwrite: bool) -> None:
+    def upload(
+        self,
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        assert format is ImportFormat.AUTO
         if path in self.data and not overwrite:
             raise ResourceAlreadyExists("exists")
         self.data[path] = content.read()
@@ -229,8 +238,14 @@ def test_post_commit_upload_timeout_removes_only_the_exact_candidate() -> None:
     workspace = _workspace()
     original_upload = workspace.workspace.upload
 
-    def commit_then_timeout(path: str, content: io.BytesIO, *, overwrite: bool) -> None:
-        original_upload(path, content, overwrite=overwrite)
+    def commit_then_timeout(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        original_upload(path, content, format=format, overwrite=overwrite)
         raise TimeoutError("injected timeout after commit")
 
     workspace.workspace.upload = commit_then_timeout
@@ -250,8 +265,14 @@ def test_post_commit_upload_timeout_reports_exact_cleanup_failure() -> None:
     workspace = _workspace()
     original_upload = workspace.workspace.upload
 
-    def commit_then_timeout(path: str, content: io.BytesIO, *, overwrite: bool) -> None:
-        original_upload(path, content, overwrite=overwrite)
+    def commit_then_timeout(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        original_upload(path, content, format=format, overwrite=overwrite)
         raise TimeoutError("injected timeout after commit")
 
     def fail_delete(_path: str) -> None:
@@ -281,7 +302,14 @@ def test_post_commit_upload_timeout_reports_exact_cleanup_failure() -> None:
 def test_ambiguous_upload_never_deletes_a_different_persisted_record() -> None:
     workspace = _workspace()
 
-    def replace_then_timeout(path: str, content: io.BytesIO, *, overwrite: bool) -> None:
+    def replace_then_timeout(
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: ImportFormat,
+        overwrite: bool,
+    ) -> None:
+        assert format is ImportFormat.AUTO
         assert overwrite is False
         candidate = json.loads(content.read())
         replacement = lease._sign(
