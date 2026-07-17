@@ -48,6 +48,7 @@ from tools.databricks.export_gateway_runtime_contract import (
     ExactGatewayRuntimeProof,
     resolve_exact_resource_proof,
 )
+from tools.databricks.lakebase_instance_contract import resolve_lakebase_instance_aliases
 from tools.databricks.serving_endpoint_acl import (
     grant_direct_can_query,
     revoke_direct_permissions,
@@ -55,6 +56,13 @@ from tools.databricks.serving_endpoint_acl import (
 
 DEFAULT_SCOPE = "mip-app-rollback"
 DEPLOY_TIMEOUT = timedelta(minutes=20)
+
+
+def _expected_lakebase_instance() -> str:
+    try:
+        return resolve_lakebase_instance_aliases(os.environ, require_both=True)
+    except ValueError as exc:
+        raise RuntimeError(f"rollback Lakebase deployment control is invalid: {exc}") from exc
 
 
 def _record_key(app_name: str) -> str:
@@ -400,10 +408,14 @@ def _record_from(
     app_resources: list[dict[str, object]],
     app_service_principal_client_id: str,
     app_service_principal_scim_id: str,
+    expected_lakebase_instance: str,
 ) -> dict[str, Any]:
     immutable_payload = copy.deepcopy(payload)
     immutable_payload["source_code_path"] = _immutable_source(deployment)
-    immutable_payload = _validated_payload(immutable_payload)
+    immutable_payload = _validated_payload(
+        immutable_payload,
+        expected_lakebase_instance=expected_lakebase_instance,
+    )
     return {
         "version": RECORD_VERSION,
         "app_name": app_name,
@@ -430,6 +442,7 @@ def ensure_current(
     treatment_warehouse_id: str,
     treatment_catalog: str,
 ) -> str:
+    expected_lakebase_instance = _expected_lakebase_instance()
     _converge_treatment_guard(
         workspace,
         app_name=app_name,
@@ -438,7 +451,12 @@ def ensure_current(
         mode="quiesce",
     )
     try:
-        record = _load_record(workspace, app_name=app_name, scope=scope)
+        record = _load_record(
+            workspace,
+            app_name=app_name,
+            scope=scope,
+            expected_lakebase_instance=expected_lakebase_instance,
+        )
         _assert_record_app_identity(workspace, app_name=app_name, record=record)
         _stored_resource_proof(workspace, record=record)
         _ensure_started(workspace, app_name=app_name)
@@ -458,7 +476,12 @@ def ensure_current(
                 treatment_catalog=treatment_catalog,
                 restore_treatment=False,
             )
-            refreshed = _load_record(workspace, app_name=app_name, scope=scope)
+            refreshed = _load_record(
+                workspace,
+                app_name=app_name,
+                scope=scope,
+                expected_lakebase_instance=expected_lakebase_instance,
+            )
             return _rollback_gateway_endpoint(refreshed)
         _converge_rollback_endpoint_acl(
             workspace,
@@ -510,7 +533,12 @@ def capture_current(
     treatment_warehouse_id: str,
     treatment_catalog: str,
 ) -> None:
-    candidate = _validated_payload(payload, require_immutable_source=False)
+    expected_lakebase_instance = _expected_lakebase_instance()
+    candidate = _validated_payload(
+        payload,
+        require_immutable_source=False,
+        expected_lakebase_instance=expected_lakebase_instance,
+    )
     candidate_lease_id = _payload_deployment_lease_id(candidate)
     try:
         UUID(expected_deployment_lease_id)
@@ -578,6 +606,7 @@ def capture_current(
         app_resources=app_resources,
         app_service_principal_client_id=app_client_id,
         app_service_principal_scim_id=app_scim_id,
+        expected_lakebase_instance=expected_lakebase_instance,
     )
     expected_deployment_id = _text(getattr(latest, "deployment_id", None))
     treatment_activated = False
@@ -601,7 +630,12 @@ def capture_current(
             source_git_sha=expected_git_sha,
         )
         _save_record(workspace, scope=scope, record=record)
-        persisted_record = _load_record(workspace, app_name=app_name, scope=scope)
+        persisted_record = _load_record(
+            workspace,
+            app_name=app_name,
+            scope=scope,
+            expected_lakebase_instance=expected_lakebase_instance,
+        )
         if persisted_record["deployment_id"] != expected_deployment_id:
             raise RuntimeError("App rollback contract readback names another deployment")
         if _active_deployment_id(workspace, app_name=app_name) != expected_deployment_id:
@@ -660,6 +694,7 @@ def restore_last_good(
     revoke_endpoints: tuple[str, ...] = (),
     restore_treatment: bool = True,
 ) -> None:
+    expected_lakebase_instance = _expected_lakebase_instance()
     _converge_treatment_guard(
         workspace,
         app_name=app_name,
@@ -668,7 +703,12 @@ def restore_last_good(
         mode="quiesce",
     )
     try:
-        record = _load_record(workspace, app_name=app_name, scope=scope)
+        record = _load_record(
+            workspace,
+            app_name=app_name,
+            scope=scope,
+            expected_lakebase_instance=expected_lakebase_instance,
+        )
         _assert_record_app_identity(workspace, app_name=app_name, record=record)
         _stored_resource_proof(workspace, record=record)
         _converge_rollback_endpoint_acl(
@@ -713,6 +753,7 @@ def restore_last_good(
             app_resources=record["app_resources"],
             app_service_principal_client_id=app_client_id,
             app_service_principal_scim_id=app_scim_id,
+            expected_lakebase_instance=expected_lakebase_instance,
         )
         _save_record(workspace, scope=scope, record=refreshed)
         if restore_treatment:

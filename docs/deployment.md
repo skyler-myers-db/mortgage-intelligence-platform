@@ -319,11 +319,15 @@ request closed instead of remaining a nominally verified Supervisor path.
 
 App activation has a separate blue/green rollback contract. Before changing an
 existing App, deploy requires a server-owned
-`mip-app-rollback/app-last-good-v4-mip-app` secret whose Ed25519 signature and
+`mip-app-rollback/app-last-good-v5-mip-app` secret whose Ed25519 signature and
 digest bind the full environment payload, exact health SHA, App service-
 principal client and SCIM IDs, Gateway binding, succeeded deployment ID,
 immutable `/Workspace/Users/.../src/...` source artifact, and the complete live
-Supervisor/Gateway/model/experiment/inference-table resource proof. Before any
+Supervisor/Gateway/model/experiment/inference-table resource proof. The v5
+payload must also bind matching `MIP_LAKEBASE_INSTANCE` and
+`LAKEBASE_INSTANCE_NAME` values to the current deployment target. Older v4
+records are intentionally not rollback authority; an operator must use the
+explicit stopped-App rebase path once before the next governed capture. Before any
 App start, endpoint ACL grant, rollback deployment, or treatment restoration,
 the rollback tool re-reads those immutable resource IDs, owners, exact endpoint
 configuration, signed model envelope/source, runtime-owned experiment name/ID,

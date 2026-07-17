@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 
@@ -24,6 +25,30 @@ def test_direct_execution_resolves_repository_imports() -> None:
 
     assert completed.returncode == 0, completed.stderr
     assert "--source-code-path" in completed.stdout
+
+
+def test_direct_execution_forwards_non_default_lakebase_instance() -> None:
+    completed = subprocess.run(
+        [
+            sys.executable,
+            str(app_deploy_payload.REPO / "tools/databricks/app_deploy_payload.py"),
+            "--source-code-path",
+            "/Workspace/app/files",
+            "--target",
+            "dev",
+            "--lakebase-instance",
+            "mip-app-state-pr105-staging",
+        ],
+        cwd="/tmp",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    env = _env_map(json.loads(completed.stdout))
+    assert env["LAKEBASE_INSTANCE_NAME"]["value"] == "mip-app-state-pr105-staging"
+    assert env["MIP_LAKEBASE_INSTANCE"]["value"] == "mip-app-state-pr105-staging"
 
 
 @pytest.fixture(autouse=True)
@@ -93,6 +118,8 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     }
     assert env["GENIE_SPACE_ID"]["value_from"] == "genie_space"
     assert env["LAKEBASE_HOST"]["value_from"] == "database"
+    assert env["LAKEBASE_INSTANCE_NAME"]["value"] == "mip-app-state"
+    assert env["MIP_LAKEBASE_INSTANCE"]["value"] == "mip-app-state"
     assert env["MIP_LIFECYCLE_SYNC_JOB_ID"]["value_from"] == "lifecycle_sync_job"
     assert env["MIP_FRED_RATES_JOB_ID"]["value_from"] == "fred_rates_job"
     assert env["MIP_SILVER_REFRESH_JOB_ID"]["value_from"] == "silver_refresh_job"
@@ -163,6 +190,34 @@ def test_app_deploy_payload_does_not_overlay_lakebase_dsn_fragments(monkeypatch)
     assert "LAKEBASE_PORT" not in env
     assert "LAKEBASE_DATABASE" not in env
     assert "LAKEBASE_SSLMODE" not in env
+
+
+def test_app_deploy_payload_pins_non_default_lakebase_instance() -> None:
+    payload = build_payload(
+        source_code_path="/Workspace/app/files",
+        target="dev",
+        lakebase_instance="mip-app-state-pr105-staging",
+    )
+    env = _env_map(payload)
+
+    assert env["LAKEBASE_INSTANCE_NAME"] == {
+        "name": "LAKEBASE_INSTANCE_NAME",
+        "value": "mip-app-state-pr105-staging",
+    }
+    assert env["MIP_LAKEBASE_INSTANCE"] == {
+        "name": "MIP_LAKEBASE_INSTANCE",
+        "value": "mip-app-state-pr105-staging",
+    }
+
+
+@pytest.mark.parametrize("name", ["", "UPPER", "bad_name", "-leading", "trailing-"])
+def test_app_deploy_payload_rejects_invalid_lakebase_instance(name: str) -> None:
+    with pytest.raises(ValueError, match="lowercase DNS-style"):
+        build_payload(
+            source_code_path="/Workspace/app/files",
+            target="dev",
+            lakebase_instance=name,
+        )
 
 
 def test_payload_does_not_bootstrap_current_user_admin(monkeypatch) -> None:

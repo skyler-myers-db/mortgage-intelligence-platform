@@ -351,9 +351,10 @@ resources:
     # Dedicated first-install bootstrap. Deploy runs this idempotent DAG before
     # applying UC grants, so a fresh or --skip-silver deployment never grants
     # a schema, table, or reviewed Growth Agent function before it exists.
-    # mip_refresh_silver / mip_refresh_scores intentionally repeat the same DDL
-    # later to seed and refresh data; these first-install tasks create only the
-    # empty governed contracts needed for fail-closed grant convergence.
+    # Silver/gold refreshes intentionally repeat table DDL later to seed and
+    # refresh data. The three reviewed, App-executable Growth Agent functions
+    # are deployment-owned and publish only here: customer/Admin/nightly jobs
+    # must never replace them and silently discard their object grants.
     mip_init_catalog_schemas:
       name: mip_init_catalog_schemas
       tags:
@@ -869,30 +870,6 @@ resources:
             warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
             file:
               path: sql/_rendered/ddl/005_semantics_views.sql
-        - task_key: publish_fn_build_cohort
-          description: "CREATE OR REPLACE mip.gold.fn_build_cohort for reviewed Growth Agent cohort counts."
-          depends_on:
-            - task_key: refresh_semantics_views
-          sql_task:
-            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
-            file:
-              path: sql/_rendered/uc_functions/fn_build_cohort.sql
-        - task_key: publish_fn_segment_counts
-          description: "CREATE OR REPLACE mip.gold.fn_segment_counts for reviewed Growth Agent eligible counts."
-          depends_on:
-            - task_key: refresh_semantics_views
-          sql_task:
-            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
-            file:
-              path: sql/_rendered/uc_functions/fn_segment_counts.sql
-        - task_key: publish_fn_lead_queue_url
-          description: "CREATE OR REPLACE mip.gold.fn_lead_queue_url for reviewed Growth Agent handoffs."
-          depends_on:
-            - task_key: refresh_semantics_views
-          sql_task:
-            warehouse_id: ${resources.sql_warehouses.mip_serverless_sql.id}
-            file:
-              path: sql/_rendered/uc_functions/fn_lead_queue_url.sql
         - task_key: refresh_certified_lead_metric_view
           description: "CREATE OR REPLACE certified Lead Queue Databricks metric view wrapper."
           depends_on:

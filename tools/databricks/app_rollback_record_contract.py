@@ -25,10 +25,14 @@ from tools.databricks.app_rollback_resource_contract import (
     app_resource_contract_digest,
     validated_app_resource_contract,
 )
+from tools.databricks.lakebase_instance_contract import (
+    resolve_lakebase_instance_aliases,
+    validated_lakebase_instance_name,
+)
 
-RECORD_VERSION = 4
-DEFAULT_KEY_PREFIX = "app-last-good-v4"
-RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v4"
+RECORD_VERSION = 5
+DEFAULT_KEY_PREFIX = "app-last-good-v5"
+RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v5"
 
 
 def _text(value: object) -> str:
@@ -128,6 +132,7 @@ def _validated_payload(
     value: object,
     *,
     require_immutable_source: bool = True,
+    expected_lakebase_instance: str | None = None,
 ) -> dict[str, object]:
     if not isinstance(value, dict):
         raise RuntimeError("App rollback payload is not an object")
@@ -143,6 +148,7 @@ def _validated_payload(
     if not isinstance(env_vars, list) or not env_vars:
         raise RuntimeError("App rollback payload has no complete environment")
     names: set[str] = set()
+    literal_values: dict[str, str] = {}
     for item in env_vars:
         if not isinstance(item, dict):
             raise RuntimeError("App rollback environment entry is invalid")
@@ -151,6 +157,21 @@ def _validated_payload(
         if not name or name in names or len(value_keys) != 1:
             raise RuntimeError("App rollback environment is incomplete or ambiguous")
         names.add(name)
+        if "value" in value_keys:
+            literal_values[name] = str(item["value"]).strip()
+    try:
+        payload_lakebase_instance = resolve_lakebase_instance_aliases(
+            literal_values,
+            require_both=True,
+        )
+        if expected_lakebase_instance is not None:
+            expected = validated_lakebase_instance_name(expected_lakebase_instance)
+            if payload_lakebase_instance != expected:
+                raise ValueError(
+                    "App rollback Lakebase instance does not match the deployment target"
+                )
+    except ValueError as exc:
+        raise RuntimeError(f"App rollback Lakebase binding is invalid: {exc}") from exc
     allowed = {"source_code_path", "mode", "env_vars", "command"}
     if set(payload) - allowed:
         raise RuntimeError("App rollback payload contains unsupported fields")
@@ -177,12 +198,20 @@ def _validated_gateway_resources(value: object) -> dict[str, str]:
     return {**resources, "resource_digest": digest}
 
 
-def _validated_record(value: object, *, app_name: str) -> dict[str, Any]:
+def _validated_record(
+    value: object,
+    *,
+    app_name: str,
+    expected_lakebase_instance: str,
+) -> dict[str, Any]:
     if not isinstance(value, dict) or value.get("version") != RECORD_VERSION:
         raise RuntimeError("App rollback contract version is invalid")
     if value.get("app_name") != app_name:
         raise RuntimeError("App rollback contract names a different App")
-    payload = _validated_payload(value.get("payload"))
+    payload = _validated_payload(
+        value.get("payload"),
+        expected_lakebase_instance=expected_lakebase_instance,
+    )
     if value.get("payload_sha256") != _payload_digest(payload):
         raise RuntimeError("App rollback payload digest does not match")
     deployment_id = str(value.get("deployment_id") or "").strip()
@@ -212,7 +241,13 @@ def _validated_record(value: object, *, app_name: str) -> dict[str, Any]:
     }
 
 
-def _load_record(workspace: Any, *, app_name: str, scope: str) -> dict[str, Any]:
+def _load_record(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+    expected_lakebase_instance: str,
+) -> dict[str, Any]:
     raw = _secret_value(workspace, scope=scope, key=_record_key(app_name))
     if raw is None:
         raise RuntimeError(
@@ -226,7 +261,11 @@ def _load_record(workspace: Any, *, app_name: str, scope: str) -> dict[str, Any]
     if not isinstance(decoded, dict):
         raise RuntimeError("App rollback contract is not an object")
     _verify_record_attestation(decoded)
-    return _validated_record(decoded, app_name=app_name)
+    return _validated_record(
+        decoded,
+        app_name=app_name,
+        expected_lakebase_instance=expected_lakebase_instance,
+    )
 
 
 def _save_record(workspace: Any, *, scope: str, record: dict[str, Any]) -> None:

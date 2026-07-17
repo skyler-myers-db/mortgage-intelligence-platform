@@ -283,6 +283,7 @@ AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
 APP_ACCESS_QUARANTINED=0
+REVIEWED_FUNCTION_GRANTS_PROVEN=1
 
 restore_deployment_sync_contract() {
   local source_label="${1:-agentic environment}"
@@ -438,6 +439,11 @@ converge_green_only_app_access() {
 stop_app_after_failed_deploy() {
   [[ "$DRY_RUN" -eq 0 && "$APP_FAIL_CLOSED_ARMED" -eq 1 && \
      -n "$APP_FAIL_CLOSED_NAME" ]] || return 0
+  if [[ "${REVIEWED_FUNCTION_GRANTS_PROVEN:-1}" -ne 1 ]]; then
+    echo "${RED}[deploy] reviewed function grants are unproven; stopping and quiescing instead of restoring signed blue.${RST}" >&2
+    stop_and_quiesce_unproven_app
+    return $?
+  fi
   case "${APP_UPGRADE_STATE:-first_install}" in
     blue_active)
       if [[ "$TREATMENT_RUNTIME_QUIESCED" -eq 1 ]]; then
@@ -1881,11 +1887,107 @@ run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
   --sync-schema "$DEPLOYMENT_SYNC_SCHEMA" \
   --sync-tables "$DEPLOYMENT_SYNC_TABLES"
 
+apply_uc_grant() {
+  local _grant_stmt="$1"
+  local _grant_state=""
+  local _grant_resp=""
+  local _grant_try
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    echo "  would grant: ${_grant_stmt}"
+    return 0
+  fi
+  # Re-audit 2026-06-11: a single 50s/CANCEL attempt reported a cold or
+  # queued warehouse as a misleading "grant failed". Retry the statement
+  # up to 3 attempts (the wait_timeout API ceiling is 50s per call) so
+  # warm-up latency is absorbed; a genuine authority failure still exits.
+  for _grant_try in 1 2 3; do
+    _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
+      "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
+        "$_GRANTS_WAREHOUSE_ID" "$_grant_stmt"
+    )")"
+    _grant_state="$(printf '%s' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",{}).get("state",""))')"
+    [[ "$_grant_state" == "SUCCEEDED" ]] && break
+    if [[ "$_grant_try" -lt 3 ]]; then
+      echo "  grant attempt ${_grant_try} ended ${_grant_state:-no-state} (warehouse warming?) — retrying"
+      sleep 5
+    fi
+  done
+  if [[ "$_grant_state" != "SUCCEEDED" ]]; then
+    echo "${RED}[deploy] UC grant failed after 3 attempts (${_grant_state:-no-state}): ${_grant_stmt}${RST}" >&2
+    printf '%s\n' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("status",{}).get("error",{}), indent=2)[:600])' >&2 || true
+    echo "  Likely cause: the deploying identity lacks GRANT authority on catalog '${_GRANTS_CATALOG}'." >&2
+    echo "  A metastore admin can apply docs/security/GRANTS.md once; reruns are idempotent." >&2
+    return 4
+  fi
+  echo "  granted: ${_grant_stmt}"
+}
+
+# The pre-refresh bootstrap is the sole publisher of the reviewed helper
+# functions. Both it and the gold refresh pass through the same reconciliation
+# boundary so grants remain proven after publication and any future job-graph
+# regression fails closed before either production identity can continue.
+reconcile_reviewed_function_execute_grants() {
+  local _function_name
+  local _principal
+  local _grant_failed=0
+  local _postflight_failed=0
+  for _principal in "$APP_SP_CLIENT_ID" "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; do
+    for _function_name in fn_build_cohort fn_segment_counts fn_lead_queue_url; do
+      if ! apply_uc_grant \
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.${_function_name} TO \`${_principal}\`"; then
+        _grant_failed=1
+      fi
+    done
+  done
+  if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants \
+    --catalog "$_GRANTS_CATALOG" \
+    --app-application-id "$APP_SP_CLIENT_ID" \
+    --agent-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; then
+    _postflight_failed=1
+  fi
+  if [[ "$_grant_failed" -ne 0 || "$_postflight_failed" -ne 0 ]]; then
+    echo "${RED}[deploy] reviewed function EXECUTE reconciliation is unproven.${RST}" >&2
+    return 4
+  fi
+  REVIEWED_FUNCTION_GRANTS_PROVEN=1
+}
+
+run_job_and_reconcile_reviewed_function_grants() {
+  local _job_label="$1"
+  local _job_rc=0
+  local _reconcile_rc=0
+  shift
+  REVIEWED_FUNCTION_GRANTS_PROVEN=0
+  step "$_job_label"
+  run_job_with_retry "$@" || _job_rc=$?
+  step "reconcile and prove reviewed function EXECUTE grants after governed job"
+  reconcile_reviewed_function_execute_grants || _reconcile_rc=$?
+  if [[ "$_job_rc" -ne 0 ]]; then
+    if [[ "$_reconcile_rc" -ne 0 ]]; then
+      echo "${RED}[deploy] governed job and reviewed function grant repair both failed.${RST}" >&2
+    fi
+    return "$_job_rc"
+  fi
+  return "$_reconcile_rc"
+}
+
+initialize_uc_targets_and_reconcile_function_grants() {
+  run_job_and_reconcile_reviewed_function_grants \
+    "initialize every pre-refresh UC grant target (idempotent)" \
+    databricks bundle run mip_init_catalog_schemas -t "$TARGET"
+}
+
+refresh_gold_and_reconcile_function_grants() {
+  run_job_and_reconcile_reviewed_function_grants \
+    "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*" \
+    databricks bundle run mip_refresh_scores -t "$TARGET"
+}
+
 # Run the dedicated, idempotent UC bootstrap before object-level grants. Its
 # DAG creates the governed treatment table, the ref/gold contracts, and the
-# three reviewed Growth Agent functions. The silver/gold jobs repeat these DDL
-# files later, but they may be intentionally skipped; grant ordering must not
-# depend on refresh policy.
+# three reviewed Growth Agent functions. Customer-triggerable silver/gold jobs
+# never republish those functions; grant ordering must not depend on refresh
+# policy.
 step "quiesce app treatment writes immediately before treatment-table DDL"
 run_with_account_identity \
   "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
@@ -1894,8 +1996,7 @@ run_with_account_identity \
   --principal "$APP_SP_CLIENT_ID" \
   --mode quiesce
 TREATMENT_RUNTIME_QUIESCED=1
-step "initialize every pre-refresh UC grant target (idempotent)"
-run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"
+initialize_uc_targets_and_reconcile_function_grants
 
 # CHECK constraints must be added through ALTER TABLE in Databricks SQL; the
 # CREATE TABLE bootstrap cannot declare them inline. Inspect Delta's persisted
@@ -1930,41 +2031,6 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   # The EXIT compensation revokes them on both success and failure.
   AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=1
 fi
-apply_uc_grant() {
-  local _grant_stmt="$1"
-  local _grant_state=""
-  local _grant_resp=""
-  local _grant_try
-  if [[ "$DRY_RUN" -eq 1 ]]; then
-    echo "  would grant: ${_grant_stmt}"
-    return 0
-  fi
-  # Re-audit 2026-06-11: a single 50s/CANCEL attempt reported a cold or
-  # queued warehouse as a misleading "grant failed". Retry the statement
-  # up to 3 attempts (the wait_timeout API ceiling is 50s per call) so
-  # warm-up latency is absorbed; a genuine authority failure still exits.
-  for _grant_try in 1 2 3; do
-    _grant_resp="$(databricks api post /api/2.0/sql/statements/ --json "$(
-      "$PYTHON" -c 'import json,sys; print(json.dumps({"warehouse_id": sys.argv[1], "statement": sys.argv[2], "wait_timeout": "50s", "on_wait_timeout": "CANCEL"}))' \
-        "$_GRANTS_WAREHOUSE_ID" "$_grant_stmt"
-    )")"
-    _grant_state="$(printf '%s' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(d.get("status",{}).get("state",""))')"
-    [[ "$_grant_state" == "SUCCEEDED" ]] && break
-    if [[ "$_grant_try" -lt 3 ]]; then
-      echo "  grant attempt ${_grant_try} ended ${_grant_state:-no-state} (warehouse warming?) — retrying"
-      sleep 5
-    fi
-  done
-  if [[ "$_grant_state" != "SUCCEEDED" ]]; then
-    echo "${RED}[deploy] UC grant failed after 3 attempts (${_grant_state:-no-state}): ${_grant_stmt}${RST}" >&2
-    printf '%s\n' "$_grant_resp" | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(d.get("status",{}).get("error",{}), indent=2)[:600])' >&2 || true
-    echo "  Likely cause: the deploying identity lacks GRANT authority on catalog '${_GRANTS_CATALOG}'." >&2
-    echo "  A metastore admin can apply docs/security/GRANTS.md once; reruns are idempotent." >&2
-    exit 4
-  fi
-  echo "  granted: ${_grant_stmt}"
-}
-
 while IFS= read -r _grant_stmt; do
   [[ -z "$_grant_stmt" ]] && continue
   apply_uc_grant "$_grant_stmt"
@@ -2129,6 +2195,7 @@ emit_app_deploy_payload() {
     --app-env "$APP_RUNTIME_ENV" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --enable-campaign-treatment-runtime \
     > "$destination"
 }
@@ -2246,8 +2313,7 @@ fi
 # -----------------------------------------------------------------------------
 # Step 8: gold refresh (CTAS chain, ends with refresh_semantics_views)
 # -----------------------------------------------------------------------------
-step "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*"
-run_job_with_retry databricks bundle run mip_refresh_scores -t "$TARGET"
+refresh_gold_and_reconcile_function_grants
 
 # -----------------------------------------------------------------------------
 # Step 9: lifecycle sync + funnel snapshot (approval / outreach rates)

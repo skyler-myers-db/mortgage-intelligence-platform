@@ -158,6 +158,15 @@ GRANT EXECUTE ON FUNCTION mip.gold.fn_segment_counts TO `mip-app`;
 GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `mip-app`;
 ```
 
+The deployment-only catalog bootstrap publishes these three reviewed helpers
+with `CREATE OR REPLACE FUNCTION`, which removes their object-level `EXECUTE`
+grants. Customer-triggerable Admin Operations and nightly gold refreshes do
+not publish them. `scripts/deploy.sh` attempts all six exact app and dedicated
+agent-runtime grants after every attempted bootstrap and `mip_refresh_scores`
+run, including a partially failed run, and proves their direct effective state
+before continuing. A deployment that cannot prove all six grants stops and
+quiesces the App instead of restoring a signed release with incomplete access.
+
 **Objects covered.** `lead_population`, `lead_score`, `borrower_360`,
 `borrower_dossier`, `evidence_events`, `property_owner_bridge`,
 `county_rollup`, `zip_rollup`, `state_top_segment`, `lockin_cohort`,

@@ -87,6 +87,8 @@ def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
         derive_gateway_proof_verify_key(SIGNING_KEY),
     )
+    monkeypatch.setenv("MIP_LAKEBASE_INSTANCE", "mip-app-state")
+    monkeypatch.setenv("LAKEBASE_INSTANCE_NAME", "mip-app-state")
     monkeypatch.setattr(rollback, "grant_direct_can_query", lambda *_a, **_kw: None)
     monkeypatch.setattr(rollback, "assert_deployment_lease_held", lambda *_a, **_kw: {})
     monkeypatch.setattr(rollback, "revoke_direct_permissions", lambda *_a, **_kw: True)
@@ -108,6 +110,8 @@ def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
 def _payload(*, git_sha: str = GIT_SHA) -> dict[str, object]:
     values = {
         "APP_ENV": "sandbox",
+        "MIP_LAKEBASE_INSTANCE": "mip-app-state",
+        "LAKEBASE_INSTANCE_NAME": "mip-app-state",
         "MIP_DEFAULT_CATALOG": "mip",
         "MIP_GIT_SHA": git_sha,
         "MIP_APP_DEPLOYMENT_LEASE_ID": LEASE_ID,
@@ -257,6 +261,9 @@ def test_capture_persists_exact_immutable_last_good_contract(
     record = _record(workspace)
     assert record["deployment_id"] == "deployment-blue"
     assert record["payload"]["source_code_path"] == ARTIFACT
+    env = rollback._env_map(record["payload"])
+    assert env["MIP_LAKEBASE_INSTANCE"] == "mip-app-state"
+    assert env["LAKEBASE_INSTANCE_NAME"] == "mip-app-state"
     assert record["gateway_binding_sha256"] == _binding()
     assert record["gateway_resources"] == {
         **RESOURCE_CONTRACT,
@@ -509,7 +516,114 @@ def test_ensure_restores_stale_active_deployment_from_signed_contract(
     )
 
     assert workspace.apps.deployed_payload["source_code_path"] == ARTIFACT
+    restored_env = rollback._env_map(workspace.apps.deployed_payload)
+    assert restored_env["MIP_LAKEBASE_INSTANCE"] == "mip-app-state"
+    assert restored_env["LAKEBASE_INSTANCE_NAME"] == "mip-app-state"
     assert _record(workspace)["deployment_id"] == "deployment-restored"
+
+
+def test_restore_rejects_signed_record_without_exact_lakebase_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    record = _record(workspace)
+    record["payload"]["env_vars"] = [
+        item
+        for item in record["payload"]["env_vars"]
+        if item["name"] not in {"MIP_LAKEBASE_INSTANCE", "LAKEBASE_INSTANCE_NAME"}
+    ]
+    record["payload_sha256"] = rollback._payload_digest(record["payload"])
+    rollback._save_record(workspace, scope="mip", record=record)
+
+    with pytest.raises(RuntimeError, match="Lakebase binding is invalid"):
+        rollback.restore_last_good(
+            workspace,
+            app_name=APP_NAME,
+            scope="mip",
+            base_url="https://mip.example",
+            bearer_token="token",
+            **TREATMENT_ARGS,
+        )
+
+    assert workspace.apps.deployed_payload is None
+
+
+def test_restore_ignores_pre_v5_rollback_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    v5_key = ("mip", rollback._record_key(APP_NAME))
+    workspace.secrets.values[("mip", f"app-last-good-v4-{APP_NAME}")] = (
+        workspace.secrets.values.pop(v5_key)
+    )
+
+    with pytest.raises(RuntimeError, match="no server-owned last-good"):
+        rollback.restore_last_good(
+            workspace,
+            app_name=APP_NAME,
+            scope="mip",
+            base_url="https://mip.example",
+            bearer_token="token",
+            **TREATMENT_ARGS,
+        )
+
+    assert workspace.apps.deployed_payload is None
+
+
+def test_restore_rejects_signed_record_for_another_lakebase_target(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    monkeypatch.setenv("MIP_LAKEBASE_INSTANCE", "other-target-state")
+    monkeypatch.setenv("LAKEBASE_INSTANCE_NAME", "other-target-state")
+
+    with pytest.raises(RuntimeError, match="does not match the deployment target"):
+        rollback.restore_last_good(
+            workspace,
+            app_name=APP_NAME,
+            scope="mip",
+            base_url="https://mip.example",
+            bearer_token="token",
+            **TREATMENT_ARGS,
+        )
+
+    assert workspace.apps.deployed_payload is None
 
 
 def test_ensure_rejects_pending_deployment_race(

@@ -15,6 +15,8 @@ from typing import Any
 import pytest
 import yaml
 
+from backend.services.databricks_jobs import MANAGED_JOBS
+
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
@@ -47,6 +49,34 @@ def _workflow_run_block(path: Path, step_name: str) -> str:
     run = text.index("        run: |", step)
     end = text.find("\n      - name:", run + 1)
     return textwrap.dedent(text[run + len("        run: |\n") : end if end != -1 else None])
+
+
+def _workflow_bundle_run_targets(workflow: dict[str, Any]) -> set[str]:
+    """Return literal Databricks bundle job targets from parsed workflow scripts."""
+
+    targets: set[str] = set()
+    for job in workflow["jobs"].values():
+        for workflow_step in job.get("steps", []):
+            run_block = workflow_step.get("run")
+            if not isinstance(run_block, str):
+                continue
+            normalized = re.sub(r"\\\r?\n[ \t]*", " ", run_block)
+            for line in normalized.splitlines():
+                if not re.search(r"\bdatabricks\s+bundle\s+run\b", line):
+                    continue
+                lexer = shlex.shlex(line, posix=True, punctuation_chars=True)
+                lexer.whitespace_split = True
+                lexer.commenters = "#"
+                tokens = list(lexer)
+                for index in range(len(tokens) - 3):
+                    if tokens[index : index + 3] != ["databricks", "bundle", "run"]:
+                        continue
+                    target = tokens[index + 3]
+                    assert re.fullmatch(r"[A-Za-z0-9_]+", target), (
+                        "nightly bundle targets must be literal governed job names"
+                    )
+                    targets.add(target)
+    return targets
 
 
 def _sql_without_comments(sql: str) -> str:
@@ -534,6 +564,7 @@ def _run_app_failure_compensation_harness(
     stop_outcome_record: str | None = None,
     access_quarantined: bool = False,
     release_acl_result: int = 0,
+    function_grants_proven: bool = True,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     calls = tmp_path / f"app-compensation-{state}.log"
     fake_python = tmp_path / f"fake-python-{state}.sh"
@@ -572,6 +603,7 @@ TREATMENT_RUNTIME_QUIESCED={0 if state in {"blue_active", "green_verified", "gre
 APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 _EXISTING_APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 APP_ACCESS_QUARANTINED={1 if access_quarantined else 0}
+REVIEWED_FUNCTION_GRANTS_PROVEN={1 if function_grants_proven else 0}
 DATABRICKS_RELEASE_PROBE_CLIENT_ID=release-probe
 DATABRICKS_CLIENT_ID=normal
 DATABRICKS_OPERATOR2_CLIENT_ID=operator2
@@ -1537,7 +1569,8 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
         'step "quiesce app treatment writes immediately before treatment-table DDL"'
     )
     uc_init = script.index(
-        'run_job_with_retry databricks bundle run mip_init_catalog_schemas -t "$TARGET"'
+        "\ninitialize_uc_targets_and_reconcile_function_grants\n",
+        post_bundle_quiesce,
     )
     constraint_convergence = script.index(
         "tools.databricks.ensure_campaign_treatment_table", uc_init
@@ -1641,6 +1674,86 @@ def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
     assert "mip_init_catalog_schemas" not in namespace_block
 
 
+def test_admin_and_nightly_jobs_cannot_replace_reviewed_growth_agent_functions() -> None:
+    bundle = yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))
+    jobs = bundle["resources"]["jobs"]
+    reviewed_paths = {
+        "sql/_rendered/uc_functions/fn_build_cohort.sql",
+        "sql/_rendered/uc_functions/fn_segment_counts.sql",
+        "sql/_rendered/uc_functions/fn_lead_queue_url.sql",
+    }
+
+    publishers: set[tuple[str, str, str]] = set()
+    for job_name, job in jobs.items():
+        for task in job.get("tasks", []):
+            path = task.get("sql_task", {}).get("file", {}).get("path", "")
+            if path in reviewed_paths:
+                publishers.add((job_name, task["task_key"], path))
+
+    assert publishers == {
+        (
+            "mip_init_catalog_schemas",
+            f"publish_{path.rsplit('/', 1)[-1].removesuffix('.sql')}",
+            path,
+        )
+        for path in reviewed_paths
+    }
+    for managed_job in MANAGED_JOBS.values():
+        assert not any(
+            task.get("sql_task", {}).get("file", {}).get("path") in reviewed_paths
+            for task in jobs[managed_job.job_name].get("tasks", [])
+        ), managed_job.job_name
+
+    nightly_workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+    nightly_jobs = _workflow_bundle_run_targets(nightly_workflow)
+    publisher_jobs = {job_name for job_name, _task_key, _path in publishers}
+    assert "mip_refresh_scores" in nightly_jobs
+    assert nightly_jobs.isdisjoint(publisher_jobs)
+
+
+def test_workflow_bundle_target_inventory_handles_shell_boundaries() -> None:
+    continued = {
+        "jobs": {
+            "gate": {
+                "steps": [
+                    {"run": "databricks bundle run \\\n  mip_init_catalog_schemas -t dev"}
+                ]
+            }
+        }
+    }
+    variable = {
+        "jobs": {"gate": {"steps": [{"run": 'databricks bundle run "$JOB" -t dev'}]}}
+    }
+    chained = {
+        "jobs": {
+            "gate": {
+                "steps": [
+                    {"run": "true&&databricks bundle run mip_init_catalog_schemas -t dev"}
+                ]
+            }
+        }
+    }
+    subshell = {
+        "jobs": {
+            "gate": {
+                "steps": [
+                    {"run": "(databricks bundle run mip_init_catalog_schemas -t dev)"},
+                    {
+                        "run": "result=$(databricks bundle run "
+                        "mip_init_catalog_schemas -t dev)"
+                    },
+                ]
+            }
+        }
+    }
+
+    assert _workflow_bundle_run_targets(continued) == {"mip_init_catalog_schemas"}
+    assert _workflow_bundle_run_targets(chained) == {"mip_init_catalog_schemas"}
+    assert _workflow_bundle_run_targets(subshell) == {"mip_init_catalog_schemas"}
+    with pytest.raises(AssertionError, match="literal governed job names"):
+        _workflow_bundle_run_targets(variable)
+
+
 def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -1695,7 +1808,6 @@ def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning(
             "mip_app_state.mip_sync",
         )
     )
-
     quiesce_block = script[quiesce:base_grants]
     quiesce_tokens = _continued_command_tokens(
         quiesce_block, "tools.databricks.converge_app_lakebase_sync_access"
@@ -1735,6 +1847,290 @@ def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning(
         "--mode",
         "runtime",
         *common,
+    ]
+
+
+def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    helper = _shell_function("reconcile_reviewed_function_execute_grants")
+    publisher = _shell_function("run_job_and_reconcile_reviewed_function_grants")
+    bootstrap = _shell_function("initialize_uc_targets_and_reconcile_function_grants")
+    refresh_helper = _shell_function("refresh_gold_and_reconcile_function_grants")
+    runtime_provision = 'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+
+    assert script.count("\ninitialize_uc_targets_and_reconcile_function_grants\n") == 1
+    assert script.count("\nrefresh_gold_and_reconcile_function_grants\n") == 1
+    invocation = script.index("\nrefresh_gold_and_reconcile_function_grants\n")
+    assert invocation < script.index(runtime_provision)
+    assert '"$APP_SP_CLIENT_ID" "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in helper
+    assert "fn_build_cohort fn_segment_counts fn_lead_queue_url" in helper
+    assert (
+        '"GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.${_function_name} '
+        'TO \\`${_principal}\\`"'
+    ) in helper
+    assert "      if ! apply_uc_grant \\\n" in helper
+    assert (
+        '  if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants '
+        "\\\n"
+    ) in helper
+    assert (
+        '  run_job_with_retry "$@" || _job_rc=$?\n'
+        '  step "reconcile and prove reviewed function EXECUTE grants after governed job"\n'
+        "  reconcile_reviewed_function_execute_grants || _reconcile_rc=$?"
+    ) in publisher
+    assert publisher.index("REVIEWED_FUNCTION_GRANTS_PROVEN=0") < publisher.index(
+        'run_job_with_retry "$@"'
+    )
+    assert (
+        'run_job_and_reconcile_reviewed_function_grants \\\n'
+        '    "initialize every pre-refresh UC grant target (idempotent)" \\\n'
+        '    databricks bundle run mip_init_catalog_schemas -t "$TARGET"'
+    ) in bootstrap
+    assert (
+        'run_job_and_reconcile_reviewed_function_grants \\\n'
+        '    "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*" \\\n'
+        '    databricks bundle run mip_refresh_scores -t "$TARGET"'
+    ) in refresh_helper
+
+
+def test_function_reconciliation_attempts_all_grants_after_one_fails(tmp_path: Path) -> None:
+    calls = tmp_path / "function-grants.log"
+    harness = tmp_path / "function-grants.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+APP_SP_CLIENT_ID=app-client
+DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+_GRANTS_CATALOG=mip
+PYTHON=python3
+RED=""
+RST=""
+REVIEWED_FUNCTION_GRANTS_PROVEN=0
+apply_uc_grant() {{
+  printf 'grant:%s\n' "$1" >> {shlex.quote(str(calls))}
+  [[ "$1" != *'fn_segment_counts TO `app-client`'* ]]
+}}
+run() {{ printf 'postflight:%s\n' "$*" >> {shlex.quote(str(calls))}; return 0; }}
+{_shell_function("reconcile_reviewed_function_execute_grants")}
+set +e
+reconcile_reviewed_function_execute_grants
+rc=$?
+set -e
+printf 'rc:%s proven:%s\n' "$rc" "$REVIEWED_FUNCTION_GRANTS_PROVEN"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "rc:4 proven:0\n"
+    entries = calls.read_text(encoding="utf-8").splitlines()
+    assert len([entry for entry in entries if entry.startswith("grant:")]) == 6
+    assert len([entry for entry in entries if entry.startswith("postflight:")]) == 1
+
+
+def test_function_reconciliation_requires_effective_postflight(tmp_path: Path) -> None:
+    calls = tmp_path / "function-postflight.log"
+    harness = tmp_path / "function-postflight.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+APP_SP_CLIENT_ID=app-client
+DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+_GRANTS_CATALOG=mip
+PYTHON=python3
+RED=""
+RST=""
+REVIEWED_FUNCTION_GRANTS_PROVEN=0
+apply_uc_grant() {{ printf 'grant\n' >> {shlex.quote(str(calls))}; return 0; }}
+run() {{ printf 'postflight\n' >> {shlex.quote(str(calls))}; return 23; }}
+{_shell_function("reconcile_reviewed_function_execute_grants")}
+set +e
+reconcile_reviewed_function_execute_grants
+rc=$?
+set -e
+printf 'rc:%s proven:%s\n' "$rc" "$REVIEWED_FUNCTION_GRANTS_PROVEN"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "rc:4 proven:0\n"
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "grant",
+        "grant",
+        "grant",
+        "grant",
+        "grant",
+        "grant",
+        "postflight",
+    ]
+
+
+def test_failed_gold_refresh_repairs_grants_before_preserving_nonzero_exit(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "failed-refresh.log"
+    harness = tmp_path / "failed-refresh.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+APP_DEPLOY_PAYLOAD=""
+AGENTIC_ENV_FILE=""
+AGENT_EVAL_ENV_FILE=""
+TARGET=dev
+RED=""
+YLW=""
+DIM=""
+RST=""
+PYTHON=python3
+step() {{ printf 'step:%s\n' "$*" >> {shlex.quote(str(calls))}; }}
+run_job_with_retry() {{ printf 'refresh\n' >> {shlex.quote(str(calls))}; return 17; }}
+reconcile_reviewed_function_execute_grants() {{
+  printf 'reconcile\n' >> {shlex.quote(str(calls))}
+  REVIEWED_FUNCTION_GRANTS_PROVEN=1
+  return 0
+}}
+stop_app_after_failed_deploy() {{ printf 'compensate\n' >> {shlex.quote(str(calls))}; }}
+quiesce_app_treatment_after_failed_stop() {{ return 0; }}
+{_shell_function("run_job_and_reconcile_reviewed_function_grants")}
+{_shell_function("refresh_gold_and_reconcile_function_grants")}
+{_deploy_exit_trap_block()}
+refresh_gold_and_reconcile_function_grants
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 17, result.stdout + result.stderr
+    entries = calls.read_text(encoding="utf-8").splitlines()
+    assert entries.index("refresh") < entries.index("reconcile") < entries.index("compensate")
+
+
+def test_failed_reconciliation_invalidates_prior_proof_before_real_compensation(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "failed-reconciliation.log"
+    harness = tmp_path / "failed-reconciliation.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+APP_DEPLOY_PAYLOAD=""
+AGENTIC_ENV_FILE=""
+AGENT_EVAL_ENV_FILE=""
+APP_FAIL_CLOSED_ARMED=1
+APP_FAIL_CLOSED_NAME=mip-app
+APP_UPGRADE_STATE=green_activating_quiesced
+TREATMENT_RUNTIME_QUIESCED=1
+APP_SIGNED_BLUE_AVAILABLE=1
+APP_ACCESS_QUARANTINED=0
+REVIEWED_FUNCTION_GRANTS_PROVEN=1
+TARGET=dev
+RED=""
+YLW=""
+DIM=""
+RST=""
+PYTHON=python3
+step() {{ :; }}
+run_job_with_retry() {{ printf 'refresh\n' >> {shlex.quote(str(calls))}; return 0; }}
+reconcile_reviewed_function_execute_grants() {{
+  printf 'reconcile-failed\n' >> {shlex.quote(str(calls))}
+  return 4
+}}
+stop_and_quiesce_unproven_app() {{ printf 'stop-quiesce\n' >> {shlex.quote(str(calls))}; }}
+restore_signed_blue_while_quiesced() {{ printf 'rollback-blue\n' >> {shlex.quote(str(calls))}; }}
+converge_app_treatment_access() {{ printf 'treatment:%s\n' "$1" >> {shlex.quote(str(calls))}; }}
+converge_green_only_app_access() {{ return 0; }}
+{_shell_function("run_job_and_reconcile_reviewed_function_grants")}
+{_shell_function("refresh_gold_and_reconcile_function_grants")}
+{_shell_function("stop_app_after_failed_deploy")}
+quiesce_app_treatment_after_failed_stop() {{ return 0; }}
+{_deploy_exit_trap_block()}
+refresh_gold_and_reconcile_function_grants
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "refresh",
+        "reconcile-failed",
+        "stop-quiesce",
+    ]
+
+
+def test_failed_bootstrap_repairs_before_blue_quiesced_compensation(tmp_path: Path) -> None:
+    calls = tmp_path / "failed-bootstrap.log"
+    harness = tmp_path / "failed-bootstrap.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+APP_DEPLOY_PAYLOAD=""
+AGENTIC_ENV_FILE=""
+AGENT_EVAL_ENV_FILE=""
+APP_FAIL_CLOSED_ARMED=1
+APP_FAIL_CLOSED_NAME=mip-app
+APP_UPGRADE_STATE=blue_quiesced
+TREATMENT_RUNTIME_QUIESCED=1
+APP_SIGNED_BLUE_AVAILABLE=1
+APP_ACCESS_QUARANTINED=0
+REVIEWED_FUNCTION_GRANTS_PROVEN=1
+TARGET=dev
+RED=""
+YLW=""
+DIM=""
+RST=""
+PYTHON=python3
+step() {{ :; }}
+run_job_with_retry() {{ printf 'bootstrap-failed\n' >> {shlex.quote(str(calls))}; return 19; }}
+reconcile_reviewed_function_execute_grants() {{
+  printf 'reconcile-failed\n' >> {shlex.quote(str(calls))}
+  return 4
+}}
+stop_and_quiesce_unproven_app() {{ printf 'stop-quiesce\n' >> {shlex.quote(str(calls))}; }}
+restore_signed_blue_while_quiesced() {{ printf 'rollback-blue\n' >> {shlex.quote(str(calls))}; }}
+converge_app_treatment_access() {{ return 0; }}
+converge_green_only_app_access() {{ return 0; }}
+{_shell_function("run_job_and_reconcile_reviewed_function_grants")}
+{_shell_function("initialize_uc_targets_and_reconcile_function_grants")}
+{_shell_function("stop_app_after_failed_deploy")}
+quiesce_app_treatment_after_failed_stop() {{ return 0; }}
+{_deploy_exit_trap_block()}
+initialize_uc_targets_and_reconcile_function_grants
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)], text=True, capture_output=True, check=False
+    )
+
+    assert result.returncode == 19, result.stdout + result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "bootstrap-failed",
+        "reconcile-failed",
+        "stop-quiesce",
     ]
 
 
@@ -1816,8 +2212,21 @@ def test_first_install_dry_run_executes_no_databricks_operations(
         (REPO / "tools" / "databricks" / "app_deploy_payload.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    instance_contract_copy = checkout / "tools" / "databricks" / "lakebase_instance_contract.py"
+    instance_contract_copy.write_text(
+        (REPO / "tools" / "databricks" / "lakebase_instance_contract.py").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
     subprocess.run(
-        ["git", "add", "scripts/deploy.sh", "tools/databricks/app_deploy_payload.py"],
+        [
+            "git",
+            "add",
+            "scripts/deploy.sh",
+            "tools/databricks/app_deploy_payload.py",
+            "tools/databricks/lakebase_instance_contract.py",
+        ],
         cwd=checkout,
         check=True,
     )
@@ -1870,6 +2279,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
         "APP_ENV": "local",
         "DATABRICKS_STUB_LOG": str(log),
         "GENIE_SPACE_ID": "space-1",
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "dry-run-runtime-client-id",
         "MIP_ADMIN_EMAILS": "operator@example.invalid",
         "MIP_COTALITY_ID_MASK_SECRET": "stable-local-mask-secret",
         "MIP_GENIE_ACTION_SECRET_CURRENT": "stable-local-action-secret",
@@ -1898,6 +2308,25 @@ def test_first_install_dry_run_executes_no_databricks_operations(
     assert result.returncode == 0, result.stdout + result.stderr
     assert log.read_text(encoding="utf-8").splitlines() == ["--version"]
     assert "would grant: GRANT USE CATALOG" in result.stdout
+    grant_start = result.stdout.index(
+        "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*"
+    )
+    grant_end = result.stdout.index(
+        "sync lifecycle state from Lakebase + record daily funnel snapshot",
+        grant_start,
+    )
+    grant_block = result.stdout[grant_start:grant_end]
+    for principal in ("dry-run-app-client-id", "dry-run-runtime-client-id"):
+        for function_name in (
+            "fn_build_cohort",
+            "fn_segment_counts",
+            "fn_lead_queue_url",
+        ):
+            statement = (
+                "would grant: GRANT EXECUTE ON FUNCTION mip.gold."
+                f"{function_name} TO `{principal}`"
+            )
+            assert grant_block.count(statement) == 1
     assert "would verify: campaign treatment table append-only" in result.stdout
     assert "would inspect/create: scope mip and write-once pii-salt-v1" in result.stdout
     assert "deploy Databricks App snapshot with Agent Evaluation proof" in result.stdout
@@ -1922,6 +2351,18 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "model-attestation and verifier-proof keys must be distinct" in script
     assert "MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING" in script
+
+
+def test_app_snapshot_payload_forwards_exact_lakebase_deployment_control() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = script.index("emit_app_deploy_payload() {")
+    end = script.index("\n}\n", start)
+    function = script[start:end]
+
+    assert function.count('--lakebase-instance "$MIP_LAKEBASE_INSTANCE"') == 1
+    assert function.index('--lakebase-instance "$MIP_LAKEBASE_INSTANCE"') < function.index(
+        '> "$destination"'
+    )
 
 
 def test_deploy_holds_signed_workspace_lease_through_durable_capture() -> None:
@@ -2389,6 +2830,22 @@ def test_app_failure_compensation_preserves_proven_deployment(
 
     assert result.returncode == 0, result.stderr
     assert calls == ""
+
+
+def test_app_failure_compensation_stops_when_function_grants_are_unproven(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="blue_active",
+        rollback_result=0,
+        stop_result=0,
+        function_grants_proven=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "stop_app_fail_closed" in calls
+    assert "app_deployment_rollback restore" not in calls
 
 
 def test_app_failure_compensation_restores_blue_during_green_activation(

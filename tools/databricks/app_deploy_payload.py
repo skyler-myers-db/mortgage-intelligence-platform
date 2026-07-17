@@ -22,6 +22,10 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from backend.config.runtime_secret_policy import runtime_secret_text  # noqa: E402
+from tools.databricks.lakebase_instance_contract import (  # noqa: E402
+    DEFAULT_LAKEBASE_INSTANCE_NAME,
+    validated_lakebase_instance_name,
+)
 
 ENV_LOCAL = REPO / ".env.local"
 
@@ -170,9 +174,11 @@ def build_payload(
     app_env: str = APP_ENV_DEFAULT,
     catalog: str = CATALOG_DEFAULT,
     schema: str = SCHEMA_DEFAULT,
+    lakebase_instance: str = DEFAULT_LAKEBASE_INSTANCE_NAME,
     mode: str = "SNAPSHOT",
     campaign_treatment_runtime_enabled: bool = False,
 ) -> dict[str, object]:
+    lakebase_instance = validated_lakebase_instance_name(lakebase_instance)
     dotenv = _dotenv_overlay()
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
     env_vars: list[dict[str, str]] = [
@@ -181,6 +187,8 @@ def build_payload(
         {"name": "GENIE_SPACE_ID", "value_from": "genie_space"},
         {"name": "PGHOST", "value_from": "database"},
         {"name": "LAKEBASE_HOST", "value_from": "database"},
+        {"name": "LAKEBASE_INSTANCE_NAME", "value": lakebase_instance},
+        {"name": "MIP_LAKEBASE_INSTANCE", "value": lakebase_instance},
         {"name": "MIP_LIFECYCLE_SYNC_JOB_ID", "value_from": "lifecycle_sync_job"},
         {"name": "MIP_FRED_RATES_JOB_ID", "value_from": "fred_rates_job"},
         {"name": "MIP_SILVER_REFRESH_JOB_ID", "value_from": "silver_refresh_job"},
@@ -237,6 +245,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--app-env", default=APP_ENV_DEFAULT)
     parser.add_argument("--catalog", default=CATALOG_DEFAULT)
     parser.add_argument("--schema", default=SCHEMA_DEFAULT)
+    parser.add_argument(
+        "--lakebase-instance",
+        default=DEFAULT_LAKEBASE_INSTANCE_NAME,
+    )
     parser.add_argument("--mode", default="SNAPSHOT", choices=("SNAPSHOT", "AUTO_SYNC"))
     parser.add_argument(
         "--enable-campaign-treatment-runtime",
@@ -258,6 +270,7 @@ def main(argv: list[str] | None = None) -> int:
         app_env=args.app_env,
         catalog=args.catalog,
         schema=args.schema,
+        lakebase_instance=args.lakebase_instance,
         mode=args.mode,
         campaign_treatment_runtime_enabled=args.enable_campaign_treatment_runtime,
     )
