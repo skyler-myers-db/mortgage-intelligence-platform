@@ -13,11 +13,32 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import yaml
 
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 DEPLOY_SCRIPT = REPO / "scripts" / "deploy.sh"
+BUNDLE_CONFIG = REPO / "databricks.yml"
+
+
+def test_live_workflows_pin_cli_with_safe_partial_app_deploy_support() -> None:
+    setup_action = "databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c"
+
+    for workflow_path in (DEPLOY_DEV, NIGHTLY):
+        workflow = yaml.safe_load(workflow_path.read_text(encoding="utf-8"))
+        setup_steps = [
+            step
+            for job in workflow["jobs"].values()
+            for step in job.get("steps", [])
+            if str(step.get("uses", "")).partition("@")[0].casefold() == "databricks/setup-cli"
+        ]
+        assert len(setup_steps) == 1
+        assert setup_steps[0]["uses"] == setup_action
+        assert not setup_steps[0].get("with")
+
+    bundle = yaml.safe_load(BUNDLE_CONFIG.read_text(encoding="utf-8"))
+    assert bundle["bundle"]["databricks_cli_version"] == ">= 1.7.0"
 
 
 def _workflow_run_block(path: Path, step_name: str) -> str:

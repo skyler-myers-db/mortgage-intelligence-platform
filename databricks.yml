@@ -1,6 +1,11 @@
 bundle:
   name: mortgage-intelligence-platform
-  databricks_cli_version: ">= 0.279.0"
+  # Existing-App roll-forwards use direct-engine partial deploys so bundle
+  # resources can converge without replacing the verified blue App snapshot.
+  # CLI 1.2.0 introduced `bundle deploy --select`; 1.7.0 also fixes selected
+  # resources omitting their grants/permissions, so keep automation and
+  # operator runs on that governance-safe floor.
+  databricks_cli_version: ">= 1.7.0"
   # Direct deployment is the Databricks-recommended bundle engine for new
   # projects. This product has no customer-installed Terraform bundle state to
   # migrate, so the bundle defaults to direct from first deploy.
