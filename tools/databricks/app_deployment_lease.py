@@ -41,6 +41,7 @@ LEASE_TTL = timedelta(hours=4)
 # root, where only the `admins` group inherits management access.
 LEASE_ROOT = "/.mip-deployment-leases"
 HEARTBEAT_INTERVAL_SECONDS = 60
+WRITER_ACL_ATTESTATION_MAX_AGE = timedelta(seconds=3 * HEARTBEAT_INTERVAL_SECONDS)
 
 
 def _path(app_name: str) -> str:
@@ -74,6 +75,10 @@ def _holder(workspace: Any) -> str:
     if not holder:
         raise RuntimeError("App deployment lease holder identity is unavailable")
     return holder
+
+
+def _now() -> datetime:
+    return datetime.now(UTC)
 
 
 def _permission_levels(entry: object) -> set[str]:
@@ -242,12 +247,43 @@ def _download(workspace: Any, *, app_name: str) -> dict[str, str | int] | None:
     return record
 
 
-def _expired(record: dict[str, str | int], *, now: datetime) -> bool:
+def _expires_at(record: dict[str, str | int]) -> datetime:
     try:
         expires = datetime.fromisoformat(str(record["expires_at"]))
     except (KeyError, ValueError) as exc:
         raise RuntimeError("App deployment lease expiration is invalid") from exc
-    return expires <= now
+    if expires.tzinfo is None:
+        raise RuntimeError("App deployment lease expiration is invalid")
+    return expires.astimezone(UTC)
+
+
+def _expired(record: dict[str, str | int], *, now: datetime) -> bool:
+    return _expires_at(record) <= now
+
+
+def _assert_recent_writer_acl_attestation(
+    record: dict[str, str | int],
+    *,
+    now: datetime,
+) -> None:
+    # Only a directory manager can inspect the ACL. The delegated writer is
+    # intentionally CAN_READ, so its signed expiry carries the last successful
+    # manager-side ACL validation performed by acquire/heartbeat. Requiring a
+    # recent attestation preserves least privilege and bounds ACL drift to three
+    # heartbeat intervals without granting the mutation identity CAN_MANAGE.
+    attested_at = _expires_at(record) - LEASE_TTL
+    if attested_at > now or now - attested_at > WRITER_ACL_ATTESTATION_MAX_AGE:
+        raise RuntimeError("App deployment lease deployer ACL attestation is stale")
+
+
+def _same_lease_after_renewal(
+    before: dict[str, str | int],
+    after: dict[str, str | int],
+) -> bool:
+    mutable = {"expires_at", "attestation_signature"}
+    if any(before.get(key) != after.get(key) for key in set(before) - mutable):
+        return False
+    return _expires_at(after) >= _expires_at(before)
 
 
 def _held_error(
@@ -310,7 +346,7 @@ def acquire(
     app_name = app_name.strip()
     _path(app_name)
     source_git_sha = _source_sha(source_git_sha)
-    current = now or datetime.now(UTC)
+    current = now or _now()
     holder = _holder(workspace)
     writer = (
         writer_application_id or os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "")
@@ -408,26 +444,37 @@ def assert_held(
     record = _download(workspace, app_name=app_name)
     if record is None:
         raise RuntimeError("App deployment lease disappeared while deployment was active")
+    current = now or _now()
     actor = _holder(workspace)
     holder = str(record.get("holder") or "").strip()
     writer = str(record.get("writer_application_id") or "").strip()
     if actor not in {holder, writer}:
         raise RuntimeError("App deployment lease actor is not its holder or delegated writer")
-    _assert_protected_root(
-        workspace,
-        holder=holder,
-        writer_application_id=writer,
-        object_id=_root_object_id(workspace),
-    )
+    if actor == holder:
+        _assert_protected_root(
+            workspace,
+            holder=holder,
+            writer_application_id=writer,
+            object_id=_root_object_id(workspace),
+        )
+    else:
+        _assert_recent_writer_acl_attestation(record, now=current)
     authoritative = _download(workspace, app_name=app_name)
     if authoritative is None:
         raise RuntimeError("App deployment lease disappeared during validation")
-    if authoritative != record:
+    if authoritative != record and not _same_lease_after_renewal(record, authoritative):
         raise RuntimeError("App deployment lease changed during validation")
     record = authoritative
+    holder = str(record.get("holder") or "").strip()
+    writer = str(record.get("writer_application_id") or "").strip()
+    if actor not in {holder, writer}:
+        raise RuntimeError("App deployment lease actor changed during validation")
     if record.get("lease_id") != lease_id or record.get("source_git_sha") != source_git_sha:
         raise RuntimeError("App deployment lease ownership or source changed")
-    if _expired(record, now=now or datetime.now(UTC)):
+    final_now = now or _now()
+    if actor == writer:
+        _assert_recent_writer_acl_attestation(record, now=final_now)
+    if _expired(record, now=final_now):
         raise RuntimeError("App deployment lease expired while deployment was active")
     return record
 
@@ -467,7 +514,8 @@ def renew(
     source_git_sha: str,
     now: datetime | None = None,
 ) -> None:
-    current = now or datetime.now(UTC)
+    current = now or _now()
+    actor = _holder(workspace)
     record = assert_held(
         workspace,
         app_name=app_name,
@@ -475,6 +523,8 @@ def renew(
         source_git_sha=source_git_sha,
         now=current,
     )
+    if record.get("holder") != actor:
+        raise RuntimeError("Only the App deployment lease holder may renew its ACL attestation")
     refreshed = _sign({**record, "expires_at": (current + LEASE_TTL).isoformat()})
     # Workspace Files exposes no conditional If-Match upload.  Re-read the
     # complete signed record immediately before the overwrite so any change

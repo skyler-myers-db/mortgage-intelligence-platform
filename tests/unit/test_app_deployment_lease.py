@@ -132,6 +132,9 @@ def test_delegated_writer_can_use_bound_lease_assertion() -> None:
     workspace = _workspace()
     lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
     workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
+    workspace.workspace.get_permissions = lambda *_args, **_kwargs: pytest.fail(
+        "CAN_READ writer must not call the manager-only ACL API"
+    )
 
     check = lease.held_assertion(
         workspace,
@@ -192,6 +195,42 @@ def test_assertion_rejects_lease_replacement_during_acl_validation() -> None:
         )
 
     assert json.loads(workspace.workspace.data[path])["lease_id"] == "replacement-lease-b"
+
+
+def test_assertion_accepts_same_lease_renewal_during_acl_validation() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    path = lease._path("mip-app")
+    original_get_permissions = workspace.workspace.get_permissions
+
+    def renew_during_acl_check(*args: object, **kwargs: object) -> object:
+        persisted = json.loads(workspace.workspace.data[path])
+        unsigned = {
+            key: value
+            for key, value in persisted.items()
+            if key not in {"attestation_verify_key", "attestation_signature"}
+        }
+        workspace.workspace.data[path] = json.dumps(
+            lease._sign(
+                unsigned
+                | {"expires_at": (NOW + lease.LEASE_TTL + timedelta(minutes=1)).isoformat()}
+            ),
+            sort_keys=True,
+        ).encode()
+        return original_get_permissions(*args, **kwargs)
+
+    workspace.workspace.get_permissions = renew_during_acl_check
+
+    record = lease.assert_held(
+        workspace,
+        app_name="mip-app",
+        lease_id=lease_id,
+        source_git_sha="a" * 40,
+        now=NOW,
+    )
+
+    assert record["lease_id"] == lease_id
+    assert record["expires_at"] == (NOW + lease.LEASE_TTL + timedelta(minutes=1)).isoformat()
 
 
 def test_unrelated_actor_cannot_assert_deployment_lease() -> None:
@@ -582,7 +621,7 @@ def test_lease_fence_rejects_inherited_non_admin_group_management() -> None:
         )
 
 
-def test_delegated_writer_rechecks_and_rejects_extra_reader() -> None:
+def test_deployer_acl_attestation_rejects_extra_reader() -> None:
     workspace = _workspace()
     lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
     workspace.workspace.access_control_list.append(
@@ -593,10 +632,61 @@ def test_delegated_writer_rechecks_and_rejects_extra_reader() -> None:
             all_permissions=[SimpleNamespace(permission_level="CAN_READ")],
         )
     )
-    workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
-
     with pytest.raises(RuntimeError, match="unexpected accessor"):
         lease.assert_held(
+            workspace,
+            app_name="mip-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+            now=NOW + timedelta(minutes=1),
+        )
+
+
+def test_delegated_writer_rejects_stale_deployer_acl_attestation() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
+
+    with pytest.raises(RuntimeError, match="deployer ACL attestation is stale"):
+        lease.assert_held(
+            workspace,
+            app_name="mip-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+            now=NOW + lease.WRITER_ACL_ATTESTATION_MAX_AGE + timedelta(seconds=1),
+        )
+
+
+def test_delegated_writer_resamples_time_after_stalled_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
+    observations = iter(
+        (
+            NOW,
+            NOW + lease.WRITER_ACL_ATTESTATION_MAX_AGE + timedelta(seconds=1),
+        )
+    )
+    monkeypatch.setattr(lease, "_now", lambda: next(observations))
+
+    with pytest.raises(RuntimeError, match="deployer ACL attestation is stale"):
+        lease.assert_held(
+            workspace,
+            app_name="mip-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+        )
+
+
+def test_delegated_writer_cannot_renew_acl_attestation() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
+
+    with pytest.raises(RuntimeError, match="Only the App deployment lease holder"):
+        lease.renew(
             workspace,
             app_name="mip-app",
             lease_id=lease_id,

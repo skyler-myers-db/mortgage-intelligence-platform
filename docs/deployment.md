@@ -355,7 +355,10 @@ pinned to the exact workspace-admin deployer, with one direct `CAN_READ` grant
 for the signed agent-runtime writer and only the inherited `admins` group also
 retaining management. The writer identity is part of the signed lease record;
 an unrelated identity cannot assert the lease, and the delegated writer cannot
-release or replace it. The deployer and runtime revalidate that exact signed
+release or replace it. Because Databricks restricts ACL reads to managers, the
+deployer revalidates the exact directory ACL on every heartbeat and the
+read-only runtime requires that signed manager attestation to be no more than
+three heartbeat intervals old. Both identities revalidate the exact signed
 lease before Lakebase Sync creation, Gateway logging, journal mutation, model
 registration or cleanup, endpoint creation, App ACL convergence, Supervisor
 rename, and blue-resource deletion. Its one-minute heartbeat renews the signed
