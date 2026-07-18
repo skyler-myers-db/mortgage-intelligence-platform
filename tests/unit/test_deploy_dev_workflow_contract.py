@@ -72,9 +72,9 @@ def _workflow_bundle_run_targets(workflow: dict[str, Any]) -> set[str]:
                     if tokens[index : index + 3] != ["databricks", "bundle", "run"]:
                         continue
                     target = tokens[index + 3]
-                    assert re.fullmatch(r"[A-Za-z0-9_]+", target), (
-                        "nightly bundle targets must be literal governed job names"
-                    )
+                    assert re.fullmatch(
+                        r"[A-Za-z0-9_]+", target
+                    ), "nightly bundle targets must be literal governed job names"
                     targets.add(target)
     return targets
 
@@ -1548,7 +1548,68 @@ def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
         source_lease,
     )
     heartbeat = script.index('--lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"', assignment)
+    writer = script.index(
+        '--writer-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"',
+        source_lease - 800,
+    )
+    gateway_step = script.index(
+        'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+    )
+    gateway_app = script.index('--app-name "$_GRANTS_APP_NAME"', gateway_step)
+    gateway_lease = script.index(
+        '--deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"',
+        gateway_step,
+    )
+    gateway_source = script.index('--deployment-source-git-sha "$SOURCE_GIT_SHA"', gateway_step)
     assert cleanup_guard < cleanup_release < source_lease < assignment < heartbeat
+    assert writer < source_lease < gateway_step < gateway_app < gateway_lease < gateway_source
+
+
+def test_every_mutating_agent_cutover_command_is_bound_to_exact_deployment_lease() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    segments = [
+        script[
+            script.index("cutover_agent_runtime_supervisor converge-app-acl") : script.index(
+                "tools.databricks.audit_global_m2m_access",
+                script.index("cutover_agent_runtime_supervisor converge-app-acl"),
+            )
+        ],
+        script[
+            script.index("refresh-journal-attestation") : script.index(
+                'if [[ -s "$CUTOVER_JOURNAL_ENV_FILE" ]]',
+                script.index("refresh-journal-attestation"),
+            )
+        ],
+        script[
+            script.index("AGENT_RUNTIME_PIN_ARGS=(") : script.index(
+                'if [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_ID:-}" ]]',
+                script.index("AGENT_RUNTIME_PIN_ARGS=("),
+            )
+        ],
+        script[
+            script.index("AGENT_RUNTIME_GREEN_ARGS=(") : script.index(
+                'step "prove effective agent-runtime privilege boundary',
+                script.index("AGENT_RUNTIME_GREEN_ARGS=("),
+            )
+        ],
+        script[
+            script.index("cutover_agent_runtime_supervisor finalize") : script.index(
+                "cutover_agent_runtime_supervisor clear-journal"
+            )
+        ],
+        script[
+            script.index("cutover_agent_runtime_supervisor clear-journal") : script.index(
+                'step "re-audit final agent-runtime global access'
+            )
+        ],
+    ]
+
+    for segment in segments:
+        assert "--app-name" in segment
+        assert '--deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"' in segment
+        assert '--deployment-source-git-sha "$SOURCE_GIT_SHA"' in segment
+
+    assert script.count("cutover_agent_runtime_supervisor export-journal") == 2
 
 
 def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
@@ -1715,21 +1776,15 @@ def test_workflow_bundle_target_inventory_handles_shell_boundaries() -> None:
     continued = {
         "jobs": {
             "gate": {
-                "steps": [
-                    {"run": "databricks bundle run \\\n  mip_init_catalog_schemas -t dev"}
-                ]
+                "steps": [{"run": "databricks bundle run \\\n  mip_init_catalog_schemas -t dev"}]
             }
         }
     }
-    variable = {
-        "jobs": {"gate": {"steps": [{"run": 'databricks bundle run "$JOB" -t dev'}]}}
-    }
+    variable = {"jobs": {"gate": {"steps": [{"run": 'databricks bundle run "$JOB" -t dev'}]}}}
     chained = {
         "jobs": {
             "gate": {
-                "steps": [
-                    {"run": "true&&databricks bundle run mip_init_catalog_schemas -t dev"}
-                ]
+                "steps": [{"run": "true&&databricks bundle run mip_init_catalog_schemas -t dev"}]
             }
         }
     }
@@ -1738,10 +1793,7 @@ def test_workflow_bundle_target_inventory_handles_shell_boundaries() -> None:
             "gate": {
                 "steps": [
                     {"run": "(databricks bundle run mip_init_catalog_schemas -t dev)"},
-                    {
-                        "run": "result=$(databricks bundle run "
-                        "mip_init_catalog_schemas -t dev)"
-                    },
+                    {"run": "result=$(databricks bundle run " "mip_init_catalog_schemas -t dev)"},
                 ]
             }
         }
@@ -1857,7 +1909,9 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     publisher = _shell_function("run_job_and_reconcile_reviewed_function_grants")
     bootstrap = _shell_function("initialize_uc_targets_and_reconcile_function_grants")
     refresh_helper = _shell_function("refresh_gold_and_reconcile_function_grants")
-    runtime_provision = 'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+    runtime_provision = (
+        'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+    )
 
     assert script.count("\ninitialize_uc_targets_and_reconcile_function_grants\n") == 1
     assert script.count("\nrefresh_gold_and_reconcile_function_grants\n") == 1
@@ -1871,8 +1925,7 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     ) in helper
     assert "      if ! apply_uc_grant \\\n" in helper
     assert (
-        '  if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants '
-        "\\\n"
+        '  if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants ' "\\\n"
     ) in helper
     assert (
         '  run_job_with_retry "$@" || _job_rc=$?\n'
@@ -1883,12 +1936,12 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
         'run_job_with_retry "$@"'
     )
     assert (
-        'run_job_and_reconcile_reviewed_function_grants \\\n'
+        "run_job_and_reconcile_reviewed_function_grants \\\n"
         '    "initialize every pre-refresh UC grant target (idempotent)" \\\n'
         '    databricks bundle run mip_init_catalog_schemas -t "$TARGET"'
     ) in bootstrap
     assert (
-        'run_job_and_reconcile_reviewed_function_grants \\\n'
+        "run_job_and_reconcile_reviewed_function_grants \\\n"
         '    "refresh gold — borrower_360, lead_scores, *_population, dossier, + mip.semantics.*" \\\n'
         '    databricks bundle run mip_refresh_scores -t "$TARGET"'
     ) in refresh_helper
@@ -1922,9 +1975,7 @@ printf 'rc:%s proven:%s\n' "$rc" "$REVIEWED_FUNCTION_GRANTS_PROVEN"
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        ["bash", str(harness)], text=True, capture_output=True, check=False
-    )
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "rc:4 proven:0\n"
@@ -1958,9 +2009,7 @@ printf 'rc:%s proven:%s\n' "$rc" "$REVIEWED_FUNCTION_GRANTS_PROVEN"
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        ["bash", str(harness)], text=True, capture_output=True, check=False
-    )
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
 
     assert result.returncode == 0, result.stderr
     assert result.stdout == "rc:4 proven:0\n"
@@ -2011,9 +2060,7 @@ refresh_gold_and_reconcile_function_grants
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        ["bash", str(harness)], text=True, capture_output=True, check=False
-    )
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
 
     assert result.returncode == 17, result.stdout + result.stderr
     entries = calls.read_text(encoding="utf-8").splitlines()
@@ -2066,9 +2113,7 @@ refresh_gold_and_reconcile_function_grants
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        ["bash", str(harness)], text=True, capture_output=True, check=False
-    )
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
 
     assert result.returncode == 4, result.stdout + result.stderr
     assert calls.read_text(encoding="utf-8").splitlines() == [
@@ -2122,9 +2167,7 @@ initialize_uc_targets_and_reconcile_function_grants
         encoding="utf-8",
     )
 
-    result = subprocess.run(
-        ["bash", str(harness)], text=True, capture_output=True, check=False
-    )
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
 
     assert result.returncode == 19, result.stdout + result.stderr
     assert calls.read_text(encoding="utf-8").splitlines() == [
@@ -2149,6 +2192,12 @@ def test_deployer_sync_provision_command_is_exact_and_cannot_skip_sync() -> None
         "$PYTHON",
         "-m",
         "tools.databricks.provision_agentic_resources",
+        "--app-name",
+        "$_GRANTS_APP_NAME",
+        "--deployment-lease-id",
+        "$MIP_APP_DEPLOYMENT_LEASE_ID",
+        "--deployment-source-git-sha",
+        "$SOURCE_GIT_SHA",
         "--catalog",
         "${MIP_DEFAULT_CATALOG:-mip}",
         "--genie-space-id",

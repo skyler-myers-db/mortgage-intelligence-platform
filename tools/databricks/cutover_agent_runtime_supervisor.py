@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import argparse
 import shlex
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -12,10 +12,12 @@ from mlflow import MlflowClient
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.databricks import app_deployment_lease
 from tools.databricks.agent_runtime_access import (
     assert_current_runtime_identity,
     assert_runtime_creator,
 )
+from tools.databricks.agent_runtime_cutover_cli import build_parser
 from tools.databricks.cutover_journal_store import (
     assert_retirement_journal,
     clear_cutover_journal_exact,
@@ -82,6 +84,7 @@ def _endpoint_identity(workspace: Any, endpoint: str) -> tuple[str, str]:
 def pin_journal(
     workspace: Any,
     *,
+    assert_single_writer: Callable[[], None],
     runtime_application_id: str,
     canonical_name: str,
     old_id: str | None = None,
@@ -142,12 +145,14 @@ def pin_journal(
         refresh_cutover_journal_attestation(
             workspace,
             runtime_application_id=runtime_application_id,
+            assert_single_writer=assert_single_writer,
         )
         return
     persist_cutover_journal(
         workspace,
         runtime_application_id=runtime_application_id,
         payload=payload,
+        assert_single_writer=assert_single_writer,
     )
 
 
@@ -204,7 +209,12 @@ def export_journal(
     )
 
 
-def clear_journal(workspace: Any, *, runtime_application_id: str) -> None:
+def clear_journal(
+    workspace: Any,
+    *,
+    runtime_application_id: str,
+    assert_single_writer: Callable[[], None],
+) -> None:
     assert_current_runtime_identity(
         workspace,
         application_id=runtime_application_id,
@@ -212,6 +222,7 @@ def clear_journal(workspace: Any, *, runtime_application_id: str) -> None:
     clear_cutover_journal_exact(
         workspace,
         runtime_application_id=runtime_application_id,
+        assert_single_writer=assert_single_writer,
     )
 
 
@@ -244,6 +255,7 @@ def _assert_ready_endpoint(
 def _assert_green_path(
     workspace: Any,
     *,
+    assert_single_writer: Callable[[], None],
     canonical_name: str,
     replacement_id: str,
     replacement_endpoint: str,
@@ -417,6 +429,7 @@ def _assert_green_path(
         ),
         model_registry=model_registry,
         tracking_client=tracking_client,
+        assert_single_writer=assert_single_writer,
     )
 
 
@@ -424,18 +437,20 @@ def prepare(
     workspace: Any,
     *,
     app_name: str,
+    assert_single_writer: Callable[[], None],
     preserve_endpoint: tuple[str, ...] = (),
     **green: Any,
 ) -> None:
     """Prove green and grant only its outer endpoint while old stays live."""
 
-    _assert_green_path(workspace, **green)
+    _assert_green_path(workspace, assert_single_writer=assert_single_writer, **green)
     _converge_app_gateway_permissions(
         workspace,
         gateway_endpoint=green["gateway_endpoint"],
         supervisor_endpoint=green["replacement_endpoint"],
         app_name=app_name,
         preserve_endpoints=preserve_endpoint,
+        assert_single_writer=assert_single_writer,
     )
 
 
@@ -450,6 +465,7 @@ def _delete_pinned_gateway(
     runtime_application_id: str,
     app_principal: str,
     timeout_s: int,
+    assert_single_writer: Callable[[], None],
 ) -> None:
     values = (endpoint, endpoint_id, creator)
     if not any(values):
@@ -471,6 +487,7 @@ def _delete_pinned_gateway(
         return
     if actual != (endpoint_id, creator):
         raise RuntimeError("old Gateway endpoint changed; refusing destructive cutover")
+    assert_single_writer()
     revoke_direct_permissions(
         workspace,
         endpoint_name=endpoint,
@@ -481,6 +498,7 @@ def _delete_pinned_gateway(
         raise RuntimeError("old Gateway endpoint changed while revoking its App access")
     if not delete_allowed:
         return
+    assert_single_writer()
     workspace.serving_endpoints.delete(endpoint)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -520,6 +538,7 @@ def retire(
     catalog: str,
     genie_space_id: str,
     preserve_endpoint: tuple[str, ...] = (),
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Re-prove green, then delete only the pinned old agent and endpoint."""
 
@@ -553,6 +572,7 @@ def retire(
         raise RuntimeError("App ACL retirement includes an endpoint absent from the signed journal")
     _assert_green_path(
         workspace,
+        assert_single_writer=assert_single_writer,
         canonical_name=canonical_name,
         replacement_id=replacement_id,
         replacement_endpoint=replacement_endpoint,
@@ -578,6 +598,7 @@ def retire(
         runtime_application_id=runtime_application_id,
         app_principal=app_principal,
         timeout_s=timeout_s,
+        assert_single_writer=assert_single_writer,
     )
     if not old_id:
         return
@@ -611,6 +632,7 @@ def retire(
                 "old Supervisor changed after provisioning; refusing destructive cutover"
             )
 
+        assert_single_writer()
         revoke_direct_permissions(
             workspace,
             endpoint_name=old_endpoint,
@@ -621,6 +643,7 @@ def retire(
             raise RuntimeError("old managed endpoint changed while revoking its App bypass")
         if _agent_by_id(old_id) != old:
             raise RuntimeError("old Supervisor changed while revoking its App bypass")
+        assert_single_writer()
         _run_no_json(
             [
                 "supervisor-agents",
@@ -636,6 +659,7 @@ def retire(
         else:
             raise TimeoutError("old Supervisor was not deleted after the governed cutover")
     else:
+        assert_single_writer()
         revoke_direct_permissions(
             workspace,
             endpoint_name=old_endpoint,
@@ -649,6 +673,7 @@ def retire(
         return
     if orphan_identity != (old_endpoint_id, old_creator):
         raise RuntimeError("old managed endpoint identity changed; refusing orphan cleanup")
+    assert_single_writer()
     workspace.serving_endpoints.delete(old_endpoint)
     deadline = time.monotonic() + timeout_s
     while time.monotonic() < deadline:
@@ -669,6 +694,7 @@ def finalize(
     runtime_application_id: str,
     catalog: str,
     genie_space_id: str,
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Rename the runtime-owned replacement only after the old ID is absent."""
 
@@ -696,6 +722,7 @@ def finalize(
         resource="replacement Supervisor agent",
     )
     if replacement.get("display_name") != canonical_name:
+        assert_single_writer()
         _run_no_json(
             [
                 "supervisor-agents",
@@ -720,70 +747,23 @@ def finalize(
     )
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__)
-    subparsers = parser.add_subparsers(dest="command", required=True)
-    for name in ("prepare", "retire", "finalize"):
-        command = subparsers.add_parser(name)
-        command.add_argument("--canonical-name", default="Mortgage Growth Agent")
-        command.add_argument("--replacement-id", required=True)
-        command.add_argument("--replacement-endpoint", required=True)
-        command.add_argument("--runtime-application-id", required=True)
-    for name in ("prepare", "retire"):
-        command = subparsers.choices[name]
-        command.add_argument("--gateway-endpoint", required=True)
-        command.add_argument("--gateway-model", required=True)
-        command.add_argument("--gateway-model-version", type=int, required=True)
-        command.add_argument("--gateway-inference-table", required=True)
-        command.add_argument("--gateway-model-family", required=True)
-        command.add_argument("--gateway-experiment-base", required=True)
-        command.add_argument("--gateway-table-prefix", required=True)
-        command.add_argument("--catalog", required=True)
-        command.add_argument("--genie-space-id", required=True)
-        command.add_argument("--app-name", required=True)
-        command.add_argument("--preserve-endpoint", action="append", default=[])
-    retire_parser = subparsers.choices["retire"]
-    retire_parser.add_argument("--old-id")
-    retire_parser.add_argument("--old-endpoint")
-    retire_parser.add_argument("--old-endpoint-id")
-    retire_parser.add_argument("--old-creator")
-    retire_parser.add_argument("--old-create-time")
-    retire_parser.add_argument("--old-gateway-endpoint")
-    retire_parser.add_argument("--old-gateway-endpoint-id")
-    retire_parser.add_argument("--old-gateway-creator")
-    retire_parser.add_argument("--old-gateway-delete-allowed", action="store_true")
-    retire_parser.add_argument("--timeout-s", type=int, default=900)
-    finalize_parser = subparsers.choices["finalize"]
-    finalize_parser.add_argument("--catalog", required=True)
-    finalize_parser.add_argument("--genie-space-id", required=True)
-    pin_parser = subparsers.add_parser("pin-journal")
-    pin_parser.add_argument("--runtime-application-id", required=True)
-    pin_parser.add_argument("--canonical-name", default="Mortgage Growth Agent")
-    pin_parser.add_argument("--old-id")
-    pin_parser.add_argument("--old-endpoint")
-    pin_parser.add_argument("--old-creator")
-    pin_parser.add_argument("--old-create-time")
-    pin_parser.add_argument("--old-gateway-endpoint")
-    export_parser = subparsers.add_parser("export-journal")
-    export_parser.add_argument("--runtime-application-id", required=True)
-    export_parser.add_argument("--out-env", type=Path, required=True)
-    refresh_parser = subparsers.add_parser("refresh-journal-attestation")
-    refresh_parser.add_argument("--runtime-application-id", required=True)
-    clear_parser = subparsers.add_parser("clear-journal")
-    clear_parser.add_argument("--runtime-application-id", required=True)
-    acl_parser = subparsers.add_parser("converge-app-acl")
-    acl_parser.add_argument("--gateway-endpoint", required=True)
-    acl_parser.add_argument("--supervisor-endpoint", required=True)
-    acl_parser.add_argument("--app-name", required=True)
-    return parser
-
-
 def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+    args = build_parser().parse_args(argv)
     workspace = WorkspaceClient()
+    lease_check: Callable[[], None] | None = None
+    if args.command != "export-journal":
+        lease_check = app_deployment_lease.held_assertion(
+            workspace,
+            app_name=args.app_name,
+            lease_id=args.deployment_lease_id,
+            source_git_sha=args.deployment_source_git_sha,
+        )
+        lease_check()
     if args.command == "pin-journal":
+        assert lease_check is not None
         pin_journal(
             workspace,
+            assert_single_writer=lease_check,
             runtime_application_id=args.runtime_application_id,
             canonical_name=args.canonical_name,
             old_id=args.old_id,
@@ -801,31 +781,39 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if args.command == "refresh-journal-attestation":
+        assert lease_check is not None
         refresh_cutover_journal_attestation(
             workspace,
             runtime_application_id=args.runtime_application_id,
+            assert_single_writer=lease_check,
         )
         return 0
     if args.command == "clear-journal":
+        assert lease_check is not None
         clear_journal(
             workspace,
             runtime_application_id=args.runtime_application_id,
+            assert_single_writer=lease_check,
         )
         return 0
     if args.command == "converge-app-acl":
+        assert lease_check is not None
         _converge_app_gateway_permissions(
             workspace,
             gateway_endpoint=args.gateway_endpoint,
             supervisor_endpoint=args.supervisor_endpoint,
             app_name=args.app_name,
+            assert_single_writer=lease_check,
         )
         return 0
+    assert lease_check is not None
     common = {
         "workspace": workspace,
         "canonical_name": args.canonical_name,
         "replacement_id": args.replacement_id,
         "replacement_endpoint": args.replacement_endpoint,
         "runtime_application_id": args.runtime_application_id,
+        "assert_single_writer": lease_check,
     }
     if args.command in {"prepare", "retire"}:
         green = {

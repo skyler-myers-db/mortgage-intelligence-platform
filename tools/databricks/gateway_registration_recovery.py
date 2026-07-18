@@ -1,4 +1,5 @@
 """Fail-closed reconciliation for interrupted Gateway model registrations."""
+
 from __future__ import annotations
 
 import json
@@ -15,6 +16,7 @@ from backend.agents.gateway_contract import (
     gateway_model_version_tags,
 )
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
+from tools.databricks import gateway_registration_journal as journal_store
 from tools.databricks.agent_runtime_access import assert_runtime_creator
 
 _UC_MODEL_VERSION_TAG_KEY = re.compile(r"[A-Za-z0-9_]{1,256}\Z")
@@ -30,10 +32,10 @@ _EXPERIMENT_TAG_VISIBILITY_ATTEMPTS = 10
 _EXPERIMENT_TAG_VISIBILITY_INTERVAL_S = 0.5
 _MODEL_VERSION_SEARCH_PAGE_SIZE = 1000
 _LOGGED_MODEL_SEARCH_PAGE_SIZE = 50
-_DURABLE_REGISTRATION_JOURNAL_TAG = "mip.gateway_registration_journal_v1"
 _DURABLE_REGISTRATION_JOURNAL_SCHEMA = "mip.gateway.registration.v1"
 _DURABLE_REGISTRATION_JOURNAL_MAX_BYTES = 5000
 _MLFLOW_MISSING_RESOURCE_CODES = frozenset({"NOT_FOUND", "RESOURCE_DOES_NOT_EXIST"})
+
 
 @dataclass(frozen=True)
 class RegistrationCleanupJournal:
@@ -426,69 +428,25 @@ def _parse_durable_journal(value: str) -> DurableRegistrationJournal:
     return durable
 
 
-def _experiment_tag(client: Any, *, experiment_id: str) -> str | None:
-    experiment = client.get_experiment(experiment_id)
-    if _field(experiment, "experiment_id") != experiment_id:
-        raise RuntimeError("MLflow returned an unexpected Gateway experiment identity")
-    tags = dict(getattr(experiment, "tags", None) or {})
-    value = tags.get(_DURABLE_REGISTRATION_JOURNAL_TAG)
-    if value is None:
-        return None
-    if not isinstance(value, str):
-        raise RuntimeError("Gateway registration journal experiment tag is not text")
-    return value
-
-
 def persist_registration_journal(
     client: Any,
     durable: DurableRegistrationJournal,
+    *,
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Persist and authoritatively read back the journal before registration."""
 
-    value = _durable_journal_value(durable)
-    last_error: Exception | None = None
-    for attempt in range(_EXPERIMENT_TAG_VISIBILITY_ATTEMPTS):
-        try:
-            current = _experiment_tag(client, experiment_id=durable.journal.experiment_id)
-        except Exception as exc:  # noqa: BLE001 - never overwrite an unproved tag
-            last_error = exc
-        else:
-            if current == value:
-                return
-            if current is not None:
-                raise RegistrationJournalPersistencePendingError(
-                    "Gateway registration journal conflicts with another durable write"
-                )
-            try:
-                client.set_experiment_tag(
-                    durable.journal.experiment_id,
-                    _DURABLE_REGISTRATION_JOURNAL_TAG,
-                    value,
-                )
-            except Exception as exc:  # noqa: BLE001 - response may be lost after commit
-                last_error = exc
-            try:
-                current = _experiment_tag(
-                    client,
-                    experiment_id=durable.journal.experiment_id,
-                )
-            except Exception as exc:  # noqa: BLE001 - readback may be temporarily unavailable
-                last_error = exc
-            else:
-                if current == value:
-                    return
-                if current is not None:
-                    raise RegistrationJournalPersistencePendingError(
-                        "Gateway registration journal read back a conflicting durable write"
-                    )
-        if attempt + 1 < _EXPERIMENT_TAG_VISIBILITY_ATTEMPTS:
-            time.sleep(_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S)
-    pending = RegistrationJournalPersistencePendingError(
-        "Gateway registration journal readback was ambiguous; preserving source"
-    )
-    if last_error is not None:
-        raise pending from last_error
-    raise pending
+    try:
+        journal_store.persist_journal_tag(
+            client,
+            experiment_id=durable.journal.experiment_id,
+            value=_durable_journal_value(durable),
+            attempts=_EXPERIMENT_TAG_VISIBILITY_ATTEMPTS,
+            interval_s=_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S,
+            assert_single_writer=assert_single_writer,
+        )
+    except Exception as exc:
+        raise RegistrationJournalPersistencePendingError(f"{exc}; preserving source") from exc
 
 
 def clear_registration_journal(
@@ -496,29 +454,19 @@ def clear_registration_journal(
     durable: DurableRegistrationJournal,
     *,
     allow_absent: bool = False,
+    assert_single_writer: Callable[[], None],
 ) -> None:
-    """Delete only the exact journal and prove the durable tag is absent."""
+    """Append exact retirement proof without overwriting journal state."""
 
-    current = _experiment_tag(client, experiment_id=durable.journal.experiment_id)
-    if current is None and allow_absent:
-        return
-    if current != _durable_journal_value(durable):
-        raise RuntimeError("Gateway registration journal drifted before deletion")
-    client.delete_experiment_tag(
-        durable.journal.experiment_id,
-        _DURABLE_REGISTRATION_JOURNAL_TAG,
+    journal_store.retire_journal_tag(
+        client,
+        experiment_id=durable.journal.experiment_id,
+        value=_durable_journal_value(durable),
+        allow_absent=allow_absent,
+        attempts=_EXPERIMENT_TAG_VISIBILITY_ATTEMPTS,
+        interval_s=_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S,
+        assert_single_writer=assert_single_writer,
     )
-    absent_reads = 0
-    for attempt in range(_EXPERIMENT_TAG_VISIBILITY_ATTEMPTS):
-        if _experiment_tag(client, experiment_id=durable.journal.experiment_id) is None:
-            absent_reads += 1
-            if absent_reads == 2:
-                return
-        else:
-            absent_reads = 0
-        if attempt + 1 < _EXPERIMENT_TAG_VISIBILITY_ATTEMPTS:
-            time.sleep(_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S)
-    raise RuntimeError("Gateway registration journal deletion was not authoritative")
 
 
 def load_registration_journal(
@@ -531,13 +479,13 @@ def load_registration_journal(
 ) -> DurableRegistrationJournal | None:
     """Strictly validate the durable journal and its current signed contract."""
 
-    value = None
-    for attempt in range(_EXPERIMENT_TAG_VISIBILITY_ATTEMPTS):
-        value = _experiment_tag(client, experiment_id=experiment_id)
-        if value is not None:
-            break
-        if attempt + 1 < _EXPERIMENT_TAG_VISIBILITY_ATTEMPTS:
-            time.sleep(_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S)
+    state = journal_store.load_journal_tag_state(
+        client,
+        experiment_id=experiment_id,
+        attempts=_EXPERIMENT_TAG_VISIBILITY_ATTEMPTS,
+        interval_s=_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S,
+    )
+    value = state.value
     if value is None:
         return None
     durable = _parse_durable_journal(value)
@@ -557,6 +505,8 @@ def load_registration_journal(
     )
     if authoritative != durable.journal:
         raise RuntimeError("Gateway registration journal artifact identity drifted")
+    if state.retired:
+        return None
     return durable
 
 
@@ -622,9 +572,11 @@ def _logged_model_run_references(
     return references
 
 
-def compensate_unregistered_logged_model(
+def cleanup_log(
     client: Any,
     journal: RegistrationCleanupJournal,
+    *,
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Remove a fresh log that failed authoritative journaling before registration."""
 
@@ -641,6 +593,7 @@ def compensate_unregistered_logged_model(
         )
 
     logged_deleted = False
+    assert_single_writer()
     try:
         client.delete_logged_model(journal.logged_model_id)
     except Exception as exc:  # noqa: BLE001 - delayed visibility must be explicit
@@ -655,6 +608,7 @@ def compensate_unregistered_logged_model(
             failures.append(f"search unjournaled run references: {exc}")
             logged_references = ["INCONCLUSIVE"]
         if not logged_references:
+            assert_single_writer()
             try:
                 client.delete_run(journal.source_run_id)
             except Exception as exc:  # noqa: BLE001 - report any eventual-consistency leak
@@ -745,6 +699,7 @@ def compensate_failed_model_registration(
     journal: RegistrationCleanupJournal,
     registration_tags: dict[str, str],
     expected_creator_application_id: str,
+    assert_single_writer: Callable[[], None],
 ) -> int | None:
     """Delete only proven incomplete versions; preserve every container and artifact."""
 
@@ -796,6 +751,7 @@ def compensate_failed_model_registration(
         )
 
     for candidate in candidates:
+        assert_single_writer()
         try:
             client.delete_model_version(model_name, candidate.version)
         except Exception as exc:  # noqa: BLE001 - attempt every safe deletion
@@ -833,6 +789,7 @@ def reconcile_incomplete_source_versions(
     inference_schema: str,
     inference_table_prefix: str,
     verify_attestation: Callable[..., Any],
+    assert_single_writer: Callable[[], None],
 ) -> RegistrationRecovery | None:
     """Recover the durable source, deleting only proven incomplete exact versions."""
 
@@ -886,11 +843,16 @@ def reconcile_incomplete_source_versions(
             journal=durable.journal,
             registration_tags=durable.registration_tags,
             expected_creator_application_id=expected_creator_application_id,
+            assert_single_writer=assert_single_writer,
         )
         ready_versions = [recovered_ready] if recovered_ready is not None else []
     if ready_versions:
         ready_version = max(ready_versions)
-        clear_registration_journal(client, durable)
+        clear_registration_journal(
+            client,
+            durable,
+            assert_single_writer=assert_single_writer,
+        )
         return RegistrationRecovery(
             durable=durable,
             ready_version=ready_version,

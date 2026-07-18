@@ -83,6 +83,14 @@ def build_parser(*, default_sync_tables: tuple[str, ...]) -> argparse.ArgumentPa
         "--expected-runtime-application-id",
         default=os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", ""),
     )
+    parser.add_argument(
+        "--deployment-lease-id",
+        default=os.environ.get("MIP_APP_DEPLOYMENT_LEASE_ID", ""),
+    )
+    parser.add_argument(
+        "--deployment-source-git-sha",
+        default=os.environ.get("MIP_GIT_SHA", ""),
+    )
     parser.add_argument("--skip-sync", action="store_true")
     parser.add_argument("--skip-gateway", action="store_true")
     parser.add_argument("--skip-supervisor", action="store_true")

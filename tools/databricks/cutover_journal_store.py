@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -110,6 +111,7 @@ def clear_cutover_journal_exact(
     workspace: Any,
     *,
     runtime_application_id: str,
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Delete only the authenticated journal and prove authoritative absence."""
 
@@ -125,6 +127,7 @@ def clear_cutover_journal_exact(
     )
     if immediately_before != expected:
         raise RuntimeError("signed cutover journal changed before exact deletion")
+    assert_single_writer()
     try:
         workspace.workspace.delete(journal_path(runtime_application_id))
     except Exception as delete_error:
@@ -162,12 +165,15 @@ def persist_cutover_journal(
     *,
     runtime_application_id: str,
     payload: dict[str, Any],
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Sign and persist a validated journal under the current proof key."""
 
     path = journal_path(runtime_application_id)
+    assert_single_writer()
     workspace.workspace.mkdirs(str(Path(path).parent))
     signed_payload = sign_cutover_journal(payload)
+    assert_single_writer()
     workspace.workspace.upload(
         path,
         io.BytesIO(json.dumps(signed_payload, sort_keys=True).encode("utf-8")),
@@ -180,6 +186,7 @@ def refresh_cutover_journal_attestation(
     workspace: Any,
     *,
     runtime_application_id: str,
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Re-sign a previous-key journal under deploy authority's current key."""
 
@@ -198,6 +205,7 @@ def refresh_cutover_journal_attestation(
         workspace,
         runtime_application_id=runtime_application_id,
         payload=payload,
+        assert_single_writer=assert_single_writer,
     )
 
 

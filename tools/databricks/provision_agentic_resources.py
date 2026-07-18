@@ -13,6 +13,7 @@ import json
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -32,6 +33,7 @@ from databricks.sdk.service.database import (  # noqa: E402
     SyncedTableSchedulingPolicy,
     SyncedTableSpec,
 )
+from tools.databricks import app_deployment_lease  # noqa: E402
 from tools.databricks.agent_runtime_access import (  # noqa: E402
     assert_current_runtime_identity,
     assert_runtime_creator,
@@ -199,6 +201,7 @@ def _validate_existing_synced_table(
 def ensure_synced_tables(
     workspace: WorkspaceClient,
     *,
+    assert_single_writer: Callable[[], None],
     source_catalog: str,
     catalog: str,
     schema: str,
@@ -228,6 +231,7 @@ def ensure_synced_tables(
             print(f"[agentic] synced table exists: {name}")
         except (NotFound, ResourceDoesNotExist):
             print(f"[agentic] creating synced table: {name} <- {source}")
+            assert_single_writer()
             workspace.database.create_synced_database_table(
                 SyncedDatabaseTable(
                     name=name,
@@ -308,6 +312,7 @@ def _converge_app_gateway_permissions(
     supervisor_endpoint: str,
     app_name: str,
     preserve_endpoints: tuple[str, ...] = (),
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Grant only the outer proxy and revoke historical direct bypasses."""
 
@@ -319,6 +324,7 @@ def _converge_app_gateway_permissions(
     ).strip()
     if not service_principal:
         raise RuntimeError(f"app service principal not found for {app_name!r}")
+    assert_single_writer()
     grant_direct_can_query(
         workspace,
         endpoint_name=gateway_endpoint,
@@ -350,6 +356,7 @@ def _converge_app_gateway_permissions(
                 "until green proof"
             )
             continue
+        assert_single_writer()
         removed = revoke_direct_permissions(
             workspace,
             endpoint_name=obsolete_endpoint,
@@ -387,6 +394,7 @@ def ensure_supervisor_agent(
     genie_space_id: str,
     catalog: str,
     expected_creator_application_id: str,
+    assert_single_writer: Callable[[], None],
 ) -> SupervisorAgentBinding:
     agents = _supervisor_agents()
     canonical = _matching_supervisor(display_name, agents=agents)
@@ -484,6 +492,7 @@ def ensure_supervisor_agent(
 
     target_display_name = replacement_name if replaced is not None else display_name
     print(f"[agentic] creating supervisor agent: {target_display_name}")
+    assert_single_writer()
     created = _run(
         ["supervisor-agents", "create-supervisor-agent"],
         input_json={
@@ -497,7 +506,12 @@ def ensure_supervisor_agent(
     supervisor_id = str(created.get("supervisor_agent_id") or "").strip()
     if not supervisor_id:
         raise RuntimeError("Supervisor create did not return a resource ID")
-    _ensure_supervisor_tools(supervisor_id, genie_space_id=genie_space_id, catalog=catalog)
+    _ensure_supervisor_tools(
+        supervisor_id,
+        genie_space_id=genie_space_id,
+        catalog=catalog,
+        assert_single_writer=assert_single_writer,
+    )
     endpoint = created.get("endpoint_name") or ""
     if not endpoint:
         refreshed = _run(
@@ -628,7 +642,13 @@ def assert_exact_supervisor_contract(
     )
 
 
-def _ensure_supervisor_tools(supervisor_id: str, *, genie_space_id: str, catalog: str) -> None:
+def _ensure_supervisor_tools(
+    supervisor_id: str,
+    *,
+    genie_space_id: str,
+    catalog: str,
+    assert_single_writer: Callable[[], None],
+) -> None:
     parent = f"supervisor-agents/{supervisor_id}"
     current = _run(["supervisor-agents", "list-tools", parent])
     current_rows = current if isinstance(current, list) else current.get("tools", [])
@@ -664,6 +684,7 @@ def _ensure_supervisor_tools(supervisor_id: str, *, genie_space_id: str, catalog
             if exact:
                 continue
             print(f"[agentic] refreshing supervisor tool: {tool_id}")
+            assert_single_writer()
             _run_no_json(["supervisor-agents", "delete-tool", f"{parent}/tools/{tool_id}"])
         print(f"[agentic] creating supervisor tool: {tool_id}")
         payload = {
@@ -671,6 +692,7 @@ def _ensure_supervisor_tools(supervisor_id: str, *, genie_space_id: str, catalog
             "description": description,
             **body,
         }
+        assert_single_writer()
         _run(
             ["supervisor-agents", "create-tool", parent, tool_id],
             input_json=payload,
@@ -701,9 +723,20 @@ def main(argv: list[str] | None = None) -> int:
     if len(tables) != len(set(tables)):
         raise ValueError("--lakebase-sync-tables contains duplicate table names")
     table_definitions = _resolve_sync_table_definitions(tables)
+    lease_check: Callable[[], None] | None = None
+    if not args.skip_sync or not args.skip_supervisor or not args.skip_gateway:
+        lease_check = app_deployment_lease.held_assertion(
+            workspace,
+            app_name=args.app_name,
+            lease_id=args.deployment_lease_id,
+            source_git_sha=args.deployment_source_git_sha,
+        )
+        lease_check()
     if not args.skip_sync:
+        assert lease_check is not None
         tables = ensure_synced_tables(
             workspace,
+            assert_single_writer=lease_check,
             source_catalog=args.catalog,
             catalog=args.lakebase_catalog,
             schema=args.lakebase_schema,
@@ -729,11 +762,14 @@ def main(argv: list[str] | None = None) -> int:
             workspace,
             application_id=args.expected_runtime_application_id,
         )
+        assert lease_check is not None
+        lease_check()
         supervisor_binding = ensure_supervisor_agent(
             display_name=args.supervisor_name,
             genie_space_id=args.genie_space_id,
             catalog=args.catalog,
             expected_creator_application_id=args.expected_runtime_application_id,
+            assert_single_writer=lease_check,
         )
         supervisor_id = supervisor_binding.supervisor_id
         supervisor_endpoint = supervisor_binding.endpoint
@@ -761,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
                 "AI Gateway ResponsesAgent endpoint must be distinct from its managed "
                 "Supervisor upstream; refusing a self-recursive proxy deployment"
             )
+        assert lease_check is not None
         gateway_deployment = ensure_gateway_responses_agent(
             workspace,
             endpoint=gateway_endpoint,
@@ -774,15 +811,24 @@ def main(argv: list[str] | None = None) -> int:
             inference_table_prefix=args.gateway_table_prefix,
             genie_space_id=args.genie_space_id,
             expected_creator_application_id=args.expected_runtime_application_id,
+            deployment_app_name=args.app_name,
+            deployment_lease_id=args.deployment_lease_id,
+            deployment_source_git_sha=args.deployment_source_git_sha,
         )
         gateway_endpoint = gateway_deployment.endpoint
         _wait_serving_endpoint_ready(gateway_endpoint, timeout=f"{args.timeout_s}s")
+        lease_check()
         bind_gateway_runtime_resource_contract(
             workspace,
             gateway_deployment,
             supervisor_name=args.supervisor_name,
+            assert_single_writer=lease_check,
         )
-        verify_gateway_responses_agent(workspace, gateway_deployment)
+        verify_gateway_responses_agent(
+            workspace,
+            gateway_deployment,
+            assert_single_writer=lease_check,
+        )
         gateway_details = workspace.serving_endpoints.get(gateway_endpoint)
         assert_runtime_creator(
             getattr(gateway_details, "creator", None),
@@ -798,6 +844,7 @@ def main(argv: list[str] | None = None) -> int:
                 gateway_endpoint=gateway_endpoint,
                 supervisor_endpoint=supervisor_endpoint,
                 app_name=args.app_name,
+                assert_single_writer=lease_check,
             )
     resources = ProvisionedResources(
         lakebase_sync_catalog=args.lakebase_catalog,

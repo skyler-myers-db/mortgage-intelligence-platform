@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from typing import Any
 
 import mlflow
@@ -39,13 +40,11 @@ from databricks.sdk.service.serving import (
     EndpointTag,
     ServingModelWorkloadType,
 )
+from tools.databricks import app_deployment_lease
 from tools.databricks.agent_runtime_access import assert_runtime_creator
 from tools.databricks.experiment_acl_contract import resolve_exact_experiment_acl
 from tools.databricks.gateway_endpoint_contract import (
     clear_deprecated_endpoint_rate_limits as _clear_deprecated_endpoint_rate_limits,
-)
-from tools.databricks.gateway_endpoint_contract import (
-    current_model_version,
 )
 from tools.databricks.gateway_endpoint_contract import (
     endpoint_policy_matches as _endpoint_policy_matches,
@@ -69,8 +68,8 @@ from tools.databricks.gateway_registration_recovery import (
     RegistrationJournalVisibilityError,
     RegistrationReconciliationPendingError,
     attested_source_versions,
+    cleanup_log,
     clear_registration_journal,
-    compensate_unregistered_logged_model,
     persist_registration_journal,
     reconcile_incomplete_source_versions,
     require_no_unjournaled_gateway_sources,
@@ -112,12 +111,6 @@ _BURST_SCALING_ENABLED = GATEWAY_BURST_SCALING_ENABLED
 _ROUTE_OPTIMIZED = GATEWAY_ROUTE_OPTIMIZED
 _TRAFFIC_PERCENTAGE = GATEWAY_TRAFFIC_PERCENTAGE
 _ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
-
-
-def _current_model_version(details: Any, *, model_name: str) -> int | None:
-    """Compatibility wrapper for callers that inspect interrupted updates."""
-
-    return current_model_version(details, model_name=model_name)
 
 
 def gateway_resource_hash(
@@ -366,6 +359,7 @@ def verify_gateway_responses_agent(
     *,
     model_registry: Any | None = None,
     tracking_client: Any | None = None,
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> None:
     """Fail closed unless the ready endpoint proves the exact governed boundary."""
 
@@ -502,7 +496,9 @@ def verify_gateway_responses_agent(
         experiment_id=deployment.experiment_id,
         runtime_application_id=deployment.runtime_application_id,
     )
-    _clear_deprecated_endpoint_rate_limits(workspace, endpoint=deployment.endpoint)
+    if assert_single_writer is not None:
+        assert_single_writer()
+        _clear_deprecated_endpoint_rate_limits(workspace, endpoint=deployment.endpoint)
 
 
 def ensure_gateway_responses_agent(
@@ -519,10 +515,21 @@ def ensure_gateway_responses_agent(
     inference_table_prefix: str,
     genie_space_id: str,
     expected_creator_application_id: str,
+    deployment_app_name: str | None = None,
+    deployment_lease_id: str | None = None,
+    deployment_source_git_sha: str | None = None,
 ) -> GatewayAgentDeployment:
     """Reuse an exact endpoint or create an immutable, versioned green endpoint."""
 
+    lease_check = app_deployment_lease.held_assertion(
+        workspace,
+        app_name=deployment_app_name or os.environ.get("MIP_APP_NAME", ""),
+        lease_id=deployment_lease_id or os.environ.get("MIP_APP_DEPLOYMENT_LEASE_ID", ""),
+        source_git_sha=deployment_source_git_sha or os.environ.get("MIP_GIT_SHA", ""),
+    )
+
     require_gateway_model_attestation_signing_authority()
+    lease_check()
     attestation_verify_key = os.environ.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "").strip()
     upstream_details = workspace.serving_endpoints.get(upstream_endpoint)
     assert_runtime_creator(
@@ -585,6 +592,7 @@ def ensure_gateway_responses_agent(
         experiment_id=experiment_id,
         runtime_application_id=expected_creator_application_id,
     )
+    lease_check()
     recovery = reconcile_incomplete_source_versions(
         client,
         workspace,
@@ -603,6 +611,7 @@ def ensure_gateway_responses_agent(
         inference_schema=inference_schema,
         inference_table_prefix=inference_table_prefix,
         verify_attestation=verify_gateway_model_contract,
+        assert_single_writer=lease_check,
     )
     active_durable = recovery.durable if recovery and recovery.journal_requires_clear else None
     model_version = recovery.ready_version if recovery else None
@@ -634,6 +643,7 @@ def ensure_gateway_responses_agent(
                 expected_logged_model_name="mortgage_growth_supervisor_proxy",
             )
             print(f"[agentic] logging Gateway Supervisor proxy: {versioned_model_name}")
+            lease_check()
             logged = _log_gateway_model(
                 upstream_endpoint=upstream_endpoint,
                 catalog=inference_catalog,
@@ -668,7 +678,7 @@ def ensure_gateway_responses_agent(
                 )
             except RegistrationJournalVisibilityError as journal_error:
                 try:
-                    compensate_unregistered_logged_model(client, journal_error.journal)
+                    cleanup_log(client, journal_error.journal, assert_single_writer=lease_check)
                 except Exception as cleanup_error:  # noqa: BLE001 - preserve both causes
                     raise RuntimeError(
                         "Gateway model journaling failed and pre-registration cleanup "
@@ -680,7 +690,8 @@ def ensure_gateway_responses_agent(
                 journal=cleanup_journal,
                 registration_tags=registration_tags,
             )
-            persist_registration_journal(client, active_durable)
+            persist_registration_journal(client, active_durable, assert_single_writer=lease_check)
+        lease_check()
         try:
             registered = mlflow.register_model(
                 model_source,
@@ -696,6 +707,7 @@ def ensure_gateway_responses_agent(
                     journal=cleanup_journal,
                     registration_tags=registration_tags,
                     expected_creator_application_id=expected_creator_application_id,
+                    assert_single_writer=lease_check,
                 )
             except RegistrationReconciliationPendingError as cleanup_error:
                 raise cleanup_error from registration_error
@@ -768,7 +780,7 @@ def ensure_gateway_responses_agent(
             or model_version_tags != active_durable.registration_tags
         ):
             raise RuntimeError("READY Gateway version does not match its durable journal")
-        clear_registration_journal(client, active_durable)
+        clear_registration_journal(client, active_durable, assert_single_writer=lease_check)
 
     entity, traffic = _served_entity(
         supervisor_id=supervisor_id,
@@ -843,6 +855,7 @@ def ensure_gateway_responses_agent(
             )
 
     if details is None:
+        lease_check()
         print(
             f"[agentic] creating Gateway Supervisor proxy: {actual_endpoint} "
             f"({versioned_model_name} v{model_version})"

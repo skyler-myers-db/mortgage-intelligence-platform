@@ -351,12 +351,19 @@ still quiesced, then restores treatment authority and repeats App health,
 resource, and lease proof. Deployment acquires an atomic, signed workspace
 lease under `/.mip-deployment-leases`; the root-level location avoids
 `/Shared`'s inherited `users`-group management permission. Its directory ACL is
-pinned to the exact workspace-admin deployer, with only the inherited `admins`
-group also retaining management, and its one-minute heartbeat renews the signed
+pinned to the exact workspace-admin deployer, with one direct `CAN_READ` grant
+for the signed agent-runtime writer and only the inherited `admins` group also
+retaining management. The writer identity is part of the signed lease record;
+an unrelated identity cannot assert the lease, and the delegated writer cannot
+release or replace it. The deployer and runtime revalidate that exact signed
+lease before Lakebase Sync creation, Gateway logging, journal mutation, model
+registration or cleanup, endpoint creation, App ACL convergence, Supervisor
+rename, and blue-resource deletion. Its one-minute heartbeat renews the signed
 fence. A losing contender reads the existing lease without changing that ACL,
 and a heartbeat exits without renewal as soon as it is no longer a child of the
-deployer that launched it. An expired lease is never auto-replaced: after a crashed runner, an
-administrator must first prove no deployment is active before removing the
+deployer that launched it. An expired lease is never auto-replaced: after a
+crashed runner, an administrator must first prove no deployment is active
+before removing the
 stale file. The lease UUID is injected into the App payload and authenticated
 health response, and capture revalidates the live signed lease before and after
 activation. Capture records the
@@ -392,6 +399,16 @@ are retained for audit; App and verifier grants converge to the exact current
 family. Request budgets remain enforced by the application's authenticated
 backpressure middleware. Do not add unsupported Gateway rate-limit fields to
 this Agent endpoint or describe them as live proof.
+
+Interrupted model registration uses an append-only MLflow experiment journal.
+Databricks exposes experiment-tag set/update but no delete operation, so the
+runtime writes a SHA-256-addressed journal tag and later appends an exact
+digest-bound retirement tag. The reader rejects malformed reserved tags,
+orphans, multiple journals, reuse after retirement, and any journal whose
+canonical JSON, signed model contract, model source, run, or experiment binding
+does not verify—even when a matching retirement tag exists. Journal writes,
+retirement, registration cleanup, and final endpoint creation are all fenced by
+the signed deployment lease above.
 
 Exact-row proof also requires an Ed25519 attestation from the verifier. Store
 `MIP_AI_GATEWAY_PROOF_SIGNING_KEY` only in deploy/verifier automation. It signs

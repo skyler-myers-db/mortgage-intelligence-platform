@@ -17,6 +17,10 @@ from tools.databricks.provision_agentic_resources import (
 )
 
 
+def _assert_single_writer() -> None:
+    return None
+
+
 @pytest.mark.parametrize("canonical_present", [True, False])
 def test_hashed_and_legacy_supervisor_collision_fails_before_selection(
     monkeypatch: pytest.MonkeyPatch,
@@ -76,6 +80,7 @@ def test_hashed_and_legacy_supervisor_collision_fails_before_selection(
             genie_space_id="space-123",
             catalog="mip",
             expected_creator_application_id="runtime-client",
+            assert_single_writer=_assert_single_writer,
         )
 
 
@@ -144,6 +149,7 @@ def test_creator_mismatch_builds_blue_green_replacement_without_touching_old(
         genie_space_id="space-123",
         catalog="mip",
         expected_creator_application_id="runtime-client",
+        assert_single_writer=_assert_single_writer,
     )
 
     assert binding == SupervisorAgentBinding(
@@ -207,6 +213,7 @@ def test_runtime_owned_contract_drift_builds_green_without_mutating_live_supervi
         genie_space_id="space-123",
         catalog="mip",
         expected_creator_application_id="runtime-client",
+        assert_single_writer=_assert_single_writer,
     )
 
     assert binding.replaced_supervisor_id == "old-id"
@@ -248,6 +255,7 @@ def test_exact_runtime_supervisor_is_reused_without_tool_mutation(
         genie_space_id="space-123",
         catalog="mip",
         expected_creator_application_id="runtime-client",
+        assert_single_writer=_assert_single_writer,
     ) == SupervisorAgentBinding(
         supervisor_id="canonical-id",
         display_name="Mortgage Growth Agent",
@@ -280,6 +288,7 @@ def test_supervisor_tool_convergence_rejects_unexpected_live_tool(
             "supervisor-1",
             genie_space_id="space-123",
             catalog="mip",
+            assert_single_writer=_assert_single_writer,
         )
     assert calls == 2
 
@@ -323,6 +332,7 @@ def test_exact_supervisor_tools_are_idempotent_and_read_back(
         "supervisor-1",
         genie_space_id="space-123",
         catalog="mip",
+        assert_single_writer=_assert_single_writer,
     )
 
     assert calls == ["list-tools", "list-examples", "list-tools", "list-examples"]
@@ -364,6 +374,7 @@ def test_converge_app_gateway_permissions_grants_outer_and_revokes_bypasses(monk
 
     provision_agentic_resources._converge_app_gateway_permissions(
         workspace,  # type: ignore[arg-type]
+        assert_single_writer=lambda: None,
         gateway_endpoint="mip-growth-agent-gateway",
         supervisor_endpoint="mas-agent-endpoint",
         app_name="mip-app",
@@ -398,6 +409,7 @@ def test_ensure_synced_tables_uses_configured_source_catalog(monkeypatch) -> Non
 
     tables = provision_agentic_resources.ensure_synced_tables(
         _Workspace(),  # type: ignore[arg-type]
+        assert_single_writer=lambda: None,
         source_catalog="acme_mip",
         catalog="acme_app_state",
         schema="mip_sync",
@@ -414,6 +426,36 @@ def test_ensure_synced_tables_uses_configured_source_catalog(monkeypatch) -> Non
         "acme_mip.gold.segment_population",
         "acme_mip.gold.funnel_snapshot_daily",
     ]
+
+
+def test_ensure_synced_tables_reasserts_lease_immediately_before_create(monkeypatch) -> None:
+    mutations: list[str] = []
+
+    class _Database:
+        def get_synced_database_table(self, _name: str) -> None:
+            raise provision_agentic_resources.NotFound("missing")
+
+        def create_synced_database_table(self, _table: Any) -> None:
+            mutations.append("create")
+
+    workspace = type("Workspace", (), {"database": _Database()})()
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        provision_agentic_resources.ensure_synced_tables(
+            workspace,  # type: ignore[arg-type]
+            assert_single_writer=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
+            source_catalog="acme_mip",
+            catalog="acme_app_state",
+            schema="mip_sync",
+            database_instance="mip-app-state",
+            logical_database="mip_app_state",
+            storage_catalog="acme_mip",
+            storage_schema="app",
+            timeout_s=1,
+            table_definitions=(provision_agentic_resources.DEFAULT_SYNC_TABLES[0],),
+        )
+
+    assert mutations == []
 
 
 def test_ensure_synced_tables_validates_existing_source_catalog(monkeypatch) -> None:
@@ -457,6 +499,7 @@ def test_ensure_synced_tables_validates_existing_source_catalog(monkeypatch) -> 
 
     assert provision_agentic_resources.ensure_synced_tables(
         _Workspace(),  # type: ignore[arg-type]
+        assert_single_writer=lambda: None,
         source_catalog="acme_mip",
         catalog="acme_app_state",
         schema="mip_sync",
@@ -499,6 +542,7 @@ def test_ensure_synced_tables_rejects_existing_wrong_source_catalog(monkeypatch)
     with pytest.raises(RuntimeError, match="expected acme_mip.gold.source_readiness"):
         provision_agentic_resources.ensure_synced_tables(
             _Workspace(),  # type: ignore[arg-type]
+            assert_single_writer=lambda: None,
             source_catalog="acme_mip",
             catalog="acme_app_state",
             schema="mip_sync",
@@ -550,6 +594,7 @@ def test_ensure_synced_tables_rejects_existing_wrong_lakebase_target(
     with pytest.raises(RuntimeError, match=re.escape(message)):
         provision_agentic_resources.ensure_synced_tables(
             _Workspace(),  # type: ignore[arg-type]
+            assert_single_writer=lambda: None,
             source_catalog="acme_mip",
             catalog="acme_app_state",
             schema="mip_sync",
@@ -595,6 +640,7 @@ def test_existing_registered_catalog_uses_authoritative_effective_lakebase_targe
 
     assert provision_agentic_resources.ensure_synced_tables(
         _Workspace(),  # type: ignore[arg-type]
+        assert_single_writer=lambda: None,
         source_catalog="acme_mip",
         catalog="acme_app_state",
         schema="mip_sync",
@@ -631,6 +677,7 @@ def test_existing_synced_table_rejects_configured_target_drift_even_when_effecti
     with pytest.raises(RuntimeError, match="configured for Lakebase instance"):
         provision_agentic_resources.ensure_synced_tables(
             _Workspace(),  # type: ignore[arg-type]
+            assert_single_writer=lambda: None,
             source_catalog="acme_mip",
             catalog="acme_app_state",
             schema="mip_sync",
@@ -653,6 +700,7 @@ def test_converge_app_gateway_permissions_fails_without_app_identity() -> None:
     with pytest.raises(RuntimeError, match="app service principal not found"):
         provision_agentic_resources._converge_app_gateway_permissions(
             workspace,  # type: ignore[arg-type]
+            assert_single_writer=lambda: None,
             gateway_endpoint="mip-growth-agent-gateway",
             supervisor_endpoint="mas-agent-endpoint",
             app_name="mip-app",
@@ -661,6 +709,11 @@ def test_converge_app_gateway_permissions_fails_without_app_identity() -> None:
 
 def test_main_defaults_ai_gateway_to_dedicated_endpoint(monkeypatch, tmp_path) -> None:
     out_env = tmp_path / "agentic.env"
+    monkeypatch.setattr(
+        provision_agentic_resources.app_deployment_lease,
+        "held_assertion",
+        lambda *_args, **_kwargs: _assert_single_writer,
+    )
 
     monkeypatch.setattr(
         provision_agentic_resources,
@@ -743,6 +796,10 @@ def test_main_defaults_ai_gateway_to_dedicated_endpoint(monkeypatch, tmp_path) -
                 "space-123",
                 "--expected-runtime-application-id",
                 "runtime",
+                "--deployment-lease-id",
+                "lease-123",
+                "--deployment-source-git-sha",
+                "f" * 40,
                 "--out-env",
                 str(out_env),
             ]
@@ -763,6 +820,9 @@ def test_main_defaults_ai_gateway_to_dedicated_endpoint(monkeypatch, tmp_path) -
             "inference_table_prefix": "mip_agent_gateway_growth_agent",
             "genie_space_id": "space-123",
             "expected_creator_application_id": "runtime",
+            "deployment_app_name": "mip-app",
+            "deployment_lease_id": "lease-123",
+            "deployment_source_git_sha": "f" * 40,
         }
     ]
     assert "MIP_AGENT_SERVING_ENDPOINT=mip-growth-agent-gateway" in out_env.read_text(
@@ -773,6 +833,159 @@ def test_main_defaults_ai_gateway_to_dedicated_endpoint(monkeypatch, tmp_path) -
     )
     assert "MIP_AI_GATEWAY_ENDPOINT=mip-growth-agent-gateway" in out_env.read_text(encoding="utf-8")
     assert "MIP_AI_GATEWAY_AGENT_MODEL_VERSION=7" in out_env.read_text(encoding="utf-8")
+
+
+def test_main_rejects_missing_lease_before_supervisor_or_sync_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", object)
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_synced_tables",
+        lambda *_args, **_kwargs: pytest.fail("sync must not run before lease validation"),
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_supervisor_agent",
+        lambda **_kwargs: pytest.fail("Supervisor must not mutate before lease validation"),
+    )
+
+    with pytest.raises(ValueError, match="exact source SHA"):
+        provision_agentic_resources.main(
+            [
+                "--genie-space-id",
+                "space-123",
+                "--expected-runtime-application-id",
+                "runtime",
+                "--out-env",
+                str(tmp_path / "agentic.env"),
+            ]
+        )
+
+
+def test_sync_only_main_rejects_lost_lease_before_sync_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", object)
+    monkeypatch.setattr(
+        provision_agentic_resources.app_deployment_lease,
+        "held_assertion",
+        lambda *_args, **_kwargs: lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_synced_tables",
+        lambda *_args, **_kwargs: pytest.fail("sync must not run after lease loss"),
+    )
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        provision_agentic_resources.main(
+            [
+                "--skip-supervisor",
+                "--skip-gateway",
+                "--deployment-lease-id",
+                "lease-123",
+                "--deployment-source-git-sha",
+                "f" * 40,
+            ]
+        )
+
+
+def test_main_reasserts_lease_after_gateway_wait_before_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    checks = 0
+    binding_calls = 0
+
+    def check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 3:
+            raise RuntimeError("lease disappeared during endpoint wait")
+
+    workspace = type(
+        "Workspace",
+        (),
+        {
+            "serving_endpoints": type(
+                "Endpoints",
+                (),
+                {"get": lambda _self, _name: type("Endpoint", (), {"creator": "runtime"})()},
+            )()
+        },
+    )()
+    monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(
+        provision_agentic_resources.app_deployment_lease,
+        "held_assertion",
+        lambda *_args, **_kwargs: check,
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "assert_current_runtime_identity",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "assert_runtime_creator",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_supervisor_agent",
+        lambda **_kwargs: SupervisorAgentBinding(
+            "supervisor-1", "Mortgage Growth Agent", "mip-supervisor-endpoint"
+        ),
+    )
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "_wait_serving_endpoint_ready",
+        lambda *_args, **_kwargs: None,
+    )
+
+    class _Deployment:
+        endpoint = "mip-growth-agent-gateway"
+        inference_table = "mip.audit.mip_agent_gateway_growth_agent"
+        model_name = "mip.audit.mortgage_growth_supervisor_proxy"
+        model_version = 7
+
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "ensure_gateway_responses_agent",
+        lambda *_args, **_kwargs: _Deployment(),
+    )
+
+    def bind(*_args: object, **_kwargs: object) -> None:
+        nonlocal binding_calls
+        binding_calls += 1
+
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "bind_gateway_runtime_resource_contract",
+        bind,
+    )
+
+    with pytest.raises(RuntimeError, match="lease disappeared during endpoint wait"):
+        provision_agentic_resources.main(
+            [
+                "--skip-sync",
+                "--genie-space-id",
+                "space-123",
+                "--expected-runtime-application-id",
+                "runtime",
+                "--deployment-lease-id",
+                "lease-123",
+                "--deployment-source-git-sha",
+                "f" * 40,
+                "--out-env",
+                str(tmp_path / "agentic.env"),
+            ]
+        )
+
+    assert checks == 3
+    assert binding_calls == 0
 
 
 def test_isolated_skip_sync_child_rejects_unreviewed_sync_table_names(
@@ -805,6 +1018,11 @@ def test_isolated_skip_sync_child_rejects_unreviewed_sync_table_names(
 
 
 def test_main_rejects_gateway_equal_to_supervisor_before_proxy_mutation(monkeypatch) -> None:
+    monkeypatch.setattr(
+        provision_agentic_resources.app_deployment_lease,
+        "held_assertion",
+        lambda *_args, **_kwargs: _assert_single_writer,
+    )
     monkeypatch.setattr(
         provision_agentic_resources,
         "WorkspaceClient",
@@ -862,5 +1080,9 @@ def test_main_rejects_gateway_equal_to_supervisor_before_proxy_mutation(monkeypa
                 "runtime",
                 "--gateway-endpoint",
                 "same-endpoint",
+                "--deployment-lease-id",
+                "lease-123",
+                "--deployment-source-git-sha",
+                "f" * 40,
             ]
         )

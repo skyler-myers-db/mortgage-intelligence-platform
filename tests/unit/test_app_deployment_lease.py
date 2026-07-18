@@ -15,6 +15,7 @@ from tools.databricks import app_deployment_lease as lease
 
 SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 NOW = datetime(2026, 7, 16, 12, tzinfo=UTC)
+WRITER_ID = "agent-runtime-application-id"
 
 
 class _Files:
@@ -38,9 +39,12 @@ class _Files:
         self.set_permissions_calls += 1
         self.access_control_list = [
             SimpleNamespace(
-                user_name=item.user_name,
+                user_name=getattr(item, "user_name", None),
+                service_principal_name=getattr(item, "service_principal_name", None),
                 group_name=None,
-                all_permissions=[SimpleNamespace(permission_level="CAN_MANAGE")],
+                all_permissions=[
+                    SimpleNamespace(permission_level=str(item.permission_level).split(".")[-1])
+                ],
             )
             for item in access_control_list
         ]
@@ -87,6 +91,7 @@ def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
         "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
         derive_gateway_proof_verify_key(SIGNING_KEY),
     )
+    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", WRITER_ID)
 
 
 def test_workspace_lease_is_exclusive_and_owner_releasable() -> None:
@@ -98,6 +103,110 @@ def test_workspace_lease_is_exclusive_and_owner_releasable() -> None:
 
     lease.release(workspace, app_name="mip-app", lease_id=lease_id)
     assert workspace.workspace.data == {}
+
+
+def test_workspace_lease_rejects_signed_record_copied_to_another_app_path() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.workspace.data[lease._path("other-app")] = workspace.workspace.data[
+        lease._path("mip-app")
+    ]
+
+    with pytest.raises(RuntimeError, match="path binding is invalid"):
+        lease.assert_held(
+            workspace,
+            app_name="other-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+            now=NOW,
+        )
+
+
+@pytest.mark.parametrize("source", ("g" * 40, "A" * 40, "a" * 39, "a" * 41))
+def test_workspace_lease_rejects_noncanonical_source_sha(source: str) -> None:
+    with pytest.raises(ValueError, match="exact source SHA"):
+        lease.acquire(_workspace(), app_name="mip-app", source_git_sha=source, now=NOW)
+
+
+def test_delegated_writer_can_use_bound_lease_assertion() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40)
+    workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
+
+    check = lease.held_assertion(
+        workspace,
+        app_name="mip-app",
+        lease_id=lease_id,
+        source_git_sha="a" * 40,
+    )
+
+    check()
+
+
+def test_delegated_writer_can_assert_but_cannot_release_lease() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
+
+    record = lease.assert_held(
+        workspace,
+        app_name="mip-app",
+        lease_id=lease_id,
+        source_git_sha="a" * 40,
+        now=NOW,
+    )
+
+    assert record["writer_application_id"] == WRITER_ID
+    with pytest.raises(RuntimeError, match="ownership changed before release"):
+        lease.release(workspace, app_name="mip-app", lease_id=lease_id)
+
+
+def test_assertion_rejects_lease_replacement_during_acl_validation() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    path = lease._path("mip-app")
+    original_get_permissions = workspace.workspace.get_permissions
+
+    def replace_during_acl_check(*args: object, **kwargs: object) -> object:
+        persisted = json.loads(workspace.workspace.data[path])
+        unsigned = {
+            key: value
+            for key, value in persisted.items()
+            if key not in {"attestation_verify_key", "attestation_signature"}
+        }
+        workspace.workspace.data[path] = json.dumps(
+            lease._sign(unsigned | {"lease_id": "replacement-lease-b"}),
+            sort_keys=True,
+        ).encode()
+        return original_get_permissions(*args, **kwargs)
+
+    workspace.workspace.get_permissions = replace_during_acl_check
+
+    with pytest.raises(RuntimeError, match="changed during validation"):
+        lease.assert_held(
+            workspace,
+            app_name="mip-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+            now=NOW,
+        )
+
+    assert json.loads(workspace.workspace.data[path])["lease_id"] == "replacement-lease-b"
+
+
+def test_unrelated_actor_cannot_assert_deployment_lease() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.current_user.me = lambda: SimpleNamespace(user_name="other-application-id")
+
+    with pytest.raises(RuntimeError, match="not its holder or delegated writer"):
+        lease.assert_held(
+            workspace,
+            app_name="mip-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+            now=NOW,
+        )
 
 
 def test_lease_root_avoids_shared_users_management_inheritance() -> None:
@@ -216,12 +325,12 @@ def test_winner_postflight_failure_removes_only_its_exact_record_for_retry(
     original = lease._ensure_protected_root
     attempts = 0
 
-    def fail_once(client: object, *, holder: str) -> None:
+    def fail_once(client: object, *, holder: str, writer_application_id: str) -> None:
         nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise RuntimeError("injected ACL postflight failure")
-        original(client, holder=holder)
+        original(client, holder=holder, writer_application_id=writer_application_id)
 
     monkeypatch.setattr(lease, "_ensure_protected_root", fail_once)
 
@@ -411,9 +520,10 @@ def test_renewal_rejects_exact_record_replacement_between_read_and_upload(
             now=NOW + timedelta(hours=1),
         )
 
-    assert json.loads(workspace.workspace.data[path])["expires_at"] == (
-        NOW + timedelta(hours=2)
-    ).isoformat()
+    assert (
+        json.loads(workspace.workspace.data[path])["expires_at"]
+        == (NOW + timedelta(hours=2)).isoformat()
+    )
 
 
 def test_renewal_rejects_wrong_source_or_lease() -> None:
@@ -441,7 +551,7 @@ def test_lease_fence_rejects_storage_acl_drift() -> None:
         )
     )
 
-    with pytest.raises(RuntimeError, match="unexpected manager"):
+    with pytest.raises(RuntimeError, match="unexpected accessor"):
         lease.assert_held(
             workspace,
             app_name="mip-app",
@@ -462,7 +572,30 @@ def test_lease_fence_rejects_inherited_non_admin_group_management() -> None:
         )
     )
 
-    with pytest.raises(RuntimeError, match="unexpected manager"):
+    with pytest.raises(RuntimeError, match="unexpected accessor"):
+        lease.assert_held(
+            workspace,
+            app_name="mip-app",
+            lease_id=lease_id,
+            source_git_sha="a" * 40,
+            now=NOW + timedelta(minutes=1),
+        )
+
+
+def test_delegated_writer_rechecks_and_rejects_extra_reader() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)
+    workspace.workspace.access_control_list.append(
+        SimpleNamespace(
+            user_name="reader@example.com",
+            service_principal_name=None,
+            group_name=None,
+            all_permissions=[SimpleNamespace(permission_level="CAN_READ")],
+        )
+    )
+    workspace.current_user.me = lambda: SimpleNamespace(user_name=WRITER_ID)
+
+    with pytest.raises(RuntimeError, match="unexpected accessor"):
         lease.assert_held(
             workspace,
             app_name="mip-app",
@@ -548,6 +681,8 @@ def test_acquire_cli_releases_exact_lease_when_environment_handoff_fails(
                 "mip-app",
                 "--source-git-sha",
                 "a" * 40,
+                "--writer-application-id",
+                WRITER_ID,
                 "--out-env",
                 "/tmp/mip-lease.env",
             ]
@@ -583,6 +718,8 @@ def test_acquire_cli_reports_environment_handoff_compensation_failure(
                 "mip-app",
                 "--source-git-sha",
                 "a" * 40,
+                "--writer-application-id",
+                WRITER_ID,
                 "--out-env",
                 "/tmp/mip-lease.env",
             ]

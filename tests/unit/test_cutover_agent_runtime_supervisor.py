@@ -43,6 +43,10 @@ MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(
 )
 
 
+def _assert_lease() -> None:
+    return None
+
+
 @pytest.fixture(autouse=True)
 def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", SIGNING_KEY)
@@ -157,6 +161,7 @@ def _green_kwargs() -> dict[str, object]:
         "catalog": "mip",
         "genie_space_id": "space-123",
         "runtime_application_id": RUNTIME_ID,
+        "assert_single_writer": lambda: None,
     }
 
 
@@ -563,6 +568,7 @@ def test_finalize_renames_only_runtime_owned_replacement(
 
     cutover.finalize(
         SimpleNamespace(),
+        assert_single_writer=lambda: None,
         canonical_name="Mortgage Growth Agent",
         replacement_id=NEW_ID,
         replacement_endpoint=NEW_ENDPOINT,
@@ -649,6 +655,7 @@ def _pin_test_journal(
     monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
@@ -686,6 +693,7 @@ def test_cutover_journal_exports_immutable_endpoint_id(
 
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
@@ -713,7 +721,9 @@ def test_clear_journal_rejects_silent_delete_noop(
     workspace.workspace.delete = lambda _path: None
 
     with pytest.raises(RuntimeError, match="remained after exact deletion"):
-        cutover.clear_journal(workspace, runtime_application_id=RUNTIME_ID)
+        cutover.clear_journal(
+            workspace, runtime_application_id=RUNTIME_ID, assert_single_writer=_assert_lease
+        )
 
     assert path in workspace.workspace.data
 
@@ -734,7 +744,9 @@ def test_clear_journal_accepts_delete_that_commits_then_times_out(
 
     workspace.workspace.delete = commit_then_timeout
 
-    cutover.clear_journal(workspace, runtime_application_id=RUNTIME_ID)
+    cutover.clear_journal(
+        workspace, runtime_application_id=RUNTIME_ID, assert_single_writer=_assert_lease
+    )
 
     assert calls == 1
     assert path not in workspace.workspace.data
@@ -755,7 +767,9 @@ def test_clear_journal_refuses_retry_when_exact_record_remains(
     workspace.workspace.delete = timeout_before_commit
 
     with pytest.raises(RuntimeError, match="remained after ambiguous deletion; refusing retry"):
-        cutover.clear_journal(workspace, runtime_application_id=RUNTIME_ID)
+        cutover.clear_journal(
+            workspace, runtime_application_id=RUNTIME_ID, assert_single_writer=_assert_lease
+        )
 
     assert calls == 1
     assert path in workspace.workspace.data
@@ -785,7 +799,9 @@ def test_clear_journal_rejects_change_immediately_before_delete(
     workspace.workspace.delete = record_delete
 
     with pytest.raises(RuntimeError, match="changed before exact deletion"):
-        cutover.clear_journal(workspace, runtime_application_id=RUNTIME_ID)
+        cutover.clear_journal(
+            workspace, runtime_application_id=RUNTIME_ID, assert_single_writer=_assert_lease
+        )
 
     assert deletes == 0
     assert json.loads(workspace.workspace.data[path])["old_endpoint_id"] == (
@@ -809,7 +825,9 @@ def test_clear_journal_never_retries_changed_record_after_ambiguous_delete(
     workspace.workspace.delete = replace_then_timeout
 
     with pytest.raises(RuntimeError, match="changed during ambiguous deletion; refusing retry"):
-        cutover.clear_journal(workspace, runtime_application_id=RUNTIME_ID)
+        cutover.clear_journal(
+            workspace, runtime_application_id=RUNTIME_ID, assert_single_writer=_assert_lease
+        )
 
     assert calls == 1
     assert json.loads(workspace.workspace.data[path])["old_endpoint_id"] == (
@@ -825,6 +843,7 @@ def test_cutover_journal_rejects_runtime_home_tampering(
     monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
@@ -856,6 +875,7 @@ def test_previous_key_journal_is_re_signed_under_current_deploy_key(
     monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", previous_verify)
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
@@ -872,6 +892,7 @@ def test_previous_key_journal_is_re_signed_under_current_deploy_key(
     cutover.refresh_cutover_journal_attestation(
         workspace,
         runtime_application_id=RUNTIME_ID,
+        assert_single_writer=_assert_lease,
     )
 
     assert workspace.workspace.upload_count == 2
@@ -892,6 +913,7 @@ def test_current_key_journal_refresh_does_not_rewrite(
     monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
@@ -903,6 +925,7 @@ def test_current_key_journal_refresh_does_not_rewrite(
     cutover.refresh_cutover_journal_attestation(
         workspace,
         runtime_application_id=RUNTIME_ID,
+        assert_single_writer=_assert_lease,
     )
 
     assert workspace.workspace.upload_count == 1
@@ -914,6 +937,7 @@ def test_missing_journal_refresh_is_a_noop() -> None:
     cutover.refresh_cutover_journal_attestation(
         workspace,
         runtime_application_id=RUNTIME_ID,
+        assert_single_writer=_assert_lease,
     )
 
     assert workspace.workspace.upload_count == 0
@@ -926,6 +950,7 @@ def test_existing_journal_refuses_same_name_endpoint_with_different_immutable_id
     monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
@@ -940,6 +965,7 @@ def test_existing_journal_refuses_same_name_endpoint_with_different_immutable_id
     with pytest.raises(RuntimeError, match="different immutable cutover tuple"):
         cutover.pin_journal(
             workspace,
+            assert_single_writer=_assert_lease,
             runtime_application_id=RUNTIME_ID,
             canonical_name="Mortgage Growth Agent",
             old_id=OLD_ID,
@@ -957,6 +983,7 @@ def test_second_run_recovers_journal_for_exact_orphan_cleanup(
     monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_id=OLD_ID,
@@ -992,7 +1019,9 @@ def test_second_run_recovers_journal_for_exact_orphan_cleanup(
 
     pinned_path = journal_path(RUNTIME_ID)
     assert pinned_path in workspace.workspace.data
-    cutover.clear_journal(workspace, runtime_application_id=RUNTIME_ID)
+    cutover.clear_journal(
+        workspace, runtime_application_id=RUNTIME_ID, assert_single_writer=_assert_lease
+    )
     assert pinned_path not in workspace.workspace.data
 
 
@@ -1028,6 +1057,7 @@ def test_gateway_only_cutover_journal_recovers_and_deletes_exact_old_runtime_end
     )
     cutover.pin_journal(
         workspace,
+        assert_single_writer=_assert_lease,
         runtime_application_id=RUNTIME_ID,
         canonical_name="Mortgage Growth Agent",
         old_gateway_endpoint=OLD_GATEWAY,
@@ -1071,3 +1101,239 @@ def test_gateway_only_cutover_journal_recovers_and_deletes_exact_old_runtime_end
     assert deleted is True
     assert revoked == [OLD_GATEWAY]
     assert journal_path(RUNTIME_ID) in files.data
+
+
+def test_prepare_lost_lease_blocks_app_acl_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
+    mutations: list[str] = []
+    monkeypatch.setattr(cutover, "_assert_green_path", lambda *_a, **_kw: None)
+
+    def converge(*_args: object, **kwargs: object) -> None:
+        check = kwargs["assert_single_writer"]
+        assert callable(check)
+        check()
+        mutations.append("grant")
+
+    monkeypatch.setattr(cutover, "_converge_app_gateway_permissions", converge)
+    green = _green_kwargs()
+    green["assert_single_writer"] = lambda: (_ for _ in ()).throw(RuntimeError("lease lost"))
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover.prepare(_workspace(), app_name="mip-app", **green)
+
+    assert mutations == []
+
+
+@pytest.mark.parametrize(("fail_on", "expected"), [(1, []), (2, ["revoke"])])
+def test_old_gateway_lost_lease_blocks_each_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+    fail_on: int,
+    expected: list[str],
+) -> None:
+    mutations: list[str] = []
+    checks = 0
+
+    def check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == fail_on:
+            raise RuntimeError("lease lost")
+
+    endpoints = SimpleNamespace(
+        get=lambda _name: SimpleNamespace(id=OLD_GATEWAY_ID, creator=RUNTIME_ID),
+        delete=lambda _name: mutations.append("delete"),
+    )
+    workspace = SimpleNamespace(serving_endpoints=endpoints)
+    monkeypatch.setattr(
+        cutover,
+        "revoke_direct_permissions",
+        lambda *_a, **_kw: mutations.append("revoke") or True,
+    )
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover._delete_pinned_gateway(
+            workspace,
+            endpoint=OLD_GATEWAY,
+            endpoint_id=OLD_GATEWAY_ID,
+            creator=RUNTIME_ID,
+            delete_allowed=True,
+            green_endpoint=GATEWAY,
+            runtime_application_id=RUNTIME_ID,
+            app_principal="app-client",
+            timeout_s=1,
+            assert_single_writer=check,
+        )
+
+    assert mutations == expected
+
+
+@pytest.mark.parametrize(("fail_on", "expected"), [(1, []), (2, ["revoke"])])
+def test_old_supervisor_lost_lease_blocks_acl_and_agent_delete(
+    monkeypatch: pytest.MonkeyPatch,
+    fail_on: int,
+    expected: list[str],
+) -> None:
+    mutations: list[str] = []
+    checks = 0
+
+    def check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == fail_on:
+            raise RuntimeError("lease lost")
+
+    workspace = _journal_workspace()
+    _install_supervisor_journal(workspace)
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+    monkeypatch.setattr(cutover, "_assert_green_path", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        cutover,
+        "revoke_direct_permissions",
+        lambda *_a, **_kw: mutations.append("revoke") or True,
+    )
+    monkeypatch.setattr(cutover, "_run_no_json", lambda _args: mutations.append("delete-agent"))
+    green = _green_kwargs()
+    green["assert_single_writer"] = check
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover.retire(
+            workspace,
+            app_name="mip-app",
+            old_id=OLD_ID,
+            old_endpoint=OLD_ENDPOINT,
+            old_endpoint_id=OLD_ENDPOINT_ID,
+            old_creator="skyler@entrada.ai",
+            old_create_time="old-time",
+            timeout_s=1,
+            **green,
+        )
+
+    assert mutations == expected
+
+
+def test_orphan_endpoint_lost_lease_blocks_delete(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = _journal_workspace()
+    _install_supervisor_journal(workspace)
+    mutations: list[str] = []
+    checks = 0
+
+    def check() -> None:
+        nonlocal checks
+        checks += 1
+        if checks == 2:
+            raise RuntimeError("lease lost")
+
+    monkeypatch.setattr(cutover, "_supervisor_agents", lambda: [_agents()[0]])
+    monkeypatch.setattr(cutover, "_assert_green_path", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        cutover,
+        "revoke_direct_permissions",
+        lambda *_a, **_kw: mutations.append("revoke") or False,
+    )
+    green = _green_kwargs()
+    green["assert_single_writer"] = check
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover.retire(
+            workspace,
+            app_name="mip-app",
+            old_id=OLD_ID,
+            old_endpoint=OLD_ENDPOINT,
+            old_endpoint_id=OLD_ENDPOINT_ID,
+            old_creator="skyler@entrada.ai",
+            old_create_time="old-time",
+            timeout_s=1,
+            **green,
+        )
+
+    assert mutations == ["revoke"]
+    assert cutover._endpoint_identity(workspace, OLD_ENDPOINT) == (
+        OLD_ENDPOINT_ID,
+        "skyler@entrada.ai",
+    )
+
+
+def test_finalize_lost_lease_blocks_rename(monkeypatch: pytest.MonkeyPatch) -> None:
+    mutations: list[str] = []
+    monkeypatch.setattr(cutover, "_supervisor_agents", lambda: [_agents()[0]])
+    monkeypatch.setattr(cutover, "assert_current_runtime_identity", lambda *_a, **_kw: None)
+    monkeypatch.setattr(cutover, "_run_no_json", lambda _args: mutations.append("rename"))
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover.finalize(
+            SimpleNamespace(),
+            canonical_name="Mortgage Growth Agent",
+            replacement_id=NEW_ID,
+            replacement_endpoint=NEW_ENDPOINT,
+            runtime_application_id=RUNTIME_ID,
+            catalog="mip",
+            genie_space_id="space-123",
+            assert_single_writer=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
+        )
+
+    assert mutations == []
+
+
+def test_journal_persist_lost_lease_blocks_workspace_write(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _journal_workspace()
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover.pin_journal(
+            workspace,
+            runtime_application_id=RUNTIME_ID,
+            canonical_name="Mortgage Growth Agent",
+            old_id=OLD_ID,
+            old_endpoint=OLD_ENDPOINT,
+            old_creator="skyler@entrada.ai",
+            old_create_time="old-time",
+            assert_single_writer=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
+        )
+
+    assert workspace.workspace.upload_count == 0
+
+
+def test_journal_refresh_lost_lease_blocks_rewrite(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = _journal_workspace()
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+    cutover.pin_journal(
+        workspace,
+        runtime_application_id=RUNTIME_ID,
+        canonical_name="Mortgage Growth Agent",
+        old_id=OLD_ID,
+        old_endpoint=OLD_ENDPOINT,
+        old_creator="skyler@entrada.ai",
+        old_create_time="old-time",
+        assert_single_writer=_assert_lease,
+    )
+    old_verify = derive_gateway_proof_verify_key(SIGNING_KEY)
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", PREVIOUS_SIGNING_KEY)
+    monkeypatch.setenv(
+        "MIP_AI_GATEWAY_PROOF_VERIFY_KEY",
+        derive_gateway_proof_verify_key(PREVIOUS_SIGNING_KEY),
+    )
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY", old_verify)
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover.refresh_cutover_journal_attestation(
+            workspace,
+            runtime_application_id=RUNTIME_ID,
+            assert_single_writer=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
+        )
+
+    assert workspace.workspace.upload_count == 1
+
+
+def test_journal_clear_lost_lease_preserves_record(monkeypatch: pytest.MonkeyPatch) -> None:
+    workspace = _journal_workspace()
+    path = _pin_test_journal(workspace, monkeypatch)
+
+    with pytest.raises(RuntimeError, match="lease lost"):
+        cutover.clear_journal(
+            workspace,
+            runtime_application_id=RUNTIME_ID,
+            assert_single_writer=lambda: (_ for _ in ()).throw(RuntimeError("lease lost")),
+        )
+
+    assert path in workspace.workspace.data

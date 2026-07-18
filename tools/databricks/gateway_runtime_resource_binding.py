@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from typing import Any
 
 from backend.agents.gateway_contract import (
@@ -54,6 +55,7 @@ def bind_gateway_runtime_resource_contract(
     supervisor_name: str,
     model_registry: Any | None = None,
     tracking_client: Any | None = None,
+    assert_single_writer: Callable[[], None],
 ) -> None:
     """Sign, inject, re-read, and prove the final served-proxy environment."""
 
@@ -96,6 +98,7 @@ def bind_gateway_runtime_resource_contract(
         experiment_id=deployment.experiment_id,
         resource_binding=binding,
     )
+    assert_single_writer()
     workspace.serving_endpoints.update_config_and_wait(
         name=deployment.endpoint,
         served_entities=[entity],

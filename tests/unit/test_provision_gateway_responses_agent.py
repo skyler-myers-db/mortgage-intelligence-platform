@@ -13,11 +13,14 @@ from mlflow.exceptions import RestException
 import backend.agents.gateway_contract as gateway_contract
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import gateway_model_attestation as attestation
+from tools.databricks import gateway_registration_journal as journal_store
 from tools.databricks import gateway_registration_recovery as registration_recovery
 from tools.databricks import provision_gateway_responses_agent as gateway
+from tools.databricks.gateway_endpoint_contract import (
+    current_model_version as _current_model_version,
+)
 from tools.databricks.provision_gateway_responses_agent import (
     GatewayAgentDeployment,
-    _current_model_version,
     ensure_gateway_responses_agent,
     gateway_agent_source_hash,
     verify_gateway_responses_agent,
@@ -32,6 +35,10 @@ _MODEL_SIGNING_KEY = base64.urlsafe_b64encode(b"t" * 32).decode("ascii").rstrip(
 _MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(_MODEL_SIGNING_KEY)
 _PREVIOUS_MODEL_SIGNING_KEY = base64.urlsafe_b64encode(b"p" * 32).decode("ascii").rstrip("=")
 _PREVIOUS_MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(_PREVIOUS_MODEL_SIGNING_KEY)
+
+
+def _assert_single_writer() -> None:
+    return None
 
 
 def _production_model_tags(monkeypatch: pytest.MonkeyPatch) -> dict[str, str]:
@@ -347,7 +354,7 @@ class _Client:
         self.runs: dict[str, object] = {}
         self.model_version_searches: list[str | None] = []
         self.fail_experiment_tag_set = False
-        self.fail_experiment_tag_delete = False
+        self.fail_experiment_tag_clear = False
 
     def search_model_versions(
         self,
@@ -454,14 +461,13 @@ class _Client:
     def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
         if self.fail_experiment_tag_set:
             raise RuntimeError("experiment tag persistence failed")
+        if self.fail_experiment_tag_clear and key.startswith(journal_store.RETIREMENT_TAG_PREFIX):
+            raise RuntimeError("experiment tag retirement failed")
         experiment = self.experiments_by_id[experiment_id]
         experiment.tags[key] = value
 
     def delete_experiment_tag(self, experiment_id: str, key: str) -> None:
-        if self.fail_experiment_tag_delete:
-            raise RuntimeError("experiment tag deletion failed")
-        experiment = self.experiments_by_id[experiment_id]
-        experiment.tags.pop(key, None)
+        raise AssertionError("Databricks does not expose experiment-tag deletion")
 
 
 def test_existing_source_scan_rejects_previous_epoch_without_mutation(
@@ -567,6 +573,10 @@ def _patch_mlflow(monkeypatch, *, client: _Client) -> None:
     monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
     monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    monkeypatch.setenv("MIP_APP_NAME", "mip-app")
+    monkeypatch.setenv("MIP_APP_DEPLOYMENT_LEASE_ID", "test-deployment-lease")
+    monkeypatch.setenv("MIP_GIT_SHA", "f" * 40)
+    monkeypatch.setattr(gateway.app_deployment_lease, "assert_held", lambda *_args, **_kwargs: {})
     monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
     for version in client.versions:
         raw_tags = dict(getattr(version, "tags", None) or {})
@@ -751,8 +761,16 @@ def _persisted_recovery(
         registration_tags=tags
         or _cleanup_tags(monkeypatch, model_name=model_name, model_source=model_source),
     )
-    registration_recovery.persist_registration_journal(client, durable)
+    registration_recovery.persist_registration_journal(
+        client,
+        durable,
+        assert_single_writer=lambda: None,
+    )
     return durable
+
+
+def _journal_state(client: _Client) -> journal_store.JournalTagState:
+    return journal_store.read_journal_tag_state(client, experiment_id="experiment-7")
 
 
 def _add_logged_source(
@@ -786,6 +804,7 @@ def _reconcile_recovery(
         expected_creator_application_id=_RUNTIME_APPLICATION_ID,
         **_recovery_contract(),
         verify_attestation=verify,
+        assert_single_writer=lambda: None,
     )
 
 
@@ -1313,8 +1332,8 @@ def test_failed_registration_compensates_exact_pending_uc_artifacts(monkeypatch)
     assert client.deleted_registered_models == []
     assert client.deleted_logged_models == []
     assert client.deleted_runs == []
-    experiment = client.get_experiment("experiment-7")
-    assert registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG in experiment.tags
+    assert _journal_state(client).value is not None
+    assert not _journal_state(client).retired
     assert serving.created == []
 
 
@@ -1465,6 +1484,7 @@ def test_registration_cleanup_preserves_ready_same_source_and_its_artifacts(
         journal=journal,
         registration_tags=tags,
         expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        assert_single_writer=_assert_single_writer,
     )
 
     assert client.deleted_versions == [(model_name, "1")]
@@ -1508,6 +1528,7 @@ def test_registration_cleanup_rejects_missing_or_unknown_status_without_mutation
             journal=journal,
             registration_tags=tags,
             expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+            assert_single_writer=_assert_single_writer,
         )
 
     assert client.deleted_versions == []
@@ -1641,6 +1662,7 @@ def test_registration_cleanup_rejects_exact_source_with_tag_drift_without_mutati
             journal=journal,
             registration_tags=registration_tags,
             expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+            assert_single_writer=_assert_single_writer,
         )
 
     assert client.deleted_versions == []
@@ -1675,6 +1697,7 @@ def test_registration_cleanup_handles_no_visible_candidate(
             journal=journal,
             registration_tags=tags,
             expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+            assert_single_writer=_assert_single_writer,
         )
 
     assert client.deleted_versions == []
@@ -1740,6 +1763,7 @@ def test_registration_cleanup_preserves_candidate_hidden_past_visibility_bound(
             journal=journal,
             registration_tags=tags,
             expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+            assert_single_writer=_assert_single_writer,
         )
 
     assert client.target_searches == 2
@@ -1807,6 +1831,7 @@ def test_registration_cleanup_polls_for_delayed_candidate_visibility(
         journal=journal,
         registration_tags=tags,
         expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        assert_single_writer=_assert_single_writer,
     )
 
     assert client.target_searches >= 2
@@ -1849,6 +1874,7 @@ def test_registration_cleanup_aggregates_independent_delete_failures(
             journal=journal,
             registration_tags=tags,
             expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+            assert_single_writer=_assert_single_writer,
         )
 
     message = str(exc_info.value)
@@ -1892,6 +1918,7 @@ def test_registration_cleanup_never_deletes_registered_model_container(
         journal=journal,
         registration_tags=tags,
         expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        assert_single_writer=_assert_single_writer,
     )
 
     assert client.deleted_versions == [(model_name, "1")]
@@ -1945,6 +1972,7 @@ def test_registration_cleanup_preserves_artifacts_referenced_by_any_surviving_ve
         journal=journal,
         registration_tags=tags,
         expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        assert_single_writer=_assert_single_writer,
     )
 
     assert client.deleted_versions == [(model_name, "1")]
@@ -1988,6 +2016,7 @@ def test_registration_cleanup_preserves_run_referenced_by_another_logged_model(
         journal=journal,
         registration_tags=tags,
         expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        assert_single_writer=_assert_single_writer,
     )
 
     assert client.deleted_versions == [(model_name, "1")]
@@ -2051,7 +2080,11 @@ def test_interrupted_registration_retry_reconciles_then_creates_fresh_ready_vers
         journal=_cleanup_journal(client, model_source=prior_source),
         registration_tags=prior_tags,
     )
-    registration_recovery.persist_registration_journal(client, durable)
+    registration_recovery.persist_registration_journal(
+        client,
+        durable,
+        assert_single_writer=_assert_single_writer,
+    )
     monkeypatch.setattr(
         gateway,
         "_log_gateway_model",
@@ -2089,10 +2122,7 @@ def test_interrupted_registration_retry_reconciles_then_creates_fresh_ready_vers
     assert client.deleted_runs == []
     assert deployment.model_version == 2
     assert deployment.model_source == prior_source
-    assert (
-        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
-        not in client.get_experiment("experiment-7").tags
-    )
+    assert _journal_state(client).retired
     assert len(serving.created) == 1
 
 
@@ -2109,10 +2139,10 @@ def test_durable_restart_without_candidate_reuses_preserved_source(
     assert recovery is not None
     assert recovery.ready_version is None
     assert recovery.durable.journal.model_source == source
-    assert (
-        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
-        in client.get_experiment("experiment-7").tags
+    assert _journal_state(client).value == registration_recovery._durable_journal_value(
+        recovery.durable
     )
+    assert not _journal_state(client).retired
     assert client.deleted_versions == []
     assert client.deleted_registered_models == []
     assert client.deleted_logged_models == []
@@ -2170,7 +2200,9 @@ def test_durable_journal_tamper_fails_closed_without_mutation(
     client = _CleanupClient()
     _persisted_recovery(monkeypatch, client, model_name=model_name, model_source=source)
     experiment = client.get_experiment("experiment-7")
-    key = registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
+    value = _journal_state(client).value
+    assert value is not None
+    key = journal_store.journal_tag_key(value)
     experiment.tags[key] = experiment.tags[key].replace(model_name, f"{model_name}x")
 
     with pytest.raises(RuntimeError, match="identity drifted"):
@@ -2258,10 +2290,8 @@ def test_durable_reconcile_removes_multiple_exact_incomplete_versions_only(
     assert client.deleted_registered_models == []
     assert client.deleted_logged_models == []
     assert client.deleted_runs == []
-    assert (
-        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
-        in client.get_experiment("experiment-7").tags
-    )
+    assert _journal_state(client).value is not None
+    assert not _journal_state(client).retired
 
 
 def test_durable_persist_retries_exact_write_after_definite_failure(
@@ -2289,13 +2319,47 @@ def test_durable_persist_retries_exact_write_after_definite_failure(
     )
     monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
 
-    registration_recovery.persist_registration_journal(client, durable)
+    registration_recovery.persist_registration_journal(
+        client,
+        durable,
+        assert_single_writer=_assert_single_writer,
+    )
 
     assert client.tag_writes == 2
-    assert (
-        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
-        in client.get_experiment("experiment-7").tags
+    assert _journal_state(client).value == registration_recovery._durable_journal_value(durable)
+    assert not _journal_state(client).retired
+
+
+def test_durable_persist_rejects_lost_writer_lease_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    client.set_experiment("/Users/runtime-client/gateway-recovery")
+    durable = registration_recovery.DurableRegistrationJournal(
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        journal=_cleanup_journal(client, model_source="models:/m-lost-writer-persist"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+            model_source="models:/m-lost-writer-persist",
+        ),
     )
+
+    def reject_writer() -> None:
+        raise RuntimeError("deployment lease is no longer held")
+
+    with pytest.raises(
+        registration_recovery.RegistrationJournalPersistencePendingError,
+        match="deployment lease is no longer held",
+    ):
+        registration_recovery.persist_registration_journal(
+            client,
+            durable,
+            assert_single_writer=reject_writer,
+        )
+
+    assert _journal_state(client).value is None
+    assert not _journal_state(client).retired
 
 
 def test_durable_persist_survives_lost_response_and_readback_exception(
@@ -2330,13 +2394,420 @@ def test_durable_persist_survives_lost_response_and_readback_exception(
     )
     monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
 
-    registration_recovery.persist_registration_journal(client, durable)
+    registration_recovery.persist_registration_journal(
+        client,
+        durable,
+        assert_single_writer=_assert_single_writer,
+    )
 
     assert client.tag_writes == 1
-    assert (
-        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
-        in client.get_experiment("experiment-7").tags
+    assert _journal_state(client).value == registration_recovery._durable_journal_value(durable)
+    assert not _journal_state(client).retired
+
+
+def test_journal_retirement_survives_lost_response_and_rejects_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class LostRetirementResponseClient(_CleanupClient):
+        def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+            super().set_experiment_tag(experiment_id, key, value)
+            if key.startswith(journal_store.RETIREMENT_TAG_PREFIX):
+                raise ConnectionError("retirement response lost after commit")
+
+    client = LostRetirementResponseClient()
+    first = _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        model_source="models:/m-terminal-first",
     )
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
+
+    registration_recovery.clear_registration_journal(
+        client,
+        first,
+        assert_single_writer=_assert_single_writer,
+    )
+    registration_recovery.clear_registration_journal(
+        client,
+        first,
+        assert_single_writer=_assert_single_writer,
+    )
+
+    assert (
+        registration_recovery.load_registration_journal(
+            client,
+            model_name=first.model_name,
+            experiment_id=first.journal.experiment_id,
+            attestation_contract=_recovery_contract(),
+            verify_attestation=lambda **_kwargs: True,
+        )
+        is None
+    )
+    assert _journal_state(client).value == registration_recovery._durable_journal_value(first)
+    assert _journal_state(client).retired
+    second = registration_recovery.DurableRegistrationJournal(
+        model_name=first.model_name,
+        journal=_cleanup_journal(client, model_source="models:/m-terminal-second"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name=first.model_name,
+            model_source="models:/m-terminal-second",
+        ),
+    )
+    with pytest.raises(
+        registration_recovery.RegistrationJournalPersistencePendingError,
+        match="terminal and cannot be reused",
+    ):
+        registration_recovery.persist_registration_journal(
+            client,
+            second,
+            assert_single_writer=_assert_single_writer,
+        )
+    assert _journal_state(client).value == registration_recovery._durable_journal_value(first)
+    assert _journal_state(client).retired
+
+
+def test_journal_retirement_rejects_lost_writer_lease_before_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    durable = _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        model_source="models:/m-lost-writer-retire",
+    )
+
+    def reject_writer() -> None:
+        raise RuntimeError("deployment lease is no longer held")
+
+    with pytest.raises(RuntimeError, match="deployment lease is no longer held"):
+        registration_recovery.clear_registration_journal(
+            client,
+            durable,
+            assert_single_writer=reject_writer,
+        )
+
+    assert _journal_state(client).value == registration_recovery._durable_journal_value(durable)
+    assert not _journal_state(client).retired
+
+
+def test_append_only_journal_rejects_concurrent_persist_without_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConcurrentPersistClient(_CleanupClient):
+        trigger = ""
+        concurrent_key = ""
+        concurrent_value = ""
+        injected = False
+
+        def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+            if key == self.trigger and not self.injected:
+                self.injected = True
+                super().set_experiment_tag(
+                    experiment_id,
+                    self.concurrent_key,
+                    self.concurrent_value,
+                )
+            super().set_experiment_tag(experiment_id, key, value)
+
+    client = ConcurrentPersistClient()
+    client.set_experiment("/Users/runtime-client/gateway-recovery")
+    first = registration_recovery.DurableRegistrationJournal(
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        journal=_cleanup_journal(client, model_source="models:/m-concurrent-first"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+            model_source="models:/m-concurrent-first",
+        ),
+    )
+    second = replace(
+        first,
+        journal=_cleanup_journal(client, model_source="models:/m-concurrent-second"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name=first.model_name,
+            model_source="models:/m-concurrent-second",
+        ),
+    )
+    first_value = registration_recovery._durable_journal_value(first)
+    second_value = registration_recovery._durable_journal_value(second)
+    client.trigger = journal_store.journal_tag_key(first_value)
+    client.concurrent_key = journal_store.journal_tag_key(second_value)
+    client.concurrent_value = second_value
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
+
+    with pytest.raises(
+        registration_recovery.RegistrationJournalPersistencePendingError,
+        match="multiple durable registration journals",
+    ):
+        registration_recovery.persist_registration_journal(
+            client,
+            first,
+            assert_single_writer=_assert_single_writer,
+        )
+
+    tags = client.get_experiment("experiment-7").tags
+    assert tags[journal_store.journal_tag_key(first_value)] == first_value
+    assert tags[journal_store.journal_tag_key(second_value)] == second_value
+
+
+def test_append_only_retirement_rejects_concurrent_journal_without_overwrite(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class ConcurrentRetirementClient(_CleanupClient):
+        trigger = ""
+        concurrent_key = ""
+        concurrent_value = ""
+        injected = False
+
+        def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+            if key == self.trigger and not self.injected:
+                self.injected = True
+                super().set_experiment_tag(
+                    experiment_id,
+                    self.concurrent_key,
+                    self.concurrent_value,
+                )
+            super().set_experiment_tag(experiment_id, key, value)
+
+    client = ConcurrentRetirementClient()
+    first = _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        model_source="models:/m-clear-race-first",
+    )
+    second = replace(
+        first,
+        journal=_cleanup_journal(client, model_source="models:/m-clear-race-second"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name=first.model_name,
+            model_source="models:/m-clear-race-second",
+        ),
+    )
+    first_value = registration_recovery._durable_journal_value(first)
+    second_value = registration_recovery._durable_journal_value(second)
+    client.trigger = journal_store.retirement_tag_key(first_value)
+    client.concurrent_key = journal_store.journal_tag_key(second_value)
+    client.concurrent_value = second_value
+
+    with pytest.raises(RuntimeError, match="multiple durable registration journals"):
+        registration_recovery.clear_registration_journal(
+            client,
+            first,
+            assert_single_writer=_assert_single_writer,
+        )
+
+    tags = client.get_experiment("experiment-7").tags
+    assert tags[journal_store.journal_tag_key(first_value)] == first_value
+    assert tags[journal_store.journal_tag_key(second_value)] == second_value
+    assert tags[journal_store.retirement_tag_key(first_value)] == (
+        journal_store.retirement_tag_value(first_value)
+    )
+
+
+def test_journal_retirement_never_accepts_transient_absence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TransientAbsenceClient(_CleanupClient):
+        hidden_reads = 0
+
+        def set_experiment_tag(self, experiment_id: str, key: str, value: str) -> None:
+            if key.startswith(journal_store.RETIREMENT_TAG_PREFIX):
+                self.hidden_reads = 2
+                raise RuntimeError("retirement rejected before commit")
+            super().set_experiment_tag(experiment_id, key, value)
+
+        def get_experiment(self, experiment_id: str) -> object:
+            experiment = super().get_experiment(experiment_id)
+            if self.hidden_reads:
+                self.hidden_reads -= 1
+                return SimpleNamespace(experiment_id=experiment_id, tags={})
+            return experiment
+
+    client = TransientAbsenceClient()
+    durable = _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        model_source="models:/m-transient-absence",
+    )
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_ATTEMPTS", 4)
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
+
+    with pytest.raises(RuntimeError, match="retirement was not authoritative"):
+        registration_recovery.clear_registration_journal(
+            client,
+            durable,
+            assert_single_writer=_assert_single_writer,
+        )
+
+    assert _journal_state(client).value == registration_recovery._durable_journal_value(durable)
+    assert not _journal_state(client).retired
+
+
+def test_legacy_single_tag_journal_retires_append_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = _CleanupClient()
+    client.set_experiment("/Users/runtime-client/gateway-recovery")
+    durable = registration_recovery.DurableRegistrationJournal(
+        model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+        journal=_cleanup_journal(client, model_source="models:/m-legacy-live"),
+        registration_tags=_cleanup_tags(
+            monkeypatch,
+            model_name="mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234",
+            model_source="models:/m-legacy-live",
+        ),
+    )
+    value = registration_recovery._durable_journal_value(durable)
+    client.get_experiment("experiment-7").tags[journal_store.JOURNAL_TAG] = value
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
+
+    registration_recovery.clear_registration_journal(
+        client,
+        durable,
+        assert_single_writer=_assert_single_writer,
+    )
+
+    tags = client.get_experiment("experiment-7").tags
+    assert tags[journal_store.JOURNAL_TAG] == value
+    assert tags[journal_store.retirement_tag_key(value)] == (
+        journal_store.retirement_tag_value(value)
+    )
+    assert _journal_state(client).retired
+
+
+def test_forged_retired_pair_cannot_bypass_signed_journal_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    resource_hash = _resource_hash(source_hash)
+    model_name = gateway.gateway_agent_model_name(
+        base_model_name="mip.audit.mortgage_growth_supervisor_proxy",
+        contract_hash=resource_hash,
+    )
+    model_source = "models:/m-forged-retired-pair"
+    monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    tags = attestation.sign_gateway_model_contract(
+        full_name=model_name,
+        model_source=model_source,
+        source_hash=source_hash,
+        supervisor_id=_SUPERVISOR_ID,
+        supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        model_family="mip.audit.mortgage_growth_supervisor_proxy",
+        experiment_base="mip-agent-runtime-gateway-proxy",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        inference_schema="audit",
+        inference_table_prefix="mip_agent_gateway_growth_agent",
+    )
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="5",
+                source=model_source,
+                run_id="run-forged-retired-pair",
+                tags=tags,
+                status="READY",
+            )
+        ]
+    )
+    _patch_mlflow(monkeypatch, client=client)
+    experiment_name = gateway.gateway_experiment_name(
+        base_experiment_name="mip-agent-runtime-gateway-proxy",
+        contract_hash=resource_hash,
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+    )
+    experiment = client.set_experiment(experiment_name)
+    forged = "not-a-signed-or-canonical-journal"
+    experiment.tags[journal_store.journal_tag_key(forged)] = forged
+    experiment.tags[journal_store.retirement_tag_key(forged)] = journal_store.retirement_tag_value(
+        forged
+    )
+    serving = _ServingEndpoints()
+    monkeypatch.setattr(
+        gateway,
+        "_log_gateway_model",
+        lambda **_kwargs: pytest.fail("forged retired bytes must fail before model logging"),
+    )
+
+    with pytest.raises(RuntimeError, match="not strict JSON"):
+        _ensure_gateway(_runtime_workspace(serving))
+
+    assert serving.created == []
+
+
+def test_gateway_endpoint_creation_reasserts_exclusive_deployment_lease(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    resource_hash = _resource_hash(source_hash)
+    model_name = gateway.gateway_agent_model_name(
+        base_model_name="mip.audit.mortgage_growth_supervisor_proxy",
+        contract_hash=resource_hash,
+    )
+    model_source = "models:/m-lease-recheck"
+    monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY", _MODEL_SIGNING_KEY)
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", _MODEL_VERIFY_KEY)
+    tags = attestation.sign_gateway_model_contract(
+        full_name=model_name,
+        model_source=model_source,
+        source_hash=source_hash,
+        supervisor_id=_SUPERVISOR_ID,
+        supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        model_family="mip.audit.mortgage_growth_supervisor_proxy",
+        experiment_base="mip-agent-runtime-gateway-proxy",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        inference_schema="audit",
+        inference_table_prefix="mip_agent_gateway_growth_agent",
+    )
+    client = _Client(
+        [
+            SimpleNamespace(
+                name=model_name, version="8", source=model_source, tags=tags, status="READY"
+            )
+        ]
+    )
+    _patch_mlflow(monkeypatch, client=client)
+    lease_checks = 0
+
+    def assert_held(*_args: object, **_kwargs: object) -> dict[str, str]:
+        nonlocal lease_checks
+        lease_checks += 1
+        if lease_checks == 3:
+            raise RuntimeError("deployment lease disappeared before endpoint creation")
+        return {}
+
+    monkeypatch.setattr(gateway.app_deployment_lease, "assert_held", assert_held)
+    serving = _ServingEndpoints()
+
+    with pytest.raises(RuntimeError, match="lease disappeared before endpoint creation"):
+        _ensure_gateway(_runtime_workspace(serving))
+
+    assert lease_checks == 3
+    assert serving.created == []
 
 
 def test_definite_journal_write_failure_quarantines_orphan_on_fresh_process(
@@ -2581,10 +3052,7 @@ def test_registration_lost_response_reuses_authoritative_ready_version(
     assert client.deleted_registered_models == []
     assert client.deleted_logged_models == []
     assert client.deleted_runs == []
-    assert (
-        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
-        not in client.get_experiment("experiment-7").tags
-    )
+    assert _journal_state(client).retired
     assert len(serving.created) == 1
 
 
@@ -2592,7 +3060,7 @@ def test_journal_clear_failure_prevents_endpoint_and_preserves_source(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     client = _CleanupClient()
-    client.fail_experiment_tag_delete = True
+    client.fail_experiment_tag_clear = True
     _patch_mlflow(monkeypatch, client=client)
     monkeypatch.setattr(
         gateway,
@@ -2611,13 +3079,13 @@ def test_journal_clear_failure_prevents_endpoint_and_preserves_source(
     )
     serving = _ServingEndpoints()
 
-    with pytest.raises(RuntimeError, match="experiment tag deletion failed"):
+    monkeypatch.setattr(registration_recovery, "_EXPERIMENT_TAG_VISIBILITY_INTERVAL_S", 0.0)
+
+    with pytest.raises(RuntimeError, match="retirement was not authoritative"):
         _ensure_gateway(_runtime_workspace(serving))
 
-    assert (
-        registration_recovery._DURABLE_REGISTRATION_JOURNAL_TAG
-        in client.get_experiment("experiment-7").tags
-    )
+    assert _journal_state(client).value is not None
+    assert not _journal_state(client).retired
     assert client.deleted_logged_models == []
     assert client.deleted_runs == []
     assert serving.created == []
@@ -3262,6 +3730,7 @@ def test_gateway_agent_postflight_verifies_signed_v2_contract_and_exact_experime
         deployment,
         model_registry=model_registry,
         tracking_client=_tracking_client(deployment),
+        assert_single_writer=_assert_single_writer,
     )
     assert serving.rate_limit_puts == [{"name": "mip-growth-agent-gateway", "rate_limits": []}]
 

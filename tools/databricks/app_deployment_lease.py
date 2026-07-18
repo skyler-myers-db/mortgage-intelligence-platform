@@ -12,6 +12,7 @@ import shlex
 import signal
 import sys
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -33,7 +34,7 @@ from databricks.sdk.service.workspace import (
     WorkspaceObjectPermissionLevel,
 )
 
-LEASE_VERSION = 1
+LEASE_VERSION = 2
 LEASE_TTL = timedelta(hours=4)
 # /Shared grants the workspace `users` group inherited CAN_MANAGE, which cannot
 # be removed on a child directory. Keep the deployment fence at the workspace
@@ -49,6 +50,13 @@ def _path(app_name: str) -> str:
     ):
         raise ValueError("App deployment lease name is invalid")
     return f"{LEASE_ROOT}/{normalized}.json"
+
+
+def _source_sha(value: str) -> str:
+    normalized = value.strip()
+    if len(normalized) != 40 or any(char not in "0123456789abcdef" for char in normalized):
+        raise ValueError("App deployment lease requires an exact source SHA")
+    return normalized
 
 
 def _field(value: object, name: str) -> object:
@@ -83,22 +91,46 @@ def _root_object_id(workspace: Any) -> str:
     return object_id
 
 
-def _assert_protected_root(workspace: Any, *, holder: str, object_id: str) -> None:
+def _assert_protected_root(
+    workspace: Any,
+    *,
+    holder: str,
+    writer_application_id: str,
+    object_id: str,
+) -> None:
     permissions = workspace.workspace.get_permissions("directories", object_id)
     holder_manage = False
+    writer_read = False
     for entry in _items(_field(permissions, "access_control_list")):
         levels = _permission_levels(entry)
         user_name = str(_field(entry, "user_name") or "").strip()
+        service_principal_name = str(_field(entry, "service_principal_name") or "").strip()
         group_name = str(_field(entry, "group_name") or "").strip().casefold()
-        if user_name == holder and "CAN_MANAGE" in levels:
+        if user_name == holder and not service_principal_name and not group_name:
+            if levels != {"CAN_MANAGE"}:
+                raise RuntimeError("App deployment lease holder permission drifted")
             holder_manage = True
-        if "CAN_MANAGE" in levels and user_name != holder and group_name != "admins":
-            raise RuntimeError("App deployment lease directory has an unexpected manager")
+        elif service_principal_name == writer_application_id and not user_name and not group_name:
+            if levels != {"CAN_READ"}:
+                raise RuntimeError("App deployment lease writer permission drifted")
+            writer_read = True
+        elif group_name == "admins" and not user_name and not service_principal_name:
+            if levels != {"CAN_MANAGE"}:
+                raise RuntimeError("App deployment lease administrator permission drifted")
+        elif levels:
+            raise RuntimeError("App deployment lease directory has an unexpected accessor")
     if not holder_manage:
         raise RuntimeError("App deployment lease directory ACL did not converge")
+    if not writer_read:
+        raise RuntimeError("App deployment lease writer read boundary did not converge")
 
 
-def _ensure_protected_root(workspace: Any, *, holder: str) -> None:
+def _ensure_protected_root(
+    workspace: Any,
+    *,
+    holder: str,
+    writer_application_id: str,
+) -> None:
     workspace.workspace.mkdirs(LEASE_ROOT)
     object_id = _root_object_id(workspace)
     workspace.workspace.set_permissions(
@@ -108,10 +140,19 @@ def _ensure_protected_root(workspace: Any, *, holder: str) -> None:
             WorkspaceObjectAccessControlRequest(
                 user_name=holder,
                 permission_level=WorkspaceObjectPermissionLevel.CAN_MANAGE,
-            )
+            ),
+            WorkspaceObjectAccessControlRequest(
+                service_principal_name=writer_application_id,
+                permission_level=WorkspaceObjectPermissionLevel.CAN_READ,
+            ),
         ],
     )
-    _assert_protected_root(workspace, holder=holder, object_id=object_id)
+    _assert_protected_root(
+        workspace,
+        holder=holder,
+        writer_application_id=writer_application_id,
+        object_id=object_id,
+    )
 
 
 def _decode(value: str, *, length: int) -> bytes:
@@ -176,6 +217,7 @@ def _verify(record: object) -> dict[str, str | int]:
         "lease_id",
         "source_git_sha",
         "holder",
+        "writer_application_id",
         "acquired_at",
         "expires_at",
         "attestation_verify_key",
@@ -192,9 +234,12 @@ def _download(workspace: Any, *, app_name: str) -> dict[str, str | int] | None:
     except (NotFound, ResourceDoesNotExist):
         return None
     try:
-        return _verify(json.loads(stream.read().decode("utf-8")))
+        record = _verify(json.loads(stream.read().decode("utf-8")))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("App deployment lease is not valid JSON") from exc
+    if record.get("app_name") != app_name.strip():
+        raise RuntimeError("App deployment lease path binding is invalid")
+    return record
 
 
 def _expired(record: dict[str, str | int], *, now: datetime) -> bool:
@@ -212,11 +257,11 @@ def _held_error(
 ) -> RuntimeError:
     owner = str((existing or {}).get("holder") or "unknown")
     suffix = (
-        " (expired but never auto-replaced)"
-        if existing and _expired(existing, now=now)
-        else ""
+        " (expired but never auto-replaced)" if existing and _expired(existing, now=now) else ""
     )
-    return RuntimeError(f"App deployment lease is already held by {owner}{suffix}; wait for release")
+    return RuntimeError(
+        f"App deployment lease is already held by {owner}{suffix}; wait for release"
+    )
 
 
 def _delete_exact_record(
@@ -241,8 +286,7 @@ def _delete_exact_record(
             return
         if after_error != expected:
             raise RuntimeError(
-                "App deployment lease changed during ambiguous exact deletion; "
-                "refusing retry"
+                "App deployment lease changed during ambiguous exact deletion; " "refusing retry"
             ) from delete_error
         raise RuntimeError(
             "App deployment lease remained after ambiguous exact deletion; refusing retry"
@@ -260,18 +304,26 @@ def acquire(
     *,
     app_name: str,
     source_git_sha: str,
+    writer_application_id: str | None = None,
     now: datetime | None = None,
 ) -> str:
-    if len(source_git_sha.strip()) != 40:
-        raise ValueError("App deployment lease requires an exact source SHA")
+    app_name = app_name.strip()
+    _path(app_name)
+    source_git_sha = _source_sha(source_git_sha)
     current = now or datetime.now(UTC)
     holder = _holder(workspace)
+    writer = (
+        writer_application_id or os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "")
+    ).strip()
+    if not writer or writer == holder:
+        raise ValueError("App deployment lease requires a distinct writer application ID")
     record: dict[str, str | int] = {
         "version": LEASE_VERSION,
         "app_name": app_name,
         "lease_id": str(uuid4()),
         "source_git_sha": source_git_sha,
         "holder": holder,
+        "writer_application_id": writer,
         "acquired_at": current.isoformat(),
         "expires_at": (current + LEASE_TTL).isoformat(),
     }
@@ -322,7 +374,11 @@ def acquire(
             ) from compensation_error
         raise
     try:
-        _ensure_protected_root(workspace, holder=holder)
+        _ensure_protected_root(
+            workspace,
+            holder=holder,
+            writer_application_id=writer,
+        )
         persisted = _download(workspace, app_name=app_name)
         if persisted != signed:
             raise RuntimeError("App deployment lease did not persist exactly")
@@ -349,24 +405,58 @@ def assert_held(
     source_git_sha: str,
     now: datetime | None = None,
 ) -> dict[str, str | int]:
-    holder = _holder(workspace)
-    _assert_protected_root(
-        workspace,
-        holder=holder,
-        object_id=_root_object_id(workspace),
-    )
     record = _download(workspace, app_name=app_name)
     if record is None:
         raise RuntimeError("App deployment lease disappeared while deployment was active")
-    if (
-        record.get("lease_id") != lease_id
-        or record.get("source_git_sha") != source_git_sha
-        or record.get("holder") != holder
-    ):
+    actor = _holder(workspace)
+    holder = str(record.get("holder") or "").strip()
+    writer = str(record.get("writer_application_id") or "").strip()
+    if actor not in {holder, writer}:
+        raise RuntimeError("App deployment lease actor is not its holder or delegated writer")
+    _assert_protected_root(
+        workspace,
+        holder=holder,
+        writer_application_id=writer,
+        object_id=_root_object_id(workspace),
+    )
+    authoritative = _download(workspace, app_name=app_name)
+    if authoritative is None:
+        raise RuntimeError("App deployment lease disappeared during validation")
+    if authoritative != record:
+        raise RuntimeError("App deployment lease changed during validation")
+    record = authoritative
+    if record.get("lease_id") != lease_id or record.get("source_git_sha") != source_git_sha:
         raise RuntimeError("App deployment lease ownership or source changed")
     if _expired(record, now=now or datetime.now(UTC)):
         raise RuntimeError("App deployment lease expired while deployment was active")
     return record
+
+
+def held_assertion(
+    workspace: Any,
+    *,
+    app_name: str,
+    lease_id: str,
+    source_git_sha: str,
+) -> Callable[[], None]:
+    """Bind exact lease evidence into a reusable fail-closed assertion."""
+
+    app_name = app_name.strip()
+    lease_id = lease_id.strip()
+    source_git_sha = _source_sha(source_git_sha)
+    _path(app_name)
+    if not lease_id:
+        raise ValueError("App deployment lease ID is required")
+
+    def check() -> None:
+        assert_held(
+            workspace,
+            app_name=app_name,
+            lease_id=lease_id,
+            source_git_sha=source_git_sha,
+        )
+
+    return check
 
 
 def renew(
@@ -458,18 +548,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("action", choices=("acquire", "heartbeat", "release"))
     parser.add_argument("--app-name", required=True)
     parser.add_argument("--source-git-sha")
+    parser.add_argument("--writer-application-id")
     parser.add_argument("--lease-id")
     parser.add_argument("--out-env", type=Path)
     parser.add_argument("--parent-pid", type=int)
     args = parser.parse_args(argv)
     workspace = WorkspaceClient()
     if args.action == "acquire":
-        if not args.source_git_sha or args.out_env is None:
-            parser.error("acquire requires --source-git-sha and --out-env")
+        if not args.source_git_sha or not args.writer_application_id or args.out_env is None:
+            parser.error(
+                "acquire requires --source-git-sha, --writer-application-id, and --out-env"
+            )
         lease_id = acquire(
             workspace,
             app_name=args.app_name,
             source_git_sha=args.source_git_sha,
+            writer_application_id=args.writer_application_id,
         )
         try:
             args.out_env.write_text(

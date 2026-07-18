@@ -426,7 +426,9 @@ converge_green_only_app_access() {
   "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor converge-app-acl \
     --gateway-endpoint "${MIP_AI_GATEWAY_ENDPOINT:?green Gateway is required}" \
     --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:?green Supervisor is required}" \
-    --app-name "$APP_FAIL_CLOSED_NAME" || return 1
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" || return 1
   "$PYTHON" -m tools.databricks.audit_global_m2m_access \
     --application-id "${APP_SP_CLIENT_ID:?App service principal is required}" \
     --expected-inventory-principal "${DEPLOY_INVENTORY_PRINCIPAL:?}" \
@@ -1486,6 +1488,7 @@ PYEOF
     "$PYTHON" -m tools.databricks.app_deployment_lease acquire \
     --app-name "$_GRANTS_APP_NAME" \
     --source-git-sha "$SOURCE_GIT_SHA" \
+    --writer-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
     --out-env "$APP_DEPLOYMENT_LEASE_ENV"
   set -a
   # shellcheck disable=SC1090
@@ -2371,6 +2374,9 @@ fi
 step "prove agentic Lakebase Sync under deployer authority"
 AGENTIC_ENV_FILE="$(mktemp -t mip-agentic.XXXXXX.env)"
 run "$PYTHON" -m tools.databricks.provision_agentic_resources \
+  --app-name "$_GRANTS_APP_NAME" \
+  --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --deployment-source-git-sha "$SOURCE_GIT_SHA" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
   --lakebase-catalog "$DEPLOYMENT_SYNC_CATALOG" \
@@ -2399,9 +2405,12 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
   DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
   DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
   "$PYTHON" -m tools.databricks.provision_agentic_resources \
+  --app-name "$_GRANTS_APP_NAME" \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
   --expected-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --deployment-source-git-sha "$SOURCE_GIT_SHA" \
   --gateway-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-mip-growth-agent-gateway}" \
   --gateway-agent-model "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
   --gateway-agent-experiment "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
@@ -2463,7 +2472,10 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     run_with_proof_signing_authority \
       "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor \
       refresh-journal-attestation \
-      --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+      --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --app-name "$_GRANTS_APP_NAME" \
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --deployment-source-git-sha "$SOURCE_GIT_SHA"
     if [[ -s "$CUTOVER_JOURNAL_ENV_FILE" ]]; then
       unset \
         MIP_REPLACED_AGENT_SUPERVISOR_ID \
@@ -2485,6 +2497,9 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       AGENT_RUNTIME_PIN_ARGS=(
         -m tools.databricks.cutover_agent_runtime_supervisor pin-journal
         --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+        --app-name "$_GRANTS_APP_NAME"
+        --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
+        --deployment-source-git-sha "$SOURCE_GIT_SHA"
       )
       if [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_ID:-}" ]]; then
         AGENT_RUNTIME_PIN_ARGS+=(
@@ -2537,6 +2552,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --catalog "${MIP_DEFAULT_CATALOG:-mip}"
       --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
       --app-name "$_GRANTS_APP_NAME"
+      --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"
+      --deployment-source-git-sha "$SOURCE_GIT_SHA"
       --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
       --preserve-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}"
     )
@@ -2925,6 +2942,9 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --replacement-id "$MIP_AGENT_SUPERVISOR_ID" \
     --replacement-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
     --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
   run_as_m2m_identity \
@@ -2932,7 +2952,10 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
     DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
     "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor clear-journal \
-    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --deployment-source-git-sha "$SOURCE_GIT_SHA"
   step "re-audit final agent-runtime global access after blue retirement"
   run "$PYTHON" -m tools.databricks.audit_global_m2m_access \
     --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
