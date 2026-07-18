@@ -11,7 +11,49 @@ from tools.databricks.gateway_model_attestation import (
     gateway_model_contract_from_tags,
     verify_gateway_model_contract,
 )
+from tools.databricks.mlflow_uc_model_versions import (
+    authoritative_model_version,
+    model_version_field,
+    model_version_tags,
+)
 from tools.databricks.provision_gateway_responses_agent import gateway_resource_hash
+
+_MODEL_VERSION_SEARCH_PAGE_SIZE = 1000
+
+
+def _search_model_versions(model_registry: Any, *, full_name: str) -> list[Any]:
+    versions: list[Any] = []
+    page_token: str | None = None
+    seen_tokens: set[str] = set()
+    while True:
+        page = model_registry.search_model_versions(
+            filter_string=f"name='{full_name}'",
+            max_results=_MODEL_VERSION_SEARCH_PAGE_SIZE,
+            page_token=page_token,
+        )
+        versions.extend(page)
+        next_token = str(getattr(page, "token", "") or "").strip()
+        if not next_token:
+            return versions
+        if next_token in seen_tokens:
+            raise RuntimeError("Gateway model-version provenance search repeated a page token")
+        seen_tokens.add(next_token)
+        page_token = next_token
+
+
+def _authoritative_version(model_registry: Any, search_result: Any, *, full_name: str) -> Any:
+    authoritative = authoritative_model_version(
+        model_registry,
+        search_result,
+        expected_model_name=full_name,
+    )
+    version = model_version_field(authoritative, "version")
+    status = model_version_field(authoritative, "status").upper()
+    if status != "READY":
+        raise RuntimeError(
+            f"Gateway model {full_name} v{version} is not ready ({status or 'MISSING'})"
+        )
+    return authoritative
 
 
 def assert_gateway_model_provenance(
@@ -31,11 +73,15 @@ def assert_gateway_model_provenance(
 ) -> None:
     """Require signed source/allocation provenance for every visible family version."""
 
-    versions = list(model_registry.search_model_versions(f"name='{full_name}'"))
+    versions = _search_model_versions(model_registry, full_name=full_name)
     if not versions:
         raise RuntimeError(f"Gateway model {full_name} has no registered versions")
-    for version in versions:
-        tags = dict(getattr(version, "tags", None) or {})
+    for search_result in versions:
+        version = _authoritative_version(model_registry, search_result, full_name=full_name)
+        tags = model_version_tags(
+            version,
+            resource=f"Gateway model {full_name} v{version.version}",
+        )
         version_number = str(getattr(version, "version", None) or "").strip()
         model_source = str(getattr(version, "source", None) or "").strip()
         resolved_tags = gateway_model_version_tags(tags)

@@ -18,12 +18,18 @@ from backend.agents.gateway_contract import (
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks import gateway_registration_journal as journal_store
 from tools.databricks.agent_runtime_access import assert_runtime_creator
+from tools.databricks.mlflow_uc_model_versions import (
+    authoritative_model_version,
+    model_version_tags,
+)
 
 _UC_MODEL_VERSION_TAG_KEY = re.compile(r"[A-Za-z0-9_]{1,256}\Z")
 _UC_MODEL_VERSION_TAG_LIMIT = 50
 _UC_MODEL_VERSION_TAG_VALUE_LIMIT = 256
 _MODEL_VERSION_READY_STATUS = "READY"
 _INCOMPLETE_MODEL_VERSION_STATUSES = frozenset({"PENDING_REGISTRATION", "FAILED_REGISTRATION"})
+_TERMINAL_FAILED_MODEL_VERSION_STATUS = "FAILED_REGISTRATION"
+_PENDING_MODEL_VERSION_STATUS = "PENDING_REGISTRATION"
 _REGISTRATION_VISIBILITY_ATTEMPTS = 10
 _REGISTRATION_VISIBILITY_INTERVAL_S = 0.5
 _JOURNAL_VISIBILITY_ATTEMPTS = 10
@@ -190,7 +196,7 @@ def attested_source_versions(
 ) -> tuple[list[int], list[IncompleteModelVersion]]:
     """Classify exact signed versions only after authoritative status validation."""
 
-    versions = _search_model_versions(client, filter_string=f"name='{model_name}'")
+    versions = _target_model_versions(client, model_name)
     ready: list[int] = []
     incomplete: list[IncompleteModelVersion] = []
     for version in versions:
@@ -198,10 +204,7 @@ def attested_source_versions(
         model_source = str(getattr(version, "source", "") or "").strip()
         if not version_number or not model_source:
             raise RuntimeError("attested Gateway model version lacks immutable source metadata")
-        tags = {
-            str(key): str(value)
-            for key, value in dict(getattr(version, "tags", None) or {}).items()
-        }
+        tags = model_version_tags(version, resource=f"Gateway model version {model_name}")
         contract = {
             "full_name": model_name,
             "model_source": model_source,
@@ -516,45 +519,54 @@ def _exact_cleanup_candidates(
     model_name: str,
     journal: RegistrationCleanupJournal,
     registration_tags: dict[str, str],
-) -> tuple[list[IncompleteModelVersion], list[int]]:
-    candidates: list[IncompleteModelVersion] = []
+) -> tuple[list[IncompleteModelVersion], list[IncompleteModelVersion], list[int]]:
+    failed_versions: list[IncompleteModelVersion] = []
+    pending_versions: list[IncompleteModelVersion] = []
     ready_versions: list[int] = []
     for version in versions:
         source = _field(version, "source")
-        tags = {
-            str(key): str(value)
-            for key, value in dict(getattr(version, "tags", None) or {}).items()
-        }
         if source != journal.model_source:
             continue
+        version_number = _field(version, "version")
+        if not version_number:
+            raise RuntimeError("exact Gateway cleanup candidate has no immutable version number")
+        resource = f"Gateway cleanup candidate {model_name} v{version_number}"
+        tags = model_version_tags(version, resource=resource)
         if tags != registration_tags:
             raise RuntimeError(
                 f"Gateway cleanup candidate {model_name} uses the exact journaled source "
                 "with drifted registration tags"
             )
-        version_number = _field(version, "version")
-        if not version_number:
-            raise RuntimeError("exact Gateway cleanup candidate has no immutable version number")
-        resource = f"Gateway cleanup candidate {model_name} v{version_number}"
         status = model_version_status(version, resource=resource)
         if status == _MODEL_VERSION_READY_STATUS:
             ready_versions.append(int(version_number))
         elif status in _INCOMPLETE_MODEL_VERSION_STATUSES:
-            candidates.append(
-                IncompleteModelVersion(
-                    version=version_number,
-                    source=source,
-                    tags=tags,
-                    status=status,
-                )
+            incomplete = IncompleteModelVersion(
+                version=version_number,
+                source=source,
+                tags=tags,
+                status=status,
             )
+            if status == _TERMINAL_FAILED_MODEL_VERSION_STATUS:
+                failed_versions.append(incomplete)
+            elif status == _PENDING_MODEL_VERSION_STATUS:
+                pending_versions.append(incomplete)
+            else:  # pragma: no cover - bounded by _INCOMPLETE_MODEL_VERSION_STATUSES
+                raise RuntimeError(f"{resource} has unsupported registration status ({status})")
         else:
             raise RuntimeError(f"{resource} has unsupported registration status ({status})")
-    return candidates, ready_versions
+    return failed_versions, pending_versions, ready_versions
 
 
 def _target_model_versions(client: Any, model_name: str) -> list[Any]:
-    return _search_model_versions(client, filter_string=f"name='{model_name}'")
+    return [
+        authoritative_model_version(
+            client,
+            version,
+            expected_model_name=model_name,
+        )
+        for version in _search_model_versions(client, filter_string=f"name='{model_name}'")
+    ]
 
 
 def _logged_model_run_references(
@@ -706,19 +718,25 @@ def compensate_failed_model_registration(
     validated_model_version_tags(registration_tags)
     failures: list[str] = []
     candidates: list[IncompleteModelVersion] = []
+    pending_versions: list[IncompleteModelVersion] = []
     ready_versions: list[int] = []
     for attempt in range(_REGISTRATION_VISIBILITY_ATTEMPTS):
-        candidates, ready_versions = _exact_cleanup_candidates(
+        candidates, pending_versions, ready_versions = _exact_cleanup_candidates(
             _target_model_versions(client, model_name),
             model_name=model_name,
             journal=journal,
             registration_tags=registration_tags,
         )
-        if candidates or ready_versions:
+        if candidates or pending_versions or ready_versions:
             break
         if attempt + 1 < _REGISTRATION_VISIBILITY_ATTEMPTS:
             time.sleep(_REGISTRATION_VISIBILITY_INTERVAL_S)
 
+    if pending_versions:
+        raise RegistrationReconciliationPendingError(
+            "Gateway registration cleanup found a pending version; preserving the durable "
+            "journal and source until Unity Catalog reaches a terminal status"
+        )
     if ready_versions and not candidates:
         return max(ready_versions)
     if not candidates:
@@ -759,7 +777,7 @@ def compensate_failed_model_registration(
 
     if failures:
         raise RuntimeError("Gateway registration cleanup did not converge: " + "; ".join(failures))
-    remaining, ready_versions = _exact_cleanup_candidates(
+    remaining, pending_versions, ready_versions = _exact_cleanup_candidates(
         _target_model_versions(client, model_name),
         model_name=model_name,
         journal=journal,
@@ -767,6 +785,11 @@ def compensate_failed_model_registration(
     )
     if remaining:
         raise RuntimeError("Gateway registration cleanup left an incomplete exact version")
+    if pending_versions:
+        raise RegistrationReconciliationPendingError(
+            "Gateway registration cleanup observed a new pending version; preserving the "
+            "durable journal and source"
+        )
     return max(ready_versions) if ready_versions else None
 
 
@@ -829,12 +852,17 @@ def reconcile_incomplete_source_versions(
     versions = _target_model_versions(client, model_name)
     if any(_field(version, "source") != durable.journal.model_source for version in versions):
         raise RuntimeError("Gateway registration journal conflicts with another model source")
-    candidates, ready_versions = _exact_cleanup_candidates(
+    candidates, pending_versions, ready_versions = _exact_cleanup_candidates(
         versions,
         model_name=model_name,
         journal=durable.journal,
         registration_tags=durable.registration_tags,
     )
+    if pending_versions:
+        raise RegistrationReconciliationPendingError(
+            "Gateway registration journal still has a pending version; preserving it until "
+            "Unity Catalog reaches a terminal status"
+        )
     if candidates:
         recovered_ready = compensate_failed_model_registration(
             client,

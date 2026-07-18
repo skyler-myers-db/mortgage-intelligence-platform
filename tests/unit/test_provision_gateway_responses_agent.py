@@ -387,12 +387,16 @@ class _Client:
             ]
         assert field == "name"
         assert expected_value.startswith("mip.audit.mortgage_growth_supervisor_proxy_")
-        return [
+        selected = [
             version
             for version in self.versions
             if not str(getattr(version, "name", "") or "").strip()
             or str(getattr(version, "name", "") or "").strip() == expected_value
         ]
+        for version in selected:
+            if not str(getattr(version, "name", "") or "").strip():
+                version.name = expected_value
+        return selected
 
     def set_model_version_tag(self, *args: str) -> None:
         raise AssertionError(f"Gateway model tags must be immutable: {args!r}")
@@ -1251,7 +1255,7 @@ def test_fresh_registration_requires_explicit_authoritative_ready_status(
     assert serving.created == []
 
 
-def test_failed_registration_compensates_exact_pending_uc_artifacts(monkeypatch) -> None:
+def test_failed_registration_preserves_exact_pending_uc_artifacts(monkeypatch) -> None:
     class CleanupClient(_Client):
         def __init__(self) -> None:
             super().__init__()
@@ -1295,6 +1299,7 @@ def test_failed_registration_compensates_exact_pending_uc_artifacts(monkeypatch)
         client.versions.append(version)
         client.version_tags["1"] = dict(tags)
         client.version_sources["1"] = model_uri
+        client.version_statuses["1"] = "PENDING_REGISTRATION"
         raise ModuleNotFoundError("No module named 'boto3'")
 
     monkeypatch.setattr(gateway.mlflow, "register_model", fail_after_uc_create)
@@ -1325,10 +1330,7 @@ def test_failed_registration_compensates_exact_pending_uc_artifacts(monkeypatch)
             expected_creator_application_id=_RUNTIME_APPLICATION_ID,
         )
 
-    assert len(client.deleted_versions) == 1
-    deleted_name, deleted_version = client.deleted_versions[0]
-    assert deleted_name.startswith("mip.audit.mortgage_growth_supervisor_proxy_")
-    assert deleted_version == "1"
+    assert client.deleted_versions == []
     assert client.deleted_registered_models == []
     assert client.deleted_logged_models == []
     assert client.deleted_runs == []
@@ -1463,7 +1465,7 @@ def test_registration_cleanup_preserves_ready_same_source_and_its_artifacts(
                 source=model_source,
                 run_id="run-m-shared-ready-source",
                 tags=tags,
-                status="PENDING_REGISTRATION",
+                status="FAILED_REGISTRATION",
             ),
             SimpleNamespace(
                 name="mip.audit.other_model",
@@ -1858,7 +1860,7 @@ def test_registration_cleanup_aggregates_independent_delete_failures(
                 source=model_source,
                 run_id="run-m-delete-failures",
                 tags=tags,
-                status="PENDING_REGISTRATION",
+                status="FAILED_REGISTRATION",
             )
             for version in ("1", "2")
         ]
@@ -1958,7 +1960,7 @@ def test_registration_cleanup_preserves_artifacts_referenced_by_any_surviving_ve
                 source=model_source,
                 run_id="run-m-cross-model-reference",
                 tags=tags,
-                status="PENDING_REGISTRATION",
+                status="FAILED_REGISTRATION",
             ),
             SimpleNamespace(**surviving),
         ]
@@ -1998,7 +2000,7 @@ def test_registration_cleanup_preserves_run_referenced_by_another_logged_model(
                 source=model_source,
                 run_id="run-m-shared-logged-run",
                 tags=tags,
-                status="PENDING_REGISTRATION",
+                status="FAILED_REGISTRATION",
             )
         ]
     )
@@ -2149,6 +2151,145 @@ def test_durable_restart_without_candidate_reuses_preserved_source(
     assert client.deleted_runs == []
 
 
+def test_durable_reconcile_hydrates_uc_search_version_tags(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    source = "models:/m-uc-search-result"
+    tags = _cleanup_tags(monkeypatch, model_name=model_name, model_source=source)
+    full_version = SimpleNamespace(
+        name=model_name,
+        version="1",
+        source=source,
+        run_id="run-m-uc-search-result",
+        tags=tags,
+        status="READY",
+    )
+    client = _CleanupClient([full_version])
+    _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name=model_name,
+        model_source=source,
+        tags=tags,
+    )
+
+    class UcSearchVersion:
+        def __init__(self) -> None:
+            self.name = model_name
+            self.version = "1"
+            self.source = source
+            self.run_id = "run-m-uc-search-result"
+            self.status = "READY"
+
+        def tags(self) -> None:
+            raise AssertionError("UC search tags method must never be called")
+
+    client.versions = [UcSearchVersion()]
+
+    recovery = _reconcile_recovery(client, model_name=model_name)
+
+    assert recovery is not None and recovery.ready_version == 1
+    assert recovery.durable.registration_tags == tags
+    assert client.deleted_versions == []
+
+
+def test_durable_reconcile_preserves_pending_version_until_it_becomes_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    source = "models:/m-pending-then-ready"
+    tags = _cleanup_tags(monkeypatch, model_name=model_name, model_source=source)
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=source,
+                run_id="run-m-pending-then-ready",
+                tags=tags,
+                status="PENDING_REGISTRATION",
+            )
+        ]
+    )
+    _persisted_recovery(
+        monkeypatch,
+        client,
+        model_name=model_name,
+        model_source=source,
+        tags=tags,
+    )
+
+    with pytest.raises(
+        registration_recovery.RegistrationReconciliationPendingError,
+        match="still has a pending version",
+    ):
+        _reconcile_recovery(client, model_name=model_name)
+
+    assert client.deleted_versions == []
+    assert not _journal_state(client).retired
+
+    client.version_statuses["1"] = "READY"
+    recovery = _reconcile_recovery(client, model_name=model_name)
+
+    assert recovery is not None and recovery.ready_version == 1
+    assert client.deleted_versions == []
+    assert _journal_state(client).retired
+
+
+def test_uc_search_hydration_rejects_immutable_source_drift() -> None:
+    model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    authoritative_source = "models:/m-authoritative-source"
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=model_name,
+                version="1",
+                source=authoritative_source,
+                tags={},
+                status="READY",
+            )
+        ]
+    )
+
+    class DriftedSearchVersion:
+        name = model_name
+        version = "1"
+        source = "models:/m-drifted-search-source"
+        status = "READY"
+
+        def tags(self) -> None:
+            raise AssertionError("UC search tags method must never be called")
+
+    client.versions = [DriftedSearchVersion()]
+
+    with pytest.raises(RuntimeError, match="identity drifted during authoritative hydration"):
+        registration_recovery._target_model_versions(client, model_name)
+
+
+def test_uc_search_hydration_rejects_row_outside_exact_target_without_deletion() -> None:
+    target_model = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
+    foreign_model = "mip.audit.mortgage_growth_supervisor_proxy_foreign12345"
+    source = "models:/m-foreign-search-row"
+    client = _CleanupClient(
+        [
+            SimpleNamespace(
+                name=foreign_model,
+                version="7",
+                source=source,
+                tags={},
+                status="FAILED_REGISTRATION",
+            )
+        ]
+    )
+    client.search_model_versions = lambda **_kwargs: client.versions  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError, match="escaped its exact target model"):
+        registration_recovery._target_model_versions(client, target_model)
+
+    assert client.deleted_versions == []
+
+
 def test_durable_restart_preserves_hidden_incomplete_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2256,7 +2397,7 @@ def test_durable_journal_rejects_previous_attestation_epoch(
     assert client.deleted_runs == []
 
 
-def test_durable_reconcile_removes_multiple_exact_incomplete_versions_only(
+def test_durable_reconcile_removes_multiple_exact_failed_versions_only(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     model_name = "mip.audit.mortgage_growth_supervisor_proxy_deadbeef1234"
@@ -2272,7 +2413,7 @@ def test_durable_reconcile_removes_multiple_exact_incomplete_versions_only(
                 tags=tags,
                 status=status,
             )
-            for version, status in ((1, "PENDING_REGISTRATION"), (2, "FAILED_REGISTRATION"))
+            for version, status in ((1, "FAILED_REGISTRATION"), (2, "FAILED_REGISTRATION"))
         ]
     )
     _persisted_recovery(

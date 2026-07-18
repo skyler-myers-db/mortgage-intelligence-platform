@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from mlflow.entities.model_registry.model_version_search import ModelVersionSearch
 
 from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_AGENT_EXPERIMENT,
@@ -188,7 +189,18 @@ class _ModelRegistry:
         self.tags = tags
         self.set_calls: list[tuple[str, str, str, str]] = []
 
-    def search_model_versions(self, query: str) -> list[object]:
+    def search_model_versions(
+        self,
+        query: str | None = None,
+        *,
+        filter_string: str | None = None,
+        max_results: int | None = None,
+        page_token: str | None = None,
+    ) -> list[object]:
+        assert max_results in (None, 1000)
+        assert page_token is None
+        query = filter_string or query
+        assert query is not None
         prefix = "name='"
         assert query.startswith(prefix) and query.endswith("'")
         name = query[len(prefix) : -1]
@@ -197,11 +209,13 @@ class _ModelRegistry:
             []
             if model_tags is None
             else [
-                SimpleNamespace(
+                ModelVersionSearch(
                     name=name,
                     version="1",
+                    creation_timestamp=1,
                     source="models:/m-reviewed-proxy",
-                    tags=model_tags,
+                    run_id="run-reviewed-proxy",
+                    status="READY",
                 )
             ]
         )
@@ -211,7 +225,13 @@ class _ModelRegistry:
         self.tags[name][key] = value
 
     def get_model_version(self, name: str, version: str) -> object:
-        return SimpleNamespace(name=name, version=version, tags=dict(self.tags[name]))
+        return SimpleNamespace(
+            name=name,
+            version=version,
+            source="models:/m-reviewed-proxy",
+            tags=dict(self.tags[name]),
+            status="READY",
+        )
 
 
 def _provenance(
@@ -544,6 +564,69 @@ def test_effective_runtime_uc_boundary_is_public_key_only_and_never_mutates(
     _verify(_workspace(), model_registry=registry)
 
     assert registry.set_calls == []
+
+
+def test_effective_runtime_uc_boundary_hydrates_real_uc_search_shape() -> None:
+    registry = _ModelRegistry({MODEL: _provenance()})
+    search_rows = registry.search_model_versions(
+        filter_string=f"name='{MODEL}'",
+        max_results=1000,
+        page_token=None,
+    )
+    assert callable(search_rows[0].tags)
+
+    _verify(_workspace(), model_registry=registry)
+
+
+def test_effective_runtime_uc_boundary_reads_every_model_version_page() -> None:
+    class Page(list[object]):
+        def __init__(self, values: list[object], token: str | None) -> None:
+            super().__init__(values)
+            self.token = token
+
+    class PagedRegistry(_ModelRegistry):
+        def __init__(self) -> None:
+            super().__init__({MODEL: _provenance()})
+            self.page_tokens: list[str | None] = []
+
+        def search_model_versions(self, **kwargs: Any) -> Page:
+            assert kwargs["filter_string"] == f"name='{MODEL}'"
+            assert kwargs["max_results"] == 1000
+            token = kwargs["page_token"]
+            self.page_tokens.append(token)
+            version = "1" if token is None else "2"
+            next_token = "page-2" if token is None else None
+            return Page(
+                [
+                    ModelVersionSearch(
+                        name=MODEL,
+                        version=version,
+                        creation_timestamp=1,
+                        source="models:/m-reviewed-proxy",
+                        run_id="run-reviewed-proxy",
+                        status="READY",
+                    )
+                ],
+                next_token,
+            )
+
+    registry = PagedRegistry()
+
+    _verify(_workspace(), model_registry=registry)
+
+    assert registry.page_tokens == [None, "page-2"]
+
+
+def test_effective_runtime_uc_boundary_rejects_repeated_model_version_page_token() -> None:
+    class RepeatingPage(list[object]):
+        token = "repeated"
+
+    class RepeatingRegistry(_ModelRegistry):
+        def search_model_versions(self, **_kwargs: Any) -> RepeatingPage:
+            return RepeatingPage()
+
+    with pytest.raises(RuntimeError, match="repeated a page token"):
+        _verify(_workspace(), model_registry=RepeatingRegistry({MODEL: _provenance()}))
 
 
 def test_effective_runtime_uc_boundary_requires_current_candidate_epoch(
