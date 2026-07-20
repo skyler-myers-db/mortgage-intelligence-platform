@@ -104,6 +104,7 @@ from backend.services.repositories import (
 from backend.services.repositories.factory import _reset_singletons_for_tests
 from backend.services.resilience import _reset_breakers_for_tests
 from backend.services.sales_state import clear_sales_state_cache
+from backend.services.state_footprint import _reset_state_footprint_resolver_for_tests
 from backend.services.workspace_store import (
     _reset_workspace_store_for_tests,
     get_workspace_store,
@@ -1431,6 +1432,7 @@ def _reset_runtime_singletons_for_tests() -> None:
     _reset_breakers_for_tests()
     _reset_kpi_delta_service_for_tests()
     _reset_home_summary_service_for_tests()
+    _reset_state_footprint_resolver_for_tests()
 
 
 def _reset_fake_dependency_state_for_tests() -> None:

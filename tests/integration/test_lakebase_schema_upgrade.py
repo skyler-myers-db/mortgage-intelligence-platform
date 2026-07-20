@@ -51,6 +51,8 @@ def _apply_migration(conn_kwargs: dict[str, str]) -> None:
         conn_kwargs,
         app_role="lakebase-schema-upgrade-test-role",
         verify_outreach_integrity=True,
+        allow_absent_managed_event_triggers=True,
+        allow_absent_provider_schema=True,
     )
 
 
@@ -281,6 +283,8 @@ def test_failed_migration_rolls_back_reviewed_trigger_quarantine(
             ),
             postgres_kwargs,
             app_role="lakebase-schema-upgrade-test-role",
+            allow_absent_managed_event_triggers=True,
+            allow_absent_provider_schema=True,
         )
 
     assert _reviewed_trigger_keys(postgres_kwargs) == expected
@@ -663,8 +667,16 @@ def test_real_postgres_isolates_app_and_verifier_acl(
     verifier_role = f"mip_test_verifier_{suffix}"
 
     with psycopg.connect(**postgres_kwargs, autocommit=True) as conn, conn.cursor() as cur:
-        cur.execute(psql.SQL("CREATE ROLE {}").format(psql.Identifier(app_role)))
-        cur.execute(psql.SQL("CREATE ROLE {}").format(psql.Identifier(verifier_role)))
+        cur.execute(
+            psql.SQL("CREATE ROLE {} LOGIN NOREPLICATION INHERIT").format(
+                psql.Identifier(app_role)
+            )
+        )
+        cur.execute(
+            psql.SQL("CREATE ROLE {} LOGIN NOREPLICATION INHERIT").format(
+                psql.Identifier(verifier_role)
+            )
+        )
 
     monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: app_role)
     monkeypatch.setenv("APP_ENV", "test")
@@ -674,6 +686,8 @@ def test_real_postgres_isolates_app_and_verifier_acl(
             postgres_kwargs,
             role_wait_timeout_s=0,
             role_wait_interval_s=1,
+            allow_absent_managed_event_triggers=True,
+            allow_absent_provider_schema=True,
         )
 
         with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:

@@ -614,6 +614,7 @@ def _run_app_failure_compensation_harness(
     access_quarantined: bool = False,
     release_acl_result: int = 0,
     function_grants_proven: bool = True,
+    lakebase_runtime_access_proven: bool = True,
     first_install_created: bool = False,
     journal_status: str = "recover",
 ) -> tuple[subprocess.CompletedProcess[str], str]:
@@ -670,6 +671,7 @@ APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 _EXISTING_APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 APP_ACCESS_QUARANTINED={1 if access_quarantined else 0}
 REVIEWED_FUNCTION_GRANTS_PROVEN={1 if function_grants_proven else 0}
+LAKEBASE_RUNTIME_ACCESS_PROVEN={1 if lakebase_runtime_access_proven else 0}
 FIRST_INSTALL_APP_CREATED={1 if first_install_created else 0}
 FIRST_INSTALL_COMPENSATION_AUTHORIZED=0
 FIRST_INSTALL_APP_BOUND=0
@@ -714,6 +716,7 @@ def _run_first_install_cleanup_harness(
     bound: bool,
     unbind_result: int = 0,
     delete_result: int = 0,
+    role_recovery_result: int = 0,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     calls = tmp_path / f"first-install-cleanup-{journal_status}-{bound}.log"
     fake_python = tmp_path / f"first-install-cleanup-{journal_status}-{bound}.sh"
@@ -735,6 +738,7 @@ def _run_first_install_cleanup_harness(
         '  } > "$out_env"\n'
         "  exit 0\n"
         "fi\n"
+        f'if [[ "$*" == *"converge_lakebase_oauth_role"* ]]; then exit {role_recovery_result}; fi\n'
         f'if [[ "$*" == *"bundle_env deployment unbind"* ]]; then exit {unbind_result}; fi\n'
         f'if [[ "$*" == *"app_first_install_journal delete"* ]]; then exit {delete_result}; fi\n'
         "exit 0\n",
@@ -754,6 +758,7 @@ MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
 SOURCE_GIT_SHA={'a' * 40}
 APP_ROLLBACK_SECRET_SCOPE=mip-app-rollback
 MIP_LAKEBASE_INSTANCE=mip-lakebase
+LAKEBASE_DATABASE=mip_app_state
 TARGET=dev
 PYTHON={shlex.quote(str(fake_python))}
 RED=""
@@ -991,15 +996,113 @@ def test_first_install_absent_audit_schema_needs_no_stale_grant_revoke(
 def test_stale_runtime_bootstrap_grants_are_reconciled_before_build_or_bundle() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     lease = script.index("tools.databricks.app_deployment_lease acquire")
+    verifier_role_recovery = script.index(
+        'step "recover interrupted verifier Lakebase role bootstrap"'
+    )
+    app_inventory = script.index('_EXISTING_APPS_JSON="$(databricks apps list -o json)"')
+    app_role_recovery = script.index(
+        'step "recover interrupted App Lakebase role bootstrap"'
+    )
+    journal_status = script.index(
+        'step "read signed first-install journal at the immediate recovery boundary"',
+        app_role_recovery,
+    )
+    journal_role_recovery = script.index(
+        "recover_journaled_first_install_lakebase_bootstrap",
+        journal_status,
+    )
     early_cleanup = script.index("could not clear prior agent-runtime bootstrap privileges")
     frontend_build = script.index('step "build frontend')
     bundle_deploy = script.index(
         'step "deploy non-App bundle resources without activating an App candidate"'
     )
 
-    assert lease < early_cleanup < frontend_build < bundle_deploy
+    assert (
+        lease
+        < verifier_role_recovery
+        < app_inventory
+        < app_role_recovery
+        < journal_status
+        < journal_role_recovery
+        < early_cleanup
+        < frontend_build
+        < bundle_deploy
+    )
+    recovery_block = script[verifier_role_recovery:early_cleanup]
+    assert recovery_block.count("--recover-bootstrap-only") == 2
+    assert recovery_block.count('"$LAKEBASE_DATABASE"') == 2
+    assert "MIP_LAKEBASE_DATABASE" not in recovery_block
     assert "SHOW GRANTS \\`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\\` ON SCHEMA" in script
     assert "SHOW GRANTS TO" not in script
+
+
+def test_existing_app_is_stopped_and_identity_pinned_before_binding_update() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    existing_update = script.index('step "update existing Databricks App resource bindings')
+    identity_read = script.index("_BINDING_APP_ID _BINDING_APP_CLIENT_ID", existing_update)
+    stop = script.index("tools.databricks.stop_app_fail_closed", identity_read)
+    stopped_baseline = script.index(
+        'databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"',
+        stop,
+    )
+    update = script.index('databricks apps update "$_GRANTS_APP_NAME"', stop)
+    convergence = script.index("tools.databricks.converge_lakebase_oauth_role", update)
+
+    assert existing_update < identity_read < stop < stopped_baseline < update < convergence
+    assert '--expected-app-id "$_BINDING_APP_ID"' in script[stop:update]
+    assert '--expected-client-id "$_BINDING_APP_CLIENT_ID"' in script[stop:update]
+    assert '--expected-scim-id "$_BINDING_APP_SCIM_ID"' in script[stop:update]
+
+
+def test_lakebase_access_proof_brackets_binding_role_rotation_and_migration() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    initial_proof = script.index("LAKEBASE_RUNTIME_ACCESS_PROVEN=0")
+    binding_build = script.index("tools.databricks.app_resource_bindings build")
+    proof_invalidated = script.index("LAKEBASE_RUNTIME_ACCESS_PROVEN=0", binding_build)
+    app_create = script.index("databricks apps create", proof_invalidated)
+    role_convergence = script.index(
+        "tools.databricks.converge_lakebase_oauth_role",
+        app_create,
+    )
+    migration = script.index("databricks bundle run mip_lakebase_migrate", role_convergence)
+    proof_restored = script.index("LAKEBASE_RUNTIME_ACCESS_PROVEN=1", migration)
+
+    assert initial_proof < binding_build < proof_invalidated
+    assert "LAKEBASE_RUNTIME_ACCESS_PROVEN=1" not in script[initial_proof:migration]
+    assert proof_invalidated < app_create < role_convergence < migration < proof_restored
+
+
+def test_unproven_lakebase_access_forces_stop_without_signed_blue_restore(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="blue_quiesced",
+        rollback_result=0,
+        stop_result=0,
+        lakebase_runtime_access_proven=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "stop_app_fail_closed" in calls
+    assert "app_deployment_rollback" not in calls
+    assert "converge_campaign_treatment_access" in calls
+
+
+def test_every_lakebase_role_recovery_and_convergence_gets_bounded_signing_key() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    command = '"$PYTHON" -m tools.databricks.converge_lakebase_oauth_role'
+    bounded = re.findall(
+        r"run_with_proof_signing_authority \\\n\s+"
+        r'"\$PYTHON" -m tools\.databricks\.converge_lakebase_oauth_role',
+        script,
+    )
+
+    assert len(bounded) == script.count(command)
+    assert not re.search(
+        r'(?m)^\s*run "\$PYTHON" -m tools\.databricks\.converge_lakebase_oauth_role',
+        script,
+    )
 
 
 @pytest.mark.parametrize("mode", ("revoke_failure", "remaining"))
@@ -1862,11 +1965,10 @@ def test_failed_first_install_uses_signed_journal_for_exact_cleanup() -> None:
     assert status < unbind < delete
     assert "databricks apps delete" not in cleanup_block
     assert "tools.databricks.app_first_install_journal clear-absent" not in cleanup_block
-    for required_argument in (
-        '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
-        '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
-    ):
-        assert cleanup_block.count(required_argument) == 3
+    assert cleanup_block.count('--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"') == 3
+    assert cleanup_block.count('--lakebase-instance "$MIP_LAKEBASE_INSTANCE"') == 4
+    recovery = cleanup_block.index("recover_journaled_first_install_lakebase_bootstrap")
+    assert recovery < unbind < delete
     assert "refusing API deletion" in cleanup_block
     assert script.index("cleanup_failed_first_install_app", trap) < capture
 
@@ -1918,6 +2020,9 @@ def test_exact_unsigned_first_install_cleanup_converges_through_signed_helper(
 
     assert result.returncode == 0, result.stderr
     assert calls.index("app_first_install_journal status") < calls.index(
+        "converge_lakebase_oauth_role"
+    )
+    assert calls.index("converge_lakebase_oauth_role") < calls.index(
         "bundle_env deployment unbind"
     )
     assert calls.index("bundle_env deployment unbind") < calls.index(
@@ -1971,6 +2076,23 @@ def test_ambiguous_first_install_unbind_retains_app_and_journal_for_retry(
     assert "app_first_install_journal delete" not in calls
 
 
+def test_failed_first_install_role_recovery_retains_app_binding_and_journal(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_first_install_cleanup_harness(
+        tmp_path,
+        journal_status="recover",
+        bound=True,
+        role_recovery_result=23,
+    )
+
+    assert result.returncode == 1
+    assert "retaining App and journal" in result.stderr
+    assert "converge_lakebase_oauth_role" in calls
+    assert "bundle_env deployment unbind" not in calls
+    assert "app_first_install_journal delete" not in calls
+
+
 def test_committed_app_delete_can_retire_orphaned_first_install_journal(
     tmp_path: Path,
 ) -> None:
@@ -1987,7 +2109,9 @@ def test_committed_app_delete_can_retire_orphaned_first_install_journal(
 
 def test_initial_retry_routes_claimed_and_unclaimed_absence_separately() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
-    status = script.index("tools.databricks.app_first_install_journal status")
+    status = script.index(
+        'step "read signed first-install journal at the immediate recovery boundary"'
+    )
     unclaimed = script.index(
         'FIRST_INSTALL_JOURNAL_STATUS" == "orphan_unclaimed"', status
     )
@@ -1995,9 +2119,18 @@ def test_initial_retry_routes_claimed_and_unclaimed_absence_separately() -> None
     claimed = script.index(
         'FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed"', clear
     )
+    journal_role_recovery = script.index(
+        'step "recover interrupted Lakebase bootstrap for journaled App identity"',
+        status,
+    )
     retire = script.index("tools.databricks.app_first_install_journal delete", claimed)
 
-    assert status < unclaimed < clear < claimed < retire
+    assert status < journal_role_recovery < unclaimed < clear < claimed < retire
+    recovery_block = script[journal_role_recovery:unclaimed]
+    assert "recover_journaled_first_install_lakebase_bootstrap" in recovery_block
+    helper = _shell_function("recover_journaled_first_install_lakebase_bootstrap")
+    assert '--application-id "$FIRST_INSTALL_APP_CLIENT_ID"' in helper
+    assert "run_with_proof_signing_authority" in helper
 
 
 def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
@@ -2028,7 +2161,10 @@ def test_first_install_creation_is_preceded_by_signed_durable_recovery_intent() 
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     inventory = script.index('_EXISTING_APPS_JSON="$(databricks apps list -o json)"')
-    status = script.index("tools.databricks.app_first_install_journal status", inventory)
+    status = script.index(
+        'step "read signed first-install journal at the immediate recovery boundary"',
+        inventory,
+    )
     recovery_function = script.index("recover_interrupted_first_install_app()")
     recovery_stop = script.index("tools.databricks.stop_app_fail_closed", recovery_function)
     recovery_quarantine = script.index(
@@ -2448,7 +2584,16 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     runtime_provision = (
         'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
     )
+    initial_proof = script.index("REVIEWED_FUNCTION_GRANTS_PROVEN=0")
+    lakebase_migration = script.index("databricks bundle run mip_lakebase_migrate")
+    function_postflight = script.index(
+        "tools.databricks.verify_reviewed_function_execute_grants",
+        lakebase_migration,
+    )
+    first_proven = script.index("REVIEWED_FUNCTION_GRANTS_PROVEN=1", function_postflight)
 
+    assert initial_proof < lakebase_migration < function_postflight < first_proven
+    assert "REVIEWED_FUNCTION_GRANTS_PROVEN=1" not in script[initial_proof:function_postflight]
     assert script.count("\ninitialize_uc_targets_and_reconcile_function_grants\n") == 1
     assert script.count("\nrefresh_gold_and_reconcile_function_grants\n") == 1
     invocation = script.index("\nrefresh_gold_and_reconcile_function_grants\n")

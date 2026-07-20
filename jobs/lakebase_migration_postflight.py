@@ -15,6 +15,7 @@ from jobs.lakebase_migration_contracts import (
     _APP_ROLE_ROUTINE_PRIVILEGES,
     _APP_ROLE_SEQUENCE_PRIVILEGES,
     _APP_ROLE_TABLE_PRIVILEGES,
+    _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT,
     _SEQUENCE_PRIVILEGE_NAMES,
     _TABLE_PRIVILEGE_NAMES,
 )
@@ -179,10 +180,18 @@ def _postflight_app_role_grants(cur: object, role: str) -> None:
         WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'mip_app')
           AND n.nspname !~ '^pg_'
+          AND NOT (
+              n.nspname = 'public'
+              AND c.relname = ANY(%s::text[])
+          )
           AND has_table_privilege(%s, c.oid, privilege.name)
         ORDER BY n.nspname, c.relname, privilege.name
         """,
-        (list(_TABLE_PRIVILEGE_NAMES), role),
+        (
+            list(_TABLE_PRIVILEGE_NAMES),
+            sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT),
+            role,
+        ),
     )
     other_table_privileges = cur.fetchall()  # type: ignore[attr-defined]
     if other_table_privileges:
@@ -343,13 +352,21 @@ def _postflight_ai_gateway_verifier_grants(cur: object, role: str) -> None:
           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
           AND n.nspname !~ '^pg_'
           AND NOT (
+              n.nspname = 'public'
+              AND c.relname = ANY(%s::text[])
+          )
+          AND NOT (
               n.nspname = 'mip_app'
               AND c.relname = 'ai_gateway_proof_ledger'
           )
           AND has_table_privilege(%s, c.oid, privilege.name)
         ORDER BY n.nspname, c.relname, privilege.name
         """,
-        (list(_TABLE_PRIVILEGE_NAMES), role),
+        (
+            list(_TABLE_PRIVILEGE_NAMES),
+            sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT),
+            role,
+        ),
     )
     other_table_privileges = cur.fetchall()  # type: ignore[attr-defined]
     if other_table_privileges:

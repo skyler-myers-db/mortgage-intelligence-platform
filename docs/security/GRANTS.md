@@ -499,13 +499,48 @@ the applicable rollback-capable transaction before commit. The later ACL
 transaction independently repeats the exact inventory for both runtime roles.
 Revoking function `EXECUTE` is not treated as sufficient trigger neutralization.
 Because PostgreSQL stores DDL event triggers in `pg_event_trigger`, not
-`pg_trigger`, schema preflight and postflight independently require the global
-event-trigger inventory to be empty. Any event trigger aborts before quarantine
-or schema SQL; Module 0 has no reviewed DDL event-trigger capability.
-The separate ACL transaction repeats the empty event-trigger preflight before
-its first `REVOKE`, `GRANT`, or `ALTER DEFAULT PRIVILEGES` statement and repeats
-the postflight after both identity matrices immediately before commit. Event-
-trigger drift therefore cannot produce a false-green ACL reconciliation.
+`pg_trigger`, schema preflight and postflight independently require the complete
+three-row Databricks-managed event-trigger contract: `on_create_schema`,
+`on_create_sequence`, and `on_create_table_or_view`. The contract pins each
+trigger's event, exact command tags, enabled state, `cloud_admin` event and
+function ownership, `public` function identity, empty signature,
+`event_trigger` return type, `plpgsql` language, volatility/parallel/strict/
+leakproof/security-definer/config/binary attributes, raw UTF-8 `prosrc`
+SHA-256, and source byte length. `NULL` command tags remain distinct from an
+empty array because `NULL` would permit every DDL command. The only accepted
+function ACL states are PostgreSQL's first-install `NULL` representation and
+the explicit `cloud_admin`-owner-only ACL produced when this migration revokes
+PUBLIC `EXECUTE`. A partial inventory, extra trigger, source-byte drift, extra
+grantee, or any shape mismatch aborts before quarantine or schema SQL.
+
+These provider-plane hooks grant Databricks' gateway, superuser, reader, and
+writer roles access to newly created objects. Module 0 trusts that pinned
+`cloud_admin` provider implementation while independently converging the App
+and AI Gateway verifier matrices below. Live release verification must audit
+the provider roles' recursive memberships and effective access; a provider
+implementation change requires a new source digest and governance review.
+Only the vanilla-PostgreSQL integration fixture may explicitly allow the
+managed inventory to be absent. The production entrypoint has no environment-
+or target-based opt-out, including for staging `dev` deployments.
+
+The provider boundary also pins the `__db_system` namespace itself. It must be
+owned by `databricks_control_plane`; every contained owner-bearing object must
+be inventoried and owned by that role or the one exact
+`databricks_writer_<current database oid>` role; any future namespace object
+catalog outside that exhaustive inventory fails closed; and
+the App and verifier must have no ownership or effective schema, table, column,
+sequence, or routine capability there. The two provider views exposed in
+`public`, `databricks_list_roles` and `databricks_synced_table_managers`, are
+pinned by owner, view kind, security options, raw view-definition SHA-256 and
+byte length, PUBLIC `SELECT` shape, and absence of direct runtime grants. Only
+after that proof may migration exclude provider objects from mutation-generating
+inventories. They remain in independent effective-access audits. Production has
+no name-only exclusion and no provider-schema absence seam.
+
+The separate ACL transaction repeats the exact managed event-trigger preflight
+before its first `REVOKE`, `GRANT`, or `ALTER DEFAULT PRIVILEGES` statement and
+repeats the postflight after both identity matrices immediately before commit.
+Event-trigger drift therefore cannot produce a false-green ACL reconciliation.
 
 AI Gateway proof is a deployment-verifier boundary, not a runtime write path.
 The app role receives `SELECT` only on `ai_gateway_proof_ledger`. The separate
@@ -516,6 +551,107 @@ postflights both matrices. It rejects both directions of role membership:
 neither runtime role may inherit a direct/recursive parent, and neither may be
 used as a direct/recursive group role by another principal that could inherit
 or `SET ROLE` into app/verifier capabilities.
+
+Both OAuth database roles must have the exact PostgreSQL profile
+`NOSUPERUSER NOCREATEROLE NOCREATEDB NOREPLICATION NOBYPASSRLS INHERIT LOGIN`,
+no parent or descendant role relationships, and the one exact
+`databricks_auth` security label bound to the workspace service-principal SCIM
+id. This is not inferred from the three attributes exposed by the Lakebase role
+API. Live testing proved that the legacy Database Instances create-role path can
+set `rolreplication=true` and permit a replication-protocol `IDENTIFY_SYSTEM`
+command even though `CREATEDB`, `CREATEROLE`, and `BYPASSRLS` are false.
+
+The deployment therefore creates roles through Databricks' documented
+`databricks_create_role()` SQL function, which creates an OAuth role with LOGIN
+only. Before invoking that privileged primitive, deployment pins its exact
+provider contract: `public.databricks_create_role(text,text)`, function kind,
+return type, `cloud_admin` owner, C language, volatility/parallel/strict/
+leakproof/security-definer/config attributes, extension identity/version/
+namespace, database-specific `databricks_writer_<database oid>` extension
+owner, binary path, raw source SHA-256 and byte length, and `NULL` ACL. Any
+metadata drift or missing extension membership fails before creating a
+credential or database role. If an App binding or legacy provisioner already created the exact unsafe
+profile, replacement is allowed only while the App is stopped/quiesced and only
+after proving exact service-principal metadata, zero ownership, zero role
+relationships, and ACL dependencies limited to this database's reviewed App or
+verifier objects. Exact reviewed ACLs are revoked before the control-plane role
+delete and the dependency audit must then be empty. Cross-database or
+unreviewed dependencies fail closed. The
+role is recreated under the same service-principal client-id name, its OAuth
+label and `NOREPLICATION` profile are rechecked. Because the exact creator
+`ADMIN` membership emitted by `databricks_create_role()` is recorded as granted
+by `cloud_admin`, the caller cannot revoke it directly. Deployment instead uses
+a newly created, one-use workspace service principal and temporary database role
+as the SQL caller. That temporary role has only `CREATEROLE`, database `CREATE`,
+and its provider-default transient `REPLICATION` flag; its credential is kept in
+memory, and both the database role and workspace principal are deleted
+immediately after the target role is created. Deleting the caller removes the
+creator-membership edge. Its exact attributes, authenticated identities,
+membership shape, cleanup, and absence are all verified. Any other relationship
+or incomplete cleanup blocks release. The resulting target graph must be empty
+before the ACL migration, which must commit before App activation.
+
+The one-use workspace principal has a deterministic display name and
+`externalId` derived from the instance, database, and target application ID;
+its database role is stamped with the same source-owned marker before mutable
+profile, relationship, or dependency checks. Every deploy retry recovers both
+the verifier marker and any existing App marker immediately after acquiring the
+exclusive signed lease, before build or bundle work. A clean first install must
+instead prove three stable observations of both the Lakebase instance and the
+workspace marker being absent. All other recovery paths also require three
+stable absence observations to tolerate delayed control-plane visibility.
+Discovered credentials are disabled and revoked before Lakebase marker
+inventory. If database-role deletion cannot be proven after credential cleanup,
+the inactive, credential-free workspace marker is retained for the next retry;
+if credential cleanup itself is unproven and the role has not reached SQL
+visibility, deployment first creates and proves a separate inactive,
+credential-free deterministic orphan tombstone. Its display marker contains
+the original bootstrap application ID plus an Ed25519 signer identity and
+signature; its bounded `externalId` is a digest of that complete signed marker.
+The signer must belong to the configured current/previous/historical proof-key
+registry, so legitimate proof-key rotation does not strand recovery. A later
+retry deletes the role through the signed original application ID and retires
+the tombstone only after stable role absence. If tombstone persistence is not
+proven, the original principal is retained rather than destroying the only
+recovery handle. Independent cleanup failures are aggregated and block the
+release.
+
+For an existing Databricks App, deployment reads and pins the immutable App,
+client, and SCIM IDs and proves the exact App is stopped before updating its
+Lakebase resource binding or converging/replacing its database role. An App
+identity mismatch aborts without name-only mutation.
+Databricks documents that App Lakebase bindings
+reuse a role with that name and that `databricks_create_role()` creates LOGIN-
+only OAuth roles:
+
+- https://docs.databricks.com/aws/en/dev-tools/databricks-apps/lakebase
+- https://docs.databricks.com/aws/en/oltp/projects/postgres-roles
+
+Before the migration command below, converge both identities at the stopped
+deployment boundary:
+
+```bash
+.venv/bin/python -m tools.databricks.converge_lakebase_oauth_role \
+  --lakebase-instance "$LAKEBASE_INSTANCE_NAME" \
+  --lakebase-database "$LAKEBASE_DATABASE" \
+  --application-id "<app-service-principal-client-id>" \
+  --role-contract app \
+  --app-name "$MIP_APP_NAME" \
+  --stop-app-for-mutation \
+  --repair-legacy-replication
+.venv/bin/python -m tools.databricks.converge_lakebase_oauth_role \
+  --lakebase-instance "$LAKEBASE_INSTANCE_NAME" \
+  --lakebase-database "$LAKEBASE_DATABASE" \
+  --application-id "$MIP_AI_GATEWAY_VERIFIER_CLIENT_ID" \
+  --role-contract verifier \
+  --repair-legacy-replication
+```
+
+Live release verification then authenticates separately as the App and
+verifier, proves `current_user`, the exact profile, security label, memberships,
+and expected normal query, and requires a replication-mode `IDENTIFY_SYSTEM`
+attempt to be rejected. It creates no replication slot. A successful
+replication command is a release blocker regardless of ordinary ACL postflight.
 
 The catalog-driven migration is the only supported path for an externally
 managed Lakebase instance. Do not copy a static GRANT list: it cannot safely

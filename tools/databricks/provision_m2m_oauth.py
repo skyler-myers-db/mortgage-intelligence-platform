@@ -150,7 +150,13 @@ def _ensure_lakebase_service_principal_role(
     instance_name: str,
     application_id: str,
 ) -> bool:
-    """Ensure a non-superuser Lakebase OAuth role exists for the verifier."""
+    """Assert the safely bootstrapped Lakebase OAuth role exists for the verifier.
+
+    The legacy Database Instances create-role endpoint grants PostgreSQL
+    REPLICATION despite exposing only disabled CREATEDB/CREATEROLE/BYPASSRLS
+    attributes.  Role creation therefore belongs exclusively to
+    ``converge_lakebase_oauth_role``'s documented SQL path.
+    """
     try:
         roles = list(client.database.list_database_instance_roles(instance_name))
     except Exception as exc:  # noqa: BLE001
@@ -177,23 +183,11 @@ def _ensure_lakebase_service_principal_role(
         _diag(f"Lakebase service-principal role already exists on instance={instance_name!r}")
         return False
 
-    from databricks.sdk.service.database import (
-        DatabaseInstanceRole,
-        DatabaseInstanceRoleIdentityType,
+    raise SystemExit(
+        f"Lakebase verifier role {application_id!r} is absent on {instance_name!r}. "
+        "Create it with tools.databricks.converge_lakebase_oauth_role; the legacy "
+        "Database Instances role-create API is forbidden because it grants REPLICATION."
     )
-
-    _diag(f"creating Lakebase verifier role on instance={instance_name!r}")
-    try:
-        client.database.create_database_instance_role(
-            instance_name,
-            DatabaseInstanceRole(
-                name=application_id,
-                identity_type=DatabaseInstanceRoleIdentityType.SERVICE_PRINCIPAL,
-            ),
-        )
-    except Exception as exc:  # noqa: BLE001
-        raise _wrap_admin_error(exc, step="create Lakebase verifier role") from exc
-    return True
 
 
 def _grant_can_use_on_app(

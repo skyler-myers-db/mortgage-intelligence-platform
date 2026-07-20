@@ -323,7 +323,11 @@ AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
 APP_ACCESS_QUARANTINED=0
-REVIEWED_FUNCTION_GRANTS_PROVEN=1
+REVIEWED_FUNCTION_GRANTS_PROVEN=0
+# Process-local state is never durable proof across deployment retries. Every
+# run starts unproven and may authorize signed-blue restoration only after the
+# live migration verifies both OAuth role security and the exact grant matrix.
+LAKEBASE_RUNTIME_ACCESS_PROVEN=0
 FIRST_INSTALL_APP_CREATED=0
 FIRST_INSTALL_APP_BOUND=0
 FIRST_INSTALL_COMPENSATION_AUTHORIZED=0
@@ -386,6 +390,7 @@ converge_runtime_app_release_access() {
 
 restore_signed_blue_while_quiesced() {
   [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]] || return 1
+  [[ "${LAKEBASE_RUNTIME_ACCESS_PROVEN:-0}" -eq 1 ]] || return 1
   if declare -F mint_m2m_token >/dev/null; then
     mint_signed_app_proof_token || return 1
   fi
@@ -520,7 +525,12 @@ stop_app_after_failed_deploy() {
         ;;
     esac
   fi
-  if [[ "${REVIEWED_FUNCTION_GRANTS_PROVEN:-1}" -ne 1 ]]; then
+  if [[ "${LAKEBASE_RUNTIME_ACCESS_PROVEN:-0}" -ne 1 ]]; then
+    echo "${RED}[deploy] Lakebase runtime access is unproven; stopping and quiescing instead of restoring signed blue.${RST}" >&2
+    stop_and_quiesce_unproven_app
+    return $?
+  fi
+  if [[ "${REVIEWED_FUNCTION_GRANTS_PROVEN:-0}" -ne 1 ]]; then
     echo "${RED}[deploy] reviewed function grants are unproven; stopping and quiescing instead of restoring signed blue.${RST}" >&2
     stop_and_quiesce_unproven_app
     return $?
@@ -720,7 +730,8 @@ refresh_first_install_journal_status() {
   FIRST_INSTALL_APP_CLIENT_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_CLIENT_ID=//p' "$status_env")"
   FIRST_INSTALL_APP_SCIM_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_SCIM_ID=//p' "$status_env")"
   rm -f "$status_env"
-  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" ]] && \
+  if [[ ( "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" || \
+          "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed" ) ]] && \
      [[ -z "$FIRST_INSTALL_APP_ID" || -z "$FIRST_INSTALL_APP_CLIENT_ID" || \
         -z "$FIRST_INSTALL_APP_SCIM_ID" ]]; then
     return 1
@@ -729,6 +740,20 @@ refresh_first_install_journal_status() {
     APP_SP_CLIENT_ID="$FIRST_INSTALL_APP_CLIENT_ID"
   fi
   [[ -n "$FIRST_INSTALL_JOURNAL_STATUS" ]]
+}
+
+recover_journaled_first_install_lakebase_bootstrap() {
+  if [[ -z "$FIRST_INSTALL_APP_CLIENT_ID" ]]; then
+    echo "${RED}[deploy] journaled first-install App client ID is required for Lakebase recovery.${RST}" >&2
+    return 1
+  fi
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
+    --application-id "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --role-contract app \
+    --recover-bootstrap-only
 }
 
 recover_interrupted_first_install_app() {
@@ -763,6 +788,8 @@ recover_interrupted_first_install_app() {
     --principal "$FIRST_INSTALL_APP_CLIENT_ID" \
     --mode quiesce
   TREATMENT_RUNTIME_QUIESCED=1
+  step "recover journal-owned Lakebase bootstrap before App deletion"
+  recover_journaled_first_install_lakebase_bootstrap
   step "normalize and remove any interrupted first-install bundle binding"
   run "$PYTHON" -m tools.databricks.bundle_env deployment bind \
     mip_app "$_GRANTS_APP_NAME" -t "$TARGET" --auto-approve
@@ -798,6 +825,11 @@ cleanup_failed_first_install_app() {
   if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "recover" && \
         "$FIRST_INSTALL_JOURNAL_STATUS" != "orphan_claimed" ]]; then
     echo "${RED}[deploy] first-install cleanup is not authorized for journal state ${FIRST_INSTALL_JOURNAL_STATUS:-unknown}.${RST}" >&2
+    return 1
+  fi
+  echo "${YLW}[deploy] recovering journal-owned Lakebase bootstrap before failed-App cleanup.${RST}" >&2
+  if ! recover_journaled_first_install_lakebase_bootstrap; then
+    echo "${RED}[deploy] failed first-install Lakebase recovery did not converge; retaining App and journal.${RST}" >&2
     return 1
   fi
   # FIRST_INSTALL_APP_BOUND is armed before bind, so both pre-commit and
@@ -1885,9 +1917,57 @@ PYEOF
     --source-git-sha "$SOURCE_GIT_SHA" \
     --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --parent-pid "$$"
-  # Reconcile any CREATE privileges left by a prior SIGKILL immediately after
-  # the lease winner is known. No build, bundle, migration, or other
-  # failure-prone work may run first.
+  # Recover any deterministic one-use Lakebase role creators left by a prior
+  # SIGKILL immediately after the lease winner is known. The verifier identity
+  # is already immutable; an existing App identity is resolved next. No build,
+  # bundle, migration, or other failure-prone work may run first.
+  step "recover interrupted verifier Lakebase role bootstrap"
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --lakebase-database "$LAKEBASE_DATABASE" \
+    --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+    --role-contract verifier \
+    --recover-bootstrap-only
+  _EXISTING_APPS_JSON="$(databricks apps list -o json)"
+  _EXISTING_APP_SP_CLIENT_ID="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
+import json, os, sys
+items = json.load(sys.stdin)
+name = os.environ.get("MIP_APP_NAME", "mip-app")
+matches = [item for item in items if str(item.get("name") or "") == name]
+if len(matches) > 1:
+    raise SystemExit(f"multiple Databricks Apps named {name!r}")
+if not matches:
+    print("")
+else:
+    principal = str(matches[0].get("service_principal_client_id") or "").strip()
+    if not principal:
+        raise SystemExit(f"existing Databricks App {name!r} has no service principal")
+    print(principal)
+')"
+  if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    step "recover interrupted App Lakebase role bootstrap"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$_EXISTING_APP_SP_CLIENT_ID" \
+      --role-contract app \
+      --recover-bootstrap-only
+  fi
+  APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+  step "read signed first-install journal at the immediate recovery boundary"
+  if ! refresh_first_install_journal_status; then
+    echo "${RED}[deploy] could not authenticate first-install recovery journal.${RST}" >&2
+    exit 1
+  fi
+  if [[ -n "$FIRST_INSTALL_APP_CLIENT_ID" && \
+        "$FIRST_INSTALL_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    step "recover interrupted Lakebase bootstrap for journaled App identity"
+    recover_journaled_first_install_lakebase_bootstrap
+  fi
+  # Reconcile any CREATE privileges left by a prior SIGKILL at the same early
+  # recovery boundary.
   _GRANTS_WAREHOUSE_ID="${DATABRICKS_WAREHOUSE_ID:-$(dotenv_value DATABRICKS_WAREHOUSE_ID)}"
   _GRANTS_CATALOG="${MIP_DEFAULT_CATALOG:-mip}"
   if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
@@ -1917,43 +1997,11 @@ if [[ -z "$_GRANTS_WAREHOUSE_ID" ]]; then
   echo "${RED}[deploy] DATABRICKS_WAREHOUSE_ID missing (env or .env.local) — cannot govern treatment access.${RST}" >&2
   exit 4
 fi
-# Discover the target before arming App compensation. A transient inventory or
-# JSON failure must not stop an otherwise healthy existing App.
+# The exact target was discovered at the immediate post-lease recovery boundary
+# before any failure-prone build or bundle work. Now arm App compensation.
 if [[ "$DRY_RUN" -eq 0 ]]; then
-  _EXISTING_APPS_JSON="$(databricks apps list -o json)"
-  _EXISTING_APP_SP_CLIENT_ID="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
-import json, os, sys
-items = json.load(sys.stdin)
-name = os.environ.get("MIP_APP_NAME", "mip-app")
-matches = [item for item in items if str(item.get("name") or "") == name]
-if len(matches) > 1:
-    raise SystemExit(f"multiple Databricks Apps named {name!r}")
-if not matches:
-    print("")
-else:
-    principal = str(matches[0].get("service_principal_client_id") or "").strip()
-    if not principal:
-        raise SystemExit(f"existing Databricks App {name!r} has no service principal")
-    print(principal)
-')"
-  FIRST_INSTALL_JOURNAL_ENV="$(mktemp -t mip-app-first-install-status.XXXXXX.env)"
-  chmod 600 "$FIRST_INSTALL_JOURNAL_ENV"
-  run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.app_first_install_journal status \
-    --app-name "$_GRANTS_APP_NAME" \
-    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
-    --source-git-sha "$SOURCE_GIT_SHA" \
-    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
-    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-    --out-env "$FIRST_INSTALL_JOURNAL_ENV"
-  set -a
-  # shellcheck disable=SC1090
-  . "$FIRST_INSTALL_JOURNAL_ENV"
-  set +a
-  FIRST_INSTALL_JOURNAL_STATUS="${MIP_FIRST_INSTALL_JOURNAL_STATUS:?journal status is required}"
-  FIRST_INSTALL_APP_ID="${MIP_FIRST_INSTALL_APP_ID:-}"
-  FIRST_INSTALL_APP_CLIENT_ID="${MIP_FIRST_INSTALL_APP_CLIENT_ID:-}"
-  FIRST_INSTALL_APP_SCIM_ID="${MIP_FIRST_INSTALL_APP_SCIM_ID:-}"
+  # The signed journal and any journal-only client ID were authenticated and
+  # recovered immediately after lease acquisition, before grant cleanup.
   if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_unclaimed" ]]; then
     step "clear signed first-install intent whose App creation never committed"
     run_with_proof_signing_authority \
@@ -2285,6 +2333,11 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
 else
   APP_RESOURCE_BINDING_PAYLOAD="/tmp/mip-dry-run-app-resource-bindings.json"
 fi
+# App resource binding can create or replace its OAuth role. From this point
+# until the migration grant postflight succeeds, no signed-blue restoration is
+# authorized: a failed LOGIN-only role rotation is not transactionally
+# reversible across the Apps API, Lakebase control plane, and PostgreSQL.
+LAKEBASE_RUNTIME_ACCESS_PROVEN=0
 if [[ -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
   if [[ "$DRY_RUN" -eq 0 ]]; then
     FIRST_INSTALL_MARKED_PAYLOAD="$(mktemp -t mip-app-first-install-payload.XXXXXX.json)"
@@ -2348,6 +2401,34 @@ else
     APP_RESOURCE_BINDING_BEFORE="$(mktemp -t mip-app-resource-before.XXXXXX.json)"
     chmod 600 "$APP_RESOURCE_BINDING_BEFORE"
     databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
+    read -r _BINDING_APP_ID _BINDING_APP_CLIENT_ID _BINDING_APP_SCIM_ID < <(
+      "$PYTHON" - "$APP_RESOURCE_BINDING_BEFORE" <<'PYEOF'
+import json, sys
+
+app = json.load(open(sys.argv[1], encoding="utf-8"))
+print(
+    str(app.get("id") or "").strip(),
+    str(app.get("service_principal_client_id") or "").strip(),
+    str(app.get("service_principal_id") or "").strip(),
+)
+PYEOF
+    )
+    if [[ -z "$_BINDING_APP_ID" || \
+          "$_BINDING_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" || \
+          -z "$_BINDING_APP_SCIM_ID" ]]; then
+      echo "${RED}[deploy] existing App identity drifted before resource-binding update.${RST}" >&2
+      exit 4
+    fi
+    step "stop and identity-pin existing App before Lakebase binding update"
+    run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+      --app-name "$_GRANTS_APP_NAME" \
+      --expected-app-id "$_BINDING_APP_ID" \
+      --expected-client-id "$_BINDING_APP_CLIENT_ID" \
+      --expected-scim-id "$_BINDING_APP_SCIM_ID"
+    # The mutation verifier compares resource bindings while independently
+    # pinning compute state. Stopping is intentional, so establish the stopped
+    # state as the authoritative pre-mutation baseline.
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
   fi
   run databricks apps update "$_GRANTS_APP_NAME" \
     --json "@$APP_RESOURCE_BINDING_PAYLOAD"
@@ -2385,6 +2466,31 @@ else
   APP_SP_CLIENT_ID="dry-run-app-client-id"
   APP_SP_SCIM_ID="dry-run-app-scim-id"
 fi
+# The legacy Database Instances role-create path and the App database binding
+# can materialize OAuth roles with PostgreSQL REPLICATION even though their
+# API-visible CREATEDB/CREATEROLE/BYPASSRLS attributes are all false.  At this
+# stopped/quiesced boundary, replace only that exact unsafe profile through the
+# documented databricks_create_role SQL function, which creates LOGIN-only
+# roles.  The helper proves zero ownership, memberships, and non-ACL shared
+# dependencies before any replacement and verifies the resulting live profile.
+step "converge App Lakebase OAuth role to exact LOGIN-only profile"
+run_with_proof_signing_authority \
+  "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --lakebase-database "$LAKEBASE_DATABASE" \
+  --application-id "$APP_SP_CLIENT_ID" \
+  --role-contract app \
+  --app-name "$_GRANTS_APP_NAME" \
+  --stop-app-for-mutation \
+  --repair-legacy-replication
+step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"
+run_with_proof_signing_authority \
+  "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --lakebase-database "$LAKEBASE_DATABASE" \
+  --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+  --role-contract verifier \
+  --repair-legacy-replication
 # Credentials-only bootstrap intentionally cannot touch an App that does not
 # exist yet. As soon as bundle apply has created/resolved the App, converge the
 # three App-facing identities by their reserved role and immutable client ID.
@@ -2449,6 +2555,7 @@ run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
 # Requires only step 4 (the bundle apply defines the job + Lakebase instance).
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
+LAKEBASE_RUNTIME_ACCESS_PROVEN=1
 
 # Historical releases granted the App's UC identity directly on the Lakebase
 # ``public``/``mip_app`` schemas.  Remove that residue (and any pre-existing
@@ -3334,6 +3441,14 @@ PYEOF
         exit 1
       fi
       step "prove verifier effective authorization boundary before exact Gateway proof"
+      run_as_m2m_identity \
+        verifier \
+        DATABRICKS_VERIFIER_CLIENT_ID \
+        DATABRICKS_VERIFIER_CLIENT_SECRET \
+        "$PYTHON" -m tools.databricks.verify_lakebase_oauth_identity \
+        --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+        --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+        --lakebase-database "$LAKEBASE_DATABASE"
       run_as_m2m_identity \
         verifier \
         DATABRICKS_VERIFIER_CLIENT_ID \

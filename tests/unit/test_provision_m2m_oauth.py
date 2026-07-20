@@ -917,13 +917,21 @@ def test_admin_existing_membership_is_idempotent() -> None:
     assert result.added_to_group is False
 
 
-def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -> None:
+def test_verifier_reuses_safely_bootstrapped_lakebase_role_without_admin_or_app_grants() -> None:
     verifier = _sp(
         "mip-ai-gateway-verifier-ci-sp",
         sp_id="verifier-scim-id",
         application_id="verifier-application-id",
     )
-    client = _make_client(existing_sp=verifier)
+    client = _make_client(
+        existing_sp=verifier,
+        lakebase_roles=[
+            DatabaseInstanceRole(
+                name="verifier-application-id",
+                identity_type=DatabaseInstanceRoleIdentityType.SERVICE_PRINCIPAL,
+            )
+        ],
+    )
 
     result = _provision(
         client,
@@ -942,11 +950,7 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
     client.groups.list.assert_called_once()
     client.groups.patch.assert_not_called()
     client.apps.update_permissions.assert_not_called()
-    client.database.create_database_instance_role.assert_called_once()
-    instance_name, role = client.database.create_database_instance_role.call_args.args
-    assert instance_name == "mip-app-state"
-    assert role.name == "verifier-application-id"
-    assert getattr(role.identity_type, "value", role.identity_type) == "SERVICE_PRINCIPAL"
+    client.database.create_database_instance_role.assert_not_called()
     client.serving_endpoints.update_permissions.assert_called_once()
     client.serving_endpoints.get.assert_called_once_with("mip-agent-gateway")
     (endpoint_id,) = client.serving_endpoints.update_permissions.call_args.args
@@ -958,7 +962,7 @@ def test_verifier_creates_distinct_lakebase_role_without_admin_or_app_grants() -
     assert getattr(endpoint_acl[0].permission_level, "value", endpoint_acl[0].permission_level) == (
         "CAN_QUERY"
     )
-    assert result.created_lakebase_role is True
+    assert result.created_lakebase_role is False
     assert result.granted_can_query is True
     client.warehouses.update_permissions.assert_called_once()
     (warehouse_id,) = client.warehouses.update_permissions.call_args.args

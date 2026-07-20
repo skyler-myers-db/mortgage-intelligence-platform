@@ -280,6 +280,16 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # convenience check. Keep it outside _running_under_pytest() so
     # MIP_BYPASS_STARTUP_CHECKS cannot disable the production write gate.
     _require_campaign_treatment_runtime_gate()
+    if looks_like_databricks_app_deploy():
+        # Governance invariant: the ambient App identity must be the exact
+        # LOGIN-only OAuth role, and PostgreSQL's replication protocol must
+        # reject it. This remains outside the generic local/test bypass just
+        # like the campaign-treatment runtime gate above.
+        from backend.services.lakebase_identity_gate import (
+            verify_app_lakebase_identity_at_startup,
+        )
+
+        verify_app_lakebase_identity_at_startup()
     if not _running_under_pytest():
         # ``require_databricks_creds`` raises RuntimeError with a
         # clear operator-facing message when any of the three env

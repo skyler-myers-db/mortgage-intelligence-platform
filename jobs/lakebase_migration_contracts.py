@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import NamedTuple
 
 # ---------------------------------------------------------------------------
 # The app role is the Databricks App service principal client id. Lakebase
@@ -162,6 +163,187 @@ _APP_TRIGGER_CONTRACT: dict[
     ): ("mip_app", "prevent_outreach_evidence_mutation", "", 42),
 }
 
+
+class _ManagedEventTriggerContractRow(NamedTuple):
+    """Exact Databricks Lakebase provider-plane event-trigger shape."""
+
+    event: str
+    enabled: str
+    tags: tuple[str, ...] | None
+    event_owner: str
+    function_schema: str
+    function_name: str
+    function_arguments: str
+    function_kind: str
+    function_return_type: str
+    function_security_definer: bool
+    function_owner: str
+    function_language: str
+    function_volatility: str
+    function_parallel_safety: str
+    function_leakproof: bool
+    function_strict: bool
+    function_config: tuple[str, ...] | None
+    function_binary: str | None
+    function_source_sha256: str
+    function_source_bytes: int
+
+
+# Lakebase installs these cloud_admin-owned DDL hooks in every managed
+# database. They assign provider-plane gateway/superuser/reader/writer grants
+# to objects created after provisioning. Because they execute during both the
+# schema and ACL transactions, bind the complete inventory and raw UTF-8
+# pg_proc.prosrc digest rather than trusting names or ownership alone. A plain
+# local PostgreSQL fixture may explicitly opt into an absent inventory; the
+# production path has no such opt-out.
+_MANAGED_EVENT_TRIGGER_CONTRACT: dict[str, _ManagedEventTriggerContractRow] = {
+    "on_create_schema": _ManagedEventTriggerContractRow(
+        event="ddl_command_end",
+        enabled="O",
+        tags=("CREATE SCHEMA",),
+        event_owner="cloud_admin",
+        function_schema="public",
+        function_name="grant_usage_on_new_schema",
+        function_arguments="",
+        function_kind="f",
+        function_return_type="event_trigger",
+        function_security_definer=False,
+        function_owner="cloud_admin",
+        function_language="plpgsql",
+        function_volatility="v",
+        function_parallel_safety="u",
+        function_leakproof=False,
+        function_strict=False,
+        function_config=None,
+        function_binary=None,
+        function_source_sha256=(
+            "f8bab6f3ee88910938aaf7f2639fda82627f15d615ac497f91853d9822d3c65b"
+        ),
+        function_source_bytes=1244,
+    ),
+    "on_create_sequence": _ManagedEventTriggerContractRow(
+        event="ddl_command_end",
+        enabled="O",
+        tags=("CREATE SEQUENCE",),
+        event_owner="cloud_admin",
+        function_schema="public",
+        function_name="grant_all_on_new_sequences",
+        function_arguments="",
+        function_kind="f",
+        function_return_type="event_trigger",
+        function_security_definer=False,
+        function_owner="cloud_admin",
+        function_language="plpgsql",
+        function_volatility="v",
+        function_parallel_safety="u",
+        function_leakproof=False,
+        function_strict=False,
+        function_config=None,
+        function_binary=None,
+        function_source_sha256=(
+            "e5a5d3ac90274b875777ed4bd2ee3430fb860759d66ecb0bce2591b29f1761ba"
+        ),
+        function_source_bytes=736,
+    ),
+    "on_create_table_or_view": _ManagedEventTriggerContractRow(
+        event="ddl_command_end",
+        enabled="O",
+        tags=(
+            "CREATE MATERIALIZED VIEW",
+            "CREATE TABLE",
+            "CREATE TABLE AS",
+            "CREATE VIEW",
+        ),
+        event_owner="cloud_admin",
+        function_schema="public",
+        function_name="grant_select_on_new_objects",
+        function_arguments="",
+        function_kind="f",
+        function_return_type="event_trigger",
+        function_security_definer=False,
+        function_owner="cloud_admin",
+        function_language="plpgsql",
+        function_volatility="v",
+        function_parallel_safety="u",
+        function_leakproof=False,
+        function_strict=False,
+        function_config=None,
+        function_binary=None,
+        function_source_sha256=(
+            "36601edce210b90953d4b1e84e84ad92fd9d77cc48d5dff7c79086cae5aacb82"
+        ),
+        function_source_bytes=1189,
+    ),
+}
+
+# PostgreSQL represents the default owner-plus-PUBLIC EXECUTE state as NULL.
+# Our ACL transaction revokes PUBLIC, after which the only accepted explicit
+# ACL is owner EXECUTE. No runtime or arbitrary grantee is permitted.
+_MANAGED_EVENT_TRIGGER_FUNCTION_ACLS: frozenset[tuple[str, ...] | None] = frozenset(
+    {None, ("cloud_admin=X/cloud_admin",)}
+)
+
+_MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256 = (
+    "c7d206fd75bb46ac9ae7e7eab342d9fd4ca57495d563547f32939ccf3a546c2e"
+)
+_MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES = 25
+_MANAGED_OAUTH_ROLE_FUNCTION_OWNER_ONLY_ACL = ("cloud_admin=X/cloud_admin",)
+_MANAGED_OAUTH_ROLE_FUNCTION_PUBLIC_ACLS: frozenset[tuple[str, ...] | None] = frozenset(
+    {
+        None,
+        ("=X/cloud_admin", "cloud_admin=X/cloud_admin"),
+    }
+)
+_MANAGED_OAUTH_ROLE_FUNCTION_ACLS = frozenset(
+    {
+        *_MANAGED_OAUTH_ROLE_FUNCTION_PUBLIC_ACLS,
+        _MANAGED_OAUTH_ROLE_FUNCTION_OWNER_ONLY_ACL,
+    }
+)
+_MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES = frozenset(
+    {
+        ("public", "databricks_create_role", "text, text"),
+        *(
+            (
+                contract.function_schema,
+                contract.function_name,
+                contract.function_arguments,
+            )
+            for contract in _MANAGED_EVENT_TRIGGER_CONTRACT.values()
+        ),
+    }
+)
+
+_PROVIDER_SCHEMA_NAME = "__db_system"
+_PROVIDER_SCHEMA_OWNER = "databricks_control_plane"
+_PROVIDER_DATABASE_WRITER_ROLE_PREFIX = "databricks_writer_"
+
+_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT: dict[str, tuple[str, int]] = {
+    "databricks_list_roles": (
+        "1e8fddb3712aa261c3db4a803f4f38300cac2fa85bb2ab953a9452f93807480a",
+        127,
+    ),
+    "databricks_synced_table_managers": (
+        "39a92930ceb1d900cd1b929fc45fc4d72392fbfe8694f143daacbbbc87cb09ad",
+        173,
+    ),
+}
+
+# Lakebase OAuth service-principal roles created through the documented
+# databricks_create_role SQL function report this exact LOGIN-only profile.
+# The legacy Database Instances create-role path can silently set REPLICATION;
+# that profile is forbidden because a live IDENTIFY_SYSTEM probe proved the
+# capability is executable, not merely a catalog marker.
+_MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE = (
+    False,  # rolsuper
+    False,  # rolcreaterole
+    False,  # rolcreatedb
+    False,  # rolreplication
+    False,  # rolbypassrls
+    True,  # rolinherit
+    True,  # rolcanlogin
+)
+
 # These six constraints are the only retained schema expressions allowed to
 # depend on application-owned code before an upgrade. Their exact dependency
 # is reviewed here and they are dropped under lock before schema.sql runs, so a
@@ -222,6 +404,7 @@ _SAFE_SCHEMA_HOOK_PG_CATALOG_ROUTINES = frozenset(
 _SAFE_SCHEMA_HOOK_FUNCTION_NAMES = frozenset(
     {
         "all",
+        "and",
         "any",
         "btrim",
         "check",
@@ -230,8 +413,10 @@ _SAFE_SCHEMA_HOOK_FUNCTION_NAMES = frozenset(
         "left",
         "length",
         "nextval",
+        "not",
         "now",
         "nullif",
+        "or",
     }
     | {
         name
@@ -267,7 +452,9 @@ _SAFE_SCHEMA_HOOK_PG_CATALOG_OPERATORS = frozenset(
 )
 _AUDIT_SEQUENCE_DEFAULT_KEY = ("mip_app", "action_audit", "audit_sequence")
 _AUDIT_SEQUENCE_DEFAULT_EXPRESSION = "nextval('mip_app.action_audit_audit_sequence_seq'::regclass)"
-_SQL_STRING_LITERAL_RE = re.compile(r"(?is)\bE?'(?:''|[^'])*'")
+_SQL_STRING_LITERAL_RE = re.compile(
+    r"(?is)(?<![a-z0-9_$])(?:E'(?:''|\\.|[^'])*'|'(?:''|[^'])*')"
+)
 _SQL_FUNCTION_CALL_RE = re.compile(
     r'(?ix)(?:(?:"[^"]+"|[a-z_][a-z0-9_$]*)\s*\.\s*)?' r'(?P<name>"[^"]+"|[a-z_][a-z0-9_$]*)\s*\('
 )
@@ -291,10 +478,15 @@ _SEQUENCE_PRIVILEGE_NAMES = ("USAGE", "SELECT", "UPDATE")
 _COLUMN_PRIVILEGE_NAMES = ("SELECT", "INSERT", "UPDATE", "REFERENCES")
 _SCHEMA_PRIVILEGE_NAMES = ("USAGE", "CREATE")
 _APP_ROLE_OPTIONAL_BASELINE_SCHEMA_PRIVILEGES = frozenset({("public", "USAGE")})
-_UNSAFE_ROLE_ATTRIBUTE_NAMES = (
+_MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES = (
     "rolsuper",
     "rolcreaterole",
     "rolcreatedb",
     "rolreplication",
     "rolbypassrls",
+    "rolinherit",
+    "rolcanlogin",
 )
+# Stable compatibility seam for tests and external audit tooling that consume
+# the original five security-sensitive attribute names.
+_UNSAFE_ROLE_ATTRIBUTE_NAMES = _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES[:5]

@@ -11,16 +11,22 @@ from jobs.lakebase_migration_contracts import (
     _APP_ROLE_ROUTINE_PRIVILEGES,
     _APP_ROLE_SEQUENCE_PRIVILEGES,
     _APP_ROLE_TABLE_PRIVILEGES,
+    _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES,
+    _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT,
 )
 from jobs.lakebase_migration_postflight import (
     _postflight_ai_gateway_verifier_grants,
     _postflight_app_role_grants,
 )
+from jobs.lakebase_migration_provider_plane import _postflight_provider_schema_boundary
 from jobs.lakebase_migration_roles import (
     _resolve_ai_gateway_verifier_role,
     _resolve_app_role,
 )
-from jobs.lakebase_migration_schema_hooks import _postflight_event_trigger_inventory
+from jobs.lakebase_migration_schema_hooks import (
+    _postflight_event_trigger_inventory,
+    _postflight_oauth_role_function_contract,
+)
 
 _ResolvedDatabaseRoles = tuple[str, str | None]
 
@@ -150,6 +156,8 @@ def _apply_app_role_grants(
     resolved_roles: _ResolvedDatabaseRoles | None = None,
     role_wait_timeout_s: float | None = None,
     role_wait_interval_s: float | None = None,
+    allow_absent_managed_event_triggers: bool = False,
+    allow_absent_provider_schema: bool = False,
     _resolve_app_role_fn: Callable[..., str] = _resolve_app_role,
     _resolve_verifier_role_fn: Callable[[], str | None] = _resolve_ai_gateway_verifier_role,
 ) -> None:
@@ -191,6 +199,22 @@ def _apply_app_role_grants(
             if database_row is None:
                 raise RuntimeError("Lakebase current database lookup returned no row")
             database_name = str(database_row[0])
+            target_roles = tuple(
+                target_role
+                for target_role in (role, verifier_role)
+                if target_role is not None
+            )
+            _postflight_provider_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="ACL preflight",
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
+            _postflight_oauth_role_function_contract(
+                cur,
+                principal_label="ACL preflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
+            )
 
             role_identifier = psql.Identifier(role).as_string()
             verifier_role_identifier = (
@@ -212,6 +236,7 @@ def _apply_app_role_grants(
                 FROM pg_namespace n
                 WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
+                  AND n.nspname <> '__db_system'
                 ORDER BY n.nspname
                 """
             )
@@ -226,8 +251,14 @@ def _apply_app_role_grants(
                 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
+                  AND n.nspname <> '__db_system'
+                  AND NOT (
+                      n.nspname = 'public'
+                      AND c.relname = ANY(%s::text[])
+                  )
                 ORDER BY n.nspname, c.relname
-                """
+                """,
+                (sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT),),
             )
             all_table_identifiers = [
                 psql.Identifier(str(row[0]), str(row[1])).as_string() for row in cur.fetchall()
@@ -240,6 +271,7 @@ def _apply_app_role_grants(
                 WHERE c.relkind = 'S'
                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
+                  AND n.nspname <> '__db_system'
                 ORDER BY n.nspname, c.relname
                 """
             )
@@ -259,11 +291,14 @@ def _apply_app_role_grants(
                     n.nspname,
                     p.proname,
                     oidvectortypes(p.proargtypes),
-                    p.prosecdef
+                    p.prosecdef,
+                    owner.rolname
                 FROM pg_proc p
                 JOIN pg_namespace n ON n.oid = p.pronamespace
+                JOIN pg_roles owner ON owner.oid = p.proowner
                 WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
+                  AND n.nspname <> '__db_system'
                 ORDER BY
                     n.nspname,
                     p.proname,
@@ -278,12 +313,29 @@ def _apply_app_role_grants(
                     str(name),
                     str(arguments),
                     bool(security_definer),
+                    str(owner),
                 )
-                for object_kind, identity, schema, name, arguments, security_definer in cur.fetchall()
+                for (
+                    object_kind,
+                    identity,
+                    schema,
+                    name,
+                    arguments,
+                    security_definer,
+                    owner,
+                ) in cur.fetchall()
             ]
             actual_mip_app_routines = {
                 (name, arguments)
-                for _kind, _identity, schema, name, arguments, _security_definer in all_routines
+                for (
+                    _kind,
+                    _identity,
+                    schema,
+                    name,
+                    arguments,
+                    _security_definer,
+                    _owner,
+                ) in all_routines
                 if schema == "mip_app"
             }
             expected_mip_app_routines = set(_APP_ROLE_ROUTINE_PRIVILEGES)
@@ -295,7 +347,15 @@ def _apply_app_role_grants(
                 )
             unsafe_reviewed_routines = sorted(
                 (name, arguments)
-                for _kind, _identity, schema, name, arguments, security_definer in all_routines
+                for (
+                    _kind,
+                    _identity,
+                    schema,
+                    name,
+                    arguments,
+                    security_definer,
+                    _owner,
+                ) in all_routines
                 if schema == "mip_app"
                 and security_definer
                 and (name, arguments) in _APP_ROLE_ROUTINE_PRIVILEGES
@@ -305,6 +365,21 @@ def _apply_app_role_grants(
                     "Lakebase reviewed routines must remain SECURITY INVOKER: "
                     f"{unsafe_reviewed_routines}"
                 )
+            routine_creator_identifiers = sorted(
+                {
+                    psql.Identifier(owner).as_string()
+                    for (
+                        _kind,
+                        _identity,
+                        schema,
+                        _name,
+                        _arguments,
+                        _security_definer,
+                        owner,
+                    ) in all_routines
+                    if schema == "mip_app"
+                }
+            )
             target_roles = [role]
             if verifier_role is not None:
                 target_roles.append(verifier_role)
@@ -332,6 +407,11 @@ def _apply_app_role_grants(
                 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
+                  AND n.nspname <> '__db_system'
+                  AND NOT (
+                      n.nspname = 'public'
+                      AND c.relname = ANY(%s::text[])
+                  )
                   AND a.attnum > 0
                   AND NOT a.attisdropped
                   AND (
@@ -340,7 +420,7 @@ def _apply_app_role_grants(
                   )
                 ORDER BY n.nspname, c.relname, a.attname
                 """,
-                tuple(target_roles),
+                (sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT), *target_roles),
             )
             column_acl_revokes = [
                 (
@@ -353,26 +433,6 @@ def _apply_app_role_grants(
                     psql.Identifier(str(column)).as_string(),
                 )
                 for grantee, schema, table, column in cur.fetchall()
-            ]
-            cur.execute(
-                f"""
-                SELECT DISTINCT creator.rolname
-                FROM pg_roles creator
-                WHERE creator.rolname !~ '^pg_'
-                  AND creator.rolname NOT IN ({role_placeholders})
-                  AND EXISTS (
-                      SELECT 1
-                      FROM pg_namespace n
-                      WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
-                        AND n.nspname !~ '^pg_'
-                        AND has_schema_privilege(creator.oid, n.oid, 'CREATE')
-                  )
-                ORDER BY creator.rolname
-                """,
-                tuple(target_roles),
-            )
-            routine_creator_identifiers = [
-                psql.Identifier(str(row[0])).as_string() for row in cur.fetchall()
             ]
             cur.execute(
                 f"""
@@ -389,13 +449,13 @@ def _apply_app_role_grants(
                 WHERE d.defaclobjtype IN ('r', 'S', 'f')
                   AND (
                       grantee.rolname IN ({role_placeholders})
-                      OR (d.defaclobjtype = 'f' AND e.grantee = 0)
                   )
                   AND (
                       d.defaclnamespace = 0
                       OR (
                           n.nspname NOT IN ('pg_catalog', 'information_schema')
                           AND n.nspname !~ '^pg_'
+                          AND n.nspname <> '__db_system'
                       )
                 )
                 GROUP BY
@@ -436,14 +496,14 @@ def _apply_app_role_grants(
             ]
 
             # GRANT, REVOKE, and ALTER DEFAULT PRIVILEGES are DDL and can fire
-            # PostgreSQL event triggers. The Module 0 contract permits none;
-            # prove that before the first ACL mutation rather than relying on
-            # the later row-trigger inventory, which cannot see
-            # pg_event_trigger.
+            # PostgreSQL event triggers. Prove the exact managed contract
+            # before the first ACL mutation rather than relying on the later
+            # row-trigger inventory, which cannot see pg_event_trigger.
             _postflight_event_trigger_inventory(
                 cur,
                 role,
                 principal_label="ACL preflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
             )
 
             # Remove prior broad/direct/default access before adding the exact
@@ -475,7 +535,21 @@ def _apply_app_role_grants(
                     f"REVOKE ALL PRIVILEGES ON SEQUENCE {existing_sequence_identifier} "
                     f"FROM {role_identifier}"
                 )
-            for routine_kind, routine_identity, *_routine_metadata in all_routines:
+            for (
+                routine_kind,
+                routine_identity,
+                routine_schema,
+                _routine_name,
+                _routine_arguments,
+                _security_definer,
+                routine_owner,
+            ) in all_routines:
+                if (
+                    (routine_schema, _routine_name, _routine_arguments)
+                    in _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES
+                    and routine_owner == "cloud_admin"
+                ):
+                    continue
                 cur.execute(
                     f"REVOKE ALL PRIVILEGES ON {routine_kind} {routine_identity} "
                     f"FROM {role_identifier}"
@@ -511,7 +585,21 @@ def _apply_app_role_grants(
                         f"REVOKE ALL PRIVILEGES ON SEQUENCE {existing_sequence_identifier} "
                         f"FROM {verifier_role_identifier}"
                     )
-                for routine_kind, routine_identity, *_routine_metadata in all_routines:
+                for (
+                    routine_kind,
+                    routine_identity,
+                    routine_schema,
+                    _routine_name,
+                    _routine_arguments,
+                    _security_definer,
+                    routine_owner,
+                ) in all_routines:
+                    if (
+                        (routine_schema, _routine_name, _routine_arguments)
+                        in _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES
+                        and routine_owner == "cloud_admin"
+                    ):
+                        continue
                     cur.execute(
                         f"REVOKE ALL PRIVILEGES ON {routine_kind} {routine_identity} "
                         f"FROM {verifier_role_identifier}"
@@ -554,7 +642,15 @@ def _apply_app_role_grants(
                 )
             routine_identifiers = {
                 (name, arguments): identity
-                for _kind, identity, schema, name, arguments, _security_definer in all_routines
+                for (
+                    _kind,
+                    identity,
+                    schema,
+                    name,
+                    arguments,
+                    _security_definer,
+                    _owner,
+                ) in all_routines
                 if schema == "mip_app"
             }
             for routine, privileges in _APP_ROLE_ROUTINE_PRIVILEGES.items():
@@ -582,6 +678,18 @@ def _apply_app_role_grants(
                 cur,
                 role,
                 principal_label="ACL postflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
+            )
+            _postflight_oauth_role_function_contract(
+                cur,
+                principal_label="ACL postflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
+            )
+            _postflight_provider_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="ACL postflight",
+                allow_absent_provider_schema=allow_absent_provider_schema,
             )
             conn.commit()
             verifier_summary = (

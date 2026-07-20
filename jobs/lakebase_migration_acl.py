@@ -5,8 +5,10 @@ from __future__ import annotations
 from jobs.lakebase_migration_contracts import (
     _APP_ROLE_OPTIONAL_BASELINE_SCHEMA_PRIVILEGES,
     _COLUMN_PRIVILEGE_NAMES,
+    _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES,
+    _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE,
+    _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES,
     _SCHEMA_PRIVILEGE_NAMES,
-    _UNSAFE_ROLE_ATTRIBUTE_NAMES,
 )
 
 
@@ -85,14 +87,21 @@ def _postflight_role_security(
         raise RuntimeError(
             f"Lakebase {principal_label} security postflight could not verify exact role {role!r}"
         )
-    unsafe_flags = {
-        attribute
-        for attribute, enabled in zip(_UNSAFE_ROLE_ATTRIBUTE_NAMES, rows[0][1:6], strict=True)
-        if enabled
-    }
-    if unsafe_flags:
+    actual_profile = tuple(bool(value) for value in rows[0][1:8])
+    if actual_profile != _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE:
+        drifted_attributes = [
+            attribute
+            for attribute, actual, expected in zip(
+                _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES,
+                actual_profile,
+                _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE,
+                strict=True,
+            )
+            if actual != expected
+        ]
         raise RuntimeError(
-            f"Lakebase {principal_label} has forbidden role attributes: " f"{sorted(unsafe_flags)}"
+            f"Lakebase {principal_label} managed OAuth role attributes mismatch: "
+            f"drifted={drifted_attributes}"
         )
 
     # pg_auth_members supplies the recursive membership graph. pg_has_role
@@ -306,7 +315,14 @@ def _postflight_effective_routine_privileges(
             oidvectortypes(p.proargtypes),
             p.prokind,
             p.prosecdef,
-            owner.rolname = %s
+            owner.rolname,
+            EXISTS (
+                SELECT 1
+                FROM aclexplode(p.proacl) direct_acl
+                JOIN pg_roles direct_grantee ON direct_grantee.oid = direct_acl.grantee
+                WHERE direct_grantee.rolname = %s
+                  AND direct_acl.privilege_type = 'EXECUTE'
+            )
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
         JOIN pg_roles owner ON owner.oid = p.proowner
@@ -318,6 +334,21 @@ def _postflight_effective_routine_privileges(
         (role, role),
     )
     actual_rows = list(cur.fetchall())  # type: ignore[attr-defined]
+    provider_rows = {
+        (
+            str(schema),
+            str(name),
+            str(arguments),
+        )
+        for schema, name, arguments, _kind, security_definer, owner, direct_grant in actual_rows
+        if (str(schema), str(name), str(arguments))
+        in _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES
+        and str(_kind) == "f"
+        and str(schema) == "public"
+        and str(owner) == "cloud_admin"
+        and not bool(security_definer)
+        and not bool(direct_grant)
+    }
     actual = {
         (
             str(schema),
@@ -325,12 +356,14 @@ def _postflight_effective_routine_privileges(
             str(arguments),
             str(kind),
             bool(security_definer),
-            bool(owned_by_principal),
+            str(owner) == role,
+            bool(direct_grant),
         )
-        for schema, name, arguments, kind, security_definer, owned_by_principal in actual_rows
+        for schema, name, arguments, kind, security_definer, owner, direct_grant in actual_rows
+        if (str(schema), str(name), str(arguments)) not in provider_rows
     }
     expected_rows = {
-        ("mip_app", name, arguments, "f", False, False)
+        ("mip_app", name, arguments, "f", False, False, True)
         for (name, arguments), privileges in expected.items()
         if "EXECUTE" in privileges
     }

@@ -6,13 +6,118 @@ from jobs.lakebase_migration_contracts import (
     _APP_TRIGGER_CONTRACT,
     _AUDIT_SEQUENCE_DEFAULT_EXPRESSION,
     _AUDIT_SEQUENCE_DEFAULT_KEY,
+    _MANAGED_EVENT_TRIGGER_CONTRACT,
+    _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS,
+    _MANAGED_OAUTH_ROLE_FUNCTION_ACLS,
+    _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES,
+    _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256,
     _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT,
     _SAFE_SCHEMA_HOOK_FUNCTION_NAMES,
     _SAFE_SCHEMA_HOOK_PG_CATALOG_OPERATORS,
     _SAFE_SCHEMA_HOOK_PG_CATALOG_ROUTINES,
     _SQL_FUNCTION_CALL_RE,
     _SQL_STRING_LITERAL_RE,
+    _ManagedEventTriggerContractRow,
 )
+
+
+def _postflight_oauth_role_function_contract(
+    cur: object,
+    *,
+    principal_label: str,
+    allow_absent_managed: bool = False,
+) -> None:
+    """Pin the provider-owned OAuth role primitive at every mutation gate."""
+
+    if allow_absent_managed:
+        # Explicit vanilla-PostgreSQL integration seam. Production never sets
+        # this flag and therefore cannot skip the provider primitive proof.
+        return
+    cur.execute(  # type: ignore[attr-defined]
+        """
+        SELECT namespace.nspname,
+               routine.proname,
+               oidvectortypes(routine.proargtypes),
+               routine.prokind,
+               pg_get_function_result(routine.oid),
+               routine_owner.rolname,
+               language.lanname,
+               routine.provolatile,
+               routine.proparallel,
+               routine.proleakproof,
+               routine.proisstrict,
+               routine.prosecdef,
+               routine.proconfig,
+               routine.probin,
+               extension.extname,
+               extension.extversion,
+               extension.extrelocatable,
+               extension_namespace.nspname,
+               extension_owner.rolname,
+               encode(sha256(convert_to(routine.prosrc, 'UTF8')), 'hex'),
+               octet_length(convert_to(routine.prosrc, 'UTF8')),
+               CASE WHEN routine.proacl IS NULL THEN NULL ELSE routine.proacl::text[] END,
+               database_object.oid
+        FROM pg_proc routine
+        JOIN pg_namespace namespace ON namespace.oid = routine.pronamespace
+        JOIN pg_roles routine_owner ON routine_owner.oid = routine.proowner
+        JOIN pg_language language ON language.oid = routine.prolang
+        JOIN pg_depend extension_membership
+          ON extension_membership.classid = 'pg_proc'::regclass
+         AND extension_membership.objid = routine.oid
+         AND extension_membership.objsubid = 0
+         AND extension_membership.deptype = 'e'
+        JOIN pg_extension extension ON extension.oid = extension_membership.refobjid
+        JOIN pg_namespace extension_namespace ON extension_namespace.oid = extension.extnamespace
+        JOIN pg_roles extension_owner ON extension_owner.oid = extension.extowner
+        CROSS JOIN pg_database database_object
+        WHERE routine.oid = to_regprocedure('public.databricks_create_role(text,text)')
+          AND database_object.datname = current_database()
+        """
+    )
+    rows = list(cur.fetchall())  # type: ignore[attr-defined]
+    if len(rows) != 1:
+        raise RuntimeError(
+            f"Lakebase {principal_label} OAuth role-function inventory mismatch: "
+            f"rows={len(rows)}"
+        )
+    row = tuple(rows[0])
+    database_oid = int(row[-1])
+    function_config = None if row[12] is None else tuple(str(item) for item in row[12])
+    function_acl = None if row[21] is None else tuple(sorted(str(item) for item in row[21]))
+    if function_acl not in _MANAGED_OAUTH_ROLE_FUNCTION_ACLS:
+        raise RuntimeError(
+            f"Lakebase {principal_label} OAuth role-function contract drifted"
+        )
+    actual = (*row[:12], function_config, *row[13:21], function_acl)
+    expected = (
+        "public",
+        "databricks_create_role",
+        "text, text",
+        "f",
+        "text",
+        "cloud_admin",
+        "c",
+        "v",
+        "s",
+        False,
+        True,
+        False,
+        None,
+        "$libdir/databricks_auth",
+        "databricks_auth",
+        "1.0",
+        True,
+        "public",
+        f"databricks_writer_{database_oid}",
+        _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256,
+        _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES,
+        function_acl,
+    )
+    if actual != expected:
+        raise RuntimeError(
+            f"Lakebase {principal_label} OAuth role-function contract drifted"
+        )
 
 
 def _schema_hook_function_calls(expression: object) -> set[str]:
@@ -65,6 +170,7 @@ def _preflight_executable_schema_hooks(
              AND attribute.attnum = attribute_default.adnum
             WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
               AND namespace.nspname !~ '^pg_'
+              AND namespace.nspname <> '__db_system'
               AND relation.relkind IN ('r', 'p')
 
             UNION ALL
@@ -83,6 +189,7 @@ def _preflight_executable_schema_hooks(
             WHERE constraint_object.conbin IS NOT NULL
               AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
               AND namespace.nspname !~ '^pg_'
+              AND namespace.nspname <> '__db_system'
 
             UNION ALL
 
@@ -99,6 +206,7 @@ def _preflight_executable_schema_hooks(
             JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
             WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
               AND namespace.nspname !~ '^pg_'
+              AND namespace.nspname <> '__db_system'
               AND NOT (
                   rewrite_rule.rulename = '_RETURN'
                   AND relation.relkind IN ('v', 'm')
@@ -123,6 +231,7 @@ def _preflight_executable_schema_hooks(
             JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
             WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
               AND namespace.nspname !~ '^pg_'
+              AND namespace.nspname <> '__db_system'
 
             UNION ALL
 
@@ -141,6 +250,7 @@ def _preflight_executable_schema_hooks(
             WHERE index_metadata.indexprs IS NOT NULL
               AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
               AND namespace.nspname !~ '^pg_'
+              AND namespace.nspname <> '__db_system'
 
             UNION ALL
 
@@ -159,6 +269,7 @@ def _preflight_executable_schema_hooks(
             WHERE index_metadata.indpred IS NOT NULL
               AND namespace.nspname NOT IN ('pg_catalog', 'information_schema')
               AND namespace.nspname !~ '^pg_'
+              AND namespace.nspname <> '__db_system'
         ), relevant_dependency AS (
             SELECT
                 hook.*,
@@ -175,6 +286,10 @@ def _preflight_executable_schema_hooks(
                  'pg_collation'::regclass,
                  'pg_class'::regclass
              )
+        ), current_executor AS (
+            SELECT oid
+            FROM pg_roles
+            WHERE rolname = current_user
         )
         SELECT
             dependency.hook_kind,
@@ -200,7 +315,7 @@ def _preflight_executable_schema_hooks(
                 routine.proname,
                 operator.oprname,
                 type_object.typname,
-                collation.collname,
+                collation_object.collname,
                 relation_dependency.relname
             ) AS dependency_name,
             CASE dependency.refclassid
@@ -214,14 +329,15 @@ def _preflight_executable_schema_hooks(
             END AS dependency_arguments,
             COALESCE(routine.prosecdef, FALSE) AS dependency_security_definer,
             CASE dependency.refclassid
-                WHEN 'pg_proc'::regclass THEN routine.proowner = current_user::regrole
-                WHEN 'pg_operator'::regclass THEN operator.oprowner = current_user::regrole
-                WHEN 'pg_type'::regclass THEN type_object.typowner = current_user::regrole
-                WHEN 'pg_collation'::regclass THEN collation.collowner = current_user::regrole
-                WHEN 'pg_class'::regclass THEN relation_dependency.relowner = current_user::regrole
+                WHEN 'pg_proc'::regclass THEN routine.proowner = current_executor.oid
+                WHEN 'pg_operator'::regclass THEN operator.oprowner = current_executor.oid
+                WHEN 'pg_type'::regclass THEN type_object.typowner = current_executor.oid
+                WHEN 'pg_collation'::regclass THEN collation_object.collowner = current_executor.oid
+                WHEN 'pg_class'::regclass THEN relation_dependency.relowner = current_executor.oid
                 ELSE FALSE
             END AS dependency_owned_by_executor
         FROM relevant_dependency dependency
+        CROSS JOIN current_executor
         LEFT JOIN pg_proc routine
           ON dependency.refclassid = 'pg_proc'::regclass
          AND routine.oid = dependency.refobjid
@@ -237,11 +353,11 @@ def _preflight_executable_schema_hooks(
          AND type_object.oid = dependency.refobjid
         LEFT JOIN pg_namespace type_namespace
           ON type_namespace.oid = type_object.typnamespace
-        LEFT JOIN pg_collation collation
+        LEFT JOIN pg_collation collation_object
           ON dependency.refclassid = 'pg_collation'::regclass
-         AND collation.oid = dependency.refobjid
+         AND collation_object.oid = dependency.refobjid
         LEFT JOIN pg_namespace collation_namespace
-          ON collation_namespace.oid = collation.collnamespace
+          ON collation_namespace.oid = collation_object.collnamespace
         LEFT JOIN pg_class relation_dependency
           ON dependency.refclassid = 'pg_class'::regclass
          AND relation_dependency.oid = dependency.refobjid
@@ -428,8 +544,8 @@ def _postflight_trigger_inventory(
             function_owner.rolname,
             table_owner.rolname,
             function_owner.oid = table_owner.oid,
-            function_owner.oid = current_user::regrole,
-            table_owner.oid = current_user::regrole,
+            function_owner.oid = executor_role.oid,
+            table_owner.oid = executor_role.oid,
             function_owner.rolname = %s OR table_owner.rolname = %s,
             trigger.tgattr = ''::int2vector,
             trigger.tgnewtable IS NULL,
@@ -444,6 +560,7 @@ def _postflight_trigger_inventory(
         JOIN pg_namespace function_namespace
           ON function_namespace.oid = function_proc.pronamespace
         JOIN pg_roles function_owner ON function_owner.oid = function_proc.proowner
+        JOIN pg_roles executor_role ON executor_role.rolname = current_user
         WHERE NOT trigger.tgisinternal
           AND table_class.relkind IN ('r', 'p', 'v', 'm', 'f')
           AND table_namespace.nspname NOT IN ('pg_catalog', 'information_schema')
@@ -563,22 +680,26 @@ def _postflight_event_trigger_inventory(
     role: str,
     *,
     principal_label: str,
+    allow_absent_managed: bool = False,
 ) -> None:
-    """Require the dedicated application database to have no event triggers."""
+    """Require the exact Databricks-managed DDL event-trigger inventory."""
 
-    # pg_trigger does not include DDL event triggers. Any pg_event_trigger row
-    # can execute on schema.sql (including DROP TRIGGER quarantine statements),
-    # so the reviewed contract is deliberately the empty set. Select the full
-    # execution identity/shape for useful fail-closed diagnostics.
+    # pg_trigger does not include DDL event triggers. These provider-plane
+    # hooks execute on schema and ACL DDL, so bind their complete identity,
+    # execution attributes, raw function-body digest, and byte length. Keep
+    # NULL evttags distinct from an empty tag list: NULL means every command.
+    # The role parameter remains part of the stable helper interface used by
+    # all four schema/ACL gates; event-trigger ownership is pinned separately
+    # to cloud_admin and never delegated to a runtime role.
+    del role
     cur.execute(  # type: ignore[attr-defined]
         """
         SELECT
             event_trigger.evtname,
             event_trigger.evtevent,
             event_trigger.evtenabled,
-            COALESCE(event_trigger.evttags, ARRAY[]::text[]),
+            event_trigger.evttags,
             event_owner.rolname,
-            event_owner.rolname = %s,
             function_namespace.nspname,
             function_proc.proname,
             oidvectortypes(function_proc.proargtypes),
@@ -586,22 +707,97 @@ def _postflight_event_trigger_inventory(
             format_type(function_proc.prorettype, NULL),
             function_proc.prosecdef,
             function_owner.rolname,
-            function_owner.rolname = %s
+            function_language.lanname,
+            function_proc.provolatile,
+            function_proc.proparallel,
+            function_proc.proleakproof,
+            function_proc.proisstrict,
+            function_proc.proconfig,
+            function_proc.probin,
+            CASE
+                WHEN function_proc.proacl IS NULL THEN NULL
+                ELSE function_proc.proacl::text[]
+            END,
+            encode(sha256(convert_to(function_proc.prosrc, 'UTF8')), 'hex'),
+            octet_length(convert_to(function_proc.prosrc, 'UTF8'))
         FROM pg_event_trigger event_trigger
         JOIN pg_roles event_owner ON event_owner.oid = event_trigger.evtowner
         JOIN pg_proc function_proc ON function_proc.oid = event_trigger.evtfoid
         JOIN pg_namespace function_namespace
           ON function_namespace.oid = function_proc.pronamespace
         JOIN pg_roles function_owner ON function_owner.oid = function_proc.proowner
+        JOIN pg_language function_language ON function_language.oid = function_proc.prolang
         ORDER BY event_trigger.evtname
-        """,
-        (role, role),
+        """
     )
     rows = list(cur.fetchall())  # type: ignore[attr-defined]
-    if rows:
+    if not rows:
+        if allow_absent_managed:
+            return
         raise RuntimeError(
             f"Lakebase {principal_label} global event-trigger inventory mismatch: "
-            f"expected=[], unexpected={rows}"
+            f"missing={sorted(_MANAGED_EVENT_TRIGGER_CONTRACT)}, unexpected=[]"
+        )
+
+    actual: dict[str, _ManagedEventTriggerContractRow] = {}
+    actual_acls: dict[str, tuple[str, ...] | None] = {}
+    duplicate_names: set[str] = set()
+    for row in rows:
+        name = str(row[0])
+        if name in actual:
+            duplicate_names.add(name)
+        tags = None if row[3] is None else tuple(sorted(str(tag) for tag in row[3]))
+        function_config = None if row[17] is None else tuple(str(item) for item in row[17])
+        function_binary = None if row[18] is None else str(row[18])
+        function_acl = None if row[19] is None else tuple(sorted(str(item) for item in row[19]))
+        actual[name] = _ManagedEventTriggerContractRow(
+            event=str(row[1]),
+            enabled=str(row[2]),
+            tags=tags,
+            event_owner=str(row[4]),
+            function_schema=str(row[5]),
+            function_name=str(row[6]),
+            function_arguments=str(row[7]),
+            function_kind=str(row[8]),
+            function_return_type=str(row[9]),
+            function_security_definer=bool(row[10]),
+            function_owner=str(row[11]),
+            function_language=str(row[12]),
+            function_volatility=str(row[13]),
+            function_parallel_safety=str(row[14]),
+            function_leakproof=bool(row[15]),
+            function_strict=bool(row[16]),
+            function_config=function_config,
+            function_binary=function_binary,
+            function_source_sha256=str(row[20]),
+            function_source_bytes=int(row[21]),
+        )
+        actual_acls[name] = function_acl
+
+    expected_names = set(_MANAGED_EVENT_TRIGGER_CONTRACT)
+    actual_names = set(actual)
+    drifted = sorted(
+        name
+        for name in expected_names & actual_names
+        if actual[name] != _MANAGED_EVENT_TRIGGER_CONTRACT[name]
+    )
+    forbidden_acls = sorted(
+        name
+        for name in expected_names & actual_names
+        if actual_acls[name] not in _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS
+    )
+    if (
+        expected_names != actual_names
+        or duplicate_names
+        or drifted
+        or forbidden_acls
+    ):
+        raise RuntimeError(
+            f"Lakebase {principal_label} global event-trigger inventory mismatch: "
+            f"missing={sorted(expected_names - actual_names)}, "
+            f"unexpected={sorted(actual_names - expected_names)}, "
+            f"duplicates={sorted(duplicate_names)}, drifted={drifted}, "
+            f"forbidden_acls={forbidden_acls}"
         )
 
 

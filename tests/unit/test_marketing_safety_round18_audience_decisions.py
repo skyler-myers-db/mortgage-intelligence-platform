@@ -21,6 +21,11 @@ from backend.services.audit_store import get_audit_store
 from backend.services.databricks_sql import get_sql_client
 from backend.services.genie_message_policy import protected_prompt_match
 from backend.services.lakebase import get_lakebase_client
+from backend.services.state_footprint import (
+    FootprintState,
+    StateFootprintResolver,
+    _reset_state_footprint_resolver_for_tests,
+)
 
 _UNSAFE_AUDIENCE_DECISIONS = (
     "This offer gives priority to homeowners carrying zyrplax.",
@@ -247,11 +252,19 @@ def test_shared_policy_does_not_resolve_mixed_reviewed_segment_relationships() -
 
 
 def test_reviewed_ranked_analytics_preserves_genie_action_affordances() -> None:
-    response = TestClient(app).post(
-        "/api/genie/message",
-        json={"question": "Show me the top 10 borrowers by lead score in Illinois."},
-        headers={"X-Forwarded-Email": "operator@example.com"},
-    )
+    resolver = StateFootprintResolver(ttl_s=60.0)
+    resolver._load_from_uc = lambda: [  # type: ignore[method-assign]
+        FootprintState("IL", "Illinois", 1, True),
+    ]
+    _reset_state_footprint_resolver_for_tests(resolver)
+    try:
+        response = TestClient(app).post(
+            "/api/genie/message",
+            json={"question": "Show me the top 10 borrowers by lead score in Illinois."},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _reset_state_footprint_resolver_for_tests()
     body = response.json()
     assert response.status_code == 200, body
     assert body["source"] == "genie", body

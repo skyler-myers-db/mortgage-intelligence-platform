@@ -90,6 +90,27 @@ from jobs.lakebase_migration_contracts import (
     _COLUMN_PRIVILEGE_NAMES as _COLUMN_PRIVILEGE_NAMES,
 )
 from jobs.lakebase_migration_contracts import (
+    _MANAGED_EVENT_TRIGGER_CONTRACT as _MANAGED_EVENT_TRIGGER_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS as _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES as _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE as _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES as _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256 as _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256,
+)
+from jobs.lakebase_migration_contracts import (
+    _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT as _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT,
+)
+from jobs.lakebase_migration_contracts import (
     _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT as _QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT,
 )
 from jobs.lakebase_migration_contracts import (
@@ -147,6 +168,9 @@ from jobs.lakebase_migration_postflight import (  # noqa: E402
 from jobs.lakebase_migration_postflight import (
     _postflight_app_role_grants as _postflight_app_role_grants,
 )
+from jobs.lakebase_migration_provider_plane import (  # noqa: E402
+    _postflight_provider_schema_boundary as _postflight_provider_schema_boundary,
+)
 from jobs.lakebase_migration_roles import (
     _raise_object_inventory_mismatch as _raise_object_inventory_mismatch,
 )
@@ -158,6 +182,9 @@ from jobs.lakebase_migration_roles import (
 )
 from jobs.lakebase_migration_schema_hooks import (  # noqa: E402
     _postflight_event_trigger_inventory as _postflight_event_trigger_inventory,
+)
+from jobs.lakebase_migration_schema_hooks import (
+    _postflight_oauth_role_function_contract as _postflight_oauth_role_function_contract,
 )
 from jobs.lakebase_migration_schema_hooks import (
     _postflight_trigger_inventory as _postflight_trigger_inventory,
@@ -191,6 +218,8 @@ def _apply_app_role_grants(
     require_ai_gateway_verifier: bool = False,
     role_wait_timeout_s: float | None = None,
     role_wait_interval_s: float | None = None,
+    allow_absent_managed_event_triggers: bool = False,
+    allow_absent_provider_schema: bool = False,
     resolved_roles: tuple[str, str | None] | None = None,
 ) -> None:
     """Reconcile grants while preserving facade monkeypatch seams."""
@@ -200,6 +229,8 @@ def _apply_app_role_grants(
         app_name=app_name,
         role_wait_timeout_s=role_wait_timeout_s,
         role_wait_interval_s=role_wait_interval_s,
+        allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+        allow_absent_provider_schema=allow_absent_provider_schema,
         resolved_roles=resolved_roles,
         _resolve_app_role_fn=_resolve_app_role,
         _resolve_verifier_role_fn=lambda: _resolve_ai_gateway_verifier_role(
@@ -238,7 +269,10 @@ def _run_transaction(
     conn_kwargs: dict,
     *,
     app_role: str,
+    ai_gateway_verifier_role: str | None = None,
     verify_outreach_integrity: bool = False,
+    allow_absent_managed_event_triggers: bool = False,
+    allow_absent_provider_schema: bool = False,
 ) -> None:
     """Run migration while preserving the integrity-probe monkeypatch seam."""
 
@@ -246,7 +280,10 @@ def _run_transaction(
         sql_texts,
         conn_kwargs,
         app_role=app_role,
+        ai_gateway_verifier_role=ai_gateway_verifier_role,
         verify_outreach_integrity=verify_outreach_integrity,
+        allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+        allow_absent_provider_schema=allow_absent_provider_schema,
         _run_integrity_probe_fn=_run_outreach_integrity_probe,
     )
 
@@ -357,6 +394,7 @@ def main(
             ),
             conn_kwargs,
             app_role=app_role,
+            ai_gateway_verifier_role=resolved_roles[1],
             verify_outreach_integrity=True,
         )
         print(

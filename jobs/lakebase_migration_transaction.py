@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from jobs.lakebase_migration_integrity import _run_outreach_integrity_probe
+from jobs.lakebase_migration_provider_plane import _postflight_provider_schema_boundary
 from jobs.lakebase_migration_schema_hooks import (
     _postflight_event_trigger_inventory,
+    _postflight_oauth_role_function_contract,
     _postflight_trigger_inventory,
     _preflight_executable_schema_hooks,
     _quarantine_existing_reviewed_triggers,
@@ -19,7 +21,10 @@ def _run_transaction(
     conn_kwargs: dict,
     *,
     app_role: str,
+    ai_gateway_verifier_role: str | None = None,
     verify_outreach_integrity: bool = False,
+    allow_absent_managed_event_triggers: bool = False,
+    allow_absent_provider_schema: bool = False,
     _run_integrity_probe_fn: Callable[..., None] = _run_outreach_integrity_probe,
 ) -> None:
     import psycopg  # local import so `--help` still works without the wheel
@@ -39,11 +44,26 @@ def _run_transaction(
             # function and recreates its trigger. A clean first install may
             # legitimately be missing reviewed triggers; the exact postflight
             # below proves all of them exist before commit.
+            target_roles = tuple(
+                role for role in (app_role, ai_gateway_verifier_role) if role is not None
+            )
+            _postflight_provider_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="schema preflight",
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
+            _postflight_oauth_role_function_contract(
+                cur,
+                principal_label="schema preflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
+            )
             reviewed_constraints = _preflight_executable_schema_hooks(cur)
             _postflight_event_trigger_inventory(
                 cur,
                 app_role,
                 principal_label="schema preflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
             )
             existing_reviewed_triggers = _postflight_trigger_inventory(
                 cur,
@@ -62,10 +82,22 @@ def _run_transaction(
                 app_role,
                 principal_label="schema postflight",
             )
+            _postflight_oauth_role_function_contract(
+                cur,
+                principal_label="schema postflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
+            )
             _postflight_event_trigger_inventory(
                 cur,
                 app_role,
                 principal_label="schema postflight",
+                allow_absent_managed=allow_absent_managed_event_triggers,
+            )
+            _postflight_provider_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="schema postflight",
+                allow_absent_provider_schema=allow_absent_provider_schema,
             )
         conn.commit()
     except Exception:
