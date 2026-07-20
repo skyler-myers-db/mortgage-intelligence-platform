@@ -136,7 +136,7 @@ _DEFAULT_DEST = _REPO_ROOT / "sql" / "_rendered"
 def _resolve_default_catalog() -> str:
     """Read ``settings.mip_default_catalog`` without hard-failing on import.
 
-    The renderer runs before ``databricks bundle deploy``, possibly in CI
+    The renderer runs before the signed deploy resource phase, possibly in CI
     containers that do not install the backend's runtime requirements. If
     importing settings fails, fall back to the contractual default
     (``mip``) so the tool is usable stand-alone.

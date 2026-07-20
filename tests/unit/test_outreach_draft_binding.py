@@ -152,7 +152,12 @@ def _install_campaign_rows(
                     "provenance_key_id": "v1",
                     "provenance_issued_at": "2026-07-15T12:00:00Z",
                     "provenance_expires_at": "2026-07-15T13:00:00Z",
-                    "provenance_copy_hash": campaign_copy_hash(copy["subject"], copy["body"]),
+                    "provenance_copy_hash": campaign_copy_hash(
+                        copy["subject"],
+                        copy["body"],
+                        variant_name=key[1],
+                        channel=key[2],
+                    ),
                     "provenance_criteria_fingerprint": campaign_criteria_fingerprint(
                         initial_criteria
                     ),
@@ -181,9 +186,7 @@ def _install_campaign_rows(
             projected_criteria = state.get(
                 "criteria", criteria or {"marketing_eligibility": "Eligible only"}
             )
-            projected_suppression = state.get(
-                "suppression_policy", {"default": "eligible_only"}
-            )
+            projected_suppression = state.get("suppression_policy", {"default": "eligible_only"})
             projected_holdout = state.get("holdout")
             projected_dedup = state.get(
                 "household_dedup",
@@ -215,9 +218,7 @@ def _install_campaign_rows(
                     stored_contract_fingerprint,
                 ),
                 "treatment_fingerprint": state.get("treatment_fingerprint", "a" * 64),
-                "treatment_source_snapshot_id": state.get(
-                    "treatment_source_snapshot_id", "b" * 64
-                ),
+                "treatment_source_snapshot_id": state.get("treatment_source_snapshot_id", "b" * 64),
                 "treatment_delta_version": state.get("treatment_delta_version", 17),
             }
         if "FROM mip_app.generated_outreach_drafts" in sql:
@@ -669,6 +670,23 @@ def test_draft_rejects_malformed_campaign_uuid(fake_lakebase_client) -> None:
     assert not any(
         "FROM mip_app.campaigns" in sql for sql, _params in fake_lakebase_client.fetchones
     )
+
+
+def test_approval_rejects_non_uuid_draft_generation_id_before_lakebase_query(
+    fake_lakebase_client,
+) -> None:
+    response = client.post(
+        "/api/outreach/approve",
+        json={
+            "borrower_id": "B-48291",
+            "draft_generation_id": "genie-11111111-1111-4111-8111-111111111111",
+        },
+        headers={"X-Forwarded-Email": OWNER},
+    )
+
+    assert response.status_code == 422
+    assert fake_lakebase_client.fetchones == []
+    assert fake_lakebase_client.executes == []
 
 
 def test_campaign_approval_persists_proof_binding_and_replays_before_borrower_fetch(

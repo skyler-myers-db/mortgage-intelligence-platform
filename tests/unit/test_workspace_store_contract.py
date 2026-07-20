@@ -4,7 +4,10 @@ import json
 from datetime import UTC, datetime
 from typing import Any
 
-from backend.schemas.workspace import SavedDraftInput, SavedLeadInput
+import pytest
+from pydantic import ValidationError
+
+from backend.schemas.workspace import SavedDraftRecordInput, SavedLeadInput
 from backend.services.workspace_store import LakebaseWorkspaceStore
 
 
@@ -47,6 +50,8 @@ class _RecordingLakebase:
         if "mip_app.outreach_drafts" in sql:
             return {
                 "borrower_id": p["borrower_id"],
+                "generation_id": p.get("generation_id"),
+                "response_hash": p.get("response_hash"),
                 "offer_code": p.get("offer_code"),
                 "channel": p.get("channel"),
                 "subject": p.get("subject"),
@@ -106,8 +111,10 @@ def test_save_governed_draft_and_keep_audit_bodyless() -> None:
 
     saved = store.save_draft(
         actor="lo@example.com",
-        draft=SavedDraftInput(
+        draft=SavedDraftRecordInput(
             borrower_id="B-123",
+            generation_id="11111111-1111-4111-8111-111111111111",
+            response_hash="a" * 64,
             offer_code="OFFER-123",
             channel="email",
             subject="Review your mortgage options",
@@ -124,6 +131,8 @@ def test_save_governed_draft_and_keep_audit_bodyless() -> None:
     assert metadata == {
         "action": "workspace.save_draft",
         "borrower_id": "B-123",
+        "draft_generation_id": "11111111-1111-4111-8111-111111111111",
+        "draft_response_hash": "a" * 64,
         "workspace_offer_code": "OFFER-123",
         "channel": "email",
         "has_subject": True,
@@ -131,6 +140,29 @@ def test_save_governed_draft_and_keep_audit_bodyless() -> None:
     }
     assert "draft_body" not in metadata
     assert saved.subject == "Review your mortgage options"
+
+
+def test_proof_bound_draft_record_preserves_exact_bytes_and_rejects_trim_mutation() -> None:
+    exact_body = "Review your mortgage options.\n\nReply YES to review."
+    record = SavedDraftRecordInput(
+        borrower_id="B-123",
+        generation_id="11111111-1111-4111-8111-111111111111",
+        response_hash="a" * 64,
+        channel="email",
+        subject="Review your mortgage options",
+        body=exact_body,
+    )
+    assert record.body == exact_body
+
+    with pytest.raises(ValidationError, match="leading or trailing whitespace"):
+        SavedDraftRecordInput(
+            borrower_id="B-123",
+            generation_id="11111111-1111-4111-8111-111111111111",
+            response_hash="a" * 64,
+            channel="email",
+            subject=" Review your mortgage options",
+            body=exact_body,
+        )
 
 
 def test_list_quarantines_legacy_drafts_that_violate_current_copy_policy() -> None:
@@ -148,6 +180,8 @@ def test_list_quarantines_legacy_drafts_that_violate_current_copy_policy() -> No
         },
         {
             "borrower_id": "B-CURRENT",
+            "generation_id": "11111111-1111-4111-8111-111111111111",
+            "response_hash": "a" * 64,
             "offer_code": "refi",
             "channel": "email",
             "subject": "Review your mortgage options",
@@ -161,6 +195,9 @@ def test_list_quarantines_legacy_drafts_that_violate_current_copy_policy() -> No
     state = store.list(actor="lo@example.com")
 
     assert [draft.borrower_id for draft in state.saved_drafts] == ["B-CURRENT"]
+    draft_query = next(sql for sql, _params, _limit in client.fetchalls if "outreach_drafts" in sql)
+    assert "JOIN mip_app.generated_outreach_drafts" in draft_query
+    assert "generated.response_hash = draft.response_hash" in draft_query
 
 
 def test_genie_save_action_sql_avoids_raw_percent_predicates() -> None:

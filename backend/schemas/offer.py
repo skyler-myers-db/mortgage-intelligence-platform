@@ -15,6 +15,7 @@ from pydantic import (
 )
 
 from backend.schemas.common import (
+    PUBLIC_UUID_PATTERN,
     validate_internal_staff_email,
     validate_no_human_name_shape,
     validate_public_borrower_id,
@@ -345,7 +346,7 @@ class OutreachApproveRequest(BaseModel):
     # SMS is intentionally subjectless and is rejected when a caller sends
     # non-empty subject text.
     draft_subject: str | None = Field(default=None, max_length=120)
-    draft_generation_id: str | None = Field(default=None, max_length=64)
+    draft_generation_id: str | None = Field(default=None, pattern=PUBLIC_UUID_PATTERN)
     draft_response_hash: str | None = Field(
         default=None,
         pattern=r"^[0-9a-f]{64}$",
@@ -357,8 +358,9 @@ class OutreachApproveRequest(BaseModel):
     # catches the collision and we return the existing decision row.
     # Clients generate this with ``crypto.randomUUID()`` and reuse the
     # same value across retries of the same user action. Bounded at 64
-    # chars to match the DDL column width; None keeps legacy callers
-    # working at pre-R5-01 semantics (no duplicate protection).
+    # chars to match the DDL column width. When omitted, the server derives a
+    # stable key from the actor, action, and complete normalized decision intent
+    # so legacy transport retries retain duplicate protection.
     request_id: str | None = Field(default=None, max_length=64)
     # Feature C: optional loan-officer assignment + "follow up in N days"
     # reminder captured at approval time. Both are optional and None-able so
@@ -399,7 +401,7 @@ class OutreachApproveRequest(BaseModel):
             field_name=str(info.field_name).replace("_", " "),
         )
 
-    @field_validator("bulk_id", "request_id", "draft_generation_id")
+    @field_validator("bulk_id", "request_id")
     @classmethod
     def _opaque_id_is_public_safe(cls, value: str | None) -> str | None:
         if value is None:

@@ -7,6 +7,8 @@ import json
 import re
 from typing import Any
 
+from databricks.sdk.service.apps import App
+
 RESOURCE_KINDS = frozenset({"database", "genie_space", "job", "secret", "sql_warehouse"})
 RESOURCE_BINDING_FIELDS = {
     "database": frozenset({"database_name", "instance_name", "permission"}),
@@ -88,6 +90,43 @@ def app_resource_contract_digest(resources: list[dict[str, object]]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()
+
+
+def restore_signed_app_resource_contract(
+    workspace: Any,
+    *,
+    app_name: str,
+    resources: object,
+) -> None:
+    """Restore signed bindings without changing source deployment or compute."""
+
+    expected = validated_app_resource_contract(resources)
+    before = workspace.apps.get(app_name)
+    if app_resource_contract(workspace, app_name=app_name) == expected:
+        return
+
+    def state(app: object) -> tuple[str, str, str]:
+        def deployment_id(field: str) -> str:
+            deployment = getattr(app, field, None)
+            return str(getattr(deployment, "deployment_id", None) or "").strip()
+
+        compute = getattr(getattr(app, "compute_status", None), "state", None)
+        return (
+            deployment_id("active_deployment"),
+            deployment_id("pending_deployment"),
+            str(getattr(compute, "value", compute) or "").strip(),
+        )
+
+    before_state = state(before)
+    workspace.apps.update(
+        app_name,
+        App.from_dict({"name": app_name, "resources": expected}),
+    )
+    after = workspace.apps.get(app_name)
+    if state(after) != before_state:
+        raise RuntimeError("App resource rollback changed deployment or compute state")
+    if app_resource_contract(workspace, app_name=app_name) != expected:
+        raise RuntimeError("App resource rollback did not restore the signed contract")
 
 
 def _resolve_reference(value: object, *, resources: dict[str, object]) -> object:

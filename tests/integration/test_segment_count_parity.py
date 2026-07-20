@@ -46,6 +46,7 @@ pattern as ``tests/integration/test_sql_python_parity.py``.
 
 On failure the row printouts at DEBUG level give a triage starting point.
 """
+
 from __future__ import annotations
 
 import json
@@ -101,6 +102,45 @@ ABS_TOLERANCE_MIN = 1000
 # ---------------------------------------------------------------------------
 
 
+def _normalized_workspace_host(host: str) -> str:
+    normalized = host.strip().rstrip("/")
+    if not normalized.startswith("http"):
+        normalized = "https://" + normalized
+    return normalized
+
+
+def _cli_profile_for_host(host: str) -> str | None:
+    """Resolve exactly one valid CLI profile bound to the target workspace."""
+
+    try:
+        out = subprocess.check_output(
+            ["databricks", "auth", "profiles", "-o", "json"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        profiles = json.loads(out).get("profiles", [])
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ):
+        return None
+
+    explicit_profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+    target_host = _normalized_workspace_host(host)
+    matches = [
+        str(profile.get("name"))
+        for profile in profiles
+        if profile.get("name")
+        and profile.get("valid") is not False
+        and _normalized_workspace_host(str(profile.get("host", ""))) == target_host
+        and (explicit_profile is None or profile.get("name") == explicit_profile)
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def _cli_token() -> tuple[str, str, str] | None:
     """Last-resort credential source: the Databricks CLI's OAuth token.
 
@@ -109,29 +149,16 @@ def _cli_token() -> tuple[str, str, str] | None:
     ``DATABRICKS_HOST`` below. Silently returns None if the CLI call
     fails.
     """
-    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE", "DEFAULT")
-    try:
-        out = subprocess.check_output(
-            ["databricks", "auth", "token", "-p", profile],
-            text=True,
-            stderr=subprocess.DEVNULL,
-            timeout=10,
-        )
-        token = json.loads(out).get("access_token")
-    except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
-        return None
-    if not token:
-        return None
-    # Still need host + warehouse from somewhere.
-    host = os.environ.get("DATABRICKS_HOST") or os.environ.get(
-        "DATABRICKS_SERVER_HOSTNAME"
-    )
+    # Resolve host + warehouse before minting a token so the credential is
+    # selected for that exact workspace rather than blindly using DEFAULT.
+    host = os.environ.get("DATABRICKS_HOST") or os.environ.get("DATABRICKS_SERVER_HOSTNAME")
     wh = os.environ.get("DATABRICKS_WAREHOUSE_ID")
     if not host or not wh:
         # Read from the .env.local at repo root if present. Deliberately
         # minimal parser: no shell expansion, no quoting -- matches the
         # flat KEY=VALUE style already used in that file.
         from pathlib import Path
+
         env_local = Path(__file__).resolve().parents[2] / ".env.local"
         if env_local.exists():
             for line in env_local.read_text().splitlines():
@@ -145,13 +172,31 @@ def _cli_token() -> tuple[str, str, str] | None:
                     wh = v
     if not host or not wh or is_placeholder_databricks_config(host=host, warehouse_id=wh):
         return None
+    profile = _cli_profile_for_host(host)
+    if profile is None:
+        return None
+    try:
+        out = subprocess.check_output(
+            ["databricks", "auth", "token", "-p", profile],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+        )
+        token = json.loads(out).get("access_token")
+    except (
+        subprocess.CalledProcessError,
+        FileNotFoundError,
+        subprocess.TimeoutExpired,
+        json.JSONDecodeError,
+    ):
+        return None
+    if not token:
+        return None
     return host, token, wh
 
 
 def _creds() -> tuple[str, str, str] | None:
-    host = os.environ.get("DATABRICKS_HOST") or os.environ.get(
-        "DATABRICKS_SERVER_HOSTNAME"
-    )
+    host = os.environ.get("DATABRICKS_HOST") or os.environ.get("DATABRICKS_SERVER_HOSTNAME")
     token = os.environ.get("DATABRICKS_TOKEN")
     wh = os.environ.get("DATABRICKS_WAREHOUSE_ID")
     if host and token and wh:
@@ -178,6 +223,74 @@ def test_placeholder_databricks_env_values_skip_live_parity(
     monkeypatch.setenv("DATABRICKS_HOST", "https://<workspace-host>.cloud.databricks.com")
     monkeypatch.setenv("DATABRICKS_TOKEN", "<pat-or-leave-unset-for-oauth>")
     monkeypatch.setenv("DATABRICKS_WAREHOUSE_ID", "<sql-warehouse-id>")
+
+    assert _creds() is None
+
+
+def test_cli_oauth_fallback_selects_profile_for_exact_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", "https://target.cloud.databricks.com/")
+    monkeypatch.setenv("DATABRICKS_WAREHOUSE_ID", "abc123warehouse")
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    commands: list[list[str]] = []
+
+    def _check_output(command: list[str], **_kwargs: object) -> str:
+        commands.append(command)
+        if command[1:3] == ["auth", "profiles"]:
+            return json.dumps(
+                {
+                    "profiles": [
+                        {
+                            "name": "DEFAULT",
+                            "host": "https://other.cloud.databricks.com",
+                            "valid": True,
+                        },
+                        {
+                            "name": "target-workspace",
+                            "host": "https://target.cloud.databricks.com",
+                            "valid": True,
+                        },
+                    ]
+                }
+            )
+        assert command == ["databricks", "auth", "token", "-p", "target-workspace"]
+        return json.dumps({"access_token": "workspace-token"})
+
+    monkeypatch.setattr(subprocess, "check_output", _check_output)
+
+    assert _creds() == (
+        "https://target.cloud.databricks.com",
+        "workspace-token",
+        "abc123warehouse",
+    )
+    assert len(commands) == 2
+
+
+def test_cli_oauth_fallback_refuses_profile_from_another_workspace(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", "https://target.cloud.databricks.com")
+    monkeypatch.setenv("DATABRICKS_WAREHOUSE_ID", "abc123warehouse")
+    monkeypatch.setenv("DATABRICKS_CONFIG_PROFILE", "DEFAULT")
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+
+    monkeypatch.setattr(
+        subprocess,
+        "check_output",
+        lambda *_args, **_kwargs: json.dumps(
+            {
+                "profiles": [
+                    {
+                        "name": "DEFAULT",
+                        "host": "https://other.cloud.databricks.com",
+                        "valid": True,
+                    }
+                ]
+            }
+        ),
+    )
 
     assert _creds() is None
 
@@ -971,8 +1084,7 @@ def test_segment_population_matches_borrower_360(
             mismatches.append((key, None, b_n))
 
     assert not mismatches, (
-        f"segment_population vs borrower_360 drift (pop, b360): "
-        f"{mismatches[:10]}"
+        f"segment_population vs borrower_360 drift (pop, b360): " f"{mismatches[:10]}"
     )
 
 

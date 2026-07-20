@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from backend.schemas.portfolio import HouseholdDedupConfig
+from backend.schemas.portfolio import HouseholdDedupConfig, PortfolioCreateRequest
 from backend.services.campaign_targeting import CAMPAIGN_TREATMENT_ALGORITHM_VERSION
 from backend.services.campaign_treatment import (
     _CAMPAIGN_FAIL_SQL,
@@ -16,6 +16,7 @@ from backend.services.campaign_treatment import (
     CAMPAIGN_TREATMENT_ALGORITHM_VERSION_V2,
     CampaignTreatmentCoordinator,
     CampaignTreatmentCreateSpec,
+    _holdout_basis_points,
 )
 from backend.services.lakebase import LakebaseError
 from backend.services.repositories.databricks_lead_cohorts import (
@@ -25,6 +26,37 @@ from backend.services.repositories.databricks_lead_cohorts import (
 
 CAMPAIGN_ID = "11111111-1111-4111-8111-111111111111"
 OLD_MATERIALIZATION_ID = "22222222-2222-4222-8222-222222222222"
+
+
+@pytest.mark.parametrize(
+    ("size_pct", "expected_basis_points"),
+    [(0, 0), (1.1, 110), (12.34, 1_234), (20.1, 2_010), (50, 5_000)],
+)
+def test_holdout_basis_points_uses_decimal_safe_public_contract(
+    size_pct: int | float,
+    expected_basis_points: int,
+) -> None:
+    assert (
+        _holdout_basis_points({"method": "hash_modulo", "size_pct": size_pct})
+        == expected_basis_points
+    )
+
+
+def test_holdout_basis_points_accepts_every_public_hundredth_percent() -> None:
+    for expected_basis_points in range(5_001):
+        size_pct = expected_basis_points / 100
+        assert (
+            _holdout_basis_points({"method": "hash_modulo", "size_pct": size_pct})
+            == expected_basis_points
+        )
+
+
+def test_schema_normalized_fractional_holdout_reaches_treatment_materialization() -> None:
+    holdout = PortfolioCreateRequest(
+        holdout={"method": "hash_modulo", "size_pct": "1.10"}
+    ).holdout
+
+    assert _holdout_basis_points(holdout) == 110
 
 
 def _spec(**updates: Any) -> CampaignTreatmentCreateSpec:

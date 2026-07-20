@@ -236,8 +236,8 @@ describe('portfolio campaign config', () => {
       'Benefit-led copy needs both a subject and message before this build can be saved.',
     );
     expect(buildCampaignConfig(setup).message_variants).toEqual([
-      expect.objectContaining({ variant_name: 'A', subject: 'Review your mortgage options' }),
-      expect.objectContaining({ variant_name: 'B', subject: '', body: '' }),
+      expect.objectContaining({ variant_name: 'Benefit-led', subject: 'Review your mortgage options' }),
+      expect.objectContaining({ variant_name: 'Guidance-led', subject: '', body: '' }),
     ]);
   });
 

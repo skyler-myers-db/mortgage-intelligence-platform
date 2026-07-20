@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from backend.schemas import lender_identity
 from jobs import lakebase_migrate
 
 
@@ -140,37 +141,238 @@ def _verifier_table_privilege_rows() -> list[tuple[str, str]]:
     ]
 
 
-def _successful_cursor(role: str, verifier_role: str | None = None) -> _Cursor:
+def _all_table_inventory_rows() -> list[tuple[str, str]]:
+    return [
+        *[("mip_app", table) for (table,) in _table_rows()],
+        ("analytics", "borrower_export"),
+        ("public", "borrower_export_view"),
+    ]
+
+
+def _all_sequence_inventory_rows() -> list[tuple[str, str]]:
+    return [
+        *[("mip_app", sequence) for (sequence,) in _sequence_rows()],
+        ("analytics", "export_sequence"),
+    ]
+
+
+def _routine_inventory_rows() -> list[tuple[str, str, str, str, str, bool]]:
+    rows = [
+        (
+            "FUNCTION",
+            f'"mip_app"."{name}"({arguments})',
+            "mip_app",
+            name,
+            arguments,
+            False,
+        )
+        for name, arguments in sorted(lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES)
+    ]
+    return [
+        *rows,
+        (
+            "FUNCTION",
+            '"public"."exfiltrate"()',
+            "public",
+            "exfiltrate",
+            "",
+            True,
+        ),
+        (
+            "FUNCTION",
+            '"analytics"."score"(integer)',
+            "analytics",
+            "score",
+            "integer",
+            False,
+        ),
+        (
+            "FUNCTION",
+            '"analytics"."score"(text)',
+            "analytics",
+            "score",
+            "text",
+            False,
+        ),
+    ]
+
+
+def _app_routine_privilege_rows() -> list[tuple[str, str, str, str, bool, bool]]:
+    return sorted(
+        ("mip_app", name, arguments, "f", False, False)
+        for (name, arguments), privileges in lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES.items()
+        if "EXECUTE" in privileges
+    )
+
+
+def _trigger_inventory_rows() -> list[tuple[Any, ...]]:
+    return sorted(
+        (
+            table_schema,
+            table_name,
+            trigger_name,
+            "O",
+            trigger_type,
+            0,
+            True,
+            True,
+            function_schema,
+            function_name,
+            function_arguments,
+            "f",
+            "trigger",
+            False,
+            "migration-owner",
+            "migration-owner",
+            True,
+            True,
+            True,
+            False,
+            True,
+            True,
+            True,
+            True,
+            True,
+        )
+        for (
+            table_schema,
+            table_name,
+            trigger_name,
+        ), (
+            function_schema,
+            function_name,
+            function_arguments,
+            trigger_type,
+        ) in lakebase_migrate._APP_TRIGGER_CONTRACT.items()
+    )
+
+
+def _hostile_event_trigger_row() -> tuple[Any, ...]:
+    return (
+        "trg_ddl_exfiltrate",
+        "ddl_command_start",
+        "O",
+        [],
+        "attacker-owner",
+        False,
+        "public",
+        "ddl_exfiltrate",
+        "",
+        "f",
+        "event_trigger",
+        True,
+        "attacker-owner",
+        False,
+    )
+
+
+def _schema_hook_row(
+    hook_kind: str,
+    *,
+    schema: str = "mip_app",
+    table: str = "campaigns",
+    hook_name: str = "hostile_hook",
+    expression: str = "attacker.exfiltrate()",
+    dependency_kind: str | None = "routine",
+    dependency_schema: str | None = "attacker",
+    dependency_name: str | None = "exfiltrate",
+    dependency_arguments: str = "",
+    security_definer: bool = True,
+    owned_by_executor: bool = False,
+) -> tuple[Any, ...]:
+    return (
+        hook_kind,
+        schema,
+        table,
+        hook_name,
+        expression,
+        dependency_kind,
+        dependency_schema,
+        dependency_name,
+        dependency_arguments,
+        security_definer,
+        owned_by_executor,
+    )
+
+
+def _safe_role_security_row(role: str) -> tuple[str, bool, bool, bool, bool, bool, bool, bool]:
+    return (role, False, False, False, False, False, True, True)
+
+
+def _successful_cursor(
+    role: str,
+    verifier_role: str | None = None,
+    *,
+    column_acl_rows: list[tuple[str, str, str, str]] | None = None,
+    trigger_rows: list[tuple[Any, ...]] | None = None,
+    acl_event_preflight_rows: list[tuple[Any, ...]] | None = None,
+    acl_event_postflight_rows: list[tuple[Any, ...]] | None = None,
+) -> _Cursor:
     fetchall_results: list[list[tuple[Any, ...]]] = [[(role,)]]
     if verifier_role is not None:
         fetchall_results.append([(verifier_role,)])
     fetchall_results.extend(
         [
+            [("analytics",), ("mip_app",), ("public",)],
+            _all_table_inventory_rows(),
+            _all_sequence_inventory_rows(),
+            _routine_inventory_rows(),
+            list(column_acl_rows or []),
+            [("migration-owner",)],
+            [
+                (role, 'owner-"quoted"', "analytics", "r"),
+                ("PUBLIC", "migration-owner", "analytics", "f"),
+                *(
+                    [(verifier_role, "global-owner", None, "S")]
+                    if verifier_role is not None
+                    else []
+                ),
+            ],
+            list(acl_event_preflight_rows or []),
             [(role,)],
             _table_rows(),
             _table_privilege_rows(),
+            [],
             _sequence_rows(),
             _sequence_privilege_rows(),
             [],
+            [("mip_app", "USAGE"), ("public", "USAGE")],
+            [],
+            [],
+            _app_routine_privilege_rows(),
+            [_safe_role_security_row(role)],
+            [],
+            [],
+            [],
+            list(trigger_rows if trigger_rows is not None else _trigger_inventory_rows()),
         ]
     )
     fetchone_results = [
         ("mip_app_state",),
-        (True, False, True, False),
+        (True, False, False, True, False),
     ]
     if verifier_role is not None:
         fetchall_results.extend(
             [
                 [(verifier_role,)],
+                [("mip_app", "USAGE"), ("public", "USAGE")],
                 _table_rows(),
                 _verifier_table_privilege_rows(),
+                [],
                 [],
                 _sequence_rows(),
                 [],
                 [],
+                [],
+                [_safe_role_security_row(verifier_role)],
+                [],
+                [],
+                [],
+                _trigger_inventory_rows(),
             ]
         )
-        fetchone_results.append((True, False, True, False))
+        fetchone_results.append((True, False, False, True, False))
+    fetchall_results.append(list(acl_event_postflight_rows or []))
     return _Cursor(
         fetchall_results=fetchall_results,
         fetchone_results=fetchone_results,
@@ -222,7 +424,7 @@ def test_resolve_app_role_explicit_name_overrides_ambient_environment(
 def test_schema_and_seed_run_in_one_rollback_capable_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cursor = _FailingCursor(fetchall_results=[], fail_when="SEED")
+    cursor = _FailingCursor(fetchall_results=[[], [], []], fail_when="SEED")
     connection = _Connection(cursor)
     connect_kwargs: dict[str, Any] = {}
 
@@ -235,41 +437,452 @@ def test_schema_and_seed_run_in_one_rollback_capable_transaction(
     monkeypatch.setattr(psycopg, "connect", _connect)
 
     with pytest.raises(RuntimeError, match="injected database failure"):
-        lakebase_migrate._run_transaction(("SCHEMA", "SEED"), {})
+        lakebase_migrate._run_transaction(
+            ("SCHEMA", "SEED"),
+            {},
+            app_role="app-role",
+        )
 
     assert connect_kwargs["autocommit"] is False
-    assert [statement for statement, _params in cursor.executed] == ["SCHEMA", "SEED"]
+    assert [statement for statement, _params in cursor.executed][-2:] == ["SCHEMA", "SEED"]
     assert connection.commit_count == 0
     assert connection.rollback_count == 1
     assert connection.closed is True
 
 
-def test_integrity_probe_uses_schema_transaction_connection_before_commit(
+def test_integrity_probe_and_exact_trigger_postflight_run_before_commit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    cursor = _Cursor(fetchall_results=[])
+    cursor = _Cursor(fetchall_results=[[], [], [], _trigger_inventory_rows(), []])
     connection = _Connection(cursor)
     probe_calls: list[tuple[dict[str, str], object]] = []
 
     import psycopg
 
     monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    def _record_probe(kwargs: dict[str, str], *, connection: object) -> None:
+        probe_calls.append((kwargs, connection))
+        cursor.executed.append(("OUTREACH-INTEGRITY-PROBE", None))
+
     monkeypatch.setattr(
         lakebase_migrate,
         "_run_outreach_integrity_probe",
-        lambda kwargs, *, connection: probe_calls.append((kwargs, connection)),
+        _record_probe,
     )
 
     lakebase_migrate._run_transaction(
         ("SCHEMA", "SEED", "POST-SEED"),
         {"host": "test"},
+        app_role="app-role",
         verify_outreach_integrity=True,
     )
 
     assert probe_calls == [({"host": "test"}, connection)]
+    statements = [statement for statement, _params in cursor.executed]
+    assert statements[-3] == "OUTREACH-INTEGRITY-PROBE"
+    assert "FROM pg_trigger trigger" in statements[-2]
+    assert "FROM pg_event_trigger event_trigger" in statements[-1]
     assert connection.commit_count == 1
     assert connection.rollback_count == 0
     assert connection.closed is True
+
+
+def test_shape_correct_existing_trigger_is_locked_and_quarantined_before_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_trigger = _trigger_inventory_rows()[0]
+    trigger_key = existing_trigger[:3]
+    cursor = _Cursor(
+        fetchall_results=[[], [], [existing_trigger], _trigger_inventory_rows(), []],
+    )
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    lakebase_migrate._run_transaction(
+        ("SCHEMA",),
+        {},
+        app_role="app-role",
+    )
+
+    statements = [statement for statement, _params in cursor.executed]
+    table_schema, table_name, trigger_name = trigger_key
+    assert statements[3] == (f'LOCK TABLE "{table_schema}"."{table_name}" IN ACCESS EXCLUSIVE MODE')
+    assert statements[4] == (f'DROP TRIGGER "{trigger_name}" ON "{table_schema}"."{table_name}"')
+    assert "IF EXISTS" not in statements[4]
+    assert statements[5] == "SCHEMA"
+    assert "FROM pg_trigger trigger" in statements[6]
+    assert "FROM pg_event_trigger event_trigger" in statements[7]
+    assert connection.commit_count == 1
+    assert connection.rollback_count == 0
+
+
+def test_quarantined_reviewed_trigger_is_transactionally_restored_on_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing_trigger = _trigger_inventory_rows()[0]
+    cursor = _FailingCursor(
+        fetchall_results=[[], [], [existing_trigger]],
+        fail_when="SCHEMA",
+    )
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match="injected database failure"):
+        lakebase_migrate._run_transaction(
+            ("SCHEMA",),
+            {},
+            app_role="app-role",
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert statements[3].startswith("LOCK TABLE ")
+    assert statements[4].startswith("DROP TRIGGER ")
+    assert statements[5] == "SCHEMA"
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
+def test_hostile_existing_trigger_aborts_before_schema_or_seed_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    hostile_rows = _trigger_inventory_rows()
+    hostile_rows.append(
+        (
+            "public",
+            "borrower_export_view",
+            "trg_exfiltrate",
+            "O",
+            23,
+            0,
+            True,
+            True,
+            "public",
+            "exfiltrate",
+            "",
+            "f",
+            "trigger",
+            True,
+            "attacker-owner",
+            "migration-owner",
+            False,
+            False,
+            False,
+            False,
+            True,
+            True,
+            True,
+            True,
+            True,
+        )
+    )
+    cursor = _Cursor(fetchall_results=[[], [], hostile_rows])
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match=r"schema preflight.*exfiltrate.*True"):
+        lakebase_migrate._run_transaction(
+            ("SCHEMA", "SEED"),
+            {},
+            app_role="app-role",
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert len(statements) == 3
+    assert "FROM pg_attrdef attribute_default" in statements[0]
+    assert "FROM pg_event_trigger event_trigger" in statements[1]
+    assert "FROM pg_trigger trigger" in statements[2]
+    assert "SCHEMA" not in statements
+    assert "SEED" not in statements
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
+@pytest.mark.parametrize(
+    "hostile_hook",
+    [
+        _schema_hook_row("column_default"),
+        _schema_hook_row("generated_expression", dependency_kind=None),
+        _schema_hook_row("constraint_expression"),
+        _schema_hook_row("rewrite_rule", dependency_kind=None),
+        _schema_hook_row("row_policy", dependency_kind=None),
+        _schema_hook_row("index_expression"),
+        _schema_hook_row("index_predicate"),
+    ],
+    ids=[
+        "default",
+        "generated",
+        "constraint",
+        "rewrite-rule",
+        "row-policy",
+        "index-expression",
+        "index-predicate",
+    ],
+)
+def test_hostile_executable_hook_aborts_as_first_catalog_gate(
+    monkeypatch: pytest.MonkeyPatch,
+    hostile_hook: tuple[Any, ...],
+) -> None:
+    cursor = _Cursor(fetchall_results=[[hostile_hook]])
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match="executable-hook inventory mismatch"):
+        lakebase_migrate._run_transaction(
+            ("SCHEMA", "SEED"),
+            {},
+            app_role="app-role",
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert len(statements) == 1
+    assert "FROM pg_attrdef attribute_default" in statements[0]
+    assert "FROM pg_event_trigger event_trigger" not in statements[0]
+    assert "FROM pg_trigger trigger" not in statements[0]
+    assert "SCHEMA" not in statements
+    assert "SEED" not in statements
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
+@pytest.mark.parametrize(
+    ("function_name", "signature"),
+    [
+        ("pg_read_file", "text, bigint, bigint, boolean"),
+        ("current_setting", "text"),
+        ("set_config", "text, text, boolean"),
+        ("lo_import", "text"),
+    ],
+)
+def test_executable_hook_rejects_unreviewed_privileged_pg_catalog_routines(
+    function_name: str,
+    signature: str,
+) -> None:
+    row = _schema_hook_row(
+        "column_default",
+        table="schema_migrations",
+        hook_name="applied_at",
+        expression=f"{function_name}('governance-secret')",
+        dependency_schema="pg_catalog",
+        dependency_name=function_name,
+        dependency_arguments=signature,
+        security_definer=False,
+    )
+    cursor = _Cursor(fetchall_results=[[row]])
+
+    with pytest.raises(RuntimeError, match=rf"unreviewed_function_call.*{function_name}"):
+        lakebase_migrate._preflight_executable_schema_hooks(cursor)
+
+
+@pytest.mark.parametrize(
+    ("dependency_schema", "operator_name", "signature"),
+    [
+        ("attacker", "===", "text, text"),
+        ("pg_catalog", "@@@", "text, text"),
+    ],
+)
+def test_executable_hook_rejects_unreviewed_operator_dependencies(
+    dependency_schema: str,
+    operator_name: str,
+    signature: str,
+) -> None:
+    row = _schema_hook_row(
+        "constraint_expression",
+        hook_name="hostile_operator_check",
+        expression=f"CHECK ((status {operator_name} 'draft'::text))",
+        dependency_kind="operator",
+        dependency_schema=dependency_schema,
+        dependency_name=operator_name,
+        dependency_arguments=signature,
+        security_definer=False,
+    )
+
+    with pytest.raises(RuntimeError, match=rf"executable-hook.*{re.escape(operator_name)}"):
+        lakebase_migrate._preflight_executable_schema_hooks(
+            _Cursor(fetchall_results=[[row]])
+        )
+
+
+def test_executable_hook_binds_nextval_to_reviewed_audit_sequence() -> None:
+    expression = lakebase_migrate._AUDIT_SEQUENCE_DEFAULT_EXPRESSION
+    rows = [
+        _schema_hook_row(
+            "column_default",
+            table="action_audit",
+            hook_name="audit_sequence",
+            expression=expression,
+            dependency_schema="pg_catalog",
+            dependency_name="nextval",
+            dependency_arguments="regclass",
+            security_definer=False,
+        ),
+        _schema_hook_row(
+            "column_default",
+            table="action_audit",
+            hook_name="audit_sequence",
+            expression=expression,
+            dependency_kind="relation",
+            dependency_schema="mip_app",
+            dependency_name="action_audit",
+            security_definer=False,
+        ),
+        _schema_hook_row(
+            "column_default",
+            table="action_audit",
+            hook_name="audit_sequence",
+            expression=expression,
+            dependency_kind="relation",
+            dependency_schema="mip_app",
+            dependency_name="action_audit_audit_sequence_seq",
+            security_definer=False,
+            owned_by_executor=True,
+        ),
+    ]
+
+    assert lakebase_migrate._preflight_executable_schema_hooks(
+        _Cursor(fetchall_results=[rows])
+    ) == set()
+
+    hostile_rows = [list(row) for row in rows]
+    hostile_rows[2][4] = "nextval('attacker.sequence'::regclass)"
+    hostile_rows[2][7] = "attacker_sequence"
+    with pytest.raises(RuntimeError, match="audit_sequence_default_contract_mismatch"):
+        lakebase_migrate._preflight_executable_schema_hooks(
+            _Cursor(fetchall_results=[[tuple(row) for row in hostile_rows]])
+        )
+
+
+def test_reviewed_campaign_constraints_are_quarantined_by_exact_dependency() -> None:
+    rows = [
+        _schema_hook_row(
+            "constraint_expression",
+            table=table,
+            hook_name=constraint,
+            expression=f"CHECK (mip_app.{next(iter(dependencies))[0]}(criteria))",
+            dependency_schema="mip_app",
+            dependency_name=next(iter(dependencies))[0],
+            dependency_arguments=next(iter(dependencies))[1],
+            security_definer=False,
+            owned_by_executor=True,
+        )
+        for (
+            _schema,
+            table,
+            constraint,
+        ), dependencies in lakebase_migrate._QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT.items()
+    ]
+    cursor = _Cursor(fetchall_results=[rows])
+
+    reviewed = lakebase_migrate._preflight_executable_schema_hooks(cursor)
+    assert reviewed == set(lakebase_migrate._QUARANTINED_CONSTRAINT_ROUTINE_CONTRACT)
+
+    quarantine_cursor = _Cursor(fetchall_results=[])
+    lakebase_migrate._quarantine_reviewed_constraints(quarantine_cursor, reviewed)
+    statements = [statement for statement, _params in quarantine_cursor.executed]
+    assert statements[0] == 'LOCK TABLE "mip_app"."campaigns" IN ACCESS EXCLUSIVE MODE'
+    assert len([statement for statement in statements if "DROP CONSTRAINT" in statement]) == 6
+
+
+def test_exact_trigger_postflight_failure_rolls_back_schema_and_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    incomplete_postflight = _trigger_inventory_rows()[:-1]
+    cursor = _Cursor(fetchall_results=[[], [], [], incomplete_postflight])
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match="schema postflight.*missing"):
+        lakebase_migrate._run_transaction(
+            ("SCHEMA", "SEED"),
+            {},
+            app_role="app-role",
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert statements[3:5] == ["SCHEMA", "SEED"]
+    assert "FROM pg_trigger trigger" in statements[-1]
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
+def test_hostile_event_trigger_aborts_before_row_trigger_quarantine_or_schema(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = _Cursor(fetchall_results=[[], [_hostile_event_trigger_row()]])
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match=r"event-trigger inventory mismatch.*exfiltrate"):
+        lakebase_migrate._run_transaction(
+            ("SCHEMA", "SEED"),
+            {},
+            app_role="app-role",
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert len(statements) == 2
+    assert "FROM pg_attrdef attribute_default" in statements[0]
+    assert "FROM pg_event_trigger event_trigger" in statements[1]
+    assert "FROM pg_trigger trigger" not in statements[1]
+    assert "SCHEMA" not in statements
+    assert "SEED" not in statements
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
+
+
+def test_event_trigger_postflight_failure_rolls_back_schema_and_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [],
+            [],
+            [],
+            _trigger_inventory_rows(),
+            [_hostile_event_trigger_row()],
+        ]
+    )
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match=r"schema postflight.*event-trigger.*exfiltrate"):
+        lakebase_migrate._run_transaction(
+            ("SCHEMA", "SEED"),
+            {},
+            app_role="app-role",
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert statements[3:5] == ["SCHEMA", "SEED"]
+    assert "FROM pg_trigger trigger" in statements[-2]
+    assert "FROM pg_event_trigger event_trigger" in statements[-1]
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
 
 
 def test_expected_database_rejection_recovers_outer_transaction() -> None:
@@ -309,29 +922,222 @@ def test_main_runs_seed_and_integrity_probe_in_schema_transaction_before_grants(
     monkeypatch.setattr(lakebase_migrate, "_resolve_connection", lambda: {"host": "test"})
     monkeypatch.setattr(lakebase_migrate, "_repo_root", lambda: Path("."))
 
+    def _preflight_roles(
+        _kwargs: dict[str, str],
+        **_options: object,
+    ) -> tuple[str, None]:
+        calls.append("role-preflight")
+        return "app-role", None
+
+    monkeypatch.setattr(
+        lakebase_migrate,
+        "_preflight_database_roles",
+        _preflight_roles,
+    )
+
     def _run_transaction(
         sql_texts: tuple[str, ...],
         _kwargs: dict[str, str],
         *,
+        app_role: str,
         verify_outreach_integrity: bool,
     ) -> None:
-        assert len(sql_texts) == 3
+        assert len(sql_texts) == 4
         assert "CREATE TABLE IF NOT EXISTS mip_app.schema_migrations" in sql_texts[0]
         assert "INSERT INTO mip_app.campaign_message_variants" in sql_texts[1]
-        assert "VALIDATE CONSTRAINT approvals_campaign_variant_channel_fkey" in sql_texts[2]
+        assert "configured tenant disclosure postflight failed" in sql_texts[2]
+        assert "VALIDATE CONSTRAINT approvals_campaign_variant_channel_fkey" in sql_texts[3]
+        assert app_role == "app-role"
         assert verify_outreach_integrity is True
         calls.append("schema-seed-post-seed-integrity")
 
     monkeypatch.setattr(lakebase_migrate, "_run_transaction", _run_transaction)
-    monkeypatch.setattr(
-        lakebase_migrate,
-        "_apply_app_role_grants",
-        lambda _kwargs: calls.append("grants"),
-    )
+
+    def _apply_grants(
+        _kwargs: dict[str, str],
+        *,
+        resolved_roles: tuple[str, str | None],
+    ) -> None:
+        assert resolved_roles == ("app-role", None)
+        calls.append("grants")
+
+    monkeypatch.setattr(lakebase_migrate, "_apply_app_role_grants", _apply_grants)
 
     lakebase_migrate.main()
 
-    assert calls == ["schema-seed-post-seed-integrity", "grants"]
+    assert calls == ["role-preflight", "schema-seed-post-seed-integrity", "grants"]
+
+
+@pytest.mark.parametrize(
+    "fetchall_results",
+    ([[]], [[("app-role",)], []]),
+    ids=("app", "ai-gateway-verifier"),
+)
+def test_unknown_runtime_role_aborts_main_before_schema_statement_or_commit(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    fetchall_results: list[list[tuple[str, ...]]],
+) -> None:
+    cursor = _Cursor(fetchall_results=fetchall_results)
+    connection = _Connection(cursor)
+    connect_kwargs: dict[str, Any] = {}
+
+    import psycopg
+
+    def _connect(**kwargs: Any) -> _Connection:
+        connect_kwargs.update(kwargs)
+        return connection
+
+    monkeypatch.setattr(psycopg, "connect", _connect)
+    monkeypatch.setattr(lakebase_migrate, "_resolve_connection", lambda: {"host": "test"})
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: "app-role")
+    monkeypatch.setenv("MIP_LAKEBASE_APP_ROLE_WAIT_TIMEOUT_S", "0")
+    transaction_calls: list[tuple[str, ...]] = []
+    monkeypatch.setattr(
+        lakebase_migrate,
+        "_run_transaction",
+        lambda sql_texts, *_args, **_kwargs: transaction_calls.append(sql_texts),
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        lakebase_migrate.main(
+            ai_gateway_verifier_client_id="verifier-role",
+            require_ai_gateway_verifier=True,
+        )
+
+    assert exc_info.value.code == 2
+    assert transaction_calls == []
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+    assert connect_kwargs["autocommit"] is False
+    assert cursor.executed[0] == ("SET TRANSACTION READ ONLY", None)
+    assert all(
+        statement == "SELECT rolname FROM pg_roles WHERE rolname = %s"
+        for statement, _params in cursor.executed[1:]
+    )
+    assert capsys.readouterr().err == (
+        "[lakebase-migrate] runtime-role preflight failed; verify App and verifier "
+        "workspace identities and Lakebase role visibility before schema mutation.\n"
+    )
+
+
+def test_role_preflight_returns_exact_roles_without_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [("app-role",)],
+            [("verifier-role",)],
+        ]
+    )
+    connection = _Connection(cursor)
+    connect_kwargs: dict[str, Any] = {}
+
+    import psycopg
+
+    def _connect(**kwargs: Any) -> _Connection:
+        connect_kwargs.update(kwargs)
+        return connection
+
+    monkeypatch.setattr(psycopg, "connect", _connect)
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: "app-role")
+
+    roles = lakebase_migrate._preflight_database_roles(
+        {"host": "test"},
+        ai_gateway_verifier_client_id="verifier-role",
+        require_ai_gateway_verifier=True,
+        role_wait_timeout_s=0,
+        role_wait_interval_s=1,
+    )
+
+    assert roles == ("app-role", "verifier-role")
+    assert connect_kwargs == {"host": "test", "autocommit": False}
+    assert cursor.executed == [
+        ("SET TRANSACTION READ ONLY", None),
+        (
+            "SELECT rolname FROM pg_roles WHERE rolname = %s",
+            ("app-role",),
+        ),
+        (
+            "SELECT rolname FROM pg_roles WHERE rolname = %s",
+            ("verifier-role",),
+        ),
+    ]
+    assert connection.commit_count == 0
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
+def test_campaign_variant_schema_preserves_legacy_rows_but_blocks_new_operator_copy() -> None:
+    schema = (Path(__file__).parents[2] / "lakebase" / "schema.sql").read_text()
+    pre_seed, post_seed = lakebase_migrate._split_schema_sql(schema)
+
+    assert "DROP CONSTRAINT IF EXISTS campaign_message_variants_server_owned_proof_chk" in pre_seed
+    assert "ADD CONSTRAINT campaign_message_variants_server_owned_proof_chk" in post_seed
+    assert "generation_mode IN ('supervisor', 'reviewed_fallback')" in post_seed
+    assert "provenance_copy_hash IS NOT NULL" in post_seed
+    assert "provenance_criteria_fingerprint IS NOT NULL" in post_seed
+    assert "provenance_token_digest IS NOT NULL" in post_seed
+    assert "NOT VALID" in post_seed
+    assert "ALTER COLUMN generation_mode DROP DEFAULT" in post_seed
+
+
+def test_tenant_disclosure_seed_is_immutable_convergent_and_postflighted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setitem(
+        lender_identity._REVIEWED_PUBLIC_LENDER_IDENTITIES,
+        "O'Brien Mortgage",
+        frozenset({"7654321", "7654322"}),
+    )
+    sql = lakebase_migrate._tenant_disclosure_seed_sql(
+        lender_name="O'Brien Mortgage",
+        lender_nmls_id="7654321",
+        tenant_id="",
+    )
+
+    assert "tenant_id = 'o_brien_mortgage'" in sql
+    assert "O''Brien Mortgage" in sql
+    assert "SET active = FALSE" in sql
+    assert "DO UPDATE SET\n    body" not in sql
+    assert "WHERE target.body = EXCLUDED.body" in sql
+    assert "configured tenant disclosure postflight failed" in sql
+    assert sql.count("'o_brien_mortgage-reviewed-generic-v1-") == 6
+
+    changed_identity = lakebase_migrate._tenant_disclosure_seed_sql(
+        lender_name="O'Brien Mortgage",
+        lender_nmls_id="7654322",
+        tenant_id="",
+    )
+    first_version = re.search(r"o_brien_mortgage-reviewed-generic-v1-[0-9a-f]{16}", sql)
+    changed_version = re.search(
+        r"o_brien_mortgage-reviewed-generic-v1-[0-9a-f]{16}", changed_identity
+    )
+    assert first_version is not None and changed_version is not None
+    assert first_version.group() != changed_version.group()
+
+
+def test_customer_disclosure_identity_cannot_reuse_summit_or_demo_nmls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(ValueError, match="required when mip_lender_name"):
+        lakebase_migrate._tenant_disclosure_seed_sql(
+            lender_name="Acme Mortgage",
+            lender_nmls_id="",
+            tenant_id="",
+        )
+    monkeypatch.setitem(
+        lender_identity._REVIEWED_PUBLIC_LENDER_IDENTITIES,
+        "Acme Mortgage",
+        frozenset({"7654321"}),
+    )
+    with pytest.raises(ValueError, match="reserved for the Summit Mortgage"):
+        lakebase_migrate._tenant_disclosure_seed_sql(
+            lender_name="Acme Mortgage",
+            lender_nmls_id="7654321",
+            tenant_id="summit",
+        )
 
 
 @pytest.mark.parametrize(
@@ -364,6 +1170,48 @@ def test_resolve_ai_gateway_verifier_role_uses_explicit_client_id(
     monkeypatch.setenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", "  verifier-client-id  ")
 
     assert lakebase_migrate._resolve_ai_gateway_verifier_role() == "verifier-client-id"
+
+
+def test_explicit_verifier_argument_overrides_ambient_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", "wrong-ambient-verifier")
+
+    assert (
+        lakebase_migrate._resolve_ai_gateway_verifier_role(
+            "  exact-remote-verifier  ",
+            required=True,
+        )
+        == "exact-remote-verifier"
+    )
+
+
+@pytest.mark.parametrize("value", ["", "00000000PLACEHOLDER", "<verifier-client-id>"])
+def test_required_remote_verifier_rejects_missing_or_placeholder_identity(value: str) -> None:
+    with pytest.raises(RuntimeError, match="MIP_AI_GATEWAY_VERIFIER_CLIENT_ID"):
+        lakebase_migrate._resolve_ai_gateway_verifier_role(value, required=True)
+
+
+def test_required_remote_verifier_fails_before_connection_or_schema_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    connection_attempted = False
+
+    def _resolve_connection(**_kwargs: object) -> dict[str, str]:
+        nonlocal connection_attempted
+        connection_attempted = True
+        return {"host": "must-not-be-used"}
+
+    monkeypatch.setattr(lakebase_migrate, "_resolve_connection", _resolve_connection)
+
+    with pytest.raises(SystemExit) as exc_info:
+        lakebase_migrate.main(
+            ai_gateway_verifier_client_id="00000000PLACEHOLDER",
+            require_ai_gateway_verifier=True,
+        )
+
+    assert exc_info.value.code == 2
+    assert connection_attempted is False
 
 
 @pytest.mark.parametrize("app_env", ["local", "test", "dev", "sandbox"])
@@ -459,14 +1307,51 @@ def test_apply_grants_uses_exact_quoted_role_and_strict_matrix(
         'TO "sp-client-""quoted"""'
     ) in grant_statements
     assert 'REVOKE CREATE ON DATABASE "mip_app_state" FROM "sp-client-""quoted"""' in statements
+    assert 'REVOKE TEMPORARY ON DATABASE "mip_app_state" FROM PUBLIC' in statements
+    assert 'REVOKE TEMPORARY ON DATABASE "mip_app_state" FROM "sp-client-""quoted"""' in statements
     assert (
-        'ALTER DEFAULT PRIVILEGES IN SCHEMA "mip_app" '
+        'ALTER DEFAULT PRIVILEGES FOR ROLE "owner-""quoted""" IN SCHEMA "analytics" '
         'REVOKE ALL PRIVILEGES ON TABLES FROM "sp-client-""quoted"""'
     ) in statements
+    assert ('REVOKE ALL PRIVILEGES ON SCHEMA "public" FROM "sp-client-""quoted"""') in statements
+    assert ('REVOKE ALL PRIVILEGES ON SCHEMA "analytics" FROM "sp-client-""quoted"""') in statements
     assert (
-        'ALTER DEFAULT PRIVILEGES IN SCHEMA "mip_app" '
-        'REVOKE ALL PRIVILEGES ON SEQUENCES FROM "sp-client-""quoted"""'
+        'REVOKE ALL PRIVILEGES ON TABLE "analytics"."borrower_export" '
+        'FROM "sp-client-""quoted"""'
     ) in statements
+    assert (
+        'REVOKE ALL PRIVILEGES ON TABLE "public"."borrower_export_view" '
+        'FROM "sp-client-""quoted"""'
+    ) in statements
+    assert (
+        'REVOKE ALL PRIVILEGES ON SEQUENCE "analytics"."export_sequence" '
+        'FROM "sp-client-""quoted"""'
+    ) in statements
+    assert 'REVOKE ALL PRIVILEGES ON FUNCTION "public"."exfiltrate"() FROM PUBLIC' in statements
+    assert (
+        'REVOKE ALL PRIVILEGES ON FUNCTION "analytics"."score"(integer) '
+        'FROM "sp-client-""quoted"""'
+    ) in statements
+    assert (
+        'REVOKE ALL PRIVILEGES ON FUNCTION "analytics"."score"(text) ' 'FROM "sp-client-""quoted"""'
+    ) in statements
+    assert (
+        'ALTER DEFAULT PRIVILEGES FOR ROLE "migration-owner" '
+        "REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC"
+    ) in statements
+    assert (
+        'ALTER DEFAULT PRIVILEGES FOR ROLE "migration-owner" IN SCHEMA "analytics" '
+        "REVOKE ALL PRIVILEGES ON FUNCTIONS FROM PUBLIC"
+    ) in statements
+    assert any(
+        statement.startswith('GRANT EXECUTE ON FUNCTION "mip_app".')
+        and statement.endswith('TO "sp-client-""quoted"""')
+        for statement in grant_statements
+    )
+    assert not any(
+        "enforce_campaign_json_contract" in statement and statement.startswith("GRANT EXECUTE")
+        for statement in statements
+    )
 
 
 def test_acl_reconciliation_rolls_back_on_mid_grant_failure(
@@ -474,7 +1359,17 @@ def test_acl_reconciliation_rolls_back_on_mid_grant_failure(
 ) -> None:
     role = "app-role"
     cursor = _FailingCursor(
-        fetchall_results=[[(role,)]],
+        fetchall_results=[
+            [(role,)],
+            [("mip_app",), ("public",)],
+            [],
+            [],
+            _routine_inventory_rows(),
+            [],
+            [],
+            [],
+            [],
+        ],
         fetchone_results=[("mip_app_state",)],
         fail_when="GRANT USAGE ON SCHEMA",
     )
@@ -495,6 +1390,95 @@ def test_acl_reconciliation_rolls_back_on_mid_grant_failure(
     assert connection.closed is True
 
 
+def test_event_trigger_aborts_before_first_acl_mutation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = "app-role"
+    cursor = _successful_cursor(
+        role,
+        acl_event_preflight_rows=[_hostile_event_trigger_row()],
+    )
+    connection = _Connection(cursor)
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: role)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match=r"ACL preflight.*event-trigger.*exfiltrate"):
+        lakebase_migrate._apply_app_role_grants(
+            {},
+            role_wait_timeout_s=0,
+            role_wait_interval_s=1,
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert "FROM pg_event_trigger event_trigger" in statements[-1]
+    assert not any(
+        statement.startswith(("GRANT ", "REVOKE ", "ALTER DEFAULT PRIVILEGES "))
+        for statement in statements
+    )
+    assert connection.commit_count == 1
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
+def test_event_trigger_acl_postflight_failure_rolls_back_all_acl_mutations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = "app-role"
+    cursor = _successful_cursor(
+        role,
+        acl_event_postflight_rows=[_hostile_event_trigger_row()],
+    )
+    connection = _Connection(cursor)
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: role)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match=r"ACL postflight.*event-trigger.*exfiltrate"):
+        lakebase_migrate._apply_app_role_grants(
+            {},
+            role_wait_timeout_s=0,
+            role_wait_interval_s=1,
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert any(statement.startswith("REVOKE ") for statement in statements)
+    assert any(statement.startswith("GRANT ") for statement in statements)
+    assert "FROM pg_trigger trigger" in statements[-2]
+    assert "FROM pg_event_trigger event_trigger" in statements[-1]
+    assert connection.commit_count == 1
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
+def test_unreviewed_trigger_aborts_acl_transaction_before_commit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = "app-role"
+    cursor = _successful_cursor(role, trigger_rows=_trigger_inventory_rows()[:-1])
+    connection = _Connection(cursor)
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: role)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    with pytest.raises(RuntimeError, match="global trigger inventory mismatch"):
+        lakebase_migrate._apply_app_role_grants(
+            {},
+            role_wait_timeout_s=0,
+            role_wait_interval_s=1,
+        )
+
+    assert connection.commit_count == 1
+    assert connection.rollback_count == 1
+    assert connection.closed is True
+
+
 def test_apply_grants_reconciles_and_postflights_isolated_verifier_role(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -502,8 +1486,12 @@ def test_apply_grants_reconciles_and_postflights_isolated_verifier_role(
     verifier_role = 'verifier-"quoted"'
     cursor = _successful_cursor(role, verifier_role)
     connection = _Connection(cursor)
-    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: role)
-    monkeypatch.setenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", verifier_role)
+    monkeypatch.setattr(
+        lakebase_migrate,
+        "_resolve_app_role",
+        lambda: pytest.fail("grant reconciliation must reuse the preflight app role"),
+    )
+    monkeypatch.setenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", "wrong-ambient-verifier")
 
     import psycopg
 
@@ -511,6 +1499,7 @@ def test_apply_grants_reconciles_and_postflights_isolated_verifier_role(
 
     lakebase_migrate._apply_app_role_grants(
         {},
+        resolved_roles=(role, verifier_role),
         role_wait_timeout_s=0,
         role_wait_interval_s=1,
     )
@@ -530,8 +1519,55 @@ def test_apply_grants_reconciles_and_postflights_isolated_verifier_role(
     assert not any(
         " ON SEQUENCE " in statement or " ON TABLES " in statement for statement in verifier_grants
     )
+    assert (
+        'ALTER DEFAULT PRIVILEGES FOR ROLE "global-owner" '
+        'REVOKE ALL PRIVILEGES ON SEQUENCES FROM "verifier-""quoted"""'
+    ) in statements
+    assert 'REVOKE TEMPORARY ON DATABASE "mip_app_state" FROM "verifier-""quoted"""' in statements
     assert connection.commit_count == 2
     assert connection.rollback_count == 0
+
+
+def test_apply_grants_revokes_public_app_and_verifier_column_acls(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = "app-role"
+    verifier_role = 'verifier-"quoted"'
+    cursor = _successful_cursor(
+        role,
+        verifier_role,
+        column_acl_rows=[
+            ("PUBLIC", "public", "borrower_export_view", "borrower id"),
+            (role, "mip_app", "campaigns", "criteria"),
+            (verifier_role, "mip_app", "ai_gateway_proof_ledger", "proof_payload"),
+        ],
+    )
+    connection = _Connection(cursor)
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: role)
+    monkeypatch.setenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", verifier_role)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+
+    lakebase_migrate._apply_app_role_grants(
+        {},
+        role_wait_timeout_s=0,
+        role_wait_interval_s=1,
+    )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert (
+        'REVOKE ALL PRIVILEGES ("borrower id") ON TABLE '
+        '"public"."borrower_export_view" FROM PUBLIC'
+    ) in statements
+    assert (
+        'REVOKE ALL PRIVILEGES ("criteria") ON TABLE ' '"mip_app"."campaigns" FROM "app-role"'
+    ) in statements
+    assert (
+        'REVOKE ALL PRIVILEGES ("proof_payload") ON TABLE '
+        '"mip_app"."ai_gateway_proof_ledger" FROM "verifier-""quoted"""'
+    ) in statements
 
 
 def test_app_and_verifier_roles_must_be_distinct(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -575,7 +1611,7 @@ def test_postflight_rejects_unreviewed_new_table() -> None:
             [(role,)],
             _table_rows(add="unreviewed_runtime_state"),
         ],
-        fetchone_results=[(True, False, True, False)],
+        fetchone_results=[(True, False, False, True, False)],
     )
 
     with pytest.raises(RuntimeError, match="unexpected=.*unreviewed_runtime_state"):
@@ -593,11 +1629,36 @@ def test_postflight_rejects_effective_database_create() -> None:
     role = "app-role"
     cursor = _Cursor(
         fetchall_results=[[(role,)]],
-        fetchone_results=[(True, True, True, False)],
+        fetchone_results=[(True, True, False, True, False)],
     )
 
     with pytest.raises(RuntimeError, match="database_create=True"):
         lakebase_migrate._postflight_app_role_grants(cursor, role)
+
+
+@pytest.mark.parametrize(
+    ("postflight", "role", "principal_label"),
+    [
+        (lakebase_migrate._postflight_app_role_grants, "app-role", "app-role"),
+        (
+            lakebase_migrate._postflight_ai_gateway_verifier_grants,
+            "verifier-role",
+            "AI Gateway verifier",
+        ),
+    ],
+)
+def test_postflight_rejects_effective_database_temporary(
+    postflight: Any,
+    role: str,
+    principal_label: str,
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[[(role,)]],
+        fetchone_results=[(True, False, True, True, False)],
+    )
+
+    with pytest.raises(RuntimeError, match=rf"{principal_label}.*database_temporary=True"):
+        postflight(cursor, role)
 
 
 def test_postflight_rejects_effective_delete_privilege() -> None:
@@ -608,7 +1669,7 @@ def test_postflight_rejects_effective_delete_privilege() -> None:
             _table_rows(),
             _table_privilege_rows(add=("campaigns", "DELETE")),
         ],
-        fetchone_results=[(True, False, True, False)],
+        fetchone_results=[(True, False, False, True, False)],
     )
 
     with pytest.raises(RuntimeError, match="forbidden DELETE"):
@@ -623,7 +1684,7 @@ def test_postflight_rejects_update_on_immutable_evidence_table() -> None:
             _table_rows(),
             _table_privilege_rows(add=("generated_outreach_drafts", "UPDATE")),
         ],
-        fetchone_results=[(True, False, True, False)],
+        fetchone_results=[(True, False, False, True, False)],
     )
 
     with pytest.raises(RuntimeError, match="table privilege postflight failed"):
@@ -635,10 +1696,11 @@ def test_verifier_postflight_rejects_access_to_any_other_table() -> None:
     cursor = _Cursor(
         fetchall_results=[
             [(role,)],
+            [("mip_app", "USAGE"), ("public", "USAGE")],
             _table_rows(),
             _verifier_table_privilege_rows() + [("campaigns", "SELECT")],
         ],
-        fetchone_results=[(True, False, True, False)],
+        fetchone_results=[(True, False, False, True, False)],
     )
 
     with pytest.raises(RuntimeError, match="verifier table privilege postflight failed"):
@@ -652,17 +1714,18 @@ def test_postflight_rejects_missing_required_sequence_usage() -> None:
             [(role,)],
             _table_rows(),
             _table_privilege_rows(),
+            [],
             _sequence_rows(),
             [],
         ],
-        fetchone_results=[(True, False, True, False)],
+        fetchone_results=[(True, False, False, True, False)],
     )
 
     with pytest.raises(RuntimeError, match="sequence privilege postflight failed"):
         lakebase_migrate._postflight_app_role_grants(cursor, role)
 
 
-@pytest.mark.parametrize("object_type", ["r", "S"])
+@pytest.mark.parametrize("object_type", ["r", "S", "f"])
 def test_postflight_rejects_future_object_default_privilege(object_type: str) -> None:
     role = "app-role"
     cursor = _Cursor(
@@ -670,15 +1733,551 @@ def test_postflight_rejects_future_object_default_privilege(object_type: str) ->
             [(role,)],
             _table_rows(),
             _table_privilege_rows(),
+            [],
             _sequence_rows(),
             _sequence_privilege_rows(),
-            [(object_type, "SELECT" if object_type == "r" else "USAGE")],
+            [
+                (
+                    "external-owner",
+                    "analytics",
+                    object_type,
+                    "app-role",
+                    (
+                        "SELECT"
+                        if object_type == "r"
+                        else "USAGE"
+                        if object_type == "S"
+                        else "EXECUTE"
+                    ),
+                )
+            ],
         ],
-        fetchone_results=[(True, False, True, False)],
+        fetchone_results=[(True, False, False, True, False)],
     )
 
-    with pytest.raises(RuntimeError, match="future table/sequence default"):
+    with pytest.raises(RuntimeError, match="future table/sequence/routine default"):
         lakebase_migrate._postflight_app_role_grants(cursor, role)
+
+
+@pytest.mark.parametrize(
+    "unsafe_index, unsafe_name",
+    list(enumerate(lakebase_migrate._UNSAFE_ROLE_ATTRIBUTE_NAMES, start=1)),
+)
+def test_role_security_rejects_unsafe_role_attributes(
+    unsafe_index: int,
+    unsafe_name: str,
+) -> None:
+    role = "app-role"
+    row = list(_safe_role_security_row(role))
+    row[unsafe_index] = True
+    cursor = _Cursor(fetchall_results=[[tuple(row)]])
+
+    with pytest.raises(RuntimeError, match=unsafe_name):
+        lakebase_migrate._postflight_role_security(
+            cursor,
+            role,
+            principal_label="app role",
+        )
+
+
+@pytest.mark.parametrize(
+    ("role", "parent_membership"),
+    [
+        ("app-role", ("direct-reader", True, False, False, 1)),
+        ("app-role", ("recursive-setter", False, True, False, 2)),
+        ("verifier-role", ("admin-delegator", False, False, True, 1)),
+        ("verifier-role", ("dormant-parent", False, False, False, 2)),
+    ],
+)
+def test_role_security_rejects_every_parent_membership(
+    role: str,
+    parent_membership: tuple[str, bool, bool, bool, int],
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [_safe_role_security_row(role)],
+            [parent_membership],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match=rf"parent-role membership.*{parent_membership[0]}"):
+        lakebase_migrate._postflight_role_security(
+            cursor,
+            role,
+            principal_label="runtime principal",
+        )
+
+    membership_query = cursor.executed[1][0]
+    assert "WITH RECURSIVE membership" in membership_query
+    assert "pg_auth_members" in membership_query
+    assert "pg_has_role(%s, parent.roleid, 'USAGE')" in membership_query
+    assert "pg_has_role(%s, parent.roleid, 'SET')" in membership_query
+    assert "admin_option_path" in membership_query
+
+
+def test_role_security_allows_inherit_variation_without_parent_membership() -> None:
+    role = "verifier-role"
+    row = list(_safe_role_security_row(role))
+    row[6] = False
+    row[7] = False
+    cursor = _Cursor(fetchall_results=[[tuple(row)], [], []])
+
+    lakebase_migrate._postflight_role_security(
+        cursor,
+        role,
+        principal_label="AI Gateway verifier",
+    )
+
+
+@pytest.mark.parametrize(
+    ("role", "delegated_member"),
+    [
+        ("app-role", ("direct-app-delegate", True, True, False, 1)),
+        ("app-role", ("recursive-app-delegate", True, False, False, 2)),
+        ("verifier-role", ("direct-verifier-delegate", False, True, True, 1)),
+        ("verifier-role", ("dormant-recursive-delegate", False, False, False, 3)),
+    ],
+)
+def test_role_security_rejects_direct_and_recursive_role_delegates(
+    role: str,
+    delegated_member: tuple[str, bool, bool, bool, int],
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [_safe_role_security_row(role)],
+            [],
+            [delegated_member],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match=rf"role delegates.*{delegated_member[0]}"):
+        lakebase_migrate._postflight_role_security(
+            cursor,
+            role,
+            principal_label="runtime principal",
+        )
+
+    delegate_query = cursor.executed[2][0]
+    assert "JOIN target ON target.oid = direct.roleid" in delegate_query
+    assert "JOIN pg_auth_members child ON child.roleid = membership.member_oid" in delegate_query
+    assert "pg_has_role(member.oid, target.oid, 'USAGE')" in delegate_query
+    assert "pg_has_role(member.oid, target.oid, 'SET')" in delegate_query
+
+
+@pytest.mark.parametrize(
+    ("role", "grantee", "principal_label"),
+    [
+        ("app-role", "PUBLIC", "app role"),
+        ("verifier-role", "verifier-role", "AI Gateway verifier"),
+    ],
+)
+def test_column_postflight_rejects_public_and_direct_acl_entries(
+    role: str,
+    grantee: str,
+    principal_label: str,
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [(grantee, "analytics", "borrower_export", "ssn", "SELECT")],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match=rf"{principal_label}.*column privileges.*ssn"):
+        lakebase_migrate._postflight_direct_column_privileges(
+            cursor,
+            role,
+            principal_label=principal_label,
+        )
+
+    query = cursor.executed[0][0]
+    assert "aclexplode(a.attacl)" in query
+    assert "e.grantee = 0 OR grantee.rolname = %s" in query
+    assert "c.relkind IN ('r', 'p', 'v', 'm', 'f')" in query
+    assert "n.nspname NOT IN ('pg_catalog', 'information_schema')" in query
+
+
+@pytest.mark.parametrize(
+    ("role", "principal_label"),
+    [
+        ("app-role", "app role"),
+        ("verifier-role", "AI Gateway verifier"),
+    ],
+)
+def test_column_postflight_rejects_effective_column_only_capability(
+    role: str,
+    principal_label: str,
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [("analytics", "borrower_export", "REFERENCES")],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match=rf"{principal_label}.*column-only.*REFERENCES"):
+        lakebase_migrate._postflight_effective_column_only_privileges(
+            cursor,
+            role,
+            principal_label=principal_label,
+        )
+
+    query, params = cursor.executed[0]
+    assert "has_any_column_privilege(%s, c.oid, privilege.name)" in query
+    assert "NOT has_table_privilege(%s, c.oid, privilege.name)" in query
+    assert "c.relkind IN ('r', 'p', 'v', 'm', 'f')" in query
+    assert params == (list(lakebase_migrate._COLUMN_PRIVILEGE_NAMES), role, role)
+
+
+def test_trigger_contract_matches_every_schema_trigger_exactly() -> None:
+    schema = Path("lakebase/schema.sql").read_text(encoding="utf-8")
+    trigger_pattern = re.compile(
+        r"CREATE TRIGGER\s+(?P<trigger>[a-z_]+)\s+"
+        r"BEFORE\s+(?P<events>[A-Z ]+?)\s+"
+        r"ON\s+(?P<table_schema>[a-z_]+)\.(?P<table_name>[a-z_]+)\s+"
+        r"FOR EACH\s+(?P<level>ROW|STATEMENT)\s+"
+        r"EXECUTE FUNCTION\s+"
+        r"(?P<function_schema>[a-z_]+)\.(?P<function_name>[a-z_]+)"
+        r"\((?P<function_arguments>[^)]*)\);",
+        re.MULTILINE,
+    )
+    event_bits = {"INSERT": 4, "DELETE": 8, "UPDATE": 16, "TRUNCATE": 32}
+    actual: dict[tuple[str, str, str], tuple[str, str, str, int]] = {}
+    for match in trigger_pattern.finditer(schema):
+        trigger_type = 2 + (1 if match.group("level") == "ROW" else 0)
+        trigger_type += sum(event_bits[event] for event in match.group("events").split(" OR "))
+        key = (
+            match.group("table_schema"),
+            match.group("table_name"),
+            match.group("trigger"),
+        )
+        actual[key] = (
+            match.group("function_schema"),
+            match.group("function_name"),
+            match.group("function_arguments"),
+            trigger_type,
+        )
+
+    assert actual == lakebase_migrate._APP_TRIGGER_CONTRACT
+    assert len(actual) == 14
+
+
+def test_trigger_postflight_rejects_extra_public_security_definer_trigger() -> None:
+    rows = _trigger_inventory_rows()
+    rows.append(
+        (
+            "public",
+            "borrower_export_view",
+            "trg_exfiltrate",
+            "O",
+            23,
+            0,
+            True,
+            True,
+            "public",
+            "exfiltrate",
+            "",
+            "f",
+            "trigger",
+            True,
+            "attacker-owner",
+            "migration-owner",
+            False,
+            False,
+            False,
+            False,
+            True,
+            True,
+            True,
+            True,
+            True,
+        )
+    )
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match=r"trigger inventory mismatch.*exfiltrate.*True"):
+        lakebase_migrate._postflight_trigger_inventory(
+            cursor,
+            "app-role",
+            principal_label="app role",
+        )
+
+    query = cursor.executed[0][0]
+    assert "FROM pg_trigger trigger" in query
+    assert "NOT trigger.tgisinternal" in query
+    assert "table_class.relkind IN ('r', 'p', 'v', 'm', 'f')" in query
+    assert "function_proc.prosecdef" in query
+    assert "function_owner.rolname = %s" in query
+
+
+def test_trigger_postflight_rejects_missing_reviewed_trigger() -> None:
+    rows = _trigger_inventory_rows()
+    missing_trigger = rows.pop()[2]
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match=rf"trigger inventory mismatch.*{missing_trigger}"):
+        lakebase_migrate._postflight_trigger_inventory(
+            cursor,
+            "verifier-role",
+            principal_label="AI Gateway verifier",
+        )
+
+
+def test_trigger_postflight_rejects_security_definer_rewrite() -> None:
+    rows = _trigger_inventory_rows()
+    reviewed = list(rows[0])
+    reviewed[13] = True
+    rows[0] = tuple(reviewed)
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match=r"trigger inventory mismatch.*True"):
+        lakebase_migrate._postflight_trigger_inventory(
+            cursor,
+            "app-role",
+            principal_label="app role",
+        )
+
+
+def test_trigger_postflight_rejects_shared_arbitrary_owner() -> None:
+    rows = _trigger_inventory_rows()
+    reviewed = list(rows[0])
+    reviewed[14] = "attacker-owner"
+    reviewed[15] = "attacker-owner"
+    reviewed[16] = True
+    reviewed[17] = False
+    reviewed[18] = False
+    rows[0] = tuple(reviewed)
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match=r"trigger inventory mismatch.*attacker-owner"):
+        lakebase_migrate._postflight_trigger_inventory(
+            cursor,
+            "app-role",
+            principal_label="app role",
+        )
+
+    query = cursor.executed[0][0]
+    assert "function_owner.oid = current_user::regrole" in query
+    assert "table_owner.oid = current_user::regrole" in query
+    assert "function_owner.oid = table_owner.oid" in query
+
+
+@pytest.mark.parametrize(
+    ("field_index", "catalog_expression"),
+    [
+        (20, "trigger.tgattr = ''::int2vector"),
+        (21, "trigger.tgnewtable IS NULL"),
+        (22, "trigger.tgoldtable IS NULL"),
+        (23, "NOT trigger.tgdeferrable"),
+        (24, "NOT trigger.tginitdeferred"),
+    ],
+)
+def test_trigger_postflight_rejects_column_transition_and_deferred_variants(
+    field_index: int,
+    catalog_expression: str,
+) -> None:
+    rows = _trigger_inventory_rows()
+    hostile = list(rows[0])
+    hostile[field_index] = False
+    rows[0] = tuple(hostile)
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match="trigger inventory mismatch"):
+        lakebase_migrate._postflight_trigger_inventory(
+            cursor,
+            "app-role",
+            principal_label="app role",
+        )
+
+    assert catalog_expression in cursor.executed[0][0]
+
+
+def test_trigger_postflight_rejects_runtime_owned_reviewed_function() -> None:
+    rows = _trigger_inventory_rows()
+    reviewed = list(rows[0])
+    reviewed[14] = "app-role"
+    reviewed[15] = "app-role"
+    reviewed[17] = False
+    reviewed[18] = False
+    reviewed[19] = True
+    rows[0] = tuple(reviewed)
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match=r"trigger inventory mismatch.*True"):
+        lakebase_migrate._postflight_trigger_inventory(
+            cursor,
+            "app-role",
+            principal_label="app role",
+        )
+
+
+def test_routine_postflight_rejects_public_security_definer_execution() -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [("public", "exfiltrate", "", "f", True, False)],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="exfiltrate.*True"):
+        lakebase_migrate._postflight_effective_routine_privileges(
+            cursor,
+            "app-role",
+            principal_label="app role",
+            expected=lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES,
+        )
+
+
+def test_verifier_routine_postflight_rejects_any_execute() -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            [("mip_app", "campaign_holdout_is_reviewed", "jsonb", "f", False, False)],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="verifier.*routine EXECUTE"):
+        lakebase_migrate._postflight_effective_routine_privileges(
+            cursor,
+            "verifier-role",
+            principal_label="AI Gateway verifier",
+            expected={},
+        )
+
+
+def test_app_routine_postflight_rejects_runtime_owned_validator() -> None:
+    rows = _app_routine_privilege_rows()
+    rows[0] = (*rows[0][:-1], True)
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match="routine EXECUTE postflight.*True"):
+        lakebase_migrate._postflight_effective_routine_privileges(
+            cursor,
+            "app-role",
+            principal_label="app role",
+            expected=lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES,
+        )
+
+
+def test_verifier_postflight_rejects_inherited_create_on_external_schema() -> None:
+    role = "verifier-role"
+    cursor = _Cursor(
+        fetchall_results=[
+            [(role,)],
+            [
+                ("analytics", "CREATE"),
+                ("mip_app", "USAGE"),
+                ("public", "USAGE"),
+            ],
+        ],
+        fetchone_results=[(True, False, False, True, False)],
+    )
+
+    with pytest.raises(RuntimeError, match="AI Gateway verifier.*analytics.*CREATE"):
+        lakebase_migrate._postflight_ai_gateway_verifier_grants(cursor, role)
+
+
+def test_verifier_postflight_rejects_inherited_external_default_select() -> None:
+    role = "verifier-role"
+    cursor = _Cursor(
+        fetchall_results=[
+            [(role,)],
+            [("mip_app", "USAGE"), ("public", "USAGE")],
+            _table_rows(),
+            _verifier_table_privilege_rows(),
+            [],
+            [],
+            _sequence_rows(),
+            [],
+            [("external-owner", "analytics", "r", "reporting-role", "SELECT")],
+        ],
+        fetchone_results=[(True, False, False, True, False)],
+    )
+
+    with pytest.raises(RuntimeError, match="effective future.*analytics.*SELECT"):
+        lakebase_migrate._postflight_ai_gateway_verifier_grants(cursor, role)
+
+
+def test_postflight_rejects_effective_create_on_public_schema() -> None:
+    role = "app-role"
+    cursor = _Cursor(
+        fetchall_results=[
+            [(role,)],
+            _table_rows(),
+            _table_privilege_rows(),
+            [],
+            _sequence_rows(),
+            _sequence_privilege_rows(),
+            [],
+            [("mip_app", "USAGE"), ("public", "CREATE"), ("public", "USAGE")],
+        ],
+        fetchone_results=[(True, False, False, True, False)],
+    )
+
+    with pytest.raises(RuntimeError, match="other schemas.*public.*CREATE"):
+        lakebase_migrate._postflight_app_role_grants(cursor, role)
+
+
+def test_postflight_rejects_effective_select_on_table_in_other_schema() -> None:
+    role = "app-role"
+    cursor = _Cursor(
+        fetchall_results=[
+            [(role,)],
+            _table_rows(),
+            _table_privilege_rows(),
+            [],
+            _sequence_rows(),
+            _sequence_privilege_rows(),
+            [],
+            [("mip_app", "USAGE"), ("public", "USAGE")],
+            [("analytics", "borrower_export", "SELECT")],
+        ],
+        fetchone_results=[(True, False, False, True, False)],
+    )
+
+    with pytest.raises(RuntimeError, match="other tables.*analytics.*SELECT"):
+        lakebase_migrate._postflight_app_role_grants(cursor, role)
+
+
+def test_postflight_rejects_effective_select_on_public_view() -> None:
+    role = "app-role"
+    cursor = _Cursor(
+        fetchall_results=[
+            [(role,)],
+            _table_rows(),
+            _table_privilege_rows(),
+            [],
+            _sequence_rows(),
+            _sequence_privilege_rows(),
+            [],
+            [("mip_app", "USAGE"), ("public", "USAGE")],
+            [("public", "borrower_export_view", "SELECT")],
+        ],
+        fetchone_results=[(True, False, False, True, False)],
+    )
+
+    with pytest.raises(RuntimeError, match="other tables.*public.*borrower_export_view.*SELECT"):
+        lakebase_migrate._postflight_app_role_grants(cursor, role)
+
+
+def test_acl_catalog_queries_cover_all_table_like_relation_kinds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = "app-role"
+    cursor = _successful_cursor(role)
+    connection = _Connection(cursor)
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+    monkeypatch.setattr(lakebase_migrate, "_resolve_app_role", lambda: role)
+    lakebase_migrate._apply_app_role_grants(
+        {},
+        role_wait_timeout_s=0,
+        role_wait_interval_s=1,
+    )
+
+    relation_queries = [
+        statement for statement, _params in cursor.executed if "c.relkind IN" in statement
+    ]
+    assert relation_queries
+    assert all("('r', 'p', 'v', 'm', 'f')" in statement for statement in relation_queries)
 
 
 def test_lakebase_grant_docs_match_strict_automated_contract() -> None:
@@ -688,24 +2287,30 @@ def test_lakebase_grant_docs_match_strict_automated_contract() -> None:
     ].split("## 7. Cotality Delta Share", 1)[0]
 
     assert "service_principal_client_id" in lakebase_section
-    assert (
-        'REVOKE CREATE ON DATABASE mip_app_state FROM "service-principal-client-id"'
-        in lakebase_section
-    )
+    assert ".venv/bin/python -m jobs.lakebase_migrate" in lakebase_section
+    assert "only supported path for an externally" in lakebase_section
+    assert "Do not copy a static GRANT list" in lakebase_section
+    assert "recursive" in lakebase_section
+    assert "parent membership" in lakebase_section
+    assert "ADMIN-option paths" in lakebase_section
+    assert "table-column ACL" in lakebase_section
+    assert "TEMPORARY=false" in lakebase_section
+    assert "overloaded routine" in lakebase_section
+    assert "PUBLIC `EXECUTE`" in lakebase_section
+    assert "every non-internal trigger" in lakebase_section
+    assert "Revoking function `EXECUTE` is not treated as sufficient" in lakebase_section
+    assert "ACCESS EXCLUSIVE" in lakebase_section
+    assert "pg_event_trigger" in lakebase_section
+    assert "event-trigger inventory to be empty" in lakebase_section
+    assert "The separate ACL transaction repeats" in lakebase_section
+    assert "resources.apps.mip_app.resources" in lakebase_section
+    assert "rollback-capable ACL transaction" in lakebase_section
+    assert "](../../databricks.yml) lines" not in grants_doc
     assert "GRANT USAGE ON ALL SEQUENCES" not in lakebase_section
     assert "GRANT SELECT, INSERT, UPDATE, DELETE" not in lakebase_section
-    assert "GRANT USAGE ON SEQUENCE mip_app.action_audit_audit_sequence_seq" in (lakebase_section)
-    assert "REVOKE ALL PRIVILEGES ON SEQUENCES" in lakebase_section
-    assert "REVOKE ALL PRIVILEGES ON TABLES" in lakebase_section
-    for table, privileges in lakebase_migrate._APP_ROLE_TABLE_PRIVILEGES.items():
-        assert f"REVOKE ALL PRIVILEGES ON TABLE mip_app.{table}" in lakebase_section
-        if table == "ai_gateway_proof_ledger":
-            # The deploy/runtime matrix is authoritative for this scoped
-            # backend change; the governance-doc owner updates its SQL mirror.
-            continue
-        if privileges:
-            privilege_list = ", ".join(privileges)
-            assert f"GRANT {privilege_list} ON TABLE mip_app.{table}" in lakebase_section
+    assert 'REVOKE CREATE ON DATABASE mip_app_state FROM "service-principal-client-id"' not in (
+        lakebase_section
+    )
 
 
 def test_ai_gateway_proof_ledger_is_runtime_select_only() -> None:

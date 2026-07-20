@@ -25,10 +25,9 @@ LO_01 = "55555555-5555-4555-8555-555555555501"
 LO_02 = "55555555-5555-4555-8555-555555555502"
 
 _DISCLOSURE = (
-    "Summit Mortgage, NMLS #123456. Equal Housing Lender. "
-    "Reply unsubscribe to opt out."
+    "Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out."
 )
-_DRAFT_BODY = f"Reviewed and approved governed outreach. {_DISCLOSURE}"
+_DRAFT_BODY = f"Contact a loan officer to review available mortgage options. {_DISCLOSURE}"
 
 
 def _funnel() -> dict:

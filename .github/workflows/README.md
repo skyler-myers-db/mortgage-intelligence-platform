@@ -7,7 +7,7 @@ This repo runs four workflows:
 | [`ci.yml`](ci.yml) | `pull_request`, `push` to `main` / `feature/*` | **None.** Every job is credential-free. |
 | [`nightly.yml`](nightly.yml) | `workflow_dispatch` only | Required — see below. |
 | [`deploy-dev.yml`](deploy-dev.yml) | `workflow_dispatch` | Required — Databricks dev deployment credentials. |
-| [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | Required — Databricks production deployment credentials. |
+| [`deploy-prod.yml`](deploy-prod.yml) | `workflow_dispatch` | **None. Non-deploying scaffold gate only.** |
 
 The PR workflow (`ci.yml`) is designed to stay green for any contributor
 including fork-based PRs: it uses placeholder BUNDLE_VARs and pytest
@@ -25,8 +25,8 @@ secrets and exit non-zero instead of silently skipping release gates.
 The dev deploy workflow (`deploy-dev.yml`) is also manual-only. It builds the
 current ref, creates an ephemeral `.env.local` containing only non-secret app
 configuration, passes runtime secrets to the provisioning step through the
-process environment, seeds a temporary `DEFAULT` Databricks CLI profile, runs `scripts/deploy.sh -t dev
---no-confirm`, and keeps the deployed app smoke test enabled unless the
+process environment, seeds a temporary `DEFAULT` Databricks CLI profile, runs
+`scripts/deploy.sh -t dev --no-confirm`, and keeps the deployed app smoke test enabled unless the
 operator explicitly selects `skip_smoke`. Run it before live validation when
 the code under review changes app, bundle, job, SQL, or frontend behavior. The
 workflow has a single non-cancelling concurrency lane (`mip-dev-deploy`) because
@@ -36,6 +36,12 @@ The `rebase_unverified_app` input is a one-time adoption control, defaulting to
 false. Select it only when the existing dev App predates the signed server-owned
 rollback record; that run stops the unverified App and must prove/capture a new
 green contract before service resumes. Routine roll-forwards leave it false.
+
+Despite its legacy filename, `deploy-prod.yml` does not deploy or authenticate
+to a production workspace. It is an explicit scaffold-only placeholder. The
+only implemented mutable workflow is the governed dev deployment above;
+production requires a separately reviewed environment contract before a real
+workflow may call `scripts/deploy.sh -t prod`.
 
 ---
 

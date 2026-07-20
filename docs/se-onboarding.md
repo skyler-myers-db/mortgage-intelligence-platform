@@ -19,8 +19,9 @@ row-level multi-tenant SaaS. One customer workspace maps to one UC catalog,
 one Lakebase state database, one Genie space, one app URL, and one configured
 lender identity. Isolation is enforced at the Databricks deployment boundary;
 `mip.ref.lender_dictionary` is the tenant-lender override point for gold
-transformations, and `MIP_LENDER_NAME` / optional `MIP_TENANT_ID` drive the
-app label and governed disclosure namespace. `MIP_DEFAULT_CATALOG` drives the
+transformations, and `MIP_LENDER_NAME`, `MIP_LENDER_NMLS_ID`, and optional
+`MIP_TENANT_ID` drive the app label and governed disclosure namespace.
+`MIP_DEFAULT_CATALOG` drives the
 SQL renderer, backend `qualify()` calls, Spark Python jobs, and Genie
 provisioning, so keep it equal to the bundle `uc_catalog` variable. A future
 shared-SaaS deployment would need explicit row-level tenant predicates and RLS;
@@ -96,8 +97,12 @@ GENIE_SPACE_ID=
 # for this catalog before the bundle runs, so CTAS lands in the right place
 # on first deploy. See docs/runbook-multi-catalog.md for details.
 # MIP_DEFAULT_CATALOG=summit_mortgage
-# Customer-facing display name shown in the app and used by governed draft copy.
-MIP_LENDER_NAME=<customer display name, e.g. Acme Mortgage>
+# Customer-facing legal identity shown in the app and used by governed copy.
+# The exact name/NMLS pair must first be added to the source-controlled registry
+# in backend/schemas/lender_identity.py through an independently reviewed PR;
+# runtime configuration cannot create a new lender-text exemption.
+MIP_LENDER_NAME=<exact reviewed customer legal lender name>
+MIP_LENDER_NMLS_ID=<matching reviewed customer lender NMLS id>
 # Optional: override the Lakebase disclosure namespace. If unset, the app
 # derives it from MIP_LENDER_NAME; Summit dev keeps the seeded "summit"
 # namespace for backwards compatibility.
@@ -109,8 +114,14 @@ Env-var names are authoritative in
 [`backend/config/settings.py`](../backend/config/settings.py).
 The `BUNDLE_VAR_*` mapping (`DATABRICKS_WAREHOUSE_ID` →
 `BUNDLE_VAR_sql_warehouse_id`, `GENIE_SPACE_ID` →
-`BUNDLE_VAR_genie_space_id`) happens inside
+`BUNDLE_VAR_genie_space_id`, and the lender/NMLS/tenant values → their
+Lakebase migration variables) happens inside
 `tools/databricks/bundle_env.py` — no extra exports needed.
+
+The migration atomically installs reviewed generic email, direct-mail, and SMS
+disclosures for this exact lender/NMLS/tenant identity. State-specific legal
+rows remain explicit reviewed overrides; a customer deployment no longer
+depends on the Summit sample disclosure namespace.
 
 ---
 
@@ -162,10 +173,9 @@ phases — direct bundle resource deploy, then app snapshot promotion —
 but `./scripts/deploy.sh` runs both. Use the script for customer first
 deploys because it provisions/rebinds Genie, maps `.env.local` to
 `BUNDLE_VAR_*`, and runs the direct deployment plan before apply. The
-Entrada dev target also pins its governed Genie space id, so plain
-`databricks bundle deploy -t dev --profile DEFAULT` is available for
-resource-only recovery in Entrada's workspace after the command-of-record has
-created the governed pipeline namespace.
+internal bundle apply is selector-bounded to non-App resources; unrestricted
+bundle mutation and direct App promotion are unsupported because they bypass
+the signed deployment, rollback, migration, and proof contract.
 
 ```bash
 # One command: env-aware direct bundle validate/plan/deploy, app promotion, jobs, refreshes, and Genie provision
@@ -253,10 +263,10 @@ window. To prime the space before a demo, see [`docs/runbook.md`](runbook.md)
 
 ### 6.4 Frontend shell caches stale JS
 
-The Databricks App edge caches the SPA bundle aggressively. After a
-`databricks apps deploy`, browsers that had the app open may serve the
-previous bundle from cache. Hard-refresh (Cmd-Shift-R / Ctrl-Shift-R)
-once after §4 phase 2 to evict it.
+The Databricks App edge caches the SPA bundle aggressively. After the governed
+deployment script promotes a new snapshot, browsers that had the app open may
+serve the previous bundle from cache. Hard-refresh
+(Cmd-Shift-R / Ctrl-Shift-R) once after deployment to evict it.
 
 ### 6.5 Dashboards show blanks on day 0
 
@@ -287,10 +297,11 @@ databricks warehouses list | jq -r '.[] | select(.name=="mip_serverless_sql") | 
 # Compare to: grep DATABRICKS_WAREHOUSE_ID .env.local
 ```
 
-If the values differ, fix `.env.local`, re-run `./scripts/deploy.sh`
-(phase 1), and `databricks apps deploy mip-app` (phase 2). A wrong
-warehouse id is the single most common cause of a persistent red
-health probe.
+If the values differ, fix `.env.local` and re-run `./scripts/deploy.sh -t dev`.
+That command is the only supported promotion path because it preserves the
+governed App payload and every migration, proof, refresh, and smoke gate. A
+wrong warehouse id is the single most common cause of a persistent red health
+probe.
 
 ### 7.3 `/api/v1/audit/events` returns 503; POST `/api/v1/outreach/approve` fails
 
@@ -320,23 +331,22 @@ Three possible causes, in order of likelihood:
    `databricks bundle run mip_refresh_scores -t dev` — the
    `refresh_semantics_views` task rebinds Genie's trusted assets.
 
-### 7.5 App URL 404 or serves old JS after phase 2
+### 7.5 App URL 404 or serves old JS after deployment
 
-Phase 2 (`databricks apps deploy mip-app`) was skipped, errored, or
-completed but the browser cached the prior bundle.
+The governed deployment script failed before snapshot promotion, or the browser
+cached the prior bundle.
 
 ```bash
-# Verify phase 2 actually ran
+# Verify the governed snapshot promotion actually ran
 databricks apps get mip-app --profile DEFAULT -o json \
   | jq '{app_status: .app_status.state, compute_status: .compute_status.state, active_deployment: .active_deployment.deployment_id}'
 # Expect: app_status RUNNING, compute_status ACTIVE, active_deployment populated.
-
-# If the state is CREATED but never DEPLOYED, phase 2 never ran:
-databricks apps deploy mip-app --profile DEFAULT
 ```
 
-If phase 2 shows SUCCEEDED but the browser still serves stale JS, hard-
-refresh (§6.4). If still stale, open in an incognito window to rule out
+If no active deployment is populated, inspect the command-of-record failure and
+re-run `./scripts/deploy.sh -t dev`; never recover with a bare App deployment.
+If the deployment shows SUCCEEDED but the browser still serves stale JS,
+hard-refresh (§6.4). If still stale, open in an incognito window to rule out
 service-worker caching.
 
 ---

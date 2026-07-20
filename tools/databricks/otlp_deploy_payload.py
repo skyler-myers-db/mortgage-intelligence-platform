@@ -11,20 +11,27 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
+from pathlib import Path
 from urllib.parse import urlsplit
 
-_RESOURCE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
+REPO = Path(__file__).resolve().parents[2]
+if str(REPO) not in sys.path:
+    sys.path.insert(0, str(REPO))
+
+from tools.databricks.app_deploy_payload import (  # noqa: E402
+    build_payload as build_app_deploy_payload,
+)
+from tools.databricks.app_deploy_payload import validated_app_resource_name  # noqa: E402
 
 
 def _valid_resource_name(value: str) -> str:
-    candidate = value.strip()
-    if not _RESOURCE_NAME_RE.fullmatch(candidate):
+    try:
+        return validated_app_resource_name(value)
+    except ValueError as exc:
         raise argparse.ArgumentTypeError(
             "resource names must start with a letter and contain only letters, digits, '_' or '-'"
-        )
-    return candidate
+        ) from exc
 
 
 def _valid_otel_endpoint(value: str) -> str:
@@ -53,35 +60,30 @@ def build_payload(
     catalog: str = "mip",
     schema: str = "gold",
 ) -> dict[str, object]:
-    return {
-        "source_code_path": source_code_path,
-        "mode": mode,
-        "env_vars": [
-            {"name": "APP_ENV", "value": app_env},
-            {"name": "DATABRICKS_WAREHOUSE_ID", "value_from": "sql_warehouse"},
-            {"name": "GENIE_SPACE_ID", "value_from": "genie_space"},
-            {"name": "PGHOST", "value_from": "database"},
-            {"name": "LAKEBASE_HOST", "value_from": "database"},
-            {"name": "MIP_LIFECYCLE_SYNC_JOB_ID", "value_from": "lifecycle_sync_job"},
-            {"name": "MIP_FRED_RATES_JOB_ID", "value_from": "fred_rates_job"},
-            {"name": "MIP_SILVER_REFRESH_JOB_ID", "value_from": "silver_refresh_job"},
-            {"name": "MIP_GOLD_REFRESH_JOB_ID", "value_from": "gold_refresh_job"},
-            {"name": "MIP_DEFAULT_CATALOG", "value": catalog},
-            {"name": "MIP_DEFAULT_SCHEMA", "value": schema},
-            {"name": "MIP_OTEL_ENDPOINT", "value": endpoint},
-            {"name": "MIP_OTEL_HEADERS", "value_from": header_resource},
-        ],
-    }
+    return build_app_deploy_payload(
+        source_code_path=source_code_path,
+        target="prod",
+        app_env=app_env,
+        catalog=catalog,
+        schema=schema,
+        mode=mode,
+        campaign_treatment_runtime_enabled=True,
+        otel_endpoint=endpoint,
+        otel_header_resource=header_resource,
+    )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Emit a Databricks Apps deploy JSON payload for secret-backed OTLP."
+        description=(
+            "Emit the canonical Module 0 App payload with secret-backed OTLP. "
+            "Operators must deploy it through scripts/deploy.sh."
+        )
     )
     parser.add_argument(
         "--source-code-path",
         required=True,
-        help="Workspace source path uploaded by databricks bundle deploy.",
+        help="Workspace source path uploaded by the signed deploy resource phase.",
     )
     parser.add_argument(
         "--endpoint",

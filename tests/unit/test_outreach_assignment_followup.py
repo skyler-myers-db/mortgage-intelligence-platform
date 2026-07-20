@@ -19,10 +19,9 @@ from backend.main import app
 from backend.schemas.offer import OutreachApproveRequest
 
 _DISCLOSURE = (
-    "Summit Mortgage, NMLS #123456. Equal Housing Lender. "
-    "Reply unsubscribe to opt out."
+    "Summit Mortgage, NMLS #123456. Equal Housing Lender. " "Reply unsubscribe to opt out."
 )
-_DRAFT_BODY = f"Reviewed and approved governed outreach. {_DISCLOSURE}"
+_DRAFT_BODY = f"Contact a loan officer to review available mortgage options. {_DISCLOSURE}"
 
 
 def _approve_payload(**overrides: object) -> dict[str, object]:

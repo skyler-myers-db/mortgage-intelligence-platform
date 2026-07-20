@@ -15,6 +15,7 @@ import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+import backend.agents.mortgage_growth_copilot as growth_copilot_module
 import backend.api.growth_agent as growth_agent_api
 import backend.api.growth_agent_compose_routes as growth_agent_compose_api
 import backend.services.capabilities as capabilities_module
@@ -1798,7 +1799,7 @@ def test_prompt_agent_infers_state_scope_from_lowercase_state_code() -> None:
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["workflow"]["id"] == "daily_refi_brief"
+    assert body["workflow"]["id"] == "custom_segment_watch"
     assert body["criteria"]["states"] == ["IL"]
     assert _route_without_handoff(body["route"]) == (
         "/lead-queue?segment=itm&marketing_eligibility=Eligible+only&states=IL"
@@ -1834,7 +1835,7 @@ def test_prompt_agent_custom_segments_use_reviewed_all_semantics() -> None:
     )
 
 
-def test_prompt_agent_routes_home_equity_line_to_offer_agent_before_custom_segments() -> None:
+def test_prompt_agent_routes_home_equity_line_to_exact_custom_segment() -> None:
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
     client = _client(sql, lakebase)
@@ -1849,11 +1850,9 @@ def test_prompt_agent_routes_home_equity_line_to_offer_agent_before_custom_segme
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["workflow"]["id"] == "high_equity_heloc_watch"
-    assert body["specialist_agent"] == "offer_agent"
-    assert body["interpreted_intent"] == "Offer lens selected the high-equity HELOC watch."
-    assert "fn_offer_compare" in [step["tool_name"] for step in body["tool_steps"]]
-    assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["permit", "equity"]
+    assert body["workflow"]["id"] == "custom_segment_watch"
+    assert body["specialist_agent"] == "campaign_agent"
+    assert body["criteria"]["lead_queue_filters"]["segment_codes"] == ["permit"]
 
 
 @pytest.mark.parametrize(
@@ -1862,6 +1861,38 @@ def test_prompt_agent_routes_home_equity_line_to_offer_agent_before_custom_segme
         ("Build a custom cohort for refi and HELOC candidates.", ["itm", "permit"], "all"),
         ("Build a custom cohort for listed and HELOC candidates.", ["listed", "permit"], "all"),
         ("Build a custom cohort for refi or HELOC candidates.", ["itm", "permit"], "any"),
+        ("Build a custom cohort for either refi or HELOC candidates.", ["itm", "permit"], "any"),
+        ("Build the union of refi and HELOC opportunities.", ["itm", "permit"], "any"),
+        ("Build a cohort for at least one of refi and HELOC.", ["itm", "permit"], "any"),
+        ("Build a cohort for one or more of refi and HELOC.", ["itm", "permit"], "any"),
+        ("Build a cohort for any refi and HELOC.", ["itm", "permit"], "any"),
+        ("Build the union of refi and homes listed for sale.", ["itm", "listed"], "any"),
+        (
+            "Build a custom cohort for borrowers with refi as well as HELOC signals.",
+            ["itm", "permit"],
+            "all",
+        ),
+        (
+            "Build a custom cohort for borrowers with refi together with HELOC signals.",
+            ["itm", "permit"],
+            "all",
+        ),
+        (
+            "Build a custom cohort for borrowers with refi plus HELOC signals.",
+            ["itm", "permit"],
+            "all",
+        ),
+        (
+            "Build a custom cohort for borrowers with refi or HELOC signals and prepare it "
+            "for review.",
+            ["itm", "permit"],
+            "any",
+        ),
+        (
+            "Find refi and listed borrowers in IL before the branch review.",
+            ["itm", "listed"],
+            "all",
+        ),
     ],
 )
 def test_prompt_agent_custom_segments_with_heloc_preserve_any_all_semantics(
@@ -1886,12 +1917,402 @@ def test_prompt_agent_custom_segments_with_heloc_preserve_any_all_semantics(
     assert body["workflow"]["id"] == "custom_segment_watch"
     assert body["criteria"]["lead_queue_filters"]["segment_codes"] == expected_segments
     assert body["criteria"]["lead_queue_filters"]["segment_mode"] == expected_mode
+    route_parts = urlsplit(body["route"])
+    route_query = parse_qs(route_parts.query)
+    assert route_parts.path == "/lead-queue"
+    assert route_query["segment_codes"] == [",".join(expected_segments)]
+    assert route_query["segment_mode"] == [expected_mode]
+    assert route_query["marketing_eligibility"] == ["Eligible only"]
+    assert len(_handoff_token(body["route"])) > 64
     statement, _params = sql.calls[0]
     joiner = " AND " if expected_mode == "all" else " OR "
     assert (
         joiner.join(f"array_contains(b.segment_codes, '{code}')" for code in expected_segments)
         in statement
     )
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Build a custom cohort for refi and HELOC or listed signals.",
+        "Build a custom cohort for both refi or listed candidates.",
+        "Build a custom cohort for refi, listed candidates.",
+        "Build a custom cohort for refi and prepare it for review, then listed candidates.",
+        "Build a custom cohort for refi or HELOC, listed candidates.",
+        "Build a custom cohort for refi\nor HELOC candidates.",
+        "Build a custom cohort for refi — or HELOC candidates.",
+        "Build a custom cohort for refi or refi and HELOC candidates.",
+        "Build a custom cohort for refi or HELOC but not both.",
+        "Build a custom cohort for both refi and HELOC, listed candidates.",
+        "Build the intersection of refi and HELOC, listed candidates.",
+        "Build the union and intersection of refi and HELOC opportunities.",
+        "Build the union of both refi and HELOC opportunities.",
+        "Build refi and HELOC opportunities in a union.",
+        "Build the intersection of refi and HELOC, then use the union.",
+    ],
+)
+def test_prompt_agent_rejects_ambiguous_segment_relationship_before_execution(
+    prompt: str,
+) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": prompt},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"].startswith("Multiple reviewed segments require")
+    assert sql.calls == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Build a custom cohort for exclusive refi and HELOC candidates.",
+        "Build a custom cohort exclusively for refi and HELOC candidates.",
+        "Build a mutually exclusive cohort for refi and HELOC candidates.",
+        "Build a custom cohort for exactly one of refi and HELOC candidates.",
+        "Build a custom cohort for only one of refi and HELOC candidates.",
+        "Build a custom cohort for refi and HELOC but omit dual matches.",
+        "Build a custom cohort for refi and HELOC while omitting dual matches.",
+        "Build a custom cohort for refi and HELOC with omitted dual matches.",
+        "Build a custom cohort for refi and HELOC but leave out dual matches.",
+        "Build a custom cohort for anything but dual matches across refi and HELOC.",
+        "Build a custom cohort with no dual matches across refi and HELOC.",
+        "Build a custom cohort that doesn't combine refi and HELOC.",
+        "Build a custom cohort for refi and HELOC; avoid intersection.",
+        "Build a custom cohort for refi and HELOC, excluding dual matches.",
+        "Avoid the intersection of refi and HELOC opportunities.",
+        "Build refi or HELOC opportunities, omitting borrowers in both segments.",
+        "Omit borrowers in both refi and HELOC segments.",
+        "Leave out borrowers in both refi and HELOC segments.",
+        "Anything but borrowers in both refi and HELOC segments.",
+        "Build a cohort that doesn't combine refi and HELOC.",
+        "Build a custom cohort for one or the other of refi and HELOC.",
+        "Build a custom cohort for one-or-the-other of refi and HELOC.",
+        "Build a custom cohort for refi or HELOC, never both.",
+        "Build a custom cohort for refi or HELOC, never-both.",
+        "Build a custom cohort for refi or HELOC with no overlap.",
+        "Build a custom cohort for refi or HELOC with zero-overlap.",
+        "Build disjoint refi and HELOC cohorts.",
+        "Build refi and HELOC cohorts disjointly.",
+        "Build a custom cohort for at-most-one of refi and HELOC.",
+        "Build separate refi and HELOC cohorts.",
+        "Build refi and HELOC opportunities separately.",
+        "Build non-overlapping refi and HELOC cohorts.",
+        "Build overlap-free refi and HELOC cohorts.",
+        "Build the union of refi and HELOC, minus overlap.",
+        "Build refi or HELOC opportunities and strip double matches.",
+        "Build refi or HELOC opportunities and remove overlapping borrowers.",
+        "Build refi or HELOC opportunities and drop dual matches.",
+        "Build refi or HELOC opportunities and skip overlaps.",
+        "Build refi or HELOC opportunities and filter out shared borrowers.",
+    ],
+)
+def test_prompt_agent_rejects_exclusive_segment_semantics_without_side_effects(
+    prompt: str,
+) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": prompt},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"].startswith("Multiple reviewed segments require")
+    assert sql.calls == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Build a custom cohort for refi or HELOC but not both.",
+        "Build the union of refi and HELOC, minus overlap.",
+        "Build disjoint refi and HELOC cohorts.",
+        "Build refi or HELOC opportunities and strip double matches.",
+        "Build refi or HELOC opportunities and remove overlapping borrowers.",
+        "Build refi or HELOC opportunities and drop dual matches.",
+        "Build refi or HELOC opportunities and skip overlaps.",
+        "Build refi or HELOC opportunities and filter out shared borrowers.",
+    ],
+)
+def test_prompt_agent_explicit_fields_cannot_widen_unsupported_set_semantics(
+    prompt: str,
+) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={
+                "prompt": prompt,
+                "segment_codes": ["itm", "permit"],
+                "segment_mode": "any",
+                "save_monitor": True,
+                "monitor_name": "Custom Segment Workflow - ANY - ITM+PERMIT",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"].startswith("Multiple reviewed segments require")
+    assert sql.calls == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+    assert lakebase.notification_drafts == []
+
+
+@pytest.mark.parametrize("explicit_fields", [False, True])
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Build the symmetric difference of refi and HELOC.",
+        "Build a cohort where each borrower is in just one of refi and HELOC.",
+        "Build a cohort where each borrower is in only one of refi and HELOC.",
+        "Build refi or HELOC opportunities and eliminate borrowers in both.",
+        "Build the union of refi and HELOC and subtract common members.",
+        "Build the union of refi and HELOC, subtracting the intersection.",
+        "Build refi or HELOC opportunities and discard shared members.",
+        "Build refi or HELOC opportunities and prune overlap.",
+        "Build refi or HELOC opportunities and prune overlaps.",
+        "Build refi or HELOC opportunities and prune overlapping borrowers.",
+        "Build refi or HELOC opportunities and delete dual matches.",
+        "Build refi or HELOC opportunities and deduplicate the overlap.",
+        "Build a distinct-membership cohort for refi and HELOC.",
+        "Build refi or HELOC opportunities after subtracting common borrowers.",
+    ],
+)
+def test_prompt_agent_closed_set_grammar_rejects_before_all_side_effects(
+    prompt: str,
+    explicit_fields: bool,
+) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    body: dict[str, Any] = {
+        "prompt": prompt,
+        "save_monitor": True,
+        "monitor_name": "Set Relationship Review",
+    }
+    if explicit_fields:
+        body.update(
+            {
+                "segment_codes": ["itm", "permit"],
+                "segment_mode": "any",
+            }
+        )
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json=body,
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 422, response.text
+    assert sql.calls == []
+    assert lakebase.executes == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+    assert lakebase.notification_drafts == []
+
+
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Find refinance leads but not refi borrowers.",
+        "Find refi leads excluding refinance borrowers.",
+        "Find cash-out candidates but not high equity borrowers.",
+        "Find borrowers excluding refinance leads.",
+        "Find borrowers without refi signals.",
+        "Find borrowers other than refinance leads.",
+    ],
+)
+def test_prompt_agent_rejects_negative_same_or_single_segment_before_side_effects(
+    prompt: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner_effects: list[str] = []
+
+    def record_external_planner(*args: object, **kwargs: object) -> None:
+        _ = (args, kwargs)
+        planner_effects.append("called")
+
+    monkeypatch.setattr(
+        growth_copilot_module,
+        "_agent_framework_plan",
+        record_external_planner,
+    )
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={
+                "prompt": prompt,
+                "save_monitor": True,
+                "monitor_name": "Set Relationship Review",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 422, response.text
+    assert planner_effects == []
+    assert sql.calls == []
+    assert lakebase.executes == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+    assert lakebase.notification_drafts == []
+
+
+@pytest.mark.parametrize("explicit_fields", [False, True])
+@pytest.mark.parametrize(
+    "prompt",
+    [
+        "Lack refi signals.",
+        "Aren't refi candidates.",
+        "Zero refi signals.",
+        "Refi absent.",
+    ],
+)
+def test_prompt_agent_single_segment_closed_grammar_precedes_all_side_effects(
+    prompt: str,
+    explicit_fields: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner_effects: list[str] = []
+
+    def record_external_planner(*args: object, **kwargs: object) -> None:
+        _ = (args, kwargs)
+        planner_effects.append("called")
+
+    monkeypatch.setattr(
+        growth_copilot_module,
+        "_agent_framework_plan",
+        record_external_planner,
+    )
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    body: dict[str, Any] = {
+        "prompt": prompt,
+        "save_monitor": True,
+        "monitor_name": "Single Segment Review",
+    }
+    if explicit_fields:
+        body.update({"segment_codes": ["itm"], "segment_mode": "any"})
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json=body,
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 422, response.text
+    assert planner_effects == []
+    assert sql.calls == []
+    assert lakebase.executes == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+    assert lakebase.notification_drafts == []
+
+
+@pytest.mark.parametrize(
+    ("segment_mode", "joiner"),
+    [("any", " OR "), ("all", " AND ")],
+)
+def test_prompt_agent_explicit_fields_resolve_ambiguous_prose_without_widening(
+    segment_mode: str,
+    joiner: str,
+) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={
+                "prompt": "Build a custom cohort for refi, listed candidates.",
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": segment_mode,
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    filters = body["criteria"]["lead_queue_filters"]
+    assert filters["segment_codes"] == ["itm", "listed"]
+    assert filters["segment_mode"] == segment_mode
+    assert (
+        joiner.join(
+            [
+                "array_contains(b.segment_codes, 'itm')",
+                "array_contains(b.segment_codes, 'listed')",
+            ]
+        )
+        in sql.calls[0][0]
+    )
+    assert lakebase.monitors == []
+
+
+def test_prompt_agent_preserves_reviewed_state_and_branch_review_qualifiers() -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={
+                "prompt": "Find refi and listed borrowers in IL before the branch review.",
+                "states": ["IL"],
+                "segment_codes": ["itm", "listed"],
+                "segment_mode": "all",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    filters = body["criteria"]["lead_queue_filters"]
+    assert filters["segment_codes"] == ["itm", "listed"]
+    assert filters["segment_mode"] == "all"
+    assert body["criteria"]["states"] == ["IL"]
 
 
 def test_prompt_agent_routes_dossier_story_to_borrower_dossier_specialist() -> None:
@@ -1951,7 +2372,7 @@ def test_prompt_agent_save_monitor_persists_reviewed_filters_without_prompt_text
 
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["workflow"]["id"] == "daily_refi_brief"
+    assert body["workflow"]["id"] == "custom_segment_watch"
     assert body["monitor"]["name"] == "Mortgage Growth Agent - IL"
     assert body["monitor"]["cadence"] == "weekly"
     assert body["monitor"]["route"] == body["route"]
@@ -2043,17 +2464,14 @@ def test_prompt_agent_allows_safe_borrower_group_language() -> None:
         _clear_overrides()
 
     assert response.status_code == 200, response.text
-    assert response.json()["workflow"]["id"] == "daily_refi_brief"
+    assert response.json()["workflow"]["id"] == "custom_segment_watch"
 
 
 @pytest.mark.parametrize(
     "prompt",
     [
         "top 10 prime refi candidates",
-        "show prime refinance opportunities over 75 bps in Illinois",
-        "show prime refinance borrowers over 75 bps in Illinois",
         "show 10 high equity borrowers",
-        "show borrowers over 75 bps",
     ],
 )
 def test_prompt_agent_allows_safe_numeric_rank_language(prompt: str) -> None:
@@ -2869,3 +3287,230 @@ def test_compose_rejects_pii_objective_without_echo() -> None:
         _clear_overrides()
     assert response.status_code == 422
     assert "John Smith" not in response.text
+
+
+@pytest.mark.parametrize(
+    "objective",
+    [
+        "Locate zachary quince for a refi review.",
+        "Prepare a refi review for zachary quince.",
+        "Include zelda quince in refi review.",
+        "Add zelda quince to the cohort.",
+        "Create a cohort around zelda quince.",
+        "Focus on zelda quince.",
+        "Exclude zelda quince from refi review.",
+    ],
+)
+def test_uncommon_lowercase_name_rejection_precedes_run_and_compose_side_effects(
+    objective: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner_calls: list[str] = []
+
+    def record_run_planner(*args: object, **kwargs: object) -> None:
+        _ = (args, kwargs)
+        planner_calls.append("run")
+
+    def record_compose_planner(*args: object, **kwargs: object) -> None:
+        _ = (args, kwargs)
+        planner_calls.append("compose")
+
+    monkeypatch.setattr(growth_agent_api, "plan_growth_agent_prompt", record_run_planner)
+    monkeypatch.setattr(
+        growth_agent_compose_api,
+        "compose_growth_agent_plan",
+        record_compose_planner,
+    )
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        run_response = client.post(
+            "/api/growth-agent/agent/run",
+            json={
+                "prompt": objective,
+                "save_monitor": True,
+                "monitor_name": "Single Segment Review",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+        compose_response = client.post(
+            "/api/growth-agent/agent/compose",
+            json={"objective": objective, "execute": True},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert run_response.status_code == 422, run_response.text
+    assert compose_response.status_code == 422, compose_response.text
+    assert "quince" not in run_response.text.lower()
+    assert "quince" not in compose_response.text.lower()
+    assert planner_calls == []
+    assert sql.calls == []
+    assert lakebase.executes == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+    assert lakebase.notification_drafts == []
+
+
+@pytest.mark.parametrize(
+    "objective",
+    [
+        "Lack qualifying signals.",
+        "Without competitor signal.",
+        "Find unlisted candidates.",
+        "Show refi candidates below 75 bps.",
+        "Show refi candidates above 125 bps.",
+        "Show prime refinance opportunities over 75 bps in Illinois.",
+        "Show refi candidates under 75 bps.",
+    ],
+)
+@pytest.mark.parametrize("explicit_fields", [False, True])
+def test_round16_shared_growth_semantics_precede_both_planners_and_stores(
+    objective: str,
+    explicit_fields: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner_calls: list[str] = []
+    monkeypatch.setattr(
+        growth_agent_api,
+        "plan_growth_agent_prompt",
+        lambda *args, **kwargs: planner_calls.append("run"),
+    )
+    monkeypatch.setattr(
+        growth_agent_compose_api,
+        "compose_growth_agent_plan",
+        lambda *args, **kwargs: planner_calls.append("compose"),
+    )
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    run_body: dict[str, Any] = {
+        "prompt": objective,
+        "save_monitor": True,
+        "monitor_name": "Single Segment Review",
+    }
+    if explicit_fields:
+        run_body.update({"segment_codes": ["itm"], "segment_mode": "any"})
+    try:
+        run_response = client.post(
+            "/api/growth-agent/agent/run",
+            json=run_body,
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+        compose_response = client.post(
+            "/api/growth-agent/agent/compose",
+            json={"objective": objective, "execute": True},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert run_response.status_code == 422, run_response.text
+    assert compose_response.status_code == 422, compose_response.text
+    assert planner_calls == []
+    assert sql.calls == []
+    assert lakebase.executes == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+    assert lakebase.notification_drafts == []
+
+
+@pytest.mark.parametrize("segment_codes", [["listed"], ["listed", "permit"]])
+def test_round16_prompt_and_explicit_segments_must_reconcile_before_run_effects(
+    segment_codes: list[str],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    planner_calls: list[str] = []
+    monkeypatch.setattr(
+        growth_agent_api,
+        "plan_growth_agent_prompt",
+        lambda *args, **kwargs: planner_calls.append("run"),
+    )
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={
+                "prompt": "Find refi opportunities.",
+                "segment_codes": segment_codes,
+                "segment_mode": "any",
+                "save_monitor": True,
+                "monitor_name": "Custom Segment Workflow",
+            },
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 422, response.text
+    assert "exactly match" in response.json()["detail"]
+    assert planner_calls == []
+    assert sql.calls == []
+    assert lakebase.executes == []
+    assert lakebase.runs == []
+    assert lakebase.audit_events == []
+    assert lakebase.monitors == []
+    assert lakebase.notification_drafts == []
+
+
+@pytest.mark.parametrize(
+    ("prompt", "workflow_id", "route_filters"),
+    [
+        (
+            "Find prime refinance and listed-for-sale opportunities across current coverage.",
+            "custom_segment_watch",
+            {"segment_codes": "itm,listed", "segment_mode": "all"},
+        ),
+        (
+            "Find prime refinance opportunities for a branch manager review.",
+            "daily_refi_brief",
+            {"segment": "itm"},
+        ),
+        (
+            "Find prime refinance opportunities for a branch manager monitor.",
+            "daily_refi_brief",
+            {"segment": "itm"},
+        ),
+        ("Find high equity candidates.", "custom_segment_watch", {"segment": "equity"}),
+        ("Find investor candidates.", "custom_segment_watch", {"segment": "investor"}),
+        (
+            "Find HELOC candidates.",
+            "custom_segment_watch",
+            {"segment": "permit"},
+        ),
+        (
+            "Show HELOC opportunities.",
+            "custom_segment_watch",
+            {"segment": "permit"},
+        ),
+    ],
+)
+def test_round16_visible_and_live_prompts_keep_exact_route_contracts(
+    prompt: str,
+    workflow_id: str,
+    route_filters: dict[str, str],
+) -> None:
+    sql = _FakeSqlClient()
+    lakebase = _FakeLakebaseClient()
+    client = _client(sql, lakebase)
+    try:
+        response = client.post(
+            "/api/growth-agent/agent/run",
+            json={"prompt": prompt},
+            headers={"X-Forwarded-Email": "operator@example.com"},
+        )
+    finally:
+        _clear_overrides()
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["workflow"]["id"] == workflow_id
+    route_query = parse_qs(urlsplit(body["route"]).query)
+    for key, value in route_filters.items():
+        assert route_query[key] == [value]

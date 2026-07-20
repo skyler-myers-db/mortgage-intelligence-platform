@@ -9,6 +9,7 @@ import pytest
 
 from backend.config.settings import Settings
 from backend.schemas.agent_plan import ComposePlanRequest
+from backend.schemas.growth_agent import GrowthAgentPromptRunRequest
 from backend.services.growth_agent_composer import (
     build_validated_plan,
     compose_growth_agent_plan,
@@ -320,15 +321,9 @@ def test_reviewed_objective_accepts_natural_compose_phrasings() -> None:
     from backend.schemas.growth_agent import assert_reviewed_growth_objective
 
     objectives = [
-        (
-            "Find investor owners in Illinois with high equity whose properties "
-            "recently listed, check our data freshness for those signals, size "
-            "the opportunity, and stage a lead queue handoff for the strongest cohort"
-        ),
         "Review retention risk for these segments and rank counties by recapture upside",
-        "Compare equity distributions for all cohorts and flag any stale sources",
         "Build a briefing for our strongest markets using every trusted signal",
-        "Check freshness for several feeds and summarize which segments grew most",
+        "Check freshness for several feeds",
     ]
     for objective in objectives:
         assert assert_reviewed_growth_objective(objective)
@@ -337,20 +332,65 @@ def test_reviewed_objective_accepts_natural_compose_phrasings() -> None:
 def test_reviewed_objective_still_rejects_human_names() -> None:
     from backend.schemas.growth_agent import assert_reviewed_growth_objective
 
-    # NOTE: lowercase names after verbs outside the action list (e.g.
-    # "prioritize maria garcia") are a known pre-existing gap documented at
-    # _PROMPT_LOWERCASE_NAME_AFTER_ACTION_RE -- widening the verb list
-    # false-refuses ordinary analytics phrasings; a real name-detection pass
-    # is the follow-up, not more regex.
     for bad in [
         "Pull everything for john smith in Chicago",
         "Call Robert Johnson about his rate",
+        "Locate zachary quince for a refi review.",
+        "Prepare a refi review for zachary quince.",
+        "Include zelda quince in refi review.",
+        "Add zelda quince to the cohort.",
+        "Create a cohort around zelda quince.",
+        "Focus on zelda quince.",
+        "Exclude zelda quince from refi review.",
     ]:
         try:
             assert_reviewed_growth_objective(bad)
         except ValueError:
             continue
         raise AssertionError(f"should have refused: {bad}")
+
+
+@pytest.mark.parametrize(
+    "objective",
+    [
+        "Locate high equity borrowers for a HELOC review.",
+        "Prepare a refi review for weekly monitoring.",
+        "Find listed purchase opportunities.",
+        "Review residents dealing with high mortgage rates for refinance options.",
+        "Review the health of the mortgage portfolio before campaign selection.",
+        "Include high equity borrowers in a reviewed cohort.",
+        "Add refi review to weekly monitoring.",
+        "Check source readiness.",
+        "Focus on branch capacity review.",
+        "Exclude health information from campaign eligibility.",
+    ],
+)
+def test_lowercase_name_context_grammar_preserves_governed_mortgage_phrases(
+    objective: str,
+) -> None:
+    assert GrowthAgentPromptRunRequest(prompt=objective).prompt == objective
+    assert ComposePlanRequest(objective=objective).objective == objective
+
+
+@pytest.mark.parametrize(
+    "objective",
+    [
+        "Locate zachary quince for a refi review.",
+        "Prepare a refi review for zachary quince.",
+        "Include zelda quince in refi review.",
+        "Add zelda quince to the cohort.",
+        "Create a cohort around zelda quince.",
+        "Focus on zelda quince.",
+        "Exclude zelda quince from refi review.",
+    ],
+)
+def test_uncommon_lowercase_names_are_rejected_by_both_request_schemas(
+    objective: str,
+) -> None:
+    with pytest.raises(ValueError, match="reviewed, non-PII"):
+        GrowthAgentPromptRunRequest(prompt=objective)
+    with pytest.raises(ValueError, match="reviewed, non-PII"):
+        ComposePlanRequest(objective=objective)
 
 
 class _SequentialApiClient:

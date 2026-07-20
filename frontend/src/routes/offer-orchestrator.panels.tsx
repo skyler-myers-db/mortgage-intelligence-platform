@@ -144,6 +144,7 @@ interface OfferReviewGridProps {
   draftSubject: string;
   draftText: string;
   draftChannel: OutreachChannel;
+  allowedDraftChannels?: readonly OutreachChannel[];
   draftDirty?: boolean;
   draftProofFresh: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
@@ -180,6 +181,7 @@ export function OfferReviewGrid({
   draftSubject,
   draftText,
   draftChannel,
+  allowedDraftChannels,
   draftDirty = false,
   draftProofFresh,
   onDraftChannelChange,
@@ -221,6 +223,7 @@ export function OfferReviewGrid({
         draftSubject={draftSubject}
         draftText={draftText}
         draftChannel={draftChannel}
+        allowedDraftChannels={allowedDraftChannels}
         draftDirty={draftDirty}
         draftProofFresh={draftProofFresh}
         onDraftChannelChange={onDraftChannelChange}
@@ -344,6 +347,7 @@ interface DraftOutreachPanelProps {
   draftSubject: string;
   draftText: string;
   draftChannel: OutreachChannel;
+  allowedDraftChannels?: readonly OutreachChannel[];
   draftDirty?: boolean;
   draftProofFresh: boolean;
   onDraftChannelChange: (channel: OutreachChannel) => void;
@@ -376,6 +380,7 @@ function DraftOutreachPanel({
   draftSubject,
   draftText,
   draftChannel,
+  allowedDraftChannels,
   draftDirty = false,
   draftProofFresh,
   onDraftChannelChange,
@@ -399,6 +404,12 @@ function DraftOutreachPanel({
 }: DraftOutreachPanelProps) {
   const [regenerateReviewOpen, setRegenerateReviewOpen] = useState(false);
   const [pendingChannel, setPendingChannel] = useState<OutreachChannel | null>(null);
+  const channelRestrictionNoteId = allowedDraftChannels
+    ? 'campaign-outreach-channel-restriction'
+    : undefined;
+  const allowedChannelLabels = allowedDraftChannels?.map((channel) => (
+    channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase()
+  ));
   return (
     <div className="surface">
       <div className="surface__hdr">
@@ -551,25 +562,48 @@ function DraftOutreachPanel({
             )}
           </div>
         )}
+        {allowedChannelLabels && (
+          <div
+            id={channelRestrictionNoteId}
+            className="status-callout status-callout--info mt-3"
+            role="status"
+            aria-live="polite"
+            data-testid="campaign-channel-restriction"
+          >
+            This campaign handoff is limited to its saved audited
+            {' '}{allowedChannelLabels.join(' and ')} copy. Other channels require separately
+            saved campaign variants.
+          </div>
+        )}
         <div className="chip-row mt-3">
-          {OUTREACH_CHANNELS.map((channel) => (
-            <Button
-              key={channel}
-              variant={draftChannel === channel ? 'primary' : 'ghost'}
-              size="sm"
-              onClick={() => {
-                if (channel === draftChannel) return;
-                if (draftDirty) {
-                  setPendingChannel(channel);
-                  return;
-                }
-                onDraftChannelChange(channel);
-              }}
-              disabled={approving || draftSavePending}
-            >
-              {channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase()}
-            </Button>
-          ))}
+          {OUTREACH_CHANNELS.map((channel) => {
+            const channelAvailable = !allowedDraftChannels
+              || allowedDraftChannels.includes(channel);
+            const label = channel === 'direct_mail' ? 'Direct mail' : channel.toUpperCase();
+            return (
+              <Button
+                key={channel}
+                variant={draftChannel === channel ? 'primary' : 'ghost'}
+                size="sm"
+                onClick={() => {
+                  if (!channelAvailable || channel === draftChannel) return;
+                  if (draftDirty) {
+                    setPendingChannel(channel);
+                    return;
+                  }
+                  onDraftChannelChange(channel);
+                }}
+                disabled={approving || draftSavePending || !channelAvailable}
+                aria-disabled={!channelAvailable || undefined}
+                aria-describedby={!channelAvailable ? channelRestrictionNoteId : undefined}
+                title={!channelAvailable
+                  ? `${label} is unavailable because this campaign has no saved audited ${label} variant.`
+                  : undefined}
+              >
+                {label}
+              </Button>
+            );
+          })}
           {canAccessAdmin ? (
             <Link
               className="chip chip--neutral offer-cadence-link"
@@ -592,7 +626,7 @@ function DraftOutreachPanel({
             size="sm"
             icon={draftIsSaved ? 'check' : 'doc'}
             onClick={() => void saveCurrentDraft()}
-            disabled={!borrowerId || !draftReady || draftSavePending}
+            disabled={!borrowerId || !draftReady || draftDirty || draftSavePending}
             aria-label={`Save outreach draft for ${borrowerId ?? 'borrower'}`}
           >
             {draftSavePending ? 'Saving…' : draftIsSaved ? 'Draft saved' : 'Save draft'}

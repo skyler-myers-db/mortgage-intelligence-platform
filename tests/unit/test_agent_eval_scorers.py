@@ -68,7 +68,7 @@ def _response_for(case_id: str) -> dict:
                 }
             },
         }
-    if case_id == "listed_objective_routes_to_purchase_watch":
+    if case_id == "listed_objective_routes_to_exact_segment":
         return {
             **common,
             "workflow": {"id": "listing_watch"},
@@ -77,6 +77,38 @@ def _response_for(case_id: str) -> dict:
             "criteria": {
                 "lead_queue_filters": {
                     "segment_codes": ["listed"],
+                    "segment_mode": "any",
+                }
+            },
+        }
+    if case_id == "competitor_recapture_routes_to_named_monitor":
+        return {
+            **common,
+            "workflow": {"id": "competitor_recapture_monitor"},
+            "execution_mode": "deterministic",
+            "route": (
+                "/lead-queue?lender_relationship=Competitor+customer"
+                "&marketing_eligibility=Eligible+only"
+            ),
+            "criteria": {
+                "lead_queue_filters": {
+                    "segment_codes": [],
+                    "segment_mode": "any",
+                }
+            },
+        }
+    if case_id == "high_equity_heloc_routes_to_named_watch":
+        return {
+            **common,
+            "workflow": {"id": "high_equity_heloc_watch"},
+            "execution_mode": "deterministic",
+            "route": (
+                "/lead-queue?segment_codes=permit%2Cequity&segment_mode=any"
+                "&marketing_eligibility=Eligible+only"
+            ),
+            "criteria": {
+                "lead_queue_filters": {
+                    "segment_codes": ["permit", "equity"],
                     "segment_mode": "any",
                 }
             },
@@ -99,10 +131,12 @@ def test_golden_agent_cases_load() -> None:
     cases = load_cases()
     assert {case["id"] for case in cases} == {
         "refi_objective_routes_to_daily_refi",
-        "listed_objective_routes_to_purchase_watch",
+        "listed_objective_routes_to_exact_segment",
         "custom_any_mode_preserves_or_semantics",
         "custom_all_mode_preserves_intersection_semantics",
         "pii_prompt_is_rejected_before_planning",
+        "competitor_recapture_routes_to_named_monitor",
+        "high_equity_heloc_routes_to_named_watch",
     }
 
 
@@ -265,8 +299,8 @@ def test_growth_agent_eval_batch_summary() -> None:
     cases = load_cases()
     responses = {str(case["id"]): _response_for(str(case["id"])) for case in cases}
     summary = score_batch(responses, cases)
-    assert summary["passed"] == 5
-    assert summary["total"] == 5
+    assert summary["passed"] == 7
+    assert summary["total"] == 7
     assert summary["score"] == 1.0
 
 
@@ -310,9 +344,12 @@ def test_golden_cases_score_real_reviewed_planner_outputs() -> None:
             "criteria": {
                 "lead_queue_filters": {
                     "segment_codes": list(
-                        workflow.route_filters.get(
-                            "segment_codes", workflow.route_filters.get("segment", "")
-                        ).split(",")
+                        filter(
+                            None,
+                            workflow.route_filters.get(
+                                "segment_codes", workflow.route_filters.get("segment", "")
+                            ).split(","),
+                        )
                     ),
                     "segment_mode": workflow.route_filters.get("segment_mode", "any"),
                 }
@@ -320,7 +357,7 @@ def test_golden_cases_score_real_reviewed_planner_outputs() -> None:
         }
 
     summary = score_batch(responses)
-    assert summary["passed"] == summary["total"] == 5
+    assert summary["passed"] == summary["total"] == 7
 
 
 def test_agent_endpoint_exposes_source_proof_but_fails_without_destination_proof() -> None:

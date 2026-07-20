@@ -23,7 +23,7 @@ def test_prompt_planner_does_not_call_genie_sql_path(monkeypatch) -> None:
         settings=_settings(),
     )
 
-    assert workflow.id == "listing_watch"
+    assert workflow.id == "custom_segment_watch"
     assert evidence.execution_mode == "deterministic"
     assert evidence.trace_kind == "local_hash"
     assert evidence.planner_label == "Reviewed deterministic planner"

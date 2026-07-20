@@ -10,10 +10,11 @@
 #   2.  Validate the direct-deployment bundle under `-t dev`, with .env.local mapped to
 #       BUNDLE_VAR_* via tools/databricks/bundle_env.py.
 #   3.  Show the direct deployment plan.
-#   4.  Deploy the bundle.
-#   5.  Promote the uploaded bundle source to the running Databricks App.
-#   6.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
-#   7.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
+#   4.  Deploy non-App bundle resources, then apply source-free App resource
+#       bindings (first install creates the App stopped with --no-compute).
+#   5.  Migrate Lakebase (idempotent schema.sql + seed_campaigns.sql).
+#   6.  Promote the uploaded bundle source only after migration/grant proof.
+#   7.  Seed + refresh silver (FRED MORTGAGE30US + Cotality share).
 #   8.  Refresh gold (CTAS chain) — the last task in the chain is
 #       `refresh_semantics_views`, which lands the four mip.semantics.*
 #       metric views Genie depends on.
@@ -96,6 +97,7 @@ SKIP_SMOKE=0
 NO_CONFIRM=0
 VERIFY_SOURCE_ONLY=0
 TARGET="dev"
+TARGET_SEEN=0
 
 # `for arg in "$@"` iterates a pre-expanded snapshot, so an inner
 # `shift` to grab `-t <target>`'s value doesn't actually consume the
@@ -111,22 +113,30 @@ while [[ $# -gt 0 ]]; do
     --no-confirm)   NO_CONFIRM=1;    shift ;;
     --verify-source-only) VERIFY_SOURCE_ONLY=1; shift ;;
     -t|--target)
+      if [[ "$TARGET_SEEN" -eq 1 ]]; then
+        echo "[deploy] target may be supplied only once" >&2
+        exit 2
+      fi
       if [[ $# -lt 2 || -z "$2" ]]; then
         echo "[deploy] missing value for $1 (expected target name, e.g. dev)" >&2
         exit 2
       fi
-      TARGET="$2"; shift 2 ;;
+      TARGET="$2"; TARGET_SEEN=1; shift 2 ;;
     --target=*)
       # The `--target=` form can take an empty value (e.g. user typed
       # `--target=` with nothing after the equals sign). Validate and
       # fail fast so we never pass `-t ""` to `databricks bundle ...`
       # downstream (raised by Copilot 2026-04-22).
       TARGET="${1#--target=}"
+      if [[ "$TARGET_SEEN" -eq 1 ]]; then
+        echo "[deploy] target may be supplied only once" >&2
+        exit 2
+      fi
       if [[ -z "$TARGET" ]]; then
         echo "[deploy] missing value for --target= (expected target name, e.g. dev)" >&2
         exit 2
       fi
-      shift ;;
+      TARGET_SEEN=1; shift ;;
     -h|--help)
       sed -n '2,60p' "$0"
       exit 0
@@ -137,6 +147,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+if [[ "$TARGET" != "dev" && "$TARGET" != "prod" ]]; then
+  echo "[deploy] target must be exactly dev or prod; refusing '$TARGET'" >&2
+  exit 2
+fi
 
 # -----------------------------------------------------------------------------
 # Pretty-print helpers
@@ -161,6 +175,26 @@ run() {
     return 1
   fi
   "$@"
+}
+
+run_json_to_file() {
+  local output_file="$1"
+  local display_file="${output_file:-<dry-run-json-output>}"
+  shift
+  echo "${DIM}\$ $* > ${display_file}${RST}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ -z "$output_file" ]]; then
+    echo "${RED}[deploy] JSON command output path is required.${RST}" >&2
+    return 1
+  fi
+  if [[ -n "${APP_DEPLOYMENT_LEASE_HEARTBEAT_PID:-}" ]] && \
+     ! kill -0 "$APP_DEPLOYMENT_LEASE_HEARTBEAT_PID" 2>/dev/null; then
+    echo "${RED}[deploy] signed App deployment lease heartbeat is not running.${RST}" >&2
+    return 1
+  fi
+  "$@" > "$output_file"
 }
 
 run_redacted() {
@@ -272,6 +306,12 @@ AGENTIC_ENV_FILE=""
 AGENT_EVAL_ENV_FILE=""
 CUTOVER_JOURNAL_ENV_FILE=""
 APP_DEPLOYMENT_LEASE_ENV=""
+APP_LEASE_RECOVERY_ENV=""
+APP_RESOURCE_BINDING_SUMMARY=""
+APP_RESOURCE_BINDING_PAYLOAD=""
+APP_RESOURCE_BINDING_BEFORE=""
+APP_RESOURCE_BINDING_AFTER=""
+APP_CREATE_RESULT=""
 _PII_SECRET_PAYLOAD=""
 APP_DEPLOYMENT_LEASE_ID=""
 APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
@@ -284,6 +324,15 @@ TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
 APP_ACCESS_QUARANTINED=0
 REVIEWED_FUNCTION_GRANTS_PROVEN=1
+FIRST_INSTALL_APP_CREATED=0
+FIRST_INSTALL_APP_BOUND=0
+FIRST_INSTALL_COMPENSATION_AUTHORIZED=0
+FIRST_INSTALL_JOURNAL_STATUS="absent"
+FIRST_INSTALL_APP_ID=""
+FIRST_INSTALL_APP_CLIENT_ID=""
+FIRST_INSTALL_APP_SCIM_ID=""
+FIRST_INSTALL_JOURNAL_ENV=""
+FIRST_INSTALL_MARKED_PAYLOAD=""
 
 restore_deployment_sync_contract() {
   local source_label="${1:-agentic environment}"
@@ -358,10 +407,19 @@ restore_signed_blue_while_quiesced() {
 
 stop_and_quiesce_unproven_app() {
   local failed=0 outcome_file outcome_line="" extra_line="" outcome="" principal app_json
+  local -a stop_identity_args=()
+  if [[ "${FIRST_INSTALL_COMPENSATION_AUTHORIZED:-0}" -eq 1 ]]; then
+    stop_identity_args=(
+      --expected-app-id "${FIRST_INSTALL_APP_ID:?claimed first-install App ID is required}"
+      --expected-client-id "${FIRST_INSTALL_APP_CLIENT_ID:?claimed App client ID is required}"
+      --expected-scim-id "${FIRST_INSTALL_APP_SCIM_ID:?claimed App SCIM ID is required}"
+    )
+  fi
   outcome_file="$(mktemp -t mip-app-stop-outcome.XXXXXX.env)"
   chmod 600 "$outcome_file"
   if ! "$PYTHON" -m tools.databricks.stop_app_fail_closed \
     --app-name "$APP_FAIL_CLOSED_NAME" \
+    "${stop_identity_args[@]}" \
     --out-env "$outcome_file"; then
     rm -f "$outcome_file"
     return 1
@@ -441,6 +499,27 @@ converge_green_only_app_access() {
 stop_app_after_failed_deploy() {
   [[ "$DRY_RUN" -eq 0 && "$APP_FAIL_CLOSED_ARMED" -eq 1 && \
      -n "$APP_FAIL_CLOSED_NAME" ]] || return 0
+  if [[ "${FIRST_INSTALL_APP_CREATED:-0}" -eq 1 ]]; then
+    if ! refresh_first_install_journal_status; then
+      echo "${RED}[deploy] could not authenticate first-install App before stop compensation.${RST}" >&2
+      return 1
+    fi
+    case "$FIRST_INSTALL_JOURNAL_STATUS" in
+      recover)
+        FIRST_INSTALL_COMPENSATION_AUTHORIZED=1
+        ;;
+      orphan_claimed)
+        # Authoritative App absence needs no name-based stop or quiescence.
+        FIRST_INSTALL_COMPENSATION_AUTHORIZED=1
+        TREATMENT_RUNTIME_QUIESCED=1
+        return 0
+        ;;
+      *)
+        echo "${RED}[deploy] first-install stop compensation is not authorized for journal state ${FIRST_INSTALL_JOURNAL_STATUS:-unknown}.${RST}" >&2
+        return 1
+        ;;
+    esac
+  fi
   if [[ "${REVIEWED_FUNCTION_GRANTS_PROVEN:-1}" -ne 1 ]]; then
     echo "${RED}[deploy] reviewed function grants are unproven; stopping and quiescing instead of restoring signed blue.${RST}" >&2
     stop_and_quiesce_unproven_app
@@ -511,6 +590,11 @@ stop_app_after_failed_deploy() {
 }
 
 quiesce_app_treatment_after_failed_stop() {
+  if [[ "${FIRST_INSTALL_APP_CREATED:-0}" -eq 1 && \
+        "${FIRST_INSTALL_COMPENSATION_AUTHORIZED:-0}" -ne 1 ]]; then
+    echo "${RED}[deploy] refusing name-based treatment quiescence without an authenticated first-install App identity.${RST}" >&2
+    return 1
+  fi
   local principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}" app_json=""
   if [[ -z "$principal" && -n "$APP_FAIL_CLOSED_NAME" ]]; then
     app_json="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null || true)"
@@ -595,14 +679,169 @@ for row in (body.get("result") or {}).get("data_array", []):
   return "$failed"
 }
 
+finalize_signed_first_install_capture() {
+  # Capture makes this durable signed customer state. Change the compensation
+  # boundary before journal retirement because retirement can fail after an
+  # ambiguous Workspace Files delete without invalidating the signed release.
+  FIRST_INSTALL_APP_CREATED=0
+  FIRST_INSTALL_APP_BOUND=0
+  TREATMENT_RUNTIME_QUIESCED=0
+  APP_UPGRADE_STATE="green_captured_cleanup_pending"
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "absent" ]]; then
+    step "retire signed first-install ownership journal after last-good capture"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal complete \
+      --app-name "$APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+    FIRST_INSTALL_JOURNAL_STATUS="absent"
+  fi
+}
+
+refresh_first_install_journal_status() {
+  local status_env
+  status_env="$(mktemp -t mip-app-first-install-status.XXXXXX.env)"
+  chmod 600 "$status_env"
+  if ! run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_first_install_journal status \
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    --lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}" \
+    --source-git-sha "${SOURCE_GIT_SHA:?source SHA is required}" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --out-env "$status_env"; then
+    rm -f "$status_env"
+    return 1
+  fi
+  FIRST_INSTALL_JOURNAL_STATUS="$(sed -n 's/^MIP_FIRST_INSTALL_JOURNAL_STATUS=//p' "$status_env")"
+  FIRST_INSTALL_APP_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_ID=//p' "$status_env")"
+  FIRST_INSTALL_APP_CLIENT_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_CLIENT_ID=//p' "$status_env")"
+  FIRST_INSTALL_APP_SCIM_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_SCIM_ID=//p' "$status_env")"
+  rm -f "$status_env"
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" ]] && \
+     [[ -z "$FIRST_INSTALL_APP_ID" || -z "$FIRST_INSTALL_APP_CLIENT_ID" || \
+        -z "$FIRST_INSTALL_APP_SCIM_ID" ]]; then
+    return 1
+  fi
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" ]]; then
+    APP_SP_CLIENT_ID="$FIRST_INSTALL_APP_CLIENT_ID"
+  fi
+  [[ -n "$FIRST_INSTALL_JOURNAL_STATUS" ]]
+}
+
+recover_interrupted_first_install_app() {
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "recover" || \
+        -z "$FIRST_INSTALL_APP_ID" || -z "$FIRST_INSTALL_APP_CLIENT_ID" || \
+        -z "$FIRST_INSTALL_APP_SCIM_ID" || \
+        "$FIRST_INSTALL_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+    echo "${RED}[deploy] signed first-install recovery identity is incomplete or conflicts with inventory.${RST}" >&2
+    return 1
+  fi
+  APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+  step "stop journal-owned unsigned first-install App after interrupted deployment"
+  run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$_GRANTS_APP_NAME" \
+    --expected-app-id "$FIRST_INSTALL_APP_ID" \
+    --expected-client-id "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --expected-scim-id "$FIRST_INSTALL_APP_SCIM_ID"
+  step "quarantine journal-owned App access before exact recovery deletion"
+  run "$PYTHON" -m tools.databricks.converge_app_release_access \
+    --mode quarantine \
+    --app-name "$_GRANTS_APP_NAME" \
+    --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
+    --normal-application-id "$DATABRICKS_CLIENT_ID" \
+    --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
+    --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+  APP_ACCESS_QUARANTINED=1
+  step "quiesce journal-owned App treatment authority before recovery deletion"
+  run_with_account_identity \
+    "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --catalog "$_GRANTS_CATALOG" \
+    --principal "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --mode quiesce
+  TREATMENT_RUNTIME_QUIESCED=1
+  step "normalize and remove any interrupted first-install bundle binding"
+  run "$PYTHON" -m tools.databricks.bundle_env deployment bind \
+    mip_app "$_GRANTS_APP_NAME" -t "$TARGET" --auto-approve
+  run "$PYTHON" -m tools.databricks.bundle_env deployment unbind \
+    mip_app -t "$TARGET"
+  step "delete only the App authenticated by the signed first-install journal"
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_first_install_journal delete \
+    --app-name "$_GRANTS_APP_NAME" \
+    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --source-git-sha "$SOURCE_GIT_SHA" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+  _EXISTING_APPS_JSON="[]"
+  _EXISTING_APP_SP_CLIENT_ID=""
+  FIRST_INSTALL_JOURNAL_STATUS="absent"
+  FIRST_INSTALL_APP_ID=""
+  FIRST_INSTALL_APP_CLIENT_ID=""
+  FIRST_INSTALL_APP_SCIM_ID=""
+  APP_ACCESS_QUARANTINED=0
+  TREATMENT_RUNTIME_QUIESCED=0
+}
+
+cleanup_failed_first_install_app() {
+  [[ "$DRY_RUN" -eq 0 && "$FIRST_INSTALL_APP_CREATED" -eq 1 ]] || return 0
+  # Re-authenticate the signed journal before touching bundle state. The helper
+  # refuses signed customer state and any App whose creator, marker, exact
+  # resources, or immutable service-principal IDs no longer match.
+  if ! refresh_first_install_journal_status; then
+    echo "${RED}[deploy] could not authenticate failed first-install ownership.${RST}" >&2
+    return 1
+  fi
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "recover" && \
+        "$FIRST_INSTALL_JOURNAL_STATUS" != "orphan_claimed" ]]; then
+    echo "${RED}[deploy] first-install cleanup is not authorized for journal state ${FIRST_INSTALL_JOURNAL_STATUS:-unknown}.${RST}" >&2
+    return 1
+  fi
+  # FIRST_INSTALL_APP_BOUND is armed before bind, so both pre-commit and
+  # commit-then-error outcomes take this path. A failed/ambiguous unbind leaves
+  # the signed journal and App intact for the next lease to reconcile.
+  if [[ "$FIRST_INSTALL_APP_BOUND" -eq 1 ]]; then
+    echo "${YLW}[deploy] unbinding failed first-install App from bundle state before cleanup.${RST}" >&2
+    if ! "$PYTHON" -m tools.databricks.bundle_env deployment unbind \
+      mip_app -t "$TARGET"; then
+      echo "${RED}[deploy] failed to unbind the unverified first-install App; refusing API deletion.${RST}" >&2
+      return 1
+    fi
+    FIRST_INSTALL_APP_BOUND=0
+  fi
+  echo "${YLW}[deploy] deleting only the unsigned App authenticated by the signed first-install journal.${RST}" >&2
+  if ! run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_first_install_journal delete \
+    --app-name "$APP_FAIL_CLOSED_NAME" \
+    --lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?deployment lease is required}" \
+    --source-git-sha "${SOURCE_GIT_SHA:?source SHA is required}" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE"; then
+    echo "${RED}[deploy] authenticated failed first-install App deletion did not converge.${RST}" >&2
+    return 1
+  fi
+  FIRST_INSTALL_APP_CREATED=0
+  FIRST_INSTALL_JOURNAL_STATUS="absent"
+}
+
 restore_rendered_sql_fail_closed() {
-  local rc=$? compensation_failed=0
+  local rc=$? compensation_failed=0 app_stopped=0
   if [[ "$rc" -ne 0 ]]; then
-    if ! stop_app_after_failed_deploy; then
+    if stop_app_after_failed_deploy; then
+      app_stopped=1
+    else
       compensation_failed=1
       if ! quiesce_app_treatment_after_failed_stop; then
         echo "${RED}[deploy] secondary treatment-write quiescence also failed.${RST}" >&2
       fi
+    fi
+    if [[ "$app_stopped" -eq 1 ]] && \
+       declare -F cleanup_failed_first_install_app >/dev/null && \
+       ! cleanup_failed_first_install_app; then
+        compensation_failed=1
     fi
   fi
   if declare -F revoke_agent_runtime_bootstrap_grants >/dev/null && \
@@ -648,6 +887,30 @@ restore_rendered_sql_fail_closed() {
   fi
   if [[ -n "${APP_DEPLOYMENT_LEASE_ENV:-}" ]]; then
     rm -f "$APP_DEPLOYMENT_LEASE_ENV"
+  fi
+  if [[ -n "${APP_LEASE_RECOVERY_ENV:-}" ]]; then
+    rm -f "$APP_LEASE_RECOVERY_ENV"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_SUMMARY:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_SUMMARY"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_PAYLOAD:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_PAYLOAD"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_BEFORE:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_BEFORE"
+  fi
+  if [[ -n "${APP_RESOURCE_BINDING_AFTER:-}" ]]; then
+    rm -f "$APP_RESOURCE_BINDING_AFTER"
+  fi
+  if [[ -n "${APP_CREATE_RESULT:-}" ]]; then
+    rm -f "$APP_CREATE_RESULT"
+  fi
+  if [[ -n "${FIRST_INSTALL_JOURNAL_ENV:-}" ]]; then
+    rm -f "$FIRST_INSTALL_JOURNAL_ENV"
+  fi
+  if [[ -n "${FIRST_INSTALL_MARKED_PAYLOAD:-}" ]]; then
+    rm -f "$FIRST_INSTALL_MARKED_PAYLOAD"
   fi
   if [[ -n "${_PII_SECRET_PAYLOAD:-}" ]]; then
     rm -f "$_PII_SECRET_PAYLOAD"
@@ -940,6 +1203,7 @@ run_as_m2m_identity() {
   local verifier_signing_key="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
   local verifier_verify_key="${MIP_AI_GATEWAY_PROOF_VERIFY_KEY:-}"
   local verifier_previous_key="${MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY:-}"
+  local verifier_historical_keys="${MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS:-}"
   local model_signing_key="${MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY:-}"
   local model_verify_key="${MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY:-}"
   local model_previous_key="${MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY:-}"
@@ -982,6 +1246,9 @@ run_as_m2m_identity() {
       fi
       if [[ -n "$verifier_previous_key" ]]; then
         export MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY="$verifier_previous_key"
+      fi
+      if [[ -n "$verifier_historical_keys" ]]; then
+        export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$verifier_historical_keys"
       fi
     fi
     if [[ "$label" == "verifier" && -n "$verifier_signing_key" ]]; then
@@ -1132,6 +1399,36 @@ fi
 # preserve the established Entrada installation. Alias drift still fails.
 MIP_DEFAULT_CATALOG="$(deployment_control_value MIP_DEFAULT_CATALOG mip)"
 MIP_APP_NAME="$(deployment_control_value MIP_APP_NAME mip-app)"
+MIP_LENDER_NAME="$(deployment_control_value MIP_LENDER_NAME 'Summit Mortgage')"
+_MIP_LENDER_NMLS_ID="$(deployment_control_value MIP_LENDER_NMLS_ID)"
+_MIP_TENANT_ID="$(deployment_control_value MIP_TENANT_ID)"
+if [[ ! -f backend/schemas/lender_identity.py ]]; then
+  # Isolated shell-contract tests copy only deploy.sh. The only safe fallback
+  # without the source-controlled registry is the exact built-in demo pair.
+  if [[ "$MIP_LENDER_NAME" != "Summit Mortgage" || \
+        ( -n "$_MIP_LENDER_NMLS_ID" && "$_MIP_LENDER_NMLS_ID" != "123456" ) || \
+        ( -n "$_MIP_TENANT_ID" && "$_MIP_TENANT_ID" != "summit" ) ]]; then
+    echo "${RED}[deploy] source-controlled lender identity registry is unavailable.${RST}" >&2
+    exit 2
+  fi
+  _MIP_LENDER_IDENTITY=$'Summit Mortgage\t123456\tsummit'
+elif ! _MIP_LENDER_IDENTITY="$(
+    "$PYTHON" -c '
+import sys
+from backend.schemas.lender_identity import effective_public_tenant_id, validate_public_lender_identity
+lender, nmls = validate_public_lender_identity(sys.argv[1], sys.argv[2])
+tenant = effective_public_tenant_id(sys.argv[3], lender_name=lender)
+print("\t".join((lender, nmls, tenant)))
+' "$MIP_LENDER_NAME" "$_MIP_LENDER_NMLS_ID" "$_MIP_TENANT_ID"
+)"; then
+  echo "${RED}[deploy] lender name, NMLS id, or tenant disclosure namespace is invalid.${RST}" >&2
+  exit 2
+fi
+IFS=$'\t' read -r MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID <<< "$_MIP_LENDER_IDENTITY"
+if [[ -z "$MIP_LENDER_NAME" || -z "$MIP_LENDER_NMLS_ID" || -z "$MIP_TENANT_ID" ]]; then
+  echo "${RED}[deploy] lender disclosure identity did not resolve completely.${RST}" >&2
+  exit 2
+fi
 _LAKEBASE_INSTANCE_NAME="$(deployment_control_value LAKEBASE_INSTANCE_NAME)"
 _MIP_LAKEBASE_INSTANCE="$(deployment_control_value MIP_LAKEBASE_INSTANCE)"
 if [[ -n "$_LAKEBASE_INSTANCE_NAME" && -n "$_MIP_LAKEBASE_INSTANCE" && \
@@ -1159,10 +1456,57 @@ DEPLOYMENT_SYNC_TABLES="$MIP_LAKEBASE_SYNC_TABLES"
 MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME 'Mortgage Lead Intelligence')"
 MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"
 MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE mip-app-rollback)"
-export MIP_DEFAULT_CATALOG MIP_APP_NAME MIP_LAKEBASE_INSTANCE LAKEBASE_INSTANCE_NAME
+MIP_OTEL_ENDPOINT="$(deployment_control_value MIP_OTEL_ENDPOINT)"
+MIP_OTEL_HEADERS_SECRET_SCOPE="$(deployment_control_value MIP_OTEL_HEADERS_SECRET_SCOPE)"
+MIP_OTEL_HEADERS_SECRET_KEY="$(deployment_control_value MIP_OTEL_HEADERS_SECRET_KEY)"
+_MIP_OTEL_HEADERS_PLAINTEXT="$(deployment_control_value MIP_OTEL_HEADERS)"
+if [[ -n "$_MIP_OTEL_HEADERS_PLAINTEXT" ]]; then
+  unset _MIP_OTEL_HEADERS_PLAINTEXT
+  echo "${RED}[deploy] MIP_OTEL_HEADERS must never be provided as plaintext deploy config; store it in Databricks Secrets.${RST}" >&2
+  exit 2
+fi
+unset _MIP_OTEL_HEADERS_PLAINTEXT
+if [[ -n "$MIP_OTEL_ENDPOINT" || -n "$MIP_OTEL_HEADERS_SECRET_SCOPE" || \
+      -n "$MIP_OTEL_HEADERS_SECRET_KEY" ]]; then
+  if [[ -z "$MIP_OTEL_ENDPOINT" || -z "$MIP_OTEL_HEADERS_SECRET_SCOPE" || \
+        -z "$MIP_OTEL_HEADERS_SECRET_KEY" ]]; then
+    echo "${RED}[deploy] OTLP requires MIP_OTEL_ENDPOINT plus the Databricks Secret scope and key.${RST}" >&2
+    exit 2
+  fi
+  if ! "$PYTHON" - "$MIP_OTEL_ENDPOINT" <<'PYEOF'
+import sys
+from tools.databricks.app_deploy_payload import validated_otel_endpoint
+
+validated_otel_endpoint(sys.argv[1])
+PYEOF
+  then
+    echo "${RED}[deploy] MIP_OTEL_ENDPOINT must be credential-free HTTPS without query or fragment.${RST}" >&2
+    exit 2
+  fi
+  if [[ ! "$MIP_OTEL_HEADERS_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
+        ! "$MIP_OTEL_HEADERS_SECRET_KEY" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+    echo "${RED}[deploy] OTLP Databricks Secret scope/key names are invalid.${RST}" >&2
+    exit 2
+  fi
+fi
+export MIP_DEFAULT_CATALOG MIP_APP_NAME MIP_LENDER_NAME MIP_LENDER_NMLS_ID MIP_TENANT_ID
+export MIP_LAKEBASE_INSTANCE LAKEBASE_INSTANCE_NAME
 export LAKEBASE_DATABASE MIP_LAKEBASE_DATABASE_NAME MIP_LAKEBASE_SYNC_CATALOG
 export MIP_LAKEBASE_SYNC_SCHEMA MIP_LAKEBASE_SYNC_TABLES
 export MIP_GENIE_SPACE_NAME MIP_RUNTIME_SECRET_SCOPE MIP_APP_ROLLBACK_SECRET_SCOPE
+export MIP_OTEL_ENDPOINT MIP_OTEL_HEADERS_SECRET_SCOPE MIP_OTEL_HEADERS_SECRET_KEY
+OTEL_RESOURCE_BINDING_ARGS=()
+OTEL_DEPLOY_PAYLOAD_ARGS=()
+if [[ -n "$MIP_OTEL_ENDPOINT" ]]; then
+  OTEL_RESOURCE_BINDING_ARGS=(
+    --otel-header-secret-scope "$MIP_OTEL_HEADERS_SECRET_SCOPE"
+    --otel-header-secret-key "$MIP_OTEL_HEADERS_SECRET_KEY"
+  )
+  OTEL_DEPLOY_PAYLOAD_ARGS=(
+    --otel-endpoint "$MIP_OTEL_ENDPOINT"
+    --otel-header-resource otel_headers
+  )
+fi
 APP_ROLLBACK_SECRET_SCOPE="$MIP_APP_ROLLBACK_SECRET_SCOPE"
 if [[ ! "$MIP_APP_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
   echo "${RED}[deploy] MIP_APP_NAME must be a lowercase DNS-style name.${RST}" >&2
@@ -1197,6 +1541,9 @@ if [[ ! "$MIP_RUNTIME_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
   exit 2
 fi
 export BUNDLE_VAR_app_name="$MIP_APP_NAME"
+export BUNDLE_VAR_lender_name="$MIP_LENDER_NAME"
+export BUNDLE_VAR_lender_nmls_id="$MIP_LENDER_NMLS_ID"
+export BUNDLE_VAR_tenant_id="$MIP_TENANT_ID"
 export BUNDLE_VAR_lakebase_instance_name="$MIP_LAKEBASE_INSTANCE"
 export BUNDLE_VAR_lakebase_catalog_name="$MIP_LAKEBASE_SYNC_CATALOG"
 export BUNDLE_VAR_lakebase_database_name="$LAKEBASE_DATABASE"
@@ -1327,6 +1674,24 @@ fi
 # receives only the derived public key, so the Lakebase proof-writer credential
 # cannot manufacture a claimable row by itself.
 # shellcheck disable=SC2031  # Parent-shell secret is unchanged by M2M subshells.
+_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED="${MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY:-}"
+if [[ -z "$_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED" ]]; then
+  _AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED="$(dotenv_value MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY)"
+fi
+if [[ -n "$_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED" ]]; then
+  # shellcheck disable=SC2031  # Intentional parent-shell restoration.
+  export MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY="$_AI_GATEWAY_PROOF_PREVIOUS_KEY_RESOLVED"
+fi
+# shellcheck disable=SC2031  # Intentional parent-shell restoration.
+_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED="${MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS:-}"
+if [[ -z "$_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED" ]]; then
+  _AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED="$(dotenv_value MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS)"
+fi
+if [[ -n "$_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED" ]]; then
+  # shellcheck disable=SC2031  # Intentional parent-shell restoration.
+  export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$_AI_GATEWAY_PROOF_HISTORICAL_KEYS_RESOLVED"
+fi
+# shellcheck disable=SC2031  # Intentional parent-shell restoration.
 _AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
 if [[ -z "$_AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED" ]]; then
   _AI_GATEWAY_PROOF_SIGNING_KEY_RESOLVED="$(dotenv_value MIP_AI_GATEWAY_PROOF_SIGNING_KEY)"
@@ -1480,8 +1845,25 @@ PYEOF
 )"
   export MIP_ADMIN_IDENTITIES
   export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"
+  export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"
   # The signed lease is the first persistent workspace mutation. A contender
   # must lose here before it can revoke stale grants or alter shared resources.
+  APP_LEASE_RECOVERY_ENV="$(mktemp -t mip-app-lease-recovery.XXXXXX.env)"
+  chmod 600 "$APP_LEASE_RECOVERY_ENV"
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_deployment_lease recovery-root \
+    --app-name "$_GRANTS_APP_NAME" \
+    --out-env "$APP_LEASE_RECOVERY_ENV"
+  set -a
+  # shellcheck disable=SC1090
+  . "$APP_LEASE_RECOVERY_ENV"
+  set +a
+  _APP_EXPIRED_LEASE_RECOVERY_ARGS=()
+  if [[ -n "${MIP_APP_DEPLOYMENT_RECOVERY_ROOT:-}" ]]; then
+    _APP_EXPIRED_LEASE_RECOVERY_ARGS=(
+      --expired-recovery-lease-id "$MIP_APP_DEPLOYMENT_RECOVERY_ROOT"
+    )
+  fi
   APP_DEPLOYMENT_LEASE_ENV="$(mktemp -t mip-app-deployment-lease.XXXXXX.env)"
   step "acquire signed workspace lease for the exact App deployment"
   run_with_proof_signing_authority \
@@ -1489,6 +1871,7 @@ PYEOF
     --app-name "$_GRANTS_APP_NAME" \
     --source-git-sha "$SOURCE_GIT_SHA" \
     --writer-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    "${_APP_EXPIRED_LEASE_RECOVERY_ARGS[@]}" \
     --out-env "$APP_DEPLOYMENT_LEASE_ENV"
   set -a
   # shellcheck disable=SC1090
@@ -1553,6 +1936,69 @@ else:
         raise SystemExit(f"existing Databricks App {name!r} has no service principal")
     print(principal)
 ')"
+  FIRST_INSTALL_JOURNAL_ENV="$(mktemp -t mip-app-first-install-status.XXXXXX.env)"
+  chmod 600 "$FIRST_INSTALL_JOURNAL_ENV"
+  run_with_proof_signing_authority \
+    "$PYTHON" -m tools.databricks.app_first_install_journal status \
+    --app-name "$_GRANTS_APP_NAME" \
+    --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+    --source-git-sha "$SOURCE_GIT_SHA" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --out-env "$FIRST_INSTALL_JOURNAL_ENV"
+  set -a
+  # shellcheck disable=SC1090
+  . "$FIRST_INSTALL_JOURNAL_ENV"
+  set +a
+  FIRST_INSTALL_JOURNAL_STATUS="${MIP_FIRST_INSTALL_JOURNAL_STATUS:?journal status is required}"
+  FIRST_INSTALL_APP_ID="${MIP_FIRST_INSTALL_APP_ID:-}"
+  FIRST_INSTALL_APP_CLIENT_ID="${MIP_FIRST_INSTALL_APP_CLIENT_ID:-}"
+  FIRST_INSTALL_APP_SCIM_ID="${MIP_FIRST_INSTALL_APP_SCIM_ID:-}"
+  if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_unclaimed" ]]; then
+    step "clear signed first-install intent whose App creation never committed"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal clear-absent \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+    FIRST_INSTALL_JOURNAL_STATUS="absent"
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed" ]]; then
+    step "retire claimed first-install journal after authenticated App deletion"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal delete \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+    FIRST_INSTALL_JOURNAL_STATUS="absent"
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" ]]; then
+    if [[ -z "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
+      echo "${RED}[deploy] signed first-install journal names an App absent from inventory.${RST}" >&2
+      exit 4
+    fi
+    recover_interrupted_first_install_app
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "unclaimed" ]]; then
+    APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
+    step "bind interrupted first-install App to its authoritative create audit event"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal recover-claim \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+    refresh_first_install_journal_status
+    if [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "recover" ]]; then
+      echo "${RED}[deploy] audited first-install recovery did not converge to recoverable state.${RST}" >&2
+      exit 4
+    fi
+    recover_interrupted_first_install_app
+  elif [[ "$FIRST_INSTALL_JOURNAL_STATUS" != "absent" && \
+          "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
+    echo "${RED}[deploy] unrecognized first-install journal state.${RST}" >&2
+    exit 4
+  fi
   if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
     APP_UPGRADE_STATE="unverified_existing"
     _EXISTING_APP_URL="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
@@ -1567,7 +2013,8 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
     fi
     APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
     APP_FAIL_CLOSED_ARMED=1
-    if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]; then
+    if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \
+          "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
       step "explicitly stop an unverified legacy App before fail-closed rebase"
       run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
         --app-name "$_GRANTS_APP_NAME"
@@ -1618,6 +2065,17 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       APP_SIGNED_BLUE_AVAILABLE=1
       TREATMENT_RUNTIME_QUIESCED=1
       APP_UPGRADE_STATE="blue_quiesced"
+      if [[ "$FIRST_INSTALL_JOURNAL_STATUS" == "signed" ]]; then
+        step "retire completed first-install journal after signed-blue verification"
+        run_with_proof_signing_authority \
+          "$PYTHON" -m tools.databricks.app_first_install_journal complete \
+          --app-name "$_GRANTS_APP_NAME" \
+          --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+          --source-git-sha "$SOURCE_GIT_SHA" \
+          --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+          --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
+        FIRST_INSTALL_JOURNAL_STATUS="absent"
+      fi
     fi
     # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
     if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" && \
@@ -1763,10 +2221,20 @@ run_with_account_identity \
   "$PYTHON" -m tools.databricks.ensure_pipeline_namespace \
   "${_PIPELINE_NAMESPACE_ARGS[@]}"
 verify_exact_deploy_source
-if [[ -n "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
-  step "deploy non-App bundle resources while the prior App snapshot remains live"
+step "deploy non-App bundle resources without activating an App candidate"
+if [[ "$DRY_RUN" -eq 0 ]]; then
   BUNDLE_SUMMARY_JSON="$("$PYTHON" -m tools.databricks.bundle_env summary -t "$TARGET" -o json)"
-  BUNDLE_NON_APP_SELECTORS="$(printf '%s' "$BUNDLE_SUMMARY_JSON" | "$PYTHON" -c '
+else
+  # Preserve offline dry-run semantics: derive only resource keys from the
+  # checked-in bundle and never authenticate to resolve a live summary.
+  BUNDLE_SUMMARY_JSON="$("$PYTHON" -c '
+import json, sys, yaml
+
+body = yaml.safe_load(open(sys.argv[1], encoding="utf-8")) or {}
+print(json.dumps({"resources": body.get("resources") or {}}))
+' databricks.yml)"
+fi
+BUNDLE_NON_APP_SELECTORS="$(printf '%s' "$BUNDLE_SUMMARY_JSON" | "$PYTHON" -c '
 import json, sys
 
 body = json.load(sys.stdin)
@@ -1781,20 +2249,119 @@ if not selectors:
     raise SystemExit("bundle summary exposed no non-App resources")
 print("\n".join(selectors))
 ')"
-  BUNDLE_NON_APP_ARGS=()
-  while IFS= read -r _bundle_selector; do
-    [[ -n "$_bundle_selector" ]] || continue
-    BUNDLE_NON_APP_ARGS+=(--select "$_bundle_selector")
-  done <<< "$BUNDLE_NON_APP_SELECTORS"
-  run "$PYTHON" -m tools.databricks.bundle_env deploy \
-    -t "$TARGET" "${BUNDLE_NON_APP_ARGS[@]}"
-else
-  step "deploy full bundle for first App creation"
-  run "$PYTHON" -m tools.databricks.bundle_env deploy -t "$TARGET"
+BUNDLE_NON_APP_ARGS=()
+while IFS= read -r _bundle_selector; do
+  [[ -n "$_bundle_selector" ]] || continue
+  BUNDLE_NON_APP_ARGS+=(--select "$_bundle_selector")
+done <<< "$BUNDLE_NON_APP_SELECTORS"
+run "$PYTHON" -m tools.databricks.bundle_env deploy -t "$TARGET" "${BUNDLE_NON_APP_ARGS[@]}"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  # Refresh after apply: on a true first install this is the first summary
+  # that can contain concrete ids for every App resource binding.
+  BUNDLE_SUMMARY_JSON="$("$PYTHON" -m tools.databricks.bundle_env summary -t "$TARGET" -o json)"
 fi
 
-# A true first install has no service principal to quiesce before bundle
-# apply. Resolve the newly created (or retained) App identity immediately and
+# The App's Lakebase role exists only after its database resource binding is
+# applied. A DAB bind records state but does not update the live App, while a
+# full App bundle deploy would also activate source_code_path. Resolve the
+# now-created non-App resource ids and use the Apps API to apply only resource
+# bindings. First installs create the App stopped with those bindings; upgrades
+# update the existing App and prove its active/pending source deployment and
+# compute state did not change.
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  APP_RESOURCE_BINDING_SUMMARY="$(mktemp -t mip-app-resource-summary.XXXXXX.json)"
+  APP_RESOURCE_BINDING_PAYLOAD="$(mktemp -t mip-app-resource-payload.XXXXXX.json)"
+  APP_RESOURCE_BINDING_AFTER="$(mktemp -t mip-app-resource-after.XXXXXX.json)"
+  chmod 600 \
+    "$APP_RESOURCE_BINDING_SUMMARY" \
+    "$APP_RESOURCE_BINDING_PAYLOAD" \
+    "$APP_RESOURCE_BINDING_AFTER"
+  printf '%s\n' "$BUNDLE_SUMMARY_JSON" > "$APP_RESOURCE_BINDING_SUMMARY"
+  "$PYTHON" -m tools.databricks.app_resource_bindings build \
+    --bundle-summary "$APP_RESOURCE_BINDING_SUMMARY" \
+    --app-name "$_GRANTS_APP_NAME" \
+    "${OTEL_RESOURCE_BINDING_ARGS[@]}" \
+    --out "$APP_RESOURCE_BINDING_PAYLOAD"
+else
+  APP_RESOURCE_BINDING_PAYLOAD="/tmp/mip-dry-run-app-resource-bindings.json"
+fi
+if [[ -z "${_EXISTING_APP_SP_CLIENT_ID:-}" ]]; then
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    FIRST_INSTALL_MARKED_PAYLOAD="$(mktemp -t mip-app-first-install-payload.XXXXXX.json)"
+    chmod 600 "$FIRST_INSTALL_MARKED_PAYLOAD"
+    step "persist signed first-install ownership before remote App creation"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal prepare \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --payload "$APP_RESOURCE_BINDING_PAYLOAD" \
+      --out-payload "$FIRST_INSTALL_MARKED_PAYLOAD"
+    FIRST_INSTALL_JOURNAL_STATUS="prepared"
+  else
+    FIRST_INSTALL_MARKED_PAYLOAD="$APP_RESOURCE_BINDING_PAYLOAD"
+  fi
+  step "create stopped Databricks App with resolved resource bindings and no source deployment"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    APP_CREATE_RESULT="$(mktemp -t mip-app-first-install-create.XXXXXX.json)"
+    chmod 600 "$APP_CREATE_RESULT"
+  else
+    APP_CREATE_RESULT=""
+  fi
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    # Arm the signed-journal compensation boundary before the remote POST. A
+    # nonzero CLI result can still mean that Apps committed creation and only
+    # the response was lost. Until the journal binds immutable IDs, the exit
+    # trap must refuse every name-based App stop or treatment mutation.
+    FIRST_INSTALL_APP_CREATED=1
+  fi
+  run_json_to_file "$APP_CREATE_RESULT" databricks apps create \
+    --json "@$FIRST_INSTALL_MARKED_PAYLOAD" \
+    --no-compute \
+    -o json
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
+    "$PYTHON" -m tools.databricks.app_resource_bindings verify \
+      --expected "$FIRST_INSTALL_MARKED_PAYLOAD" \
+      --after "$APP_RESOURCE_BINDING_AFTER" \
+      --require-stopped-without-deployment
+    step "bind signed first-install recovery to the created App service-principal identity"
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_first_install_journal claim \
+      --app-name "$_GRANTS_APP_NAME" \
+      --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+      --source-git-sha "$SOURCE_GIT_SHA" \
+      --created-app "$APP_CREATE_RESULT"
+    FIRST_INSTALL_JOURNAL_STATUS="recover"
+  fi
+  step "bind the stopped source-free App into bundle deployment state"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    # Arm compensation before the remote command: a nonzero exit can still mean
+    # the bind committed and its response was lost.
+    FIRST_INSTALL_APP_BOUND=1
+  fi
+  run "$PYTHON" -m tools.databricks.bundle_env deployment bind \
+    mip_app "$_GRANTS_APP_NAME" -t "$TARGET" --auto-approve
+else
+  step "update existing Databricks App resource bindings without source activation"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    APP_RESOURCE_BINDING_BEFORE="$(mktemp -t mip-app-resource-before.XXXXXX.json)"
+    chmod 600 "$APP_RESOURCE_BINDING_BEFORE"
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
+  fi
+  run databricks apps update "$_GRANTS_APP_NAME" \
+    --json "@$APP_RESOURCE_BINDING_PAYLOAD"
+  if [[ "$DRY_RUN" -eq 0 ]]; then
+    databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
+    "$PYTHON" -m tools.databricks.app_resource_bindings verify \
+      --expected "$APP_RESOURCE_BINDING_PAYLOAD" \
+      --before "$APP_RESOURCE_BINDING_BEFORE" \
+      --after "$APP_RESOURCE_BINDING_AFTER"
+  fi
+fi
+
+# A true first install has no service principal to quiesce before App identity
+# creation. Resolve the newly created (or retained) identity immediately and
 # apply the same authoritative identity/metastore/UC boundary before any
 # migration, catalog bootstrap, or general data grant can run.
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -1802,7 +2369,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
   APP_SP_CLIENT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' 2>/dev/null || true)"
   APP_SP_SCIM_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("service_principal_id") or "").strip())' 2>/dev/null || true)"
   if [[ -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
-    echo "${RED}[deploy] could not resolve both service-principal identifiers for app '$_GRANTS_APP_NAME' immediately after bundle apply.${RST}" >&2
+    echo "${RED}[deploy] could not resolve both service-principal identifiers for app '$_GRANTS_APP_NAME' after stopped identity bootstrap.${RST}" >&2
     exit 4
   fi
   # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
@@ -1876,9 +2443,9 @@ run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
 # app snapshot promotion, the freshly restarted app raced the migrate job's
 # schema work, tripped the lakebase circuit breaker, and showed the audit
 # feed's degraded banner for ~30s. Migrating first means the restarted app
-# boots against an already-migrated schema. Bonus: the migrate job's runtime
-# gives the bundle-triggered app deployment time to settle, so the
-# wait_for_app_deployable() poll below usually finds a clear runway.
+# boots against an already-migrated schema. The stopped first-install identity
+# and every existing App remain unmodified throughout this migration; source
+# activation occurs only through deploy_app_snapshot after convergence.
 # Requires only step 4 (the bundle apply defines the job + Lakebase instance).
 step "migrate Lakebase — schema.sql + seed_campaigns.sql (idempotent)"
 run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"
@@ -2173,11 +2740,11 @@ APP_NAME="${MIP_APP_NAME:-mip-app}"
 # races were observed in the wild, each failing this step on a fresh run:
 #   1. App STOPPED (idle auto-stop / manual stop) -> "Cannot deploy app ...
 #      as it is not in RUNNING state."
-#   2. The bundle deploy in the previous step triggers its OWN app deployment
-#      (the app is a bundle resource), so an immediate `apps deploy` here
-#      collides with it -> "active/pending deployment in progress."
+#   2. A prior interrupted governed promotion can leave an active/pending
+#      deployment in progress. The selected non-App bundle apply above cannot
+#      create one, but retry recovery must still wait for the existing state.
 # Both are waitable states, not errors. Start the app if needed, then poll
-# until no deployment is in flight before promoting the snapshot.
+# until no deployment is in flight before promoting the signed snapshot.
 wait_for_app_deployable() {
   local compute pend active i
   compute="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("compute_status") or {}).get("state",""))' || true)"
@@ -2209,6 +2776,7 @@ emit_app_deploy_payload() {
     --schema "${MIP_DEFAULT_SCHEMA:-gold}" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --enable-campaign-treatment-runtime \
+    "${OTEL_DEPLOY_PAYLOAD_ARGS[@]}" \
     > "$destination"
 }
 
@@ -2246,7 +2814,7 @@ capture_last_good_app() {
     --base-url "${MIP_APP_URL:?App URL is required for exact last-good capture}"
     --token-env MIP_BEARER_TOKEN
     --payload "${APP_LAST_DEPLOY_PAYLOAD:?App deployment payload is required}"
-    --bundle-summary "${APP_BUNDLE_SUMMARY:?Resolved bundle summary is required}"
+    --app-resource-payload "${APP_RESOURCE_BINDING_PAYLOAD:?Resolved App resources are required}"
     --expected-git-sha "$APP_GIT_SHA"
     --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
@@ -2730,11 +3298,10 @@ PYEOF
       --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
       --expected-count "$AGENT_TOOL_EXPECTED_COUNT" \
       --catalog "${MIP_DEFAULT_CATALOG:-mip}"
-    step "reconcile runtime read-only and verifier-only Lakebase proof-ledger grants"
-    run "$PYTHON" jobs/lakebase_migrate.py \
-      --app-name "$MIP_APP_NAME" \
-      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-      --lakebase-database "$LAKEBASE_DATABASE"
+    # The pre-activation mip_lakebase_migrate job already reconciled the exact
+    # App and verifier Lakebase grants after both OAuth roles were bootstrapped.
+    # Never rerun the full schema transaction after activating an App snapshot:
+    # doing so races live requests and can trip the Lakebase circuit breaker.
     AI_GATEWAY_GRANTS_READY=1
     step "grant least-privilege AI Gateway inference-table access to the app service principal"
     if ! run "$PYTHON" -m tools.databricks.grant_ai_gateway_inference_table \
@@ -2889,8 +3456,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
   APP_UPGRADE_STATE="green_treatment_pending_capture"
   step "atomically restore treatment authority and persist the last-good App contract"
   capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"
-  TREATMENT_RUNTIME_QUIESCED=0
-  APP_UPGRADE_STATE="green_captured_cleanup_pending"
+  finalize_signed_first_install_capture
   if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
     step "replace release-probe access with exact runtime operator access after signed capture"
     # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.

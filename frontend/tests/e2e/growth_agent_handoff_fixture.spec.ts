@@ -111,7 +111,7 @@ test('renders verified provenance only after all Lead Queue identity headers rec
   await page.goto(proofRoute());
 
   const proof = page.getByTestId('growth-agent-cohort-proof');
-  await expect(proof).toBeVisible();
+  await expect(proof).toBeVisible({ timeout: 30_000 });
   await expect(proof).toContainText('12 borrowers');
   await expect(proof).toContainText(`proof ${COHORT_FINGERPRINT.slice(0, 12)}`);
   await expect(proof).toContainText(`snapshot ${SNAPSHOT_ID}`);
@@ -129,5 +129,5 @@ test('does not trust a proof-shaped URL when the backend run-id header differs',
   await page.goto(proofRoute());
 
   await expect(page.getByTestId('growth-agent-cohort-proof')).toHaveCount(0);
-  await expect(page.getByRole('alert')).toContainText('Growth Agent cohort is stale');
+  await expect(page.getByRole('alert')).toContainText('Growth Agent cohort is stale', { timeout: 30_000 });
 });

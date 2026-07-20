@@ -789,9 +789,9 @@ def run(args: argparse.Namespace) -> int:
         print()
         print(
             "note: trusted_assets in the YAML reference a catalog not yet "
-            f"materialized ({spec.catalog}). Run `make bundle-deploy-dev` then "
-            "`databricks bundle run refresh_silver -t dev` to create the "
-            "gold tables, then re-run this tool to bind them to the space."
+            f"materialized ({spec.catalog}). Run `./scripts/deploy.sh -t dev` "
+            "to create and refresh the governed tables, then re-run this tool "
+            "to bind them to the space."
         )
 
     if args.smoke_test and not _run_smoke_test(client, space_id):

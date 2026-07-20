@@ -49,8 +49,25 @@ def _apply_migration(conn_kwargs: dict[str, str]) -> None:
     lakebase_migrate._run_transaction(
         (pre_seed, _SEED, post_seed),
         conn_kwargs,
+        app_role="lakebase-schema-upgrade-test-role",
         verify_outreach_integrity=True,
     )
+
+
+def _reviewed_trigger_keys(conn_kwargs: dict[str, str]) -> set[tuple[str, str, str]]:
+    with psycopg.connect(**conn_kwargs) as conn, conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT n.nspname, c.relname, t.tgname
+            FROM pg_trigger t
+            JOIN pg_class c ON c.oid = t.tgrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE NOT t.tgisinternal
+              AND n.nspname = 'mip_app'
+            ORDER BY n.nspname, c.relname, t.tgname
+            """
+        )
+        return {(str(schema), str(table), str(trigger)) for schema, table, trigger in cur}
 
 
 def _proof_rows(conn_kwargs: dict[str, str]) -> tuple[list[tuple[Any, ...]], ...]:
@@ -244,6 +261,31 @@ def test_fresh_upgrade_and_recurring_apply_preserve_proof(
     assert _proof_rows(postgres_kwargs) == upgraded_rows
 
 
+def test_failed_migration_rolls_back_reviewed_trigger_quarantine(
+    postgres_kwargs: dict[str, str],
+) -> None:
+    _apply_migration(postgres_kwargs)
+    expected = set(lakebase_migrate._APP_TRIGGER_CONTRACT)
+    assert _reviewed_trigger_keys(postgres_kwargs) == expected
+
+    with pytest.raises(psycopg.Error, match="forced migration rollback"):
+        lakebase_migrate._run_transaction(
+            (
+                """
+                DO $mip_forced_rollback$
+                BEGIN
+                    RAISE EXCEPTION 'forced migration rollback';
+                END
+                $mip_forced_rollback$;
+                """,
+            ),
+            postgres_kwargs,
+            app_role="lakebase-schema-upgrade-test-role",
+        )
+
+    assert _reviewed_trigger_keys(postgres_kwargs) == expected
+
+
 def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(
     postgres_kwargs: dict[str, str],
 ) -> None:
@@ -260,9 +302,7 @@ def test_campaign_json_checks_preserve_existing_rows_and_reject_new_poison(
     with psycopg.connect(**postgres_kwargs) as conn, conn.cursor() as cur:
         for constraint in _CAMPAIGN_JSON_SHAPE_CONSTRAINTS:
             cur.execute(f"ALTER TABLE mip_app.campaigns DROP CONSTRAINT {constraint}")
-        cur.execute(
-            "DROP TRIGGER trg_campaigns_json_contract_enforcement ON mip_app.campaigns"
-        )
+        cur.execute("DROP TRIGGER trg_campaigns_json_contract_enforcement ON mip_app.campaigns")
         cur.execute("ALTER TABLE mip_app.campaigns DROP COLUMN json_contract_version")
         cur.execute(
             """

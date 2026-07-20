@@ -79,10 +79,10 @@ def _enable_orchestrator(monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
-def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
+def test_prompt_agent_retains_exact_cohort_when_supervisor_diverges(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    prompt_text = "show borrowers in the money for review"
+    prompt_text = "Find prime refinance opportunities for a branch manager review."
     calls: list[dict[str, Any]] = []
 
     def fake_query_serving_endpoint(
@@ -130,7 +130,12 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     try:
         response = client.post(
             "/api/growth-agent/agent/run",
-            json={"prompt": prompt_text, "states": ["IL"]},
+            json={
+                "prompt": prompt_text,
+                "states": ["IL"],
+                "save_monitor": True,
+                "monitor_name": "IL Refi Watch",
+            },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
     finally:
@@ -151,22 +156,22 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert body["execution_mode"] == "agent_framework"
     assert body["trace_kind"] == "agent_framework"
     assert body["planner_label"] == "Databricks Agent Responses"
-    assert body["workflow"]["id"] == "listing_watch"
+    assert body["workflow"]["id"] == "daily_refi_brief"
     _assert_signed_lead_queue_route(
         body["route"],
         expected_query={
-            "segment": ["listed"],
+            "segment": ["itm"],
             "marketing_eligibility": ["Eligible only"],
             "states": ["IL"],
         },
     )
-    assert "Databricks Agent Responses selected reviewed workflow" in body["interpreted_intent"]
-    assert "deterministic fallback candidate" in body["interpreted_intent"]
+    assert "Databricks Agent Responses suggested reviewed workflow" in body["interpreted_intent"]
+    assert "retained the exact deterministic workflow" in body["interpreted_intent"]
     assert "Daily Refi Opportunity Brief" in body["agent_reasoning"]
     selection_check = next(
         check
         for check in body["policy_checks"]
-        if check["label"] == "Databricks Agent Responses workflow selection"
+        if check["label"] == "Databricks Agent Responses suggestion reconciliation"
     )
     assert selection_check["status"] == "review_required"
     assert "listing_watch" in selection_check["detail"]
@@ -196,6 +201,15 @@ def test_prompt_agent_invokes_supervisor_endpoint_when_configured(
     assert evidence["gateway_client_request_id"] == calls[0]["client_request_id"]
     assert evidence["serving_endpoint"] == GATEWAY_ENDPOINT
     assert evidence["serving_task"] == "agent/v1/responses"
+    assert lakebase.runs[0]["workflow_id"] == "daily_refi_brief"
+    assert len(lakebase.runs) == 1
+    audit_metadata = json.loads(lakebase.audit_events[0]["metadata"])
+    assert audit_metadata["workflow_id"] == "daily_refi_brief"
+    assert len(lakebase.audit_events) == 1
+    assert len(lakebase.monitors) == 1
+    assert lakebase.monitors[0]["workflow_id"] == "daily_refi_brief"
+    assert "b.in_the_money = TRUE" in sql.calls[0][0]
+    assert "b.listed_for_sale = TRUE" not in sql.calls[0][0]
     assert prompt_text.lower() not in json.dumps(body).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.runs, default=str).lower()
     assert prompt_text.lower() not in json.dumps(lakebase.audit_events, default=str).lower()
@@ -234,7 +248,7 @@ def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
     lakebase = _FakeLakebaseClient()
     client = _client(sql, lakebase)
     payload = {
-        "prompt": "show borrowers in the money for review",
+        "prompt": "Find prime refinance opportunities for a branch manager review.",
         "states": ["IL"],
         "request_id": str(uuid4()),
     }
@@ -258,7 +272,7 @@ def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
     selection_check = next(
         check
         for check in replay.json()["policy_checks"]
-        if check["label"] == "Databricks Agent Responses workflow selection"
+        if check["label"] == "Databricks Agent Responses suggestion reconciliation"
     )
     assert selection_check["status"] == "review_required"
     framework_chip = next(
@@ -327,13 +341,30 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
     assert prompt_text not in calls[0]["prompt"]
     assert body["execution_mode"] == "agent_framework"
     assert body["workflow"]["id"] == "daily_refi_brief"
+    assert "Agent Responses agreed with deterministic routing" in body["interpreted_intent"]
+    assert "Agent Responses agreed with deterministic routing" in body["agent_reasoning"]
+    assert "Agent Responses agreed with deterministic routing" in body["tool_steps"][0]["detail"]
     selection_check = next(
         check
         for check in body["policy_checks"]
-        if check["label"] == "Databricks Agent Responses workflow selection"
+        if check["label"] == "Databricks Agent Responses suggestion reconciliation"
     )
     assert selection_check["status"] == "passed"
     assert "agreed on daily_refi_brief" in selection_check["detail"]
+    framework_chip = next(
+        chip
+        for chip in body["governance_chips"]
+        if chip["label"] == "Databricks Agent Responses"
+    )
+    assert "agreed with deterministic routing" in framework_chip["detail"]
+    for evidence_text in (
+        body["interpreted_intent"],
+        body["agent_reasoning"],
+        body["tool_steps"][0]["detail"],
+        selection_check["detail"],
+        framework_chip["detail"],
+    ):
+        assert "Agent Responses selected" not in evidence_text
     assert body["criteria"]["states"] == ["IL"]
     _assert_signed_lead_queue_route(
         body["route"],
@@ -361,7 +392,10 @@ def test_prompt_agent_rejects_unreviewed_supervisor_workflow_choice(
     try:
         response = client.post(
             "/api/growth-agent/agent/run",
-            json={"prompt": "find listed-for-sale borrowers for review", "states": ["IL"]},
+            json={
+                "prompt": "Find prime refinance opportunities for a branch manager review.",
+                "states": ["IL"],
+            },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
     finally:
@@ -370,7 +404,7 @@ def test_prompt_agent_rejects_unreviewed_supervisor_workflow_choice(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["execution_mode"] == "deterministic"
-    assert body["workflow"]["id"] == "listing_watch"
+    assert body["workflow"]["id"] == "daily_refi_brief"
     evidence = json.loads(lakebase.runs[0]["agent_evidence"])
     assert evidence["fallback_reason"] == "agent_orchestrator_unavailable"
 
@@ -410,7 +444,10 @@ def test_prompt_agent_discards_adversarial_supervisor_content(
     try:
         response = client.post(
             "/api/growth-agent/agent/run",
-            json={"prompt": "find home equity line opportunities", "states": ["TX"]},
+            json={
+                "prompt": "Find prime refinance opportunities for a branch manager review.",
+                "states": ["TX"],
+            },
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
     finally:
@@ -419,7 +456,9 @@ def test_prompt_agent_discards_adversarial_supervisor_content(
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["execution_mode"] == "agent_framework"
-    assert body["workflow"]["id"] == "high_equity_heloc_watch"
+    assert body["workflow"]["id"] == "daily_refi_brief"
+    assert "b.in_the_money = TRUE" in sql.calls[0][0]
+    assert "b.has_heloc_propensity_trigger" not in sql.calls[0][0]
     persisted_text = " ".join(
         [
             json.dumps(body, default=str),
@@ -497,7 +536,7 @@ def test_prompt_agent_falls_back_when_supervisor_endpoint_fails(
     try:
         response = client.post(
             "/api/growth-agent/agent/run",
-            json={"prompt": "find refinance opportunities"},
+            json={"prompt": "Find refinance opportunities for branch follow-up."},
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
     finally:
@@ -545,7 +584,7 @@ def test_prompt_agent_falls_back_when_supervisor_config_is_incomplete(
     try:
         response = client.post(
             "/api/growth-agent/agent/run",
-            json={"prompt": "find refinance opportunities"},
+            json={"prompt": "Find refinance opportunities for branch follow-up."},
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
     finally:
@@ -591,7 +630,7 @@ def test_prompt_agent_falls_back_when_supervisor_is_not_proven_ready(
     try:
         response = client.post(
             "/api/growth-agent/agent/run",
-            json={"prompt": "find refinance opportunities"},
+            json={"prompt": "Find refinance opportunities for branch follow-up."},
             headers={"X-Forwarded-Email": "operator@example.com"},
         )
     finally:
@@ -645,7 +684,6 @@ def test_prompt_agent_rejects_pii_and_protected_proxies_before_supervisor_call(
     "prompt",
     [
         "top 10 prime refi candidates",
-        "show 10 high equity borrowers",
     ],
 )
 def test_prompt_agent_allows_numeric_rank_prompts_with_supervisor_enabled(
@@ -692,4 +730,5 @@ def test_prompt_agent_allows_numeric_rank_prompts_with_supervisor_enabled(
         _clear_overrides()
 
     assert response.status_code == 200, response.text
-    assert calls
+    assert calls == []
+    assert response.json()["workflow"]["id"] == "custom_segment_watch"

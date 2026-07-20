@@ -57,6 +57,9 @@ jobs:
           MIP_APPROVER_GROUP_NAME: ${{ vars.MIP_APPROVER_GROUP_NAME }}
           MIP_UC_APPROVED_OWNER_PRINCIPALS: ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}
           MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
+          MIP_LENDER_NAME: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
+          MIP_LENDER_NMLS_ID: ${{ vars.MIP_LENDER_NMLS_ID }}
+          MIP_TENANT_ID: ${{ vars.MIP_TENANT_ID }}
           MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
           MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
           LAKEBASE_DATABASE: ${{ vars.LAKEBASE_DATABASE || 'mip_app_state' }}
@@ -146,6 +149,9 @@ jobs:
             echo "DATABRICKS_WAREHOUSE_ID=${DATABRICKS_WAREHOUSE_ID}"
             echo "GENIE_SPACE_ID=${GENIE_SPACE_ID}"
             echo "MIP_DEFAULT_CATALOG=${MIP_DEFAULT_CATALOG}"
+            echo "MIP_LENDER_NAME=${MIP_LENDER_NAME:-Summit Mortgage}"
+            echo "MIP_LENDER_NMLS_ID=${MIP_LENDER_NMLS_ID:-}"
+            echo "MIP_TENANT_ID=${MIP_TENANT_ID:-}"
             echo "MIP_APP_NAME=${MIP_APP_NAME:-mip-app}"
             echo "MIP_LAKEBASE_INSTANCE=${MIP_LAKEBASE_INSTANCE:-mip-app-state}"
             echo "LAKEBASE_INSTANCE_NAME=${MIP_LAKEBASE_INSTANCE:-mip-app-state}"
@@ -215,10 +221,14 @@ jobs:
           MIP_GENIE_ACTION_SECRET_PREVIOUS: ${{ secrets.MIP_GENIE_ACTION_SECRET_PREVIOUS }}
           MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
           MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}
+          MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: ${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}
           MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}
           MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY }}
           MIP_UC_APPROVED_OWNER_PRINCIPALS: ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}
           MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
+          MIP_LENDER_NAME: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
+          MIP_LENDER_NMLS_ID: ${{ vars.MIP_LENDER_NMLS_ID }}
+          MIP_TENANT_ID: ${{ vars.MIP_TENANT_ID }}
           MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
           MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
           LAKEBASE_DATABASE: ${{ vars.LAKEBASE_DATABASE || 'mip_app_state' }}

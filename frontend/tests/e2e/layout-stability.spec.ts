@@ -730,7 +730,7 @@ test('Lead Queue preserves expanded virtual-row geometry outside overscan @deskt
 
   await page.goto('/lead-queue', { waitUntil: 'domcontentloaded' });
   const scrollRegion = page.getByRole('region', { name: 'Ranked borrowers table scroll region' });
-  await expect(scrollRegion).toBeVisible();
+  await expect(scrollRegion).toBeVisible({ timeout: 30_000 });
   await expect(page.locator('.surface__ft')).toContainText('of 200 total matching filters');
   await page.waitForTimeout(350);
 

@@ -4,6 +4,7 @@ Actor-scoped inbox state backed by Lakebase. This replaces the prior
 browser-only saved leads/drafts convenience with durable app state and
 an audit row for each state-changing action.
 """
+
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -17,6 +18,7 @@ from backend.schemas.lead import LeadSummary
 from backend.schemas.workspace import (
     SavedDraft,
     SavedDraftInput,
+    SavedDraftRecordInput,
     SavedLead,
     SavedLeadInput,
     WorkspaceMutationResponse,
@@ -27,6 +29,10 @@ from backend.services.disclosures import MissingTenantDisclosureError, resolve_t
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseClient, LakebaseError, get_lakebase_client
+from backend.services.outreach_draft_proof import (
+    GeneratedOutreachDraftProofError,
+    load_verified_generated_outreach_draft,
+)
 from backend.services.repositories import (
     LeadRepository,
     OutreachRepository,
@@ -252,18 +258,59 @@ def save_draft(
     if borrower is None:
         raise HTTPException(status_code=404, detail=f"Borrower {borrower_id} not found")
     _assert_workspace_marketing_eligible(borrower)
+    actor = _actor(request)
     try:
-        resolve_tenant_disclosure(
+        generated = load_verified_generated_outreach_draft(
+            lakebase,
+            generation_id=payload.generation_id,
+            response_hash=payload.response_hash,
+            actor=actor,
+            borrower_id=borrower_id,
+        )
+    except GeneratedOutreachDraftProofError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="Generated draft proof is invalid; regenerate before saving.",
+        ) from exc
+    except LakebaseError as exc:
+        raise _as_lakebase_503() from exc
+    try:
+        disclosure = resolve_tenant_disclosure(
             lakebase,
             state=str(getattr(borrower, "state", "") or ""),
-            channel=payload.channel,
+            channel=generated.channel,
         )
     except MissingTenantDisclosureError as exc:
         raise HTTPException(status_code=412, detail=str(exc)) from exc
     except LakebaseError as exc:
         raise _as_lakebase_503() from exc
+
+    borrower_refreshed_at = _coerce_datetime(getattr(borrower, "source_refreshed_at", None))
+    generated_refreshed_at = _coerce_datetime(generated.source_refreshed_at)
+    exact_copy_match = (
+        disclosure.disclosure_version == generated.disclosure_version
+        and disclosure.state == generated.disclosure_state
+        and disclosure.body in generated.body
+        and borrower_refreshed_at is not None
+        and generated_refreshed_at is not None
+        and borrower_refreshed_at.astimezone(UTC) == generated_refreshed_at.astimezone(UTC)
+    )
+    if not exact_copy_match:
+        raise HTTPException(
+            status_code=409,
+            detail="Generated draft no longer matches the reviewed copy; regenerate before saving.",
+        )
+    server_draft = SavedDraftRecordInput(
+        borrower_id=generated.borrower_id,
+        generation_id=generated.generation_id,
+        response_hash=generated.response_hash,
+        offer_code=generated.offer_code,
+        channel=generated.channel,
+        subject=generated.subject,
+        body=generated.body,
+    )
     try:
-        return store.save_draft(actor=_actor(request), draft=payload)
+        return store.save_draft(actor=actor, draft=server_draft)
     except LakebaseError as exc:
         raise _as_lakebase_503() from exc
 

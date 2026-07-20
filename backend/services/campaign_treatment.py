@@ -6,6 +6,7 @@ import json
 from contextlib import suppress
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any
 from uuid import uuid4
 
@@ -275,8 +276,18 @@ def _holdout_basis_points(holdout: dict[str, Any] | None) -> int:
     raw = holdout.get("size_pct")
     if isinstance(raw, bool) or not isinstance(raw, int | float):
         raise ValueError("campaign holdout contract is invalid")
-    basis_points = round(float(raw) * 100)
-    if basis_points != float(raw) * 100 or not 0 <= basis_points <= 5_000:
+    try:
+        percentage = Decimal(str(raw))
+        basis_points_decimal = percentage * Decimal(100)
+    except (InvalidOperation, ValueError):
+        raise ValueError("campaign holdout contract is invalid") from None
+    if (
+        not percentage.is_finite()
+        or basis_points_decimal != basis_points_decimal.to_integral_value()
+    ):
+        raise ValueError("campaign holdout contract is invalid")
+    basis_points = int(basis_points_decimal)
+    if not 0 <= basis_points <= 5_000:
         raise ValueError("campaign holdout contract is invalid")
     return basis_points
 

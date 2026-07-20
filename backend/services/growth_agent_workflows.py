@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from urllib.parse import urlencode
@@ -14,6 +13,10 @@ from backend.schemas.growth_agent import (
     GrowthAgentSpecialist,
     GrowthAgentWorkflow,
     GrowthAgentWorkflowId,
+)
+from backend.schemas.growth_agent_objective_intent import (
+    GrowthNamedWorkflowFamily,
+    classify_growth_objective_intent,
 )
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.eligibility import eligible_sql_predicate
@@ -236,7 +239,9 @@ def custom_workflow(segment_codes: Sequence[str], segment_mode: str) -> GrowthAg
         raise HTTPException(status_code=422, detail="segment_codes must use reviewed segment codes")
     deduped = [code for idx, code in enumerate(segment_codes) if code not in segment_codes[:idx]]
     if not deduped:
-        raise HTTPException(status_code=422, detail="segment_codes must include at least one reviewed segment")
+        raise HTTPException(
+            status_code=422, detail="segment_codes must include at least one reviewed segment"
+        )
     mode = segment_mode
     segment_label = _format_segment_labels(deduped, mode=mode)
     predicate = segment_predicate(deduped, mode)
@@ -287,52 +292,63 @@ def build_growth_agent_route(filters: dict[str, str], *, path: str = "/lead-queu
 
 
 def planned_workflow(payload: GrowthAgentPromptRunRequest) -> tuple[GrowthAgentWorkflowDef, str]:
-    q = payload.prompt.lower()
-    if payload.segment_codes:
-        mode = "all" if payload.segment_mode == "all" else "any"
+    intent = classify_growth_objective_intent(
+        payload.prompt,
+        explicit_segment_codes=payload.segment_codes,
+        explicit_segment_mode=payload.segment_mode,
+    )
+    named_workflows: dict[GrowthNamedWorkflowFamily, tuple[GrowthAgentWorkflowId, str]] = {
+        GrowthNamedWorkflowFamily.REFI_BRANCH: (
+            "daily_refi_brief",
+            "Structured data lens selected the branch-reviewed refi brief.",
+        ),
+        GrowthNamedWorkflowFamily.DOSSIER: (
+            "borrower_dossier_review",
+            "Borrower dossier lens selected the dossier review workflow.",
+        ),
+        GrowthNamedWorkflowFamily.LISTING: (
+            "listing_watch",
+            "Campaign lens selected the exact listed-for-sale purchase watch.",
+        ),
+        GrowthNamedWorkflowFamily.COMPETITOR_RECAPTURE: (
+            "competitor_recapture_monitor",
+            "Compliance lens selected the exact competitor recapture monitor.",
+        ),
+        GrowthNamedWorkflowFamily.HIGH_EQUITY_HELOC: (
+            "high_equity_heloc_watch",
+            "Offer lens selected the exact high-equity and HELOC watch.",
+        ),
+        GrowthNamedWorkflowFamily.BRANCH_CAPACITY: (
+            "branch_capacity_review",
+            "Campaign lens selected the branch-manager capacity review.",
+        ),
+        GrowthNamedWorkflowFamily.SOURCE_FRESHNESS: (
+            "source_freshness_sentinel",
+            "Data operations lens selected the global source/freshness sentinel.",
+        ),
+    }
+    if intent.named_family is not None:
+        workflow_id, interpreted_intent = named_workflows[intent.named_family]
+        return WORKFLOWS[workflow_id], interpreted_intent
+    if intent.segment_codes:
+        if payload.segment_codes:
+            interpreted_intent = (
+                f"Custom reviewed segment workflow using {intent.segment_mode.upper()} semantics."
+            )
+        elif len(intent.segment_codes) >= 2:
+            interpreted_intent = (
+                f"Campaign lens built a custom {intent.segment_mode.upper()} segment workflow."
+            )
+        else:
+            interpreted_intent = (
+                f"Campaign lens built an exact governed {intent.segment_codes[0].upper()} "
+                "segment workflow."
+            )
         return (
-            custom_workflow(payload.segment_codes, mode),
-            f"Custom reviewed segment workflow using {mode.upper()} semantics.",
+            custom_workflow(intent.segment_codes, intent.segment_mode),
+            interpreted_intent,
         )
-    if any(term in q for term in ("source", "fresh", "readiness", "stale data", "data ops", "refresh")):
-        return WORKFLOWS["source_freshness_sentinel"], "Data operations lens selected the global source/freshness sentinel."
-    if any(term in q for term in ("dossier", "borrower story", "customer 360", "borrower 360", "explain top")):
-        return WORKFLOWS["borrower_dossier_review"], "Borrower dossier lens selected the dossier review workflow."
-    detected_segments = _segments_from_prompt(q)
-    if len(detected_segments) >= 2 and _requests_custom_segment_workflow(q):
-        mode = "all" if _requests_all_segment_mode(q) else "any"
-        return custom_workflow(detected_segments, mode), f"Campaign lens built a custom {mode.upper()} segment workflow."
-    if any(term in q for term in ("heloc", "home equity line", "equity line")):
-        return WORKFLOWS["high_equity_heloc_watch"], "Offer lens selected the high-equity HELOC watch."
-    if len(detected_segments) >= 2:
-        mode = "all" if _requests_all_segment_mode(q) else "any"
-        return custom_workflow(detected_segments, mode), f"Campaign lens built a custom {mode.upper()} segment workflow."
-    if (
-        any(term in q for term in ("refi", "refinance", "rate spread", "economic incentive", "prime refinance"))
-        and not any(term in q for term in ("listed", "listing", "for sale", "purchase", "heloc", "cash out", "cash-out", "home equity", "equity line"))
-    ):
-        return WORKFLOWS["daily_refi_brief"], "Structured data lens selected the daily refi opportunity brief."
-    if any(term in q for term in ("capacity", "branch", "manager", "aging", "stale approved", "loan officer", "lo ")):
-        return WORKFLOWS["branch_capacity_review"], "Campaign lens selected the branch-manager capacity review."
-    if any(term in q for term in ("heloc", "cash out", "cash-out", "home equity", "equity line")):
-        return WORKFLOWS["high_equity_heloc_watch"], "Offer lens selected the high-equity HELOC watch."
-    if any(term in q for term in ("listed", "listing", "for sale", "purchase")):
-        return WORKFLOWS["listing_watch"], "Campaign lens selected the listed-for-sale purchase watch."
-    if any(term in q for term in ("competitor", "recapture", "retention", "current customer")):
-        return WORKFLOWS["competitor_recapture_monitor"], "Compliance lens selected competitor recapture monitoring."
-    return WORKFLOWS["daily_refi_brief"], "Structured data lens selected the daily refi opportunity brief."
-
-
-_SEGMENT_PROMPT_TERMS: dict[str, str] = {
-    "itm": "itm|in the money|refi|refinance|rate spread|economic incentive|prime refi",
-    "listed": "listed|listing|for sale|purchase",
-    "permit": "permit|heloc intent|heloc|home equity line",
-    "investor": "investor|multi property|multi-property|owner link|portfolio owner",
-    "equity": "equity|cash out|cash-out|high equity",
-    "retention": "retention|recapture|current customer",
-}
-_ALL_SEGMENT_MODE_RE = re.compile(r"\b(?:both|all selected|intersection|and)\b")
-_CUSTOM_SEGMENT_WORKFLOW_RE = re.compile(r"\b(?:custom|cohort|segment|segments|both|intersection)\b")
+    raise HTTPException(status_code=422, detail="prompt does not select a reviewed workflow")
 
 
 def _format_segment_labels(segment_codes: list[str], *, mode: str) -> str:
@@ -341,19 +357,3 @@ def _format_segment_labels(segment_codes: list[str], *, mode: str) -> str:
         return labels[0]
     separator = " and " if mode == "all" else " or "
     return ", ".join(labels[:-1]) + separator + labels[-1]
-
-
-def _segments_from_prompt(prompt: str) -> list[str]:
-    found: list[str] = []
-    for code, terms in _SEGMENT_PROMPT_TERMS.items():
-        if any(term in prompt for term in terms.split("|")) and code not in found:
-            found.append(code)
-    return found
-
-
-def _requests_all_segment_mode(prompt: str) -> bool:
-    return bool(_ALL_SEGMENT_MODE_RE.search(prompt))
-
-
-def _requests_custom_segment_workflow(prompt: str) -> bool:
-    return bool(_CUSTOM_SEGMENT_WORKFLOW_RE.search(prompt))

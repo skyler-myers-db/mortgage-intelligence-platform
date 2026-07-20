@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent } from 'react';
+import type { ChangeEvent } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip } from '../components/Primitives';
@@ -19,6 +19,10 @@ type CampaignField = Exclude<
   | 'generatorLabel'
   | 'provenanceTokenA'
   | 'provenanceTokenB'
+  | 'subjectA'
+  | 'subjectB'
+  | 'bodyA'
+  | 'bodyB'
 >;
 
 export function CampaignSetupPanel({
@@ -50,7 +54,6 @@ export function CampaignSetupPanel({
   onRegenerate: () => void;
   onApply: () => void;
 }) {
-  const [applyReviewOpen, setApplyReviewOpen] = useState(false);
   const recommendationActionable = Boolean(
     canRecommend
     && recommendation
@@ -58,21 +61,8 @@ export function CampaignSetupPanel({
     && !recommendationError
     && !recommendationFetching,
   );
-  useEffect(() => {
-    if (!recommendationActionable) setApplyReviewOpen(false);
-  }, [recommendationActionable]);
-  const hasEditedCopy = setup.generationMode === 'operator' && [
-    setup.subjectA,
-    setup.subjectB,
-    setup.bodyA,
-    setup.bodyB,
-  ].some((value) => value.trim().length > 0);
   const applyRecommendation = () => {
     if (!recommendationActionable) return;
-    if (hasEditedCopy) {
-      setApplyReviewOpen(true);
-      return;
-    }
     onApply();
   };
   return (
@@ -120,7 +110,6 @@ export function CampaignSetupPanel({
                 size="sm"
                 icon="sparkle"
                 onClick={() => {
-                  setApplyReviewOpen(false);
                   onRegenerate();
                 }}
                 disabled={!canRecommend || recommendationFetching}
@@ -138,31 +127,6 @@ export function CampaignSetupPanel({
               </Button>
             </div>
           </div>
-          {applyReviewOpen && recommendationActionable && (
-            <div className="status-callout status-callout--warning" role="alert">
-              <span>Applying this recommendation replaces the campaign copy currently in the editor.</span>
-              <div className="chip-row mt-2">
-                <Button
-                  variant="default"
-                  size="sm"
-                  onClick={() => {
-                    if (!recommendationActionable) return;
-                    setApplyReviewOpen(false);
-                    onApply();
-                  }}
-                >
-                  Replace edited copy
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setApplyReviewOpen(false)}
-                >
-                  Keep current copy
-                </Button>
-              </div>
-            </div>
-          )}
           {!canRecommend ? (
             <div className="muted fs-12">
               Run a non-empty portfolio build to generate cohort-specific strategy and copy.
@@ -244,10 +208,14 @@ export function CampaignSetupPanel({
           ) : null}
         </div>
         <div className="campaign-setup">
-          <CampaignTextField label="Benefit-led subject" value={setup.subjectA} onChange={onFieldChange('subjectA')} maxLength={120} />
-          <CampaignTextField label="Guidance-led subject" value={setup.subjectB} onChange={onFieldChange('subjectB')} maxLength={120} />
-          <CampaignTextField label="Benefit-led message" value={setup.bodyA} onChange={onFieldChange('bodyA')} maxLength={700} multiline />
-          <CampaignTextField label="Guidance-led message" value={setup.bodyB} onChange={onFieldChange('bodyB')} maxLength={700} multiline />
+          <CampaignTextField label="Benefit-led subject" value={setup.subjectA} maxLength={120} readOnly />
+          <CampaignTextField label="Guidance-led subject" value={setup.subjectB} maxLength={120} readOnly />
+          <CampaignTextField label="Benefit-led message" value={setup.bodyA} maxLength={700} multiline readOnly />
+          <CampaignTextField label="Guidance-led message" value={setup.bodyB} maxLength={700} multiline readOnly />
+          <div className="campaign-setup__field campaign-setup__field--wide muted fs-12">
+            Borrower copy is rendered from reviewed server templates. Apply or regenerate the
+            recommendation to change it.
+          </div>
           <CampaignNumericFieldEditor label="Holdout % (0-50)" field="holdoutPct" value={setup.holdoutPct} onChange={onFieldChange('holdoutPct')} onCommit={onNumericFieldCommit} />
           <CampaignTextField label="Send start" value={setup.startLocal} onChange={onFieldChange('startLocal')} type="time" />
           <CampaignTextField label="Send end" value={setup.endLocal} onChange={onFieldChange('endLocal')} type="time" />
@@ -335,10 +303,11 @@ function CampaignTextField({
   min,
   max,
   step,
+  readOnly = false,
 }: {
   label: string;
   value: string;
-  onChange: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
+  onChange?: (event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => void;
   maxLength?: number;
   multiline?: boolean;
   type?: string;
@@ -348,6 +317,7 @@ function CampaignTextField({
   min?: number;
   max?: number;
   step?: number;
+  readOnly?: boolean;
 }) {
   const className = `campaign-setup__field${multiline ? ' campaign-setup__field--wide' : ''}`;
   return (
@@ -359,6 +329,7 @@ function CampaignTextField({
           aria-label={label}
           value={value}
           onChange={onChange}
+          readOnly={readOnly}
           maxLength={maxLength}
         />
       ) : (
@@ -367,6 +338,7 @@ function CampaignTextField({
           aria-label={label}
           value={value}
           onChange={onChange}
+          readOnly={readOnly}
           maxLength={maxLength}
           type={type}
           inputMode={inputMode}

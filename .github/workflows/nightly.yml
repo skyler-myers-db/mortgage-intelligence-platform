@@ -41,6 +41,9 @@ env:
   PYTHON_VERSION: '3.11'
   NODE_VERSION: '22'
   MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
+  MIP_LENDER_NAME: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
+  MIP_LENDER_NMLS_ID: ${{ vars.MIP_LENDER_NMLS_ID }}
+  MIP_TENANT_ID: ${{ vars.MIP_TENANT_ID }}
   MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
   MIP_LAKEBASE_INSTANCE: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
   LAKEBASE_INSTANCE_NAME: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
@@ -50,6 +53,9 @@ env:
   MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
   MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE || 'mip-app-rollback' }}
   BUNDLE_VAR_uc_catalog: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
+  BUNDLE_VAR_lender_name: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
+  BUNDLE_VAR_lender_nmls_id: ${{ vars.MIP_LENDER_NMLS_ID }}
+  BUNDLE_VAR_tenant_id: ${{ vars.MIP_TENANT_ID }}
   BUNDLE_VAR_app_name: ${{ vars.MIP_APP_NAME || 'mip-app' }}
   BUNDLE_VAR_lakebase_instance_name: ${{ vars.MIP_LAKEBASE_INSTANCE || 'mip-app-state' }}
   BUNDLE_VAR_lakebase_catalog_name: ${{ vars.MIP_LAKEBASE_SYNC_CATALOG || 'mip_app_state' }}

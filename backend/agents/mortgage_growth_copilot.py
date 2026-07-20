@@ -1,10 +1,9 @@
 """Safe Mortgage Growth co-pilot planner.
 
 The co-pilot accepts a natural-language objective and, when a configured Agent
-Responses endpoint is live, may ask it to choose one reviewed workflow id.
-The selection is untrusted until it matches the local allowlist; criteria, SQL,
-counts, routes, audit rows, and watchlist writes stay in the reviewed
-deterministic executor.
+Responses endpoint is live, may ask it to suggest one reviewed workflow id.
+The suggestion is evidence only: the schema-owned deterministic classification
+always owns criteria, SQL, counts, routes, audit rows, and watchlist writes.
 """
 
 from __future__ import annotations
@@ -95,10 +94,10 @@ def plan_growth_agent_prompt(
     """Return a reviewed workflow plus honest co-pilot evidence.
 
     The normal Genie answer path can compile and execute SQL, so this planner
-    does not call it. A configured Agent Responses endpoint may choose exactly
+    does not call it. A configured Agent Responses endpoint may suggest exactly
     one reviewed workflow id from the allowlist. Deterministic code still owns
     SQL predicates, counts, handoff routes, Lakebase writes, audit rows, and
-    fallbacks.
+    fallbacks, and a divergent suggestion never changes the executed workflow.
     """
 
     deterministic_workflow, deterministic_intent = planned_workflow(payload)
@@ -164,27 +163,28 @@ def _agent_framework_plan(
     except Exception:  # noqa: BLE001 - framework failure must not block reviewed fallback
         return None
     diverged = selected.id != deterministic_workflow.id
-    interpreted_intent = f"Databricks Agent Responses selected reviewed workflow: {selected.title}."
+    interpreted_intent = (
+        "Databricks Agent Responses agreed with deterministic routing on reviewed workflow: "
+        f"{selected.title}."
+    )
     reasoning_summary = (
-        f"Databricks Agent Responses selected the reviewed {selected.title} workflow "
-        "from an allowlist. Deterministic tools produced counts, filters, audit, "
+        f"Databricks Agent Responses agreed with deterministic routing on the reviewed "
+        f"{selected.title} workflow from an allowlist. Deterministic tools produced counts, filters, audit, "
         "and the human-review handoff; no model SQL, DML, outreach, or raw "
         "identity data was executed."
     )
     if diverged:
         interpreted_intent = (
-            f"Databricks Agent Responses selected reviewed workflow: {selected.title}; "
-            f"deterministic fallback candidate was {deterministic_workflow.title}."
+            f"Databricks Agent Responses suggested reviewed workflow: {selected.title}; "
+            f"the app retained the exact deterministic workflow {deterministic_workflow.title}."
         )
         reasoning_summary = (
-            f"Databricks Agent Responses selected {selected.title} instead of the "
-            f"deterministic fallback candidate {deterministic_workflow.title}. "
-            "Both workflows are reviewed and allowlisted, but the mismatch is marked "
-            "review-required before any human action. Deterministic tools produced "
-            "counts, filters, audit, and the handoff; no model SQL, DML, outreach, "
-            "or raw identity data was executed."
+            f"Databricks Agent Responses suggested {selected.title}, which did not match "
+            f"the exact deterministic workflow {deterministic_workflow.title}. The suggestion "
+            "is retained only as review evidence; it did not change SQL, cohort predicates, "
+            "counts, filters, audit, monitor state, or the handoff."
         )
-    return selected, GrowthAgentCopilotEvidence(
+    return deterministic_workflow, GrowthAgentCopilotEvidence(
         execution_mode="agent_framework",
         trace_kind="agent_framework",
         planner_label="Databricks Agent Responses",

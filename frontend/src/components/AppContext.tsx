@@ -367,8 +367,12 @@ export function AppProvider({ children }: PropsWithChildren) {
     [savedLeads],
   );
   const saveDraft = useCallback(async (draft: SavedDraftInput): Promise<SavedDraft> => {
-    if (!draft.borrower_id || draft.body.trim().length === 0) {
-      throw new Error('A borrower and non-empty draft are required.');
+    if (
+      !draft.borrower_id
+      || !draft.generation_id
+      || !/^[0-9a-f]{64}$/.test(draft.response_hash)
+    ) {
+      throw new Error('A borrower and audited draft proof are required.');
     }
     setLastBorrowerIdState(draft.borrower_id);
     try {

@@ -417,7 +417,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
   ].some((value) => value.trim().length > 0);
   const messageVariants = hasCampaignCopy ? [
     {
-      variant_name: 'A',
+      variant_name: 'Benefit-led',
       channel: 'email',
       subject: setup.subjectA.trim(),
       body: setup.bodyA.trim(),
@@ -427,7 +427,7 @@ export function buildCampaignConfig(setup: CampaignSetupState): {
       provenance_token: setup.provenanceTokenA,
     },
     {
-      variant_name: 'B',
+      variant_name: 'Guidance-led',
       channel: 'email',
       subject: setup.subjectB.trim(),
       body: setup.bodyB.trim(),

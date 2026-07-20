@@ -87,6 +87,8 @@ def test_campaign_provenance_rejects_legacy_current_key_outside_local_test() -> 
         issue_campaign_variant_provenance(
             generation_mode="reviewed_fallback",
             generator_label="Reviewed campaign framework",
+            variant_name="Benefit-led",
+            channel="email",
             subject="Review your mortgage options",
             body="Explore options with a licensed loan officer.",
             criteria_fingerprint="criteria-v1",
@@ -108,6 +110,8 @@ def test_campaign_provenance_previous_key_is_bounded_by_existing_ttl() -> None:
     token = issue_campaign_variant_provenance(
         generation_mode="reviewed_fallback",
         generator_label="Reviewed campaign framework",
+        variant_name="Benefit-led",
+        channel="email",
         subject="Review your mortgage options",
         body="Explore options with a licensed loan officer.",
         criteria_fingerprint=criteria_fingerprint,
@@ -122,6 +126,8 @@ def test_campaign_provenance_previous_key_is_bounded_by_existing_ttl() -> None:
         mip_genie_action_secret_previous_kid="old-v1",
     )
     variant = {
+        "variant_name": "Benefit-led",
+        "channel": "email",
         "subject": "Review your mortgage options",
         "body": "Explore options with a licensed loan officer.",
         "provenance_token": token,
@@ -149,6 +155,8 @@ def test_campaign_provenance_rejects_weak_production_key() -> None:
         issue_campaign_variant_provenance(
             generation_mode="reviewed_fallback",
             generator_label="Reviewed campaign framework",
+            variant_name="Benefit-led",
+            channel="email",
             subject="Review your mortgage options",
             body="Explore options with a licensed loan officer.",
             criteria_fingerprint="criteria-v1",
@@ -163,6 +171,8 @@ def test_campaign_provenance_rejects_duplicate_rotation_key() -> None:
     token = issue_campaign_variant_provenance(
         generation_mode="reviewed_fallback",
         generator_label="Reviewed campaign framework",
+        variant_name="Benefit-led",
+        channel="email",
         subject="Review your mortgage options",
         body="Explore options with a licensed loan officer.",
         criteria_fingerprint="criteria-v1",
@@ -174,6 +184,8 @@ def test_campaign_provenance_rejects_duplicate_rotation_key() -> None:
     with pytest.raises(RuntimeError, match="must differ"):
         verify_campaign_variant_provenance(
             {
+                "variant_name": "Benefit-led",
+                "channel": "email",
                 "subject": "Review your mortgage options",
                 "body": "Explore options with a licensed loan officer.",
                 "provenance_token": token,

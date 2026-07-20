@@ -604,11 +604,11 @@ def test_lakebase_grants_reference_covers_growth_agent_tables() -> None:
             "INSERT",
             "UPDATE",
         )
-        assert (
-            f"GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.{table_name} "
-            'TO "service-principal-client-id";'
-        ) in grants_doc
-        assert f"GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE mip_app.{table_name}" not in grants_doc
+        assert f"GRANT SELECT, INSERT, UPDATE ON TABLE mip_app.{table_name}" not in grants_doc
+
+    assert ".venv/bin/python -m jobs.lakebase_migrate" in grants_doc
+    assert "Do not copy a static GRANT list" in grants_doc
+    assert "code-owned privilege matrix" in grants_doc
 
 
 def test_lakebase_app_role_grants_only_the_required_current_sequence() -> None:
@@ -621,16 +621,12 @@ def test_lakebase_app_role_grants_only_the_required_current_sequence() -> None:
     assert lakebase_migrate._APP_ROLE_SEQUENCE_PRIVILEGES == {
         "action_audit_audit_sequence_seq": ("USAGE",),
     }
-    assert (
-        "GRANT USAGE ON SEQUENCE mip_app.action_audit_audit_sequence_seq "
-        'TO "service-principal-client-id";'
-    ) in grants_doc
+    assert ".venv/bin/python -m jobs.lakebase_migrate" in grants_doc
+    assert "Do not copy a static GRANT list" in grants_doc
+    assert "code-owned privilege matrix" in grants_doc
+    assert "GRANT USAGE ON SEQUENCE mip_app.action_audit_audit_sequence_seq" not in grants_doc
     assert "GRANT USAGE ON ALL SEQUENCES IN SCHEMA mip_app" not in grants_doc
     assert "GRANT USAGE ON SEQUENCES TO" not in grants_doc
-    assert (
-        "ALTER DEFAULT PRIVILEGES IN SCHEMA mip_app\n"
-        '  REVOKE ALL PRIVILEGES ON SEQUENCES FROM "service-principal-client-id";'
-    ) in grants_doc
 
 
 def test_in_memory_store_is_a_drop_in_for_the_protocol() -> None:

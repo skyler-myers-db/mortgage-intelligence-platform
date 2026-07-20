@@ -22,7 +22,7 @@ def test_approve_writes_audit():
             "borrower_id": "B-48291",
             "actor": "test",
             "draft_subject": "Your mortgage review",
-            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )
     assert res.status_code == 200

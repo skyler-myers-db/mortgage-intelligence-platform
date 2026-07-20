@@ -234,30 +234,24 @@ describe('PortfolioBuilder recommendation ownership', () => {
     expect(container.querySelector('a[href^="/admin-config"]')).toBeNull();
   });
 
-  it('does not let a deferred recommendation overwrite operator edits before explicit Apply', async () => {
+  it('keeps copy read-only and applies a deferred reviewed recommendation explicitly', async () => {
     const recommendation = deferred<CampaignRecommendationResponse>();
     campaignRecommendation.mockReturnValue(recommendation.promise);
     mount();
     await waitUntil(() => campaignRecommendation.mock.calls.length === 1);
 
     const subject = field('Benefit-led subject');
+    expect(subject.readOnly).toBe(true);
     setField(subject, 'Operator-owned subject');
-    expect(subject.value).toBe('Operator-owned subject');
+    expect(subject.value).toBe('');
 
     recommendation.resolve(RECOMMENDATION);
     await waitUntil(() => applyButton()?.disabled === false);
 
-    expect(field('Benefit-led subject').value).toBe('Operator-owned subject');
+    expect(field('Benefit-led subject').value).toBe('');
     expect(field('Benefit-led message').value).toBe('');
 
     act(() => applyButton()!.click());
-    expect(container.textContent).toContain(
-      'Applying this recommendation replaces the campaign copy currently in the editor.',
-    );
-    const replaceButton = [...container.querySelectorAll<HTMLButtonElement>('button')]
-      .find((button) => button.textContent?.includes('Replace edited copy'));
-    expect(replaceButton).toBeTruthy();
-    act(() => replaceButton!.click());
     expect(field('Benefit-led subject').value).toBe('Recommended benefit subject');
     expect(field('Benefit-led message').value).toBe('Recommended benefit body');
   });
@@ -281,13 +275,14 @@ describe('PortfolioBuilder recommendation ownership', () => {
     ]);
   });
 
-  it('invalidates generated provenance on operator copy edits before save', async () => {
+  it('prevents operator copy edits and preserves server provenance on save', async () => {
     mount();
     await waitUntil(() => applyButton()?.disabled === false);
     act(() => applyButton()!.click());
     await waitUntil(() => field('Benefit-led subject').value === RECOMMENDATION.variants[0].subject);
 
     setField(field('Benefit-led subject'), 'Operator revised benefit subject');
+    expect(field('Benefit-led subject').value).toBe('Recommended benefit subject');
     await waitUntil(() => !saveButton().disabled);
     act(() => saveButton().click());
     const confirm = container.querySelector<HTMLButtonElement>(
@@ -301,15 +296,13 @@ describe('PortfolioBuilder recommendation ownership', () => {
 
     expect(portfolioCreate.mock.calls[0][2].message_variants).toEqual([
       expect.objectContaining({
-        subject: 'Operator revised benefit subject',
-        generation_mode: 'operator',
-        generator_label: 'Operator edited',
-        provenance_token: null,
+        subject: 'Recommended benefit subject',
+        generation_mode: 'supervisor',
+        provenance_token: BENEFIT_PROVENANCE_TOKEN,
       }),
       expect.objectContaining({
-        generation_mode: 'operator',
-        generator_label: 'Operator edited',
-        provenance_token: null,
+        generation_mode: 'supervisor',
+        provenance_token: GUIDANCE_PROVENANCE_TOKEN,
       }),
     ]);
   });

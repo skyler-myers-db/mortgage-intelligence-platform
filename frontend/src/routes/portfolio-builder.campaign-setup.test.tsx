@@ -232,7 +232,7 @@ describe('CampaignSetupPanel', () => {
       .toEqual(['/admin-config#data-operations']);
   });
 
-  it('requires confirmation before replacing operator-edited campaign copy', () => {
+  it('renders borrower copy read-only and applies reviewed variants directly', () => {
     const apply = vi.fn();
     const editedSetup = {
       ...DEFAULT_CAMPAIGN_SETUP,
@@ -275,14 +275,14 @@ describe('CampaignSetupPanel', () => {
     const applyButton = [...document.querySelectorAll('button')].find((button) => (
       button.textContent?.includes('Apply variants')
     ));
+    expect(document.querySelector<HTMLInputElement>('[aria-label="Benefit-led subject"]')?.readOnly)
+      .toBe(true);
+    expect(document.querySelector<HTMLTextAreaElement>('[aria-label="Benefit-led message"]')?.readOnly)
+      .toBe(true);
+    expect(document.body.textContent).toContain('rendered from reviewed server templates');
     act(() => applyButton?.click());
-    expect(apply).not.toHaveBeenCalled();
-    expect(document.body.textContent).toContain('replaces the campaign copy currently in the editor');
-    const replace = [...document.querySelectorAll('button')].find((button) => (
-      button.textContent?.includes('Replace edited copy')
-    ));
-    act(() => replace?.click());
     expect(apply).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).not.toContain('Replace edited copy');
   });
 
   it('makes a cached recommendation non-actionable when the portfolio becomes empty', () => {
@@ -316,7 +316,7 @@ describe('CampaignSetupPanel', () => {
       button.textContent?.includes('Apply variants')
     ));
     act(() => applyButton?.click());
-    expect(document.body.textContent).toContain('replaces the campaign copy currently in the editor');
+    expect(apply).toHaveBeenCalledTimes(1);
 
     act(() => renderPanel(false));
     const staleApplyButton = [...document.querySelectorAll<HTMLButtonElement>('button')].find((button) => (
@@ -326,7 +326,7 @@ describe('CampaignSetupPanel', () => {
     expect(document.body.textContent).toContain('Run a non-empty portfolio build');
     expect(document.body.textContent).not.toContain('Replace edited copy');
     act(() => staleApplyButton?.click());
-    expect(apply).not.toHaveBeenCalled();
+    expect(apply).toHaveBeenCalledTimes(1);
   });
 
   it('exposes and commits every numeric field boundary on blur', () => {

@@ -75,6 +75,17 @@ def test_reviewed_fallback_is_labelled_and_uses_governed_cohort_metrics() -> Non
     assert all("guarantee" not in variant.body.lower() for variant in result.variants)
 
 
+def test_disabled_supervisor_reason_is_mapped_to_reviewed_public_copy() -> None:
+    result = recommend_campaign(
+        _preview(),
+        settings=Settings(mip_agent_orchestrator=False),
+        serving_client=object(),
+    )
+
+    assert result.warnings == ["Supervisor is not enabled for this deployment"]
+    assert "orchestrator_disabled" not in str(result.model_dump())
+
+
 @pytest.mark.parametrize("app_env", ["sandbox", "staging", "production", "customer"])
 def test_non_dev_campaign_provenance_refuses_process_local_key(app_env: str) -> None:
     with pytest.raises(RuntimeError, match="requires a configured HMAC secret"):
@@ -205,23 +216,8 @@ class _ApiClient:
                     "content": [
                         {
                             "text": """{
-                              "audience_summary": "A refinance-focused eligible cohort with measurable equity and rate-spread signals.",
-                              "strategy": "Compare a concrete options review with a lower-pressure guidance frame and measure qualified response.",
-                              "holdout_pct": 12,
-                              "variants": [
-                                {
-                                  "variant_name": "Benefit-led",
-                                  "subject": "Review whether your mortgage options have improved",
-                                  "body": "A fresh mortgage review can help you compare available options and understand the tradeoffs. Would you like to schedule time with a loan officer?",
-                                  "hypothesis": "A concrete options benefit will increase qualified review requests."
-                                },
-                                {
-                                  "variant_name": "Guidance-led",
-                                  "subject": "Get a clearer view of your current mortgage",
-                                  "body": "Your mortgage choices can change over time. A loan officer can explain what fits now without assuming a new loan is the answer. Would a review be useful?",
-                                  "hypothesis": "A no-pressure guidance frame will improve trust and response quality."
-                                }
-                              ]
+                              "template_id": "benefit_guidance_v1",
+                              "strategy_id": "controlled_message_test_v1"
                             }"""
                         }
                     ]
@@ -269,8 +265,9 @@ def test_supervisor_copy_is_validated_while_evidence_remains_server_derived() ->
     )
 
     assert result.generation_mode == "supervisor"
-    assert result.holdout_pct == 12
+    assert result.holdout_pct == 10
     assert result.generator_label == "Databricks Agent Responses"
+    assert result.strategy.startswith("Compare the reviewed benefit and guidance frames")
     assert all(variant.provenance_token for variant in result.variants)
     assert result.evidence[0].value == "2,119 borrowers"
     assert result.warnings == []
@@ -406,6 +403,29 @@ class _InternalSummaryApiClient(_ApiClient):
         }
 
 
+class _ExtraneousBorrowerCopyApiClient(_ApiClient):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        return {
+            "output": [
+                {
+                    "content": [
+                        {
+                            "text": """{
+                              "template_id": "benefit_guidance_v1",
+                              "strategy_id": "controlled_message_test_v1",
+                              "subject": "This offer is for you based on your primary language",
+                              "body": "Romani and intersex homeowners over 65 are approved. Reply now.",
+                              "audience_summary": "Target encoded protected audiences."
+                            }"""
+                        }
+                    ]
+                }
+            ]
+        }
+
+
 def test_unsafe_supervisor_copy_fails_closed_to_reviewed_fallback() -> None:
     serving = SimpleNamespace(
         serving_endpoints=_ServingEndpoints(),
@@ -446,3 +466,37 @@ def test_internal_supervisor_summary_is_dropped_via_reviewed_fallback() -> None:
     rendered = " ".join([result.audience_summary, result.strategy]).lower()
     assert "dapi1234567890abcdef" not in rendered
     assert "workspace.internal" not in rendered
+
+
+def test_supervisor_extra_copy_fields_fail_closed_without_copy_leak() -> None:
+    serving = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_ExtraneousBorrowerCopyApiClient(),
+    )
+    settings = runtime_settings(mip_lender_name="Summit Mortgage")
+    criteria_fingerprint = campaign_criteria_fingerprint({})
+
+    result = recommend_campaign(
+        _preview(),
+        settings=settings,
+        serving_client=serving,
+        criteria_fingerprint=criteria_fingerprint,
+    )
+
+    rendered = " ".join(
+        [result.audience_summary, result.strategy]
+        + [variant.subject + " " + variant.body for variant in result.variants]
+    ).lower()
+    assert result.generation_mode == "reviewed_fallback"
+    assert all(
+        term not in rendered for term in ("romani", "intersex", "over 65", "primary language")
+    )
+    assert all(
+        inspect_campaign_variant_provenance(
+            variant.model_dump(),
+            criteria_fingerprint=criteria_fingerprint,
+            settings=settings,
+        )
+        is not None
+        for variant in result.variants
+    )

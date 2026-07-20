@@ -25,14 +25,25 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
+# MLflow tracing can flush after an individual test fixture has torn down. Pin
+# the entire pytest process to an isolated tracking/registry database before
+# importing the application so asynchronous exporters can never fall back to
+# root-local ``mlflow.db`` / ``mlruns`` state.
+_MLFLOW_TEST_ROOT = Path(tempfile.mkdtemp(prefix="mip-pytest-mlflow-"))
+_MLFLOW_TEST_URI = f"sqlite:///{_MLFLOW_TEST_ROOT / 'mlflow.db'}"
+os.environ["MLFLOW_TRACKING_URI"] = _MLFLOW_TEST_URI
+os.environ["MLFLOW_REGISTRY_URI"] = _MLFLOW_TEST_URI
 
 from backend.config.settings import settings
 
@@ -432,14 +443,21 @@ class _FakeLakebaseClient:
         if "FROM mip_app.approvals" in sql and "request_id" in sql:
             return None
         if "FROM mip_app.tenant_disclosures" in sql:
+            from backend.config.settings import settings
+
             channel = (params or {}).get("channel", "email")
+            lender_name = settings.mip_lender_name
+            nmls_id = settings.mip_lender_nmls_id
             body = (
-                "Summit Mortgage NMLS #123456. Equal Housing Lender. Reply STOP to opt out."
+                f"{lender_name} NMLS #{nmls_id}. Equal Housing Lender. Reply STOP to opt out."
                 if channel == "sms"
-                else "Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
+                else (
+                    f"{lender_name}, NMLS #{nmls_id}. Equal Housing Lender. "
+                    "Reply unsubscribe to opt out."
+                )
             )
             return {
-                "state": (params or {}).get("state", "_ALL"),
+                "state": "_ALL",
                 "channel": channel,
                 "disclosure_version": "test-disclosure-v1",
                 "body": body,

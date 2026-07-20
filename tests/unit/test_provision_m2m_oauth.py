@@ -1821,10 +1821,10 @@ def test_mint_missing_secret_fails_without_printing_response_values(
     assert "dose_fake_secret_value" not in captured.out + captured.err
 
 
-def test_app_not_found_prompts_bundle_deploy() -> None:
+def test_app_not_found_prompts_signed_command_of_record() -> None:
     client = _make_client(existing_sp=_sp())
     client.apps.update_permissions.side_effect = RuntimeError("App mip-app NOT FOUND")
-    with pytest.raises(SystemExit, match="bundle deploy -t dev"):
+    with pytest.raises(SystemExit, match=r"scripts/deploy\.sh -t dev"):
         _provision(
             client,
             mint_secret=False,

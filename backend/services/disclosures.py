@@ -4,13 +4,19 @@ Outreach copy must never contain "insert disclosure here" placeholders.
 The draft path resolves an active tenant/state/channel disclosure from
 Lakebase and fails closed when none is configured.
 """
+
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
 from backend.config.settings import settings
 from backend.schemas.common import contains_pii_marker
+from backend.schemas.lender_identity import (
+    validate_public_lender_name,
+    validate_public_lender_nmls_id,
+)
 from backend.services.lakebase import LakebaseClient
 
 
@@ -47,6 +53,81 @@ _DISCLOSURE_PLACEHOLDER_PATTERNS = (
     "nmls...",
 )
 
+_REVIEWED_DISCLOSURE_SUFFIXES: dict[str, dict[str, frozenset[str]]] = {
+    "email": {
+        "_ALL": frozenset(
+            {
+                "Equal Housing Lender. Reply unsubscribe to opt out.",
+                "Equal Housing Lender. This is not a commitment to lend. Terms subject to "
+                "credit, collateral, and underwriting approval. To opt out of marketing, "
+                "reply unsubscribe or contact {lender} at its governed compliance address.",
+            }
+        ),
+        "CA": frozenset(
+            {
+                "Equal Housing Lender. California residents: this is not a commitment to "
+                "lend and terms are subject to credit, collateral, and underwriting "
+                "approval. To opt out of marketing, reply unsubscribe or contact {lender} "
+                "at its governed compliance address."
+            }
+        ),
+        "NY": frozenset(
+            {
+                "Equal Housing Lender. New York residents: mortgage terms are subject to "
+                "licensed review, credit, collateral, and underwriting approval. To opt "
+                "out of marketing, reply unsubscribe or contact {lender} at its governed "
+                "compliance address."
+            }
+        ),
+    },
+    "direct_mail": {
+        "_ALL": frozenset(
+            {
+                "Equal Housing Lender. Reply unsubscribe to opt out.",
+                "Equal Housing Lender. This is not a commitment to lend. Terms subject to "
+                "credit, collateral, and underwriting approval. To opt out of marketing, "
+                "contact {lender} at its governed compliance address.",
+            }
+        )
+    },
+    "sms": {
+        "_ALL": frozenset(
+            {
+                "Equal Housing Lender. Reply STOP to opt out.",
+                "Equal Housing Lender. Reply STOP to opt out. Msg and data rates may apply.",
+            }
+        ),
+        "CA": frozenset(
+            {
+                "Equal Housing Lender. CA residents may reply STOP to opt out. Msg and data "
+                "rates may apply."
+            }
+        ),
+    },
+}
+_DISCLOSURE_PREFIX_RE = re.compile(
+    r"(?P<lender>.+?)(?P<comma>,?) NMLS #(?P<nmls>[1-9]\d{3,11})\. (?P<suffix>.+)",
+)
+
+
+def _is_reviewed_disclosure(*, normalized: str, channel: str, state: str) -> bool:
+    match = _DISCLOSURE_PREFIX_RE.fullmatch(normalized)
+    if match is None:
+        return False
+    lender_name = validate_public_lender_name(settings.mip_lender_name)
+    if match.group("lender") != lender_name:
+        return False
+    lender_nmls_id = validate_public_lender_nmls_id(settings.mip_lender_nmls_id)
+    if match.group("nmls") != lender_nmls_id:
+        return False
+    expected_comma = "" if channel == "sms" else ","
+    if match.group("comma") != expected_comma:
+        return False
+    channel_suffixes = _REVIEWED_DISCLOSURE_SUFFIXES.get(channel, {})
+    suffixes = channel_suffixes.get(state, frozenset())
+    rendered_suffixes = {suffix.format(lender=lender_name) for suffix in suffixes}
+    return match.group("suffix") in rendered_suffixes
+
 
 def _validate_disclosure_block(*, body: str, channel: str, state: str) -> None:
     normalized = " ".join(str(body or "").split())
@@ -55,29 +136,16 @@ def _validate_disclosure_block(*, body: str, channel: str, state: str) -> None:
         raise MissingTenantDisclosureError(
             f"tenant disclosure body is blank for state {state} and channel {channel}"
         )
-    if contains_pii_marker(normalized) or any(token in lowered for token in _DISCLOSURE_PLACEHOLDER_PATTERNS):
+    if contains_pii_marker(normalized) or any(
+        token in lowered for token in _DISCLOSURE_PLACEHOLDER_PATTERNS
+    ):
         raise MissingTenantDisclosureError(
             f"tenant disclosure body is not publishable for state {state} and channel {channel}"
         )
-    if "nmls" not in lowered:
+    if not _is_reviewed_disclosure(normalized=normalized, channel=channel, state=state):
         raise MissingTenantDisclosureError(
-            f"tenant disclosure missing NMLS language for state {state} and channel {channel}"
-        )
-    if "equal housing" not in lowered:
-        raise MissingTenantDisclosureError(
-            f"tenant disclosure missing Equal Housing language for state {state} and channel {channel}"
-        )
-    has_opt_out = any(
-        phrase in lowered
-        for phrase in ("opt out", "unsubscribe", "stop")
-    )
-    if not has_opt_out:
-        raise MissingTenantDisclosureError(
-            f"tenant disclosure missing opt-out language for state {state} and channel {channel}"
-        )
-    if channel == "sms" and "stop" not in lowered:
-        raise MissingTenantDisclosureError(
-            f"tenant SMS disclosure missing STOP language for state {state}"
+            f"tenant disclosure does not match a reviewed legal template for state {state} "
+            f"and channel {channel}"
         )
 
 

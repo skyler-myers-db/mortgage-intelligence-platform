@@ -298,6 +298,8 @@ class _CampaignPatchLakebase:
                         "provenance_copy_hash": campaign_copy_hash(
                             "Review your mortgage options",
                             "Contact a loan officer to review available options.",
+                            variant_name="Primary",
+                            channel="email",
                         ),
                         "provenance_criteria_fingerprint": campaign_criteria_fingerprint(
                             {"marketing_eligibility": "Eligible only"}
@@ -345,6 +347,8 @@ def _server_provenance(
     subject: str,
     body: str,
     *,
+    variant_name: str = "A",
+    channel: str = "email",
     criteria: PortfolioCriteria | None = None,
 ) -> dict[str, str]:
     label = "Databricks Agent Responses"
@@ -354,6 +358,8 @@ def _server_provenance(
         "provenance_token": issue_campaign_variant_provenance(
             generation_mode="supervisor",
             generator_label=label,
+            variant_name=variant_name,
+            channel=channel,  # type: ignore[arg-type]
             subject=subject,
             body=body,
             criteria_fingerprint=campaign_criteria_fingerprint(criteria or PortfolioCriteria()),
@@ -790,10 +796,12 @@ def test_campaign_summary_relational_variants_are_authoritative_and_verified_fro
         "generator_label": "Databricks Agent Responses",
         "provenance_key_id": "v1",
         "subject": "Review your options",
-        "body": "A loan officer can review the available options.",
+        "body": "Contact a loan officer to review the available options.",
         "provenance_copy_hash": campaign_copy_hash(
             "Review your options",
-            "A loan officer can review the available options.",
+            "Contact a loan officer to review the available options.",
+            variant_name="A",
+            channel="email",
         ),
         "provenance_criteria_fingerprint": campaign_criteria_fingerprint({}),
         "provenance_issued_at": "2026-07-14T00:00:00Z",
@@ -830,7 +838,7 @@ def test_campaign_summary_relational_variants_are_authoritative_and_verified_fro
     )
 
     assert summary.message_variants[0]["copy_verified_at_creation"] is True
-    assert summary.message_variants[1]["copy_verified_at_creation"] is False
+    assert len(summary.message_variants) == 1
     assert summary.message_variants[0]["body"] == generated["body"]
     assert set(summary.message_variants[0]) == {
         "variant_name",
@@ -877,18 +885,8 @@ def test_campaign_summary_projects_json_only_legacy_variants_as_unverified() -> 
         }
     )
 
-    assert summary.message_variants == [
-        {
-            "variant_name": "Legacy A",
-            "channel": "email",
-            "subject": "Review your mortgage options",
-            "body": "Contact a loan officer to review the available options.",
-            "weight_pct": 100,
-            "generation_mode": "supervisor",
-            "generator_label": "Databricks Agent Responses",
-            "copy_verified_at_creation": False,
-        }
-    ]
+    assert summary.message_variants == []
+    assert summary.actionable is False
 
 
 def test_campaign_summary_explicit_relational_empty_set_blocks_legacy_fallback() -> None:
@@ -948,8 +946,8 @@ def test_campaign_summary_does_not_trust_duplicate_json_verification_claim() -> 
         }
     )
 
-    assert summary.message_variants[0]["copy_verified_at_creation"] is False
-    assert "provenance_token" not in summary.message_variants[0]
+    assert summary.message_variants == []
+    assert summary.actionable is False
 
 
 def test_campaign_summary_omits_poisoned_legacy_variant_without_echoing_values(
@@ -1495,7 +1493,7 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
                     "subject": subject_b,
                     "body": body_b,
                     "weight_pct": 45,
-                    **_server_provenance(subject_b, body_b),
+                    **_server_provenance(subject_b, body_b, variant_name="B"),
                 },
             ],
         ),
@@ -1529,18 +1527,11 @@ def test_create_commits_message_variants_and_generation_provenance_atomically(mo
     assert metadata["generator_label"] == "Databricks Agent Responses"
 
 
-def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
-    client = _StubClient(_preview_row(), [])
-    lakebase = _StubLakebase()
-    monkeypatch.setattr(
-        "backend.services.repositories.databricks_repo.get_lakebase_client",
-        lambda: lakebase,
-    )
-    repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
+def test_create_rejects_mixed_operator_borrower_copy() -> None:
     generated_subject = "Review your mortgage options"
     generated_body = "Compare your current mortgage options with a loan officer."
 
-    repo.create(
+    with pytest.raises(ValueError, match="reviewed server template"):
         PortfolioCreateRequest(
             name="Reviewed mixed campaign",
             message_variants=[
@@ -1549,7 +1540,7 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
                     "channel": "email",
                     "subject": generated_subject,
                     "body": generated_body,
-                    **_server_provenance(generated_subject, generated_body),
+                    **_server_provenance(generated_subject, generated_body, variant_name="A"),
                 },
                 {
                     "variant_name": "B",
@@ -1560,29 +1551,7 @@ def test_create_preserves_mixed_generation_provenance_per_variant(monkeypatch):
                     "generator_label": "Operator edited",
                 },
             ],
-        ),
-        idempotency_key="11111111-1111-4111-8111-111111111117",
-    )
-
-    write = next(
-        row for row in lakebase.rows if str(row["sql"]).lstrip().startswith("WITH finalized AS")
-    )
-    metadata = json.loads(str(write["params"]["audit_metadata"]))
-    assert metadata["campaign_generation_mode"] == "mixed"
-    assert metadata["generator_label"] == "Multiple generators"
-    generated, operator = metadata["variant_provenance"]
-    assert generated["generation_mode"] == "supervisor"
-    assert generated["generator_label"] == "Databricks Agent Responses"
-    assert generated["variant_name"] == "A"
-    assert generated["provenance_key_id"] == "v1"
-    assert len(generated["provenance_copy_hash"]) == 64
-    assert len(generated["provenance_criteria_fingerprint"]) == 64
-    assert generated["provenance_performance_fingerprint"] is None
-    assert operator == {
-        "generation_mode": "operator",
-        "generator_label": "Operator edited",
-        "variant_name": "B",
-    }
+        )
 
 
 def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkeypatch):
@@ -1595,7 +1564,7 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
     repo = DatabricksPortfolioRepository(client)  # type: ignore[arg-type]
     subject = "Review your mortgage options"
     original_body = "Compare your current mortgage options with a loan officer."
-    provenance = _server_provenance(subject, original_body)
+    provenance = _server_provenance(subject, original_body, variant_name="Primary")
 
     with pytest.raises(ValueError, match="provenance is missing, expired, or invalid"):
         repo.create(
@@ -1614,7 +1583,7 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
             idempotency_key="11111111-1111-4111-8111-111111111121",
         )
 
-    with pytest.raises(ValueError, match="provenance is missing, expired, or invalid"):
+    with pytest.raises(ValueError, match="bounded server-issued token"):
         repo.create(
             PortfolioCreateRequest(
                 name="Unsigned provenance review",
@@ -1646,6 +1615,7 @@ def test_create_rejects_forged_or_copy_transplanted_generation_provenance(monkey
                         **_server_provenance(
                             subject,
                             original_body,
+                            variant_name="Primary",
                             criteria=PortfolioCriteria(states=["IL"]),
                         ),
                     }

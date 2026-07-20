@@ -197,6 +197,7 @@ class _Apps:
         self.service_principal_client_id = "app-client"
         self.service_principal_id = "app-scim-id"
         self.resources = json.loads(json.dumps(APP_RESOURCES))
+        self.resource_updates = 0
 
     def list_deployments(self, _app_name: str) -> list[object]:
         return self.deployments
@@ -214,6 +215,11 @@ class _Apps:
 
     def start_and_wait(self, _app_name: str, *, timeout: object) -> None:
         self.started += 1
+
+    def update(self, _app_name: str, app: object) -> object:
+        self.resource_updates += 1
+        self.resources = app.as_dict()["resources"]
+        return self.get(_app_name)
 
     def deploy_and_wait(self, _app_name: str, deployment: object, *, timeout: object) -> object:
         self.deployed_payload = deployment.as_dict()
@@ -365,6 +371,16 @@ def test_reviewed_app_resource_contract_rejects_unresolved_reference() -> None:
 
     with pytest.raises(RuntimeError, match="did not resolve"):
         reviewed_app_resource_contract(summary)
+
+
+def test_reviewed_resources_file_accepts_exact_source_free_payload(tmp_path) -> None:
+    payload = tmp_path / "app-resources.json"
+    payload.write_text(
+        json.dumps({"name": APP_NAME, "resources": APP_RESOURCES}),
+        encoding="utf-8",
+    )
+
+    assert rollback._reviewed_resources_file(str(payload)) == APP_RESOURCES
 
 
 def test_payload_resource_proof_preserves_custom_resource_families(
@@ -646,6 +662,13 @@ def test_ensure_rejects_pending_deployment_race(
         deployment_id="manual-pending",
         status=SimpleNamespace(state="IN_PROGRESS"),
     )
+    workspace.apps.resources = [
+        *APP_RESOURCES[:-1],
+        {
+            "name": "sql_warehouse",
+            "sql_warehouse": {"id": "candidate-warehouse", "permission": "CAN_USE"},
+        },
+    ]
 
     with pytest.raises(RuntimeError, match="pending deployment"):
         rollback.ensure_current(
@@ -656,6 +679,9 @@ def test_ensure_rejects_pending_deployment_race(
             bearer_token="token",
             **TREATMENT_ARGS,
         )
+
+    assert workspace.apps.resource_updates == 0
+    assert workspace.apps.started == 0
 
 
 def test_ensure_rejects_live_resource_drift_before_start_or_acl_mutation(
@@ -702,7 +728,62 @@ def test_ensure_rejects_live_resource_drift_before_start_or_acl_mutation(
     assert grants == []
 
 
-def test_ensure_rejects_app_resource_target_drift_before_start(
+def test_ensure_restores_signed_resources_after_interrupted_candidate_update(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    candidate_resources = [
+        *APP_RESOURCES[:-1],
+        {
+            "name": "sql_warehouse",
+            "sql_warehouse": {"id": "candidate-warehouse", "permission": "CAN_USE"},
+        },
+    ]
+    workspace.apps.update(
+        APP_NAME,
+        SimpleNamespace(as_dict=lambda: {"resources": candidate_resources}),
+    )
+    health_calls = 0
+
+    def _signed_blue_health(*_args: object, **_kwargs: object) -> tuple[str, str, str]:
+        nonlocal health_calls
+        health_calls += 1
+        assert workspace.apps.resources == APP_RESOURCES
+        return GIT_SHA, _binding(), LEASE_ID
+
+    monkeypatch.setattr(rollback, "_health", _signed_blue_health)
+
+    endpoint = rollback.ensure_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        base_url="https://mip.example",
+        bearer_token="token",
+        **TREATMENT_ARGS,
+    )
+
+    assert endpoint == "green-gateway"
+    assert workspace.apps.resource_updates == 2
+    assert workspace.apps.resources == APP_RESOURCES
+    assert workspace.apps.active_deployment.deployment_id == "deployment-blue"
+    assert workspace.apps.deployed_payload is None
+    assert workspace.apps.started == 0
+    assert health_calls == 1
+
+
+def test_ensure_fails_closed_when_signed_resource_restore_fails(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
@@ -719,14 +800,29 @@ def test_ensure_rejects_app_resource_target_drift_before_start(
         **CAPTURE_ARGS,
     )
     workspace.apps.resources = [
-        *APP_RESOURCES[:-1],
+        *APP_RESOURCES,
         {
-            "name": "sql_warehouse",
-            "sql_warehouse": {"id": "attacker-warehouse", "permission": "CAN_USE"},
+            "name": "candidate_secret",
+            "secret": {
+                "scope": "candidate",
+                "key": "headers",
+                "permission": "READ",
+            },
         },
     ]
+    modes: list[str] = []
+    monkeypatch.setattr(
+        rollback,
+        "converge_campaign_treatment_access",
+        lambda **kwargs: modes.append(str(kwargs["mode"])) or True,
+    )
+    monkeypatch.setattr(
+        rollback,
+        "restore_signed_app_resource_contract",
+        lambda *_a, **_kw: (_ for _ in ()).throw(RuntimeError("resource restore failed")),
+    )
 
-    with pytest.raises(RuntimeError, match="App resource bindings drifted"):
+    with pytest.raises(RuntimeError, match="resource restore failed"):
         rollback.ensure_current(
             workspace,
             app_name=APP_NAME,
@@ -736,6 +832,7 @@ def test_ensure_rejects_app_resource_target_drift_before_start(
             **TREATMENT_ARGS,
         )
 
+    assert modes == ["quiesce", "quiesce"]
     assert workspace.apps.started == 0
 
 
@@ -764,6 +861,13 @@ def test_ensure_rejects_recreated_same_name_app_identity(
         expected_gateway_binding=_binding(),
         **CAPTURE_ARGS,
     )
+    workspace.apps.resources = [
+        *APP_RESOURCES[:-1],
+        {
+            "name": "sql_warehouse",
+            "sql_warehouse": {"id": "candidate-warehouse", "permission": "CAN_USE"},
+        },
+    ]
     setattr(workspace.apps, field, replacement)
 
     with pytest.raises(RuntimeError, match="identity drifted"):
@@ -775,6 +879,8 @@ def test_ensure_rejects_recreated_same_name_app_identity(
             bearer_token="token",
             **TREATMENT_ARGS,
         )
+
+    assert workspace.apps.resource_updates == 0
 
 
 def test_restore_redeploys_exact_payload_and_advances_server_contract(
@@ -805,6 +911,47 @@ def test_restore_redeploys_exact_payload_and_advances_server_contract(
 
     assert workspace.apps.deployed_payload["source_code_path"] == ARTIFACT
     assert _record(workspace)["deployment_id"] == "deployment-restored"
+
+
+def test_restore_reconciles_signed_resources_before_blue_source(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    workspace.apps.resources.append(
+        {
+            "name": "otel_headers",
+            "secret": {
+                "scope": "candidate-observability",
+                "key": "headers",
+                "permission": "READ",
+            },
+        }
+    )
+
+    rollback.restore_last_good(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        base_url="https://mip.example",
+        bearer_token="token",
+        **TREATMENT_ARGS,
+    )
+
+    assert workspace.apps.resource_updates == 1
+    assert workspace.apps.resources == APP_RESOURCES
+    assert workspace.apps.deployed_payload["source_code_path"] == ARTIFACT
 
 
 def test_restore_keeps_treatment_quiesced_until_exact_blue_health(
@@ -1036,6 +1183,8 @@ def test_tampered_server_record_fails_signature_verification(
             bearer_token="token",
             **TREATMENT_ARGS,
         )
+
+    assert workspace.apps.resource_updates == 0
 
 
 def test_ensure_rekeys_previous_signed_record_during_bounded_rotation(

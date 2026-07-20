@@ -287,7 +287,7 @@ def test_approval_endpoint_schedules_trigger(monkeypatch: pytest.MonkeyPatch) ->
             "offer_code": "heloc",
             "actor": "anonymous",
             "draft_subject": "Your mortgage review",
-            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )
     assert resp.status_code == 200, resp.text

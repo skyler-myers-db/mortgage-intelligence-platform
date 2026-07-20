@@ -1,16 +1,16 @@
 """Supervisor-assisted borrower outreach with deterministic safety rails.
 
-The Supervisor may improve the message strategy and prose for email and direct
-mail. It never chooses the offer, receives raw borrower identity, supplies a
-financial figure, changes the tenant disclosure, or bypasses human approval.
-SMS stays on the reviewed deterministic framework because the disclosure and
-160-character limit leave too little room for a useful model rewrite.
+The Supervisor may select a reviewed template and explain its strategy for
+email and direct mail, but it never authors borrower-facing copy. It also never
+chooses the offer, receives raw borrower identity, changes the tenant
+disclosure, or bypasses human approval. SMS stays on the reviewed deterministic
+framework because the disclosure and 160-character limit leave too little room
+for a useful model-selected strategy.
 """
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -23,13 +23,12 @@ from backend.agents.mortgage_growth_copilot import (
     workspace_client,
 )
 from backend.config.settings import Settings, get_settings
-from backend.schemas.portfolio import CampaignRecommendationVariant
+from backend.schemas.reviewed_template_selection import OutreachTemplateSelection
 from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
 )
 from backend.services.outreach_copy import (
-    _TRIGGER_TERM_RE,
     _borrower_offer_phrase,
     _compose_outreach_body,
     _personalization_hook,
@@ -38,14 +37,9 @@ from backend.services.outreach_copy import (
 from backend.services.supervisor_runtime import verify_supervisor_runtime
 
 OutreachGenerationMode = Literal["supervisor", "governed_fallback"]
-
-_UNSUPPORTED_CLAIM_RE = re.compile(
-    r"\b(?:guarantee(?:d)?|pre[- ]?approved|lowest|best rate|save(?:s|d|ing)?\s+"
-    r"(?:money|hundreds|thousands)|act now|limited time|expires? today|no credit check)\b",
-    re.IGNORECASE,
-)
-_CTA_RE = re.compile(
-    r"\b(?:reply|schedule|talk|speak|call|review|compare|learn more)\b", re.IGNORECASE
+_REVIEWED_OUTREACH_STRATEGY = (
+    "Use the reviewed relationship template with one clear reply invitation and no "
+    "assumption that a new loan is right for the borrower."
 )
 
 
@@ -111,6 +105,8 @@ def _fallback(
     disclosure: Any,
     warning: str,
     campaign_variant: GovernedCampaignVariant | None = None,
+    generation_mode: OutreachGenerationMode = "governed_fallback",
+    strategy_summary: str | None = None,
 ) -> IntelligentOutreachDraft:
     if campaign_variant is None:
         subject, body = _compose_outreach_body(
@@ -119,7 +115,7 @@ def _fallback(
             disclosure=disclosure,
         )
         generator_label = "Governed message framework"
-        strategy_summary = (
+        fallback_strategy = (
             "Uses the selected offer, borrower relationship, and strongest qualitative signal with "
             f"one low-friction response path. {warning}"
         )
@@ -142,16 +138,20 @@ def _fallback(
             if len(body) > 160:
                 raise ValueError("campaign SMS variant plus disclosure exceeds 160 characters")
         generator_label = campaign_variant.generator_label
-        strategy_summary = (
+        fallback_strategy = (
             f"Uses governed campaign variant {campaign_variant.variant_name} as the authoritative "
             f"message framework. {warning}"
         )
     return IntelligentOutreachDraft(
         subject=subject,
         body=body,
-        generation_mode="governed_fallback",
-        generator_label=generator_label,
-        strategy_summary=strategy_summary,
+        generation_mode=generation_mode,
+        generator_label=(
+            "Supervisor-selected reviewed template"
+            if generation_mode == "supervisor"
+            else generator_label
+        ),
+        strategy_summary=strategy_summary or fallback_strategy,
         evidence_summary=_evidence_summary(borrower),
         evidence_assets=_evidence_assets(),
     )
@@ -186,40 +186,20 @@ def _prompt(
     )
     return (
         "You are the borrower-communications specialist inside a governed mortgage Supervisor. "
-        "Write a concise, natural message that helps the borrower understand the potential relevance "
-        "and benefit of a review without assuming that a new loan is right for them. Use only the "
-        "qualitative facts below. Do not include a name, address, account detail, balance, percentage, "
-        "rate, savings amount, urgency, scarcity, guarantee, pre-approval, protected trait, disclosure, "
-        "signature, greeting placeholder, or invented fact. Avoid mortgage-industry jargon. Use one "
-        "specific benefit and one autonomy-supportive call to action. Return JSON only with subject, "
-        "body, and strategy_summary. The body must stand alone without a greeting and must not mention "
-        "the targeting signal or internal scoring. When governed_campaign_variant is present, preserve "
-        "its core positioning and use it as the authoritative message context. strategy_summary explains "
-        "why the approach fits this "
-        f"audience in one sentence.\nGoverned qualitative facts:\n{json.dumps(facts, sort_keys=True)}"
+        "Select the reviewed relationship-aware outreach template; do not author borrower-facing copy. "
+        "Return JSON only with template_id set exactly to relationship_review_v1 and strategy_id "
+        "set exactly to relationship_review_strategy_v1. Do not author any other fields. When "
+        "governed_campaign_variant is present, the server preserves that exact proven variant."
+        f"\nGoverned qualitative facts:\n{json.dumps(facts, sort_keys=True)}"
         f"{repair}"
     )
 
 
-def _validate_model_copy(parsed: dict[str, Any]) -> tuple[str, str, str]:
-    # Reuse the campaign-copy PII/name/placeholder validation contract. The
-    # variant label is internal and fixed; no model-controlled label is stored.
-    validated = CampaignRecommendationVariant.model_validate(
-        {
-            "variant_name": "Benefit-led",
-            "subject": parsed.get("subject"),
-            "body": parsed.get("body"),
-            "hypothesis": parsed.get("strategy_summary"),
-        }
-    )
-    combined = f"{validated.subject}\n{validated.body}"
-    if _TRIGGER_TERM_RE.search(combined):
-        raise ValueError("copy contained a numeric financial trigger term")
-    if _UNSUPPORTED_CLAIM_RE.search(combined):
-        raise ValueError("copy contained an unsupported or high-pressure claim")
-    if not _CTA_RE.search(validated.body):
-        raise ValueError("copy did not include a review-oriented call to action")
-    return validated.subject, validated.body, validated.hypothesis
+def _validate_model_selection(parsed: dict[str, Any]) -> str:
+    """Accept only a bounded template choice; model prose never becomes copy."""
+
+    OutreachTemplateSelection.model_validate(parsed)
+    return _REVIEWED_OUTREACH_STRATEGY
 
 
 def compose_intelligent_outreach(
@@ -231,7 +211,7 @@ def compose_intelligent_outreach(
     serving_client: Any | None = None,
     campaign_variant: GovernedCampaignVariant | None = None,
 ) -> IntelligentOutreachDraft:
-    """Return Supervisor-optimized copy or an explicitly labelled fallback."""
+    """Return server-authored copy with an optional Supervisor template selection."""
 
     settings = settings or get_settings()
     if channel == "sms":
@@ -253,13 +233,13 @@ def compose_intelligent_outreach(
             warning="Supervisor readiness check failed.",
             campaign_variant=campaign_variant,
         )
-    runtime, reason = verify_supervisor_runtime(client, settings)
+    runtime, _reason = verify_supervisor_runtime(client, settings)
     if runtime is None:
         return _fallback(
             borrower=borrower,
             channel=channel,
             disclosure=disclosure,
-            warning=f"Supervisor unavailable ({reason or 'not configured'}).",
+            warning="Supervisor is not enabled for this deployment.",
             campaign_variant=campaign_variant,
         )
     endpoint = runtime.endpoint
@@ -289,20 +269,15 @@ def compose_intelligent_outreach(
             parsed = parse_json_object(extract_response_text(response))
             if parsed is None:
                 raise ValueError("Supervisor response was not a JSON object")
-            subject, model_body, strategy = _validate_model_copy(parsed)
-            body = (
-                f"Hello,\n\n{model_body}\n\n{disclosure.body}"
-                if channel == "email"
-                else f"{model_body}\n\n{disclosure.body}"
-            )
-            return IntelligentOutreachDraft(
-                subject=subject,
-                body=body,
+            strategy = _validate_model_selection(parsed)
+            return _fallback(
+                borrower=borrower,
+                channel=channel,
+                disclosure=disclosure,
+                warning="Supervisor selected the reviewed relationship template.",
+                campaign_variant=campaign_variant,
                 generation_mode="supervisor",
-                generator_label="Supervisor-optimized message",
                 strategy_summary=strategy,
-                evidence_summary=_evidence_summary(borrower),
-                evidence_assets=_evidence_assets(),
             )
         except (ValidationError, ValueError, TypeError) as exc:
             repair_note = str(exc)[:500]

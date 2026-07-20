@@ -9577,7 +9577,7 @@
           "draft_generation_id": {
             "anyOf": [
               {
-                "maxLength": 64,
+                "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
                 "type": "string"
               },
               {
@@ -11746,6 +11746,7 @@
         "type": "object"
       },
       "SavedDraft": {
+        "additionalProperties": false,
         "properties": {
           "body": {
             "maxLength": 5000,
@@ -11769,6 +11770,11 @@
             "title": "Channel",
             "type": "string"
           },
+          "generation_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "title": "Generation Id",
+            "type": "string"
+          },
           "offer_code": {
             "anyOf": [
               {
@@ -11780,6 +11786,11 @@
               }
             ],
             "title": "Offer Code"
+          },
+          "response_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Response Hash",
+            "type": "string"
           },
           "saved_at": {
             "title": "Saved At",
@@ -11804,6 +11815,8 @@
         },
         "required": [
           "borrower_id",
+          "generation_id",
+          "response_hash",
           "body",
           "saved_at",
           "updated_at"
@@ -11812,12 +11825,20 @@
         "type": "object"
       },
       "SavedDraftInput": {
+        "additionalProperties": false,
+        "description": "Public save request; borrower copy is reconstructed from proof.",
         "properties": {
           "body": {
-            "maxLength": 5000,
-            "minLength": 1,
-            "title": "Body",
-            "type": "string"
+            "anyOf": [
+              {
+                "maxLength": 5000,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Body"
           },
           "borrower_id": {
             "maxLength": 128,
@@ -11826,13 +11847,24 @@
             "type": "string"
           },
           "channel": {
-            "default": "email",
-            "enum": [
-              "email",
-              "sms",
-              "direct_mail"
+            "anyOf": [
+              {
+                "enum": [
+                  "email",
+                  "sms",
+                  "direct_mail"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
             ],
-            "title": "Channel",
+            "title": "Channel"
+          },
+          "generation_id": {
+            "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$",
+            "title": "Generation Id",
             "type": "string"
           },
           "offer_code": {
@@ -11846,6 +11878,11 @@
               }
             ],
             "title": "Offer Code"
+          },
+          "response_hash": {
+            "pattern": "^[0-9a-f]{64}$",
+            "title": "Response Hash",
+            "type": "string"
           },
           "subject": {
             "anyOf": [
@@ -11862,7 +11899,8 @@
         },
         "required": [
           "borrower_id",
-          "body"
+          "generation_id",
+          "response_hash"
         ],
         "title": "SavedDraftInput",
         "type": "object"

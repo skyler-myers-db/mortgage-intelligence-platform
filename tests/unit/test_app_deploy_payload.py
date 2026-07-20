@@ -79,7 +79,8 @@ def _env_map(payload: dict[str, object]) -> dict[str, dict[str, str]]:
 def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     monkeypatch,
 ) -> None:
-    monkeypatch.setenv("MIP_LENDER_NAME", "Acme Mortgage")
+    monkeypatch.setenv("MIP_LENDER_NAME", "Summit Mortgage")
+    monkeypatch.setenv("MIP_LENDER_NMLS_ID", "123456")
     monkeypatch.setenv("MIP_TRUST_FORWARDED_HEADERS", "false")
     monkeypatch.setenv("MIP_RUM_ENABLED", "1")
     monkeypatch.setenv("MIP_GENIE_CONCURRENCY_LIMIT", "8")
@@ -130,22 +131,20 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_DEFAULT_CATALOG"]["value"] == "acme_mip"
     assert env["MIP_LEADS_WARM_INTERVAL_S"]["value"] == "0"
     assert env["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "0"
-    assert env["MIP_LENDER_NAME"]["value"] == "Acme Mortgage"
+    assert env["MIP_LENDER_NAME"]["value"] == "Summit Mortgage"
+    assert env["MIP_LENDER_NMLS_ID"]["value"] == "123456"
+    assert env["MIP_TENANT_ID"]["value"] == "summit"
     assert env["MIP_APP_DEPLOYMENT_LEASE_ID"]["value"] == ("11111111-1111-4111-8111-111111111111")
     assert env["MIP_TRUST_FORWARDED_HEADERS"]["value"] == "false"
     assert env["MIP_RUM_ENABLED"]["value"] == "1"
     assert env["MIP_GENIE_CONCURRENCY_LIMIT"]["value"] == "8"
     assert env["MIP_LIVE_CAPABILITY_PROBE_TTL_S"]["value"] == "45"
-    assert env["MIP_AI_GATEWAY_AGENT_MODEL_FAMILY"]["value"] == (
-        "acme_mip.audit.proxy_family"
-    )
+    assert env["MIP_AI_GATEWAY_AGENT_MODEL_FAMILY"]["value"] == ("acme_mip.audit.proxy_family")
     assert env["MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE"]["value"] == "acme-gateway-proxy"
     assert env["MIP_AI_GATEWAY_TABLE_PREFIX"]["value"] == "acme_gateway_inference"
     assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"]["value"] == '{"v":"1"}'
     assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"]["value"] == "a" * 64
-    assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE"]["value"] == (
-        "signed-public-proof"
-    )
+    assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE"]["value"] == ("signed-public-proof")
     assert env["MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY"]["value"] == "current-public-key"
     assert env["MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY"]["value"] == (
         "previous-public-key"
@@ -153,6 +152,14 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in env
     assert env["MIP_GIT_SHA"]["value"] == "abc123def456"
     assert "MIP_ADMIN_EMAILS" not in env
+
+
+def test_app_deploy_payload_rejects_unreviewed_lender_identity(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_LENDER_NAME", "Women Home Loans")
+    monkeypatch.setenv("MIP_LENDER_NMLS_ID", "7654321")
+
+    with pytest.raises(ValueError, match="independently reviewed source-controlled"):
+        build_payload(source_code_path="/Workspace/app/files", target="prod")
 
 
 def test_treatment_runtime_gate_requires_exact_enabled_value(monkeypatch) -> None:
@@ -169,6 +176,52 @@ def test_treatment_runtime_gate_requires_exact_enabled_value(monkeypatch) -> Non
         )
     )
     assert enabled["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "1"
+
+
+def test_otel_overlay_preserves_canonical_governed_payload(monkeypatch) -> None:
+    monkeypatch.setenv("MIP_APP_DEPLOYMENT_LEASE_ID", "11111111-1111-4111-8111-111111111111")
+    monkeypatch.setenv("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256", "a" * 64)
+
+    env = _env_map(
+        build_payload(
+            source_code_path="/Workspace/app/files",
+            target="prod",
+            campaign_treatment_runtime_enabled=True,
+            otel_endpoint="https://collector.example.com/v1/logs",
+            otel_header_resource="otel_headers",
+        )
+    )
+
+    assert env["MIP_OTEL_ENDPOINT"]["value"] == "https://collector.example.com/v1/logs"
+    assert env["MIP_OTEL_HEADERS"]["value_from"] == "otel_headers"
+    assert env["MIP_CAMPAIGN_TREATMENT_RUNTIME_ENABLED"]["value"] == "1"
+    assert env["MIP_APP_DEPLOYMENT_LEASE_ID"]["value"].startswith("11111111-")
+    assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"]["value"] == "a" * 64
+    assert env["MIP_GENIE_ACTION_SECRET_CURRENT"]["value_from"] == (
+        "genie_action_current_secret"
+    )
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "resource"),
+    (
+        ("https://collector.example.com/v1/logs", ""),
+        ("", "otel_headers"),
+        ("http://collector.example.com/v1/logs", "otel_headers"),
+        ("https://user:secret@collector.example.com/v1/logs", "otel_headers"),
+    ),
+)
+def test_otel_overlay_rejects_partial_or_unsafe_configuration(
+    endpoint: str,
+    resource: str,
+) -> None:
+    with pytest.raises(ValueError, match="OTEL|OTLP|https|credentials"):
+        build_payload(
+            source_code_path="/Workspace/app/files",
+            target="prod",
+            otel_endpoint=endpoint,
+            otel_header_resource=resource,
+        )
 
 
 def test_app_deploy_payload_does_not_overlay_lakebase_dsn_fragments(monkeypatch) -> None:

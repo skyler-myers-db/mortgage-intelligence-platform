@@ -55,7 +55,9 @@ def _disclosure_row(params: dict[str, Any] | None = None) -> dict[str, str]:
         else "Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out."
     )
     return {
-        "state": params.get("state", "_ALL"),
+        # These fixtures model the generic fallback row selected for an IL
+        # borrower, not an IL-specific reviewed legal template.
+        "state": "_ALL",
         "channel": channel,
         "disclosure_version": "test-disclosure-v1",
         "body": body,
@@ -63,7 +65,9 @@ def _disclosure_row(params: dict[str, Any] | None = None) -> dict[str, str]:
 
 
 DISCLOSURE_BODY = _disclosure_row()["body"]
-APPROVAL_DRAFT_BODY = f"Governed approval body. {DISCLOSURE_BODY}"
+APPROVAL_DRAFT_BODY = (
+    "Contact a loan officer to review available mortgage options. " f"{DISCLOSURE_BODY}"
+)
 
 
 def _record_non_atomic_approval(
@@ -590,8 +594,16 @@ def test_draft_outreach_is_relationship_and_channel_aware() -> None:
 def test_draft_outreach_uses_configured_lender_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from backend.schemas import lender_identity
+
+    monkeypatch.setitem(
+        lender_identity._REVIEWED_PUBLIC_LENDER_IDENTITIES,
+        "Acme Mortgage",
+        frozenset({"7654321"}),
+    )
     monkeypatch.setattr(outreach_mod.settings, "mip_lender_name", "Acme Mortgage")
-    monkeypatch.setattr(outreach_mod.settings, "mip_tenant_id", "summit")
+    monkeypatch.setattr(outreach_mod.settings, "mip_lender_nmls_id", "7654321")
+    monkeypatch.setattr(outreach_mod.settings, "mip_tenant_id", None)
 
     response = TestClient(app).post(
         "/api/outreach/draft",
@@ -633,7 +645,10 @@ def test_supervisor_draft_is_reconstructed_from_exact_durable_response(
         "compose_intelligent_outreach",
         lambda **kwargs: SimpleNamespace(
             subject="A focused mortgage review",
-            body=f"A review may help clarify your available options. {DISCLOSURE_BODY}",
+            body=(
+                "Contact a loan officer to review and clarify your available options. "
+                f"{DISCLOSURE_BODY}"
+            ),
             generation_mode="supervisor",
             generator_label="Supervisor-optimized message",
             strategy_summary="Lead with borrower autonomy and one focused review path.",
@@ -1258,7 +1273,6 @@ def test_fallback_request_id_binds_the_full_decision_payload(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     lakebase = _ConcurrentDecisionLakebase()
-    monkeypatch.setattr(outreach_mod.time, "time", lambda: 1_700_000_000.0)
     monkeypatch.setattr(
         outreach_mod,
         "enqueue_lifecycle_trigger",
@@ -1290,17 +1304,16 @@ def test_fallback_request_id_binds_the_full_decision_payload(
     assert lakebase.audit_count == 2
 
 
-def test_approve_without_request_id_same_minute_collapses_to_one_row(
+def test_approve_without_request_id_repeated_payload_collapses_to_one_row(
     override_deps,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """R6-19: legacy callers that omit ``request_id`` get a server-derived
-    deterministic fallback keyed on (actor, borrower, action, minute).
+    deterministic fallback keyed on the complete decision intent.
 
-    Two same-minute POSTs from the same actor for the same borrower now
-    collapse to one row (matches operator intent: a double-click should
-    not double-book). Cross-minute retries stay distinct -- the test
-    below covers that.
+    Repeated POSTs from the same actor for the same decision collapse to one
+    row regardless of retry timing. A distinct intentional decision requires
+    an explicit new request id.
     """
     audit = InMemoryAuditStore()
     inserted: dict[str, dict[str, Any]] = {}
@@ -1326,8 +1339,6 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
         "enqueue_lifecycle_trigger",
         lambda background, *, reason="approval": None,
     )
-    # Pin the clock so both POSTs land in the same minute-bucket.
-    monkeypatch.setattr(outreach_mod.time, "time", lambda: 1_700_000_000.0)
     override_deps(audit=audit, lakebase=fake_lakebase)
 
     client = TestClient(app)
@@ -1342,7 +1353,7 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
 
     assert first.status_code == 200
     assert second.status_code == 200
-    # Same-minute duplicates collapse to one approval_id.
+    # Identical no-key retries collapse to one approval_id.
     assert first.json()["approval_id"] == second.json()["approval_id"]
     # Exactly one INSERT -- the second call short-circuited via the
     # server-derived fallback key.
@@ -1354,63 +1365,21 @@ def test_approve_without_request_id_same_minute_collapses_to_one_row(
     assert len(approval_inserts) == 1
 
 
-def test_approve_without_request_id_cross_minute_produces_two_rows(
-    override_deps,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """R6-19 cross-minute contract: an explicit re-submit ~60s later
-    intentionally opens a new decision -- the fallback key changes
-    bucket so the second POST writes a distinct row.
-    """
-    audit = InMemoryAuditStore()
-    inserted: dict[str, dict[str, Any]] = {}
+def test_fallback_request_id_has_no_clock_boundary() -> None:
+    intent = '{"borrower_id":"B-48291","rationale":"reviewed"}'
 
-    def _execute(sql: str, params: dict[str, Any]) -> None:
-        _record_non_atomic_approval(inserted, sql, params)
-
-    def _fetchone(sql: str, params: dict[str, Any]) -> dict[str, Any] | None:
-        if "FROM mip_app.tenant_disclosures" in sql:
-            return _disclosure_row(params)
-        if "WHERE request_id" in sql:
-            rid = params.get("request_id")
-            if rid and rid in inserted:
-                return inserted[rid]
-        return None
-
-    fake_lakebase = MagicMock()
-    fake_lakebase.execute.side_effect = _execute
-    fake_lakebase.fetchone.side_effect = _fetchone
-
-    # Start clock, bump 61s between calls.
-    clock = {"t": 1_700_000_000.0}
-    monkeypatch.setattr(outreach_mod.time, "time", lambda: clock["t"])
-    monkeypatch.setattr(
-        outreach_mod,
-        "enqueue_lifecycle_trigger",
-        lambda background, *, reason="approval": None,
+    first = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=intent,
     )
-    override_deps(audit=audit, lakebase=fake_lakebase)
+    retry = outreach_mod._derive_fallback_request_id(
+        actor="lo@example.com",
+        action="approve",
+        decision_intent=intent,
+    )
 
-    client = TestClient(app)
-    body = {
-        "borrower_id": "B-48291",
-        "draft_subject": "Your mortgage review",
-        "draft_body": APPROVAL_DRAFT_BODY,
-    }
-    headers = {"X-Forwarded-Email": "lo@example.com"}
-    first = client.post("/api/outreach/approve", json=body, headers=headers)
-    clock["t"] += 61.0  # bump to the next minute bucket
-    second = client.post("/api/outreach/approve", json=body, headers=headers)
-
-    assert first.status_code == 200
-    assert second.status_code == 200
-    assert first.json()["approval_id"] != second.json()["approval_id"]
-    approval_inserts = [
-        call
-        for call in fake_lakebase.execute.call_args_list
-        if "INSERT INTO mip_app.approvals" in call.args[0]
-    ]
-    assert len(approval_inserts) == 2
+    assert first == retry
 
 
 # ---------------------------------------------------------------------------
@@ -1458,7 +1427,7 @@ def test_approve_body_not_in_logs(
             "borrower_id": "B-48291",
             "actor": f"{sentinel}@example.com",
             "draft_subject": "Your mortgage review",
-            "draft_body": f"{sentinel} {APPROVAL_DRAFT_BODY}",
+            "draft_body": f"{sentinel}. {APPROVAL_DRAFT_BODY}",
         },
     )
     assert resp.status_code == 200, resp.text

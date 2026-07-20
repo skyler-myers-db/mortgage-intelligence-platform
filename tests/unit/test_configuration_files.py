@@ -86,13 +86,13 @@ def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     assert "profile: DEFAULT" not in dev_match.group("body")
 
 
-def test_dev_bundle_pins_real_genie_space_for_bare_deploy():
+def test_dev_bundle_pins_real_genie_space_for_signed_deploy():
     """The dev target must not inherit the CI placeholder for app binding.
 
     Databricks Apps requires a concrete Genie ``space_id`` in the app resource.
-    If the dev target falls back to the root placeholder, bare
-    a direct ``databricks bundle deploy -t dev`` reaches Apps with an
-    invalid binding and returns an opaque permission error.
+    If the dev target falls back to the root placeholder, the command-of-record
+    deploy reaches Apps with an invalid binding and returns an opaque permission
+    error.
     """
     content = (REPO / "databricks.yml").read_text(encoding="utf-8")
     dev_match = re.search(r"(?ms)^  dev:\n(?P<body>.*?)(?=^  prod:\n)", content)
@@ -250,23 +250,19 @@ def test_runtime_requirements_include_otlp_exporter_wheels():
     assert any(line.startswith("opentelemetry-exporter-otlp") for line in lines)
 
 
-def test_prod_otlp_target_wires_secret_resource_without_global_app_yaml_secret():
-    """Durable OTLP uses an explicit target, not a dev-breaking global env.
-
-    ``app.yaml`` stays portable for normal dev/customer deploys. The
-    ``prod_otlp`` bundle target attaches the secret resource; operators then
-    promote with a full deployment env_vars payload that sets
-    ``MIP_OTEL_HEADERS`` from that resource.
-    """
+def test_governed_deploy_wires_otlp_without_global_app_yaml_secret():
+    """Durable OTLP overlays the existing governed target, not a parallel one."""
     app_yaml = (REPO / "app.yaml").read_text(encoding="utf-8")
     bundle = (REPO / "databricks.yml").read_text(encoding="utf-8")
+    deploy = (REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
 
     assert "MIP_OTEL_HEADERS" not in app_yaml
-    assert "prod_otlp:" in bundle
-    assert "name: otel_headers" in bundle
-    assert "secret:" in bundle
-    assert "scope: ${var.otel_headers_secret_scope}" in bundle
-    assert "key: ${var.otel_headers_secret_key}" in bundle
+    assert "prod_otlp:" not in bundle
+    assert "MIP_OTEL_HEADERS_SECRET_SCOPE" in deploy
+    assert "MIP_OTEL_HEADERS_SECRET_KEY" in deploy
+    assert "--otel-header-secret-scope" in deploy
+    assert "--otel-header-resource otel_headers" in deploy
+    assert "MIP_OTEL_HEADERS must never be provided as plaintext" in deploy
 
 
 def test_workspace_host_configuration_script_rewrites_only_anchor(tmp_path):
@@ -292,7 +288,7 @@ def test_workspace_host_configuration_script_rewrites_only_anchor(tmp_path):
     assert "host: &default_host https://adb-1234567890123456.7.azuredatabricks.net" in content
     assert "https://dbc-3aa503a9-4fa8.cloud.databricks.com" not in content
     assert len(re.findall(r"^  host: &default_host ", content, re.MULTILINE)) == 1
-    assert len(re.findall(r"host: \*default_host", content)) >= 4
+    assert len(re.findall(r"host: \*default_host", content)) >= 3
 
 
 def test_workspace_host_configuration_script_rejects_non_origin_url(tmp_path):

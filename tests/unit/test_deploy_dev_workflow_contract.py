@@ -24,6 +24,41 @@ DEPLOY_SCRIPT = REPO / "scripts" / "deploy.sh"
 BUNDLE_CONFIG = REPO / "databricks.yml"
 
 
+@pytest.mark.parametrize("target", ("ci", "unknown", "staging"))
+def test_deploy_script_rejects_nonmutable_target_before_preflight(target: str) -> None:
+    result = subprocess.run(
+        ["bash", str(DEPLOY_SCRIPT), "--target", target, "--dry-run"],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "target must be exactly dev or prod" in result.stderr
+    assert "step 1" not in result.stdout
+
+
+@pytest.mark.parametrize(
+    "targets",
+    (("-t", "dev", "--target", "prod"), ("--target=dev", "--target=prod")),
+)
+def test_deploy_script_rejects_duplicate_target_before_preflight(
+    targets: tuple[str, ...],
+) -> None:
+    result = subprocess.run(
+        ["bash", str(DEPLOY_SCRIPT), *targets, "--dry-run"],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "target may be supplied only once" in result.stderr
+    assert "step 1" not in result.stdout
+
+
 def test_live_workflows_pin_cli_with_safe_partial_app_deploy_support() -> None:
     setup_action = "databricks/setup-cli@bc7e6aabb6006d8d1758bd25ee1a100935c9cb7c"
 
@@ -207,6 +242,20 @@ def _deploy_exit_trap_block() -> str:
 def _runtime_grant_revoke_block() -> str:
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     start = text.index("revoke_agent_runtime_bootstrap_grants() {")
+    end = text.index("restore_rendered_sql_fail_closed() {", start)
+    return text[start:end]
+
+
+def _first_install_capture_finalize_block() -> str:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = text.index("finalize_signed_first_install_capture() {")
+    end = text.index("refresh_first_install_journal_status() {", start)
+    return text[start:end]
+
+
+def _first_install_cleanup_block() -> str:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = text.index("refresh_first_install_journal_status() {")
     end = text.index("restore_rendered_sql_fail_closed() {", start)
     return text[start:end]
 
@@ -565,6 +614,8 @@ def _run_app_failure_compensation_harness(
     access_quarantined: bool = False,
     release_acl_result: int = 0,
     function_grants_proven: bool = True,
+    first_install_created: bool = False,
+    journal_status: str = "recover",
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     calls = tmp_path / f"app-compensation-{state}.log"
     fake_python = tmp_path / f"fake-python-{state}.sh"
@@ -574,6 +625,21 @@ def _run_app_failure_compensation_harness(
         f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
         f'if [[ "$*" == *app_deployment_rollback* ]]; then exit {rollback_result}; fi\n'
         f'if [[ "$*" == *converge_app_release_access* ]]; then exit {release_acl_result}; fi\n'
+        'if [[ "$*" == *"app_first_install_journal status"* ]]; then\n'
+        '  out_env=""\n'
+        "  while (( $# )); do\n"
+        '    if [[ "$1" == --out-env && $# -ge 2 ]]; then out_env="$2"; break; fi\n'
+        "    shift\n"
+        "  done\n"
+        '  [[ -n "$out_env" ]] || exit 64\n'
+        "  {\n"
+        f"    printf '%s\\n' MIP_FIRST_INSTALL_JOURNAL_STATUS={journal_status}\n"
+        "    printf '%s\\n' MIP_FIRST_INSTALL_APP_ID=app-object-id\n"
+        "    printf '%s\\n' MIP_FIRST_INSTALL_APP_CLIENT_ID=app-client-id\n"
+        "    printf '%s\\n' MIP_FIRST_INSTALL_APP_SCIM_ID=app-scim-id\n"
+        '  } > "$out_env"\n'
+        "  exit 0\n"
+        "fi\n"
         'if [[ "$*" == *stop_app_fail_closed* ]]; then\n'
         f"  [[ {stop_result} -eq 0 ]] || exit {stop_result}\n"
         '  outcome_file=""\n'
@@ -604,6 +670,13 @@ APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 _EXISTING_APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 APP_ACCESS_QUARANTINED={1 if access_quarantined else 0}
 REVIEWED_FUNCTION_GRANTS_PROVEN={1 if function_grants_proven else 0}
+FIRST_INSTALL_APP_CREATED={1 if first_install_created else 0}
+FIRST_INSTALL_COMPENSATION_AUTHORIZED=0
+FIRST_INSTALL_APP_BOUND=0
+FIRST_INSTALL_JOURNAL_STATUS={shlex.quote(journal_status)}
+MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
+SOURCE_GIT_SHA={'a' * 40}
+MIP_LAKEBASE_INSTANCE=mip-lakebase
 DATABRICKS_RELEASE_PROBE_CLIENT_ID=release-probe
 DATABRICKS_CLIENT_ID=normal
 DATABRICKS_OPERATOR2_CLIENT_ID=operator2
@@ -619,8 +692,150 @@ RST=""
 run_with_account_identity() {{ "$@"; }}
 run_with_proof_signing_authority() {{ "$@"; }}
 mint_m2m_token() {{ printf 'mint %s\n' "$*" >> {shlex.quote(str(calls))}; }}
+{_first_install_cleanup_block()}
 {_app_failure_compensation_block()}
 stop_app_after_failed_deploy
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+
+def _run_first_install_cleanup_harness(
+    tmp_path: Path,
+    *,
+    journal_status: str,
+    bound: bool,
+    unbind_result: int = 0,
+    delete_result: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    calls = tmp_path / f"first-install-cleanup-{journal_status}-{bound}.log"
+    fake_python = tmp_path / f"first-install-cleanup-{journal_status}-{bound}.sh"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        'if [[ "$*" == *"app_first_install_journal status"* ]]; then\n'
+        '  out_env=""\n'
+        "  while (( $# )); do\n"
+        '    if [[ "$1" == --out-env && $# -ge 2 ]]; then out_env="$2"; break; fi\n'
+        "    shift\n"
+        "  done\n"
+        '  [[ -n "$out_env" ]] || exit 64\n'
+        "  {\n"
+        f"    printf '%s\\n' MIP_FIRST_INSTALL_JOURNAL_STATUS={journal_status}\n"
+        "    printf '%s\\n' MIP_FIRST_INSTALL_APP_ID=app-object-id\n"
+        "    printf '%s\\n' MIP_FIRST_INSTALL_APP_CLIENT_ID=app-client-id\n"
+        "    printf '%s\\n' MIP_FIRST_INSTALL_APP_SCIM_ID=app-scim-id\n"
+        '  } > "$out_env"\n'
+        "  exit 0\n"
+        "fi\n"
+        f'if [[ "$*" == *"bundle_env deployment unbind"* ]]; then exit {unbind_result}; fi\n'
+        f'if [[ "$*" == *"app_first_install_journal delete"* ]]; then exit {delete_result}; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / f"first-install-cleanup-{journal_status}-{bound}.harness.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+FIRST_INSTALL_APP_CREATED=1
+FIRST_INSTALL_APP_BOUND={1 if bound else 0}
+FIRST_INSTALL_JOURNAL_STATUS={shlex.quote(journal_status)}
+APP_FAIL_CLOSED_NAME=mip-app
+MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
+SOURCE_GIT_SHA={'a' * 40}
+APP_ROLLBACK_SECRET_SCOPE=mip-app-rollback
+MIP_LAKEBASE_INSTANCE=mip-lakebase
+TARGET=dev
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+YLW=""
+RST=""
+run_with_proof_signing_authority() {{ "$@"; }}
+{_first_install_cleanup_block()}
+cleanup_failed_first_install_app
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    return result, calls.read_text(encoding="utf-8") if calls.exists() else ""
+
+
+def _run_signed_capture_retirement_failure_harness(
+    tmp_path: Path,
+) -> tuple[subprocess.CompletedProcess[str], str]:
+    calls = tmp_path / "signed-capture-retirement.log"
+    fake_python = tmp_path / "signed-capture-retirement-python.sh"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        'if [[ "$*" == *"app_first_install_journal complete"* ]]; then exit 1; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "signed-capture-retirement.harness.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+DRY_RUN=0
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+APP_DEPLOY_PAYLOAD=""
+APP_LAST_DEPLOY_PAYLOAD=""
+APP_BUNDLE_SUMMARY=""
+APP_ROLLBACK_BINDING_ENV=""
+AGENTIC_ENV_FILE=""
+AGENT_EVAL_ENV_FILE=""
+CUTOVER_JOURNAL_ENV_FILE=""
+APP_DEPLOYMENT_LEASE_ENV=""
+APP_RESOURCE_BINDING_SUMMARY=""
+APP_RESOURCE_BINDING_PAYLOAD=""
+APP_RESOURCE_BINDING_BEFORE=""
+APP_RESOURCE_BINDING_AFTER=""
+FIRST_INSTALL_JOURNAL_ENV=""
+FIRST_INSTALL_MARKED_PAYLOAD=""
+_PII_SECRET_PAYLOAD=""
+APP_DEPLOYMENT_LEASE_ID=""
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+FIRST_INSTALL_APP_CREATED=1
+FIRST_INSTALL_APP_BOUND=1
+FIRST_INSTALL_JOURNAL_STATUS=prepared
+TREATMENT_RUNTIME_QUIESCED=1
+APP_UPGRADE_STATE=green_treatment_pending_capture
+APP_NAME=mip-app
+MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
+SOURCE_GIT_SHA={'a' * 40}
+APP_ROLLBACK_SECRET_SCOPE=mip-app-rollback
+MIP_LAKEBASE_INSTANCE=mip-lakebase
+RED=""
+YLW=""
+DIM=""
+RST=""
+PYTHON={shlex.quote(str(fake_python))}
+step() {{ :; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+stop_app_after_failed_deploy() {{
+  printf 'stop:%s\\n' "$APP_UPGRADE_STATE" >> {shlex.quote(str(calls))}
+  return 0
+}}
+quiesce_app_treatment_after_failed_stop() {{ return 0; }}
+{_first_install_capture_finalize_block()}
+{_first_install_cleanup_block()}
+{_deploy_exit_trap_block()}
+finalize_signed_first_install_capture
 """,
         encoding="utf-8",
     )
@@ -779,7 +994,7 @@ def test_stale_runtime_bootstrap_grants_are_reconciled_before_build_or_bundle() 
     early_cleanup = script.index("could not clear prior agent-runtime bootstrap privileges")
     frontend_build = script.index('step "build frontend')
     bundle_deploy = script.index(
-        'step "deploy non-App bundle resources while the prior App snapshot remains live"'
+        'step "deploy non-App bundle resources without activating an App candidate"'
     )
 
     assert lease < early_cleanup < frontend_build < bundle_deploy
@@ -1156,7 +1371,7 @@ def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() ->
     assert "export MIP_ADMIN_IDENTITIES" in script
     assert "\"$DATABRICKS_RELEASE_PROBE_CLIENT_ID\" <<'PYEOF'" in script
 
-    rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]')
+    rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \\')
     stop = script.index("tools.databricks.stop_app_fail_closed", rebase)
     quarantine = script.index("tools.databricks.converge_app_release_access", stop)
     quarantined_state = script.index("APP_ACCESS_QUARANTINED=1", quarantine)
@@ -1334,6 +1549,7 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
 def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    bundle = BUNDLE_CONFIG.read_text(encoding="utf-8")
 
     for secret in (
         "DATABRICKS_VERIFIER_CLIENT_ID",
@@ -1345,8 +1561,23 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     assert '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in script
     assert '--warehouse-id "$_GRANTS_WAREHOUSE_ID"' in script
     assert "run_as_m2m_identity" in script
-    assert "jobs/lakebase_migrate.py" in script
+    assert "mip_lakebase_migrate" in script
     assert 'export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"' in script
+    assert (
+        'export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"'
+        in script
+    )
+    assert "ai_gateway_verifier_client_id:" in bundle
+    assert (
+        '"--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"' in bundle
+    )
+    assert '"--require-ai-gateway-verifier"' in bundle
+    verifier_export = script.index("export BUNDLE_VAR_ai_gateway_verifier_client_id=")
+    bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
+    migration = script.index(
+        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
+    )
+    assert verifier_export < bundle_apply < migration
     boundary = script.index(
         'step "prove verifier effective authorization boundary before exact Gateway proof"'
     )
@@ -1370,9 +1601,7 @@ def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> N
     runtime_block = script[
         script.index(
             'step "provision Supervisor and Gateway under the dedicated agent-runtime'
-        ) : script.index(
-            'step "reconcile runtime read-only and verifier-only Lakebase proof-ledger grants"'
-        )
+        ) : script.index("AI_GATEWAY_GRANTS_READY=1")
     ]
     assert "run_as_m2m_identity" in runtime_block
     assert "DATABRICKS_AGENT_RUNTIME_CLIENT_ID" in runtime_block
@@ -1447,10 +1676,19 @@ def test_deploy_accepts_numeric_app_service_principal_ids() -> None:
 def test_deploy_reconciles_every_app_facing_identity_only_after_app_creation() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
-    bundle_create = script.index('step "deploy full bundle for first App creation"')
+    bundle_create = script.index(
+        'step "deploy non-App bundle resources without activating an App candidate"'
+    )
+    app_create = script.index(
+        'step "create stopped Databricks App with resolved resource bindings and no source deployment"'
+    )
+    app_bind = script.index(
+        'step "bind the stopped source-free App into bundle deployment state"',
+        app_create,
+    )
     app_identity = script.index(
         'APP_SP_SCIM_ID="$(printf',
-        bundle_create,
+        app_bind,
     )
     grants_start = script.index(
         'step "reconcile normal operator access to the deployed App"',
@@ -1462,7 +1700,21 @@ def test_deploy_reconciles_every_app_facing_identity_only_after_app_creation() -
     )
     grant_block = script[grants_start:verifier_start]
 
-    assert bundle_create < app_identity < grants_start < verifier_start
+    bootstrap = script[bundle_create:app_identity]
+    expected_app_create = "\n".join(
+        (
+            'run_json_to_file "$APP_CREATE_RESULT" databricks apps create \\',
+            '    --json "@$FIRST_INSTALL_MARKED_PAYLOAD"',
+        )
+    )
+    assert expected_app_create in bootstrap
+    assert 'databricks apps create "$_GRANTS_APP_NAME"' not in bootstrap
+    assert "--no-compute" in bootstrap
+    assert "tools.databricks.app_resource_bindings build" in bootstrap
+    assert "--require-stopped-without-deployment" in bootstrap
+    assert "tools.databricks.bundle_env deployment bind" in bootstrap
+    assert 'mip_app "$_GRANTS_APP_NAME"' in bootstrap
+    assert bundle_create < app_create < app_bind < app_identity < grants_start < verifier_start
     for role, client_id in (
         ("normal", "DATABRICKS_CLIENT_ID"),
         ("operator2", "DATABRICKS_OPERATOR2_CLIENT_ID"),
@@ -1517,6 +1769,8 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
     quiesce = script.index(
         'step "quiesce app treatment writes immediately before treatment-table DDL"'
     )
+    app_create = script.index('run_json_to_file "$APP_CREATE_RESULT" databricks apps create')
+    app_bind = script.index("tools.databricks.bundle_env deployment bind", app_create)
     bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
     role_bootstrap = script.index(
         'step "bootstrap dedicated AI Gateway verifier Lakebase OAuth role"'
@@ -1524,8 +1778,16 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
     first_migration = script.index(
         'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
     )
-    assert absent_or_converged < bundle_apply < role_bootstrap < first_migration < quiesce
-    first_install_block = script[absent_or_converged:bundle_apply]
+    assert (
+        absent_or_converged
+        < bundle_apply
+        < app_create
+        < app_bind
+        < role_bootstrap
+        < first_migration
+        < quiesce
+    )
+    first_install_block = script[absent_or_converged:app_create]
     assert "tools.databricks.ensure_campaign_treatment_table" in first_install_block
     assert "--allow-absent" in first_install_block
     bootstrap_block = script[role_bootstrap:first_migration]
@@ -1535,6 +1797,280 @@ def test_fresh_deploy_creates_verifier_lakebase_role_before_first_migration() ->
     assert "--no-mint-secret" in bootstrap_block
     assert "--gateway-endpoint" not in bootstrap_block
     assert "--warehouse-id" not in bootstrap_block
+
+
+def test_full_lakebase_migration_never_runs_after_app_snapshot_activation() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    migration = script.index(
+        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
+    )
+    activation = script.index(
+        'deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"'
+    )
+
+    assert migration < activation
+    assert "jobs/lakebase_migrate.py" not in script[activation:]
+    assert script.count(
+        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
+    ) == 1
+
+
+def test_first_install_never_uses_an_app_inclusive_bundle_deploy_before_migration() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    app_create = script.index('run_json_to_file "$APP_CREATE_RESULT" databricks apps create')
+    identity_claim = script.index("tools.databricks.app_first_install_journal claim", app_create)
+    app_bind = script.index("tools.databricks.bundle_env deployment bind", app_create)
+    bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
+    migration = script.index(
+        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
+    )
+    post_migration_constraints = script.index(
+        "tools.databricks.ensure_campaign_treatment_table",
+        migration,
+    )
+    first_snapshot = script.index(
+        'deploy_app_snapshot "deploy first-install Databricks App snapshot from uploaded bundle source"'
+    )
+
+    bundle_line_end = script.index("\n", bundle_apply)
+    bundle_line = script[bundle_apply:bundle_line_end]
+    assert '"${BUNDLE_NON_APP_ARGS[@]}"' in bundle_line
+    assert "kind != \"apps\"" in script[:bundle_apply]
+    assert "--no-compute" in script[app_create:app_bind]
+    assert "--json \"@$FIRST_INSTALL_MARKED_PAYLOAD\"" in script[app_create:app_bind]
+    assert "tools.databricks.app_resource_bindings verify" in script[bundle_apply:app_bind]
+    assert app_create < identity_claim < app_bind
+    assert "deploy full bundle for first App creation" not in script
+    assert bundle_apply < app_create < app_bind < migration < post_migration_constraints
+    assert post_migration_constraints < first_snapshot
+
+
+def test_failed_first_install_uses_signed_journal_for_exact_cleanup() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    cleanup = script.index("refresh_first_install_journal_status()")
+    trap = script.index("restore_rendered_sql_fail_closed()", cleanup)
+    capture = script.index("capture_last_good_app", trap)
+    cleanup_block = script[cleanup:trap]
+
+    assert '[[ "$DRY_RUN" -eq 0 && "$FIRST_INSTALL_APP_CREATED" -eq 1 ]]' in cleanup_block
+    status = cleanup_block.index("tools.databricks.app_first_install_journal status")
+    unbind = cleanup_block.index("tools.databricks.bundle_env deployment unbind")
+    delete = cleanup_block.index("tools.databricks.app_first_install_journal delete")
+    assert status < unbind < delete
+    assert "databricks apps delete" not in cleanup_block
+    assert "tools.databricks.app_first_install_journal clear-absent" not in cleanup_block
+    for required_argument in (
+        '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"',
+        '--lakebase-instance "$MIP_LAKEBASE_INSTANCE"',
+    ):
+        assert cleanup_block.count(required_argument) == 3
+    assert "refusing API deletion" in cleanup_block
+    assert script.index("cleanup_failed_first_install_app", trap) < capture
+
+
+def test_first_install_bind_arms_ambiguous_cleanup_before_remote_mutation() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    create = script.index('run_json_to_file "$APP_CREATE_RESULT" databricks apps create')
+    arm = script.index("FIRST_INSTALL_APP_BOUND=1", create)
+    bind = script.index("tools.databricks.bundle_env deployment bind", create)
+
+    assert create < arm < bind
+
+
+def test_signed_capture_disarms_first_install_deletion_before_journal_retirement() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    finalizer = script.index("finalize_signed_first_install_capture()")
+    finalizer_end = script.index("refresh_first_install_journal_status()", finalizer)
+    finalizer_block = script[finalizer:finalizer_end]
+    capture = script.index('capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"')
+    finalize_call = script.index("finalize_signed_first_install_capture", capture)
+    disarm = finalizer_block.index("FIRST_INSTALL_APP_CREATED=0")
+    captured_state = finalizer_block.index('APP_UPGRADE_STATE="green_captured_cleanup_pending"')
+    complete = finalizer_block.index("tools.databricks.app_first_install_journal complete")
+
+    assert disarm < captured_state < complete
+    assert capture < finalize_call
+
+
+def test_signed_capture_retirement_failure_preserves_captured_app_in_exit_trap(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_signed_capture_retirement_failure_harness(tmp_path)
+
+    assert result.returncode == 1
+    assert "app_first_install_journal complete" in calls
+    assert "stop:green_captured_cleanup_pending" in calls
+    assert "app_first_install_journal delete" not in calls
+    assert "bundle_env deployment unbind" not in calls
+
+
+def test_exact_unsigned_first_install_cleanup_converges_through_signed_helper(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_first_install_cleanup_harness(
+        tmp_path,
+        journal_status="recover",
+        bound=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls.index("app_first_install_journal status") < calls.index(
+        "bundle_env deployment unbind"
+    )
+    assert calls.index("bundle_env deployment unbind") < calls.index(
+        "app_first_install_journal delete"
+    )
+
+
+def test_first_install_cleanup_refuses_signed_or_replaced_state_before_unbind(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_first_install_cleanup_harness(
+        tmp_path,
+        journal_status="signed",
+        bound=True,
+    )
+
+    assert result.returncode == 1
+    assert "not authorized for journal state signed" in result.stderr
+    assert "bundle_env deployment unbind" not in calls
+    assert "app_first_install_journal delete" not in calls
+
+
+def test_unclaimed_first_install_identity_is_manual_and_never_auto_deleted(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_first_install_cleanup_harness(
+        tmp_path,
+        journal_status="unclaimed",
+        bound=True,
+    )
+
+    assert result.returncode == 1
+    assert "not authorized for journal state unclaimed" in result.stderr
+    assert "bundle_env deployment unbind" not in calls
+    assert "app_first_install_journal delete" not in calls
+
+
+def test_ambiguous_first_install_unbind_retains_app_and_journal_for_retry(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_first_install_cleanup_harness(
+        tmp_path,
+        journal_status="recover",
+        bound=True,
+        unbind_result=1,
+    )
+
+    assert result.returncode == 1
+    assert "refusing API deletion" in result.stderr
+    assert "bundle_env deployment unbind" in calls
+    assert "app_first_install_journal delete" not in calls
+
+
+def test_committed_app_delete_can_retire_orphaned_first_install_journal(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_first_install_cleanup_harness(
+        tmp_path,
+        journal_status="orphan_claimed",
+        bound=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "bundle_env deployment unbind" not in calls
+    assert "app_first_install_journal delete" in calls
+
+
+def test_initial_retry_routes_claimed_and_unclaimed_absence_separately() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    status = script.index("tools.databricks.app_first_install_journal status")
+    unclaimed = script.index(
+        'FIRST_INSTALL_JOURNAL_STATUS" == "orphan_unclaimed"', status
+    )
+    clear = script.index("tools.databricks.app_first_install_journal clear-absent", unclaimed)
+    claimed = script.index(
+        'FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed"', clear
+    )
+    retire = script.index("tools.databricks.app_first_install_journal delete", claimed)
+
+    assert status < unclaimed < clear < claimed < retire
+
+
+def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert "dotenv_value MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY" in script
+    assert "dotenv_value MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS" in script
+    assert (
+        'export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$verifier_historical_keys"'
+        in script
+    )
+
+
+def test_expired_lease_recovery_uses_durable_signed_lease_root() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    recovery = script.index("tools.databricks.app_deployment_lease recovery-root")
+    acquire = script.index("tools.databricks.app_deployment_lease acquire", recovery)
+
+    assert recovery < acquire
+    assert "MIP_APP_DEPLOYMENT_RECOVERY_ROOT" in script[recovery:acquire]
+    assert "app_first_install_journal takeover-lease" not in script
+    assert 'APP_LEASE_RECOVERY_ENV=""' in script
+    assert 'rm -f "$APP_LEASE_RECOVERY_ENV"' in script
+    assert "FIRST_INSTALL_TAKEOVER_ENV" not in script
+
+
+def test_first_install_creation_is_preceded_by_signed_durable_recovery_intent() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    inventory = script.index('_EXISTING_APPS_JSON="$(databricks apps list -o json)"')
+    status = script.index("tools.databricks.app_first_install_journal status", inventory)
+    recovery_function = script.index("recover_interrupted_first_install_app()")
+    recovery_stop = script.index("tools.databricks.stop_app_fail_closed", recovery_function)
+    recovery_quarantine = script.index(
+        "tools.databricks.converge_app_release_access",
+        recovery_stop,
+    )
+    recovery_quiesce = script.index(
+        "tools.databricks.converge_campaign_treatment_access",
+        recovery_quarantine,
+    )
+    recovery_delete = script.index(
+        "tools.databricks.app_first_install_journal delete",
+        recovery_quiesce,
+    )
+    recover = script.index('FIRST_INSTALL_JOURNAL_STATUS" == "recover"', status)
+    recovery_call = script.index("recover_interrupted_first_install_app", recover)
+    audit_recover = script.index(
+        "tools.databricks.app_first_install_journal recover-claim",
+        recover,
+    )
+    prepare = script.index("tools.databricks.app_first_install_journal prepare")
+    create = script.index('run_json_to_file "$APP_CREATE_RESULT" databricks apps create', prepare)
+    ambiguous_create_guard = script.index("FIRST_INSTALL_APP_CREATED=1", prepare)
+    verify = script.index("tools.databricks.app_resource_bindings verify", create)
+    claim = script.index("tools.databricks.app_first_install_journal claim", verify)
+    bind = script.index("tools.databricks.bundle_env deployment bind", verify)
+    capture = script.index(
+        'capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"',
+        bind,
+    )
+    complete = script.index("finalize_signed_first_install_capture", capture)
+
+    assert recovery_function < recovery_stop < recovery_quarantine < recovery_quiesce < recovery_delete
+    assert inventory < status < recover < recovery_call < audit_recover
+    assert audit_recover < prepare < ambiguous_create_guard < create
+    assert create < verify < claim < bind < capture < complete
+    assert '--payload "$APP_RESOURCE_BINDING_PAYLOAD"' in script[prepare:create]
+    assert '--out-payload "$FIRST_INSTALL_MARKED_PAYLOAD"' in script[prepare:create]
+    assert '--json "@$FIRST_INSTALL_MARKED_PAYLOAD"' in script[create:verify]
+    assert '--expected "$FIRST_INSTALL_MARKED_PAYLOAD"' in script[verify:bind]
+    assert '--created-app "$APP_CREATE_RESULT"' in script[verify:bind]
+    assert '"$FIRST_INSTALL_JOURNAL_STATUS" != "signed"' in script[status:prepare]
 
 
 def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
@@ -2261,6 +2797,11 @@ def test_first_install_dry_run_executes_no_databricks_operations(
         (REPO / "tools" / "databricks" / "app_deploy_payload.py").read_text(encoding="utf-8"),
         encoding="utf-8",
     )
+    lender_identity_copy = checkout / "backend" / "schemas" / "lender_identity.py"
+    lender_identity_copy.write_text(
+        (REPO / "backend" / "schemas" / "lender_identity.py").read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
     instance_contract_copy = checkout / "tools" / "databricks" / "lakebase_instance_contract.py"
     instance_contract_copy.write_text(
         (REPO / "tools" / "databricks" / "lakebase_instance_contract.py").read_text(
@@ -2273,6 +2814,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
             "git",
             "add",
             "scripts/deploy.sh",
+            "backend/schemas/lender_identity.py",
             "tools/databricks/app_deploy_payload.py",
             "tools/databricks/lakebase_instance_contract.py",
         ],
@@ -2388,6 +2930,10 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: " "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
     )
     assert workflow.count(secret_binding) == 2
+    assert workflow.count(
+        "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: "
+        "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
+    ) == 1
     model_binding = (
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: "
         "${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}"
@@ -2414,6 +2960,28 @@ def test_app_snapshot_payload_forwards_exact_lakebase_deployment_control() -> No
     )
 
 
+def test_otlp_is_an_exact_overlay_on_the_governed_target_and_rollback() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    bundle = BUNDLE_CONFIG.read_text(encoding="utf-8")
+
+    otlp_preflight = script.index(
+        'MIP_OTEL_ENDPOINT="$(deployment_control_value MIP_OTEL_ENDPOINT)"'
+    )
+    lease = script.index("tools.databricks.app_deployment_lease acquire")
+    resource_build = script.index("tools.databricks.app_resource_bindings build")
+    snapshot = script.index("emit_app_deploy_payload() {")
+    capture = script.index("--app-resource-payload", snapshot)
+
+    assert otlp_preflight < lease < resource_build < snapshot < capture
+    assert "MIP_OTEL_HEADERS must never be provided as plaintext" in script
+    assert "--otel-header-secret-scope" in script[otlp_preflight:resource_build + 500]
+    assert "--otel-header-secret-key" in script[otlp_preflight:resource_build + 500]
+    assert "--otel-endpoint" in script[otlp_preflight:lease]
+    assert "--otel-header-resource otel_headers" in script[otlp_preflight:lease]
+    assert '"${OTEL_DEPLOY_PAYLOAD_ARGS[@]}"' in script[snapshot:capture]
+    assert "prod_otlp:" not in bundle
+
+
 def test_deploy_holds_signed_workspace_lease_through_durable_capture() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -2430,7 +2998,7 @@ def test_deploy_holds_signed_workspace_lease_through_durable_capture() -> None:
     assert "MIP_APP_DEPLOYMENT_LEASE_ID" in (
         REPO / "tools/databricks/app_deploy_payload.py"
     ).read_text(encoding="utf-8")
-    assert '--bundle-summary "${APP_BUNDLE_SUMMARY:' in script
+    assert '--app-resource-payload "${APP_RESOURCE_BINDING_PAYLOAD:' in script
 
 
 def test_proof_signing_heartbeat_is_direct_child_and_renews(
@@ -2448,6 +3016,7 @@ def test_proof_signing_heartbeat_is_direct_child_and_renews(
             from pathlib import Path
 
             from tools.databricks import app_deployment_lease as lease
+            from tools.databricks import app_deployment_lease_cli as lease_cli
 
             expected_parent = int(sys.argv[1])
             output = Path(sys.argv[2])
@@ -2461,7 +3030,7 @@ def test_proof_signing_heartbeat_is_direct_child_and_renews(
                 return actual if len(checks) <= 2 else False
 
             lease._parent_is_expected = bounded_parent_check
-            lease.time.sleep = lambda _seconds: None
+            lease_cli.time.sleep = lambda _seconds: None
             lease.renew = lambda *_args, **kwargs: renewals.append(kwargs)
             lease._heartbeat(
                 object(),
@@ -2528,7 +3097,10 @@ def test_proof_signing_heartbeat_is_direct_child_and_renews(
         text=True,
         capture_output=True,
         check=False,
-        timeout=15,
+        # CI executes this import-heavy child beside the full xdist worker
+        # pool. Bound hangs, but do not mistake scheduler starvation for a
+        # heartbeat failure on smaller shared runners.
+        timeout=45,
     )
 
     assert result.returncode == 0, result.stdout + result.stderr
@@ -2745,7 +3317,7 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
         'deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"'
     )
     assert first_snapshot < preserve_old < activate_green
-    rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" ]]')
+    rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \\')
     rebase_first_install = script.index('APP_UPGRADE_STATE="first_install"', rebase)
     first_snapshot_guard = script.index(
         'if [[ "$APP_UPGRADE_STATE" == "first_install" ]]; then', rebase_first_install
@@ -2969,6 +3541,46 @@ def test_first_install_compensation_accepts_authoritative_app_absence(
     assert "converge_campaign_treatment_access" not in calls
 
 
+def test_unclaimed_first_install_trap_refuses_stop_and_treatment_mutations(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="first_install",
+        rollback_result=1,
+        stop_result=0,
+        first_install_created=True,
+        journal_status="unclaimed",
+    )
+
+    assert result.returncode == 1
+    assert "app_first_install_journal status" in calls
+    assert "stop_app_fail_closed" not in calls
+    assert "converge_campaign_treatment_access" not in calls
+    assert "not authorized for journal state unclaimed" in result.stderr
+
+
+def test_claimed_first_install_trap_authenticates_before_stop(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="first_install",
+        rollback_result=1,
+        stop_result=0,
+        first_install_created=True,
+        journal_status="recover",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert calls.index("app_first_install_journal status") < calls.index(
+        "stop_app_fail_closed"
+    )
+    assert "--expected-app-id app-object-id" in calls
+    assert "--expected-client-id app-client-id" in calls
+    assert "--expected-scim-id app-scim-id" in calls
+
+
 @pytest.mark.parametrize(
     "record",
     (
@@ -3060,7 +3672,7 @@ def test_deploy_dev_wires_optional_salesforce_external_id_upsert_without_preflig
     assert "SALESFORCE" not in required_preflight
 
 
-def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_path: Path) -> None:
+def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: Path) -> None:
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
     assert 'APP_RUNTIME_ENV="${APP_ENV:-}"' in text
@@ -3099,7 +3711,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
     env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
     env.pop("MIP_GENIE_ACTION_SECRET", None)
     result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "customer", "--dry-run", "--no-confirm"],
+        ["bash", str(deploy_copy), "-t", "prod", "--dry-run", "--no-confirm"],
         cwd=repo,
         env=env,
         text=True,
@@ -3109,7 +3721,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_non_dev_targets(tmp_pat
 
     assert result.returncode == 1
     assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer' (APP_ENV=customer)"
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)"
         in result.stderr
     )
     assert "step 1: preflight" in result.stdout
@@ -3240,7 +3852,7 @@ def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path
     }
     env.pop("MIP_COTALITY_ID_MASK_SECRET", None)
     result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "customer", "--dry-run", "--no-confirm"],
+        ["bash", str(deploy_copy), "-t", "prod", "--dry-run", "--no-confirm"],
         cwd=repo,
         env=env,
         text=True,
@@ -3250,7 +3862,7 @@ def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path
 
     assert result.returncode == 1
     assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer' (APP_ENV=customer)"
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)"
         in result.stderr
     )
     assert "cotality id-mask secret: configured" not in result.stdout
@@ -3285,7 +3897,7 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
         "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}",
     }
     result = subprocess.run(
-        ["bash", str(deploy_copy), "-t", "customer", "--dry-run", "--no-confirm"],
+        ["bash", str(deploy_copy), "-t", "prod", "--dry-run", "--no-confirm"],
         cwd=repo,
         env=env,
         text=True,
@@ -3295,7 +3907,7 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
 
     assert result.returncode == 1
     assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'customer' (APP_ENV=customer)"
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)"
         in result.stderr
     )
     assert "cotality id-mask secret: configured" not in result.stdout

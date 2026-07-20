@@ -1059,6 +1059,11 @@ ALTER TABLE mip_app.campaign_message_variants
     ADD COLUMN IF NOT EXISTS provenance_performance_fingerprint TEXT;
 ALTER TABLE mip_app.campaign_message_variants
     ADD COLUMN IF NOT EXISTS provenance_token_digest TEXT;
+-- Recurring seed installation retains three historical operator rows. Drop
+-- the forward-write guard only inside this migration transaction; it is
+-- restored after the insert-only seed block below.
+ALTER TABLE mip_app.campaign_message_variants
+    DROP CONSTRAINT IF EXISTS campaign_message_variants_server_owned_proof_chk;
 DO $$
 BEGIN
     IF NOT EXISTS (
@@ -1285,6 +1290,8 @@ CREATE INDEX IF NOT EXISTS idx_saved_leads_actor_updated
 CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     actor_email  TEXT NOT NULL,
     borrower_id  TEXT NOT NULL,
+    generation_id UUID,
+    response_hash TEXT,
     offer_code   TEXT,
     channel      TEXT NOT NULL DEFAULT 'email' CHECK (channel IN ('email','sms','direct_mail')),
     subject      TEXT CHECK (subject IS NULL OR length(subject) <= 120),
@@ -1295,6 +1302,20 @@ CREATE TABLE IF NOT EXISTS mip_app.outreach_drafts (
     deleted_at   TIMESTAMPTZ,
     PRIMARY KEY (actor_email, borrower_id, channel)
 );
+ALTER TABLE mip_app.outreach_drafts
+    ADD COLUMN IF NOT EXISTS generation_id UUID;
+ALTER TABLE mip_app.outreach_drafts
+    ADD COLUMN IF NOT EXISTS response_hash TEXT;
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_generation_proof_check;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_generation_proof_check CHECK (
+        (generation_id IS NULL AND response_hash IS NULL)
+        OR (
+            generation_id IS NOT NULL
+            AND response_hash ~ '^[0-9a-f]{64}$'
+        )
+    );
 ALTER TABLE mip_app.outreach_drafts
     ADD COLUMN IF NOT EXISTS subject TEXT;
 ALTER TABLE mip_app.outreach_drafts
@@ -1731,6 +1752,15 @@ CREATE TABLE IF NOT EXISTS mip_app.generated_outreach_drafts (
     response_json  JSONB NOT NULL,
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+ALTER TABLE mip_app.outreach_drafts
+    DROP CONSTRAINT IF EXISTS outreach_drafts_generation_id_fkey;
+ALTER TABLE mip_app.outreach_drafts
+    ADD CONSTRAINT outreach_drafts_generation_id_fkey
+    FOREIGN KEY (generation_id)
+    REFERENCES mip_app.generated_outreach_drafts(generation_id)
+    NOT VALID;
+ALTER TABLE mip_app.outreach_drafts
+    VALIDATE CONSTRAINT outreach_drafts_generation_id_fkey;
 
 -- Existing immutable triggers are transactionally removed only after their
 -- table exists. The post-seed finalization block restores them before commit.
@@ -2637,6 +2667,42 @@ VALUES (
 ON CONFLICT (version) DO NOTHING;
 
 -- MIP_LAKEBASE_POST_SEED_BEGIN
+
+-- Historical reviewed seed rows remain readable evidence, but every new
+-- variant must carry structurally complete server-owned generation proof.
+-- NOT VALID preserves those legacy operator rows while still enforcing this
+-- check for every INSERT/UPDATE after the migration commits.
+ALTER TABLE mip_app.campaign_message_variants
+    ADD CONSTRAINT campaign_message_variants_server_owned_proof_chk
+    CHECK (
+        generation_mode IN ('supervisor', 'reviewed_fallback')
+        AND length(btrim(generator_label)) BETWEEN 1 AND 80
+        AND provenance_key_id IS NOT NULL
+        AND provenance_key_id ~ '^[A-Za-z0-9._-]{1,64}$'
+        AND provenance_issued_at IS NOT NULL
+        AND provenance_expires_at IS NOT NULL
+        AND provenance_expires_at > provenance_issued_at
+        AND provenance_copy_hash IS NOT NULL
+        AND provenance_copy_hash ~ '^[0-9a-f]{64}$'
+        AND provenance_criteria_fingerprint IS NOT NULL
+        AND provenance_criteria_fingerprint ~ '^[0-9a-f]{64}$'
+        AND (
+            provenance_performance_fingerprint IS NULL
+            OR provenance_performance_fingerprint ~ '^[0-9a-f]{64}$'
+        )
+        AND provenance_token_digest IS NOT NULL
+        AND provenance_token_digest ~ '^[0-9a-f]{64}$'
+    ) NOT VALID;
+ALTER TABLE mip_app.campaign_message_variants
+    ALTER COLUMN generation_mode DROP DEFAULT,
+    ALTER COLUMN generator_label DROP DEFAULT;
+
+INSERT INTO mip_app.schema_migrations (version, description)
+VALUES (
+    '2026_07_18_campaign_variant_server_owned_proof',
+    'Reject new operator-authored campaign variants and require complete server-owned proof'
+)
+ON CONFLICT (version) DO NOTHING;
 -- jobs/lakebase_migrate.py executes the deterministic seed immediately before
 -- this suffix, in the same transaction. That ordering makes reviewed campaign
 -- variants available for legacy proof backfills before hard validation.

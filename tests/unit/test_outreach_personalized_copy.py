@@ -11,6 +11,7 @@ contract without needing the Lakebase/disclosure resolver stack:
 * current customers never receive cold-acquisition language,
 * no unprovable / firm-offer terms ("guaranteed", "pre-approved", etc.).
 """
+
 from __future__ import annotations
 
 import re
@@ -18,6 +19,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from backend.api.outreach import (
+    _assert_disclosure_backed_draft_body,
+    _assert_final_draft_subject,
+)
+from backend.schemas.workspace import SavedDraftRecordInput
 from backend.services.outreach_copy import _compose_outreach_body, _personalization_hook
 from tests.fixtures import mock_population
 
@@ -61,9 +67,7 @@ def test_hook_rate_spread_then_equity_then_portfolio() -> None:
     )
     assert (
         _personalization_hook(
-            _borrower(
-                is_competitor_lien=False, rate_spread_bps=0, ltv=90, equity_estimate=120_000
-            )
+            _borrower(is_competitor_lien=False, rate_spread_bps=0, ltv=90, equity_estimate=120_000)
         )
         == "your estimated home-equity position"
     )
@@ -171,9 +175,7 @@ def test_sms_within_160_chars(competitor: bool) -> None:
         is_competitor_lien=competitor,
         rate_spread_bps=0 if competitor else 90,
     )
-    subject, body = _compose_outreach_body(
-        borrower=borrower, channel="sms", disclosure=_DISCLOSURE
-    )
+    subject, body = _compose_outreach_body(borrower=borrower, channel="sms", disclosure=_DISCLOSURE)
     assert subject is None
     assert len(body) <= 160, (len(body), body)
     assert _DISCLOSURE.body in body
@@ -245,3 +247,67 @@ def test_figure_bearing_why_now_is_suppressed_from_authored_copy(channel) -> Non
     # Personalization still lands via the qualitative hook; disclosure retained.
     assert "your current mortgage" in authored
     assert _DISCLOSURE.body in body
+
+
+@pytest.mark.parametrize(
+    "offer_code",
+    (
+        "purchase",
+        "refi_plus_heloc",
+        "heloc",
+        "refi",
+        "cash_out",
+        "investor",
+        "retention",
+        "nurture",
+    ),
+)
+@pytest.mark.parametrize(
+    ("is_customer", "is_competitor"),
+    ((False, False), (True, False), (False, True)),
+    ids=("prospect", "customer", "competitor"),
+)
+@pytest.mark.parametrize("channel", ("email", "direct_mail", "sms"))
+def test_every_reviewed_template_round_trips_generate_save_and_approve(
+    offer_code: str,
+    is_customer: bool,
+    is_competitor: bool,
+    channel: str,
+) -> None:
+    disclosure = (
+        SimpleNamespace(
+            body=("Summit Mortgage NMLS #123456. Equal Housing Lender. Reply STOP to opt out.")
+        )
+        if channel == "sms"
+        else _DISCLOSURE
+    )
+    borrower = _borrower(
+        recommended_offer_code=offer_code,
+        is_current_customer=is_customer,
+        is_competitor_lien=is_competitor,
+    )
+
+    subject, body = _compose_outreach_body(
+        borrower=borrower,
+        channel=channel,
+        disclosure=disclosure,
+    )
+    saved = SavedDraftRecordInput(
+        borrower_id=borrower.borrower_id,
+        generation_id="11111111-1111-4111-8111-111111111111",
+        response_hash="a" * 64,
+        offer_code=offer_code,
+        channel=channel,
+        subject=subject,
+        body=body,
+    )
+
+    assert _assert_final_draft_subject(draft_subject=saved.subject, channel=channel) == subject
+    assert (
+        _assert_disclosure_backed_draft_body(
+            draft_body=saved.body,
+            disclosure=disclosure,
+            channel=channel,
+        )
+        == saved.body
+    )

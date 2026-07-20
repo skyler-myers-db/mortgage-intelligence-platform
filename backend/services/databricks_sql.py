@@ -38,6 +38,7 @@ from typing import Any
 from backend.services.observability import emit
 
 _log = logging.getLogger("mip.databricks_sql")
+_MAX_STATEMENT_WAIT_TIMEOUT_S = 50
 
 
 def _statement_hash(statement: str) -> str:
@@ -92,6 +93,11 @@ class DatabricksSqlClient:
         warehouse_id: str,
         timeout_s: int = 30,
     ) -> None:
+        if timeout_s != 0 and not 5 <= timeout_s <= _MAX_STATEMENT_WAIT_TIMEOUT_S:
+            raise ValueError(
+                "Databricks Statement Execution wait_timeout must be 0 or between "
+                f"5 and {_MAX_STATEMENT_WAIT_TIMEOUT_S}s"
+            )
         if not host.startswith("http"):
             host = "https://" + host
         self._host = host.rstrip("/")

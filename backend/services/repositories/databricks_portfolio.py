@@ -814,17 +814,11 @@ class DatabricksPortfolioRepository:
                         portfolio_criteria=criteria or PortfolioCriteria(),
                     ),
                     frequency_cap_days=int(
-                        str(
-                            campaign_build_config.suppression_policy.get(
-                                "frequency_cap_days", 30
-                            )
-                        )
+                        str(campaign_build_config.suppression_policy.get("frequency_cap_days", 30))
                     ),
                     household_dedup_enabled=campaign_build_config.household_dedup.enabled,
                 )
-                campaign_build_contact_count = int(
-                    treatment_preflight["selected_primary_count"]
-                )
+                campaign_build_contact_count = int(treatment_preflight["selected_primary_count"])
             trends, latest, trend_status, trend_note = self._load_funnel(
                 include_trends=not bool(where_clause),
             )
@@ -969,27 +963,22 @@ class DatabricksPortfolioRepository:
         for variant in payload.message_variants:
             if not str(variant.get("body") or "").strip():
                 continue
-            requested_mode = str(variant.get("generation_mode") or "operator")
-            requested_label = str(variant.get("generator_label") or "Operator edited")
-            if requested_mode == "operator":
-                generation_mode = "operator"
-                generator_label = "Operator edited"
-                provenance_proof = None
-            else:
-                provenance_proof = inspect_campaign_variant_provenance(
-                    variant,
-                    criteria_fingerprint=criteria_fingerprint,
+            requested_mode = str(variant.get("generation_mode") or "")
+            requested_label = str(variant.get("generator_label") or "")
+            provenance_proof = inspect_campaign_variant_provenance(
+                variant,
+                criteria_fingerprint=criteria_fingerprint,
+            )
+            if provenance_proof is None:
+                raise ValueError(
+                    "model-generated campaign provenance is missing, expired, or invalid"
                 )
-                if provenance_proof is None:
-                    raise ValueError(
-                        "model-generated campaign provenance is missing, expired, or invalid"
-                    )
-                generation_mode = provenance_proof.generation_mode
-                generator_label = provenance_proof.generator_label
-                if requested_mode != generation_mode or requested_label != generator_label:
-                    raise ValueError(
-                        "model-generated campaign provenance does not match the server proof"
-                    )
+            generation_mode = provenance_proof.generation_mode
+            generator_label = provenance_proof.generator_label
+            if requested_mode != generation_mode or requested_label != generator_label:
+                raise ValueError(
+                    "model-generated campaign provenance does not match the server proof"
+                )
             variant_rows.append(
                 {
                     "variant_name": str(
@@ -1294,9 +1283,7 @@ class DatabricksPortfolioRepository:
                 audit_metadata.get("rationale") if isinstance(audit_metadata, dict) else None
             )
             audited_expected_status = (
-                audit_metadata.get("expected_status")
-                if isinstance(audit_metadata, dict)
-                else None
+                audit_metadata.get("expected_status") if isinstance(audit_metadata, dict) else None
             )
             if (
                 str(row.get("status") or "") != target_status
@@ -1398,8 +1385,10 @@ class DatabricksPortfolioRepository:
         if payload.status in {"approved", "live", "active"}:
             campaign = self._campaign_from_row(existing)
             variants = campaign.message_variants
-            if not campaign.actionable or not variants or not all(
-                variant.get("copy_verified_at_creation") is True for variant in variants
+            if (
+                not campaign.actionable
+                or not variants
+                or not all(variant.get("copy_verified_at_creation") is True for variant in variants)
             ):
                 raise HTTPException(
                     status_code=409,
@@ -1772,14 +1761,14 @@ def _public_campaign_variant(
         generation_mode_raw = variant.get("generation_mode")
         if generation_mode_raw is not None and not isinstance(generation_mode_raw, str):
             raise ValueError("campaign variant generation_mode must be text")
-        generation_mode = str(generation_mode_raw or "operator").strip()
-        if generation_mode not in {"operator", "supervisor", "reviewed_fallback"}:
-            raise ValueError("unsupported generation mode")
+        generation_mode = str(generation_mode_raw or "").strip()
+        if generation_mode not in {"supervisor", "reviewed_fallback"}:
+            raise ValueError("borrower campaign copy is not server-reviewed")
         generator_label_raw = variant.get("generator_label")
         if generator_label_raw is not None and not isinstance(generator_label_raw, str):
             raise ValueError("campaign variant generator_label must be text")
         generator_label = assert_public_campaign_text(
-            generator_label_raw or "Operator edited",
+            generator_label_raw or "",
             field_name="variant generator_label",
             max_length=80,
         )
@@ -1813,6 +1802,15 @@ def _public_campaign_variant(
             criteria_fingerprint=criteria_fingerprint,
         )
     )
+    if not copy_verified_at_creation:
+        emit(
+            log,
+            "campaign_variant_public_projection_rejected",
+            level=logging.WARNING,
+            outcome="omitted",
+            reason="unverified_borrower_copy",
+        )
+        return None
     public_variant: dict[str, object] = {
         "variant_name": variant_name,
         "channel": channel,

@@ -21,6 +21,10 @@ from pydantic import AliasChoices, Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from backend.schemas._validators import set_public_lender_name_provider
+from backend.schemas.lender_identity import (
+    effective_public_tenant_id,
+    validate_public_lender_identity,
+)
 
 # Documented, shared error message so every fail-fast site reads the
 # same -- helps operators who see it in a container log.
@@ -127,6 +131,7 @@ class Settings(BaseSettings):
     )
     mip_app_deployment_lease_id: str | None = None
     mip_lender_name: str = "Summit Mortgage"
+    mip_lender_nmls_id: str = ""
     mip_tenant_id: str | None = None
     mip_default_catalog: str = "mip"
     mip_default_schema: str = "gold"
@@ -235,14 +240,10 @@ class Settings(BaseSettings):
     def effective_tenant_id(self) -> str:
         """Return the Lakebase disclosure namespace for this deployment."""
 
-        configured = (self.mip_tenant_id or "").strip()
-        if configured:
-            return configured
-        lender_name = (self.mip_lender_name or "").strip()
-        if lender_name == "Summit Mortgage":
-            return "summit"
-        slug = re.sub(r"[^a-z0-9]+", "_", lender_name.lower()).strip("_")
-        return slug or "tenant"
+        return effective_public_tenant_id(
+            self.mip_tenant_id,
+            lender_name=self.mip_lender_name,
+        )
 
     # In-the-money contract: matches tests/fixtures/rate_spread_golden.json
     # (market_rate_constant) and tests/fixtures/in_the_money_golden.json
@@ -549,6 +550,19 @@ class Settings(BaseSettings):
         gt=0,
         allow_inf_nan=False,
     )
+
+    @model_validator(mode="after")
+    def _validate_public_lender_identity(self) -> Settings:
+        self.mip_lender_name, self.mip_lender_nmls_id = validate_public_lender_identity(
+            self.mip_lender_name,
+            self.mip_lender_nmls_id,
+        )
+        if self.mip_tenant_id is not None:
+            self.mip_tenant_id = effective_public_tenant_id(
+                self.mip_tenant_id,
+                lender_name=self.mip_lender_name,
+            )
+        return self
 
     @model_validator(mode="after")
     def _validate_health_wait_budget(self) -> Settings:

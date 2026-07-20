@@ -31,6 +31,11 @@ import {
   useOfferCampaignBinding,
 } from './offer-orchestrator.route-ui';
 
+// Saved campaign variants are currently persisted as governed email copy.
+// Keep campaign handoffs on that exact channel until the campaign contract
+// carries and verifies additional stored channel variants.
+const SAVED_CAMPAIGN_OUTREACH_CHANNELS: readonly OutreachChannel[] = ['email'];
+
 export default function OfferOrchestrator() {
   const { id } = useParams();
   const { campaignBinding, campaignBindingError } = useOfferCampaignBinding();
@@ -77,6 +82,10 @@ export default function OfferOrchestrator() {
   const [followUpDays, setFollowUpDays] = useState<number>(0); // 0 = no reminder
   const [routingConfirm, setRoutingConfirm] = useState<{ email: string | null; followUpAt: string | null } | null>(null);
   const [borrowerPreviewOpen, setBorrowerPreviewOpen] = useState(false);
+  const allowedDraftChannels = campaignBinding
+    ? SAVED_CAMPAIGN_OUTREACH_CHANNELS
+    : undefined;
+  const activeDraftChannel = allowedDraftChannels?.[0] ?? draftChannel;
 
   const [rejectRationale, setRejectRationale] = useState('');
   const {
@@ -92,7 +101,7 @@ export default function OfferOrchestrator() {
     canAccessAdmin,
   } = useApp();
   const approval = id ? approvals[id] : undefined;
-  const savedDraftKey = id ? `${id}::${draftChannel}` : null;
+  const savedDraftKey = id ? `${id}::${activeDraftChannel}` : null;
 
   useEffect(() => {
     if (id) setLastBorrowerId(id);
@@ -182,9 +191,9 @@ export default function OfferOrchestrator() {
         BORROWER_CACHE.set(id, {
           borrower,
           recommendation,
-          draftSubject: !campaignBinding && prev?.draftChannel === draftChannel ? (prev?.draftSubject ?? null) : null,
-          draftBody: !campaignBinding && prev?.draftChannel === draftChannel ? (prev?.draftBody ?? null) : null,
-          draftChannel: !campaignBinding && prev?.draftChannel === draftChannel ? draftChannel : null,
+          draftSubject: !campaignBinding && prev?.draftChannel === activeDraftChannel ? (prev?.draftSubject ?? null) : null,
+          draftBody: !campaignBinding && prev?.draftChannel === activeDraftChannel ? (prev?.draftBody ?? null) : null,
+          draftChannel: !campaignBinding && prev?.draftChannel === activeDraftChannel ? activeDraftChannel : null,
           fetched: Date.now(),
         });
       } catch (err: unknown) {
@@ -233,14 +242,15 @@ export default function OfferOrchestrator() {
       }
       try {
         const draft = campaignBinding
-          ? await api.draftOutreach(id, draftChannel, ctrl.signal, campaignBinding)
-          : await api.draftOutreach(id, draftChannel, ctrl.signal);
+          ? await api.draftOutreach(id, activeDraftChannel, ctrl.signal, campaignBinding)
+          : await api.draftOutreach(id, activeDraftChannel, ctrl.signal);
         if (cancelled) return;
         if (
           campaignBinding
           && (
             draft.campaign_id !== campaignBinding.campaign_id
             || draft.variant_name !== campaignBinding.variant_name
+            || draft.channel !== activeDraftChannel
           )
         ) {
           throw new Error(
@@ -275,7 +285,7 @@ export default function OfferOrchestrator() {
               ...prev,
               draftSubject: subject || null,
               draftBody: body,
-              draftChannel,
+              draftChannel: activeDraftChannel,
               fetched: Date.now(),
             });
           }
@@ -338,7 +348,7 @@ export default function OfferOrchestrator() {
   }, [
     campaignBinding,
     campaignBindingError,
-    draftChannel,
+    activeDraftChannel,
     id,
     reloadToken,
   ]);
@@ -361,7 +371,7 @@ export default function OfferOrchestrator() {
     b?.approval_status,
   );
   const draftText = draftLoaded ? draftBody : '';
-  const subjectReady = draftChannel === 'sms' || draftSubject.trim().length > 0;
+  const subjectReady = activeDraftChannel === 'sms' || draftSubject.trim().length > 0;
   const draftProofFresh = draftProofMatchesSnapshot(b, rec, draftProof?.sourceRefreshedAt);
   const draftReady = Boolean(
     draftLoaded
@@ -371,13 +381,15 @@ export default function OfferOrchestrator() {
   );
   const draftDirty = draftLoaded && (
     draftBody !== draftBaselineBody
-    || (draftChannel !== 'sms' && draftSubject !== draftBaselineSubject)
+    || (activeDraftChannel !== 'sms' && draftSubject !== draftBaselineSubject)
   );
   const savedDraft = savedDraftKey ? savedDrafts[savedDraftKey] : undefined;
   const draftIsSaved = Boolean(
     savedDraft
+      && savedDraft.generation_id === draftProof?.generationId
+      && savedDraft.response_hash === draftProof?.responseHash
       && savedDraft.body === draftText
-      && (savedDraft.subject ?? '') === (draftChannel === 'sms' ? '' : draftSubject),
+      && (savedDraft.subject ?? '') === (activeDraftChannel === 'sms' ? '' : draftSubject),
   );
   const leadIsSaved = b ? isLeadSaved(b.borrower_id) : false;
   const saveCurrentLead = () => {
@@ -393,16 +405,14 @@ export default function OfferOrchestrator() {
     });
   };
   const saveCurrentDraft = async () => {
-    if (!id || !draftReady || draftSavePending) return;
+    if (!id || !draftReady || draftDirty || !draftProof || draftSavePending) return;
     setDraftSavePending(true);
     setDraftSaveError(null);
     try {
       await saveDraft({
         borrower_id: id,
-        offer_code: rec?.offer_code ?? b?.recommended_offer_code ?? null,
-        channel: draftChannel,
-        subject: draftChannel === 'sms' ? null : draftSubject,
-        body: draftText,
+        generation_id: draftProof.generationId,
+        response_hash: draftProof.responseHash,
       });
     } catch (err) {
       setDraftSaveError(
@@ -415,7 +425,7 @@ export default function OfferOrchestrator() {
   const resetCurrentDraft = () => {
     if (!id) return;
     setDraftSaveError(null);
-    removeSavedDraft(id, draftChannel);
+    removeSavedDraft(id, activeDraftChannel);
     const cached = BORROWER_CACHE.get(id);
     if (cached) {
       BORROWER_CACHE.set(id, { ...cached, draftSubject: null, draftBody: null, fetched: 0 });
@@ -473,7 +483,7 @@ export default function OfferOrchestrator() {
       const offer_code = rec?.offer_code ?? b?.recommended_offer_code ?? null;
       const evidence_ids = rec?.evidence_ids ?? b?.evidence_ids ?? [];
       const draft_body = draftText;
-      const draft_subject = draftChannel === 'sms' ? null : draftSubject;
+      const draft_subject = activeDraftChannel === 'sms' ? null : draftSubject;
       const res = await api.approve(id, {
         offer_code,
         evidence_ids,
@@ -482,7 +492,7 @@ export default function OfferOrchestrator() {
         draft_generation_id: draftProof?.generationId ?? null,
         draft_response_hash: draftProof?.responseHash ?? null,
         draft_source_refreshed_at: draftProof?.sourceRefreshedAt ?? null,
-        channel: draftChannel,
+        channel: activeDraftChannel,
         assigned_to_email: assignedTo || null,
         follow_up_in_days: followUpDays > 0 ? followUpDays : null,
         campaign_id: campaignBinding?.campaign_id ?? null,
@@ -534,7 +544,7 @@ export default function OfferOrchestrator() {
       const res = await api.reject(id, {
         offer_code,
         evidence_ids,
-        channel: draftChannel,
+        channel: activeDraftChannel,
         rationale_code: rejectReasonCode,
         rationale: rejectRationale.trim() || null,
         campaign_id: campaignBinding?.campaign_id ?? null,
@@ -681,10 +691,12 @@ export default function OfferOrchestrator() {
         draftError={draftError}
         draftSubject={draftSubject}
         draftText={draftText}
-        draftChannel={draftChannel}
+        draftChannel={activeDraftChannel}
+        allowedDraftChannels={allowedDraftChannels}
         draftDirty={draftDirty}
         draftProofFresh={draftProofFresh}
         onDraftChannelChange={(channel) => {
+          if (allowedDraftChannels && !allowedDraftChannels.includes(channel)) return;
           setDraftSaveError(null);
           setDraftChannel(channel);
           setDraftLoaded(false);
@@ -801,7 +813,7 @@ export default function OfferOrchestrator() {
           <ActivationLoopPanel
             borrowerId={b?.borrower_id ?? id}
             offerCode={rec?.offer_code ?? b?.recommended_offer_code ?? null}
-            channel={draftChannel}
+            channel={activeDraftChannel}
             approvalId={approvalId}
             approved
           />

@@ -397,7 +397,7 @@ describe('PortfolioBuilder save-build flow', () => {
     expect(saveButton().textContent).toContain('Build saved');
   });
 
-  it('explains incomplete campaign copy and does not submit an invalid save', async () => {
+  it('does not persist DOM-tampered copy from the read-only campaign fields', async () => {
     portfolioPreview.mockResolvedValue(PREVIEW);
     mount();
     await waitUntil(() => !saveButton().disabled);
@@ -406,6 +406,7 @@ describe('PortfolioBuilder save-build flow', () => {
       'input[aria-label="Benefit-led subject"]',
     );
     expect(subject).not.toBeNull();
+    expect(subject!.readOnly).toBe(true);
     act(() => {
       const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')!.set!;
       setter.call(subject!, 'Review your mortgage options');
@@ -418,11 +419,11 @@ describe('PortfolioBuilder save-build flow', () => {
         .click();
     });
 
+    await waitUntil(() => portfolioCreate.mock.calls.length > 0);
     await flush();
-    expect(portfolioCreate).not.toHaveBeenCalled();
-    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
-      'Benefit-led copy needs both a subject and message before this build can be saved.',
-    );
+    expect(portfolioCreate).toHaveBeenCalledTimes(1);
+    expect(portfolioCreate.mock.calls[0][2].message_variants).toEqual([]);
+    expect(container.querySelector('[role="alert"]')).toBeNull();
   });
 
   it('keeps Save unavailable while a changed build replaces stale preview data', async () => {

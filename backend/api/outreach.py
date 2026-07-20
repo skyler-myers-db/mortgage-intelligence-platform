@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any
@@ -38,6 +37,7 @@ from backend.schemas.portfolio import HouseholdDedupConfig, project_public_campa
 from backend.schemas.portfolio_campaign import (
     assert_borrower_campaign_copy,
     assert_public_campaign_text,
+    remove_configured_public_lender_phrase,
 )
 from backend.services.audit_decision_inputs import decision_inputs_from_borrower
 from backend.services.audit_lakebase_store import (
@@ -367,8 +367,7 @@ def _resolve_governed_campaign_variant(
         )
     if (
         str(campaign.get("treatment_state") or "") != "ready"
-        or str(campaign.get("treatment_algorithm_version") or "")
-        != "campaign-treatment-v2"
+        or str(campaign.get("treatment_algorithm_version") or "") != "campaign-treatment-v2"
     ):
         raise HTTPException(
             status_code=409,
@@ -625,7 +624,6 @@ def _derive_fallback_request_id(
     actor: str,
     action: str,
     decision_intent: str,
-    now_s: float | None = None,
 ) -> str:
     """Generate a deterministic fallback ``request_id`` for legacy clients.
 
@@ -636,21 +634,13 @@ def _derive_fallback_request_id(
     from a watchdog) therefore bypasses the idempotency contract
     completely: a double-submit writes two approvals.
 
-    We close the loop by deriving a deterministic key from
-    ``(actor, action, full normalized decision intent, minute-bucket)`` and hashing to a
-    stable 32-hex-char digest. Two requests from the same actor for the
-    same borrower + action within the SAME minute collapse to one row
-    (matches operator intent: a user who double-clicks Approve wants
-    one approval). Two requests 61 seconds apart are treated as
-    distinct (matches operator intent: a user who explicitly re-submits
-    after waiting wants a new decision).
-
-    ``now_s`` is injectable so tests can pin the minute bucket; in
-    production it defaults to ``time.time()``.
+    We close the loop by deriving a stable key from ``(actor, action, full
+    normalized decision intent)``. An identical no-key retry therefore
+    collapses even when a transport retry crosses an arbitrary clock boundary.
+    A caller that intends a separate decision must send a new explicit
+    ``request_id``; first-party clients already generate one per user action.
     """
-    t = now_s if now_s is not None else time.time()
-    minute_bucket = int(t // 60)
-    material = f"{actor}|{action}|{decision_intent}|{minute_bucket}"
+    material = f"{actor}|{action}|{decision_intent}"
     digest = hashlib.sha256(material.encode("utf-8")).hexdigest()[:32]  # noqa: S324 -- not a secret
     # Prefix so audit review can tell server-derived keys apart from
     # client-sent ones (which are typically UUIDs / opaque tokens).
@@ -1228,8 +1218,11 @@ def _assert_disclosure_backed_draft_body(
             detail="approved draft_body contains PII-like text and cannot be audited",
         )
     try:
-        assert_no_protected_class_marketing_text(body, field_name="approved draft_body")
         borrower_copy = body.replace(disclosure_body, " ").strip()
+        assert_no_protected_class_marketing_text(
+            remove_configured_public_lender_phrase(borrower_copy),
+            field_name="approved draft_body",
+        )
         assert_public_campaign_text(
             borrower_copy,
             field_name="approved draft_body",
@@ -1238,6 +1231,7 @@ def _assert_disclosure_backed_draft_body(
         assert_borrower_campaign_copy(
             borrower_copy,
             field_name="approved draft text",
+            require_cta=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

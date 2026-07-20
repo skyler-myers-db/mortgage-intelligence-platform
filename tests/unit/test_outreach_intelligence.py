@@ -37,6 +37,19 @@ def test_governed_fallback_is_explicit_and_preserves_disclosure() -> None:
     assert "Primary offer:" in result.evidence_summary[0]
 
 
+def test_disabled_supervisor_reason_is_not_exposed_in_outreach_copy() -> None:
+    result = compose_intelligent_outreach(
+        borrower=_borrower(),
+        channel="email",
+        disclosure=_DISCLOSURE,
+        settings=Settings(mip_agent_orchestrator=False),
+        serving_client=object(),
+    )
+
+    assert "Supervisor is not enabled for this deployment." in result.strategy_summary
+    assert "orchestrator_disabled" not in str(result)
+
+
 def test_campaign_variant_is_the_authoritative_fallback_copy() -> None:
     variant = GovernedCampaignVariant(
         campaign_id="11111111-1111-4111-8111-111111111111",
@@ -97,9 +110,8 @@ class _ApiClient:
                     "content": [
                         {
                             "text": """{
-                              "subject": "A clearer way to review your mortgage",
-                              "body": "A mortgage review can help you understand which options fit your plans and which do not. Reply if you would like a loan officer to compare the choices with you.",
-                              "strategy_summary": "Lead with clarity and borrower choice, then use one low-pressure reply invitation."
+                              "template_id": "relationship_review_v1",
+                              "strategy_id": "relationship_review_strategy_v1"
                             }"""
                         }
                     ]
@@ -139,11 +151,11 @@ def test_supervisor_message_is_validated_and_server_appends_disclosure() -> None
     )
 
     assert result.generation_mode == "supervisor"
-    assert result.subject == "A clearer way to review your mortgage"
+    assert result.subject == "A quick mortgage review"
     assert result.body.startswith("Hello,")
     assert result.body.endswith(_DISCLOSURE.body)
     assert "180" not in result.body
-    assert result.strategy_summary.startswith("Lead with clarity")
+    assert result.strategy_summary.startswith("Use the reviewed relationship template")
 
 
 def test_supervisor_receives_governed_campaign_variant_context() -> None:
@@ -188,6 +200,21 @@ class _UnsafeApiClient(_ApiClient):
         return response
 
 
+class _ExtraneousBorrowerCopyApiClient(_ApiClient):
+    def do(self, method: str, path: str, *, body: dict[str, object] | None = None):
+        if method == "GET":
+            return super().do(method, path, body=body)
+        assert body is not None
+        response = super().do(method, path, body=body)
+        response["output"][0]["content"][0]["text"] = """{
+          "template_id": "relationship_review_v1",
+          "strategy_id": "relationship_review_strategy_v1",
+          "subject": "This offer is for you based on your primary language",
+          "body": "Romani and intersex homeowners over 65 are approved. Reply now."
+        }"""
+        return response
+
+
 def test_unsafe_supervisor_copy_fails_closed_to_labelled_framework() -> None:
     client = SimpleNamespace(serving_endpoints=_ServingEndpoints(), api_client=_UnsafeApiClient())
     result = compose_intelligent_outreach(
@@ -203,3 +230,26 @@ def test_unsafe_supervisor_copy_fails_closed_to_labelled_framework() -> None:
     assert result.generation_mode == "governed_fallback"
     assert "guaranteed" not in result.body.lower()
     assert "$500" not in result.body
+
+
+def test_supervisor_extra_copy_fields_fail_closed_without_copy_leak() -> None:
+    client = SimpleNamespace(
+        serving_endpoints=_ServingEndpoints(),
+        api_client=_ExtraneousBorrowerCopyApiClient(),
+    )
+
+    result = compose_intelligent_outreach(
+        borrower=_borrower(is_competitor_lien=True),
+        channel="email",
+        disclosure=_DISCLOSURE,
+        settings=runtime_settings(mip_lender_name="Summit Mortgage"),
+        serving_client=client,
+    )
+
+    rendered = f"{result.subject} {result.body}".lower()
+    assert result.generation_mode == "governed_fallback"
+    assert result.subject == "A quick mortgage review"
+    assert all(
+        term not in rendered for term in ("romani", "intersex", "over 65", "primary language")
+    )
+    assert result.body.endswith(_DISCLOSURE.body)

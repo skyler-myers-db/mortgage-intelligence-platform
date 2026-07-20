@@ -11,6 +11,7 @@ These are integration-tier tests because they exercise the full
 router -> factory -> store seam, not a single unit. They do not
 require any live network.
 """
+
 from __future__ import annotations
 
 import json
@@ -130,16 +131,14 @@ def test_approve_outreach_writes_approvals_row_and_audit_event() -> None:
             "offer_code": "refi",
             "actor": "anonymous",
             "draft_subject": "Your mortgage review",
-            "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+            "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
         },
     )
     assert r.status_code == 200
 
     # Approvals row -- INSERT INTO mip_app.approvals with named params.
     approval_inserts = [
-        (sql, params)
-        for sql, params in lakebase.executes
-        if "INSERT INTO mip_app.approvals" in sql
+        (sql, params) for sql, params in lakebase.executes if "INSERT INTO mip_app.approvals" in sql
     ]
     assert len(approval_inserts) == 1
     _sql, params = approval_inserts[0]

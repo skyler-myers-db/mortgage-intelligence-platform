@@ -23,8 +23,8 @@ DEFAULT_GATEWAY_AGENT_EXPERIMENT = "mip-agent-runtime-gateway-proxy"
 DEFAULT_GATEWAY_ENDPOINT = "mip-growth-agent-gateway"
 LEGACY_GATEWAY_ENDPOINT = "mip-agent-gateway"
 DEFAULT_GATEWAY_INFERENCE_TABLE = "mip.audit.mip_agent_gateway_growth_agent"
-GATEWAY_PROXY_SOURCE_HASH_TAG = "mip.proxy_source_hash"
-GATEWAY_UPSTREAM_TAG = "mip.upstream_supervisor_endpoint"
+GATEWAY_PROXY_SOURCE_HASH_TAG = "mip_proxy_source_hash"
+GATEWAY_UPSTREAM_TAG = "mip_upstream_supervisor_endpoint"
 GATEWAY_MODEL_SOURCE_HASH_TAG = "mip_proxy_source_hash"
 GATEWAY_MODEL_UPSTREAM_TAG = "mip_upstream_supervisor_endpoint"
 GATEWAY_MODEL_CONTRACT_TAG_PREFIX = "mip_proxy_contract_v3_"
@@ -162,8 +162,8 @@ class GatewayModelVersionTags:
 def gateway_model_version_tags(tags: Mapping[str, str]) -> GatewayModelVersionTags:
     """Resolve the complete canonical model-version tag epoch.
 
-    Serving Endpoint tags retain their dotted keys. Unity Catalog model-version
-    tags use underscore-only fixed fields because UC rejects dotted keys and
+    Serving Endpoint and Unity Catalog model-version tags use underscore-only
+    fixed fields because both APIs reject reserved punctuation and UC rejects
     values over 256 characters. The dotted model encoding never shipped;
     incomplete, mixed, dotted, and extra fields therefore fail closed.
     """

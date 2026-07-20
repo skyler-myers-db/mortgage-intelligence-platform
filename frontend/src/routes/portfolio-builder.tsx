@@ -223,19 +223,15 @@ export default function PortfolioBuilder() {
     | 'generatorLabel'
     | 'provenanceTokenA'
     | 'provenanceTokenB'
+    | 'subjectA'
+    | 'subjectB'
+    | 'bodyA'
+    | 'bodyB'
   >) => (
     event: ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
   ) => setCampaignSetup((current) => ({
     ...current,
     [key]: event.target.value,
-    ...(['subjectA', 'subjectB', 'bodyA', 'bodyB'].includes(key)
-      ? {
-          generationMode: 'operator' as const,
-          generatorLabel: 'Operator edited',
-          provenanceTokenA: null,
-          provenanceTokenB: null,
-        }
-      : {}),
   }));
   const toggleHouseholdDedup = useCallback(() => {
     setCampaignSetup((current) => ({

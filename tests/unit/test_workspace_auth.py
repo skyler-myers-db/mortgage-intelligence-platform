@@ -349,6 +349,7 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
     env_local.write_text(
         "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
         "GENIE_SPACE_ID=stale-cross-workspace-id\n"
+        "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID=verifier-client-id\n"
         "MIP_GENIE_SPACE_NAME=Mortgage Lead Intelligence PR105 Staging\n",
         encoding="utf-8",
     )
@@ -373,12 +374,114 @@ def test_direct_bundle_deploy_overwrites_stale_genie_id_with_governed_name(
         return SimpleNamespace(returncode=0)
 
     monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "deploy", "-t", "dev"])
+    monkeypatch.setattr(
+        bundle_env.sys,
+        "argv",
+        ["bundle_env.py", "deploy", "-t", "dev", "--select", "jobs.refresh_gold"],
+    )
 
     assert bundle_env.main() == 0
     assert captured["GENIE_SPACE_ID"] == "governed-space-id"
     assert captured["BUNDLE_VAR_genie_space_id"] == "governed-space-id"
+    assert captured["BUNDLE_VAR_ai_gateway_verifier_client_id"] == "verifier-client-id"
     assert "stale-cross-workspace-id" not in captured.values()
+
+
+def test_bundle_deployment_bind_uses_the_same_reviewed_workspace_contract(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_local = tmp_path / ".env.local"
+    env_local.write_text(
+        "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
+        "GENIE_SPACE_ID=genie-space-id\n"
+        "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID=verifier-client-id\n"
+        "MIP_APP_NAME=mip-app\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
+    monkeypatch.setattr(
+        bundle_env,
+        "_resolve_governed_genie_space_id",
+        lambda _env, *, space_name: "genie-space-id",
+    )
+    monkeypatch.setattr(bundle_env.render_sql, "render", lambda **_kwargs: (1, 0, 0))
+    captured: dict[str, object] = {}
+
+    def fake_run(command: list[str], *, env: dict[str, str], check: bool) -> Any:
+        captured["command"] = command
+        captured["env"] = env
+        captured["check"] = check
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        bundle_env.sys,
+        "argv",
+        [
+            "bundle_env.py",
+            "deployment",
+            "bind",
+            "mip_app",
+            "mip-app",
+            "-t",
+            "dev",
+            "--auto-approve",
+        ],
+    )
+
+    assert bundle_env.main() == 0
+    assert captured["command"] == [
+        "databricks",
+        "bundle",
+        "deployment",
+        "bind",
+        "mip_app",
+        "mip-app",
+        "-t",
+        "dev",
+        "--auto-approve",
+    ]
+    child_env = captured["env"]
+    assert isinstance(child_env, dict)
+    assert child_env["BUNDLE_VAR_app_name"] == "mip-app"
+    assert child_env["BUNDLE_VAR_genie_space_id"] == "genie-space-id"
+    assert child_env["BUNDLE_VAR_ai_gateway_verifier_client_id"] == "verifier-client-id"
+    assert captured["check"] is False
+
+
+def test_direct_bundle_deploy_refuses_missing_remote_verifier_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    env_local = tmp_path / ".env.local"
+    env_local.write_text(
+        "DATABRICKS_WAREHOUSE_ID=warehouse-id\n" "GENIE_SPACE_ID=genie-space-id\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(bundle_env, "ENV_LOCAL", env_local)
+    monkeypatch.delenv("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID", raising=False)
+    monkeypatch.setattr(
+        bundle_env,
+        "_resolve_governed_genie_space_id",
+        lambda _env, *, space_name: "genie-space-id",
+    )
+    subprocess_called = False
+
+    def fake_run(_command: list[str], *, env: dict[str, str], check: bool) -> Any:
+        nonlocal subprocess_called
+        subprocess_called = True
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(bundle_env.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        bundle_env.sys,
+        "argv",
+        ["bundle_env.py", "deploy", "-t", "dev", "--select", "jobs.refresh_gold"],
+    )
+
+    assert bundle_env.main() == 2
+    assert subprocess_called is False
 
 
 def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(
@@ -389,6 +492,7 @@ def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(
     env_local.write_text(
         "DATABRICKS_WAREHOUSE_ID=warehouse-id\n"
         "GENIE_SPACE_ID=stale-id\n"
+        "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID=verifier-client-id\n"
         "MIP_GENIE_SPACE_NAME=Stale Space Name\n",
         encoding="utf-8",
     )
@@ -407,10 +511,129 @@ def test_bundle_deploy_preserves_reviewed_genie_name_over_dotenv(
         "run",
         lambda _command, *, env, check: SimpleNamespace(returncode=0),
     )
-    monkeypatch.setattr(bundle_env.sys, "argv", ["bundle_env.py", "deploy", "-t", "dev"])
+    monkeypatch.setattr(
+        bundle_env.sys,
+        "argv",
+        ["bundle_env.py", "deploy", "-t", "dev", "--select", "jobs.refresh_gold"],
+    )
 
     assert bundle_env.main() == 0
     assert observed == ["Reviewed Space Name"]
+
+
+@pytest.mark.parametrize(
+    "args",
+    (
+        ["-t", "dev"],
+        ["-t", "dev", "--select", "apps.mip_app"],
+        ["-t", "dev", "--select", "*"],
+        ["-t", "dev", "--select=apps.mip_app"],
+        ["-t", "dev", "--select", "jobs.refresh_gold", "--plan", "full-plan.json"],
+        ["-t", "dev", "--plan=full-plan.json", "--select=jobs.refresh_gold"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--var=x=y"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--var", "x=y"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--profile", "other-workspace"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--profile=other-workspace"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--cluster-id", "cluster-1"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--cluster-id=cluster-1"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--force"],
+        ["-t", "dev", "--select=jobs.refresh_gold", "--target", "prod"],
+        ["-t", "ci", "--select=jobs.refresh_gold"],
+        ["--select=jobs.refresh_gold"],
+    ),
+)
+def test_bundle_env_rejects_unrestricted_or_app_deploy_selectors(args: list[str]) -> None:
+    error = bundle_env._validate_non_app_deploy_selectors(args)
+
+    assert error is not None
+    assert error
+
+
+def test_bundle_env_accepts_only_exact_non_app_deploy_selectors() -> None:
+    assert (
+        bundle_env._validate_non_app_deploy_selectors(
+            [
+                "-t",
+                "dev",
+                "--select",
+                "jobs.refresh_gold",
+                "--select=pipelines.mip_silver",
+            ]
+        )
+        is None
+    )
+
+
+def test_bundle_env_accepts_equals_target_with_exact_non_app_selector() -> None:
+    assert (
+        bundle_env._validate_non_app_deploy_selectors(
+            ["--target=prod", "--select=jobs.refresh_gold"]
+        )
+        is None
+    )
+
+
+@pytest.mark.parametrize(
+    "args",
+    (
+        ["migrate", "mip_app", "-t", "dev"],
+        ["unbind", "jobs.refresh_gold", "-t", "dev", "--force-lock"],
+        ["unbind", "mip_app", "-t", "dev", "--auto-approve"],
+        ["bind", "mip_app", "another-app", "-t", "dev", "--auto-approve"],
+        ["bind", "mip_app", "mip-app", "-t", "dev", "--var=x=y"],
+        ["bind", "mip_app", "mip-app", "-t", "dev", "-t", "prod"],
+        ["bind", "mip_app", "mip-app", "--auto-approve"],
+        ["bind", "mip_app", "mip-app", "-t", "ci", "--auto-approve"],
+        ["bind", "mip_app", "mip-app", "--target=unknown", "--auto-approve"],
+        ["unbind", "mip_app", "--force-lock"],
+    ),
+)
+def test_bundle_env_rejects_unrestricted_deployment_state_mutation(
+    args: list[str],
+) -> None:
+    error = bundle_env._validate_app_deployment_command(
+        args,
+        expected_app_name="mip-app",
+    )
+
+    assert error is not None
+
+
+@pytest.mark.parametrize(
+    "args",
+    (
+        ["bind", "mip_app", "mip-app", "-t", "dev", "--auto-approve"],
+        ["unbind", "mip_app", "--target=prod", "--force-lock"],
+    ),
+)
+def test_bundle_env_accepts_only_the_governed_app_binding(args: list[str]) -> None:
+    assert (
+        bundle_env._validate_app_deployment_command(
+            args,
+            expected_app_name="mip-app",
+        )
+        is None
+    )
+
+
+def test_bundle_env_rejects_unsafe_deployment_before_remote_resolution(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(bundle_env, "ENV_LOCAL", tmp_path / "missing.env")
+    monkeypatch.setenv("MIP_APP_NAME", "mip-app")
+    monkeypatch.setattr(
+        bundle_env,
+        "_resolve_governed_genie_space_id",
+        lambda *_args, **_kwargs: pytest.fail("unsafe deployment reached remote resolution"),
+    )
+    monkeypatch.setattr(
+        bundle_env.sys,
+        "argv",
+        ["bundle_env.py", "deployment", "unbind", "jobs.refresh_gold", "-t", "dev"],
+    )
+
+    assert bundle_env.main() == 2
 
 
 def test_bundle_profile_child_does_not_rehydrate_dotenv_pat(

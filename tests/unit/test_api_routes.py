@@ -69,7 +69,7 @@ def test_required_routes_exist_and_respond():
                 "borrower_id": "B-48291",
                 "actor": "anonymous",
                 "draft_subject": "Your mortgage review",
-                "draft_body": "Governed approval body. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
+                "draft_body": "Contact a loan officer to review available mortgage options. Summit Mortgage, NMLS #123456. Equal Housing Lender. Reply unsubscribe to opt out.",
             },
             200,
         ),
@@ -162,12 +162,10 @@ def test_structured_mutation_routes_require_and_document_json_content_type():
         dependant = getattr(route, "dependant", None)
         if dependant is None or not dependant.body_params:
             continue
-        dependency_names = (
-            [
-                getattr(dependency.call, "__name__", str(dependency.call))
-                for dependency in dependant.dependencies
-            ]
-        )
+        dependency_names = [
+            getattr(dependency.call, "__name__", str(dependency.call))
+            for dependency in dependant.dependencies
+        ]
         schema_path = schema["paths"].get(getattr(route, "path_format", path), {})
         for method in structured_methods:
             responses = schema_path.get(method.lower(), {}).get("responses", {})

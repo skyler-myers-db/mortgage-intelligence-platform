@@ -21,6 +21,18 @@ from backend.agents.gateway_contract import (
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.apps import AppDeployment
 from tools.databricks.app_deployment_lease import assert_held as assert_deployment_lease_held
+from tools.databricks.app_deployment_state import (
+    active_deployment_id as _active_deployment_id,
+)
+from tools.databricks.app_deployment_state import (
+    deployment_state as _deployment_state,
+)
+from tools.databricks.app_deployment_state import (
+    immutable_source as _immutable_source,
+)
+from tools.databricks.app_deployment_state import (
+    latest_succeeded as _latest_succeeded,
+)
 from tools.databricks.app_health_contract import authenticated_app_health
 from tools.databricks.app_rollback_record_contract import (
     RECORD_VERSION,
@@ -37,6 +49,7 @@ from tools.databricks.app_rollback_record_contract import (
 from tools.databricks.app_rollback_resource_contract import (
     app_resource_contract,
     app_resource_contract_digest,
+    restore_signed_app_resource_contract,
     reviewed_app_resource_contract,
     validated_app_resource_contract,
 )
@@ -70,29 +83,6 @@ def _record_key(app_name: str) -> str:
     return _contract_record_key(app_name)
 
 
-def _deployment_state(deployment: object) -> str:
-    return _text(getattr(getattr(deployment, "status", None), "state", None)).split(".")[-1].upper()
-
-
-def _latest_succeeded(workspace: Any, *, app_name: str) -> object:
-    deployments = [
-        deployment
-        for deployment in workspace.apps.list_deployments(app_name)
-        if _deployment_state(deployment) == "SUCCEEDED"
-        and _text(getattr(deployment, "deployment_id", None))
-    ]
-    if not deployments:
-        raise RuntimeError("existing App has no succeeded deployment to preserve")
-    deployments.sort(
-        key=lambda item: (
-            _text(getattr(item, "update_time", None)),
-            _text(getattr(item, "create_time", None)),
-            _text(getattr(item, "deployment_id", None)),
-        )
-    )
-    return deployments[-1]
-
-
 def _app_identity(workspace: Any, *, app_name: str) -> tuple[str, str]:
     app = workspace.apps.get(app_name)
     client_id = _text(getattr(app, "service_principal_client_id", None))
@@ -107,6 +97,7 @@ def _assert_record_app_identity(
     *,
     app_name: str,
     record: dict[str, Any],
+    require_resources: bool = True,
 ) -> None:
     client_id, scim_id = _app_identity(workspace, app_name=app_name)
     if (
@@ -116,7 +107,9 @@ def _assert_record_app_identity(
         raise RuntimeError(
             "App service-principal identity drifted from the signed rollback contract"
         )
-    if app_resource_contract(workspace, app_name=app_name) != record["app_resources"]:
+    if require_resources and (
+        app_resource_contract(workspace, app_name=app_name) != record["app_resources"]
+    ):
         raise RuntimeError("Databricks App resource bindings drifted from the signed contract")
 
 
@@ -138,30 +131,6 @@ def _converge_treatment_guard(
     )
     if not existed:
         raise RuntimeError("signed App rollback requires the governed treatment table")
-
-
-def _active_deployment_id(workspace: Any, *, app_name: str) -> str:
-    app = workspace.apps.get(app_name)
-    if getattr(app, "pending_deployment", None) is not None:
-        raise RuntimeError("App has a pending deployment; rollback identity is not stable")
-    active = getattr(app, "active_deployment", None)
-    if active is None:
-        raise RuntimeError("App has no active deployment to bind")
-    if _deployment_state(active) == "IN_PROGRESS":
-        raise RuntimeError("App active deployment is still in progress")
-    deployment_id = _text(getattr(active, "deployment_id", None))
-    if not deployment_id:
-        raise RuntimeError("App active deployment has no immutable deployment ID")
-    return deployment_id
-
-
-def _immutable_source(deployment: object) -> str:
-    source = _text(
-        getattr(getattr(deployment, "deployment_artifacts", None), "source_code_path", None)
-    )
-    if not source.startswith("/Workspace/Users/") or "/src/" not in source:
-        raise RuntimeError("succeeded App deployment has no immutable source artifact")
-    return source
 
 
 def _health(
@@ -457,9 +426,17 @@ def ensure_current(
             scope=scope,
             expected_lakebase_instance=expected_lakebase_instance,
         )
-        _assert_record_app_identity(workspace, app_name=app_name, record=record)
-        _stored_resource_proof(workspace, record=record)
-        _ensure_started(workspace, app_name=app_name)
+        # A killed deploy can leave reviewed candidate resources applied while
+        # the still-active source and signed rollback record remain blue. Trust
+        # only the authenticated record and immutable App identity, restore its
+        # exact resource contract, then require the complete identity/resource
+        # binding before any source, endpoint, or health verification.
+        _assert_record_app_identity(
+            workspace,
+            app_name=app_name,
+            record=record,
+            require_resources=False,
+        )
         active_id = _active_deployment_id(workspace, app_name=app_name)
         latest = _latest_succeeded(workspace, app_name=app_name)
         if (
@@ -483,6 +460,16 @@ def ensure_current(
                 expected_lakebase_instance=expected_lakebase_instance,
             )
             return _rollback_gateway_endpoint(refreshed)
+        restore_signed_app_resource_contract(
+            workspace,
+            app_name=app_name,
+            resources=record["app_resources"],
+        )
+        _assert_record_app_identity(workspace, app_name=app_name, record=record)
+        _stored_resource_proof(workspace, record=record)
+        if _active_deployment_id(workspace, app_name=app_name) != active_id:
+            raise RuntimeError("App active deployment changed during signed resource repair")
+        _ensure_started(workspace, app_name=app_name)
         _converge_rollback_endpoint_acl(
             workspace,
             app_name=app_name,
@@ -709,6 +696,17 @@ def restore_last_good(
             scope=scope,
             expected_lakebase_instance=expected_lakebase_instance,
         )
+        _assert_record_app_identity(
+            workspace,
+            app_name=app_name,
+            record=record,
+            require_resources=False,
+        )
+        restore_signed_app_resource_contract(
+            workspace,
+            app_name=app_name,
+            resources=record["app_resources"],
+        )
         _assert_record_app_identity(workspace, app_name=app_name, record=record)
         _stored_resource_proof(workspace, record=record)
         _converge_rollback_endpoint_acl(
@@ -790,6 +788,9 @@ def _reviewed_resources_file(path: str) -> list[dict[str, object]]:
         value = json.loads(Path(path).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError("bundle summary file is invalid") from exc
+    resources = value.get("resources")
+    if isinstance(resources, list):
+        return validated_app_resource_contract(resources)
     return reviewed_app_resource_contract(value)
 
 
@@ -806,6 +807,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--deployment-lease-id")
     parser.add_argument("--genie-space-id")
     parser.add_argument("--bundle-summary")
+    parser.add_argument("--app-resource-payload")
     parser.add_argument("--revoke-endpoint", action="append", default=[])
     parser.add_argument("--treatment-warehouse-id")
     parser.add_argument("--treatment-catalog", default="mip")
@@ -854,8 +856,9 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--genie-space-id is required for capture")
         if not args.deployment_lease_id:
             parser.error("--deployment-lease-id is required for capture")
-        if not args.bundle_summary:
-            parser.error("--bundle-summary is required for capture")
+        resource_contract_path = args.app_resource_payload or args.bundle_summary
+        if not resource_contract_path:
+            parser.error("--app-resource-payload is required for capture")
         if not args.treatment_warehouse_id:
             parser.error("--treatment-warehouse-id is required for capture")
         capture_current(
@@ -865,7 +868,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_gateway_binding=args.expected_gateway_binding,
             expected_deployment_lease_id=args.deployment_lease_id,
             genie_space_id=args.genie_space_id,
-            expected_app_resources=_reviewed_resources_file(args.bundle_summary),
+            expected_app_resources=_reviewed_resources_file(resource_contract_path),
             treatment_warehouse_id=args.treatment_warehouse_id,
             treatment_catalog=args.treatment_catalog,
         )

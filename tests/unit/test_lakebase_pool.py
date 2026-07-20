@@ -16,6 +16,13 @@ from backend.services import lakebase as lakebase_mod
 from backend.services.lakebase import LakebaseClient, LakebaseError, ResilientLakebaseClient
 from backend.services.resilience import CircuitBreaker, DependencyDownError
 
+# The child scripts enforce the product behavior with their own 3-4 second
+# elapsed-time assertions. The outer watchdog must additionally cover a cold
+# interpreter import while the full suite saturates xdist workers; tying it to
+# the inner eight-second fake-server release made the otherwise bounded tests
+# fail nondeterministically before their assertions could report a result.
+_SUBPROCESS_WALL_TIMEOUT_S = 20.0
+
 
 class _Clock:
     def __init__(self) -> None:
@@ -274,9 +281,7 @@ def test_lakebase_healthcheck_bounds_connect_and_statement_execution(
     assert "keepalives_interval=1" in connect_dsns[0]
     assert "keepalives_count=1" in connect_dsns[0]
     assert "tcp_user_timeout=2000" in connect_dsns[0]
-    assert calls == [
-        b"BEGIN; SET LOCAL statement_timeout = 1750; SELECT 1 AS one; COMMIT"
-    ]
+    assert calls == [b"BEGIN; SET LOCAL statement_timeout = 1750; SELECT 1 AS one; COMMIT"]
 
 
 def test_lakebase_connect_timeout_retires_blackholed_subprocess() -> None:
@@ -337,7 +342,7 @@ def test_lakebase_connect_timeout_retires_blackholed_subprocess() -> None:
         cwd=Path(__file__).resolve().parents[2],
         text=True,
         capture_output=True,
-        timeout=8.0,
+        timeout=_SUBPROCESS_WALL_TIMEOUT_S,
         check=False,
     )
 
@@ -433,7 +438,7 @@ def test_lakebase_transport_timeout_retires_authenticated_silent_peer() -> None:
         cwd=Path(__file__).resolve().parents[2],
         text=True,
         capture_output=True,
-        timeout=8.0,
+        timeout=_SUBPROCESS_WALL_TIMEOUT_S,
         check=False,
     )
 

@@ -1,10 +1,9 @@
 """Evidence-grounded campaign recommendations for Portfolio Builder.
 
-The configured Agent Responses endpoint may propose message strategy and copy, but it never supplies
-metrics, source citations, eligibility rules, or approval policy. Those remain
-server-derived from the exact governed cohort. A reviewed deterministic
-fallback is labelled explicitly when the endpoint is unavailable or its
-output fails validation.
+The configured Agent Responses endpoint may select a reviewed campaign
+template and propose strategy, but it never authors borrower-facing copy or
+supplies metrics, source citations, eligibility rules, or approval policy.
+Those remain server-owned and derived from the exact governed cohort.
 """
 
 from __future__ import annotations
@@ -41,6 +40,12 @@ from backend.schemas.portfolio import (
     CampaignRecommendationVariant,
     PortfolioPreview,
 )
+from backend.schemas.reviewed_template_selection import CampaignTemplateSelection
+from backend.services.campaign_provenance_identity import (
+    CAMPAIGN_PROVENANCE_VERSION,
+    CAMPAIGN_TEMPLATE_ID,
+    campaign_copy_hash,
+)
 from backend.services.capability_serving_probes import (
     query_serving_endpoint,
     serving_response_has_payload,
@@ -59,7 +64,6 @@ _OFFER_AUDIENCE: dict[str, str] = {
     "nurture": "borrowers who should receive education rather than a product-specific claim",
 }
 
-_CAMPAIGN_PROVENANCE_VERSION = 2
 _CAMPAIGN_PROVENANCE_TTL_S = 60 * 60
 _LOCAL_TEST_PROVENANCE_SECRET = b"mip-local-test-campaign-provenance-v1"
 _LOCAL_TEST_PROVENANCE_APP_ENVS = frozenset({"local", "test"})
@@ -79,6 +83,10 @@ _GENERATOR_LABELS: dict[str, str] = {
     "supervisor": "Databricks Agent Responses",
     "reviewed_fallback": "Reviewed campaign framework",
 }
+_REVIEWED_CAMPAIGN_STRATEGY = (
+    "Compare the reviewed benefit and guidance frames with one clear review invitation "
+    "and a randomized holdout."
+)
 
 
 @dataclass(frozen=True)
@@ -184,6 +192,9 @@ class CampaignVariantProvenanceProof:
 
     generation_mode: Literal["supervisor", "reviewed_fallback"]
     generator_label: str
+    template_id: str
+    variant_name: str
+    channel: str
     key_id: str
     issued_at: int
     expires_at: int
@@ -324,21 +335,6 @@ def _campaign_provenance_keyring(
     return keyring
 
 
-def _campaign_copy_hash(subject: object, body: object) -> str:
-    material = json.dumps(
-        {"body": str(body or "").strip(), "subject": str(subject or "").strip()},
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(material.encode("utf-8")).hexdigest()
-
-
-def campaign_copy_hash(subject: object, body: object) -> str:
-    """Return the durable hash used to bind saved copy to its creation proof."""
-
-    return _campaign_copy_hash(subject, body)
-
-
 def durable_campaign_variant_copy_verified(
     variant: Mapping[str, object],
     *,
@@ -376,9 +372,7 @@ def durable_campaign_variant_copy_verified(
     issued_at = _timestamp(issued_raw)
     expires_at = _timestamp(expires_raw)
     token_digest = str(variant.get("provenance_token_digest") or "").strip()
-    performance_fingerprint = str(
-        variant.get("provenance_performance_fingerprint") or ""
-    ).strip()
+    performance_fingerprint = str(variant.get("provenance_performance_fingerprint") or "").strip()
     return bool(
         mode in _GENERATOR_LABELS
         and label == _GENERATOR_LABELS[mode]
@@ -387,7 +381,12 @@ def durable_campaign_variant_copy_verified(
         and expires_at is not None
         and expires_at - issued_at == _CAMPAIGN_PROVENANCE_TTL_S
         and str(variant.get("provenance_copy_hash") or "").strip()
-        == _campaign_copy_hash(variant.get("subject"), variant.get("body"))
+        == campaign_copy_hash(
+            variant.get("subject"),
+            variant.get("body"),
+            variant_name=variant.get("variant_name"),
+            channel=variant.get("channel"),
+        )
         and str(variant.get("provenance_criteria_fingerprint") or "").strip()
         == criteria_fingerprint
         and (
@@ -418,6 +417,8 @@ def issue_campaign_variant_provenance(
     *,
     generation_mode: Literal["supervisor", "reviewed_fallback"],
     generator_label: str,
+    variant_name: str,
+    channel: Literal["email", "sms", "direct_mail"],
     subject: str,
     body: str,
     criteria_fingerprint: str,
@@ -430,7 +431,13 @@ def issue_campaign_variant_provenance(
     key_id = _campaign_provenance_keyring(active_settings, for_issuance=True)[0][0]
     return _encode_provenance_claims(
         {
-            "copy_hash": _campaign_copy_hash(subject, body),
+            "channel": channel,
+            "copy_hash": campaign_copy_hash(
+                subject,
+                body,
+                variant_name=variant_name,
+                channel=channel,
+            ),
             "criteria_fingerprint": criteria_fingerprint,
             "exp": issued_at + _CAMPAIGN_PROVENANCE_TTL_S,
             "generation_mode": generation_mode,
@@ -438,7 +445,9 @@ def issue_campaign_variant_provenance(
             "iat": issued_at,
             "kid": key_id,
             "performance_fingerprint": performance_fingerprint or "none",
-            "v": _CAMPAIGN_PROVENANCE_VERSION,
+            "template_id": CAMPAIGN_TEMPLATE_ID,
+            "v": CAMPAIGN_PROVENANCE_VERSION,
+            "variant_name": variant_name,
         },
         active_settings,
     )
@@ -484,27 +493,43 @@ def inspect_campaign_variant_provenance(
         return None
     mode = str(claims.get("generation_mode") or "")
     label = str(claims.get("generator_label") or "")
+    template_id = str(claims.get("template_id") or "")
+    signed_variant_name = str(claims.get("variant_name") or "")
+    signed_channel = str(claims.get("channel") or "")
     copy_hash = str(claims.get("copy_hash") or "")
     signed_criteria = str(claims.get("criteria_fingerprint") or "")
     signed_performance = str(claims.get("performance_fingerprint") or "")
     if (
-        claims.get("v") != _CAMPAIGN_PROVENANCE_VERSION
+        claims.get("v") != CAMPAIGN_PROVENANCE_VERSION
         or issued_at > current_time + 60
         or expires_at < current_time
         or expires_at - issued_at != _CAMPAIGN_PROVENANCE_TTL_S
         or mode not in _GENERATOR_LABELS
         or label != _GENERATOR_LABELS[mode]
+        or template_id != CAMPAIGN_TEMPLATE_ID
+        or signed_variant_name != str(variant.get("variant_name") or "").strip()
+        or signed_channel != str(variant.get("channel") or "email").strip()
         or signed_criteria != criteria_fingerprint
         or (
             signed_performance != "none"
             and re.fullmatch(r"[0-9a-f]{64}", signed_performance) is None
         )
-        or copy_hash != _campaign_copy_hash(variant.get("subject"), variant.get("body"))
+        or copy_hash
+        != campaign_copy_hash(
+            variant.get("subject"),
+            variant.get("body"),
+            variant_name=signed_variant_name,
+            channel=signed_channel,
+            template_id=template_id,
+        )
     ):
         return None
     return CampaignVariantProvenanceProof(
         generation_mode=mode,  # type: ignore[arg-type]
         generator_label=label,
+        template_id=template_id,
+        variant_name=signed_variant_name,
+        channel=signed_channel,
         key_id=matched_kid,
         issued_at=issued_at,
         expires_at=expires_at,
@@ -551,6 +576,8 @@ def _bind_recommendation_provenance(
                 "provenance_token": issue_campaign_variant_provenance(
                     generation_mode=response.generation_mode,
                     generator_label=response.generator_label,
+                    variant_name=variant.variant_name,
+                    channel="email",
                     subject=variant.subject,
                     body=variant.body,
                     criteria_fingerprint=criteria_fingerprint,
@@ -670,22 +697,25 @@ def _fallback(
     *,
     lender_name: str,
     performance: CampaignPerformanceContext | None,
-    warning: str,
+    warning: str | None,
     criteria_fingerprint: str,
     settings: Settings,
+    generation_mode: Literal["supervisor", "reviewed_fallback"] = "reviewed_fallback",
+    strategy: str | None = None,
 ) -> CampaignRecommendationResponse:
     offer_code, _offer_count = _dominant_offer(preview)
     offer_label = offer_display_label(offer_code, NBO_PRODUCT_LABELS[offer_code]).lower()
     audience = _OFFER_AUDIENCE[offer_code]
     lender = lender_name.strip() or "your lender"
     response = CampaignRecommendationResponse(
-        generation_mode="reviewed_fallback",
-        generator_label=_GENERATOR_LABELS["reviewed_fallback"],
+        generation_mode=generation_mode,
+        generator_label=_GENERATOR_LABELS[generation_mode],
         performance_status=_performance_status(performance),
         audience_summary=(
             f"The selected audience is led by {audience} and is ready for a controlled message test."
         ),
-        strategy=(
+        strategy=strategy
+        or (
             "Test a concrete benefit-led explanation against a guidance-led review. Keep one call to "
             "action, avoid unverified savings claims, and reserve a randomized holdout for measurement."
         ),
@@ -719,7 +749,7 @@ def _fallback(
         ],
         holdout_pct=10,
         evidence=_evidence(preview, performance),
-        warnings=[warning],
+        warnings=[warning] if warning else [],
     )
     return _bind_recommendation_provenance(
         response,
@@ -756,19 +786,19 @@ def _prompt(
     )
     return (
         "You are the campaign-strategy specialist inside a governed mortgage growth workflow. "
-        "Use only the aggregate cohort facts below. Create two genuinely distinct email tests: one "
-        "benefit-led and one guidance-led. Use plain language, one low-friction call to action, and no "
-        "guaranteed savings, quoted rates, false urgency, protected traits, personal data, placeholders, "
-        "or unsupported claims. Observed performance is strategy context only. Do not put any numeric "
-        "claim, count, percentage, rate, currency amount, or performance metric in audience_summary, "
-        "strategy, or borrower-facing copy; exact figures are rendered separately from governed evidence. "
-        "The hypotheses must say what "
-        "behavior each variant tests. Return JSON "
-        "only with keys audience_summary, strategy, holdout_pct, variants. variants must contain exactly "
-        "two objects with variant_name (Benefit-led or Guidance-led), subject, body, hypothesis. Set "
-        "holdout_pct between 5 and 30.\nAggregate cohort facts:\n"
+        "Use only the aggregate cohort facts below. Select the reviewed benefit-and-guidance copy "
+        "template and its reviewed test strategy. You do not author borrower-facing or operator-facing "
+        "prose. Return JSON only with template_id set exactly to benefit_guidance_v1 and strategy_id "
+        "set exactly to controlled_message_test_v1.\nAggregate cohort facts:\n"
         f"{json.dumps(payload, sort_keys=True)}{repair}"
     )
+
+
+def _reviewed_template_selection(parsed: dict[str, Any]) -> str:
+    """Validate the model's bounded selection without accepting model-authored copy."""
+
+    CampaignTemplateSelection.model_validate(parsed)
+    return _REVIEWED_CAMPAIGN_STRATEGY
 
 
 def recommend_campaign(
@@ -793,20 +823,19 @@ def recommend_campaign(
             criteria_fingerprint=criteria_fingerprint,
             settings=settings,
         )
-    runtime, reason = verify_supervisor_runtime(client, settings)
+    runtime, _reason = verify_supervisor_runtime(client, settings)
     if runtime is None:
         return _fallback(
             preview,
             lender_name=lender_name,
             performance=performance,
-            warning=reason or "Supervisor unavailable",
+            warning="Supervisor is not enabled for this deployment",
             criteria_fingerprint=criteria_fingerprint,
             settings=settings,
         )
     endpoint = runtime.endpoint
     task = runtime.task
 
-    evidence = _evidence(preview, performance)
     repair_note: str | None = None
     for attempt in range(2):
         prompt = _prompt(
@@ -829,24 +858,16 @@ def recommend_campaign(
             parsed = parse_json_object(extract_response_text(response))
             if parsed is None:
                 raise ValueError("Agent Responses output was not a JSON object")
-            candidate = CampaignRecommendationResponse.model_validate(
-                {
-                    "generation_mode": "supervisor",
-                    "generator_label": _GENERATOR_LABELS["supervisor"],
-                    "performance_status": _performance_status(performance),
-                    "audience_summary": parsed.get("audience_summary"),
-                    "strategy": parsed.get("strategy"),
-                    "variants": parsed.get("variants"),
-                    "holdout_pct": parsed.get("holdout_pct", 10),
-                    "evidence": [item.model_dump() for item in evidence],
-                    "warnings": [],
-                }
-            )
-            return _bind_recommendation_provenance(
-                candidate,
-                criteria_fingerprint=criteria_fingerprint,
+            strategy = _reviewed_template_selection(parsed)
+            return _fallback(
+                preview,
+                lender_name=lender_name,
                 performance=performance,
+                warning=None,
+                criteria_fingerprint=criteria_fingerprint,
                 settings=settings,
+                generation_mode="supervisor",
+                strategy=strategy,
             )
         except (ValidationError, ValueError, TypeError) as exc:
             repair_note = str(exc)[:500]

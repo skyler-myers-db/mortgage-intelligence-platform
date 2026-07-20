@@ -648,21 +648,23 @@ class PortfolioCreateRequest(BaseModel):
                 raise ValueError("email message variants require a nonblank subject")
             assert_borrower_campaign_copy(subject, field_name="variant subject")
             assert_borrower_campaign_copy(body, field_name="variant body")
-            generation_mode = str(raw.get("generation_mode") or "operator").strip()
-            if generation_mode not in {"supervisor", "reviewed_fallback", "operator"}:
+            generation_mode = str(raw.get("generation_mode") or "").strip()
+            if generation_mode not in {"supervisor", "reviewed_fallback"}:
                 raise ValueError(
-                    "variant generation_mode must be supervisor, reviewed_fallback, or operator"
+                    "borrower-facing campaign copy must come from a reviewed server template"
                 )
             generator_label = assert_public_campaign_text(
-                raw.get("generator_label") or "Operator edited",
+                raw.get("generator_label") or "",
                 field_name="variant generator_label",
                 max_length=80,
             )
+            if not generator_label:
+                raise ValueError("variant generator_label must be nonblank")
             provenance_token_raw = raw.get("provenance_token")
             provenance_token = (
                 str(provenance_token_raw).strip() if provenance_token_raw is not None else None
             )
-            if provenance_token is not None and not 32 <= len(provenance_token) <= 4096:
+            if provenance_token is None or not 32 <= len(provenance_token) <= 4096:
                 raise ValueError("variant provenance_token must be a bounded server-issued token")
             weight_raw = raw.get("weight_pct", 100)
             try:

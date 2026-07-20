@@ -199,9 +199,7 @@ def test_lead_population_projection_selects_module0_flags() -> None:
 
 
 def test_lead_population_sql_emits_canonical_offer_code() -> None:
-    transform_sql = (
-        REPO_ROOT / "sql" / "transformations" / "gold_lead_population.sql"
-    ).read_text()
+    transform_sql = (REPO_ROOT / "sql" / "transformations" / "gold_lead_population.sql").read_text()
     ddl_sql = (REPO_ROOT / "sql" / "ddl" / "gold_lead_population.sql").read_text()
 
     assert "b.recommended_offer_code" in transform_sql
@@ -245,7 +243,12 @@ def test_state_changing_schemas_reject_raw_borrower_ids(schema_cls: type) -> Non
     if schema_cls is SavedLeadInput:
         payload.update({"city": "Chicago"})
     if schema_cls is SavedDraftInput:
-        payload.update({"body": "Review your mortgage options."})
+        payload.update(
+            {
+                "generation_id": "11111111-1111-4111-8111-111111111111",
+                "response_hash": "a" * 64,
+            }
+        )
     if schema_cls is OutreachApproveRequest:
         payload.update({"offer_code": "refi"})
 
@@ -260,7 +263,12 @@ def test_state_changing_schemas_reject_raw_borrower_ids(schema_cls: type) -> Non
 def test_state_changing_schemas_accept_public_borrower_ids(schema_cls: type) -> None:
     payload: dict[str, object] = {"borrower_id": "B-102FL7THC6Q3L"}
     if schema_cls is SavedDraftInput:
-        payload.update({"body": "Review your mortgage options."})
+        payload.update(
+            {
+                "generation_id": "11111111-1111-4111-8111-111111111111",
+                "response_hash": "a" * 64,
+            }
+        )
     if schema_cls is OutreachApproveRequest:
         payload.update({"offer_code": "refi"})
 

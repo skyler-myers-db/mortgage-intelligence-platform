@@ -6,7 +6,22 @@ import re
 import unicodedata
 from collections.abc import Callable, Sequence
 
-from backend.schemas.marketing_safety_terms import PROTECTED_NATIONAL_ORIGIN_RE
+from backend.schemas.lender_identity import validate_public_lender_name
+from backend.schemas.marketing_safety_terms import (
+    PROTECTED_NATIONAL_ORIGIN_RE,
+    build_protected_health_marketing_patterns,
+    build_protected_health_term_pattern,
+    mask_protected_health_safe_contexts,
+)
+from backend.schemas.marketing_selection_criteria import (
+    build_selection_context_pattern,
+    contains_unreviewed_selection_criterion,
+    is_reviewed_campaign_audience_description_text,
+    is_reviewed_campaign_audience_summary_text,
+    is_reviewed_read_only_analytics_text,
+)
+from backend.schemas.marketing_text_normalization import ascii_confusable_folds
+from backend.schemas.protected_relationships import PROTECTED_RELIGION_FAMILIAL_RELATION_RE
 
 _DEFAULT_PUBLIC_LENDER_NAME = "Summit Mortgage"
 _PUBLIC_COMPETITOR_REF_RE = re.compile(r"^Competitor ([A-Z]|Other)$")
@@ -24,17 +39,19 @@ _MARKETING_SYMBOL_CONFUSABLES: dict[int, str] = {
     ord("€"): "e",
     ord("¥"): "y",
 }
-
 _PROTECTED_CLASS_MARKETING_RE = re.compile(
     r"\b(?:age|aged|african[\s\-\u2010-\u2015]+americans?|"
     r"alaska[\s\-\u2010-\u2015]+natives?|american[\s\-\u2010-\u2015]+indians?|"
     r"arabs?|asians?|autis(?:m|tic)|blacks?|blind|"
     r"agnostics?|atheists?|baptists?|buddhists?|catholics?|color|deaf|"
-    r"disab(?:ility|ilities|led)|wheelchair(?:\s+users?)?|elderly|ethnic(?:ity|ities)?|"
+    r"disab(?:ility|ilities)|"
+    r"disabled\s+(?:adults?|applicants?|borrowers?|customers?|homeowners?|people|persons?)|"
+    r"(?:adults?|applicants?|borrowers?|customers?|homeowners?|people|persons?)\s+"
+    r"(?:who\s+are\s+)?disabled|wheelchair(?:\s+users?)?|elderly|ethnic(?:ity|ities)?|"
     r"familial status(?:es)?|families? with children|family status(?:es)?|"
     r"parents?|dependents?|"
-    r"(?:families?|households?|caregivers?)\s+(?:raising|with|of)\s+"
-    r"(?:children|dependents?|minors?)|expecting (?:a )?baby|"
+    r"(?:families?|households?|caregivers?)\s+(?:(?:raising|with|of)\s+"
+    r"(?:bab(?:y|ies)|children|dependents?|minors?|newborns?|toddlers?)|(?:(?:awaiting|anticipating|expecting)\s+|preparing\s+for\s+)(?:a\s+)?(?:child|baby|newborn))|expecting (?:a )?baby|"
     r"females?|genders?|handicap(?:s|ped)?|"
     r"gay|lesbian|bisexual|transgender|lgbt(?:q(?:ia2s?)?)?\+?|"
     r"non[- ]?binary|queer|gender identity|"
@@ -44,17 +61,21 @@ _PROTECTED_CLASS_MARKETING_RE = re.compile(
     r"middle eastern|mormons?|muslims?|islam(?:ic)?|christians?|hindus?|jewish|jews?|"
     r"evangelicals?|episcopalians?|jehovah(?:'s)? witnesses?|lutherans?|methodists?|"
     r"pentecostals?|presbyterians?|protestants?|scientologists?|"
-    r"churchgoers?|congregants?|worshipp?ers?|believers?|"
+    r"churchgoers?|churchgoing|congregants?|worshipp?ers?|believers?|"
     r"(?:people|persons?)\s+who\s+(?:attend\s+church|worship)|"
     r"orthodox|sikhs?|national origins?|native[\s\-\u2010-\u2015]+americans?|"
     r"native[\s\-\u2010-\u2015]+hawaiians?|pacific islanders?|"
     r"hawaiians?|chamorros?|guamanians?|biracial|multiracial|"
-    r"pregnanc(?:y|ies)|pregnant|races?|racial|impair(?:ment|ments|ed)|"
+    r"pregnanc(?:y|ies)|pregnant|expectant(?:\s+(?:homeowners?|borrowers?|applicants?|"
+    r"customers?|people|persons?|parents?|mothers?))?|"
+    r"maternity[- ]leave(?:\s+(?:homeowners?|borrowers?|applicants?|customers?|"
+    r"people|persons?))?|(?:civil|domestic)[- ]partner(?:ed)?(?:\s+(?:homeowners?|borrowers?|applicants?|customers?|"
+    r"people|persons?|partners?))?|civil(?:[- ]union|ly[- ](?:joined|partnered|united|wed))(?:\s+(?:homeowners?|borrowers?|applicants?|customers?|people|persons?|partners?))?|races?|racial|impair(?:ment|ments|ed)|"
     r"mobility[- ]impaired|mobility[- ]aid users?|"
     r"(?:people|persons?)\s+using\s+mobility\s+aids?|"
     r"neurodivergent|special[- ]needs|"
     r"religions?|religious|people of faith|faith[- ]based|divorced|divorcees?|"
-    r"marital status(?:es)?|unmarried|widowed|husbands?|wife|wives|spouses?|"
+    r"marital status(?:es)?|unmarried|unwed|widowed|husbands?|wife|wives|spouses?|"
     r"senior citizens?|sex(?:es)?|sexual orientations?|single (?:mothers?|fathers?|parents?)|"
     r"(?:moms?|dads?|parents?|households?|families?)\s+with\s+(?:kids|children)|"
     r"consumer[- ]credit[- ]rights?|fair[- ]lending\s+complaints?|"
@@ -85,14 +106,26 @@ _PROTECTED_AGE_CITIZENSHIP_MARKETING_RE = re.compile(
     re.IGNORECASE,
 )
 
-# Natural protected-status descriptions that require category-level context
-# rather than another flat spelling alias. These patterns deliberately bind
-# ambiguous adjectives (for example ``single``, ``young``, and ``senior``) to
-# people/population nouns, leaving product phrases such as ``single-family``
-# and ``senior lien`` available on governed mortgage surfaces.
+# Bind ambiguous status adjectives to people/population nouns so product
+# phrases such as ``single-family`` and ``senior lien`` remain available.
+_PROTECTED_POPULATION_RE_FRAGMENT = (
+    r"(?:people|persons?|individuals?|adults?|residents?|households?|"
+    r"homeowners?|borrowers?|applicants?|customers?|"
+    r"prospects?|clients?|mortgage\s+holders?|loan\s+holders?|mortgagors?|"
+    r"account\s+holders?|members?|leads?|candidates?|recipients?|consumers?|participants?)"
+)
+_PROTECTED_PTSD_RE_FRAGMENT = (
+    r"(?:p(?:[.\s_-]*t)(?:[.\s_-]*s)(?:[.\s_-]*d)|"
+    r"post[- ]?traumatic[- ]stress(?:[- ]disorders?)?)"
+)
+_PROTECTED_MOBILITY_STATUS_RE_FRAGMENT = (
+    r"(?:mobility\s+(?:challenges?|limitations?|impairments?|issues?|needs?|restrictions?)|"
+    r"(?:limited|impaired|reduced|restricted)\s+mobility)"
+)
 _PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE = re.compile(
     r"\b(?:"
-    r"(?:young|senior|middle[- ]aged)\s+(?:professionals?|homeowners?|borrowers?|"
+    r"(?:(?:sunday|sabbath|easter|lent)[- ]service|young|senior|middle[- ]aged|(?!(?:budget|data|deadline|market|mortgage|policy|price|product|rate|schedule|time|trend)[- ])"
+    r"[a-z][a-z-]{2,24}[- ](?:observ(?:ing|ant)|practicing|keeping|worshipp?ing|celebrating|praying|attending)|church[- ]attending)\s+(?:professionals?|homeowners?|borrowers?|"
     r"applicants?|customers?|people|persons?|adults?)|"
     r"(?:under|over)[ -]?\d{1,3}\s+(?:homeowners?|borrowers?|applicants?|"
     r"customers?|people|persons?|adults?)|"
@@ -101,6 +134,7 @@ _PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE = re.compile(
     r"newlyweds?|couples?|(?:single|separated|engaged|cohabiting)\s+"
     r"(?:homeowners?|borrowers?|applicants?|customers?|people|persons?|adults?)|"
     r"(?:foster|adoptive)\s+parents?|guardians?\s+of\s+minors?|"
+    rf"{_PROTECTED_POPULATION_RE_FRAGMENT}\s+(?:joined\s+in\s+(?:a\s+)?civil\s+partnership|due\s+to\s+give\s+birth|expecting\s+(?:their\s+)?first\s+child|welcoming\s+(?:a\s+)?bab(?:y|ies)|active\s+in\s+(?:their\s+|a\s+)?(?:congregation|parish|church|mosque|synagogue|temple)|(?:who\s+)?(?:observ(?:e|es|ed|ing)|practic(?:e|es|ed|ing)|keep(?:s|ing)?|kept|celebrat(?:e|es|ed|ing))\s+(?:their\s+faith|ramadan|passover|easter|lent|the\s+sabbath)|(?:who\s+)?attend(?:s|ed|ing)?\s+(?:mass|worship|religious\s+services?|church|mosque|synagogue|temple)|(?:who\s+)?worship(?:s|ped|ping)?\s+(?:on\s+)?(?:sundays?|the\s+sabbath))|"
     r"faith\s+community\s+members?|parishioners?|(?:members?\s+of\s+the\s+)?clergy|"
     r"members?\s+of\s+(?:a\s+)?(?:congregation|church|mosque|synagogue|temple)|"
     r"religious\s+community\s+members?|"
@@ -111,8 +145,14 @@ _PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE = re.compile(
     r"(?:people|persons?|homeowners?|borrowers?|applicants?)\s+(?:who\s+)?"
     r"(?:were\s+)?born\s+outside(?:\s+the)?\s+(?:u\.?s\.?|united states|america)|"
     r"assistive[- ]device\s+users?|hearing[- ]aid\s+users?|visually[- ]challenged|"
-    r"mobility[- ]limited\s+(?:homeowners?|borrowers?|"
-    r"applicants?|customers?|people|persons?)|"
+    rf"mobility[- ](?:challenged|limited|impaired)\s+{_PROTECTED_POPULATION_RE_FRAGMENT}|"
+    rf"mobility[- ](?:challenge|limitation|impairment)[- ]affected\s+{_PROTECTED_POPULATION_RE_FRAGMENT}|"
+    rf"(?:limited|impaired|reduced|restricted)[- ]mobility\s+{_PROTECTED_POPULATION_RE_FRAGMENT}|"
+    rf"{_PROTECTED_POPULATION_RE_FRAGMENT}\s+"
+    rf"(?:with|who\s+have|facing|experiencing|living\s+with|affected\s+by|managing)\s+"
+    rf"{_PROTECTED_MOBILITY_STATUS_RE_FRAGMENT}|"
+    rf"{_PROTECTED_POPULATION_RE_FRAGMENT}\s+whose\s+mobility\s+is\s+(?:challenged|limited|impaired|reduced|restricted)|"
+    rf"{_PROTECTED_POPULATION_RE_FRAGMENT}\s+(?:requiring|using|dependent\s+on)\s+mobility\s+aids?|"
     r"(?:people|persons?)\s+(?:with|who have)\s+(?:chronic\s+)?"
     r"(?:illness(?:es)?|conditions?|accessibility\s+needs)|"
     r"(?:serious|long[- ]term)\s+(?:medical|health)\s+conditions?|"
@@ -132,6 +172,21 @@ _PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE = re.compile(
     re.IGNORECASE,
 )
 
+(
+    _PROTECTED_HEALTH_STATUS_MARKETING_RE,
+    _PROTECTED_HEALTH_GOVERNANCE_INTENT_RE,
+) = build_protected_health_marketing_patterns(
+    population_re_fragment=_PROTECTED_POPULATION_RE_FRAGMENT,
+    ptsd_re_fragment=_PROTECTED_PTSD_RE_FRAGMENT,
+    mobility_re_fragment=_PROTECTED_MOBILITY_STATUS_RE_FRAGMENT,
+)
+_PROTECTED_HEALTH_TERM_MARKETING_RE = build_protected_health_term_pattern(
+    ptsd_re_fragment=_PROTECTED_PTSD_RE_FRAGMENT,
+    mobility_re_fragment=_PROTECTED_MOBILITY_STATUS_RE_FRAGMENT,
+)
+_PROTECTED_HEALTH_SELECTION_CONTEXT_RE = build_selection_context_pattern(
+    population_re_fragment=_PROTECTED_POPULATION_RE_FRAGMENT
+)
 _AUDIENCE_OUTCOME_CLAIM_RE = re.compile(
     r"(?:^|[.!?;:\n])\s*(?P<audience>[^.!?;:\n]+?)\s+"
     r"(?:may|might|could|can|should)"
@@ -182,13 +237,11 @@ def _structural_audience_scan_variants(value: str) -> set[str]:
     in_word_symbols: list[str] = []
     for index, char in enumerate(value):
         replacement = _MARKETING_SYMBOL_CONFUSABLES.get(ord(char))
-        previous_is_ascii_letter = index > 0 and value[index - 1].isascii() and value[
-            index - 1
-        ].isalpha()
+        previous_is_ascii_letter = (
+            index > 0 and value[index - 1].isascii() and value[index - 1].isalpha()
+        )
         next_is_ascii_letter = (
-            index + 1 < len(value)
-            and value[index + 1].isascii()
-            and value[index + 1].isalpha()
+            index + 1 < len(value) and value[index + 1].isascii() and value[index + 1].isalpha()
         )
         in_word_symbols.append(
             replacement
@@ -341,6 +394,7 @@ _REVIEWED_NON_PERSON_PHRASES: tuple[str, ...] = (
     "Competitor Recapture Monitor",
     "High-Equity HELOC Watch",
     "Borrower Dossier Review",
+    "Call consent",
     "Branch Manager Capacity Review",
     "Custom Segment Workflow",
     "Source Freshness Sentinel",
@@ -463,7 +517,10 @@ _MECHANICAL_PII_OR_RAW_IDENTIFIER_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 _CONTEXTUAL_HUMAN_NAME_RE = re.compile(
     r"\b(?:call|contact|email|message|text|ask|target|prioritize|dear|hello|hi)\s+"
-    r"(?!(?:to|the|a|an|this|that|your|our)\b)[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\b|"
+    r"(?!(?:to|the|a|an|and|or|at|about|before|if|when|this|that|your|our|us|me|you|"
+    r"them|him|her|it|then|provider|carrier|system|platform|service|gateway|authorization|consent|permission|outreach|contact|records?|"
+    r"is|are|was|were|will|would|can|could|may|might|has|have|had)\b)"
+    r"[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\b|"
     r"\b[A-Za-z]{2,30}\s+[A-Za-z]{2,30}\s+(?:qualifies?|is the top borrower)\b",
     re.IGNORECASE,
 )
@@ -478,12 +535,12 @@ def set_public_lender_name_provider(provider: _PublicLenderNameProvider | None) 
 
 def _configured_public_lender_name() -> str:
     if _public_lender_name_provider is None:
-        return _DEFAULT_PUBLIC_LENDER_NAME
+        return validate_public_lender_name(_DEFAULT_PUBLIC_LENDER_NAME)
     try:
-        configured = _public_lender_name_provider().strip()
+        configured = _public_lender_name_provider()
     except Exception:
-        return _DEFAULT_PUBLIC_LENDER_NAME
-    return configured or _DEFAULT_PUBLIC_LENDER_NAME
+        configured = _DEFAULT_PUBLIC_LENDER_NAME
+    return validate_public_lender_name(configured or _DEFAULT_PUBLIC_LENDER_NAME)
 
 
 def configured_public_lender_name() -> str:
@@ -593,6 +650,15 @@ def contains_protected_class_marketing_text(value: str) -> bool:
         for char in unicodedata.normalize("NFKD", normalized)
         if not unicodedata.category(char).startswith("M")
     )
+    if is_reviewed_campaign_audience_description_text(
+        mark_folded
+    ) or is_reviewed_campaign_audience_summary_text(mark_folded):
+        # The server renders these fields from a closed offer-to-audience map.
+        # Handle it before the generic unknown-health relationship detector,
+        # whose fail-closed ``population with X`` grammar intentionally cannot
+        # infer that each complete product description is governed. Full-match
+        # semantics ensure appended or substituted criteria remain scannable.
+        return False
     if any(
         _contains_unreviewed_audience_outcome_claim(candidate)
         for candidate in _structural_audience_scan_variants(mark_folded)
@@ -618,26 +684,14 @@ def contains_protected_class_marketing_text(value: str) -> bool:
             variant.translate(str.maketrans("013457", "oieast")),
         )
     }
+
     # Add only reviewed ASCII lookalike folds. These variants are safety-scan
     # inputs, never rewritten campaign copy: ``vv`` is commonly substituted
     # for ``w`` and a capital ``I`` for lowercase ``l`` in otherwise ordinary
     # words. Applying both orders catches combinations without opening a
     # general edit-distance matcher that would be difficult to audit.
-    def ascii_confusable_folds(variant: str) -> set[str]:
-        capital_i_folded = variant.replace("I", "l")
-        double_v_folded = re.sub(r"vv", "w", variant, flags=re.IGNORECASE)
-        return {
-            variant,
-            capital_i_folded,
-            double_v_folded,
-            re.sub(r"vv", "w", capital_i_folded, flags=re.IGNORECASE),
-            double_v_folded.replace("I", "l"),
-        }
-
     ascii_confusable_variants = {
-        folded
-        for variant in leet_variants
-        for folded in ascii_confusable_folds(variant)
+        folded for variant in leet_variants for folded in ascii_confusable_folds(variant)
     }
     deobfuscated: set[str] = set()
     separator_folded: set[str] = set()
@@ -675,21 +729,47 @@ def contains_protected_class_marketing_text(value: str) -> bool:
         for variant in deobfuscated | joined_tokens
         for folded in ascii_confusable_folds(variant)
     )
-    scannable = " ".join(
-        (
-            mark_folded,
-            *sorted(ascii_confusable_variants),
-            *sorted(deobfuscated),
-            *sorted(separator_folded),
-            *sorted(joined_tokens),
-        )
+    scannable_parts = (
+        mark_folded,
+        *sorted(ascii_confusable_variants),
+        *sorted(deobfuscated),
+        *sorted(separator_folded),
+        *sorted(joined_tokens),
     )
+    scannable = " ".join(scannable_parts)
     for pattern in _PROTECTED_CLASS_SAFE_CONTEXT_PATTERNS:
         scannable = pattern.sub(" ", scannable)
+    # Keep punctuation-preserving representations for criterion state.
+    health_semantic_parts = (mark_folded, *sorted(leet_variants), *sorted(deobfuscated))
+    health_scannable = " ; ".join(
+        mask_protected_health_safe_contexts(part) for part in health_semantic_parts
+    )
+    # Direct status matching can use lossy separator/token normalization; selection state cannot.
+    health_status_scannable = " ; ".join(
+        mask_protected_health_safe_contexts(part) for part in scannable_parts
+    )
+    reviewed_analytics = is_reviewed_read_only_analytics_text(mark_folded)
+    has_unreviewed_selection_criterion = (
+        False
+        if reviewed_analytics
+        else any(
+            contains_unreviewed_selection_criterion(
+                mask_protected_health_safe_contexts(part),
+                selection_context_re=_PROTECTED_HEALTH_SELECTION_CONTEXT_RE,
+            )
+            # Separator-folded text is invalid for the clause state machine.
+            for part in health_semantic_parts
+        )
+    )
     return bool(
         _PROTECTED_CLASS_MARKETING_RE.search(scannable)
         or _PROTECTED_AGE_CITIZENSHIP_MARKETING_RE.search(scannable)
         or _PROTECTED_CONTEXTUAL_TRAIT_MARKETING_RE.search(scannable)
+        or PROTECTED_RELIGION_FAMILIAL_RELATION_RE.search(scannable)
+        or (not reviewed_analytics and _PROTECTED_HEALTH_TERM_MARKETING_RE.search(health_scannable))
+        or _PROTECTED_HEALTH_STATUS_MARKETING_RE.search(health_status_scannable)
+        or _PROTECTED_HEALTH_GOVERNANCE_INTENT_RE.search(health_scannable)
+        or has_unreviewed_selection_criterion
         or _contains_national_origin_marketing_text(scannable)
         or contains_protected_class_proxy_marketing_text(scannable)
     )

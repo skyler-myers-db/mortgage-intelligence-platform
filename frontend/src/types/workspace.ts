@@ -14,6 +14,8 @@ export type SavedLeadInput = Omit<SavedLead, 'saved_at' | 'updated_at'>;
 
 export interface SavedDraft {
   borrower_id: string;
+  generation_id: string;
+  response_hash: string;
   offer_code?: string | null;
   channel: 'email' | 'sms' | 'direct_mail';
   subject?: string | null;
@@ -22,7 +24,10 @@ export interface SavedDraft {
   updated_at: string;
 }
 
-export type SavedDraftInput = Omit<SavedDraft, 'saved_at' | 'updated_at'>;
+export type SavedDraftInput = Pick<
+  SavedDraft,
+  'borrower_id' | 'generation_id' | 'response_hash'
+>;
 
 export interface WorkspaceState {
   saved_leads: SavedLead[];

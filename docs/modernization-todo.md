@@ -13,9 +13,9 @@ This tracker captures the remaining work to keep Module 0 aligned with modern we
   - Validation: `npm --prefix frontend ci`, `npm --prefix frontend run lint`, `npm --prefix frontend run test`, `npm --prefix frontend run build`, production dependency audit.
 
 - [x] **Databricks bundle deploy path**
-  - Root-cause the recurring `databricks bundle deploy -t dev` app permission `403`: bare dev deploy inherited the CI placeholder `genie_space_id`, and Databricks Apps reported the invalid Genie binding as an opaque "Can View" permission error.
-  - Make the documented bundle path deploy the app without falling back to direct `databricks apps deploy`: dev target now pins the governed Entrada Genie space binding instead of inheriting the root placeholder.
-  - Validation: `databricks bundle validate -t dev --profile DEFAULT -o json` resolves a non-placeholder Genie space binding; `databricks bundle deploy -t dev --profile DEFAULT` completed successfully; `/api/health` on the deployed app returned `warehouse/lakebase/genie=up`.
+  - Root-caused the historical unrestricted-bundle permission failure and retired that operator path.
+  - `scripts/deploy.sh` resolves the governed Genie binding, applies exact non-App resource selectors, reconciles the complete App resource contract, and performs signed source promotion.
+  - Validation: `databricks bundle validate -t dev --profile DEFAULT -o json` resolves a non-placeholder Genie binding; the command-of-record deployment and `/api/v1/health` live gate must pass.
 
 - [x] **Backpressure and load protection**
   - Add authenticated per-actor/per-route budgets for high-cost endpoints.
@@ -29,7 +29,7 @@ This tracker captures the remaining work to keep Module 0 aligned with modern we
   - [x] Add browser Real User Monitoring for navigation load, SPA route load, LCP, INP, CLS, and long tasks.
   - [x] Add a PII-safe `/api/telemetry/rum` endpoint that rejects query strings, borrower ids, UUIDs, and emails.
   - [x] Add a self-contained OTLP proof lane that preserves stdout-only boot when optional OTEL wheels are missing, verifies handler attachment with a mocked exporter, and asserts endpoint/header/token secrets do not leak into exported log bodies.
-  - [x] Add a non-default `prod_otlp` bundle target with an app secret resource for `MIP_OTEL_HEADERS`, plus `tools/databricks/otlp_deploy_payload.py` so production deployments can promote a full env list without committing collector headers or breaking default dev deploys.
+  - [x] Add an optional OTLP overlay to the governed `prod` target. The canonical App resource/payload builders attach `MIP_OTEL_HEADERS` through a Databricks Secret reference while retaining the complete deployment contract.
   - [x] Add `tools/databricks/otlp_customer_retention_gate.py` so customer durable retention cannot be claimed from prose alone; it requires customer-owned collector ownership, secret reference, retention/ACL proof, and a fresh collector query proof for the deployed-app correlation id.
   - Validation: `tests/unit/test_rum_telemetry.py`, `frontend/src/lib/rum.test.ts`, frontend lint/build/budget, scoped backend lint, API/resilience regression set; deployed app accepted sanitized batched RUM with `202` while rejecting a borrower-ID route with `422`.
   - External OTLP proof: a temporary deployment included the base app env/resource bindings plus `MIP_OTEL_ENDPOINT`; `/api/admin/health` reported `log_export=otlp`, dependencies up, and all breakers closed. A sanitized RUM request returned a correlation id, and the external collector received an OTLP HTTP protobuf payload containing the matching `http_request` log body for `/api/telemetry/rum`.
@@ -187,7 +187,7 @@ Latest local validation pass after the current modernization tranche:
 - `.venv/bin/python -m pytest -q`
 - `databricks bundle validate -t dev --profile DEFAULT`
 - `databricks bundle validate -t ci --profile DEFAULT`
-- `databricks bundle validate -t prod_otlp --profile DEFAULT --var genie_space_id=<governed-genie-space-id>`
+- `databricks bundle validate -t prod --profile DEFAULT --var genie_space_id=<governed-genie-space-id>`
 - `npm --prefix frontend run lint`
 - `npm --prefix frontend run test`
 - `npm --prefix frontend run build`
@@ -195,7 +195,7 @@ Latest local validation pass after the current modernization tranche:
 - `npm --prefix frontend run e2e -- --list`
 - `npm --prefix frontend run e2e -- tests/e2e/route_performance.spec.ts --project=chromium --reporter=list --workers=1` (non-live skip guard: local web servers start, then all 12 tests skip because the spec requires `E2E_LIVE=1`)
 - Vitest result: 177 tests passed across 31 files.
-- OTLP production-retention setup result: `prod_otlp` validates and declares an `otel_headers` app secret resource pointing at the configured Databricks secret scope/key with `READ`; `tools/databricks/otlp_deploy_payload.py` emits the full app env list with `MIP_OTEL_HEADERS` set by `value_from`, never a header value. A temporary deployed proof verified `MIP_OTEL_HEADERS` resolved through Databricks Secrets by showing a collector request with the expected proof header; `tools/databricks/otlp_customer_retention_gate.py` now validates customer evidence packets, but customer durable retention still needs customer collector, real customer secret, retention/ACL proof, and collector query proof.
+- OTLP production-retention setup result: the optional `prod` overlay declares an `otel_headers` App secret resource pointing at the configured Databricks secret scope/key with `READ`; the canonical payload emits the full App environment with `MIP_OTEL_HEADERS` set by `value_from`, never a header value. A temporary deployed proof verified secret resolution; customer durable retention still needs a customer collector, real customer secret, retention/ACL proof, and collector query proof.
 
 Fresh deployed evidence (2026-06-11, perf/polish slice — geo singleflight, precompression, analytics decomposition, a11y polish, budget policy):
 
@@ -210,7 +210,7 @@ Fresh deployed evidence (2026-06-11, perf/polish slice — geo singleflight, pre
 
 Retained deployed evidence from the previous deploy tranche (not a fresh deploy of the local interaction-affordance edits above):
 
-- Active deployment smoke: `databricks bundle deploy -t dev --profile DEFAULT` and direct snapshot deploy from the bundle workspace files path completed.
+- Historical active deployment smoke completed before the signed command-of-record cutover. Current releases must use `./scripts/deploy.sh -t dev`; the prior unrestricted bundle/direct snapshot sequence is no longer supported.
 - Live health result: `/api/health` returned `status=ok`, `mode=live`, `warehouse/lakebase/genie=up`; `/api/admin/health` returned all breakers closed, `recent_errors_count=0`, `fallback_identity_fallbacks_total=0`, and `log_export=stdout-only`.
 - Live route-performance result: 12/12 passed against the active deployment, including the audit-safe Lead Queue canary that hover/focus/row-expand issue zero governed borrower dossier reads.
 - Live browser/device/accessibility result: 52/52 passed against the active deployment across Chromium, Firefox, WebKit, Pixel 7, iPhone 15, and iPad Pro 11 landscape.

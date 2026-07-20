@@ -5,12 +5,18 @@ unquoted spaces (e.g. `MIP_LENDER_NAME=Summit Mortgage`) and angle-bracket
 placeholder values (`GENIE_SPACE_ID=<genie-space-id>`). This helper uses
 python-dotenv's parser, which handles both correctly, and then launches the
 Databricks CLI in a subprocess with the resolved env so operator workflow
-stays `make bundle-validate-env` / `make bundle-deploy-dev`.
+stays `make bundle-validate-env`. Mutable deployment is intentionally reserved
+for `scripts/deploy.sh`, which supplies exact non-App resource selectors and
+then performs the signed App promotion.
 
 Mapping (env -> BUNDLE_VAR_*):
   DATABRICKS_WAREHOUSE_ID -> BUNDLE_VAR_sql_warehouse_id
   GENIE_SPACE_ID          -> BUNDLE_VAR_genie_space_id
   MIP_APP_NAME            -> BUNDLE_VAR_app_name
+  MIP_LENDER_NAME         -> BUNDLE_VAR_lender_name
+  MIP_LENDER_NMLS_ID      -> BUNDLE_VAR_lender_nmls_id
+  MIP_TENANT_ID           -> BUNDLE_VAR_tenant_id
+  MIP_AI_GATEWAY_VERIFIER_CLIENT_ID -> BUNDLE_VAR_ai_gateway_verifier_client_id
   LAKEBASE_INSTANCE_NAME  -> BUNDLE_VAR_lakebase_instance_name
   MIP_LAKEBASE_SYNC_CATALOG -> BUNDLE_VAR_lakebase_catalog_name
   LAKEBASE_DATABASE       -> BUNDLE_VAR_lakebase_database_name
@@ -20,7 +26,11 @@ Usage:
   python tools/databricks/bundle_env.py validate -t dev
   python tools/databricks/bundle_env.py plan     -t dev
   python tools/databricks/bundle_env.py summary  -t dev -o json
-  python tools/databricks/bundle_env.py deploy   -t dev
+  # Mutable use is command-of-record internal only and requires one or more
+  # exact, non-App selectors:
+  python tools/databricks/bundle_env.py deploy -t dev --select jobs.example
+  # Deployment-state use is restricted to the configured App binding:
+  python tools/databricks/bundle_env.py deployment bind mip_app mip-app -t dev
 
 The dev target defaults to Summit demo first-party feeds so the public demo
 keeps governed contactability / Lead Queue data after a refresh. For any
@@ -43,6 +53,10 @@ REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
+from backend.schemas.lender_identity import (  # noqa: E402
+    effective_public_tenant_id,
+    validate_public_lender_identity,
+)
 from tools import render_sql  # noqa: E402
 from tools.databricks.workspace_auth import (  # noqa: E402
     strip_app_facing_workspace_auth,
@@ -53,6 +67,10 @@ ENV_LOCAL = REPO / ".env.local"
 PLACEHOLDER = "00000000PLACEHOLDER"
 _APP_OR_INSTANCE_NAME = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
 _UC_IDENTIFIER = re.compile(r"[a-z_][a-z0-9_]{0,254}\Z")
+_EXACT_RESOURCE_SELECTOR = re.compile(
+    r"(?P<kind>[a-z_][a-z0-9_]*)\.(?P<name>[A-Za-z0-9][A-Za-z0-9_.-]*)\Z"
+)
+_MUTABLE_BUNDLE_TARGETS = frozenset({"dev", "prod"})
 
 
 def _is_real(value: str | None) -> bool:
@@ -81,6 +99,109 @@ def _target_from_args(args: list[str]) -> str:
             target = arg.split("=", 1)[1]
         idx += 1
     return target or "dev"
+
+
+def _validate_non_app_deploy_selectors(args: list[str]) -> str | None:
+    """Allow only one governed target plus exact non-App selectors."""
+
+    selectors: list[str] = []
+    target: str | None = None
+    index = 0
+    while index < len(args):
+        argument = args[index]
+        if argument in {"-t", "--target"}:
+            if target is not None or index + 1 >= len(args) or not args[index + 1].strip():
+                return "bundle deploy requires exactly one nonempty governed target"
+            target = args[index + 1]
+            index += 2
+            continue
+        if argument.startswith("--target="):
+            if target is not None or not argument.split("=", 1)[1].strip():
+                return "bundle deploy requires exactly one nonempty governed target"
+            target = argument.split("=", 1)[1]
+            index += 1
+            continue
+        if argument == "--select":
+            if index + 1 >= len(args):
+                return "bundle deploy --select requires an exact resource selector"
+            selectors.append(args[index + 1])
+            index += 2
+            continue
+        if argument.startswith("--select="):
+            selectors.append(argument.split("=", 1)[1])
+            index += 1
+            continue
+        if argument == "--plan" or argument.startswith("--plan="):
+            return "precomputed bundle deploy plans are forbidden; use scripts/deploy.sh"
+        return (
+            f"unsupported bundle deploy argument {argument!r}; only one governed "
+            "target and exact --select values are allowed"
+        )
+    if target not in _MUTABLE_BUNDLE_TARGETS:
+        return "bundle deploy target must be exactly dev or prod"
+    if not selectors:
+        return (
+            "unrestricted bundle deploy is forbidden because it can activate "
+            "apps.mip_app; use scripts/deploy.sh"
+        )
+    for selector in selectors:
+        match = _EXACT_RESOURCE_SELECTOR.fullmatch(selector)
+        if match is None or match.group("kind") == "apps":
+            return (
+                f"unsafe bundle deploy selector {selector!r}; only exact non-App "
+                "resource selectors are allowed"
+            )
+    return None
+
+
+def _validate_app_deployment_command(
+    args: list[str],
+    *,
+    expected_app_name: str,
+) -> str | None:
+    """Allow only the exact App bind/unbind used by the signed deploy flow."""
+
+    if not args or args[0] not in {"bind", "unbind"}:
+        return "bundle deployment permits only the governed App bind or unbind operation"
+    action = args[0]
+    positional: list[str] = []
+    boolean_flags: set[str] = set()
+    target: str | None = None
+    index = 1
+    while index < len(args):
+        argument = args[index]
+        if argument in {"-t", "--target"}:
+            if target is not None or index + 1 >= len(args) or not args[index + 1].strip():
+                return "bundle deployment target must be supplied exactly"
+            target = args[index + 1]
+            index += 2
+            continue
+        if argument.startswith("--target="):
+            if target is not None or not argument.split("=", 1)[1].strip():
+                return "bundle deployment target must be supplied exactly"
+            target = argument.split("=", 1)[1]
+            index += 1
+            continue
+        allowed_flags = {"--force-lock", "--auto-approve"} if action == "bind" else {"--force-lock"}
+        if argument in allowed_flags:
+            if argument in boolean_flags:
+                return f"duplicate bundle deployment flag {argument!r} is forbidden"
+            boolean_flags.add(argument)
+            index += 1
+            continue
+        if argument.startswith("-"):
+            return f"unsafe bundle deployment option {argument!r} is forbidden"
+        positional.append(argument)
+        index += 1
+    if target not in _MUTABLE_BUNDLE_TARGETS:
+        return "bundle deployment target must be exactly dev or prod"
+    expected = ["mip_app", expected_app_name] if action == "bind" else ["mip_app"]
+    if positional != expected:
+        return (
+            f"bundle deployment {action} must target only the configured "
+            f"App binding {expected!r}"
+        )
+    return None
 
 
 def _truthy(raw: str | None) -> bool:
@@ -232,18 +353,25 @@ def _resolve_governed_genie_space_id(
 def main() -> int:
     if len(sys.argv) < 2:
         print(
-            "usage: bundle_env.py <validate|plan|summary|deploy> " "[databricks bundle args...]",
+            "usage: bundle_env.py <validate|plan|summary|deploy|deployment> "
+            "[databricks bundle args...]",
             file=sys.stderr,
         )
         return 2
 
     subcmd, *rest = sys.argv[1:]
-    if subcmd not in {"validate", "plan", "summary", "deploy"}:
+    if subcmd not in {"validate", "plan", "summary", "deploy", "deployment"}:
         print(
-            "usage: bundle_env.py <validate|plan|summary|deploy> " "[databricks bundle args...]",
+            "usage: bundle_env.py <validate|plan|summary|deploy|deployment> "
+            "[databricks bundle args...]",
             file=sys.stderr,
         )
         return 2
+    if subcmd == "deploy":
+        selector_error = _validate_non_app_deploy_selectors(rest)
+        if selector_error is not None:
+            print(f"[bundle_env] {selector_error}", file=sys.stderr)
+            return 2
 
     # Start from the current process env so PATH, HOME, DATABRICKS_CONFIG_*
     # all propagate, then overlay dotenv values.
@@ -280,6 +408,10 @@ def main() -> int:
                 "MIP_DEFAULT_CATALOG",
                 "MIP_ENABLE_DEMO_FIRST_PARTY_FEEDS",
                 "MIP_APP_NAME",
+                "MIP_LENDER_NAME",
+                "MIP_LENDER_NMLS_ID",
+                "MIP_TENANT_ID",
+                "MIP_AI_GATEWAY_VERIFIER_CLIENT_ID",
                 "LAKEBASE_INSTANCE_NAME",
                 "MIP_LAKEBASE_INSTANCE",
                 "LAKEBASE_DATABASE",
@@ -301,8 +433,17 @@ def main() -> int:
             env[k] = v
 
     target = _target_from_args(rest)
+    if subcmd == "deployment":
+        deployment_error = _validate_app_deployment_command(
+            rest,
+            expected_app_name=str(env.get("MIP_APP_NAME") or "mip-app").strip(),
+        )
+        if deployment_error is not None:
+            print(f"[bundle_env] {deployment_error}", file=sys.stderr)
+            return 2
     warehouse = env.get("DATABRICKS_WAREHOUSE_ID")
     genie = env.get("GENIE_SPACE_ID")
+    verifier_client_id = env.get("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
     if not _is_real(genie):
         space_id_file = REPO / "genie" / "space_id.txt"
         if space_id_file.exists():
@@ -315,7 +456,7 @@ def main() -> int:
     # resolve the exact governed title in the authenticated workspace and
     # overwrite the child value. `scripts/deploy.sh` provisions that named
     # space first, so a missing or duplicate title here is always a hard stop.
-    if subcmd in {"plan", "summary", "deploy"}:
+    if subcmd in {"plan", "summary", "deploy", "deployment"}:
         space_name = str(env.get("MIP_GENIE_SPACE_NAME") or "Mortgage Lead Intelligence").strip()
         try:
             governed_genie = _resolve_governed_genie_space_id(env, space_name=space_name)
@@ -333,12 +474,14 @@ def main() -> int:
         genie = governed_genie
         env["GENIE_SPACE_ID"] = governed_genie
 
-    if subcmd in {"plan", "summary", "deploy"}:
+    if subcmd in {"plan", "summary", "deploy", "deployment"}:
         missing = []
         if not _is_real(warehouse):
             missing.append("DATABRICKS_WAREHOUSE_ID")
         if not _is_real(genie):
             missing.append("GENIE_SPACE_ID")
+        if not _is_real(verifier_client_id):
+            missing.append("MIP_AI_GATEWAY_VERIFIER_CLIENT_ID")
         if missing:
             print(
                 f"[bundle_env] refusing bundle {subcmd} with placeholder bundle variables: "
@@ -355,6 +498,28 @@ def main() -> int:
 
     env["BUNDLE_VAR_sql_warehouse_id"] = str(warehouse) if _is_real(warehouse) else PLACEHOLDER
     env["BUNDLE_VAR_genie_space_id"] = str(genie) if _is_real(genie) else PLACEHOLDER
+    env["BUNDLE_VAR_ai_gateway_verifier_client_id"] = (
+        str(verifier_client_id) if _is_real(verifier_client_id) else PLACEHOLDER
+    )
+
+    try:
+        lender_name, lender_nmls_id = validate_public_lender_identity(
+            env.get("MIP_LENDER_NAME") or "Summit Mortgage",
+            env.get("MIP_LENDER_NMLS_ID"),
+        )
+        tenant_id = effective_public_tenant_id(
+            env.get("MIP_TENANT_ID"),
+            lender_name=lender_name,
+        )
+    except ValueError as exc:
+        print(f"[bundle_env] invalid lender disclosure identity: {exc}", file=sys.stderr)
+        return 2
+    env["MIP_LENDER_NAME"] = lender_name
+    env["MIP_LENDER_NMLS_ID"] = lender_nmls_id
+    env["MIP_TENANT_ID"] = tenant_id
+    env["BUNDLE_VAR_lender_name"] = lender_name
+    env["BUNDLE_VAR_lender_nmls_id"] = lender_nmls_id
+    env["BUNDLE_VAR_tenant_id"] = tenant_id
 
     try:
         resource_names = _deployment_resource_names(env)

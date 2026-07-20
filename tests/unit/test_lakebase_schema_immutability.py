@@ -11,6 +11,12 @@ _SCHEMA = Path("lakebase/schema.sql").read_text(encoding="utf-8")
 _SEED = Path("lakebase/seed_campaigns.sql").read_text(encoding="utf-8")
 
 
+def _migration_source() -> str:
+    jobs = Path("jobs")
+    paths = [jobs / "lakebase_migrate.py", *sorted(jobs.glob("lakebase_migration_*.py"))]
+    return "\n".join(path.read_text(encoding="utf-8") for path in paths)
+
+
 def _table_ddl(table: str) -> str:
     match = re.search(
         rf"CREATE TABLE IF NOT EXISTS mip_app\.{table} \((.*?)\n\);",
@@ -79,7 +85,7 @@ def test_campaign_json_shape_checks_are_post_seed_not_valid_and_deploy_probed() 
     from jobs import lakebase_migrate
 
     pre_seed, post_seed = lakebase_migrate._split_schema_sql(_SCHEMA)
-    migrate_source = Path("jobs/lakebase_migrate.py").read_text(encoding="utf-8")
+    migrate_source = _migration_source()
     constraints = {
         "campaigns_criteria_reviewed_shape_chk": "campaign_criteria_is_reviewed",
         "campaigns_suppression_policy_reviewed_shape_chk": (

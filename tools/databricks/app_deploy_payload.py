@@ -12,8 +12,10 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 
@@ -22,6 +24,10 @@ if str(REPO) not in sys.path:
     sys.path.insert(0, str(REPO))
 
 from backend.config.runtime_secret_policy import runtime_secret_text  # noqa: E402
+from backend.schemas.lender_identity import (  # noqa: E402
+    effective_public_tenant_id,
+    validate_public_lender_identity,
+)
 from tools.databricks.lakebase_instance_contract import (  # noqa: E402
     DEFAULT_LAKEBASE_INSTANCE_NAME,
     validated_lakebase_instance_name,
@@ -32,6 +38,7 @@ ENV_LOCAL = REPO / ".env.local"
 APP_ENV_DEFAULT = "sandbox"
 CATALOG_DEFAULT = "mip"
 SCHEMA_DEFAULT = "gold"
+_APP_RESOURCE_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,127}$")
 
 SAFE_RUNTIME_DEFAULTS = {
     # Databricks Apps deployment env_vars are a full replacement for app.yaml.
@@ -42,6 +49,7 @@ SAFE_RUNTIME_DEFAULTS = {
 
 NON_SECRET_OPERATOR_VARS = (
     "MIP_LENDER_NAME",
+    "MIP_LENDER_NMLS_ID",
     "MIP_TENANT_ID",
     "MIP_GIT_SHA",
     "MIP_APP_DEPLOYMENT_LEASE_ID",
@@ -155,6 +163,35 @@ def _append_value(env_vars: list[dict[str, str]], name: str, value: str) -> None
         env_vars.append({"name": name, "value": value})
 
 
+def validated_otel_endpoint(value: str) -> str:
+    """Return a credential-free HTTPS OTLP endpoint or fail closed."""
+
+    endpoint = value.strip()
+    try:
+        parts = urlsplit(endpoint)
+    except ValueError as exc:
+        raise ValueError("MIP_OTEL_ENDPOINT must be a valid URL") from exc
+    if parts.scheme != "https" or not parts.netloc:
+        raise ValueError("MIP_OTEL_ENDPOINT must be an https URL")
+    if parts.username or parts.password or parts.query or parts.fragment:
+        raise ValueError(
+            "MIP_OTEL_ENDPOINT must not contain credentials, query strings, or fragments"
+        )
+    return endpoint
+
+
+def validated_app_resource_name(value: str) -> str:
+    """Return a Databricks App resource name accepted by the payload contract."""
+
+    candidate = value.strip()
+    if not _APP_RESOURCE_NAME_RE.fullmatch(candidate):
+        raise ValueError(
+            "App resource names must start with a letter and contain only letters, "
+            "digits, '_' or '-'"
+        )
+    return candidate
+
+
 def _previous_secret_grace_configured(dotenv: dict[str, str]) -> tuple[bool, str]:
     previous = runtime_secret_text(_env_value(PREVIOUS_SECRET_ENV, dotenv))
     previous_kid = _env_value(PREVIOUS_SECRET_KID_ENV, dotenv)
@@ -177,10 +214,29 @@ def build_payload(
     lakebase_instance: str = DEFAULT_LAKEBASE_INSTANCE_NAME,
     mode: str = "SNAPSHOT",
     campaign_treatment_runtime_enabled: bool = False,
+    otel_endpoint: str = "",
+    otel_header_resource: str = "",
 ) -> dict[str, object]:
     lakebase_instance = validated_lakebase_instance_name(lakebase_instance)
     dotenv = _dotenv_overlay()
+    lender_name, lender_nmls_id = validate_public_lender_identity(
+        _env_value("MIP_LENDER_NAME", dotenv) or "Summit Mortgage",
+        _env_value("MIP_LENDER_NMLS_ID", dotenv),
+    )
+    tenant_id = effective_public_tenant_id(
+        _env_value("MIP_TENANT_ID", dotenv),
+        lender_name=lender_name,
+    )
+    resolved_lender_values = {
+        "MIP_LENDER_NAME": lender_name,
+        "MIP_LENDER_NMLS_ID": lender_nmls_id,
+        "MIP_TENANT_ID": tenant_id,
+    }
     previous_secret_enabled, previous_secret_kid = _previous_secret_grace_configured(dotenv)
+    if bool(otel_endpoint.strip()) != bool(otel_header_resource.strip()):
+        raise ValueError(
+            "MIP_OTEL_ENDPOINT and its App secret resource must be configured together"
+        )
     env_vars: list[dict[str, str]] = [
         {"name": "APP_ENV", "value": app_env},
         {"name": "DATABRICKS_WAREHOUSE_ID", "value_from": "sql_warehouse"},
@@ -206,6 +262,17 @@ def build_payload(
         },
     ]
 
+    if otel_endpoint:
+        env_vars.extend(
+            (
+                {"name": "MIP_OTEL_ENDPOINT", "value": validated_otel_endpoint(otel_endpoint)},
+                {
+                    "name": "MIP_OTEL_HEADERS",
+                    "value_from": validated_app_resource_name(otel_header_resource),
+                },
+            )
+        )
+
     if previous_secret_enabled:
         env_vars.append(
             {
@@ -226,7 +293,9 @@ def build_payload(
         _append_value(
             env_vars,
             name,
-            _env_value(name, dotenv) or SAFE_RUNTIME_DEFAULTS.get(name, ""),
+            resolved_lender_values.get(name)
+            or _env_value(name, dotenv)
+            or SAFE_RUNTIME_DEFAULTS.get(name, ""),
         )
     return {
         "source_code_path": source_code_path,
@@ -258,6 +327,8 @@ def _parser() -> argparse.ArgumentParser:
             "access remains quiesced; restore runtime MODIFY after promotion."
         ),
     )
+    parser.add_argument("--otel-endpoint", default="")
+    parser.add_argument("--otel-header-resource", default="")
     return parser
 
 
@@ -273,6 +344,8 @@ def main(argv: list[str] | None = None) -> int:
         lakebase_instance=args.lakebase_instance,
         mode=args.mode,
         campaign_treatment_runtime_enabled=args.enable_campaign_treatment_runtime,
+        otel_endpoint=args.otel_endpoint,
+        otel_header_resource=args.otel_header_resource,
     )
     json.dump(payload, sys.stdout, indent=2)
     sys.stdout.write("\n")

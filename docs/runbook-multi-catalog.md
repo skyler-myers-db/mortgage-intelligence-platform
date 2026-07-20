@@ -74,7 +74,7 @@ table DDL.
 
 Wiring:
 
-- **`Makefile` targets** (`render-sql`, `bundle-validate`, `bundle-deploy`, `bundle-validate-env`, `bundle-deploy-dev`) all depend on `render-sql`. The `render-sql` target runs `tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"` — idempotent, fast, zero dependencies.
+- **`Makefile` targets** `bundle-validate` and `bundle-validate-env` depend on `render-sql`; mutable `bundle-deploy*` aliases are retired. The `render-sql` target runs `tools/render_sql.py --catalog "$${MIP_DEFAULT_CATALOG:-mip}"` — idempotent, fast, zero dependencies. Use `make deploy-dev` for every mutation.
 - **`scripts/deploy.sh`** (step 1a) runs the renderer before the frontend build, so the rendered tree is present before the bundle is touched.
 - **`databricks.yml`** declares every `sql_task.file.path` under `sql/_rendered/...` rather than `sql/...`. The canonical sources under `sql/**/*.sql` stay committed; the rendered copies under `sql/_rendered/**` are gitignored.
 - **Identity when `--catalog mip`:** every substitution is a byte-identical rewrite on the default catalog, so customers who keep the default name pay nothing.

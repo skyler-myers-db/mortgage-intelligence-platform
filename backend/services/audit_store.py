@@ -16,8 +16,14 @@ from fastapi import Request
 
 from backend.config.settings import settings
 from backend.schemas.audit import AuditEvent
+from backend.schemas.borrower_copy_claims import (
+    contains_unsupported_borrower_qualification_claim,
+)
+from backend.schemas.borrower_copy_names import contains_borrower_copy_contextual_name
+from backend.schemas.borrower_cta_evidence import contains_borrower_cta_contradiction
 from backend.schemas.common import (
     contains_pii_marker,
+    contains_protected_class_marketing_text,
     validate_internal_staff_email,
     validate_public_audit_action,
     validate_public_audit_entity_type,
@@ -374,6 +380,7 @@ _ALLOWED_METADATA_KEYS: frozenset[str] = frozenset(
 _FREE_TEXT_METADATA_KEYS: frozenset[str] = frozenset(
     {"draft_subject", "draft_body", "rationale", "bulk_rationale", "reason", "notes"}
 )
+_BORROWER_DRAFT_METADATA_KEYS: frozenset[str] = frozenset({"draft_subject", "draft_body"})
 _NESTED_METADATA_KEYS_WITH_OWN_POLICY: frozenset[str] = frozenset(
     {
         "decision_inputs",
@@ -384,11 +391,19 @@ _NESTED_METADATA_KEYS_WITH_OWN_POLICY: frozenset[str] = frozenset(
         "result_filters",
         "thresholds_applied",
         "tool_steps",
+        "variant_provenance",
     }
 )
 _HUMAN_NAME_OR_PLACEHOLDER_PATTERN = re.compile(
     r"\b[A-Z][a-z]{1,30}\s+(?:[A-Z]\s+)?[A-Z][a-z]{1,30}\b|"
     r"\[(?:first|last|full)[_\s-]?[Nn]ame\]|\{(?:first|last|full)[_\s-]?[Nn]ame\}"
+)
+_AUDIT_HUMAN_IDENTITY_DIRECTIVE_RE = re.compile(
+    r"\b(?i:call|contact|email|message|ask|tell|notify|assign|refer)\s+"
+    r"(?!(?:us|we|you|they|our|the|this|your|a|an|consent|authorization|permission|outreach|"
+    r"support|compliance|operations|servicing|"
+    r"is|was|has|had|will|should|must|may|can|could)\b)"
+    r"[a-z][a-z'’-]{1,29}\s+[a-z][a-z'’-]{1,29}\b"
 )
 _GROWTH_AGENT_REVIEWED_NAME_WORD_ALLOWLIST: frozenset[str] = frozenset(
     {
@@ -693,7 +708,11 @@ def _metadata_pii_value_paths(value: Any, *, path: str = "metadata") -> set[str]
     if value is None or isinstance(value, bool | int | float):
         return hits
     text = str(value)
-    if contains_pii_marker(text) or scrub_free_text(text) != text:
+    if (
+        contains_pii_marker(text)
+        or scrub_free_text(text) != text
+        or contains_borrower_copy_contextual_name(text)
+    ):
         hits.add(path)
     return hits
 
@@ -705,6 +724,7 @@ def _growth_agent_reviewed_text_contains_pii(value: Any) -> bool:
     return bool(
         contains_pii_marker(text)
         or scrub_free_text(text) != text
+        or contains_borrower_copy_contextual_name(text)
         or _growth_agent_reviewed_text_contains_human_name(text)
     )
 
@@ -759,6 +779,93 @@ def _assert_public_safe_values(metadata: dict[str, Any]) -> None:
     """Validate reviewed free-ish values that have their own public policy."""
     if not metadata:
         return
+    for field, rows in _metadata_values_for(metadata, {"variant_provenance"}):
+        if not isinstance(rows, list) or len(rows) > 12:
+            raise AuditMetadataValueViolation(field, "must be a bounded provenance list")
+        allowed_keys = {
+            "variant_name",
+            "generation_mode",
+            "generator_label",
+            "provenance_key_id",
+            "provenance_issued_at",
+            "provenance_expires_at",
+            "provenance_copy_hash",
+            "provenance_criteria_fingerprint",
+            "provenance_performance_fingerprint",
+        }
+        for row in rows:
+            if not isinstance(row, dict) or set(row) - allowed_keys:
+                raise AuditMetadataValueViolation(field, "contains an invalid provenance object")
+            try:
+                validate_public_campaign_label(
+                    str(row.get("variant_name") or ""),
+                    field_name="variant_name",
+                )
+            except ValueError as exc:
+                raise AuditMetadataValueViolation(
+                    field,
+                    "contains an invalid public provenance label",
+                ) from exc
+            generation_mode = str(row.get("generation_mode") or "")
+            reviewed_generator_labels = {
+                "supervisor": "Databricks Agent Responses",
+                "reviewed_fallback": "Reviewed campaign framework",
+                "operator": "Operator edited",
+            }
+            if generation_mode not in reviewed_generator_labels:
+                raise AuditMetadataValueViolation(field, "contains an invalid generation mode")
+            if row.get("generator_label") != reviewed_generator_labels[generation_mode]:
+                raise AuditMetadataValueViolation(
+                    field,
+                    "contains a generator label that does not match its generation mode",
+                )
+            proof_fields = allowed_keys - {
+                "variant_name",
+                "generation_mode",
+                "generator_label",
+            }
+            present_proof_fields = proof_fields.intersection(row)
+            if present_proof_fields and present_proof_fields != proof_fields:
+                raise AuditMetadataValueViolation(field, "contains a partial provenance proof")
+            has_proof = present_proof_fields == proof_fields
+            if not has_proof:
+                continue
+            if row.get("provenance_key_id") is None:
+                raise AuditMetadataValueViolation(field, "contains a partial provenance proof")
+            if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", str(row["provenance_key_id"])):
+                raise AuditMetadataValueViolation(field, "contains an invalid provenance key id")
+            for timestamp_key in ("provenance_issued_at", "provenance_expires_at"):
+                try:
+                    parsed = datetime.fromisoformat(str(row[timestamp_key]).replace("Z", "+00:00"))
+                except ValueError as exc:
+                    raise AuditMetadataValueViolation(
+                        field,
+                        "contains an invalid provenance timestamp",
+                    ) from exc
+                if parsed.tzinfo is None:
+                    raise AuditMetadataValueViolation(
+                        field,
+                        "contains a timezone-naive provenance timestamp",
+                    )
+            for hash_key in (
+                "provenance_copy_hash",
+                "provenance_criteria_fingerprint",
+            ):
+                if re.fullmatch(r"[0-9a-f]{64}", str(row[hash_key])) is None:
+                    raise AuditMetadataValueViolation(field, "contains an invalid provenance hash")
+            performance_hash = row["provenance_performance_fingerprint"]
+            if (
+                performance_hash is not None
+                and re.fullmatch(
+                    r"[0-9a-f]{64}",
+                    str(performance_hash),
+                )
+                is None
+            ):
+                raise AuditMetadataValueViolation(
+                    field,
+                    "contains an invalid performance provenance hash",
+                )
     for field, value in _metadata_values_for(metadata, _BORROWER_ID_METADATA_KEYS):
         if value is None:
             continue
@@ -1438,10 +1545,33 @@ def _sanitize_metadata(metadata: dict[str, Any]) -> dict[str, Any]:
     for key in _FREE_TEXT_METADATA_KEYS:
         if key in cleaned and cleaned[key] is not None:
             cleaned[key] = scrub_free_text(str(cleaned[key]))
-            if key == "notes" and _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.search(str(cleaned[key])):
+            clean_text = str(cleaned[key])
+            if contains_protected_class_marketing_text(clean_text):
+                raise AuditMetadataValueViolation(
+                    key,
+                    "must not contain protected-class targeting language",
+                )
+            if contains_unsupported_borrower_qualification_claim(clean_text):
+                raise AuditMetadataValueViolation(
+                    key,
+                    "must not contain unsupported borrower-facing claims",
+                )
+            if (
+                contains_borrower_copy_contextual_name(clean_text)
+                or (key == "notes" and _HUMAN_NAME_OR_PLACEHOLDER_PATTERN.search(clean_text))
+                or (
+                    key not in _BORROWER_DRAFT_METADATA_KEYS
+                    and _AUDIT_HUMAN_IDENTITY_DIRECTIVE_RE.search(clean_text)
+                )
+            ):
                 raise AuditMetadataValueViolation(
                     key,
                     "must not contain human-name-shaped text or unresolved placeholders",
+                )
+            if contains_borrower_cta_contradiction(clean_text):
+                raise AuditMetadataValueViolation(
+                    key,
+                    "must not contain a contact action that contradicts consent or response handling",
                 )
     return cleaned
 

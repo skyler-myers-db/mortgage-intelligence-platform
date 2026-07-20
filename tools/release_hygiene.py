@@ -24,6 +24,7 @@ BANNED_DIR_NAMES = {
     ".vscode",
     "__pycache__",
     "coverage",
+    "mlruns",
     "node_modules",
     "playwright-report",
     "screenshots",
@@ -34,6 +35,7 @@ BANNED_DIR_NAMES = {
 BANNED_FILE_NAMES = {
     ".DS_Store",
     ".mcp.json",
+    "mlflow.db",
     "trace.zip",
 }
 

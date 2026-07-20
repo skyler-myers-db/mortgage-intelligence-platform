@@ -193,6 +193,10 @@ describe('OfferOrchestrator route behavior', () => {
     appMocks.saveDraft.mockReset().mockImplementation(async (draft: SavedDraftInput) => {
       const saved: SavedDraft = {
         ...draft,
+        offer_code: DRAFT.offer_code,
+        channel: DRAFT.channel,
+        subject: DRAFT.subject,
+        body: DRAFT.body,
         saved_at: '2026-07-13T12:00:00Z',
         updated_at: '2026-07-13T12:00:00Z',
       };
@@ -338,6 +342,20 @@ describe('OfferOrchestrator route behavior', () => {
       expect.any(AbortSignal),
       { campaign_id: campaignId, variant_name: variantName },
     );
+    const channelRestriction = container.querySelector('[data-testid="campaign-channel-restriction"]');
+    const email = button('EMAIL');
+    const sms = button('SMS');
+    const directMail = button('Direct mail');
+    expect(channelRestriction?.textContent).toContain('saved audited EMAIL copy');
+    expect(email.disabled).toBe(false);
+    expect(sms.disabled).toBe(true);
+    expect(directMail.disabled).toBe(true);
+    expect(sms.getAttribute('aria-describedby')).toBe(channelRestriction?.id);
+    expect(directMail.getAttribute('aria-describedby')).toBe(channelRestriction?.id);
+
+    act(() => sms.click());
+    act(() => directMail.click());
+    expect(apiMocks.draftOutreach).toHaveBeenCalledTimes(1);
 
     await act(async () => {
       container.querySelector<HTMLButtonElement>('[data-testid="hero-approve"]')!.click();
@@ -347,6 +365,7 @@ describe('OfferOrchestrator route behavior', () => {
     expect(apiMocks.approve.mock.calls[0][1]).toMatchObject({
       campaign_id: campaignId,
       variant_name: variantName,
+      channel: 'email',
     });
   });
 
@@ -378,6 +397,8 @@ describe('OfferOrchestrator route behavior', () => {
   it('never hydrates operator-saved copy over a fresh audited proof', async () => {
     appMocks.savedDrafts[`${BORROWER_ID}::email`] = {
       borrower_id: BORROWER_ID,
+      generation_id: '11111111-1111-4111-8111-111111111111',
+      response_hash: 'a'.repeat(64),
       offer_code: 'rate_term_refi',
       channel: 'email',
       subject: 'Saved operator subject',
@@ -415,7 +436,7 @@ describe('OfferOrchestrator route behavior', () => {
     const pendingSave = deferred<SavedDraft>();
     appMocks.saveDraft.mockImplementation((draft: SavedDraftInput) => (
       pendingSave.promise.then((saved) => {
-        appMocks.savedDrafts[`${draft.borrower_id}::${draft.channel}`] = saved;
+        appMocks.savedDrafts[`${draft.borrower_id}::${saved.channel}`] = saved;
         return saved;
       })
     ));
@@ -432,6 +453,8 @@ describe('OfferOrchestrator route behavior', () => {
 
     await act(async () => pendingSave.resolve({
       borrower_id: BORROWER_ID,
+      generation_id: DRAFT.generation_id,
+      response_hash: DRAFT.response_hash,
       offer_code: 'rate_term_refi',
       channel: 'email',
       subject: 'email subject',

@@ -71,11 +71,14 @@ def tool_steps(
     supervisor_override = bool(copilot_evidence.workflow_override_review_required)
     if supervisor_override:
         planner_detail = (
-            "Databricks Agent Responses selected a different allowlisted workflow than the deterministic fallback; "
-            "human review is required before acting."
+            "Databricks Agent Responses suggested a different allowlisted workflow; the app retained "
+            "the exact deterministic workflow and recorded the mismatch for review."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
-        planner_detail = "Databricks Agent Responses selected one allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
+        planner_detail = (
+            "Databricks Agent Responses agreed with deterministic routing on one allowlisted "
+            "workflow; deterministic tools own counts, filters, audit, and handoff."
+        )
     else:
         planner_detail = "Reviewed planner selected an allowlisted workflow; deterministic tools own counts, filters, audit, and handoff."
     planner_step = GrowthAgentToolStep(
@@ -250,11 +253,11 @@ def policy_checks(
         override = bool(copilot_evidence.workflow_override_review_required)
         checks.append(
             GrowthAgentPolicyCheck(
-                label="Databricks Agent Responses workflow selection",
+                label="Databricks Agent Responses suggestion reconciliation",
                 status="review_required" if override else "passed",
                 detail=(
-                    f"Databricks Agent Responses selected {selected}; deterministic fallback candidate was "
-                    f"{deterministic}. Review the workflow choice before acting."
+                    f"Databricks Agent Responses suggested {selected}; the app retained and executed "
+                    f"the exact deterministic workflow {deterministic}. Review the mismatch before acting."
                     if override
                     else f"Databricks Agent Responses and deterministic planner agreed on {selected}."
                 ),
@@ -328,14 +331,14 @@ def governance_chips(
     if copilot_evidence.workflow_override_review_required:
         framework_status: Literal["passed", "review_required", "not_attached"] = "review_required"
         framework_detail = (
-            "Databricks Agent Responses selected a different reviewed workflow than the "
-            "deterministic fallback; review the workflow choice before acting."
+            "Databricks Agent Responses suggested a different reviewed workflow; the app retained "
+            "the exact deterministic workflow and recorded the suggestion only as review evidence."
         )
     elif copilot_evidence.execution_mode == "agent_framework":
         framework_status = "passed"
         framework_detail = (
-            "Databricks Agent Responses selected a reviewed workflow; reviewed "
-            "deterministic tools executed the run."
+            "Databricks Agent Responses agreed with deterministic routing on a reviewed "
+            "workflow; reviewed deterministic tools executed the run."
         )
     else:
         framework_status = "not_attached"

@@ -17,7 +17,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ALLOWLIST = ROOT / "tools" / "file_size_allowlist.json"
-DEFAULT_INCLUDE_DIRS = ("backend", "frontend/src", "tools")
+DEFAULT_INCLUDE_DIRS = ("backend", "frontend/src", "jobs", "tools")
 DEFAULT_SUFFIXES = {".py", ".ts", ".tsx", ".js", ".jsx", ".mjs", ".css"}
 DEFAULT_EXCLUDE_PARTS = {
     ".git",

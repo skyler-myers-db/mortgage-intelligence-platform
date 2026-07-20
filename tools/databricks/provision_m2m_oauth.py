@@ -231,8 +231,8 @@ def _grant_can_use_on_app(
         msg = str(exc).lower()
         if "not found" in msg or "does not exist" in msg:
             raise SystemExit(
-                f"App {app_name!r} not found. Run `databricks bundle deploy -t dev` "
-                "first so the App resource exists, then re-run this provisioner."
+                f"App {app_name!r} not found. Run `./scripts/deploy.sh -t dev` "
+                "so the signed command of record creates it, then re-run this provisioner."
             ) from exc
         raise _wrap_admin_error(exc, step="update_permissions on app") from exc
 

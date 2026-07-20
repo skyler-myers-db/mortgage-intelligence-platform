@@ -74,6 +74,8 @@ psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=
 If the Lakebase instance itself is stopped, bounce it:
 
 ```bash
+# The deployed job must already be bound to the reviewed
+# ai_gateway_verifier_client_id bundle variable by scripts/deploy.sh.
 databricks bundle run mip_lakebase_migrate -t dev
 ```
 
@@ -304,24 +306,35 @@ That single invocation executes:
    `.env.local` to `BUNDLE_VAR_sql_warehouse_id` / `BUNDLE_VAR_genie_space_id`).
 3. `tools/databricks/bundle_env.py plan -t dev` — read-only direct
    deployment plan. Review this output before a real app/customer deploy.
-4. `tools/databricks/bundle_env.py deploy -t dev` — env-aware wrapper
-   around direct `databricks bundle deploy`; SQL warehouse, app, jobs,
-   pipelines, Lakebase instance, MLflow experiment, dashboards.
-5. `databricks apps deploy mip-app --mode SNAPSHOT` — promotes the
-   uploaded bundle source to the running app compute.
-6. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
+4. `tools/databricks/bundle_env.py deploy -t dev --select ...` — deploys
+   every non-App bundle resource (warehouse, jobs, pipelines, Lakebase,
+   experiment, and dashboards) while explicitly excluding `apps.mip_app`.
+5. `tools.databricks.app_resource_bindings` resolves the now-concrete IDs and
+   applies only the App resource bindings. A first install creates the App with
+   `databricks apps create --no-compute`; an upgrade uses `apps update`. The
+   postflight requires exact bindings and proves no source deployment or
+   compute transition occurred. First install then binds that stopped App into
+   DAB state. Failed first installs unbind and delete only the newly created,
+   unsigned App so a normal retry starts from authoritative absence.
+6. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
+   `schema.sql` + `seed_campaigns.sql` and the exact App/verifier role-grant
+   postflight. This runs only after the live database binding has provisioned
+   the App role and before any App source activation.
+7. The script submits its generated, governed App deployment payload to promote
+   the uploaded bundle source only after Lakebase migration and treatment
+   constraints have converged. Operators must not replace this phase with a bare
+   App deployment command.
+8. `databricks bundle run mip_fred_rates_ingest -t dev` — FRED
    MORTGAGE30US into `silver.market_rates_weekly`.
-7. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
+9. `databricks bundle run mip_refresh_silver -t dev` — Cotality Delta
    Share → `mip.silver.*`; geography coverage is discovered from source
    rows with non-null states.
-8. `databricks bundle run mip_lakebase_migrate -t dev` — Postgres
-   `schema.sql` + `seed_campaigns.sql` (both idempotent).
-9. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
+10. `databricks bundle run mip_refresh_scores -t dev` — CTAS chain:
    `property_owner_bridge` → `evidence_events` → `borrower_360` →
    `lead_scores` → `lead_population` → `segment_population` →
    `lockin_cohort` → `borrower_dossier` → **`refresh_semantics_views`**
    (the three `mip.semantics.*` metric views Genie binds to).
-10. The deploy script runs the warehouse lifecycle sync and records the daily
+11. The deploy script runs the warehouse lifecycle sync and records the daily
    funnel snapshot. The lifecycle table is sparse; borrowers with no event
    resolve to `pending` / `none` through consumer `LEFT JOIN` + `COALESCE`.
    After deploy, accepted approval/rejection hooks apply a cheap changed-row
@@ -335,7 +348,7 @@ That single invocation executes:
    Deploy and durable repair runs remove only legacy untouched `pending` /
    `none` rows before the sparse MERGE. Per-event hooks skip that cleanup, so
    user actions never scan or rewrite the population-wide table.
-11. `databricks bundle run mip_growth_agent_monitor_scheduler -t dev` —
+12. `databricks bundle run mip_growth_agent_monitor_scheduler -t dev` —
    optional draft-only Growth Agent automation. It calls the deployed app's
    admin-gated `/api/v1/growth-agent/monitors/run-due-all` endpoint, refreshes
    due saved watchlists for their original owners, and creates Slack/Teams
@@ -345,18 +358,18 @@ That single invocation executes:
    be admitted by the app's admin policy (`MIP_ADMIN_IDENTITIES` or
    `MIP_ADMIN_EMAILS`) before the job is unpaused; otherwise the
    all-actor endpoint fails closed with `403 {"detail":"forbidden"}`.
-12. `python tools/databricks/provision_genie_space.py` — reads
+13. `python tools/databricks/provision_genie_space.py` — reads
    `genie/mortgage_lead_intelligence_space.yml`, creates or updates
    the Genie Space, binds trusted assets, writes `genie/space_id.txt`.
-13. `./scripts/smoke_live.sh` — verify the app and all four deps up.
+14. `./scripts/smoke_live.sh` — verify the app and all four deps up.
 
 Flags on `scripts/deploy.sh` for partial re-runs:
 
 | Flag | Effect |
 |---|---|
 | `--dry-run` | print the plan, make no changes |
-| `--skip-silver` | skip steps 5–6 (fast path when silver is already fresh) |
-| `--skip-smoke` | skip step 11 |
+| `--skip-silver` | skip steps 8–9 (fast path when silver is already fresh) |
+| `--skip-smoke` | skip step 14 |
 | `--no-confirm` | skip the interactive `y/N` prompt |
 
 Every step is idempotent — re-running `./scripts/deploy.sh` is safe
@@ -387,7 +400,7 @@ synchronously; when an app-hook MERGE fails, its queued repair job provides
 the durable run state. If the audit ledger is unavailable, Admin Data
 operations do not launch compute.
 The bundle-defined FRED, lifecycle fallback, and Growth Agent monitor
-schedules deploy **paused by default** in dev, prod, and prod_otlp so
+schedules deploy **paused by default** in dev and prod so
 intermittent development and demo workspaces do not burn recurring
 warehouse/Lakebase compute. If a customer later wants scheduled refreshes or
 scheduled watchlist-draft creation, unpause the schedule explicitly in that

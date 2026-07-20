@@ -22,12 +22,16 @@ FastAPI serves `frontend/dist` automatically if present.
 
 1. Fill `.env.local` with workspace, warehouse, lender/runtime values, and the
    deployment-owned resource namespace (or set the corresponding GitHub
-   Actions variables); customer forks should set the public brand before deploy:
+   Actions variables). The exact lender-name/NMLS pair must already exist in
+   the source-controlled reviewed identity registry in
+   `backend/schemas/lender_identity.py`; customer onboarding adds that pair in
+   an independently reviewed PR before these deployment variables are set:
 
 ```bash
-MIP_LENDER_NAME="Acme Mortgage"
+MIP_LENDER_NAME="<exact reviewed customer legal lender name>"
+MIP_LENDER_NMLS_ID="<matching reviewed customer lender NMLS id>"
 # Optional; defaults from MIP_LENDER_NAME when unset.
-MIP_TENANT_ID="acme_mortgage"
+MIP_TENANT_ID="<customer_lender_slug>"
 MIP_DEFAULT_CATALOG="acme_mip"
 # Use a deployment-owned namespace in any isolated staging/customer workspace.
 MIP_APP_NAME="acme-mip-app"
@@ -161,11 +165,72 @@ configure the two distinct Ed25519 private keys
 secrets documented below. Store its derived public key separately as the
 `MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY` GitHub Actions variable; nightly
 read-only jobs never receive the private key. Only then run
-`./scripts/deploy.sh -t dev` or dispatch `deploy-dev.yml`. Immediately after bundle apply creates the App, deploy
-re-resolves its service principal and grants `CAN_USE` to the exact normal,
+`./scripts/deploy.sh -t dev` or dispatch `deploy-dev.yml`. Bundle apply first
+creates only non-App dependencies. Deploy then resolves their concrete IDs and
+applies the App resource bindings without a source deployment: a new App is
+created stopped with `--no-compute`, while an existing App update must preserve
+its exact active/pending deployment and compute state. Only then does deploy
+re-resolve the App service principal and grant `CAN_USE` to the exact normal,
 operator2, and admin client IDs with `--no-mint-secret`. The release probe,
 verifier, and runtime retain no persistent App access; verifier/runtime resource
 reconciliation remains later, after their resources exist.
+
+The deployment-wide App fence is an append-only signed generation chain under
+`/.mip-deployment-leases`. Acquire, renewal, release, and authorized expired
+takeover each contend on the one deterministic successor path with Workspace
+Files create-without-overwrite; no authoritative generation is overwritten or
+deleted. A signed head file is only a read accelerator, so stale, missing, or
+corrupt hint state falls back to the canonical chain and cannot select a
+winner. Active leases have a six-hour absolute lifetime. Keep every retired
+public key, oldest first, in the public GitHub Actions variable
+`MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`; private keys are still destroyed
+at retirement. Each successor records the public-key epoch and rejects epoch
+regression. The signed chain retains its original recovery root through every
+release, so a killed deploy can present that exact root for an expired takeover
+even when no first-install journal exists. A stranded legacy v2 fence is
+migrated append-only only after its expiry plus the five-minute quiescence
+margin and that exact durable recovery authority.
+
+Before the first Apps API create, deploy writes a signed, lease-bound ownership
+journal under `/.mip-deployment-leases/<app>.first-install.json`. Journal v3
+records the workspace, deployer identity, source revision, original lease and
+bounded creation window, exact resolved resource bindings, and a random marker
+embedded in the new App description. The successful Apps create response is
+captured to a mode-`0600` file; before any bundle bind, deploy adds its
+immutable App object ID plus service-principal client and SCIM IDs to the signed
+journal and proves the live App still has those exact IDs. If the process is
+lost after create but before that claim, the next deployment queries the
+server-owned `system.access.audit` `apps/createApp` event. Recovery requires one
+successful event in the signed workspace/actor/time window, an exact parsed
+request payload, and an audited result App ID equal to the current live App ID;
+only then are the live service-principal IDs signed. Missing or delayed audit
+evidence is polled and authorizes no App mutation. The App-create authorization
+lasts 15 minutes and the audit settlement interval lasts one additional hour,
+keeping reconciliation inside the two-hour deploy job limit. An absent App
+cannot make its intent disappear until both intervals have closed. During settlement, deploy
+rechecks both live App inventory and the exact audit query every 30 seconds. A
+zero-row query before that boundary is delayed evidence, never negative proof;
+the journal is retired only after the final post-boundary query and App
+recheck are both still absent.
+
+If the runner is interrupted after either identity-claim path but before the
+first signed last-good capture, an ordinary later deployment stops and
+quarantines the App, quiesces its treatment authority, removes any partial
+bundle binding, and deletes it only when the live creator, marker, resources,
+and all three immutable App identity fields still match that signed journal.
+The bundle-binding compensation is armed before the remote bind, and an
+ambiguous unbind leaves both the stopped App and signed journal intact for a
+later lease to reconcile. App deletion itself is performed only by the journal
+verifier; a commit-then-timeout is resolved by re-reading exact App absence. An
+App without the exact journal is never inferred to be owned by the failed run;
+it remains on the explicit unsigned-App rebase path. Immediately after signed
+last-good capture, deploy disarms first-install deletion and advances to the
+signed-green compensation state before retiring the journal. A failed or
+ambiguous journal retirement therefore preserves the signed customer App and is
+retried by the next deployment. The journal is cleared only after audit-bound
+proof that App creation did not commit or after signed rollback state is
+verified, so a runner crash cannot strand an automatically trusted unsigned
+App.
 
 An explicit unsigned-App rebase stops the App and removes all direct non-manager
 `CAN_USE` before any restart. After the green candidate deploy, the script first
@@ -364,10 +429,14 @@ registration or cleanup, endpoint creation, App ACL convergence, Supervisor
 rename, and blue-resource deletion. Its one-minute heartbeat renews the signed
 fence. A losing contender reads the existing lease without changing that ACL,
 and a heartbeat exits without renewal as soon as it is no longer a child of the
-deployer that launched it. An expired lease is never auto-replaced: after a
-crashed runner, an administrator must first prove no deployment is active
-before removing the
-stale file. The lease UUID is injected into the App payload and authenticated
+deployer that launched it. If process death follows the first signed generation
+but precedes its ACL postflight, only that signed holder may converge the exact
+holder/writer ACL before reading its recovery root. After the signed lease
+expires (with renewal bounded by the six-hour cap), the next deployment
+presents that durable root and wins the one deterministic non-overwriting
+successor path. No journal, delete, or overwrite is involved, so an active,
+unrelated, or changed fence cannot be replaced. The
+lease UUID is injected into the App payload and authenticated
 health response, and capture revalidates the live signed lease before and after
 activation. Capture records the
 `green_treatment_pending_capture` compensation state and advances to
@@ -425,8 +494,11 @@ Rotate the key by setting the new signing key and temporarily setting
 reconciliation verifies the signed last-good record with that bounded previous
 key and immediately re-signs it with the new current key; the promoted App then
 receives only the new public key and generates a fresh exact-row proof. Remove
-the previous-key setting after that successful deploy. Any other key or rows
-signed by the prior key then fail closed.
+the previous-key setting after that successful deploy, but first append its
+public key oldest-first to `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS` so the
+append-only lease and first-install journal chains remain readable. Historical
+keys are accepted only for those chain-verification paths; exact-row promotion
+does not accept them, and proof rows signed by the prior key then fail closed.
 
 Proxy-model provenance uses an independent Ed25519 authority:
 `MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY`. The deploy preflight rejects a
@@ -498,26 +570,14 @@ which immediately invalidates old tokens while keeping the static Databricks
 App resource valid. An ordinary deploy with no configured previous key does
 the same before emitting a payload without the previous environment binding.
 
-After the command-of-record first install has created the governed UC
-namespace, the Entrada dev target also supports the plain Databricks bundle
-resource-recovery path:
-
-```bash
-databricks bundle deploy -t dev --profile <reviewed-workspace-profile>
-```
-
-That command updates bundle-managed resources and now binds the governed
-Entrada Genie space directly, so it no longer sends the placeholder
-`00000000PLACEHOLDER` to Databricks Apps. It does not run the rest of the
-shipping workflow: use `./scripts/deploy.sh` when you also need frontend build,
-app snapshot promotion, refresh jobs, Genie rebinding, and smoke checks.
-
-For a narrow resource-only recovery, `make bundle-validate`,
-`make bundle-plan`, and `make bundle-deploy` use
-`tools/databricks/bundle_env.py`, but they do not promote app source. Run
-`./scripts/deploy.sh` for promotion so the complete resource bindings, durable
-secrets, refreshes, and smoke gates are preserved. Do not invoke a bare
-`databricks apps deploy`; it bypasses the required full deployment payload.
+`make bundle-validate` and `make bundle-plan` remain read-only diagnostics.
+The mutable `make bundle-deploy` and `make bundle-deploy-dev` aliases are
+retired and fail closed. The internal bundle wrapper accepts mutation only
+with exact non-App selectors supplied by `scripts/deploy.sh`; it rejects
+unrestricted or App selectors. Always rerun `./scripts/deploy.sh` for recovery
+so complete resource bindings, durable secrets, the signed source contract,
+refreshes, and smoke gates are preserved. A direct Apps promotion bypasses the
+required full deployment payload and is unsupported.
 
 For disaster-recovery rollback paths, including Lakebase point-in-time
 restore, prior app snapshots, source-regression rollback via
@@ -584,11 +644,11 @@ attached; no app secret resource is attached for collector headers.
 `log_export: stdout-only`. The Databricks CLI `apps deploy` command in
 use here (`0.299.1`) has no top-level `--env` flag, but the underlying
 API accepts deployment `env_vars` via `--json`. That list replaces the
-app.yaml env list, so one-off proof deploys must include the normal
-resource-derived env vars as well as `MIP_OTEL_ENDPOINT`. For production
-collector headers, use the `prod_otlp` app secret resource and a
-deployment payload with `value_from: otel_headers`; do not paste
-collector tokens into `app.yaml`, a bundle var, or shell history.
+app.yaml env list. The historical proof used that API directly; current
+operators must use `scripts/deploy.sh`, which attaches the `otel_headers` App
+secret resource and emits the full runtime contract plus
+`value_from: otel_headers`. Do not paste collector tokens into `app.yaml`, a
+bundle var, process environment, or shell history.
 
 App-side proof was completed on 2026-05-14 with temporary deployment
 `01f14fe0164a1b6388f9d240679492db`: `/api/v1/admin/health` reported
@@ -609,17 +669,17 @@ deployment `01f14ff2c4cd10b99ebad8f8785c307f` with no OTLP env vars, the
 temporary app secret resource removed, and the temporary Databricks
 Secret deleted.
 
-For customer production, use the non-default `prod_otlp` target after the
-customer provides a collector endpoint and a Databricks Secret containing
-`MIP_OTEL_HEADERS`. The target attaches an app secret resource named
-`otel_headers`; `tools/databricks/otlp_deploy_payload.py` then emits the
-full deployment `env_vars` list with `MIP_OTEL_HEADERS` set by
-`value_from: otel_headers`. Do not add `MIP_OTEL_HEADERS` directly to
-`app.yaml`; that would make ordinary dev deploys depend on a secret that
-does not exist in every workspace.
+For customer production, store the collector headers in a dedicated Databricks
+Secret, then set `MIP_OTEL_ENDPOINT`, `MIP_OTEL_HEADERS_SECRET_SCOPE`, and
+`MIP_OTEL_HEADERS_SECRET_KEY` for the ordinary governed `prod` deployment.
+`scripts/deploy.sh` adds the `otel_headers` resource to the existing App target
+and overlays `MIP_OTEL_ENDPOINT` plus `value_from: otel_headers` onto the same
+complete signed payload used by every release. It rejects partial settings,
+plaintext `MIP_OTEL_HEADERS`, and credential-bearing endpoints before mutation.
+Do not add collector values to `app.yaml` or deploy the App separately.
 
 All MIP refresh and automation schedules deploy paused by default, including
-`prod` and `prod_otlp`. The app's Admin **Data operations** panel is the
+`prod`. The app's Admin **Data operations** panel is the
 normal customer-facing refresh surface. The Growth Agent monitor scheduler is
 also paused by default; when an operator deliberately runs or unpauses it, it
 only refreshes saved reviewed watchlists and creates Slack/Teams review drafts.
@@ -629,12 +689,11 @@ cadence and confirms the target writes to an isolated catalog; otherwise
 multiple bundle targets can contend on the same Unity Catalog tables and burn
 avoidable compute.
 
-If OTLP is being added to an already-deployed app in the same workspace,
-avoid deploying a second bundle target that tries to recreate existing
-Lakebase or warehouse resources unless that target has imported/owns
-those resources. In that upgrade path, preserve the existing app
-resources, add the `otel_headers` app secret resource, then deploy using
-the helper-generated full `env_vars` payload.
+Adding OTLP to an existing App uses the same target that already owns its
+Lakebase and warehouse resources. Re-run `scripts/deploy.sh -t prod`; its
+source-free resource reconciliation preserves the active signed deployment,
+adds `otel_headers`, and only then runs the normal migration, cutover, signed
+rollback, and smoke gates.
 
 ## Release checklist
 

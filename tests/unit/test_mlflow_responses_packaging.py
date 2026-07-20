@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from collections.abc import Iterator
+from pathlib import Path
+
+import mlflow
 import mlflow.pyfunc
 import pytest
 from mlflow.pyfunc import ResponsesAgent
@@ -8,6 +12,31 @@ from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
 from tools.databricks.mlflow_responses_packaging import (
     responses_agent_packaging_validation,
 )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_mlflow_store(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Iterator[None]:
+    """Never let real packaging validation create root-local MLflow state."""
+
+    original_tracking = mlflow.get_tracking_uri()
+    original_registry = mlflow.get_registry_uri()
+    database_uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
+    monkeypatch.setenv("MLFLOW_TRACKING_URI", database_uri)
+    monkeypatch.setenv("MLFLOW_REGISTRY_URI", database_uri)
+    mlflow.set_tracking_uri(database_uri)
+    mlflow.set_registry_uri(database_uri)
+    mlflow.tracing.disable()
+    try:
+        yield
+    finally:
+        mlflow.flush_trace_async_logging()
+        mlflow.flush_async_logging()
+        mlflow.set_tracking_uri(original_tracking)
+        mlflow.set_registry_uri(original_registry)
+        mlflow.tracing.enable()
 
 
 class _LiveOnlyAgent(ResponsesAgent):

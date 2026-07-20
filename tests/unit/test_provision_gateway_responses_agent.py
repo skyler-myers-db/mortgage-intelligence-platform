@@ -1140,11 +1140,15 @@ def test_ensure_gateway_agent_creates_one_responses_endpoint_with_exact_gateway_
     created = serving.created[0]
     assert created["route_optimized"] is False
     assert {(tag.key, tag.value) for tag in created["tags"]} == {
-        ("mip.proxy_source_hash", deployment.source_hash),
-        ("mip.upstream_supervisor_endpoint", "managed-supervisor"),
+        ("mip_proxy_source_hash", deployment.source_hash),
+        ("mip_upstream_supervisor_endpoint", "managed-supervisor"),
     }
-    assert gateway.SOURCE_HASH_TAG == "mip.proxy_source_hash"
-    assert gateway.UPSTREAM_TAG == "mip.upstream_supervisor_endpoint"
+    assert gateway.SOURCE_HASH_TAG == "mip_proxy_source_hash"
+    assert gateway.UPSTREAM_TAG == "mip_upstream_supervisor_endpoint"
+    assert all(
+        1 <= len(key) <= 255 and not set(key).intersection(".,=/:")
+        for key in (gateway.SOURCE_HASH_TAG, gateway.UPSTREAM_TAG)
+    )
     assert gateway.MODEL_SOURCE_HASH_TAG == "mip_proxy_source_hash"
     assert gateway.MODEL_UPSTREAM_TAG == "mip_upstream_supervisor_endpoint"
     entity = created["config"].served_entities[0]
