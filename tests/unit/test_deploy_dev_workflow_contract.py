@@ -619,6 +619,7 @@ def _run_app_failure_compensation_harness(
     lakebase_runtime_access_proven: bool = True,
     first_install_created: bool = False,
     journal_status: str = "recover",
+    expected_identity: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], str]:
     calls = tmp_path / f"app-compensation-{state}.log"
     fake_python = tmp_path / f"fake-python-{state}.sh"
@@ -665,6 +666,7 @@ set -u
 DRY_RUN=0
 APP_FAIL_CLOSED_ARMED=1
 APP_FAIL_CLOSED_NAME=mip-app
+APP_EXPECTED_IDENTITY_ARGS=()
 APP_UPGRADE_STATE={shlex.quote(state)}
 APP_ROLLBACK_SECRET_SCOPE=mip
 APP_SIGNED_BLUE_AVAILABLE=1
@@ -693,6 +695,7 @@ PYTHON={shlex.quote(str(fake_python))}
 RED=""
 YLW=""
 RST=""
+{"APP_EXPECTED_IDENTITY_ARGS=(--expected-app-id app-object-id --expected-client-id app-client-id --expected-scim-id app-scim-id)" if expected_identity else ""}
 run_with_account_identity() {{ "$@"; }}
 run_with_proof_signing_authority() {{ "$@"; }}
 run_with_lakebase_bootstrap_authority() {{ "$@"; }}
@@ -1057,6 +1060,28 @@ def test_existing_app_is_stopped_and_identity_pinned_before_binding_update() -> 
     assert '--expected-scim-id "$_BINDING_APP_SCIM_ID"' in script[stop:update]
 
 
+def test_all_post_inventory_name_mutations_have_exact_identity_boundaries() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    update = script.index('databricks apps update "$_GRANTS_APP_NAME"')
+    assert script.rfind('assert_expected_app_identity "$_GRANTS_APP_NAME"', 0, update) > 0
+    assert script.index('assert_expected_app_identity "$_GRANTS_APP_NAME"', update) > update
+
+    wait_helper = _shell_function("wait_for_app_deployable")
+    start = wait_helper.index('databricks apps start "$APP_NAME"')
+    assert wait_helper.rfind('assert_expected_app_identity "$APP_NAME"', 0, start) > 0
+    assert wait_helper.index('assert_expected_app_identity "$APP_NAME"', start) > start
+
+    deploy_helper = _shell_function("deploy_app_snapshot")
+    deploy = deploy_helper.index('databricks apps deploy "$APP_NAME"')
+    assert deploy_helper.rfind('assert_expected_app_identity "$APP_NAME"', 0, deploy) > 0
+    assert deploy_helper.index('assert_expected_app_identity "$APP_NAME"', deploy) > deploy
+
+    no_proof = _unsigned_candidate_rollback_block()
+    final_stop = no_proof.index("tools.databricks.stop_app_fail_closed")
+    final_quiesce = no_proof.index("converge_app_treatment_access quiesce")
+    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in no_proof[final_stop:final_quiesce]
+
+
 def test_lakebase_access_proof_brackets_binding_role_rotation_and_migration() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     initial_proof = script.index("LAKEBASE_RUNTIME_ACCESS_PROVEN=0")
@@ -1092,6 +1117,54 @@ def test_unproven_lakebase_access_forces_stop_without_signed_blue_restore(
     assert "converge_campaign_treatment_access" in calls
 
 
+def test_legacy_rebase_failure_compensation_retains_exact_app_identity(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="first_install",
+        rollback_result=0,
+        stop_result=0,
+        expected_identity=True,
+        lakebase_runtime_access_proven=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    stop_call = next(line for line in calls.splitlines() if "stop_app_fail_closed" in line)
+    assert "--expected-app-id app-object-id" in stop_call
+    assert "--expected-client-id app-client-id" in stop_call
+    assert "--expected-scim-id app-scim-id" in stop_call
+
+
+def test_legacy_rebase_compensation_refuses_mutation_after_identity_replacement(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_app_failure_compensation_harness(
+        tmp_path,
+        state="first_install",
+        rollback_result=0,
+        stop_result=1,
+        expected_identity=True,
+        lakebase_runtime_access_proven=False,
+    )
+
+    assert result.returncode == 1
+    stop_call = next(line for line in calls.splitlines() if "stop_app_fail_closed" in line)
+    assert "--expected-app-id app-object-id" in stop_call
+    assert "converge_app_release_access" not in calls
+    assert "converge_campaign_treatment_access" not in calls
+
+
+def test_secondary_treatment_compensation_reauthenticates_pinned_app_first() -> None:
+    helper = _shell_function("quiesce_app_treatment_after_failed_stop")
+    identity_check = helper.index("--assert-identity-only")
+    treatment = helper.index("tools.databricks.converge_campaign_treatment_access")
+
+    assert identity_check < treatment
+    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in helper[:treatment]
+    assert "refusing secondary treatment mutation" in helper
+
+
 def test_every_lakebase_role_recovery_gets_bounded_signing_and_account_authority() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     command = '"$PYTHON" -m tools.databricks.converge_lakebase_oauth_role'
@@ -1114,14 +1187,8 @@ def test_lakebase_bootstrap_receives_only_explicit_fresh_m2m_control_names() -> 
 
     assert 'control_client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"' in helper
     assert 'control_client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"' in helper
-    assert (
-        'export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$control_client_id"'
-        in helper
-    )
-    assert (
-        'export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET="$control_client_secret"'
-        in helper
-    )
+    assert 'export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$control_client_id"' in helper
+    assert 'export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET="$control_client_secret"' in helper
     assert "fresh OAuth-M2M Lakebase bootstrap control credentials are missing" in helper
     assert 'export DATABRICKS_CLIENT_SECRET="$control_client_secret"' not in helper
 
@@ -1496,6 +1563,8 @@ def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() ->
     assert "\"$DATABRICKS_RELEASE_PROBE_CLIENT_ID\" <<'PYEOF'" in script
 
     rebase = script.index('if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \\')
+    absence_gate = script.index("tools.databricks.app_rollback_bootstrap_gate", rebase)
+    fail_closed_arm = script.index("APP_FAIL_CLOSED_ARMED=1", absence_gate)
     stop = script.index("tools.databricks.stop_app_fail_closed", rebase)
     quarantine = script.index("tools.databricks.converge_app_release_access", stop)
     quarantined_state = script.index("APP_ACCESS_QUARANTINED=1", quarantine)
@@ -1511,7 +1580,10 @@ def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() ->
         first_snapshot_guard,
     )
     first_snapshot_else = script.index("\nelse\n", first_snapshot)
-    assert stop < quarantine < quarantined_state < treatment_quiesce < rebase_first_install
+    assert rebase < absence_gate < fail_closed_arm < stop < quarantine
+    assert stop < quarantined_state < treatment_quiesce < rebase_first_install
+    rebase_stop = script[stop:quarantine]
+    assert '"${APP_EXPECTED_IDENTITY_ARGS[@]}"' in rebase_stop
     assert rebase_first_install < first_snapshot_guard < first_snapshot < first_snapshot_else
     assert "_EXISTING_APP_SP_CLIENT_ID" not in script[first_snapshot_guard:first_snapshot]
 
@@ -1646,6 +1718,11 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
             APP_NAME=mip-app
             APP_SIGNED_BLUE_AVAILABLE=1
             APP_UPGRADE_STATE=green_unverified
+            APP_EXPECTED_IDENTITY_ARGS=(
+              --expected-app-id app-object-id
+              --expected-client-id app-client-id
+              --expected-scim-id app-scim-id
+            )
             TREATMENT_RUNTIME_QUIESCED=0
             PYTHON=/nonexistent/python
             step() {{ printf 'step:%s\n' "$1" >> {shlex.quote(str(calls))}; }}
@@ -1667,6 +1744,10 @@ def test_explicit_unsigned_candidate_rollback_delegates_to_quarantine_aware_rest
     log = calls.read_text(encoding="utf-8")
     assert log.index("stop the unproven candidate") < log.index("treatment:quiesce")
     assert log.index("treatment:quiesce") < log.index("restore-helper")
+    stop_call = next(line for line in log.splitlines() if "stop_app_fail_closed" in line)
+    assert "--expected-app-id app-object-id" in stop_call
+    assert "--expected-client-id app-client-id" in stop_call
+    assert "--expected-scim-id app-scim-id" in stop_call
     assert "mint_m2m_token" not in log
 
 
@@ -4179,8 +4260,8 @@ def test_exact_source_gate_rejects_dirty_uploaded_source(
 def test_deploy_timeout_covers_two_serial_auth_expiry_fences_with_margin() -> None:
     workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
     timeout_seconds = int(workflow["jobs"]["deploy"]["timeout-minutes"]) * 60
-    serialized_admission_seconds = 2 * (
-        admission._MAX_BOOTSTRAP_AUTH_TTL + orchestration._EXPIRY_SKEW
-    ).total_seconds()
+    serialized_admission_seconds = (
+        2 * (admission._MAX_BOOTSTRAP_AUTH_TTL + orchestration._EXPIRY_SKEW).total_seconds()
+    )
 
     assert timeout_seconds >= serialized_admission_seconds + 60 * 60

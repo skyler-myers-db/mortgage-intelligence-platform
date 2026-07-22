@@ -137,6 +137,33 @@ def _requested_can_use(mode: Mode, identities: dict[str, str]) -> tuple[str, ...
     )
 
 
+def _assert_app_identity(
+    workspace: Any,
+    *,
+    app_name: str,
+    expected_app_id: str,
+    expected_client_id: str,
+    expected_scim_id: str,
+) -> None:
+    expected = (
+        expected_app_id.strip(),
+        expected_client_id.strip(),
+        expected_scim_id.strip(),
+    )
+    if any(expected) != all(expected):
+        raise ValueError("expected App identity must provide ID, client ID, and SCIM ID together")
+    if not all(expected):
+        return
+    app = workspace.apps.get(app_name)
+    actual = (
+        _text(_field(app, "id")),
+        _text(_field(app, "service_principal_client_id")),
+        _text(_field(app, "service_principal_id")),
+    )
+    if actual != expected:
+        raise RuntimeError("Databricks App identity changed during release ACL convergence")
+
+
 def _request(principal: Principal, level: AppPermissionLevel) -> AppAccessControlRequest:
     field, value = principal
     return AppAccessControlRequest(permission_level=level, **{field: value})
@@ -174,6 +201,9 @@ def converge_app_release_access(
     normal_application_id: str,
     operator2_application_id: str,
     admin_application_id: str,
+    expected_app_id: str = "",
+    expected_client_id: str = "",
+    expected_scim_id: str = "",
 ) -> None:
     """Replace direct App access with the exact ACL for one release phase."""
 
@@ -186,6 +216,16 @@ def converge_app_release_access(
         admin_application_id=admin_application_id,
     )
     desired_can_use = _requested_can_use(mode, identities)
+    identity_args = {
+        "expected_app_id": expected_app_id,
+        "expected_client_id": expected_client_id,
+        "expected_scim_id": expected_scim_id,
+    }
+    # Databricks Apps v2 exposes ACL mutation only by App name, without an
+    # immutable-ID or conditional-version parameter. App managers are therefore
+    # a trusted control-plane boundary; exact pre/post checks make any breach
+    # fail rather than allowing the release to claim convergence.
+    _assert_app_identity(workspace, app_name=app, **identity_args)
     current = _inspect_acl(workspace.apps.get_permissions(app))
     direct_managers = frozenset(
         principal for principal, level in current.direct.items() if level == "CAN_MANAGE"
@@ -204,6 +244,7 @@ def converge_app_release_access(
         for application_id in desired_can_use
     )
     workspace.apps.set_permissions(app_name=app, access_control_list=requests)
+    _assert_app_identity(workspace, app_name=app, **identity_args)
     postflight = workspace.apps.get_permissions(app)
     _assert_postflight(
         postflight,
@@ -231,6 +272,9 @@ def main(argv: list[str] | None = None) -> int:
             dest=f"{role}_application_id",
             required=True,
         )
+    parser.add_argument("--expected-app-id", default="")
+    parser.add_argument("--expected-client-id", default="")
+    parser.add_argument("--expected-scim-id", default="")
     args = parser.parse_args(argv)
     converge_app_release_access(
         WorkspaceClient(),
@@ -240,6 +284,9 @@ def main(argv: list[str] | None = None) -> int:
         normal_application_id=args.normal_application_id,
         operator2_application_id=args.operator2_application_id,
         admin_application_id=args.admin_application_id,
+        expected_app_id=args.expected_app_id,
+        expected_client_id=args.expected_client_id,
+        expected_scim_id=args.expected_scim_id,
     )
     return 0
 

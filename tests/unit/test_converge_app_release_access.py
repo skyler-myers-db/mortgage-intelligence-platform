@@ -40,10 +40,22 @@ def _acl(*entries: AppAccessControlResponse) -> AppPermissions:
 
 
 class _Apps:
-    def __init__(self, current: AppPermissions, postflight: AppPermissions) -> None:
+    def __init__(
+        self,
+        current: AppPermissions,
+        postflight: AppPermissions,
+        *,
+        identities: list[object] | None = None,
+    ) -> None:
         self.responses = [current, postflight]
         self.get_calls: list[str] = []
         self.set_calls: list[tuple[str, list[object]]] = []
+        self.identities = identities or []
+        self.identity_get_calls: list[str] = []
+
+    def get(self, app_name: str) -> object:
+        self.identity_get_calls.append(app_name)
+        return self.identities.pop(0)
 
     def get_permissions(self, app_name: str) -> AppPermissions:
         self.get_calls.append(app_name)
@@ -224,6 +236,58 @@ def test_rejects_release_probe_manager_overlap_without_mutation() -> None:
     with pytest.raises(RuntimeError, match="release lifecycle identity overlaps"):
         _invoke(apps, mode="probe")
 
+    assert apps.set_calls == []
+
+
+def _identity(*, replacement: bool = False) -> object:
+    prefix = "replacement-" if replacement else ""
+    return SimpleNamespace(
+        id=f"{prefix}app-id",
+        service_principal_client_id=f"{prefix}client-id",
+        service_principal_id=f"{prefix}scim-id",
+    )
+
+
+def test_identity_pin_refuses_replacement_before_acl_mutation() -> None:
+    apps = _Apps(_acl(), _acl(), identities=[_identity(replacement=True)])
+
+    with pytest.raises(RuntimeError, match="identity changed"):
+        _invoke(
+            apps,
+            mode="quarantine",
+            expected_app_id="app-id",
+            expected_client_id="client-id",
+            expected_scim_id="scim-id",
+        )
+
+    assert apps.set_calls == []
+
+
+def test_trusted_manager_replacement_during_name_only_acl_api_is_detected() -> None:
+    apps = _Apps(_acl(), _acl(), identities=[_identity(), _identity(replacement=True)])
+
+    with pytest.raises(RuntimeError, match="identity changed"):
+        _invoke(
+            apps,
+            mode="quarantine",
+            expected_app_id="app-id",
+            expected_client_id="client-id",
+            expected_scim_id="scim-id",
+        )
+
+    # Databricks exposes this mutation only by App name and has no conditional
+    # identity/version parameter. CAN_MANAGE actors are an explicit trusted
+    # control-plane boundary; the postcheck ensures drift never returns success.
+    assert len(apps.set_calls) == 1
+
+
+def test_identity_pin_rejects_partial_triplet_before_acl_read() -> None:
+    apps = _Apps(_acl(), _acl())
+
+    with pytest.raises(ValueError, match="provide ID, client ID, and SCIM ID together"):
+        _invoke(apps, mode="quarantine", expected_app_id="app-id")
+
+    assert apps.get_calls == []
     assert apps.set_calls == []
 
 

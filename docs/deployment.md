@@ -206,7 +206,7 @@ request payload, and an audited result App ID equal to the current live App ID;
 only then are the live service-principal IDs signed. Missing or delayed audit
 evidence is polled and authorizes no App mutation. The App-create authorization
 lasts 15 minutes and the audit settlement interval lasts one additional hour,
-keeping reconciliation inside the two-hour deploy job limit. An absent App
+keeping reconciliation inside the four-hour deploy job limit. An absent App
 cannot make its intent disappear until both intervals have closed. During settlement, deploy
 rechecks both live App inventory and the exact audit query every 30 seconds. A
 zero-row query before that boundary is delayed evidence, never negative proof;
@@ -239,6 +239,19 @@ only the release probe `CAN_USE` for authenticated release checks. Normal,
 second-operator, and admin access is restored only after the treatment authority
 and exact last-good contract are durably captured. A pre-capture failure stops
 the App and leaves operator access withheld.
+
+Databricks Apps v2 accepts stop, start, resource update, snapshot deployment,
+and App-permission mutations only by App name; it exposes no immutable-App-ID or
+conditional-version parameter for those writes. App `CAN_MANAGE` principals and
+workspace admins are therefore an explicit trusted control-plane boundary: they
+must not delete/recreate or mutate the target App out of band while the signed
+deployment lease is held. Deploy captures the App object/client/SCIM identity
+triplet immediately after acquiring that lease, supplies it to every helper
+that can accept an identity, and checks it before and after name-addressed
+mutations. Any observed drift aborts the release and forbids a success claim,
+but an authorized manager violating this boundary is a governance incident that
+client-side code cannot atomically prevent. The supported operator path is
+`scripts/deploy.sh`; manual App click-ops during a deployment are unsupported.
 
 Without `--create-group`, admin provisioning fails closed when `mip-admin` is
 missing. Re-running is idempotent: existing principals, group membership, and
@@ -452,10 +465,14 @@ first install it leaves the unproven App stopped and quiesced and exits nonzero.
 An existing legacy installation without this signed record cannot truthfully be
 treated as exact blue state because Databricks redacts historical environment
 values. Its one-time migration must set `MIP_REBASE_UNVERIFIED_APP=1`; deploy
-stops that unverified App and uses first-install fail-closed compensation until
-the new App passes the hosted-tool gate and is captured as the first signed
-last-good contract. Remove the flag after that one run. Routine CI must never
-set it. New installations capture their first record automatically. Override
+first proves no last-good record already exists, then identity-pins and stops
+that unverified App and uses first-install fail-closed compensation until the
+rebased App passes the hosted-tool gate and is captured as the first signed
+last-good contract. Remove the flag only after the first successful signed
+capture; a failed attempt that remains unsigned requires another explicit
+recovery invocation. Once a record exists, the exceptional path refuses to run
+even if the flag is mistakenly selected. Routine CI must never set it. New
+installations capture their first record automatically. Override
 the dedicated scope only with the reviewed non-secret
 `MIP_APP_ROLLBACK_SECRET_SCOPE` setting.
 

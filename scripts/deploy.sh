@@ -317,6 +317,7 @@ APP_DEPLOYMENT_LEASE_ID=""
 APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
 APP_FAIL_CLOSED_ARMED=0
 APP_FAIL_CLOSED_NAME=""
+APP_EXPECTED_IDENTITY_ARGS=()
 APP_UPGRADE_STATE="first_install"
 APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
 AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
@@ -337,6 +338,21 @@ FIRST_INSTALL_APP_CLIENT_ID=""
 FIRST_INSTALL_APP_SCIM_ID=""
 FIRST_INSTALL_JOURNAL_ENV=""
 FIRST_INSTALL_MARKED_PAYLOAD=""
+
+assert_expected_app_identity() {
+  local app_name="${1:?App name is required for identity verification}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ "${#APP_EXPECTED_IDENTITY_ARGS[@]}" -ne 6 ]]; then
+    echo "${RED}[deploy] complete expected App identity is required before name-addressed mutation.${RST}" >&2
+    return 1
+  fi
+  "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+    --app-name "$app_name" \
+    "${APP_EXPECTED_IDENTITY_ARGS[@]}" \
+    --assert-identity-only
+}
 
 restore_deployment_sync_contract() {
   local source_label="${1:-agentic environment}"
@@ -384,7 +400,8 @@ converge_runtime_app_release_access() {
       --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
       --normal-application-id "$DATABRICKS_CLIENT_ID" \
       --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" || return 1
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}" || return 1
   fi
 }
 
@@ -419,6 +436,8 @@ stop_and_quiesce_unproven_app() {
       --expected-client-id "${FIRST_INSTALL_APP_CLIENT_ID:?claimed App client ID is required}"
       --expected-scim-id "${FIRST_INSTALL_APP_SCIM_ID:?claimed App SCIM ID is required}"
     )
+  elif [[ "${#APP_EXPECTED_IDENTITY_ARGS[@]}" -gt 0 ]]; then
+    stop_identity_args=("${APP_EXPECTED_IDENTITY_ARGS[@]}")
   fi
   outcome_file="$(mktemp -t mip-app-stop-outcome.XXXXXX.env)"
   chmod 600 "$outcome_file"
@@ -458,7 +477,8 @@ stop_and_quiesce_unproven_app() {
       --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
       --normal-application-id "$DATABRICKS_CLIENT_ID" \
       --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"; then
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}"; then
       APP_ACCESS_QUARANTINED=1
     else
       echo "${RED}[deploy] failed to re-quarantine temporary App release access.${RST}" >&2
@@ -606,6 +626,15 @@ quiesce_app_treatment_after_failed_stop() {
     return 1
   fi
   local principal="${APP_SP_CLIENT_ID:-${_EXISTING_APP_SP_CLIENT_ID:-}}" app_json=""
+  if [[ "${#APP_EXPECTED_IDENTITY_ARGS[@]}" -gt 0 ]]; then
+    if ! "$PYTHON" -m tools.databricks.stop_app_fail_closed \
+      --app-name "$APP_FAIL_CLOSED_NAME" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}" \
+      --assert-identity-only; then
+      echo "${RED}[deploy] App identity drifted after failed stop; refusing secondary treatment mutation.${RST}" >&2
+      return 1
+    fi
+  fi
   if [[ -z "$principal" && -n "$APP_FAIL_CLOSED_NAME" ]]; then
     app_json="$(databricks apps get "$APP_FAIL_CLOSED_NAME" -o json 2>/dev/null || true)"
     if [[ -n "$app_json" ]]; then
@@ -778,7 +807,10 @@ recover_interrupted_first_install_app() {
     --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
     --normal-application-id "$DATABRICKS_CLIENT_ID" \
     --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-    --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+    --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+    --expected-app-id "$FIRST_INSTALL_APP_ID" \
+    --expected-client-id "$FIRST_INSTALL_APP_CLIENT_ID" \
+    --expected-scim-id "$FIRST_INSTALL_APP_SCIM_ID"
   APP_ACCESS_QUARANTINED=1
   step "quiesce journal-owned App treatment authority before recovery deletion"
   run_with_account_identity \
@@ -804,7 +836,10 @@ recover_interrupted_first_install_app() {
     --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
   _EXISTING_APPS_JSON="[]"
+  _EXISTING_APP_ID=""
   _EXISTING_APP_SP_CLIENT_ID=""
+  _EXISTING_APP_SP_SCIM_ID=""
+  APP_EXPECTED_IDENTITY_ARGS=()
   FIRST_INSTALL_JOURNAL_STATUS="absent"
   FIRST_INSTALL_APP_ID=""
   FIRST_INSTALL_APP_CLIENT_ID=""
@@ -1949,7 +1984,7 @@ PYEOF
     --role-contract verifier \
     --recover-bootstrap-only
   _EXISTING_APPS_JSON="$(databricks apps list -o json)"
-  _EXISTING_APP_SP_CLIENT_ID="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
+  _EXISTING_APP_IDENTITY="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
 import json, os, sys
 items = json.load(sys.stdin)
 name = os.environ.get("MIP_APP_NAME", "mip-app")
@@ -1957,13 +1992,33 @@ matches = [item for item in items if str(item.get("name") or "") == name]
 if len(matches) > 1:
     raise SystemExit(f"multiple Databricks Apps named {name!r}")
 if not matches:
-    print("")
+    print("absent")
 else:
-    principal = str(matches[0].get("service_principal_client_id") or "").strip()
-    if not principal:
-        raise SystemExit(f"existing Databricks App {name!r} has no service principal")
-    print(principal)
+    values = tuple(str(matches[0].get(field) or "").strip() for field in (
+        "id", "service_principal_client_id", "service_principal_id"
+    ))
+    if not all(values) or any(any(char.isspace() for char in value) for value in values):
+        raise SystemExit(f"existing Databricks App {name!r} has incomplete identity")
+    print("\t".join(values))
 ')"
+  _EXISTING_APP_ID=""
+  _EXISTING_APP_SP_CLIENT_ID=""
+  _EXISTING_APP_SP_SCIM_ID=""
+  if [[ "$_EXISTING_APP_IDENTITY" != "absent" ]]; then
+    IFS=$'\t' read -r \
+      _EXISTING_APP_ID _EXISTING_APP_SP_CLIENT_ID _EXISTING_APP_SP_SCIM_ID \
+      <<< "$_EXISTING_APP_IDENTITY"
+    if [[ -z "$_EXISTING_APP_ID" || -z "$_EXISTING_APP_SP_CLIENT_ID" || \
+          -z "$_EXISTING_APP_SP_SCIM_ID" ]]; then
+      echo "${RED}[deploy] existing App inventory returned an incomplete immutable identity.${RST}" >&2
+      exit 4
+    fi
+    APP_EXPECTED_IDENTITY_ARGS=(
+      --expected-app-id "$_EXISTING_APP_ID"
+      --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID"
+      --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID"
+    )
+  fi
   if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
     step "recover interrupted App Lakebase role bootstrap"
     run_with_lakebase_bootstrap_authority \
@@ -2079,12 +2134,17 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       export MIP_APP_URL="$_EXISTING_APP_URL"
     fi
     APP_FAIL_CLOSED_NAME="$_GRANTS_APP_NAME"
-    APP_FAIL_CLOSED_ARMED=1
     if [[ "${MIP_REBASE_UNVERIFIED_APP:-0}" == "1" && \
           "$FIRST_INSTALL_JOURNAL_STATUS" != "signed" ]]; then
+      step "prove the unsigned legacy App has no existing last-good rollback record"
+      run "$PYTHON" -m tools.databricks.app_rollback_bootstrap_gate \
+        --app-name "$_GRANTS_APP_NAME" \
+        --scope "$APP_ROLLBACK_SECRET_SCOPE"
+      APP_FAIL_CLOSED_ARMED=1
       step "explicitly stop an unverified legacy App before fail-closed rebase"
       run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-        --app-name "$_GRANTS_APP_NAME"
+        --app-name "$_GRANTS_APP_NAME" \
+        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
       step "quarantine all non-manager App access for the unsigned rebase"
       # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
       run "$PYTHON" -m tools.databricks.converge_app_release_access \
@@ -2093,7 +2153,8 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
         --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
         --normal-application-id "$DATABRICKS_CLIENT_ID" \
         --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
       APP_ACCESS_QUARANTINED=1
       step "quiesce the stopped legacy App treatment grant before fail-closed rebase"
       run_with_account_identity \
@@ -2105,6 +2166,7 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       TREATMENT_RUNTIME_QUIESCED=1
       APP_UPGRADE_STATE="first_install"
     else
+      APP_FAIL_CLOSED_ARMED=1
       step "quiesce treatment authority before signed-blue App reconciliation"
       run_with_account_identity \
         "$PYTHON" -m tools.databricks.converge_campaign_treatment_access \
@@ -2432,9 +2494,9 @@ print(
 )
 PYEOF
     )
-    if [[ -z "$_BINDING_APP_ID" || \
+    if [[ "$_BINDING_APP_ID" != "$_EXISTING_APP_ID" || \
           "$_BINDING_APP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" || \
-          -z "$_BINDING_APP_SCIM_ID" ]]; then
+          "$_BINDING_APP_SCIM_ID" != "$_EXISTING_APP_SP_SCIM_ID" ]]; then
       echo "${RED}[deploy] existing App identity drifted before resource-binding update.${RST}" >&2
       exit 4
     fi
@@ -2449,8 +2511,10 @@ PYEOF
     # state as the authoritative pre-mutation baseline.
     databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_BEFORE"
   fi
+  assert_expected_app_identity "$_GRANTS_APP_NAME"
   run databricks apps update "$_GRANTS_APP_NAME" \
     --json "@$APP_RESOURCE_BINDING_PAYLOAD"
+  assert_expected_app_identity "$_GRANTS_APP_NAME"
   if [[ "$DRY_RUN" -eq 0 ]]; then
     databricks apps get "$_GRANTS_APP_NAME" -o json > "$APP_RESOURCE_BINDING_AFTER"
     "$PYTHON" -m tools.databricks.app_resource_bindings verify \
@@ -2466,12 +2530,25 @@ fi
 # migration, catalog bootstrap, or general data grant can run.
 if [[ "$DRY_RUN" -eq 0 ]]; then
   APP_RESOURCE_JSON="$(databricks apps get "$_GRANTS_APP_NAME" -o json 2>/dev/null || true)"
+  APP_OBJECT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("id") or "").strip())' 2>/dev/null || true)"
   APP_SP_CLIENT_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("service_principal_client_id") or "").strip())' 2>/dev/null || true)"
   APP_SP_SCIM_ID="$(printf '%s' "$APP_RESOURCE_JSON" | "$PYTHON" -c 'import json,sys; print(str(json.load(sys.stdin).get("service_principal_id") or "").strip())' 2>/dev/null || true)"
-  if [[ -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
-    echo "${RED}[deploy] could not resolve both service-principal identifiers for app '$_GRANTS_APP_NAME' after stopped identity bootstrap.${RST}" >&2
+  if [[ -z "$APP_OBJECT_ID" || -z "$APP_SP_CLIENT_ID" || -z "$APP_SP_SCIM_ID" ]]; then
+    echo "${RED}[deploy] could not resolve the immutable identity triplet for app '$_GRANTS_APP_NAME' after stopped identity bootstrap.${RST}" >&2
     exit 4
   fi
+  if [[ -n "${_EXISTING_APP_ID:-}" ]] && \
+     [[ "$APP_OBJECT_ID" != "$_EXISTING_APP_ID" || \
+        "$APP_SP_CLIENT_ID" != "$_EXISTING_APP_SP_CLIENT_ID" || \
+        "$APP_SP_SCIM_ID" != "$_EXISTING_APP_SP_SCIM_ID" ]]; then
+    echo "${RED}[deploy] existing App identity drifted after resource-binding convergence.${RST}" >&2
+    exit 4
+  fi
+  APP_EXPECTED_IDENTITY_ARGS=(
+    --expected-app-id "$APP_OBJECT_ID"
+    --expected-client-id "$APP_SP_CLIENT_ID"
+    --expected-scim-id "$APP_SP_SCIM_ID"
+  )
   # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
   if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" && \
         "$DATABRICKS_ACCOUNT_CLIENT_ID" == "$APP_SP_CLIENT_ID" ]]; then
@@ -2873,12 +2950,16 @@ APP_NAME="${MIP_APP_NAME:-mip-app}"
 # until no deployment is in flight before promoting the signed snapshot.
 wait_for_app_deployable() {
   local compute pend active i
+  assert_expected_app_identity "$APP_NAME"
   compute="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; print((json.load(sys.stdin).get("compute_status") or {}).get("state",""))' || true)"
   if [[ "$compute" == "STOPPED" || "$compute" == "STOPPING" ]]; then
     step "app compute is ${compute} — starting before snapshot deploy"
+    assert_expected_app_identity "$APP_NAME"
     run databricks apps start "$APP_NAME"
+    assert_expected_app_identity "$APP_NAME"
   fi
   for i in $(seq 1 90); do
+    assert_expected_app_identity "$APP_NAME"
     pend="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("pending_deployment") or {}).get("status") or {}).get("state","NONE"))' || echo "UNKNOWN")"
     active="$(databricks apps get "$APP_NAME" -o json 2>/dev/null | "$PYTHON" -c 'import json,sys; d=json.load(sys.stdin); print(((d.get("active_deployment") or {}).get("status") or {}).get("state","NONE"))' || echo "UNKNOWN")"
     if [[ "$pend" == "NONE" && "$active" != "IN_PROGRESS" ]]; then
@@ -2911,7 +2992,9 @@ deploy_app_snapshot() {
   step "$label"
   APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
   emit_app_deploy_payload "$APP_DEPLOY_PAYLOAD" "$APP_SOURCE_PATH" "$APP_GIT_SHA"
+  assert_expected_app_identity "$APP_NAME"
   run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
+  assert_expected_app_identity "$APP_NAME"
   if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then
     rm -f "$APP_LAST_DEPLOY_PAYLOAD"
   fi
@@ -3365,7 +3448,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
         --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
         --normal-application-id "$DATABRICKS_CLIENT_ID" \
         --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+        --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+        "${APP_EXPECTED_IDENTITY_ARGS[@]}"
       mint_app_automation_tokens
     fi
     AGENT_RUNTIME_BINDING_SHA256="$($PYTHON - \
@@ -3600,7 +3684,8 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
       --release-probe-application-id "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
       --normal-application-id "$DATABRICKS_CLIENT_ID" \
       --operator2-application-id "$DATABRICKS_OPERATOR2_CLIENT_ID" \
-      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID"
+      --admin-application-id "$DATABRICKS_ADMIN_CLIENT_ID" \
+      "${APP_EXPECTED_IDENTITY_ARGS[@]}"
     APP_ACCESS_QUARANTINED=0
   fi
   step "retire pinned blue runtime resources only after every green release gate"
@@ -3688,7 +3773,8 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
 elif [[ "$DRY_RUN" -eq 0 ]]; then
   step "stop the unproven candidate before signed-blue rollback"
   run "$PYTHON" -m tools.databricks.stop_app_fail_closed \
-    --app-name "$APP_NAME"
+    --app-name "$APP_NAME" \
+    "${APP_EXPECTED_IDENTITY_ARGS[@]}"
   step "prove treatment authority remains quiesced before signed-blue rollback"
   run converge_app_treatment_access quiesce
   TREATMENT_RUNTIME_QUIESCED=1
