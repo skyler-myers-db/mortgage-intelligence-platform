@@ -17,6 +17,7 @@ RUN_MARKER_RE = re.compile(r"gha[a-j]+r[a-j]+")
 CAMPAIGN_FIXTURE_LABELS = frozenset(
     {
         "Conflicting live campaign payload",
+        "Genie strategy draft",
         "Live campaign audit contract",
         "Live Lakebase approval contract",
         "Live Lakebase concurrency contract",

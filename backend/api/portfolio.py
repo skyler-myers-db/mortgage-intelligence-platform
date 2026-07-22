@@ -6,7 +6,6 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
-from backend.api.campaign_authorization import authorize_campaign_quarantine_actor
 from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
@@ -21,6 +20,7 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
 )
 from backend.services.audit_store import resolve_actor
+from backend.services.campaign_authorization import authorize_campaign_quarantine_actor
 from backend.services.campaign_intelligence import (
     CampaignPerformanceContext,
     campaign_criteria_fingerprint,

@@ -518,6 +518,41 @@ def test_principal_absence_delegates_to_direct_two_plane_helper_with_long_deadli
     )
 
 
+@pytest.mark.parametrize("attempts", [0, 3, 15])
+def test_principal_absence_rejects_deadlines_that_cannot_fit_the_stability_window(
+    attempts: int,
+) -> None:
+    with pytest.raises(ValueError, match="observation count is invalid"):
+        admission.prove_bootstrap_principal_absent(
+            object(),
+            object(),
+            service_principal_id="12345",
+            application_id=APPLICATION_ID,
+            attempts=attempts,
+        )
+
+
+def test_principal_absence_accepts_smallest_representable_stability_deadline(
+    monkeypatch: Any,
+) -> None:
+    from tools.databricks import lakebase_oauth_role_recovery_identity as recovery_identity
+
+    helper = MagicMock()
+    monkeypatch.setattr(recovery_identity, "prove_deleted_bootstrap_principal_absent", helper)
+
+    assert (
+        admission.prove_bootstrap_principal_absent(
+            object(),
+            object(),
+            service_principal_id="12345",
+            application_id=APPLICATION_ID,
+            attempts=16,
+        )
+        == 3
+    )
+    assert helper.call_args.kwargs["deadline_seconds"] == 32.0
+
+
 @pytest.mark.parametrize(
     "error",
     [

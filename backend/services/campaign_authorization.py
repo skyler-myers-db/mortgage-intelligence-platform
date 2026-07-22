@@ -1,4 +1,4 @@
-"""Shared route authorization for campaign lifecycle mutations."""
+"""Shared authorization policy for campaign lifecycle mutations."""
 
 from fastapi import Request
 

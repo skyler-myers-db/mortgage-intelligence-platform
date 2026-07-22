@@ -102,6 +102,60 @@ def test_cleanup_archives_only_exact_marked_run_and_proves_three_absences() -> N
     assert active_inventory_reads >= 4
 
 
+def test_cleanup_recovers_only_exact_run_marked_genie_draft() -> None:
+    marker = "ghabcdearf"
+    rows = {
+        "genie-id": {
+            "campaign_id": "genie-id",
+            "name": run_scoped_campaign_name("Genie strategy draft", marker=marker),
+            "status": "draft",
+        },
+        "customer-id": {
+            "campaign_id": "customer-id",
+            "name": "Genie strategy draft",
+            "status": "draft",
+        },
+    }
+
+    def request(
+        method: str,
+        path: str,
+        payload: dict[str, object] | None = None,
+        *,
+        token: str,
+    ) -> tuple[int, object]:
+        if path == "/api/campaigns?limit=200":
+            assert token == "dedicated-owner-token"
+            return 200, {
+                "campaigns": [
+                    deepcopy(row) for row in rows.values() if row["status"] != "archived"
+                ]
+            }
+        campaign_id = path.rsplit("/", 1)[-1]
+        assert token == "admin-token"
+        if method == "GET":
+            return 200, deepcopy(rows[campaign_id])
+        assert payload == {
+            "status": "archived",
+            "expected_status": "draft",
+            "rationale": "Archive isolated live release fixture.",
+        }
+        rows[campaign_id]["status"] = "archived"
+        return 200, deepcopy(rows[campaign_id])
+
+    archived = cleanup_live_campaign_fixtures(
+        request,
+        owner_token="dedicated-owner-token",
+        admin_token="admin-token",
+        run_marker=marker,
+        sleep=lambda _seconds: None,
+    )
+
+    assert archived == ("genie-id",)
+    assert rows["genie-id"]["status"] == "archived"
+    assert rows["customer-id"]["status"] == "draft"
+
+
 def test_all_run_cleanup_recovers_building_and_transient_patch() -> None:
     campaign_id = "abandoned-id"
     row: dict[str, object] = {

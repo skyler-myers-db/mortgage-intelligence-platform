@@ -11,7 +11,6 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from backend.api.campaign_authorization import authorize_campaign_quarantine_actor
 from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
@@ -20,6 +19,7 @@ from backend.schemas.portfolio import (
     CampaignSummary,
 )
 from backend.services.audit_store import resolve_actor
+from backend.services.campaign_authorization import authorize_campaign_quarantine_actor
 from backend.services.error_sanitizer import safe_dependency_detail
 from backend.services.http_content import JSON_CONTENT_TYPE_RESPONSE, require_json_content_type
 from backend.services.lakebase import LakebaseError

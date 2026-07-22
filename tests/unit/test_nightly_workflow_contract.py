@@ -324,12 +324,18 @@ def test_live_genie_campaign_action_archives_the_exact_created_campaign() -> Non
     action_block = spec[action_pos:next_test_pos]
 
     assert "async function archiveLiveCampaign" in spec
+    assert "async function reconcileGenieCampaignAction" in spec
     assert "Authorization: `Bearer ${ADMIN_BEARER}`" in spec
     assert "expected_status: campaign.status" in spec
     assert "final GET ${confirmed.status()}" in spec
+    assert "const actionRequest = page.waitForRequest" in action_block
+    assert "LIVE_CAMPAIGN_RUN_MARKER" in action_block
+    assert "submittedRequest.postDataJSON()" in action_block
     assert "typeof actionPayload.campaign_id === 'string'" in action_block
     assert "finally" in action_block
+    assert "reconcileGenieCampaignAction(page.request, submittedPayload)" in action_block
     assert "archiveLiveCampaign(page.request, campaignId)" in action_block
+    assert 'AUTH_HEADERS[\'X-MIP-Live-Campaign-Run-Marker\']' in spec
 
 
 def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
@@ -525,6 +531,14 @@ def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation()
     assert "--all-run-markers" in mutation_block
     assert mutation_block.index("--all-run-markers") < mutation_block.index("pytest -q")
 
+    mint_pos = text.index("- name: Mint per-run Playwright Bearer tokens")
+    recovery_pos = text.index("- name: Recover abandoned live campaign fixtures")
+    smoke_pos = text.index("- name: Authenticated non-admin smoke (M2M)")
+    recovery_block = _workflow_run_block("Recover abandoned live campaign fixtures")
+    assert mint_pos < recovery_pos < smoke_pos
+    assert "tools.cleanup_live_campaign_fixtures" in recovery_block
+    assert "--all-run-markers" in recovery_block
+
     cleanup_pos = text.index("- name: Always archive run-marked live campaign fixtures")
     cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
     cleanup_block = text[cleanup_pos:cleanup_next]
@@ -538,6 +552,15 @@ def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation()
     assert "tools.cleanup_live_campaign_fixtures" in cleanup_block
     assert '--run-marker "$MIP_LIVE_CAMPAIGN_RUN_MARKER"' in cleanup_block
     assert "unset MIP_CLEANUP_OWNER_BEARER_TOKEN" in cleanup_block
+
+    browser_pos = text.index("- name: Run real-UC Playwright specs")
+    browser_cleanup_pos = text.index("- name: Always reconcile live browser campaign fixtures")
+    browser_cleanup_next = text.index("\n      - name:", browser_cleanup_pos + 1)
+    browser_cleanup = text[browser_cleanup_pos:browser_cleanup_next]
+    assert browser_pos < browser_cleanup_pos
+    assert "if: always()" in browser_cleanup
+    assert browser_cleanup.count("tools/oauth_m2m_mint.py") == 2
+    assert "--all-run-markers" in browser_cleanup
 
 
 def test_nightly_agent_eval_passes_distinct_normal_and_admin_bearers() -> None:

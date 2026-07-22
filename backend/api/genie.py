@@ -27,7 +27,11 @@ from backend.services.audit_store import (
 )
 from backend.services.databricks_sql_helpers import qualify
 from backend.services.error_sanitizer import safe_dependency_detail
-from backend.services.genie_actions import handle_genie_action, issue_response_action_tokens
+from backend.services.genie_actions import (
+    handle_genie_action,
+    issue_response_action_tokens,
+    normalize_live_campaign_run_marker,
+)
 from backend.services.genie_answers import (
     GenieActionRequest,
     GenieActionResponse,
@@ -255,8 +259,13 @@ def _finalize_genie_response(
     *,
     actor: str,
     response: GenieMessageResponse,
+    live_campaign_run_marker: str | None = None,
 ) -> GenieMessageResponse:
-    issue_response_action_tokens(response, actor=actor)
+    issue_response_action_tokens(
+        response,
+        actor=actor,
+        live_campaign_run_marker=live_campaign_run_marker,
+    )
     _record_genie_session(lakebase, actor=actor, response=response)
     return response
 
@@ -399,6 +408,21 @@ def genie_message(
     _: Annotated[None, Depends(require_json_content_type)],
 ) -> GenieMessageResponse:
     actor = resolve_actor(request)
+    try:
+        live_campaign_run_marker = normalize_live_campaign_run_marker(
+            request.headers.get("X-MIP-Live-Campaign-Run-Marker")
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="live campaign run marker is invalid") from exc
+
+    def finalize(response: GenieMessageResponse) -> GenieMessageResponse:
+        return _finalize_genie_response(
+            lakebase,
+            actor=actor,
+            response=response,
+            live_campaign_run_marker=live_campaign_run_marker,
+        )
+
     assert_genie_conversation_owned(
         lakebase,
         actor=actor,
@@ -447,7 +471,7 @@ def genie_message(
                 else "prompt refused before Genie execution due protected-class term in the prompt"
             ),
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     override_match = prompt_guardrails.instruction_override_prompt_match(payload.question)
     if override_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -480,7 +504,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due instruction-override pattern",
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     if _is_outreach_writer_request(payload.question):
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
         _ = background
@@ -529,7 +553,7 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     pii_match = prompt_guardrails.pii_prompt_match(payload.question)
     if pii_match is None and _identity_prompt_match(payload.question):
         pii_match = "person_name"
@@ -565,7 +589,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due PII request pattern",
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     scope_bypass_match = prompt_guardrails.scope_bypass_prompt_match(payload.question)
     if scope_bypass_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -599,7 +623,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due scope-bypass pattern",
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     source_gap_match = prompt_guardrails.source_gap_prompt_match(payload.question)
     if source_gap_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -647,7 +671,7 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     off_topic_match = prompt_guardrails.off_topic_prompt_match(payload.question)
     if off_topic_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -680,7 +704,7 @@ def genie_message(
             ),
             known_gap="prompt refused before Genie execution due off-topic pattern",
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     cross_lender_match = prompt_guardrails.cross_lender_prompt_match(payload.question)
     if cross_lender_match:
         question_hash = hashlib.sha256(payload.question.encode("utf-8")).hexdigest()[:16]
@@ -717,7 +741,7 @@ def genie_message(
                 "prompt refused before Genie execution due cross-lender customer-list pattern"
             ),
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     try:
         sales_ops_response = sales_ops_genie_response(
             lakebase,
@@ -744,7 +768,7 @@ def genie_message(
                 payload=payload,
                 response=sales_ops_response,
             )
-            return _finalize_genie_response(lakebase, actor=actor, response=blocked)
+            return finalize(blocked)
         _required_audit_write(
             audit,
             actor=actor,
@@ -762,7 +786,7 @@ def genie_message(
             },
             event_type="RUN_GENIE",
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=sales_ops_response)
+        return finalize(sales_ops_response)
     metadata_gap = prompt_guardrails.footprint_metadata_gap_match(payload.question)
     if metadata_gap is not None:
         state_name, state_code = metadata_gap
@@ -812,7 +836,7 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     outside_footprint = prompt_guardrails.outside_footprint_match(payload.question)
     if outside_footprint is not None:
         state_name, state_code, footprint_codes = outside_footprint
@@ -869,7 +893,7 @@ def genie_message(
             follow_up_questions=load_sample_questions()[:2],
             table_rows=[],
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=response)
+        return finalize(response)
     # repo.respond() returns a GenieMessageResponse by contract; the
     # protocol annotates `object` only to dodge a forward-import cycle.
     try:
@@ -888,7 +912,7 @@ def genie_message(
             payload=payload,
             response=result,  # type: ignore[arg-type]
         )
-        return _finalize_genie_response(lakebase, actor=actor, response=blocked)
+        return finalize(blocked)
     _required_audit_write(
         audit,
         actor=actor,
@@ -905,7 +929,7 @@ def genie_message(
         },
         event_type="RUN_GENIE",
     )
-    return _finalize_genie_response(lakebase, actor=actor, response=result)  # type: ignore[arg-type]
+    return finalize(result)  # type: ignore[arg-type]
 
 
 @router.post("/actions", response_model=GenieActionResponse, responses=JSON_CONTENT_TYPE_RESPONSE)

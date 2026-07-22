@@ -58,9 +58,13 @@ const API_URL =
 // request).
 const BEARER = process.env.MIP_BEARER_TOKEN || process.env.DATABRICKS_TOKEN || '';
 const ADMIN_BEARER = process.env.MIP_ADMIN_BEARER_TOKEN || '';
+const LIVE_CAMPAIGN_RUN_MARKER = process.env.MIP_LIVE_CAMPAIGN_RUN_MARKER || '';
 const AUTH_HEADERS: Record<string, string> = BEARER
   ? { Authorization: `Bearer ${BEARER}` }
   : {};
+if (LIVE_CAMPAIGN_RUN_MARKER) {
+  AUTH_HEADERS['X-MIP-Live-Campaign-Run-Marker'] = LIVE_CAMPAIGN_RUN_MARKER;
+}
 
 test.use({ baseURL: APP_URL, extraHTTPHeaders: AUTH_HEADERS });
 
@@ -377,6 +381,43 @@ async function archiveLiveCampaign(
     if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   throw new Error(`live campaign teardown did not converge: ${lastResult}`);
+}
+
+async function reconcileGenieCampaignAction(
+  request: APIRequestContext,
+  submittedPayload: Record<string, unknown>,
+): Promise<string> {
+  let lastResult = 'no replay attempted';
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    let replay: APIResponse;
+    try {
+      replay = await request.post(`${API_URL}/api/genie/actions`, {
+        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
+        data: submittedPayload,
+        timeout: 30_000,
+      });
+    } catch {
+      lastResult = 'POST transport error';
+      if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
+      continue;
+    }
+    lastResult = `POST ${replay.status()}`;
+    if (replay.status() === 200) {
+      try {
+        const body = await replay.json() as { campaign_id?: unknown };
+        if (typeof body.campaign_id === 'string' && body.campaign_id.trim()) {
+          return body.campaign_id.trim();
+        }
+        lastResult = 'POST 200 without campaign_id';
+      } catch {
+        lastResult = 'POST 200 with unreadable response';
+      }
+    } else if (replay.status() !== 429 && replay.status() < 500) {
+      throw new Error(`Genie campaign replay was rejected: ${lastResult}`);
+    }
+    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(`Genie campaign replay did not recover its durable ID: ${lastResult}`);
 }
 
 async function findBorrowerWithEvidenceProducts(
@@ -2093,6 +2134,10 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
       ADMIN_BEARER,
       'live Genie action proof requires the distinct admin bearer for teardown',
     ).not.toBe('');
+    expect(
+      LIVE_CAMPAIGN_RUN_MARKER,
+      'live Genie action proof requires a durable workflow run marker',
+    ).toMatch(/^gha[a-j]+r[a-j]+$/);
 
     await gotoApp(page, '/ask-genie');
 
@@ -2129,24 +2174,37 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const draftAction = page.locator('.genie-action', { hasText: /Create draft campaign/i }).first();
     await expect(draftAction).toBeVisible();
     await draftAction.getByRole('button', { name: /Run/i }).click();
+    const actionRequest = page.waitForRequest((request) =>
+      /\/api\/(?:v1\/)?genie\/actions(?:\?|$)/.test(request.url()) &&
+      request.method() === 'POST',
+    );
     const actionResponse = page.waitForResponse((response) =>
       /\/api\/(?:v1\/)?genie\/actions(?:\?|$)/.test(response.url()) &&
       response.request().method() === 'POST',
     );
     await draftAction.getByRole('button', { name: /Confirm/i }).click();
-    const response = await actionResponse;
-    expect(response.status(), 'Create draft campaign action should succeed').toBe(200);
-    const actionPayload = await response.json();
-    const campaignId = typeof actionPayload.campaign_id === 'string'
-      ? actionPayload.campaign_id.trim()
-      : '';
+    let submittedPayload: Record<string, unknown> | null = null;
+    let campaignId = '';
     try {
+      const submittedRequest = await actionRequest;
+      submittedPayload = submittedRequest.postDataJSON() as Record<string, unknown>;
+      const response = await actionResponse;
+      expect(response.status(), 'Create draft campaign action should succeed').toBe(200);
+      const actionPayload = await response.json();
+      campaignId = typeof actionPayload.campaign_id === 'string'
+        ? actionPayload.campaign_id.trim()
+        : '';
       expect(actionPayload.action_type).toBe('create_draft_campaign');
       expect(actionPayload.audit_event_id).toBeTruthy();
       expect(campaignId).toBeTruthy();
       await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });
     } finally {
-      if (campaignId) await archiveLiveCampaign(page.request, campaignId);
+      if (submittedPayload) {
+        if (!campaignId) {
+          campaignId = await reconcileGenieCampaignAction(page.request, submittedPayload);
+        }
+        await archiveLiveCampaign(page.request, campaignId);
+      }
     }
   });
 

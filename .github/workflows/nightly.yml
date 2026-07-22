@@ -594,6 +594,11 @@ jobs:
             "$DATABRICKS_VERIFIER_CLIENT_SECRET" \
             --github-env MIP_VERIFIER_BEARER_TOKEN
           echo "::notice::Minted distinct per-run operator A, operator B, admin, and verifier M2M Bearers."
+      - name: Recover abandoned live campaign fixtures
+        run: |
+          python -m tools.cleanup_live_campaign_fixtures \
+            --base-url "$MIP_APP_URL" \
+            --all-run-markers
       - name: Authenticated non-admin smoke (M2M)
         run: |
           python - <<'PY'
@@ -851,6 +856,35 @@ jobs:
             tests/e2e/responsive.spec.ts \
             tests/e2e/route_performance.spec.ts \
             --reporter=list --workers=1
+      - name: Always reconcile live browser campaign fixtures
+        if: always()
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          token_dir="$(mktemp -d)"
+          trap 'rm -rf "$token_dir"' EXIT
+          python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_CLIENT_ID \
+            --client-secret-env DATABRICKS_CLIENT_SECRET \
+            --output-file "$token_dir/owner"
+          python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_ADMIN_CLIENT_ID \
+            --client-secret-env DATABRICKS_ADMIN_CLIENT_SECRET \
+            --output-file "$token_dir/admin"
+          MIP_CLEANUP_OWNER_BEARER_TOKEN="$(<"$token_dir/owner")"
+          MIP_CLEANUP_ADMIN_BEARER_TOKEN="$(<"$token_dir/admin")"
+          export MIP_CLEANUP_OWNER_BEARER_TOKEN MIP_CLEANUP_ADMIN_BEARER_TOKEN
+          python -m tools.cleanup_live_campaign_fixtures \
+            --base-url "$MIP_APP_URL" \
+            --owner-token-env MIP_CLEANUP_OWNER_BEARER_TOKEN \
+            --admin-token-env MIP_CLEANUP_ADMIN_BEARER_TOKEN \
+            --all-run-markers
+          unset MIP_CLEANUP_OWNER_BEARER_TOKEN MIP_CLEANUP_ADMIN_BEARER_TOKEN
       - name: Run mocked Genie proof layout canary
         # This spec route-fulfills Genie responses to stress proof-drawer
         # layout with dense trusted-SQL evidence. Keep it separate from the

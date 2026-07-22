@@ -70,6 +70,7 @@ _MAX_ACTION_FILTER_VALUES = 500
 _MAX_ACTION_STATE_VALUES = 56
 _CAMPAIGN_IDEMPOTENCY_LOOKUP_ATTEMPTS = 3
 _CAMPAIGN_IDEMPOTENCY_RETRY_DELAY_S = 0.01
+_LIVE_CAMPAIGN_RUN_MARKER_RE = re.compile(r"gha[a-j]+r[a-j]+")
 _LEAD_QUEUE_REPLAY_KEYS = frozenset(
     {
         "state",
@@ -480,6 +481,7 @@ def _action_token_claims(
     expires_at: int,
     nonce: str,
     key_id: str | None = None,
+    live_campaign_run_marker: str | None = None,
 ) -> dict[str, Any]:
     criteria_hash, _criteria_keys, source_assets, _visualization_kind = criteria_summary(criteria)
     claims = {
@@ -499,7 +501,20 @@ def _action_token_claims(
     }
     if key_id is not None:
         claims["kid"] = key_id
+    if live_campaign_run_marker is not None:
+        claims["live_campaign_run_marker"] = live_campaign_run_marker
     return claims
+
+
+def normalize_live_campaign_run_marker(value: object) -> str | None:
+    """Accept only the non-PII marker format derived by the live workflow."""
+
+    if value is None or value == "":
+        return None
+    marker = str(value).strip()
+    if len(marker) > 40 or not _LIVE_CAMPAIGN_RUN_MARKER_RE.fullmatch(marker):
+        raise ValueError("live campaign run marker is invalid")
+    return marker
 
 
 def _sign_action_claims(claims: dict[str, Any]) -> str:
@@ -517,7 +532,9 @@ def issue_response_action_tokens(
     response: GenieMessageResponse,
     *,
     actor: str,
+    live_campaign_run_marker: str | None = None,
 ) -> None:
+    normalized_run_marker = normalize_live_campaign_run_marker(live_campaign_run_marker)
     signed_actions = []
     for action in response.actions:
         expires_at = int(time.time()) + _ACTION_TOKEN_TTL_S
@@ -538,6 +555,11 @@ def issue_response_action_tokens(
                 expires_at=expires_at,
                 nonce=secrets.token_urlsafe(12),
                 key_id=key_id,
+                live_campaign_run_marker=(
+                    normalized_run_marker
+                    if action.action_type == "create_draft_campaign"
+                    else None
+                ),
             )
         except HTTPException:
             # Response actions are optional affordances. If a raw Genie answer
@@ -638,6 +660,8 @@ def _lookup_existing_genie_action(
 def _campaign_request_payload_hash(
     payload: GenieActionRequest,
     campaign_payload: dict[str, Any],
+    *,
+    live_campaign_run_marker: str | None,
 ) -> str:
     canonical = json.dumps(
         {
@@ -648,6 +672,7 @@ def _campaign_request_payload_hash(
             "message_id": payload.message_id,
             "question_hash": payload.question_hash,
             "route": payload.route,
+            "live_campaign_run_marker": live_campaign_run_marker,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -756,6 +781,16 @@ def _validate_action_confirmation(payload: GenieActionRequest, *, actor: str) ->
         raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
     if payload.request_id != token_request_id:
         raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
+    try:
+        live_campaign_run_marker = normalize_live_campaign_run_marker(
+            claims.get("live_campaign_run_marker")
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Genie action confirmation token is invalid"
+        ) from exc
+    if live_campaign_run_marker is not None and payload.action_type != "create_draft_campaign":
+        raise HTTPException(status_code=400, detail="Genie action confirmation token is invalid")
     expected_claims = _action_token_claims(
         actor=actor,
         action_type=payload.action_type,
@@ -769,6 +804,7 @@ def _validate_action_confirmation(payload: GenieActionRequest, *, actor: str) ->
         expires_at=expires_at,
         nonce=str(claims.get("nonce") or ""),
         key_id=str(claims["kid"]) if claims.get("kid") is not None else None,
+        live_campaign_run_marker=live_campaign_run_marker,
     )
     for key, expected_value in expected_claims.items():
         if claims.get(key) != expected_value:
@@ -1207,7 +1243,14 @@ def handle_genie_action(
                     status_code=400,
                     detail="Genie campaign action has no replayable lead filters",
                 )
-            request_payload_hash = _campaign_request_payload_hash(payload, campaign_payload)
+            live_campaign_run_marker = normalize_live_campaign_run_marker(
+                claims.get("live_campaign_run_marker")
+            )
+            request_payload_hash = _campaign_request_payload_hash(
+                payload,
+                campaign_payload,
+                live_campaign_run_marker=live_campaign_run_marker,
+            )
             from backend.schemas.portfolio import HouseholdDedupConfig
             from backend.services.campaign_treatment import CampaignTreatmentCreateSpec
 
@@ -1219,7 +1262,11 @@ def handle_genie_action(
             )
             result = _campaign_treatment_coordinator(lakebase).create(
                 CampaignTreatmentCreateSpec(
-                    name="Genie strategy draft",
+                    name=(
+                        f"Genie strategy draft {live_campaign_run_marker}"
+                        if live_campaign_run_marker
+                        else "Genie strategy draft"
+                    ),
                     owner_email=actor,
                     idempotency_key=request_id,
                     request_payload_hash=request_payload_hash,

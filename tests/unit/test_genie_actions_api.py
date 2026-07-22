@@ -80,11 +80,18 @@ def _default_catalog(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(settings, "mip_default_catalog", "mip")
 
 
-def _confirmed_payload_for_action(action_type: str) -> dict[str, object]:
+def _confirmed_payload_for_action(
+    action_type: str,
+    *,
+    live_campaign_run_marker: str | None = None,
+) -> dict[str, object]:
+    headers = dict(ACTOR_HEADERS)
+    if live_campaign_run_marker is not None:
+        headers["X-MIP-Live-Campaign-Run-Marker"] = live_campaign_run_marker
     message = client.post(
         "/api/genie/message",
         json={"question": "Show me the top 10 borrowers by lead score in Illinois."},
-        headers=ACTOR_HEADERS,
+        headers=headers,
     )
     assert message.status_code == 200
     answer = message.json()
@@ -1227,6 +1234,17 @@ def test_genie_action_token_requires_server_issued_request_id() -> None:
     assert res.json()["detail"] == "Genie action confirmation token is invalid"
 
 
+def test_genie_message_rejects_invalid_live_campaign_run_marker() -> None:
+    res = client.post(
+        "/api/genie/message",
+        json={"question": "Show me the top borrowers in Illinois."},
+        headers={**ACTOR_HEADERS, "X-MIP-Live-Campaign-Run-Marker": "gha-123"},
+    )
+
+    assert res.status_code == 400
+    assert res.json()["detail"] == "live campaign run marker is invalid"
+
+
 def test_genie_actions_require_actor_identity() -> None:
     res = client.post(
         "/api/genie/actions",
@@ -1625,7 +1643,13 @@ def test_genie_create_draft_campaign_persists_full_cohort_criteria(
     app.dependency_overrides[get_genie_answer_repository] = _DraftCampaignRepo
     app.dependency_overrides[get_lakebase_client] = lambda: lakebase
     try:
-        payload = _confirmed_payload_for_action("create_draft_campaign")
+        payload = _confirmed_payload_for_action(
+            "create_draft_campaign",
+            live_campaign_run_marker="ghabcdearf",
+        )
+        assert _decode_action_token(str(payload["confirmation_token"]))[
+            "live_campaign_run_marker"
+        ] == "ghabcdearf"
         res = client.post(
             "/api/genie/actions",
             json=payload,
@@ -1646,6 +1670,7 @@ def test_genie_create_draft_campaign_persists_full_cohort_criteria(
     assert body["ok"] is True
     assert body["campaign_id"] == "campaign-1"
     spec = coordinator.specs[0]
+    assert spec.name == "Genie strategy draft ghabcdearf"  # type: ignore[attr-defined]
     criteria = spec.criteria  # type: ignore[attr-defined]
     assert criteria["source"] == "trusted_sql"
     assert criteria["marketing_eligibility"] == "Eligible only"

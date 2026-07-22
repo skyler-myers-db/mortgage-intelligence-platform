@@ -390,7 +390,11 @@ def prove_bootstrap_principal_absent(
 ) -> int:
     """Use immutable direct GETs with a deadline large enough for account propagation."""
 
-    if attempts < 3:
+    # The delegated proof requires a continuous 30-second absence window and
+    # polls at two-second intervals. A deadline equal to that window cannot
+    # complete because the first clean observation starts the window, so the
+    # smallest valid count is 16 (32 seconds).
+    if attempts < 16:
         raise ValueError("temporary Lakebase principal absence observation count is invalid")
     from tools.databricks.lakebase_oauth_role_recovery_identity import (
         prove_deleted_bootstrap_principal_absent,
