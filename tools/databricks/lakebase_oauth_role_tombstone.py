@@ -672,7 +672,7 @@ def delete_orphan_tombstone(
     bootstrap_lock_cursor: Any | None = None,
     bootstrap_lock_key: Any | None = None,
     allow_unlocked_recovery_for_tests: bool = False,
-    attempts: int = 15,
+    attempts: int = 3,
     deadline_seconds: float = _DELETION_DEADLINE_SECONDS,
 ) -> None:
     from tools.databricks.lakebase_oauth_role_account_principal import (
@@ -683,8 +683,7 @@ def delete_orphan_tombstone(
     last_error: Exception | None = None
     if attempts < 3 or deadline_seconds < _DELETION_STABILITY_SECONDS:
         raise RuntimeError("temporary Lakebase tombstone deletion contract is incomplete")
-    deadline_at = time.monotonic() + deadline_seconds
-    while time.monotonic() < deadline_at:
+    for attempt in range(attempts):
         if exact is None:
             markers = orphan_tombstones(
                 client,
@@ -699,16 +698,10 @@ def delete_orphan_tombstone(
                     tombstone_id=tombstone_id,
                     marker_application_id=None,
                     display_name=None,
-                    deadline_at=deadline_at,
+                    deadline_at=time.monotonic() + deadline_seconds,
                 )
                 return
         try:
-            remaining = deadline_at - time.monotonic()
-            retirement_deadline = remaining - _DELETION_STABILITY_SECONDS - _DELETION_POLL_SECONDS
-            if retirement_deadline < _DELETION_STABILITY_SECONDS:
-                raise RuntimeError(
-                    "temporary Lakebase tombstone retirement lacks a direct-proof window"
-                )
             retire_exact_account_principal(
                 account_client,
                 client,
@@ -718,7 +711,7 @@ def delete_orphan_tombstone(
                 bootstrap_lock_cursor=bootstrap_lock_cursor,
                 bootstrap_lock_key=bootstrap_lock_key,
                 allow_unlocked_recovery_for_tests=allow_unlocked_recovery_for_tests,
-                deadline_seconds=retirement_deadline,
+                deadline_seconds=deadline_seconds,
             )
             _prove_tombstone_absent_by_direct_id(
                 client,
@@ -726,7 +719,7 @@ def delete_orphan_tombstone(
                 tombstone_id=tombstone_id,
                 marker_application_id=exact[3],
                 display_name=exact[2],
-                deadline_at=deadline_at,
+                deadline_at=time.monotonic() + deadline_seconds,
             )
             return
         except _TombstoneAccountReappeared as exc:
@@ -734,6 +727,7 @@ def delete_orphan_tombstone(
             continue
         except Exception as exc:  # noqa: BLE001 - retry ambiguous deletion
             last_error = exc
+        if attempt + 1 < attempts:
             time.sleep(_DELETION_POLL_SECONDS)
     detail = f"; last_error={type(last_error).__name__}" if last_error is not None else ""
     raise RuntimeError(f"temporary Lakebase orphan marker deletion did not converge{detail}")

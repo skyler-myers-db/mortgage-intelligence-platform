@@ -502,7 +502,7 @@ def _create_login_only_role_locked(
             bootstrap_lock_cursor,
             lock_key=bootstrap_lock_key,
         )
-        wrapper_schema = create_wrapper(
+        wrapper_schema, wrapper_function_fingerprint = create_wrapper(
             deployer_cursor,
             instance_name=instance_name,
             database_name=database_name,
@@ -602,6 +602,7 @@ def _create_login_only_role_locked(
                 bootstrap_application_id=bootstrap_application_id,
                 expected_executor=bootstrap_application_id,
                 expected_privileges=frozenset({"USAGE", "EXECUTE"}),
+                expected_function_fingerprint=wrapper_function_fingerprint,
             )
             _event_trigger_preflight(
                 cursor,

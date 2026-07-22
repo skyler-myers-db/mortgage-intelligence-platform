@@ -12,6 +12,7 @@ from jobs.lakebase_migration_schema_hooks import _postflight_event_trigger_inven
 from tools.databricks.lakebase_oauth_role_bootstrap_wrapper_contract import (
     _WRAPPER_FUNCTION,
     _WRAPPER_OWNER,
+    WrapperFunctionFingerprint,
 )
 from tools.databricks.lakebase_oauth_role_bootstrap_wrapper_contract import (
     wrapper_function_contract as _wrapper_function_contract,
@@ -242,7 +243,8 @@ def assert_wrapper_contract(
     bootstrap_application_id: str,
     expected_executor: str,
     expected_privileges: frozenset[str] | None = None,
-) -> frozenset[str]:
+    expected_function_fingerprint: WrapperFunctionFingerprint | None = None,
+) -> tuple[frozenset[str], WrapperFunctionFingerprint]:
     schema_name = wrapper_schema_name(
         instance_name=instance_name,
         database_name=database_name,
@@ -259,23 +261,27 @@ def assert_wrapper_contract(
         allow_provider_grants=False,
         expected_executor=expected_executor,
     )
-    function_oid, function_owner = _wrapper_function_contract(
+    function_oid, function_owner, fingerprint = _wrapper_function_contract(
         cursor,
         schema_name=schema_name,
         target_application_id=target_application_id,
         bootstrap_application_id=bootstrap_application_id,
         allow_bootstrap_execute=(expected_privileges is None or "EXECUTE" in expected_privileges),
+        expected_fingerprint=expected_function_fingerprint,
     )
     if owner != function_owner:
         raise RuntimeError("temporary Lakebase bootstrap wrapper ownership drifted")
     _schema_object_contract(cursor, schema_oid=schema_oid, function_oid=function_oid)
-    return _role_acl_contract(
-        cursor,
-        database_oid=database_oid,
-        schema_oid=schema_oid,
-        function_oid=function_oid,
-        bootstrap_application_id=bootstrap_application_id,
-        expected_privileges=expected_privileges,
+    return (
+        _role_acl_contract(
+            cursor,
+            database_oid=database_oid,
+            schema_oid=schema_oid,
+            function_oid=function_oid,
+            bootstrap_application_id=bootstrap_application_id,
+            expected_privileges=expected_privileges,
+        ),
+        fingerprint,
     )
 
 
@@ -290,7 +296,7 @@ def _publish_wrapper(
     allow_absent_managed_event_triggers: bool,
     bootstrap_lock_cursor: Any,
     bootstrap_lock_key: Any,
-) -> str:
+) -> tuple[str, WrapperFunctionFingerprint]:
     schema_name = wrapper_schema_name(
         instance_name=instance_name,
         database_name=database_name,
@@ -412,7 +418,7 @@ def _publish_wrapper(
             psql.Identifier(_WRAPPER_FUNCTION),
         )
     )
-    function_oid, function_owner = _wrapper_function_contract(
+    function_oid, function_owner, _fingerprint = _wrapper_function_contract(
         cursor,
         schema_name=schema_name,
         target_application_id=target_application_id,
@@ -456,7 +462,7 @@ def _publish_wrapper(
             psql.Identifier(bootstrap_application_id),
         )
     )
-    assert_wrapper_contract(
+    _privileges, fingerprint = assert_wrapper_contract(
         cursor,
         instance_name=instance_name,
         database_name=database_name,
@@ -465,7 +471,7 @@ def _publish_wrapper(
         expected_executor=expected_executor,
         expected_privileges=frozenset({"USAGE", "EXECUTE"}),
     )
-    return schema_name
+    return schema_name, fingerprint
 
 
 def create_wrapper(
@@ -479,12 +485,12 @@ def create_wrapper(
     allow_absent_managed_event_triggers: bool,
     bootstrap_lock_cursor: Any,
     bootstrap_lock_key: Any,
-) -> str:
+) -> tuple[str, WrapperFunctionFingerprint]:
     """Publish the closed wrapper as one all-or-nothing transaction."""
 
     cursor.execute("BEGIN")
     try:
-        schema_name = _publish_wrapper(
+        schema_name, fingerprint = _publish_wrapper(
             cursor,
             instance_name=instance_name,
             database_name=database_name,
@@ -501,7 +507,7 @@ def create_wrapper(
             allow_unlocked_recovery_for_tests=False,
         )
         cursor.execute("COMMIT")
-        return schema_name
+        return schema_name, fingerprint
     except BaseException:
         with suppress(Exception):
             cursor.execute("ROLLBACK")
@@ -602,7 +608,7 @@ def _teardown_wrapper(
     if function_rows:
         function_execute = False
         try:
-            function_oid, function_owner = _wrapper_function_contract(
+            function_oid, function_owner, _fingerprint = _wrapper_function_contract(
                 cursor,
                 schema_name=schema_name,
                 target_application_id=target_application_id,
@@ -611,7 +617,7 @@ def _teardown_wrapper(
             )
             function_execute = bootstrap_application_id is not None
         except RuntimeError:
-            function_oid, function_owner = _wrapper_function_contract(
+            function_oid, function_owner, _fingerprint = _wrapper_function_contract(
                 cursor,
                 schema_name=schema_name,
                 target_application_id=target_application_id,

@@ -226,6 +226,103 @@ def test_tombstone_delete_retries_after_three_direct_misses_then_reappearance(
     assert tombstone._DELETION_DEADLINE_SECONDS == 180.0
     assert tombstone._DELETION_STABILITY_SECONDS == 30.0
     assert retire_calls == 2
-    assert all(30.0 <= deadline < 180.0 for deadline in retirement_deadlines)
+    assert retirement_deadlines == [180.0, 180.0]
     assert account_gets > 3
     assert inventory_calls == 1
+
+
+def test_tombstone_final_absence_proof_gets_a_fresh_bounded_window(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    display_name, marker_application_id = tombstone.orphan_tombstone_contract(
+        base_external_id=_BASE_EXTERNAL_ID,
+        application_id=_APPLICATION_ID,
+        principal_id=_PRINCIPAL_ID,
+        signing_key=_SIGNING_KEY,
+    )
+    marker = (
+        "78451793422042",
+        _APPLICATION_ID,
+        display_name,
+        marker_application_id,
+        _PRINCIPAL_ID,
+    )
+    now = 10.0
+    proof_windows: list[float] = []
+
+    def retire(*_args: object, **kwargs: object) -> None:
+        nonlocal now
+        assert kwargs["deadline_seconds"] == 180.0
+        now += 179.0
+
+    def prove(*_args: object, **kwargs: object) -> None:
+        proof_windows.append(float(kwargs["deadline_at"]) - now)
+
+    monkeypatch.setattr(tombstone, "orphan_tombstones", lambda *_args, **_kwargs: [marker])
+    monkeypatch.setattr(account_principal, "retire_exact_account_principal", retire)
+    monkeypatch.setattr(tombstone, "_prove_tombstone_absent_by_direct_id", prove)
+    monkeypatch.setattr(tombstone.time, "monotonic", lambda: now)
+
+    tombstone.delete_orphan_tombstone(
+        MagicMock(),
+        account_client=MagicMock(),
+        tombstone_id=marker[0],
+        base_external_id=_BASE_EXTERNAL_ID,
+        allow_unlocked_recovery_for_tests=True,
+    )
+
+    assert proof_windows == [180.0]
+
+
+def test_tombstone_retirement_response_loss_retries_exact_identity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    display_name, marker_application_id = tombstone.orphan_tombstone_contract(
+        base_external_id=_BASE_EXTERNAL_ID,
+        application_id=_APPLICATION_ID,
+        principal_id=_PRINCIPAL_ID,
+        signing_key=_SIGNING_KEY,
+    )
+    marker = (
+        "78451793422042",
+        _APPLICATION_ID,
+        display_name,
+        marker_application_id,
+        _PRINCIPAL_ID,
+    )
+    retire_calls: list[tuple[str, str, str]] = []
+    proof_calls = 0
+
+    def retire(*_args: object, **kwargs: object) -> None:
+        retire_calls.append(
+            (
+                str(kwargs["principal_id"]),
+                str(kwargs["application_id"]),
+                str(kwargs["display_name"]),
+            )
+        )
+        if len(retire_calls) == 1:
+            raise RuntimeError("retirement response lost after commit")
+
+    def prove(*_args: object, **_kwargs: object) -> None:
+        nonlocal proof_calls
+        proof_calls += 1
+
+    monkeypatch.setattr(tombstone, "orphan_tombstones", lambda *_args, **_kwargs: [marker])
+    monkeypatch.setattr(account_principal, "retire_exact_account_principal", retire)
+    monkeypatch.setattr(tombstone, "_prove_tombstone_absent_by_direct_id", prove)
+    monkeypatch.setattr(tombstone.time, "sleep", lambda _seconds: None)
+
+    tombstone.delete_orphan_tombstone(
+        MagicMock(),
+        account_client=MagicMock(),
+        tombstone_id=marker[0],
+        base_external_id=_BASE_EXTERNAL_ID,
+        allow_unlocked_recovery_for_tests=True,
+    )
+
+    assert retire_calls == [
+        (marker[0], marker_application_id, display_name),
+        (marker[0], marker_application_id, display_name),
+    ]
+    assert proof_calls == 1

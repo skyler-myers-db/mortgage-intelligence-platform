@@ -645,7 +645,13 @@ wrapper pins its owner, function kind, zero argument/default/variadic shape,
 return type, SQL language, invoker security, volatility, parallel safety,
 leakproof/strict flags, `search_path=pg_catalog`,
 `createrole_self_grant=''`, non-null parsed `prosqlbody`, and the full canonical
-`pg_get_functiondef()` text, SHA-256, and byte length. Its parsed body hard-binds
+`pg_get_functiondef()` text, SHA-256, and byte length through the deployer. The
+deployer then captures the function OID, catalog transaction identity, raw
+`prosqlbody` hash/length, and all caller-invariant metadata. The disposable
+bootstrap session must match that exact publication fingerprint immediately
+before invocation; it does not compare its caller-dependent deparse because
+that identity intentionally cannot see `public` in its effective search path.
+Its parsed body hard-binds
 the reviewed application ID, casts both provider arguments to
 `pg_catalog.text`, and returns `NULL` unless `current_user` and `session_user`
 both equal the exact disposable bootstrap application ID. A normal `pg_depend`
@@ -788,8 +794,11 @@ original principal, the exact OAuth label supplies its immutable SCIM ID and
 recovery performs a direct GET before selecting the
 absent-principal secret path. The tombstone is account-deleted only after exact secret,
 account-principal, role, OID, PID, SQL, and control-plane absence is proven. If
-any step is unproven, the remaining signed authority is retained and the release
-fails. If the canonical lock is lost during ordinary recovery, no workspace,
+retirement succeeds, a separate bounded 180-second window must then prove the
+marker's immutable account/workspace ID remains absent for 30 continuous
+seconds; provider latency in retirement cannot consume that final proof window.
+If any step is unproven, the remaining signed authority is retained and the
+release fails. If the canonical lock is lost during ordinary recovery, no workspace,
 account, or provider-role mutation is permitted. The finalizer's only exception
 is credential quarantine of the exact immutable principal
 created and already verified by that run; it may not discover or mutate a replacement identity.

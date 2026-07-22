@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import hashlib
+from dataclasses import dataclass
 from typing import Any
 
 from psycopg import sql as psql
 
 _WRAPPER_FUNCTION = "create_target_role"
 _WRAPPER_OWNER = "pg_database_owner"
+
+
+@dataclass(frozen=True)
+class WrapperFunctionFingerprint:
+    """Caller-invariant identity for one already-canonical wrapper function."""
+
+    catalog: tuple[Any, ...]
 
 
 def canonical_wrapper_definition(
@@ -85,7 +93,8 @@ def wrapper_function_contract(
     target_application_id: str,
     bootstrap_application_id: str,
     allow_bootstrap_execute: bool,
-) -> tuple[int, str]:
+    expected_fingerprint: WrapperFunctionFingerprint | None = None,
+) -> tuple[int, str, WrapperFunctionFingerprint]:
     cursor.execute(
         """
         SELECT routine.oid,
@@ -110,6 +119,9 @@ def wrapper_function_contract(
                routine.proconfig,
                routine.prosrc,
                routine.prosqlbody IS NOT NULL,
+               routine.xmin::text,
+               encode(sha256(convert_to(routine.prosqlbody::text, 'UTF8')), 'hex'),
+               octet_length(convert_to(routine.prosqlbody::text, 'UTF8')),
                pg_get_functiondef(routine.oid),
                encode(sha256(convert_to(pg_get_functiondef(routine.oid), 'UTF8')), 'hex'),
                octet_length(convert_to(pg_get_functiondef(routine.oid), 'UTF8'))
@@ -126,15 +138,12 @@ def wrapper_function_contract(
     if len(rows) != 1:
         raise RuntimeError("temporary Lakebase bootstrap wrapper function inventory drifted")
     row = rows[0]
-    definition = canonical_wrapper_definition(
-        schema_name=schema_name,
-        target_application_id=target_application_id,
-        bootstrap_application_id=bootstrap_application_id,
-    )
-    definition_bytes = definition.encode()
-    actual_tail = list(row[1:])
-    actual_tail[18] = tuple(sorted(str(item) for item in (actual_tail[18] or ())))
-    expected_tail = (
+    invariant = list(row[:25])
+    invariant[19] = tuple(sorted(str(item) for item in (invariant[19] or ())))
+    fingerprint = WrapperFunctionFingerprint(catalog=tuple(invariant))
+    actual_shape = list(row[1:22])
+    actual_shape[18] = tuple(sorted(str(item) for item in (actual_shape[18] or ())))
+    expected_shape = (
         schema_name,
         _WRAPPER_FUNCTION,
         "f",
@@ -156,12 +165,25 @@ def wrapper_function_contract(
         ("createrole_self_grant=", "search_path=pg_catalog"),
         "",
         True,
-        definition,
-        hashlib.sha256(definition_bytes).hexdigest(),
-        len(definition_bytes),
     )
-    if tuple(actual_tail) != expected_tail:
+    if tuple(actual_shape) != expected_shape:
         raise RuntimeError("temporary Lakebase bootstrap wrapper function contract drifted")
+    if expected_fingerprint is None:
+        definition = canonical_wrapper_definition(
+            schema_name=schema_name,
+            target_application_id=target_application_id,
+            bootstrap_application_id=bootstrap_application_id,
+        )
+        definition_bytes = definition.encode()
+        expected_definition = (
+            definition,
+            hashlib.sha256(definition_bytes).hexdigest(),
+            len(definition_bytes),
+        )
+        if tuple(row[25:]) != expected_definition:
+            raise RuntimeError("temporary Lakebase bootstrap wrapper function contract drifted")
+    elif fingerprint != expected_fingerprint:
+        raise RuntimeError("temporary Lakebase bootstrap wrapper function changed after publication")
     function_oid, owner = int(row[0]), str(row[12])
 
     cursor.execute(
@@ -189,4 +211,4 @@ def wrapper_function_contract(
     if actual_acl != expected_acl:
         raise RuntimeError("temporary Lakebase bootstrap wrapper function ACL drifted")
     _provider_function_dependency_contract(cursor, function_oid=function_oid)
-    return function_oid, owner
+    return function_oid, owner, fingerprint

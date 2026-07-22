@@ -81,7 +81,7 @@ def assert_recoverable_bootstrap_dependencies(
         if function_rows:
             function_execute = False
             try:
-                function_oid, function_owner = wrapper_function_contract(
+                function_oid, function_owner, _fingerprint = wrapper_function_contract(
                     cursor,
                     schema_name=schema_name,
                     target_application_id=target_application_id,
@@ -90,7 +90,7 @@ def assert_recoverable_bootstrap_dependencies(
                 )
                 function_execute = True
             except RuntimeError:
-                function_oid, function_owner = wrapper_function_contract(
+                function_oid, function_owner, _fingerprint = wrapper_function_contract(
                     cursor,
                     schema_name=schema_name,
                     target_application_id=target_application_id,

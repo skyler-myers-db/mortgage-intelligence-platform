@@ -214,7 +214,14 @@ class _State:
         self.wrapper_language = "sql"
         self.wrapper_security_definer = False
         self.wrapper_prosqlbody_present = True
+        self.wrapper_catalog_xmin = "700"
+        self.wrapper_sqlbody_sha256 = "a" * 64
+        self.wrapper_sqlbody_bytes = 4096
         self.wrapper_definition_override: str | None = None
+        self.bootstrap_qualified_wrapper_definition = False
+        self.bootstrap_wrapper_sqlbody_sha256_override: str | None = None
+        self.bootstrap_wrapper_function_acl_override: list[tuple[Any, ...]] | None = None
+        self.bootstrap_wrapper_provider_dependencies_override: list[tuple[Any, ...]] | None = None
         self.wrapper_provider_dependencies_override: list[tuple[Any, ...]] | None = None
         self.wrapper_transaction_snapshot: tuple[Any, ...] | None = None
         self.deployer_current_user = "deployer"
@@ -567,6 +574,9 @@ class _DeployerCursor:
                         ["search_path=pg_catalog", "createrole_self_grant="],
                         "",
                         self.state.wrapper_prosqlbody_present,
+                        self.state.wrapper_catalog_xmin,
+                        self.state.wrapper_sqlbody_sha256,
+                        self.state.wrapper_sqlbody_bytes,
                         definition,
                         __import__("hashlib").sha256(definition.encode()).hexdigest(),
                         len(definition.encode()),
@@ -878,6 +888,40 @@ class _BootstrapCursor:
             deployer_cursor.execute(query, _params)
             self._one = deployer_cursor.fetchone()
             self._all = deployer_cursor.fetchall()
+            if (
+                self.state.bootstrap_qualified_wrapper_definition
+                and "routine.provolatile" in rendered
+                and self._all
+            ):
+                row = list(self._all[0])
+                definition = str(row[25]).replace(
+                    "databricks_create_role(",
+                    "public.databricks_create_role(",
+                    1,
+                )
+                row[25] = definition
+                row[26] = __import__("hashlib").sha256(definition.encode()).hexdigest()
+                row[27] = len(definition.encode())
+                self._all = [tuple(row)]
+            if (
+                self.state.bootstrap_wrapper_sqlbody_sha256_override is not None
+                and "routine.provolatile" in rendered
+                and self._all
+            ):
+                row = list(self._all[0])
+                row[23] = self.state.bootstrap_wrapper_sqlbody_sha256_override
+                self._all = [tuple(row)]
+            if (
+                self.state.bootstrap_wrapper_function_acl_override is not None
+                and "aclexplode(routine.proacl)" in rendered
+                and "namespace.nspname = 'public'" not in rendered
+            ):
+                self._all = list(self.state.bootstrap_wrapper_function_acl_override)
+            if (
+                self.state.bootstrap_wrapper_provider_dependencies_override is not None
+                and "referenced.proname" in rendered
+            ):
+                self._all = list(self.state.bootstrap_wrapper_provider_dependencies_override)
 
     def fetchone(self) -> tuple[Any, ...] | None:
         return self._one
@@ -1441,6 +1485,62 @@ def test_one_use_creator_leaves_safe_role_and_empty_membership_graph() -> None:
                 for candidate in state.deployer_statements[previous_mutation + 1 : index]
             )
             previous_mutation = index
+
+
+def test_bootstrap_caller_qualified_deparse_uses_published_raw_fingerprint() -> None:
+    state = _State()
+    state.bootstrap_qualified_wrapper_definition = True
+
+    _run(state)
+
+    assert any(action == "provider_call" for action, _ in state.actions)
+    assert state.target_profile == bootstrap.SAFE_OAUTH_PROFILE
+    assert state.creator_profile is None
+    assert state.wrapper_schema_exists is False
+
+
+def test_bootstrap_caller_rejects_published_raw_body_fingerprint_drift() -> None:
+    state = _State()
+    state.bootstrap_wrapper_sqlbody_sha256_override = "f" * 64
+
+    with pytest.raises(RuntimeError, match="changed after publication"):
+        _run(state)
+
+    assert not any(action == "provider_call" for action, _ in state.actions)
+    assert state.creator_profile is None
+    assert state.bootstrap_sp_present is False
+    assert state.wrapper_schema_exists is False
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "error"),
+    [
+        (
+            "bootstrap_wrapper_function_acl_override",
+            [("pg_database_owner", "EXECUTE", False, "pg_database_owner")],
+            "function ACL drifted",
+        ),
+        (
+            "bootstrap_wrapper_provider_dependencies_override",
+            [],
+            "provider dependency drifted",
+        ),
+    ],
+)
+def test_bootstrap_caller_rechecks_published_acl_and_dependency(
+    field: str,
+    value: list[tuple[Any, ...]],
+    error: str,
+) -> None:
+    state = _State()
+    setattr(state, field, value)
+
+    with pytest.raises(RuntimeError, match=error):
+        _run(state)
+
+    assert not any(action == "provider_call" for action, _ in state.actions)
+    assert state.creator_profile is None
+    assert state.wrapper_schema_exists is False
 
 
 @pytest.mark.parametrize(
