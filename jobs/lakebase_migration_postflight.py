@@ -68,7 +68,7 @@ def _postflight_app_role_grants(cur: object, role: str) -> None:
         """
         SELECT CASE
                    WHEN c.relkind = 'r' THEN c.relname
-                   ELSE '__non_base_relation__:' || c.relname || ':' || c.relkind
+                   ELSE '__non_base_relation__:' || c.relname || ':' || c.relkind::text
                END
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -300,7 +300,7 @@ def _postflight_ai_gateway_verifier_grants(cur: object, role: str) -> None:
         """
         SELECT CASE
                    WHEN c.relkind = 'r' THEN c.relname
-                   ELSE '__non_base_relation__:' || c.relname || ':' || c.relkind
+                   ELSE '__non_base_relation__:' || c.relname || ':' || c.relkind::text
                END
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace

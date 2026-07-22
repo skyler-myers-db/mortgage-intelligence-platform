@@ -2571,6 +2571,43 @@ def test_postflight_rejects_unreviewed_new_table() -> None:
         lakebase_migrate._postflight_app_role_grants(cursor, role)
 
 
+def test_relation_inventory_casts_pg_relkind_before_text_concatenation() -> None:
+    app_role = "app-role"
+    app_cursor = _Cursor(
+        fetchall_results=[
+            [(app_role,)],
+            _table_rows(add="unreviewed_runtime_state"),
+        ],
+        fetchone_results=[(True, False, False, True, False)],
+    )
+    verifier_role = "verifier-role"
+    verifier_cursor = _Cursor(
+        fetchall_results=[
+            [(verifier_role,)],
+            [("mip_app", "USAGE")],
+            _table_rows(add="unreviewed_runtime_state"),
+        ],
+        fetchone_results=[(True, False, False, True, False)],
+    )
+
+    for postflight, cursor, role in (
+        (lakebase_migrate._postflight_app_role_grants, app_cursor, app_role),
+        (
+            lakebase_migrate._postflight_ai_gateway_verifier_grants,
+            verifier_cursor,
+            verifier_role,
+        ),
+    ):
+        with pytest.raises(RuntimeError, match="unexpected=.*unreviewed_runtime_state"):
+            postflight(cursor, role)
+        inventory_query = next(
+            statement
+            for statement, _params in cursor.executed
+            if "__non_base_relation__" in statement
+        )
+        assert "c.relkind::text" in inventory_query
+
+
 def test_postflight_rejects_non_exact_role() -> None:
     cursor = _Cursor(fetchall_results=[[("different-role",)]])
 
