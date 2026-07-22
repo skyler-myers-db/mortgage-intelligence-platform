@@ -54,6 +54,11 @@ def test_third_party_license_notice_covers_weak_copyleft_and_map_data() -> None:
         "Apache-2.0",
         "psycopg",
         "LGPL-3.0-only",
+        "pg8000",
+        "BSD-3-Clause",
+        "scramp",
+        "MIT-0",
+        "asn1crypto",
         "@axe-core/playwright",
         "MPL-2.0",
         "hypothesis",
@@ -77,11 +82,17 @@ def test_python_requirements_use_real_transitive_lockfile() -> None:
     assert "uvicorn[standard]==0.47.0" in requirements_in
     assert "databricks-sql-connector==4.2.6" in requirements_in
     assert "boto3==1.43.50" in requirements_in
+    assert "pg8000==1.31.5" in requirements_in
+    assert "gitpython>=3.1.51,<4" in requirements_in
+    assert "pyasn1>=0.6.4,<1" in requirements_in
     for required_pin in (
         "boto3==1.43.50",
         "uvicorn==0.47.0",
         "databricks-sql-connector==4.2.6",
         "pyjwt==2.13.0",
+        "gitpython==3.1.54",
+        "pyasn1==0.6.4",
+        "pg8000==1.31.5",
         "psycopg==3.3.4",
         "opentelemetry-sdk==1.41.1",
     ):

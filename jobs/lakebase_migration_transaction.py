@@ -5,7 +5,11 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from jobs.lakebase_migration_integrity import _run_outreach_integrity_probe
-from jobs.lakebase_migration_provider_plane import _postflight_provider_schema_boundary
+from jobs.lakebase_migration_provider_plane import (
+    _postflight_no_pre_boundary_sessions,
+    _postflight_provider_schema_boundary,
+    _postflight_public_schema_boundary,
+)
 from jobs.lakebase_migration_schema_hooks import (
     _postflight_event_trigger_inventory,
     _postflight_oauth_role_function_contract,
@@ -46,6 +50,18 @@ def _run_transaction(
             # below proves all of them exist before commit.
             target_roles = tuple(
                 role for role in (app_role, ai_gateway_verifier_role) if role is not None
+            )
+            _postflight_public_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="schema preflight",
+                allow_legacy_public_usage=False,
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
+            _postflight_no_pre_boundary_sessions(
+                cur,
+                target_roles,
+                allow_absent_provider_schema=allow_absent_provider_schema,
             )
             _postflight_provider_schema_boundary(
                 cur,
@@ -97,6 +113,13 @@ def _run_transaction(
                 cur,
                 target_roles,
                 principal_label="schema postflight",
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
+            _postflight_public_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="schema postflight",
+                allow_legacy_public_usage=False,
                 allow_absent_provider_schema=allow_absent_provider_schema,
             )
         conn.commit()

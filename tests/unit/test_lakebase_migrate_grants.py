@@ -10,7 +10,11 @@ from typing import Any
 import pytest
 
 from backend.schemas import lender_identity
-from jobs import lakebase_migrate
+from jobs import (
+    lakebase_migrate,
+    lakebase_migration_grants,
+    lakebase_migration_transaction,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -210,9 +214,20 @@ def _routine_inventory_rows() -> list[tuple[str, str, str, str, str, bool, str]]
     ]
 
 
-def _app_routine_privilege_rows() -> list[tuple[str, str, str, str, bool, str, bool]]:
+def _app_routine_privilege_rows() -> list[tuple[Any, ...]]:
     return sorted(
-        ("mip_app", name, arguments, "f", False, "migration-owner", True)
+        (
+            "mip_app",
+            name,
+            arguments,
+            "f",
+            False,
+            "migration-owner",
+            0,
+            False,
+            True,
+            False,
+        )
         for (name, arguments), privileges in lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES.items()
         if "EXECUTE" in privileges
     )
@@ -344,6 +359,39 @@ def _managed_provider_public_view_rows() -> list[tuple[Any, ...]]:
             source_sha256,
             source_bytes,
         ) in sorted(lakebase_migrate._MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT.items())
+    ]
+
+
+def _public_schema_acl_rows(*, legacy: bool) -> list[tuple[str, str, bool, str]]:
+    rows = [
+        ("pg_database_owner", "CREATE", False, "pg_database_owner"),
+        ("pg_database_owner", "USAGE", False, "pg_database_owner"),
+        ("databricks_superuser", "CREATE", True, "pg_database_owner"),
+        ("databricks_superuser", "USAGE", True, "pg_database_owner"),
+        ("databricks_writer_16538", "CREATE", False, "pg_database_owner"),
+        ("databricks_writer_16538", "USAGE", False, "pg_database_owner"),
+    ]
+    if legacy:
+        rows.append(("PUBLIC", "USAGE", False, "pg_database_owner"))
+    return sorted(rows)
+
+
+def _public_schema_boundary_results(
+    *,
+    legacy: bool,
+    capabilities: list[tuple[str, str]] | None = None,
+    direct_routine_acl: list[tuple[Any, ...]] | None = None,
+    direct_relation_acl: list[tuple[Any, ...]] | None = None,
+    direct_default_acl: list[tuple[Any, ...]] | None = None,
+) -> list[list[tuple[Any, ...]]]:
+    expected_capabilities = [("app-role", "USAGE"), ("verifier-role", "USAGE")] if legacy else []
+    return [
+        [("public", "pg_database_owner", 16538)],
+        _public_schema_acl_rows(legacy=legacy),
+        expected_capabilities if capabilities is None else capabilities,
+        list(direct_routine_acl or []),
+        list(direct_relation_acl or []),
+        list(direct_default_acl or []),
     ]
 
 
@@ -485,9 +533,7 @@ def test_managed_event_trigger_inventory_rejects_every_shape_or_source_drift(
 def test_managed_event_trigger_inventory_accepts_only_reviewed_function_acls(
     function_acl: list[str] | None,
 ) -> None:
-    cursor = _Cursor(
-        fetchall_results=[_managed_event_trigger_rows(function_acl=function_acl)]
-    )
+    cursor = _Cursor(fetchall_results=[_managed_event_trigger_rows(function_acl=function_acl)])
 
     lakebase_migrate._postflight_event_trigger_inventory(
         cursor,
@@ -507,9 +553,7 @@ def test_managed_event_trigger_inventory_accepts_only_reviewed_function_acls(
 def test_managed_event_trigger_inventory_rejects_unreviewed_function_acls(
     function_acl: list[str],
 ) -> None:
-    cursor = _Cursor(
-        fetchall_results=[_managed_event_trigger_rows(function_acl=function_acl)]
-    )
+    cursor = _Cursor(fetchall_results=[_managed_event_trigger_rows(function_acl=function_acl)])
 
     with pytest.raises(RuntimeError, match=r"forbidden_acls=.*on_create_schema"):
         lakebase_migrate._postflight_event_trigger_inventory(
@@ -582,6 +626,251 @@ def test_absent_provider_schema_requires_explicit_local_test_seam() -> None:
         allow_absent_provider_schema=True,
     )
     assert local_cursor.executed == []
+
+
+@pytest.mark.parametrize(
+    ("legacy", "allow_legacy"),
+    ((True, True), (False, False), (False, True)),
+)
+def test_public_schema_boundary_accepts_only_reviewed_legacy_or_hardened_state(
+    legacy: bool,
+    allow_legacy: bool,
+) -> None:
+    cursor = _Cursor(fetchall_results=_public_schema_boundary_results(legacy=legacy))
+
+    lakebase_migrate._postflight_public_schema_boundary(
+        cursor,
+        ("app-role", "verifier-role"),
+        principal_label="ACL boundary",
+        allow_legacy_public_usage=allow_legacy,
+    )
+    direct_routine_query = cursor.executed[3][0]
+    direct_relation_query = cursor.executed[4][0]
+    assert "owner.rolname = 'cloud_admin'" not in direct_routine_query
+    assert "owner.rolname = 'cloud_admin'" not in direct_relation_query
+
+
+def test_public_schema_boundary_rejects_wrong_owner() -> None:
+    cursor = _Cursor(fetchall_results=[[("public", "attacker", 16538)]])
+    with pytest.raises(RuntimeError, match="ownership mismatch"):
+        lakebase_migrate._postflight_public_schema_boundary(
+            cursor,
+            ("app-role",),
+            principal_label="ACL boundary",
+            allow_legacy_public_usage=True,
+        )
+
+
+@pytest.mark.parametrize(
+    "mutated_row",
+    (
+        ("PUBLIC", "CREATE", False, "pg_database_owner"),
+        ("PUBLIC", "USAGE", True, "pg_database_owner"),
+        ("PUBLIC", "USAGE", False, "attacker"),
+        ("attacker", "USAGE", False, "pg_database_owner"),
+        ("app-role", "USAGE", False, "pg_database_owner"),
+    ),
+)
+def test_public_schema_boundary_rejects_extra_acl_shape(
+    mutated_row: tuple[str, str, bool, str],
+) -> None:
+    results = _public_schema_boundary_results(legacy=False)
+    results[1] = [*results[1], mutated_row]
+    cursor = _Cursor(fetchall_results=results)
+    with pytest.raises(RuntimeError, match="public-schema ACL mismatch"):
+        lakebase_migrate._postflight_public_schema_boundary(
+            cursor,
+            ("app-role", "verifier-role"),
+            principal_label="ACL boundary",
+            allow_legacy_public_usage=True,
+        )
+
+
+def test_public_schema_boundary_rejects_missing_provider_acl() -> None:
+    results = _public_schema_boundary_results(legacy=False)
+    results[1] = results[1][1:]
+    cursor = _Cursor(fetchall_results=results)
+    with pytest.raises(RuntimeError, match="missing="):
+        lakebase_migrate._postflight_public_schema_boundary(
+            cursor,
+            ("app-role", "verifier-role"),
+            principal_label="ACL boundary",
+            allow_legacy_public_usage=False,
+        )
+
+
+def test_public_schema_boundary_rejects_inherited_target_capability() -> None:
+    cursor = _Cursor(
+        fetchall_results=_public_schema_boundary_results(
+            legacy=False,
+            capabilities=[("app-role", "USAGE")],
+        )
+    )
+    with pytest.raises(RuntimeError, match="runtime access mismatch"):
+        lakebase_migrate._postflight_public_schema_boundary(
+            cursor,
+            ("app-role", "verifier-role"),
+            principal_label="ACL boundary",
+            allow_legacy_public_usage=False,
+        )
+
+
+def test_public_schema_boundary_rejects_dormant_direct_provider_routine_acl() -> None:
+    cursor = _Cursor(
+        fetchall_results=_public_schema_boundary_results(
+            legacy=False,
+            direct_routine_acl=[
+                (
+                    "verifier-role",
+                    "databricks_clear_scim_me_cache",
+                    "",
+                    "EXECUTE",
+                    False,
+                    "cloud_admin",
+                )
+            ],
+        )
+    )
+    with pytest.raises(RuntimeError, match="direct ACL mismatch"):
+        lakebase_migrate._postflight_public_schema_boundary(
+            cursor,
+            ("app-role", "verifier-role"),
+            principal_label="ACL boundary",
+            allow_legacy_public_usage=False,
+        )
+
+
+@pytest.mark.parametrize(
+    "direct_relation_acl",
+    (
+        [("relation", "app-role", "local_cache", None, "SELECT", False, "cloud_admin")],
+        [
+            (
+                "relation",
+                "verifier-role",
+                "provider_sequence",
+                None,
+                "USAGE",
+                False,
+                "cloud_admin",
+            )
+        ],
+        [
+            (
+                "column",
+                "verifier-role",
+                "local_cache",
+                "payload",
+                "SELECT",
+                False,
+                "cloud_admin",
+            )
+        ],
+    ),
+    ids=("relation", "sequence", "column"),
+)
+def test_public_schema_boundary_rejects_dormant_direct_provider_relation_acl(
+    direct_relation_acl: list[tuple[Any, ...]],
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=_public_schema_boundary_results(
+            legacy=False,
+            direct_relation_acl=direct_relation_acl,
+        )
+    )
+    with pytest.raises(RuntimeError, match="public-relation direct ACL mismatch"):
+        lakebase_migrate._postflight_public_schema_boundary(
+            cursor,
+            ("app-role", "verifier-role"),
+            principal_label="ACL boundary",
+            allow_legacy_public_usage=False,
+        )
+
+
+@pytest.mark.parametrize("object_schema", ("global", "public"))
+def test_public_schema_boundary_rejects_provider_default_acl(
+    object_schema: str,
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=_public_schema_boundary_results(
+            legacy=False,
+            direct_default_acl=[("app-role", "r", "SELECT", False, "cloud_admin")],
+        )
+    )
+    with pytest.raises(RuntimeError, match="public default-ACL mismatch"):
+        lakebase_migrate._postflight_public_schema_boundary(
+            cursor,
+            ("app-role", "verifier-role"),
+            principal_label=f"{object_schema} ACL boundary",
+            allow_legacy_public_usage=False,
+        )
+
+    default_query = cursor.executed[-1][0]
+    assert "LEFT JOIN pg_namespace" in default_query
+    assert "default_acl.defaclnamespace = 0" in default_query
+    assert "grantee.rolname = ANY" in default_query
+
+
+@pytest.mark.parametrize("legacy", (True, False), ids=("transition", "idempotent"))
+def test_public_schema_close_orders_exact_preflight_revoke_and_postflight(
+    legacy: bool,
+) -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            *_public_schema_boundary_results(legacy=legacy),
+            [("migration-owner", "migration-owner", True)],
+            *_public_schema_boundary_results(legacy=False),
+        ]
+    )
+    lakebase_migrate._close_public_schema_boundary(
+        cursor,
+        ("app-role", "verifier-role"),
+        principal_label="OAuth quarantine",
+    )
+    statements = [statement for statement, _params in cursor.executed]
+    revoke_index = statements.index("REVOKE ALL PRIVILEGES ON SCHEMA public FROM PUBLIC")
+    assert revoke_index == 8
+    assert statements[7] == "SET LOCAL ROLE pg_database_owner"
+    assert statements[9] == "RESET ROLE"
+    assert "provider public-routine" not in statements[-1]
+
+
+def test_public_schema_close_rejects_missing_database_owner_set_authority() -> None:
+    cursor = _Cursor(
+        fetchall_results=[
+            *_public_schema_boundary_results(legacy=True),
+            [("migration-owner", "database-owner", False)],
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="closure authority mismatch"):
+        lakebase_migrate._close_public_schema_boundary(
+            cursor,
+            ("app-role", "verifier-role"),
+            principal_label="OAuth quarantine",
+        )
+
+    statements = [statement for statement, _params in cursor.executed]
+    assert "SET LOCAL ROLE pg_database_owner" not in statements
+    assert "REVOKE ALL PRIVILEGES ON SCHEMA public FROM PUBLIC" not in statements
+
+
+def test_public_schema_cutover_rejects_any_surviving_target_session() -> None:
+    cursor = _Cursor(fetchall_results=[[("app-role", 1)]])
+    with pytest.raises(RuntimeError, match="surviving pre-boundary"):
+        lakebase_migration_grants._postflight_no_pre_boundary_sessions(
+            cursor,
+            ("app-role", "verifier-role"),
+        )
+    assert "FROM pg_stat_activity" in cursor.executed[0][0]
+
+
+def test_public_schema_cutover_accepts_zero_sessions() -> None:
+    cursor = _Cursor(fetchall_results=[[]])
+    lakebase_migration_grants._postflight_no_pre_boundary_sessions(
+        cursor,
+        ("app-role", "verifier-role"),
+    )
 
 
 @pytest.mark.parametrize(
@@ -715,6 +1004,7 @@ def _successful_cursor(
         fetchall_results.append([(verifier_role,)])
     fetchall_results.extend(
         [
+            list(acl_event_preflight_rows or []),
             [("analytics",), ("mip_app",), ("public",)],
             _all_table_inventory_rows(),
             _all_sequence_inventory_rows(),
@@ -736,7 +1026,7 @@ def _successful_cursor(
             _sequence_rows(),
             _sequence_privilege_rows(),
             [],
-            [("mip_app", "USAGE"), ("public", "USAGE")],
+            [("mip_app", "USAGE")],
             [],
             [],
             _app_routine_privilege_rows(),
@@ -755,7 +1045,7 @@ def _successful_cursor(
         fetchall_results.extend(
             [
                 [(verifier_role,)],
-                [("mip_app", "USAGE"), ("public", "USAGE")],
+                [("mip_app", "USAGE")],
                 _table_rows(),
                 _verifier_table_privilege_rows(),
                 [],
@@ -850,6 +1140,85 @@ def test_schema_and_seed_run_in_one_rollback_capable_transaction(
     assert connection.commit_count == 0
     assert connection.rollback_count == 1
     assert connection.closed is True
+
+
+def test_schema_transaction_proves_committed_public_cutover_before_hooks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cursor = _Cursor(fetchall_results=[])
+    connection = _Connection(cursor)
+    calls: list[str] = []
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_postflight_public_schema_boundary",
+        lambda *_args, principal_label, **_kwargs: calls.append(f"public:{principal_label}"),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_postflight_no_pre_boundary_sessions",
+        lambda *_args, **_kwargs: calls.append("sessions"),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_postflight_provider_schema_boundary",
+        lambda *_args, principal_label, **_kwargs: calls.append(f"provider:{principal_label}"),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_postflight_oauth_role_function_contract",
+        lambda *_args, principal_label, **_kwargs: calls.append(f"oauth:{principal_label}"),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_preflight_executable_schema_hooks",
+        lambda *_args: calls.append("hooks") or set(),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_postflight_event_trigger_inventory",
+        lambda *_args, principal_label, **_kwargs: calls.append(f"events:{principal_label}"),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_postflight_trigger_inventory",
+        lambda *_args, principal_label, **_kwargs: calls.append(f"triggers:{principal_label}")
+        or set(),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_quarantine_existing_reviewed_triggers",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        lakebase_migration_transaction,
+        "_quarantine_reviewed_constraints",
+        lambda *_args: None,
+    )
+
+    lakebase_migration_transaction._run_transaction(
+        ("SCHEMA",),
+        {},
+        app_role="app-role",
+        ai_gateway_verifier_role="verifier-role",
+        allow_absent_managed_event_triggers=True,
+    )
+
+    assert calls[:4] == [
+        "public:schema preflight",
+        "sessions",
+        "provider:schema preflight",
+        "oauth:schema preflight",
+    ]
+    assert calls.index("sessions") < calls.index("hooks")
+    assert calls[-2:] == [
+        "provider:schema postflight",
+        "public:schema postflight",
+    ]
+    assert connection.commit_count == 1
 
 
 def test_integrity_probe_and_exact_trigger_postflight_run_before_commit(
@@ -1087,6 +1456,12 @@ def test_executable_hook_query_avoids_reserved_collation_alias() -> None:
     assert "WHERE rolname = current_user" in query
     assert "CROSS JOIN current_executor" in query
     assert query.count("namespace.nspname <> '__db_system'") == 6
+    assert "rewrite_rule.rulename = '_RETURN'" in query
+    assert "namespace.nspname = 'public'" in query
+    assert "JOIN pg_roles relation_owner ON relation_owner.oid = relation.relowner" in query
+    assert "relation_owner.rolname = 'cloud_admin'" in query
+    assert "relation.relname = ANY" not in query
+    assert cursor.executed[0][1] is None
 
 
 def test_schema_hook_lexing_ignores_literals_and_sql_grouping_keywords() -> None:
@@ -1095,8 +1470,7 @@ def test_schema_hook_lexing_ignores_literals_and_sql_grouping_keywords() -> None
         "competitor_lender_label ~ '^Competitor ([A-Z]|Other)$'::text)"
     )
     predicate = (
-        "((request_id IS NOT NULL) AND "
-        "(event_type = ANY (ARRAY['ADMIN_OPERATION_RUN'::text])))"
+        "((request_id IS NOT NULL) AND " "(event_type = ANY (ARRAY['ADMIN_OPERATION_RUN'::text])))"
     )
 
     assert lakebase_migrate._schema_hook_function_calls(constraint) == {"check"}
@@ -1156,9 +1530,7 @@ def test_executable_hook_rejects_unreviewed_operator_dependencies(
     )
 
     with pytest.raises(RuntimeError, match=rf"executable-hook.*{re.escape(operator_name)}"):
-        lakebase_migrate._preflight_executable_schema_hooks(
-            _Cursor(fetchall_results=[[row]])
-        )
+        lakebase_migrate._preflight_executable_schema_hooks(_Cursor(fetchall_results=[[row]]))
 
 
 def test_executable_hook_binds_nextval_to_reviewed_audit_sequence() -> None:
@@ -1197,9 +1569,10 @@ def test_executable_hook_binds_nextval_to_reviewed_audit_sequence() -> None:
         ),
     ]
 
-    assert lakebase_migrate._preflight_executable_schema_hooks(
-        _Cursor(fetchall_results=[rows])
-    ) == set()
+    assert (
+        lakebase_migrate._preflight_executable_schema_hooks(_Cursor(fetchall_results=[rows]))
+        == set()
+    )
 
     hostile_rows = [list(row) for row in rows]
     hostile_rows[2][4] = "nextval('attacker.sequence'::regclass)"
@@ -1790,8 +2163,7 @@ def test_apply_grants_uses_exact_quoted_role_and_strict_matrix(
     ) in statements
     assert 'REVOKE ALL PRIVILEGES ON FUNCTION "public"."exfiltrate"() FROM PUBLIC' in statements
     assert not any(
-        '"public"."databricks_create_role"' in statement
-        and statement.startswith("REVOKE ")
+        '"public"."databricks_create_role"' in statement and statement.startswith("REVOKE ")
         for statement in statements
     )
     assert (
@@ -1815,6 +2187,98 @@ def test_apply_grants_uses_exact_quoted_role_and_strict_matrix(
         for statement in statements
     )
 
+    provider_relation_skip_queries = [
+        statement
+        for statement in statements
+        if "JOIN pg_roles owner ON owner.oid = c.relowner" in statement
+        and "n.nspname = 'public'" in statement
+    ]
+    assert len(provider_relation_skip_queries) == 4
+    assert all(
+        "owner.rolname = 'cloud_admin'" in statement for statement in provider_relation_skip_queries
+    )
+    assert all("c.relname = ANY" not in statement for statement in provider_relation_skip_queries)
+    default_acl_mutation_query = next(
+        statement
+        for statement in statements
+        if "FROM pg_default_acl d" in statement and "grantee.rolname IN" in statement
+    )
+    assert "owner.rolname = 'cloud_admin'" in default_acl_mutation_query
+    assert "d.defaclnamespace = 0" in default_acl_mutation_query
+    default_acl_postflight_query = next(
+        statement
+        for statement in statements
+        if "FROM pg_default_acl d" in statement and "pg_has_role(%s, e.grantee" in statement
+    )
+    assert "owner.rolname = 'cloud_admin'" in default_acl_postflight_query
+    assert "AND e.grantee = 0" in default_acl_postflight_query
+    other_sequence_queries = [
+        statement
+        for statement in statements
+        if "has_sequence_privilege" in statement and "n.nspname NOT IN" in statement
+    ]
+    assert len(other_sequence_queries) == 1
+    assert "has_schema_privilege(%s, n.oid, 'USAGE')" in other_sequence_queries[0]
+    assert "n.nspname <> 'public'" in other_sequence_queries[0]
+
+
+def test_apply_grants_commits_public_quarantine_before_session_proof(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    role = "app-role"
+    verifier_role = "verifier-role"
+    cursor = _successful_cursor(role, verifier_role)
+    # Production-only zero-session inventory occurs immediately after the
+    # committed public-schema close and before the broader ACL inventory.
+    cursor._fetchall_results.insert(2, [])
+    connection = _Connection(cursor)
+    boundary_calls: list[str] = []
+
+    monkeypatch.setattr(
+        lakebase_migration_grants,
+        "_postflight_provider_schema_boundary",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        lakebase_migration_grants,
+        "_close_public_schema_boundary",
+        lambda *_args, **_kwargs: boundary_calls.append("close"),
+    )
+    monkeypatch.setattr(
+        lakebase_migration_grants,
+        "_postflight_public_schema_boundary",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        lakebase_migration_grants,
+        "_postflight_oauth_role_function_contract",
+        lambda *_args, **_kwargs: None,
+    )
+
+    import psycopg
+
+    monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
+    lakebase_migrate._apply_app_role_grants(
+        {},
+        resolved_roles=(role, verifier_role),
+        role_wait_timeout_s=0,
+        role_wait_interval_s=1,
+        allow_absent_managed_event_triggers=True,
+    )
+
+    statements = [statement for statement, _params in cursor.executed]
+    session_index = next(
+        index for index, statement in enumerate(statements) if "FROM pg_stat_activity" in statement
+    )
+    first_acl_mutation = next(
+        index
+        for index, statement in enumerate(statements)
+        if statement.startswith(("GRANT ", "REVOKE ", "ALTER DEFAULT PRIVILEGES "))
+    )
+    assert boundary_calls == ["close"]
+    assert connection.commit_count == 3
+    assert session_index < first_acl_mutation
+
 
 def test_acl_reconciliation_rolls_back_on_mid_grant_failure(
     monkeypatch: pytest.MonkeyPatch,
@@ -1823,6 +2287,7 @@ def test_acl_reconciliation_rolls_back_on_mid_grant_failure(
     cursor = _FailingCursor(
         fetchall_results=[
             [(role,)],
+            [],
             [("mip_app",), ("public",)],
             [],
             [],
@@ -1873,7 +2338,7 @@ def test_event_trigger_aborts_before_first_acl_mutation(
 
     monkeypatch.setattr(psycopg, "connect", lambda **_kwargs: connection)
 
-    with pytest.raises(RuntimeError, match=r"ACL preflight.*event-trigger.*exfiltrate"):
+    with pytest.raises(RuntimeError, match=r"ACL pre-cutover.*event-trigger.*exfiltrate"):
         lakebase_migrate._apply_app_role_grants(
             {},
             role_wait_timeout_s=0,
@@ -2184,7 +2649,7 @@ def test_verifier_postflight_rejects_access_to_any_other_table() -> None:
     cursor = _Cursor(
         fetchall_results=[
             [(role,)],
-            [("mip_app", "USAGE"), ("public", "USAGE")],
+            [("mip_app", "USAGE")],
             _table_rows(),
             _verifier_table_privilege_rows() + [("campaigns", "SELECT")],
         ],
@@ -2394,6 +2859,8 @@ def test_column_postflight_rejects_public_and_direct_acl_entries(
     assert "e.grantee = 0 OR grantee.rolname = %s" in query
     assert "c.relkind IN ('r', 'p', 'v', 'm', 'f')" in query
     assert "n.nspname NOT IN ('pg_catalog', 'information_schema')" in query
+    assert "owner.rolname = 'cloud_admin'" in query
+    assert "n.nspname = 'public'" in query
 
 
 @pytest.mark.parametrize(
@@ -2423,8 +2890,9 @@ def test_column_postflight_rejects_effective_column_only_capability(
     query, params = cursor.executed[0]
     assert "has_any_column_privilege(%s, c.oid, privilege.name)" in query
     assert "NOT has_table_privilege(%s, c.oid, privilege.name)" in query
+    assert "has_schema_privilege(%s, n.oid, 'USAGE')" in query
     assert "c.relkind IN ('r', 'p', 'v', 'm', 'f')" in query
-    assert params == (list(lakebase_migrate._COLUMN_PRIVILEGE_NAMES), role, role)
+    assert params == (list(lakebase_migrate._COLUMN_PRIVILEGE_NAMES), role, role, role)
 
 
 def test_trigger_contract_matches_every_schema_trigger_exactly() -> None:
@@ -2614,7 +3082,20 @@ def test_trigger_postflight_rejects_runtime_owned_reviewed_function() -> None:
 def test_routine_postflight_rejects_public_security_definer_execution() -> None:
     cursor = _Cursor(
         fetchall_results=[
-            [("public", "exfiltrate", "", "f", True, "attacker-owner", False)],
+            [
+                (
+                    "public",
+                    "exfiltrate",
+                    "",
+                    "f",
+                    True,
+                    "attacker-owner",
+                    0,
+                    False,
+                    False,
+                    True,
+                )
+            ],
         ]
     )
 
@@ -2627,7 +3108,7 @@ def test_routine_postflight_rejects_public_security_definer_execution() -> None:
         )
 
 
-def test_routine_postflight_accepts_provider_owned_public_security_invoker() -> None:
+def test_routine_postflight_rejects_schema_accessible_provider_routine() -> None:
     cursor = _Cursor(
         fetchall_results=[
             [
@@ -2638,24 +3119,41 @@ def test_routine_postflight_accepts_provider_owned_public_security_invoker() -> 
                     "f",
                     False,
                     "cloud_admin",
+                    0,
                     False,
+                    False,
+                    True,
                 )
             ]
         ]
     )
 
-    lakebase_migrate._postflight_effective_routine_privileges(
-        cursor,
-        "verifier-role",
-        principal_label="AI Gateway verifier",
-        expected={},
-    )
+    with pytest.raises(RuntimeError, match="databricks_create_role"):
+        lakebase_migrate._postflight_effective_routine_privileges(
+            cursor,
+            "verifier-role",
+            principal_label="AI Gateway verifier",
+            expected={},
+        )
 
 
 def test_routine_postflight_rejects_unreviewed_cloud_admin_public_routine() -> None:
     cursor = _Cursor(
         fetchall_results=[
-            [("public", "unexpected_provider_helper", "", "f", False, "cloud_admin", False)]
+            [
+                (
+                    "public",
+                    "unexpected_provider_helper",
+                    "",
+                    "f",
+                    False,
+                    "cloud_admin",
+                    0,
+                    False,
+                    False,
+                    True,
+                )
+            ]
         ]
     )
 
@@ -2666,6 +3164,58 @@ def test_routine_postflight_rejects_unreviewed_cloud_admin_public_routine() -> N
             principal_label="app role",
             expected={},
         )
+
+
+@pytest.mark.parametrize(
+    ("argument_defaults", "provider_dependency"),
+    ((1, False), (0, True)),
+    ids=("argument-default", "provider-oid-dependency"),
+)
+def test_routine_postflight_rejects_stored_provider_execution_paths(
+    argument_defaults: int,
+    provider_dependency: bool,
+) -> None:
+    rows = _app_routine_privilege_rows()
+    hostile = list(rows[0])
+    hostile[6] = argument_defaults
+    hostile[7] = provider_dependency
+    rows[0] = tuple(hostile)
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match="routine EXECUTE postflight"):
+        lakebase_migrate._postflight_effective_routine_privileges(
+            cursor,
+            "app-role",
+            principal_label="app role",
+            expected=lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES,
+        )
+
+    query = cursor.executed[0][0]
+    assert "p.pronargdefaults" in query
+    assert "provider_owner.rolname = 'cloud_admin'" in query
+    assert "LEFT JOIN pg_class provider_relation" in query
+    assert "'pg_class'::regclass" in query
+    assert "acldefault('f', p.proowner)" in query
+
+
+def test_routine_postflight_rejects_dormant_public_execute_on_reviewed_helper() -> None:
+    rows = _app_routine_privilege_rows()
+    hostile = list(rows[0])
+    hostile[9] = True
+    rows[0] = tuple(hostile)
+    cursor = _Cursor(fetchall_results=[rows])
+
+    with pytest.raises(RuntimeError, match="routine EXECUTE postflight"):
+        lakebase_migrate._postflight_effective_routine_privileges(
+            cursor,
+            "app-role",
+            principal_label="app role",
+            expected=lakebase_migrate._APP_ROLE_ROUTINE_PRIVILEGES,
+        )
+
+    query = cursor.executed[0][0]
+    assert "public_acl.grantee = 0" in query
+    assert "NOT (n.nspname = 'public' AND owner.rolname = 'cloud_admin')" in query
 
 
 def test_oauth_role_function_contract_accepts_exact_provider_primitive() -> None:
@@ -2692,9 +3242,7 @@ def test_oauth_role_function_contract_accepts_exact_provider_primitive() -> None
 def test_oauth_role_function_contract_accepts_reviewed_upgrade_acl_states(
     function_acl: list[str],
 ) -> None:
-    cursor = _Cursor(
-        fetchall_results=[_oauth_role_function_rows(function_acl=function_acl)]
-    )
+    cursor = _Cursor(fetchall_results=[_oauth_role_function_rows(function_acl=function_acl)])
 
     lakebase_migrate._postflight_oauth_role_function_contract(
         cursor,
@@ -2748,7 +3296,10 @@ def test_routine_postflight_rejects_privileged_or_direct_provider_execution(
                     "f",
                     security_definer,
                     "cloud_admin",
+                    0,
+                    False,
                     direct_grant,
+                    True,
                 )
             ]
         ]
@@ -2774,7 +3325,10 @@ def test_verifier_routine_postflight_rejects_any_execute() -> None:
                     "f",
                     False,
                     "migration-owner",
+                    0,
+                    False,
                     True,
+                    False,
                 )
             ],
         ]
@@ -2791,7 +3345,9 @@ def test_verifier_routine_postflight_rejects_any_execute() -> None:
 
 def test_app_routine_postflight_rejects_runtime_owned_validator() -> None:
     rows = _app_routine_privilege_rows()
-    rows[0] = (*rows[0][:-2], "app-role", rows[0][-1])
+    hostile = list(rows[0])
+    hostile[5] = "app-role"
+    rows[0] = tuple(hostile)
     cursor = _Cursor(fetchall_results=[rows])
 
     with pytest.raises(RuntimeError, match="routine EXECUTE postflight.*True"):
@@ -2811,7 +3367,6 @@ def test_verifier_postflight_rejects_inherited_create_on_external_schema() -> No
             [
                 ("analytics", "CREATE"),
                 ("mip_app", "USAGE"),
-                ("public", "USAGE"),
             ],
         ],
         fetchone_results=[(True, False, False, True, False)],
@@ -2826,7 +3381,7 @@ def test_verifier_postflight_rejects_inherited_external_default_select() -> None
     cursor = _Cursor(
         fetchall_results=[
             [(role,)],
-            [("mip_app", "USAGE"), ("public", "USAGE")],
+            [("mip_app", "USAGE")],
             _table_rows(),
             _verifier_table_privilege_rows(),
             [],
@@ -2873,13 +3428,13 @@ def test_postflight_rejects_effective_select_on_table_in_other_schema() -> None:
             _sequence_rows(),
             _sequence_privilege_rows(),
             [],
-            [("mip_app", "USAGE"), ("public", "USAGE")],
+            [("analytics", "USAGE"), ("mip_app", "USAGE")],
             [("analytics", "borrower_export", "SELECT")],
         ],
         fetchone_results=[(True, False, False, True, False)],
     )
 
-    with pytest.raises(RuntimeError, match="other tables.*analytics.*SELECT"):
+    with pytest.raises(RuntimeError, match="other schemas.*analytics.*USAGE"):
         lakebase_migrate._postflight_app_role_grants(cursor, role)
 
 
@@ -2900,7 +3455,7 @@ def test_postflight_rejects_effective_select_on_public_view() -> None:
         fetchone_results=[(True, False, False, True, False)],
     )
 
-    with pytest.raises(RuntimeError, match="other tables.*public.*borrower_export_view.*SELECT"):
+    with pytest.raises(RuntimeError, match="other schemas.*public.*USAGE"):
         lakebase_migrate._postflight_app_role_grants(cursor, role)
 
 
@@ -2928,6 +3483,7 @@ def test_acl_catalog_queries_cover_all_table_like_relation_kinds(
     ]
     assert relation_queries
     assert all("('r', 'p', 'v', 'm', 'f')" in statement for statement in relation_queries)
+    assert any("__non_base_relation__" in statement for statement in relation_queries)
 
 
 def test_lakebase_grant_docs_match_strict_automated_contract() -> None:
@@ -2956,6 +3512,45 @@ def test_lakebase_grant_docs_match_strict_automated_contract() -> None:
     assert "vanilla-PostgreSQL integration fixture" in lakebase_section
     assert "provider roles' recursive memberships" in lakebase_section
     assert "The separate ACL transaction repeats" in lakebase_section
+    assert "removes PUBLIC `USAGE`" in lakebase_section
+    assert "each require zero App/verifier database sessions" in lakebase_section
+    assert "Direct runtime relation, column,\nroutine, and provider-default grants" in (
+        lakebase_section
+    )
+    assert "assumes that role transaction-locally for the revoke" in lakebase_section
+    assert "target-bound private schema" in lakebase_section
+    assert "zero-argument `LANGUAGE SQL SECURITY INVOKER` wrapper" in lakebase_section
+    assert "receives neither\ndatabase `CREATE` nor `public` schema access" in lakebase_section
+    assert "canonical `databricks_postgres` administration database" in lakebase_section
+    assert "exact advisory-lock row and original\nbackend PID" in lakebase_section
+    assert "`current_user` and `session_user` must both be" in lakebase_section
+    assert "casts both provider arguments to\n`pg_catalog.text`" in lakebase_section
+    assert "SQL-\nstandard `BEGIN ATOMIC` body" in lakebase_section
+    assert "pseudo-role owns both the schema and function" in lakebase_section
+    assert "non-null parsed `prosqlbody`" in lakebase_section
+    assert "full canonical\n`pg_get_functiondef()` text" in lakebase_section
+    assert "both equal the exact disposable bootstrap application ID" in lakebase_section
+    assert "normal `pg_depend`\nedge" in lakebase_section
+    assert "requires three stable zero-session observations" in lakebase_section
+    assert "three stable empty secret inventories" in lakebase_section
+    assert "absent from both the account and workspace" in lakebase_section
+    assert "workspace deletion only removed the assignment" in lakebase_section
+    assert "provider role-delete API" in lakebase_section
+    assert "legacy\ncomment alone never authorizes deletion" in lakebase_section
+    assert "`DROP ... RESTRICT` teardown are atomic" in lakebase_section
+    assert "requires three stable observations" in lakebase_section
+    assert "A generic error never\nauthorizes deletion" in lakebase_section
+    assert "four finite wrapper ACL states" in lakebase_section
+    assert "four historical direct-provider ACL states" in lakebase_section
+    assert "Mixed\nwrapper/legacy states are rejected" in lakebase_section
+    assert "initially resolved immutable\nSCIM ID" in lakebase_section
+    assert "exact 100-byte signed `displayName`" in lakebase_section
+    assert "SCIM `externalId` must remain\nunset" in lakebase_section
+    assert "created before\nthe first credential or SQL role mutation" in lakebase_section
+    assert "direct GET before selecting the\nabsent-principal secret path" in lakebase_section
+    assert "tombstone is account-deleted only after exact" in lakebase_section
+    assert "exact immutable principal\ncreated and already verified by that run" in lakebase_section
+    assert "absence of `public.USAGE`/`public.CREATE`" in lakebase_section
     assert "resources.apps.mip_app.resources" in lakebase_section
     assert "rollback-capable ACL transaction" in lakebase_section
     assert "](../../databricks.yml) lines" not in grants_doc

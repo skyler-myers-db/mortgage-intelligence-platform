@@ -19,13 +19,15 @@
  *      send/dispatch affordance anywhere on the surface — the terminal
  *      state is the approval-gated Lakebase record.
  *
- * Non-negotiables per CLAUDE.md: no mock fallback (if UC is unreachable the
- * spec fails, correctly); only synthetic B-* ids asserted; resilient
- * role/label selectors against the prototype BEM.
+ * The primary product-flow test has no mock fallback (if UC is unreachable it
+ * fails, correctly). The final high-density response-shape canary is explicitly
+ * env-gated and executed in a separately named nightly step; it is never
+ * counted as real-UC evidence.
  */
 import { test, expect, type Locator, type Page } from '@playwright/test';
 
 const LIVE = process.env.E2E_LIVE === '1';
+const MOCKED_POINTS_CANARY = process.env.ECONOMICS_SCATTER_MOCKED === '1';
 test.skip(!LIVE, 'Set E2E_LIVE=1 in the nightly workflow to run real-UC e2e.');
 
 const APP_URL = process.env.MIP_APP_URL || 'http://127.0.0.1:5173';
@@ -192,7 +194,11 @@ test.describe('S7 economics scatter — bins → dot → Borrower 360 → draft 
     await expect(page.locator('main')).not.toContainText(/send now|sending to borrower/i);
   });
 
-  test('numbered cluster reports exact population and paginates every returned member', async ({ page }) => {
+  test('mocked response-shape canary: numbered cluster paginates every returned member', async ({ page }) => {
+    test.skip(
+      !MOCKED_POINTS_CANARY,
+      'Set ECONOMICS_SCATTER_MOCKED=1 only in the separately labeled mocked canary.',
+    );
     const returnedIds = Array.from(
       { length: 75 },
       (_, index) => `B-${String(index).padStart(13, '0')}`,

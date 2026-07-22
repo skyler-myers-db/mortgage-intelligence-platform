@@ -747,7 +747,7 @@ recover_journaled_first_install_lakebase_bootstrap() {
     echo "${RED}[deploy] journaled first-install App client ID is required for Lakebase recovery.${RST}" >&2
     return 1
   fi
-  run_with_proof_signing_authority \
+  run_with_lakebase_bootstrap_authority \
     "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --lakebase-database "$LAKEBASE_DATABASE" \
@@ -1345,6 +1345,25 @@ run_with_proof_signing_authority() {
   )
 }
 
+run_with_lakebase_bootstrap_authority() {
+  local control_client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"
+  local control_client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"
+  if [[ "$DRY_RUN" -eq 0 && \
+        ( -z "$control_client_id" || -z "$control_client_secret" ) ]]; then
+    echo "${RED}[deploy] fresh OAuth-M2M Lakebase bootstrap control credentials are missing.${RST}" >&2
+    return 2
+  fi
+  # Expose the reviewed agent-runtime control identity only to the convergence
+  # child. The child creates a fresh OAuth client for every bracketed probe;
+  # ordinary deploy commands never inherit this credential under a generic
+  # Databricks auth variable.
+  (
+    export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$control_client_id"
+    export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET="$control_client_secret"
+    run_with_account_identity run_with_proof_signing_authority "$@"
+  )
+}
+
 start_proof_signing_heartbeat() {
   # shellcheck disable=SC2031  # Parent shell retains the unexported authority.
   local signing_key="${MIP_AI_GATEWAY_PROOF_SIGNING_KEY:-}"
@@ -1922,7 +1941,7 @@ PYEOF
   # is already immutable; an existing App identity is resolved next. No build,
   # bundle, migration, or other failure-prone work may run first.
   step "recover interrupted verifier Lakebase role bootstrap"
-  run_with_proof_signing_authority \
+  run_with_lakebase_bootstrap_authority \
     "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --lakebase-database "$LAKEBASE_DATABASE" \
@@ -1947,7 +1966,7 @@ else:
 ')"
   if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
     step "recover interrupted App Lakebase role bootstrap"
-    run_with_proof_signing_authority \
+    run_with_lakebase_bootstrap_authority \
       "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
       --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
       --lakebase-database "$LAKEBASE_DATABASE" \
@@ -2474,7 +2493,7 @@ fi
 # roles.  The helper proves zero ownership, memberships, and non-ACL shared
 # dependencies before any replacement and verifies the resulting live profile.
 step "converge App Lakebase OAuth role to exact LOGIN-only profile"
-run_with_proof_signing_authority \
+run_with_lakebase_bootstrap_authority \
   "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
   --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
   --lakebase-database "$LAKEBASE_DATABASE" \
@@ -2484,7 +2503,7 @@ run_with_proof_signing_authority \
   --stop-app-for-mutation \
   --repair-legacy-replication
 step "converge verifier Lakebase OAuth role to exact LOGIN-only profile"
-run_with_proof_signing_authority \
+run_with_lakebase_bootstrap_authority \
   "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
   --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
   --lakebase-database "$LAKEBASE_DATABASE" \

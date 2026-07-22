@@ -26,6 +26,7 @@ from backend.schemas.portfolio import (
     PortfolioPreviewRequest,
     project_public_campaign_json_field,
 )
+from backend.services import campaign_treatment
 from backend.services.campaign_intelligence import (
     campaign_copy_hash,
     campaign_criteria_fingerprint,
@@ -264,11 +265,13 @@ class _CampaignPatchLakebase:
         suppression_policy: dict[str, object],
         current_status: str = "draft",
         treatment_state: str = "ready",
+        treatment_build_lease_expired: bool = False,
         verified_copy: bool = True,
     ) -> None:
         self.suppression_policy = suppression_policy
         self.current_status = current_status
         self.treatment_state = treatment_state
+        self.treatment_build_lease_expired = treatment_build_lease_expired
         self.verified_copy = verified_copy
         self.calls: list[dict[str, object]] = []
 
@@ -280,6 +283,8 @@ class _CampaignPatchLakebase:
             "status": status,
             "json_contract_version": 1,
             "treatment_state": self.treatment_state,
+            "treatment_build_lease_until": datetime.now(UTC) + timedelta(minutes=5),
+            "treatment_build_lease_expired": self.treatment_build_lease_expired,
             "criteria": {"marketing_eligibility": "Eligible only"},
             "suppression_policy": self.suppression_policy,
             "normalized_message_variants": (
@@ -322,10 +327,17 @@ class _CampaignPatchLakebase:
         if "JOIN mip_app.action_audit" in sql:
             return None  # type: ignore[return-value]
         if "UPDATE mip_app.campaigns" in sql:
-            return {
+            row = {
                 **self._row(status=str((params or {}).get("status") or "pending_review")),
                 "audit_id": "22222222-2222-4222-8222-222222222222",
-            }  # type: ignore[return-value]
+            }
+            if (
+                (params or {}).get("status") == "archived"
+                and (params or {}).get("current_treatment_state") == "building"
+            ):
+                row["treatment_state"] = "failed"
+                row["treatment_build_lease_until"] = None
+            return row  # type: ignore[return-value]
         return self._row(status=self.current_status)  # type: ignore[return-value]
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> None:
@@ -2314,6 +2326,42 @@ def test_building_campaign_cannot_be_archived_or_advanced(monkeypatch) -> None:
         assert exc_info.value.status_code == 409
 
     assert not any("UPDATE mip_app.campaigns" in str(call["sql"]) for call in lakebase.calls)
+
+
+def test_expired_building_campaign_is_atomically_failed_and_archived(monkeypatch) -> None:
+    lakebase = _CampaignPatchLakebase(
+        suppression_policy={"default": "eligible_only"},
+        treatment_state="building",
+        treatment_build_lease_expired=True,
+    )
+    monkeypatch.setattr(
+        "backend.services.repositories.databricks_repo.get_lakebase_client",
+        lambda: lakebase,
+    )
+    repo = DatabricksPortfolioRepository(_StubClient(_preview_row(), []))  # type: ignore[arg-type]
+
+    summary = repo.patch_status(
+        "11111111-1111-4111-8111-111111111111",
+        CampaignStatusPatchRequest(status="archived", rationale="Quarantine stale build"),
+        actor="admin@example.com",
+    )
+
+    assert summary.status == "archived"
+    assert summary.treatment_state == "failed"
+    patch = next(call for call in lakebase.calls if "UPDATE mip_app.campaigns" in str(call["sql"]))
+    sql = str(patch["sql"])
+    assert "treatment_build_lease_until <= now()" in sql
+    assert "THEN 'failed'" in sql
+    assert "THEN NULL" in sql
+    metadata = json.loads(str(patch["params"]["metadata"]))
+    assert metadata["terminal_archive_without_treatment"] is True
+    assert metadata["treatment_state"] == "building"
+
+
+def test_campaign_reclaim_and_finalize_lose_after_stale_build_quarantine() -> None:
+    assert "AND status = 'draft'" in campaign_treatment._CAMPAIGN_RECLAIM_SQL
+    assert "AND treatment_state = 'building'" in campaign_treatment._CAMPAIGN_RECLAIM_SQL
+    assert "AND treatment_state = 'building'" in campaign_treatment._CAMPAIGN_FINALIZE_SQL
 
 
 @pytest.mark.parametrize(

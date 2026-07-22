@@ -15,7 +15,6 @@ from jobs.lakebase_migration_contracts import (
     _APP_ROLE_ROUTINE_PRIVILEGES,
     _APP_ROLE_SEQUENCE_PRIVILEGES,
     _APP_ROLE_TABLE_PRIVILEGES,
-    _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT,
     _SEQUENCE_PRIVILEGE_NAMES,
     _TABLE_PRIVILEGE_NAMES,
 )
@@ -67,14 +66,17 @@ def _postflight_app_role_grants(cur: object, role: str) -> None:
 
     cur.execute(  # type: ignore[attr-defined]
         """
-        SELECT c.relname
+        SELECT CASE
+                   WHEN c.relkind = 'r' THEN c.relname
+                   ELSE '__non_base_relation__:' || c.relname || ':' || c.relkind
+               END
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'mip_app' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
         ORDER BY c.relname
         """
     )
-    actual_tables = {row[0] for row in cur.fetchall()}  # type: ignore[attr-defined]
+    actual_tables = {str(row[0]) for row in cur.fetchall()}  # type: ignore[attr-defined]
     expected_tables = set(_APP_ROLE_TABLE_PRIVILEGES)
     _raise_object_inventory_mismatch("table", actual=actual_tables, expected=expected_tables)
 
@@ -180,16 +182,16 @@ def _postflight_app_role_grants(cur: object, role: str) -> None:
         WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'mip_app')
           AND n.nspname !~ '^pg_'
-          AND NOT (
-              n.nspname = 'public'
-              AND c.relname = ANY(%s::text[])
-          )
           AND has_table_privilege(%s, c.oid, privilege.name)
+          AND (
+              n.nspname <> 'public'
+              OR has_schema_privilege(%s, n.oid, 'USAGE')
+          )
         ORDER BY n.nspname, c.relname, privilege.name
         """,
         (
             list(_TABLE_PRIVILEGE_NAMES),
-            sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT),
+            role,
             role,
         ),
     )
@@ -210,9 +212,13 @@ def _postflight_app_role_grants(cur: object, role: str) -> None:
           AND n.nspname NOT IN ('pg_catalog', 'information_schema', 'mip_app')
           AND n.nspname !~ '^pg_'
           AND has_sequence_privilege(%s, c.oid, privilege.name)
+          AND (
+              n.nspname <> 'public'
+              OR has_schema_privilege(%s, n.oid, 'USAGE')
+          )
         ORDER BY n.nspname, c.relname, privilege.name
         """,
-        (list(_SEQUENCE_PRIVILEGE_NAMES), role),
+        (list(_SEQUENCE_PRIVILEGE_NAMES), role, role),
     )
     other_sequence_privileges = cur.fetchall()  # type: ignore[attr-defined]
     if other_sequence_privileges:
@@ -292,14 +298,17 @@ def _postflight_ai_gateway_verifier_grants(cur: object, role: str) -> None:
 
     cur.execute(  # type: ignore[attr-defined]
         """
-        SELECT c.relname
+        SELECT CASE
+                   WHEN c.relkind = 'r' THEN c.relname
+                   ELSE '__non_base_relation__:' || c.relname || ':' || c.relkind
+               END
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
         WHERE n.nspname = 'mip_app' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
         ORDER BY c.relname
         """
     )
-    actual_tables = {row[0] for row in cur.fetchall()}  # type: ignore[attr-defined]
+    actual_tables = {str(row[0]) for row in cur.fetchall()}  # type: ignore[attr-defined]
     expected_tables = set(_APP_ROLE_TABLE_PRIVILEGES)
     _raise_object_inventory_mismatch(
         "AI Gateway verifier table",
@@ -352,19 +361,19 @@ def _postflight_ai_gateway_verifier_grants(cur: object, role: str) -> None:
           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
           AND n.nspname !~ '^pg_'
           AND NOT (
-              n.nspname = 'public'
-              AND c.relname = ANY(%s::text[])
-          )
-          AND NOT (
               n.nspname = 'mip_app'
               AND c.relname = 'ai_gateway_proof_ledger'
           )
           AND has_table_privilege(%s, c.oid, privilege.name)
+          AND (
+              n.nspname <> 'public'
+              OR has_schema_privilege(%s, n.oid, 'USAGE')
+          )
         ORDER BY n.nspname, c.relname, privilege.name
         """,
         (
             list(_TABLE_PRIVILEGE_NAMES),
-            sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT),
+            role,
             role,
         ),
     )
@@ -402,9 +411,13 @@ def _postflight_ai_gateway_verifier_grants(cur: object, role: str) -> None:
           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
           AND n.nspname !~ '^pg_'
           AND has_sequence_privilege(%s, c.oid, privilege.name)
+          AND (
+              n.nspname <> 'public'
+              OR has_schema_privilege(%s, n.oid, 'USAGE')
+          )
         ORDER BY n.nspname, c.relname, privilege.name
         """,
-        (list(_SEQUENCE_PRIVILEGE_NAMES), role),
+        (list(_SEQUENCE_PRIVILEGE_NAMES), role, role),
     )
     verifier_sequence_privileges = cur.fetchall()  # type: ignore[attr-defined]
     if verifier_sequence_privileges:

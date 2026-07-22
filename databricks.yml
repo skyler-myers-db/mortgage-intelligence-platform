@@ -58,6 +58,8 @@ targets:
   dev:
     mode: development
     default: true
+    run_as:
+      user_name: ${workspace.current_user.userName}
     workspace:
       host: *default_host
       root_path: ~/.bundle/${bundle.name}/${bundle.target}

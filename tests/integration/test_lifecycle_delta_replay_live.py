@@ -17,13 +17,13 @@ import urllib.error
 import urllib.request
 from datetime import UTC, datetime
 from typing import Any
-from uuid import uuid4
 
 import pytest
 
 from jobs import sync_lifecycle_state
 
-_IDENTIFIER_RE = re.compile(r"[A-Za-z0-9_]+")
+_IDENTIFIER_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+_SCRATCH_SUFFIX_RE = re.compile(r"gha_[0-9]+")
 _TERMINAL_STATES = {"SUCCEEDED", "FAILED", "CANCELED", "CLOSED"}
 _STATEMENT_TIMEOUT_SECONDS = 180
 
@@ -31,9 +31,7 @@ _STATEMENT_TIMEOUT_SECONDS = 180
 def _live_warehouse_config() -> tuple[str, str, str] | None:
     if os.environ.get("MIP_LIVE_MUTATION_OK") != "1":
         return None
-    host = os.environ.get("DATABRICKS_HOST") or os.environ.get(
-        "DATABRICKS_SERVER_HOSTNAME"
-    )
+    host = os.environ.get("DATABRICKS_HOST") or os.environ.get("DATABRICKS_SERVER_HOSTNAME")
     token = os.environ.get("DATABRICKS_TOKEN")
     warehouse_id = os.environ.get("DATABRICKS_WAREHOUSE_ID")
     if not host or not token or not warehouse_id:
@@ -59,6 +57,13 @@ def _qualified_table(catalog: str, schema: str, table: str) -> str:
             (table, "table"),
         )
     )
+
+
+def _scratch_suffix() -> str:
+    suffix = os.environ.get("MIP_LIVE_SCRATCH_SUFFIX", "").strip()
+    if not _SCRATCH_SUFFIX_RE.fullmatch(suffix):
+        raise ValueError("unsafe MIP_LIVE_SCRATCH_SUFFIX: expected deterministic gha_[0-9]+")
+    return suffix
 
 
 def _rewrite_generated_merge_for_scratch(
@@ -119,9 +124,7 @@ def _request_json(
             return dict(json.loads(response.read().decode("utf-8")))
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8")[:2000]
-        raise AssertionError(
-            f"Databricks SQL API returned HTTP {exc.code}: {detail}"
-        ) from exc
+        raise AssertionError(f"Databricks SQL API returned HTTP {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
         raise AssertionError(f"Databricks SQL API was unreachable: {exc.reason}") from exc
 
@@ -206,6 +209,75 @@ def _selected_approval(
     return str(status), str(offer_code), str(event_id)
 
 
+def _selected_outreach(
+    config: tuple[str, str, str],
+    *,
+    lifecycle_table: str,
+    borrower_id: str,
+    expected_at: datetime,
+    expected_created_at: datetime,
+) -> tuple[str, bool, bool, str]:
+    rows = _execute_statement(
+        config,
+        f"""
+        SELECT
+          outreach_status,
+          CAST(outreach_at = {sync_lifecycle_state._sql_timestamp(expected_at)} AS STRING),
+          CAST(
+            outreach_created_at =
+              {sync_lifecycle_state._sql_timestamp(expected_created_at)}
+            AS STRING
+          ),
+          outreach_event_id
+        FROM {lifecycle_table}
+        WHERE borrower_id = '{borrower_id}'
+        """,
+    )
+    assert len(rows) == 1, rows
+    status, at_matches, created_at_matches, event_id = rows[0]
+    return (
+        str(status),
+        str(at_matches).lower() == "true",
+        str(created_at_matches).lower() == "true",
+        str(event_id),
+    )
+
+
+def _selected_refresh_marker(
+    config: tuple[str, str, str],
+    *,
+    lifecycle_table: str,
+    borrower_id: str,
+) -> str:
+    rows = _execute_statement(
+        config,
+        f"""
+        SELECT CAST(refreshed_at AS STRING)
+        FROM {lifecycle_table}
+        WHERE borrower_id = '{borrower_id}'
+        """,
+    )
+    assert len(rows) == 1, rows
+    assert rows[0][0] is not None, rows
+    return str(rows[0][0])
+
+
+def _with_outreach(
+    row: dict[str, object],
+    *,
+    occurred_at: datetime,
+    created_at: datetime,
+    event_id: str,
+) -> dict[str, object]:
+    return {
+        **row,
+        "outreach_status": "actioned",
+        "outreach_at": occurred_at,
+        "outreach_created_at": created_at,
+        "outreach_event_id": event_id,
+    }
+
+
 @pytest.fixture
 def live_warehouse() -> tuple[str, str, str]:
     config = _live_warehouse_config()
@@ -214,6 +286,7 @@ def live_warehouse() -> tuple[str, str, str]:
             "Set DATABRICKS_HOST, DATABRICKS_TOKEN, DATABRICKS_WAREHOUSE_ID, "
             "and MIP_LIVE_MUTATION_OK=1 to run the isolated Delta replay proof."
         )
+    _scratch_suffix()
     return config
 
 
@@ -224,11 +297,10 @@ def test_generated_lifecycle_merge_is_monotonic_in_live_delta(
         os.environ.get("MIP_DEFAULT_CATALOG", "mip"),
         field="catalog",
     )
-    schema = _safe_identifier(
-        os.environ.get("MIP_LIFECYCLE_SMOKE_SCHEMA", "audit"),
-        field="schema",
-    )
-    suffix = uuid4().hex.lower()
+    # The audit schema is the reviewed mutation boundary. Environment input
+    # may select a catalog, but never a less-governed schema.
+    schema = "audit"
+    suffix = _scratch_suffix()
     borrower_table = _qualified_table(
         catalog,
         schema,
@@ -239,7 +311,7 @@ def test_generated_lifecycle_merge_is_monotonic_in_live_delta(
         schema,
         f"lifecycle_replay_target_{suffix}",
     )
-    borrower_id = "B-" + suffix[:13].upper()
+    borrower_id = "B-REPLAY0000001"
     stale_time = datetime(2026, 1, 15, 14, 0, tzinfo=UTC)
     newer_time = datetime(2026, 1, 15, 14, 1, tzinfo=UTC)
     low_event_id = "00000000-0000-4000-8000-000000000001"
@@ -328,18 +400,37 @@ def test_generated_lifecycle_merge_is_monotonic_in_live_delta(
 
         merge(newer)
         expected_newer = ("rejected", "smoke_newer", low_event_id)
-        assert _selected_approval(
-            live_warehouse,
-            lifecycle_table=lifecycle_table,
-            borrower_id=borrower_id,
-        ) == expected_newer
+        assert (
+            _selected_approval(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == expected_newer
+        )
 
-        merge(stale)
-        assert _selected_approval(
+        refresh_after_newer = _selected_refresh_marker(
             live_warehouse,
             lifecycle_table=lifecycle_table,
             borrower_id=borrower_id,
-        ) == expected_newer
+        )
+        merge(stale)
+        assert (
+            _selected_approval(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == expected_newer
+        )
+        assert (
+            _selected_refresh_marker(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == refresh_after_newer
+        )
 
         merge(equal_timestamp_higher_id)
         expected_equal_order_winner = (
@@ -347,18 +438,157 @@ def test_generated_lifecycle_merge_is_monotonic_in_live_delta(
             "smoke_equal_timestamp",
             high_event_id,
         )
-        assert _selected_approval(
-            live_warehouse,
-            lifecycle_table=lifecycle_table,
-            borrower_id=borrower_id,
-        ) == expected_equal_order_winner
+        assert (
+            _selected_approval(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == expected_equal_order_winner
+        )
 
-        merge(newer)
-        assert _selected_approval(
+        refresh_after_equal_winner = _selected_refresh_marker(
             live_warehouse,
             lifecycle_table=lifecycle_table,
             borrower_id=borrower_id,
-        ) == expected_equal_order_winner
+        )
+        merge(newer)
+        assert (
+            _selected_approval(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == expected_equal_order_winner
+        )
+        assert (
+            _selected_refresh_marker(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == refresh_after_equal_winner
+        )
+
+        outreach_at = datetime(2026, 1, 15, 15, 0, tzinfo=UTC)
+        outreach_created_at = datetime(2026, 1, 15, 15, 1, tzinfo=UTC)
+        outreach_newer_at = datetime(2026, 1, 15, 15, 2, tzinfo=UTC)
+        outreach_newer_created_at = datetime(2026, 1, 15, 15, 3, tzinfo=UTC)
+        outreach_highest_created_at = datetime(2026, 1, 15, 15, 4, tzinfo=UTC)
+        outreach_low_id = "00000000-0000-4000-8000-000000000011"
+        outreach_high_id = "00000000-0000-4000-8000-000000000012"
+
+        first_outreach = _with_outreach(
+            equal_timestamp_higher_id,
+            occurred_at=outreach_at,
+            created_at=outreach_created_at,
+            event_id=outreach_low_id,
+        )
+        merge(first_outreach)
+        assert _selected_outreach(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+            expected_at=outreach_at,
+            expected_created_at=outreach_created_at,
+        ) == ("actioned", True, True, outreach_low_id)
+
+        newer_outreach = _with_outreach(
+            equal_timestamp_higher_id,
+            occurred_at=outreach_newer_at,
+            created_at=outreach_newer_created_at,
+            event_id=outreach_low_id,
+        )
+        merge(newer_outreach)
+        assert _selected_outreach(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+            expected_at=outreach_newer_at,
+            expected_created_at=outreach_newer_created_at,
+        ) == ("actioned", True, True, outreach_low_id)
+
+        # A newer subordinate tuple must not beat an older occurred_at.
+        stale_outreach = _with_outreach(
+            equal_timestamp_higher_id,
+            occurred_at=outreach_at,
+            created_at=outreach_highest_created_at,
+            event_id=outreach_high_id,
+        )
+        refresh_after_newer_outreach = _selected_refresh_marker(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+        )
+        merge(stale_outreach)
+        assert _selected_outreach(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+            expected_at=outreach_newer_at,
+            expected_created_at=outreach_newer_created_at,
+        ) == ("actioned", True, True, outreach_low_id)
+        assert (
+            _selected_refresh_marker(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == refresh_after_newer_outreach
+        )
+
+        # Equal occurred_at is ordered by created_at, then event id.
+        newer_created_at = _with_outreach(
+            equal_timestamp_higher_id,
+            occurred_at=outreach_newer_at,
+            created_at=outreach_highest_created_at,
+            event_id=outreach_low_id,
+        )
+        merge(newer_created_at)
+        assert _selected_outreach(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+            expected_at=outreach_newer_at,
+            expected_created_at=outreach_highest_created_at,
+        ) == ("actioned", True, True, outreach_low_id)
+
+        higher_outreach_id = _with_outreach(
+            equal_timestamp_higher_id,
+            occurred_at=outreach_newer_at,
+            created_at=outreach_highest_created_at,
+            event_id=outreach_high_id,
+        )
+        merge(higher_outreach_id)
+        assert _selected_outreach(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+            expected_at=outreach_newer_at,
+            expected_created_at=outreach_highest_created_at,
+        ) == ("actioned", True, True, outreach_high_id)
+
+        refresh_after_outreach_winner = _selected_refresh_marker(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+        )
+        merge(newer_created_at)
+        assert _selected_outreach(
+            live_warehouse,
+            lifecycle_table=lifecycle_table,
+            borrower_id=borrower_id,
+            expected_at=outreach_newer_at,
+            expected_created_at=outreach_highest_created_at,
+        ) == ("actioned", True, True, outreach_high_id)
+        assert (
+            _selected_refresh_marker(
+                live_warehouse,
+                lifecycle_table=lifecycle_table,
+                borrower_id=borrower_id,
+            )
+            == refresh_after_outreach_winner
+        )
     finally:
         # Both cleanup attempts run even if table creation or a replay
         # assertion fails. A cleanup failure remains release-blocking.

@@ -29,8 +29,17 @@ process environment, seeds a temporary `DEFAULT` Databricks CLI profile, runs
 `scripts/deploy.sh -t dev --no-confirm`, and keeps the deployed app smoke test enabled unless the
 operator explicitly selects `skip_smoke`. Run it before live validation when
 the code under review changes app, bundle, job, SQL, or frontend behavior. The
-workflow has a single non-cancelling concurrency lane (`mip-dev-deploy`) because
+workflow shares a single non-cancelling concurrency lane (`mip-dev-live-state`)
+with live validation because
 parallel deploys overlap expensive refresh jobs and app promotion.
+
+The live mutation gate encodes the GitHub run and attempt into a reviewed,
+non-PII campaign name. It removes abandoned marked fixtures before pytest and
+uses a fresh operator/admin OAuth pair in an `if: always()` postflight to
+archive the current run and prove three active-inventory absences. An
+interrupted build remains immutable until its five-minute lease expires; only
+then may the admin transition atomically quarantine it as `failed` and
+`archived` through the public campaign API.
 
 The `rebase_unverified_app` input is a one-time adoption control, defaulting to
 false. Select it only when the existing dev App predates the signed server-owned

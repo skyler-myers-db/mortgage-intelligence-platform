@@ -2,292 +2,121 @@
 
 from __future__ import annotations
 
-import hashlib
-import os
 import time
 from collections.abc import Callable
 from typing import Any
 
-from psycopg import sql as psql
-
-from tools.databricks.lakebase_oauth_role_bootstrap import (
-    _BOOTSTRAP_API_PROFILE,
-    assert_oauth_security_label,
-    read_profile,
+from tools.databricks.lakebase_oauth_role_bootstrap import read_profile
+from tools.databricks.lakebase_oauth_role_bootstrap_admission import (
+    fence_bootstrap_role_admission,
+)
+from tools.databricks.lakebase_oauth_role_bootstrap_contract import (
+    _assert_bootstrap_role_contract,
+    _assert_no_bootstrap_acl_dependencies,
+    _control_plane_role,
+    bootstrap_oauth_label_service_principal_id,
+)
+from tools.databricks.lakebase_oauth_role_bootstrap_credentials import (
+    assert_workspace_mutation_lease as _assert_workspace_mutation_lease,
+)
+from tools.databricks.lakebase_oauth_role_bootstrap_legacy_acl import (
+    cleanup_legacy_acl_dependencies,
+)
+from tools.databricks.lakebase_oauth_role_bootstrap_principal import (
+    assert_bootstrap_principal_contract as _assert_bootstrap_principal_contract,
+)
+from tools.databricks.lakebase_oauth_role_bootstrap_principal import (
+    exact_bootstrap_principals as _exact_bootstrap_principals,
+)
+from tools.databricks.lakebase_oauth_role_bootstrap_sessions import (
+    SessionFence,
+    cleanup_executor_identity,
+    drain_post_delete_sessions,
+    prove_post_delete_session_absence,
+    terminate_bootstrap_sessions,
+)
+from tools.databricks.lakebase_oauth_role_bootstrap_wrapper import (
+    _event_trigger_preflight,
+    cleanup_wrapper,
+)
+from tools.databricks.lakebase_oauth_role_recovery_absent import (
+    commented_bootstrap_roles as _commented_bootstrap_roles,
+)
+from tools.databricks.lakebase_oauth_role_recovery_admin import (
+    TargetDatabaseReappearedError,
+    assert_admin_database_target_absent,
+    role_exists_on_either_plane,
+)
+from tools.databricks.lakebase_oauth_role_recovery_identity import (
+    AccountPrincipalCleanupError,
+    CredentialCleanupError,
+    prove_deleted_bootstrap_principal_absent,
+    revoke_credentials_and_retire_account_principal,
+)
+from tools.databricks.lakebase_oauth_role_recovery_marker import (
+    bootstrap_identity_contract as _bootstrap_identity_contract,
+)
+from tools.databricks.lakebase_oauth_role_recovery_marker import (
+    marker_signing_key as _marker_signing_key,
 )
 from tools.databricks.lakebase_oauth_role_tombstone import (
     delete_orphan_tombstone as _delete_orphan_tombstone,
 )
 from tools.databricks.lakebase_oauth_role_tombstone import (
-    ensure_orphan_tombstone as _ensure_orphan_tombstone,
-)
-from tools.databricks.lakebase_oauth_role_tombstone import (
     orphan_tombstones as _orphan_tombstones,
 )
+from tools.databricks.lakebase_oauth_role_tombstone import (
+    upgrade_v2_orphan_tombstone as _upgrade_v2_orphan_tombstone,
+)
+from tools.databricks.lakebase_oauth_role_tombstone_migration import (
+    migrate_v2_tombstones_before_role_cleanup,
+)
 
-_BOOTSTRAP_DISPLAY_PREFIX = "mip-lakebase-role-bootstrap-"
-_BOOTSTRAP_EXTERNAL_ID_PREFIX = "mip:lb:b:v1:"
-_MARKER_SIGNING_KEY_ENV = "MIP_AI_GATEWAY_PROOF_SIGNING_KEY"
 
-
-def _bootstrap_identity_contract(
+def _fence_and_drain_bootstrap_role(
+    client: Any,
+    deployer_cursor: Any,
     *,
     instance_name: str,
     database_name: str,
     application_id: str,
-) -> tuple[str, str]:
-    digest = hashlib.sha256(
-        f"{instance_name}\0{database_name}\0{application_id}".encode()
-    ).hexdigest()
-    return _BOOTSTRAP_DISPLAY_PREFIX + digest[:24], _BOOTSTRAP_EXTERNAL_ID_PREFIX + digest[:48]
-
-
-def _marker_signing_key() -> str | None:
-    value = os.environ.get(_MARKER_SIGNING_KEY_ENV, "").strip()
-    return value or None
-
-
-def _exact_bootstrap_principals(
-    client: Any,
-    *,
     display_name: str,
-    external_id: str,
-) -> list[Any]:
-    candidates: dict[str, Any] = {}
-    for filter_expr in (
-        f"displayName eq '{display_name}'",
-        f"externalId eq '{external_id}'",
-    ):
-        for principal in client.service_principals.list(filter=filter_expr):
-            principal_id = str(getattr(principal, "id", "") or "").strip()
-            if not principal_id:
-                raise RuntimeError("bootstrap principal inventory returned an identity without id")
-            candidates[principal_id] = principal
-    conflicts = [
-        principal
-        for principal in candidates.values()
-        if str(getattr(principal, "display_name", "") or "") != display_name
-        or str(getattr(principal, "external_id", "") or "") != external_id
-    ]
-    if conflicts:
-        raise RuntimeError("reserved Lakebase bootstrap identity marker is ambiguous")
-    return list(candidates.values())
-
-
-def _control_plane_role(
-    client: Any,
-    *,
-    instance_name: str,
-    application_id: str,
-) -> Any | None:
-    roles = [
-        role
-        for role in client.database.list_database_instance_roles(instance_name)
-        if str(getattr(role, "name", "") or "") == application_id
-    ]
-    if len(roles) > 1:
-        raise RuntimeError("temporary Lakebase bootstrap role inventory is ambiguous")
-    return roles[0] if roles else None
-
-
-def _assert_bootstrap_principal_contract(
-    client: Any,
-    principal: Any,
-    *,
-    display_name: str,
-    external_id: str,
-) -> tuple[str, str]:
-    principal_id = str(getattr(principal, "id", "") or "").strip()
-    if not principal_id:
-        raise RuntimeError("temporary Lakebase bootstrap principal has no immutable id")
-    exact = client.service_principals.get(principal_id)
-    application_id = str(getattr(exact, "application_id", "") or "").strip()
-    if (
-        not application_id
-        or str(getattr(exact, "display_name", "") or "") != display_name
-        or str(getattr(exact, "external_id", "") or "") != external_id
-        or any(getattr(exact, field, None) for field in ("groups", "roles", "entitlements"))
-    ):
-        raise RuntimeError("temporary Lakebase bootstrap principal contract drifted")
-    if any(
-        str(getattr(app, "service_principal_client_id", "") or "") == application_id
-        for app in client.apps.list()
-    ):
-        raise RuntimeError("temporary Lakebase bootstrap principal is bound to an App")
-    return principal_id, application_id
-
-
-def _bootstrap_role_relationships(cursor: Any, application_id: str) -> list[tuple[Any, ...]]:
-    cursor.execute(
-        """
-        SELECT parent.rolname,
-               member.rolname,
-               membership.admin_option,
-               membership.inherit_option,
-               membership.set_option,
-               grantor.rolname
-        FROM pg_auth_members membership
-        JOIN pg_roles parent ON parent.oid = membership.roleid
-        JOIN pg_roles member ON member.oid = membership.member
-        JOIN pg_roles grantor ON grantor.oid = membership.grantor
-        WHERE membership.roleid = (SELECT oid FROM pg_roles WHERE rolname = %s)
-           OR membership.member = (SELECT oid FROM pg_roles WHERE rolname = %s)
-        ORDER BY parent.rolname, member.rolname
-        """,
-        (application_id, application_id),
-    )
-    return list(cursor.fetchall())
-
-
-def _role_ownership_marker(cursor: Any, application_id: str) -> str | None:
-    cursor.execute(
-        "SELECT shobj_description(oid, 'pg_authid') FROM pg_roles WHERE rolname = %s",
-        (application_id,),
-    )
-    row = cursor.fetchone()
-    return str(row[0]) if row and row[0] is not None else None
-
-
-def _assert_bootstrap_role_contract(
-    client: Any,
-    cursor: Any,
-    *,
-    instance_name: str,
-    database_name: str,
-    application_id: str,
     target_application_id: str,
     external_id: str,
     service_principal_id: str | None,
-) -> bool:
-    control_role = _control_plane_role(
-        client,
-        instance_name=instance_name,
-        application_id=application_id,
-    )
-    profile = read_profile(cursor, application_id)
-    if control_role is None and profile is None:
-        return False
-    if control_role is None:
-        raise RuntimeError("temporary Lakebase bootstrap role contract drifted")
-    identity_type = getattr(control_role, "identity_type", None)
-    if str(getattr(identity_type, "value", identity_type) or "") != "SERVICE_PRINCIPAL":
-        raise RuntimeError("temporary Lakebase bootstrap role identity type drifted")
-    if service_principal_id is not None:
-        assert_oauth_security_label(
-            cursor,
+    expected_executor: str,
+    allow_absent_managed_event_triggers: bool,
+    bootstrap_lock_cursor: Any | None,
+    bootstrap_lock_key: Any | None,
+    allow_unlocked_recovery_for_tests: bool,
+    signed_tombstone_authority: bool = False,
+) -> SessionFence:
+    """Prove immutable authority, then drain sessions for a provider-owned role."""
+
+    sql_present = read_profile(deployer_cursor, application_id) is not None
+    if sql_present:
+        fence_bootstrap_role_admission(
+            client,
+            deployer_cursor,
+            instance_name=instance_name,
+            database_name=database_name,
             application_id=application_id,
+            display_name=display_name,
+            target_application_id=target_application_id,
+            external_id=external_id,
             service_principal_id=service_principal_id,
+            allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
+            allow_unlocked_recovery_for_tests=allow_unlocked_recovery_for_tests,
+            signed_tombstone_authority=signed_tombstone_authority,
         )
-
-    # Persist the source-owned recovery marker before checking any mutable
-    # membership or ACL surface. If later cleanup fails and the workspace SP
-    # must still be deleted to invalidate tokens, the privileged DB role stays
-    # discoverable on the next run.
-    description = _role_ownership_marker(cursor, application_id)
-    if description is None:
-        cursor.execute(
-            psql.SQL("COMMENT ON ROLE {} IS {}").format(
-                psql.Identifier(application_id),
-                psql.Literal(external_id),
-            )
-        )
-        description = _role_ownership_marker(cursor, application_id)
-    if description != external_id:
-        raise RuntimeError("temporary Lakebase bootstrap role ownership marker drifted")
-    if profile != _BOOTSTRAP_API_PROFILE:
-        raise RuntimeError("temporary Lakebase bootstrap role attribute profile drifted")
-
-    relationships = _bootstrap_role_relationships(cursor, application_id)
-    allowed_relationships = [
-        (
-            target_application_id,
-            application_id,
-            True,
-            False,
-            False,
-            "cloud_admin",
-        )
-    ]
-    if relationships not in ([], allowed_relationships):
-        raise RuntimeError("temporary Lakebase bootstrap role relationship drifted")
-
-    cursor.execute(
-        """
-        SELECT ARRAY(
-            SELECT acl.privilege_type
-            FROM pg_database database_object
-            CROSS JOIN aclexplode(database_object.datacl) acl
-            JOIN pg_roles grantee ON grantee.oid = acl.grantee
-            WHERE database_object.datname = %s
-              AND grantee.rolname = %s
-            ORDER BY acl.privilege_type
-        )
-        """,
-        (database_name, application_id),
+    fence = terminate_bootstrap_sessions(
+        deployer_cursor,
+        application_id=application_id,
+        expected_executor=expected_executor,
     )
-    direct_database_privileges = tuple((cursor.fetchone() or ([],))[0] or [])
-    if direct_database_privileges not in ((), ("CREATE",)):
-        raise RuntimeError("temporary Lakebase bootstrap database privilege drifted")
-
-    cursor.execute(
-        """
-        SELECT dependency.dbid,
-               dependency.classid::regclass::text,
-               dependency.objsubid,
-               dependency.deptype,
-               COALESCE(database_object.datname, '')
-        FROM pg_shdepend dependency
-        LEFT JOIN pg_database database_object
-          ON dependency.classid = 'pg_database'::regclass
-         AND database_object.oid = dependency.objid
-        WHERE dependency.refclassid = 'pg_authid'::regclass
-          AND dependency.refobjid = (
-              SELECT oid FROM pg_roles WHERE rolname = %s
-          )
-        ORDER BY 1, 2, 3, 4, 5
-        """,
-        (application_id,),
-    )
-    shared_dependencies = list(cursor.fetchall())
-    allowed_dependencies = [(0, "pg_database", 0, "a", database_name)]
-    if shared_dependencies not in ([], allowed_dependencies):
-        raise RuntimeError("temporary Lakebase bootstrap dependency drifted")
-
-    return True
-
-
-def _disable_and_revoke_bootstrap_credentials(
-    client: Any,
-    *,
-    service_principal_id: str,
-) -> None:
-    from databricks.sdk.service.iam import Patch, PatchOp, PatchSchema
-
-    before = client.service_principals.get(service_principal_id)
-    immutable_before = tuple(
-        str(getattr(before, field, "") or "")
-        for field in ("id", "application_id", "display_name", "external_id")
-    )
-    client.service_principals.patch(
-        id=service_principal_id,
-        operations=[Patch(op=PatchOp.REPLACE, path="active", value=False)],
-        schemas=[PatchSchema.URN_IETF_PARAMS_SCIM_API_MESSAGES_2_0_PATCH_OP],
-    )
-    principal = client.service_principals.get(service_principal_id)
-    immutable_after = tuple(
-        str(getattr(principal, field, "") or "")
-        for field in ("id", "application_id", "display_name", "external_id")
-    )
-    if immutable_after != immutable_before or getattr(principal, "active", None) is not False:
-        raise RuntimeError("temporary Lakebase bootstrap principal did not become inactive")
-    secrets = list(client.service_principal_secrets_proxy.list(service_principal_id))
-    for secret in secrets:
-        secret_id = str(getattr(secret, "id", "") or "").strip()
-        if not secret_id:
-            raise RuntimeError("temporary Lakebase bootstrap credential has no immutable id")
-        client.service_principal_secrets_proxy.delete(service_principal_id, secret_id)
-    if list(client.service_principal_secrets_proxy.list(service_principal_id)):
-        raise RuntimeError("temporary Lakebase bootstrap credentials survived revocation")
+    return fence
 
 
 def _delete_bootstrap_role(
@@ -295,32 +124,173 @@ def _delete_bootstrap_role(
     deployer_cursor: Any,
     *,
     instance_name: str,
+    database_name: str,
     application_id: str,
+    display_name: str,
+    target_application_id: str,
+    external_id: str,
+    service_principal_id: str | None,
+    allow_absent_managed_event_triggers: bool,
+    bootstrap_lock_cursor: Any | None,
+    bootstrap_lock_key: Any | None,
+    allow_unlocked_recovery_for_tests: bool,
+    expected_executor: str,
+    admin_database_recovery: bool,
+    signed_tombstone_authority: bool = False,
     attempts: int = 15,
 ) -> None:
     """Delete a possibly ambiguous role creation and prove stable absence."""
 
     absent_observations = 0
     last_error: Exception | None = None
+    last_delete_fence: SessionFence | None = None
     for attempt in range(attempts):
-        present = read_profile(deployer_cursor, application_id) is not None
+        sql_present = read_profile(deployer_cursor, application_id) is not None
+        present = sql_present
         try:
-            present = present or _control_plane_role(
-                client,
-                instance_name=instance_name,
-                application_id=application_id,
-            ) is not None
+            present = (
+                present
+                or _control_plane_role(
+                    client,
+                    instance_name=instance_name,
+                    application_id=application_id,
+                )
+                is not None
+            )
         except Exception as exc:  # noqa: BLE001 - absence must remain conclusive
             last_error = exc
             present = True
         if present:
             absent_observations = 0
             try:
+                if sql_present:
+                    _fence_and_drain_bootstrap_role(
+                        client,
+                        deployer_cursor,
+                        instance_name=instance_name,
+                        database_name=database_name,
+                        application_id=application_id,
+                        display_name=display_name,
+                        target_application_id=target_application_id,
+                        external_id=external_id,
+                        service_principal_id=service_principal_id,
+                        expected_executor=expected_executor,
+                        allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                        bootstrap_lock_cursor=bootstrap_lock_cursor,
+                        bootstrap_lock_key=bootstrap_lock_key,
+                        allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                        signed_tombstone_authority=signed_tombstone_authority,
+                    )
+                else:
+                    terminate_bootstrap_sessions(
+                        deployer_cursor,
+                        application_id=application_id,
+                        expected_executor=expected_executor,
+                    )
+                if not _assert_bootstrap_role_contract(
+                    client,
+                    deployer_cursor,
+                    instance_name=instance_name,
+                    database_name=database_name,
+                    application_id=application_id,
+                    target_application_id=target_application_id,
+                    external_id=external_id,
+                    service_principal_id=service_principal_id,
+                    expected_executor=expected_executor,
+                    allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                    target_database_absent=admin_database_recovery,
+                    signed_tombstone_authority=signed_tombstone_authority,
+                ):
+                    raise RuntimeError(
+                        "temporary Lakebase bootstrap role disappeared before deletion"
+                    )
+                if sql_present:
+                    if admin_database_recovery:
+                        _assert_no_bootstrap_acl_dependencies(
+                            deployer_cursor,
+                            application_id=application_id,
+                        )
+                    else:
+                        cleanup_wrapper(
+                            deployer_cursor,
+                            instance_name=instance_name,
+                            database_name=database_name,
+                            target_application_id=target_application_id,
+                            bootstrap_application_id=application_id,
+                            expected_executor=expected_executor,
+                            allow_absent_managed_event_triggers=(
+                                allow_absent_managed_event_triggers
+                            ),
+                            bootstrap_lock_cursor=bootstrap_lock_cursor,
+                            bootstrap_lock_key=bootstrap_lock_key,
+                            allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                        )
+                        cleanup_legacy_acl_dependencies(
+                            deployer_cursor,
+                            database_name=database_name,
+                            application_id=application_id,
+                            expected_executor=expected_executor,
+                            allow_absent_managed_event_triggers=(
+                                allow_absent_managed_event_triggers
+                            ),
+                        )
+                    last_delete_fence = terminate_bootstrap_sessions(
+                        deployer_cursor,
+                        application_id=application_id,
+                        expected_executor=expected_executor,
+                    )
+                else:
+                    last_delete_fence = terminate_bootstrap_sessions(
+                        deployer_cursor,
+                        application_id=application_id,
+                        expected_executor=expected_executor,
+                    )
+                _event_trigger_preflight(
+                    deployer_cursor,
+                    principal_label="bootstrap role DROP",
+                    allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                )
+                if bootstrap_lock_cursor is not None and bootstrap_lock_key is not None:
+                    from tools.databricks.lakebase_oauth_role_bootstrap_lock import (
+                        assert_bootstrap_lock_held,
+                    )
+
+                    assert_bootstrap_lock_held(
+                        bootstrap_lock_cursor,
+                        lock_key=bootstrap_lock_key,
+                    )
+                elif not allow_unlocked_recovery_for_tests:
+                    raise RuntimeError(
+                        "temporary Lakebase bootstrap DROP lacks canonical advisory lock"
+                    )
+                if admin_database_recovery:
+                    assert_admin_database_target_absent(
+                        deployer_cursor,
+                        database_name,
+                    )
                 client.database.delete_database_instance_role(instance_name, application_id)
+                last_delete_fence = drain_post_delete_sessions(
+                    deployer_cursor,
+                    application_id=application_id,
+                    fence=last_delete_fence,
+                )
+                prove_post_delete_session_absence(
+                    deployer_cursor,
+                    application_id=application_id,
+                    fence=last_delete_fence,
+                )
                 last_error = None
+            except TargetDatabaseReappearedError:
+                raise
             except Exception as exc:  # noqa: BLE001 - retry ambiguous deletion
                 last_error = exc
         else:
+            if last_delete_fence is not None:
+                prove_post_delete_session_absence(
+                    deployer_cursor,
+                    application_id=application_id,
+                    fence=last_delete_fence,
+                )
             absent_observations += 1
             if absent_observations >= 3:
                 return
@@ -330,275 +300,51 @@ def _delete_bootstrap_role(
     raise RuntimeError(f"temporary Lakebase bootstrap role cleanup did not converge{detail}")
 
 
-def _delete_control_plane_bootstrap_role(
-    client: Any,
-    *,
-    instance_name: str,
-    application_id: str,
-    attempts: int = 15,
-) -> None:
-    """Delete a creator when its target database is absent and SQL is unavailable."""
-
-    absent_observations = 0
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        role = _control_plane_role(
-            client,
-            instance_name=instance_name,
-            application_id=application_id,
-        )
-        if role is None:
-            absent_observations += 1
-            if absent_observations >= 3:
-                return
-        else:
-            identity_type = getattr(role, "identity_type", None)
-            if str(getattr(identity_type, "value", identity_type) or "") != "SERVICE_PRINCIPAL":
-                raise RuntimeError("temporary Lakebase bootstrap role identity type drifted")
-            absent_observations = 0
-            try:
-                client.database.delete_database_instance_role(instance_name, application_id)
-                last_error = None
-            except Exception as exc:  # noqa: BLE001 - retry ambiguous deletion
-                last_error = exc
-        if attempt + 1 < attempts:
-            time.sleep(1)
-    detail = f"; last_error={type(last_error).__name__}" if last_error is not None else ""
-    raise RuntimeError(
-        f"temporary Lakebase bootstrap control-plane role cleanup did not converge{detail}"
-    )
-
-
-def _commented_bootstrap_roles(cursor: Any, external_id: str) -> list[str]:
-    cursor.execute(
-        """
-        SELECT role.rolname
-        FROM pg_roles role
-        WHERE shobj_description(role.oid, 'pg_authid') = %s
-        ORDER BY role.rolname
-        """,
-        (external_id,),
-    )
-    return [str(row[0]) for row in cursor.fetchall()]
-
-
-def _delete_bootstrap_principal(
-    client: Any,
-    *,
-    principal_id: str,
-    display_name: str,
-    external_id: str,
-    attempts: int = 15,
-) -> None:
-    last_error: Exception | None = None
-    for attempt in range(attempts):
-        principals = _exact_bootstrap_principals(
-            client,
-            display_name=display_name,
-            external_id=external_id,
-        )
-        if not any(str(getattr(item, "id", "") or "") == principal_id for item in principals):
-            return
-        try:
-            client.service_principals.delete(principal_id)
-            last_error = None
-        except Exception as exc:  # noqa: BLE001 - retry ambiguous deletion
-            last_error = exc
-        if attempt + 1 < attempts:
-            time.sleep(1)
-    detail = f"; last_error={type(last_error).__name__}" if last_error is not None else ""
-    raise RuntimeError(f"temporary Lakebase bootstrap principal deletion did not converge{detail}")
-
-
-def _role_exists_on_either_plane(
-    client: Any,
-    deployer_cursor: Any,
-    *,
-    instance_name: str,
-    application_id: str,
-) -> bool:
-    """Fail closed across eventual-consistency disagreement between role inventories."""
-
-    sql_present = read_profile(deployer_cursor, application_id) is not None
-    control_present = _control_plane_role(
-        client,
-        instance_name=instance_name,
-        application_id=application_id,
-    ) is not None
-    return sql_present or control_present
-
-
 def recover_bootstrap_principals_for_absent_instance(
     client: Any,
     *,
+    account_client: Any,
     instance_name: str,
     database_name: str,
     target_application_id: str,
     marker_signing_key: str | None = None,
     resource_absence_probe: Callable[[], bool] | None = None,
-    recover_control_plane_roles: bool = False,
-    attempts: int = 15,
+    monotonic: Callable[[], float] | None = None,
+    sleep: Callable[[float], None] | None = None,
 ) -> bool:
-    """Recover workspace markers only after proving the target resource stays absent.
+    from tools.databricks.lakebase_oauth_role_recovery_absent import (
+        recover_absent_instance_principals,
+    )
 
-    By default the exact Lakebase instance is the resource. Callers may supply
-    an equally fail-closed probe for a child resource (currently the target
-    database). Returns ``False`` as soon as the resource exists so the caller
-    can switch to full SQL/control-plane recovery. Returns ``True`` only after
-    three stable observations of both resource and marker absence.
-    """
-
-    display_name, external_id = _bootstrap_identity_contract(
+    return recover_absent_instance_principals(
+        client,
+        account_client=account_client,
         instance_name=instance_name,
         database_name=database_name,
-        application_id=target_application_id,
+        target_application_id=target_application_id,
+        marker_signing_key=marker_signing_key,
+        resource_absence_probe=resource_absence_probe,
+        monotonic=monotonic,
+        sleep=sleep,
     )
-    marker_signing_key = marker_signing_key or _marker_signing_key()
-    marker_absence = 0
-    for attempt in range(attempts):
-        principals = _exact_bootstrap_principals(
-            client,
-            display_name=display_name,
-            external_id=external_id,
-        )
-        verified: list[tuple[str, str, bool]] = []
-        credential_errors: list[str] = []
-        for principal in principals:
-            principal_id, application_id = _assert_bootstrap_principal_contract(
-                client,
-                principal,
-                display_name=display_name,
-                external_id=external_id,
-            )
-            credential_cleanup_succeeded = False
-            try:
-                _disable_and_revoke_bootstrap_credentials(
-                    client,
-                    service_principal_id=principal_id,
-                )
-                credential_cleanup_succeeded = True
-            except Exception as exc:  # noqa: BLE001 - quarantine every exact marker
-                credential_errors.append(
-                    f"{principal_id} credential cleanup: {type(exc).__name__}: {exc}"
-                )
-            verified.append(
-                (principal_id, application_id, credential_cleanup_succeeded)
-            )
-        orphan_tombstones = _orphan_tombstones(
-            client,
-            base_external_id=external_id,
-        )
-
-        if resource_absence_probe is None:
-            instances = [
-                instance
-                for instance in client.database.list_database_instances()
-                if str(getattr(instance, "name", "") or "") == instance_name
-            ]
-            if len(instances) > 1:
-                raise RuntimeError("Lakebase instance inventory is ambiguous")
-            resource_absent = not instances
-        else:
-            resource_absent = resource_absence_probe()
-        if not resource_absent:
-            return False
-        resource_absence = attempt + 1
-
-        if verified or orphan_tombstones:
-            marker_absence = 0
-            if resource_absence >= 3:
-                cleanup_errors: list[str] = list(credential_errors)
-                role_cleanup_failures: set[str] = set()
-                if recover_control_plane_roles:
-                    role_targets = {
-                        application_id
-                        for _principal_id, application_id, _credential_ok in verified
-                    }
-                    for _marker_id, application_id, *_marker_fields in orphan_tombstones:
-                        if application_id == target_application_id:
-                            cleanup_errors.append(
-                                "orphan marker contract: target runtime identity is never a "
-                                "bootstrap role"
-                            )
-                            role_cleanup_failures.add(application_id)
-                        else:
-                            role_targets.add(application_id)
-                    for application_id in sorted(role_targets):
-                        try:
-                            _delete_control_plane_bootstrap_role(
-                                client,
-                                instance_name=instance_name,
-                                application_id=application_id,
-                            )
-                        except Exception as exc:  # noqa: BLE001 - aggregate exact roles
-                            role_cleanup_failures.add(application_id)
-                            cleanup_errors.append(f"{type(exc).__name__}: {exc}")
-                for principal_id, application_id, credential_cleanup_succeeded in verified:
-                    principal_deletion_authorized = (
-                        application_id not in role_cleanup_failures
-                    )
-                    if not principal_deletion_authorized and not credential_cleanup_succeeded:
-                        try:
-                            _ensure_orphan_tombstone(
-                                client,
-                                base_external_id=external_id,
-                                application_id=application_id,
-                                signing_key=str(marker_signing_key or ""),
-                            )
-                            principal_deletion_authorized = True
-                        except Exception as exc:  # noqa: BLE001 - retain source marker
-                            cleanup_errors.append(
-                                f"orphan marker persistence: {type(exc).__name__}: {exc}"
-                            )
-                    if not principal_deletion_authorized:
-                        cleanup_errors.append(
-                            "principal cleanup: retained inactive credential-free marker "
-                            "because control-plane role deletion was unproven"
-                        )
-                        continue
-                    try:
-                        _delete_bootstrap_principal(
-                            client,
-                            principal_id=principal_id,
-                            display_name=display_name,
-                            external_id=external_id,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - aggregate exact identities
-                        cleanup_errors.append(f"{type(exc).__name__}: {exc}")
-                for tombstone_id, application_id, *_remaining_fields in orphan_tombstones:
-                    if application_id in role_cleanup_failures:
-                        continue
-                    try:
-                        _delete_orphan_tombstone(
-                            client,
-                            tombstone_id=tombstone_id,
-                            base_external_id=external_id,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - aggregate exact markers
-                        cleanup_errors.append(f"{type(exc).__name__}: {exc}")
-                if cleanup_errors:
-                    raise RuntimeError(
-                        "temporary Lakebase bootstrap principal cleanup was incomplete: "
-                        f"{cleanup_errors!r}"
-                    )
-        else:
-            marker_absence += 1
-            if resource_absence >= 3 and marker_absence >= 3:
-                return True
-        if attempt + 1 < attempts:
-            time.sleep(1)
-    raise RuntimeError("absent-instance Lakebase bootstrap recovery did not converge")
 
 
 def recover_stale_bootstrap_identities(
     client: Any,
     deployer_cursor: Any,
     *,
+    account_client: Any,
     instance_name: str,
     database_name: str,
     target_application_id: str,
     marker_signing_key: str | None = None,
     attempts: int = 15,
+    allow_absent_managed_event_triggers: bool = False,
+    bootstrap_lock_cursor: Any | None = None,
+    bootstrap_lock_key: Any | None = None,
+    allow_unlocked_recovery_for_tests: bool = False,
+    expected_executor: str | None = None,
+    admin_database_recovery: bool = False,
 ) -> None:
     """Recover deterministic one-use creators left by interruption or ambiguity."""
 
@@ -607,47 +353,112 @@ def recover_stale_bootstrap_identities(
         database_name=database_name,
         application_id=target_application_id,
     )
+    if (bootstrap_lock_cursor is None) != (bootstrap_lock_key is None):
+        raise ValueError("bootstrap lock cursor and key must be supplied together")
+    expected_executor = cleanup_executor_identity(
+        deployer_cursor,
+        excluded_application_id=target_application_id,
+        expected_executor=expected_executor,
+    )
     marker_signing_key = marker_signing_key or _marker_signing_key()
-    # Three observations are required on every path. A previous process may
-    # have committed a workspace principal or database role just before losing
-    # its response, so a single empty eventually-consistent list is not proof.
     required_absence = 3
     absence_observations = 0
     for attempt in range(attempts):
+        if admin_database_recovery:
+            assert_admin_database_target_absent(deployer_cursor, database_name)
         principals = _exact_bootstrap_principals(
             client,
             display_name=display_name,
             external_id=external_id,
+            account_client=account_client,
         )
 
-        # Cross the credential boundary before any Lakebase inventory query can
-        # fail. Each exact, app-unbound deterministic principal is disabled and
-        # stripped of secrets independently.
-        principal_states: list[tuple[str, str, bool, list[str]]] = []
-        for principal in principals:
-            principal_id, application_id = _assert_bootstrap_principal_contract(
+        resolved_principals = [
+            _assert_bootstrap_principal_contract(
                 client,
                 principal,
                 display_name=display_name,
                 external_id=external_id,
+                account_client=account_client,
             )
+            for principal in principals
+        ]
+        if any(
+            application_id == target_application_id for _, application_id in resolved_principals
+        ):
+            raise RuntimeError("target runtime identity is never a bootstrap principal")
+        principal_states: list[tuple[str, str, bool, bool, bool, list[str]]] = []
+        for principal_id, application_id in resolved_principals:
             principal_errors: list[str] = []
             credential_cleanup_succeeded = False
+            account_cleanup_succeeded = False
+            session_cleanup_succeeded = False
+            # Keep signed immutable two-id authority durable before the first
+            # credential or account-plane write.
+            _assert_workspace_mutation_lease(
+                bootstrap_lock_cursor,
+                bootstrap_lock_key,
+                allow_unlocked_recovery_for_tests=allow_unlocked_recovery_for_tests,
+            )
+            _upgrade_v2_orphan_tombstone(
+                client,
+                account_client=account_client,
+                base_external_id=external_id,
+                application_id=application_id,
+                principal_id=principal_id,
+                signing_key=str(marker_signing_key or ""),
+                bootstrap_lock_cursor=bootstrap_lock_cursor,
+                bootstrap_lock_key=bootstrap_lock_key,
+                allow_unlocked_recovery_for_tests=allow_unlocked_recovery_for_tests,
+            )
             try:
-                _disable_and_revoke_bootstrap_credentials(
+                revoke_credentials_and_retire_account_principal(
                     client,
-                    service_principal_id=principal_id,
+                    account_client,
+                    principal_id=principal_id,
+                    application_id=application_id,
+                    bootstrap_reservation_name=display_name,
+                    ownership_marker=external_id,
+                    allow_workspace_absence=True,
+                    bootstrap_lock_cursor=bootstrap_lock_cursor,
+                    bootstrap_lock_key=bootstrap_lock_key,
+                    allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
                 )
                 credential_cleanup_succeeded = True
-            except Exception as exc:  # noqa: BLE001 - continue independent cleanup
-                principal_errors.append(
-                    f"credential cleanup: {type(exc).__name__}: {exc}"
+                account_cleanup_succeeded = True
+            except CredentialCleanupError as exc:
+                principal_errors.append(f"credential cleanup: {type(exc).__name__}: {exc}")
+            except AccountPrincipalCleanupError as exc:
+                credential_cleanup_succeeded = True
+                principal_errors.append(f"account principal cleanup: {type(exc).__name__}: {exc}")
+            try:
+                _fence_and_drain_bootstrap_role(
+                    client,
+                    deployer_cursor,
+                    instance_name=instance_name,
+                    database_name=database_name,
+                    application_id=application_id,
+                    display_name=display_name,
+                    target_application_id=target_application_id,
+                    external_id=external_id,
+                    service_principal_id=principal_id,
+                    expected_executor=expected_executor,
+                    allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                    bootstrap_lock_cursor=bootstrap_lock_cursor,
+                    bootstrap_lock_key=bootstrap_lock_key,
+                    allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                    signed_tombstone_authority=True,
                 )
+                session_cleanup_succeeded = True
+            except Exception as exc:  # noqa: BLE001 - retain quarantined marker
+                principal_errors.append(f"session cleanup: {type(exc).__name__}: {exc}")
             principal_states.append(
                 (
                     principal_id,
                     application_id,
                     credential_cleanup_succeeded,
+                    account_cleanup_succeeded,
+                    session_cleanup_succeeded,
                     principal_errors,
                 )
             )
@@ -657,18 +468,30 @@ def recover_stale_bootstrap_identities(
             orphan_tombstones = _orphan_tombstones(
                 client,
                 base_external_id=external_id,
+                account_client=account_client,
             )
         except Exception as exc:  # noqa: BLE001 - principals still require cleanup
             orphan_tombstones = []
-            inventory_errors.append(
-                f"orphan marker inventory: {type(exc).__name__}: {exc}"
-            )
+            inventory_errors.append(f"orphan marker inventory: {type(exc).__name__}: {exc}")
         try:
             commented_roles = _commented_bootstrap_roles(deployer_cursor, external_id)
         except Exception as exc:  # noqa: BLE001 - principals still require cleanup
             commented_roles = []
-            inventory_errors.append(
-                f"database marker inventory: {type(exc).__name__}: {exc}"
+            inventory_errors.append(f"database marker inventory: {type(exc).__name__}: {exc}")
+
+        if orphan_tombstones and not inventory_errors:
+            orphan_tombstones = migrate_v2_tombstones_before_role_cleanup(
+                client,
+                deployer_cursor,
+                account_client,
+                orphan_tombstones,
+                external_id,
+                display_name,
+                str(marker_signing_key or ""),
+                {state[1]: state[0] for state in principal_states},
+                bootstrap_lock_cursor,
+                bootstrap_lock_key,
+                allow_unlocked_recovery_for_tests,
             )
 
         if (
@@ -677,6 +500,19 @@ def recover_stale_bootstrap_identities(
             and not commented_roles
             and not inventory_errors
         ):
+            if not admin_database_recovery:
+                cleanup_wrapper(
+                    deployer_cursor,
+                    instance_name=instance_name,
+                    database_name=database_name,
+                    target_application_id=target_application_id,
+                    bootstrap_application_id=None,
+                    expected_executor=expected_executor,
+                    allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                    bootstrap_lock_cursor=bootstrap_lock_cursor,
+                    bootstrap_lock_key=bootstrap_lock_key,
+                    allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                )
             absence_observations += 1
             if absence_observations >= required_absence:
                 return
@@ -689,6 +525,7 @@ def recover_stale_bootstrap_identities(
                 application_id,
                 _tombstone_display_name,
                 _tombstone_external_id,
+                tombstone_principal_id,
             ) in orphan_tombstones:
                 if application_id == target_application_id:
                     cleanup_groups.append(
@@ -699,6 +536,128 @@ def recover_stale_bootstrap_identities(
                 handled_roles.add(application_id)
                 tombstone_errors: list[str] = []
                 role_present = False
+                role_contract_error: Exception | None = None
+                matching_principal = next(
+                    (state for state in principal_states if state[1] == application_id),
+                    None,
+                )
+                recovery_principal_id: str | None = (
+                    matching_principal[0]
+                    if matching_principal is not None
+                    else tombstone_principal_id
+                )
+                identity_conflicted = False
+                if (
+                    recovery_principal_id is not None
+                    and tombstone_principal_id is not None
+                    and recovery_principal_id != tombstone_principal_id
+                ):
+                    tombstone_errors.append(
+                        "orphan principal identity: signed tombstone conflicts with exact "
+                        "principal inventory"
+                    )
+                    recovery_principal_id = None
+                    identity_conflicted = True
+                credential_cleanup_succeeded = bool(
+                    matching_principal is not None and matching_principal[2]
+                )
+                account_cleanup_succeeded = bool(
+                    matching_principal is not None and matching_principal[3]
+                )
+                session_cleanup_succeeded = bool(
+                    matching_principal is None or matching_principal[4]
+                )
+                if (
+                    not identity_conflicted
+                    and read_profile(deployer_cursor, application_id) is not None
+                ):
+                    try:
+                        label_principal_id = bootstrap_oauth_label_service_principal_id(
+                            deployer_cursor,
+                            application_id,
+                        )
+                        if (
+                            recovery_principal_id is not None
+                            and recovery_principal_id != label_principal_id
+                        ):
+                            raise RuntimeError(
+                                "signed tombstone conflicts with the OAuth role label"
+                            )
+                        recovery_principal_id = label_principal_id
+                    except Exception as exc:  # noqa: BLE001 - retain conflicting evidence
+                        tombstone_errors.append(
+                            "orphan principal identity: " f"{type(exc).__name__}: {exc}"
+                        )
+                        recovery_principal_id = None
+                        identity_conflicted = True
+                if matching_principal is None and recovery_principal_id is not None:
+                    try:
+                        revoke_credentials_and_retire_account_principal(
+                            client,
+                            account_client,
+                            principal_id=recovery_principal_id,
+                            application_id=application_id,
+                            bootstrap_reservation_name=display_name,
+                            ownership_marker=external_id,
+                            allow_workspace_absence=True,
+                            bootstrap_lock_cursor=bootstrap_lock_cursor,
+                            bootstrap_lock_key=bootstrap_lock_key,
+                            allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                        )
+                        credential_cleanup_succeeded = True
+                        account_cleanup_succeeded = True
+                    except (CredentialCleanupError, AccountPrincipalCleanupError) as exc:
+                        try:
+                            prove_deleted_bootstrap_principal_absent(
+                                client,
+                                account_client,
+                                principal_id=recovery_principal_id,
+                                application_id=application_id,
+                            )
+                            credential_cleanup_succeeded = True
+                            account_cleanup_succeeded = True
+                        except Exception as reconcile_exc:  # noqa: BLE001 - retain evidence
+                            tombstone_errors.append(
+                                "orphan credential/account cleanup: "
+                                f"{type(exc).__name__}: {exc}; reconciliation: "
+                                f"{type(reconcile_exc).__name__}: {reconcile_exc}"
+                            )
+                if matching_principal is None and recovery_principal_id is None:
+                    tombstone_errors.append(
+                        "orphan account principal cleanup: legacy v2 tombstone lacks the "
+                        "immutable original SCIM id"
+                    )
+                if matching_principal is None:
+                    try:
+                        _fence_and_drain_bootstrap_role(
+                            client,
+                            deployer_cursor,
+                            instance_name=instance_name,
+                            database_name=database_name,
+                            application_id=application_id,
+                            display_name=display_name,
+                            target_application_id=target_application_id,
+                            external_id=external_id,
+                            service_principal_id=recovery_principal_id,
+                            expected_executor=expected_executor,
+                            allow_absent_managed_event_triggers=(
+                                allow_absent_managed_event_triggers
+                            ),
+                            bootstrap_lock_cursor=bootstrap_lock_cursor,
+                            bootstrap_lock_key=bootstrap_lock_key,
+                            allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                            signed_tombstone_authority=True,
+                        )
+                    except Exception as exc:
+                        session_cleanup_succeeded = False
+                        role_contract_error = exc
+                        tombstone_errors.append(
+                            "orphan session cleanup: " f"{type(exc).__name__}: {exc}"
+                        )
+                elif not session_cleanup_succeeded:
+                    tombstone_errors.append(
+                        "orphan session cleanup: exact SCIM recovery session fence failed"
+                    )
                 try:
                     role_present = _assert_bootstrap_role_contract(
                         client,
@@ -708,11 +667,19 @@ def recover_stale_bootstrap_identities(
                         application_id=application_id,
                         target_application_id=target_application_id,
                         external_id=external_id,
-                        service_principal_id=None,
+                        service_principal_id=recovery_principal_id,
+                        expected_executor=expected_executor,
+                        allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                        target_database_absent=admin_database_recovery,
+                        signed_tombstone_authority=True,
                     )
-                except Exception:  # tombstone owns quarantine even under drift
+                except Exception as exc:
+                    role_contract_error = exc
+                    tombstone_errors.append(
+                        "orphan database role contract: " f"{type(exc).__name__}: {exc}"
+                    )
                     try:
-                        role_present = _role_exists_on_either_plane(
+                        role_present = role_exists_on_either_plane(
                             client,
                             deployer_cursor,
                             instance_name=instance_name,
@@ -720,31 +687,75 @@ def recover_stale_bootstrap_identities(
                         )
                     except Exception:  # inventory failure is never absence
                         role_present = True
-                role_cleanup_succeeded = not role_present
-                if role_present:
+                role_cleanup_succeeded = not role_present and role_contract_error is None
+                if (
+                    role_present
+                    and role_contract_error is None
+                    and session_cleanup_succeeded
+                    and credential_cleanup_succeeded
+                    and account_cleanup_succeeded
+                ):
                     try:
                         _delete_bootstrap_role(
                             client,
                             deployer_cursor,
                             instance_name=instance_name,
+                            database_name=database_name,
                             application_id=application_id,
+                            display_name=display_name,
+                            target_application_id=target_application_id,
+                            external_id=external_id,
+                            service_principal_id=recovery_principal_id,
+                            allow_absent_managed_event_triggers=(
+                                allow_absent_managed_event_triggers
+                            ),
+                            bootstrap_lock_cursor=bootstrap_lock_cursor,
+                            bootstrap_lock_key=bootstrap_lock_key,
+                            allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                            expected_executor=expected_executor,
+                            admin_database_recovery=admin_database_recovery,
+                            signed_tombstone_authority=True,
                         )
                         role_cleanup_succeeded = True
+                    except TargetDatabaseReappearedError:
+                        raise
                     except Exception as exc:  # noqa: BLE001 - retain durable marker
                         tombstone_errors.append(
                             f"orphan database role cleanup: {type(exc).__name__}: {exc}"
                         )
-                if role_cleanup_succeeded:
+                if (
+                    role_cleanup_succeeded
+                    and credential_cleanup_succeeded
+                    and account_cleanup_succeeded
+                ):
                     try:
+                        _assert_workspace_mutation_lease(
+                            bootstrap_lock_cursor,
+                            bootstrap_lock_key,
+                            allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                        )
                         _delete_orphan_tombstone(
                             client,
+                            account_client=account_client,
                             tombstone_id=tombstone_id,
                             base_external_id=external_id,
+                            bootstrap_lock_cursor=bootstrap_lock_cursor,
+                            bootstrap_lock_key=bootstrap_lock_key,
+                            allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
                         )
                     except Exception as exc:  # noqa: BLE001 - aggregate marker cleanup
                         tombstone_errors.append(
                             f"orphan marker cleanup: {type(exc).__name__}: {exc}"
                         )
+                elif not credential_cleanup_succeeded:
+                    tombstone_errors.append(
+                        "orphan marker cleanup: retained because credential cleanup " "was unproven"
+                    )
+                elif not account_cleanup_succeeded:
+                    tombstone_errors.append(
+                        "orphan marker cleanup: retained because account principal cleanup "
+                        "was unproven"
+                    )
                 else:
                     tombstone_errors.append(
                         "orphan marker cleanup: retained because database role deletion "
@@ -756,6 +767,8 @@ def recover_stale_bootstrap_identities(
                 principal_id,
                 application_id,
                 credential_cleanup_succeeded,
+                account_cleanup_succeeded,
+                session_cleanup_succeeded,
                 cleanup_errors,
             ) in principal_states:
                 handled_roles.add(application_id)
@@ -771,115 +784,111 @@ def recover_stale_bootstrap_identities(
                         target_application_id=target_application_id,
                         external_id=external_id,
                         service_principal_id=principal_id,
+                        expected_executor=expected_executor,
+                        allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                        target_database_absent=admin_database_recovery,
+                        signed_tombstone_authority=True,
                     )
                 except Exception as exc:  # noqa: BLE001 - continue independent cleanup
                     role_contract_error = exc
+                    cleanup_errors.append("database role contract: " f"{type(exc).__name__}: {exc}")
                     try:
-                        role_present = _role_exists_on_either_plane(
+                        role_present = role_exists_on_either_plane(
                             client,
                             deployer_cursor,
                             instance_name=instance_name,
                             application_id=application_id,
                         )
                     except Exception as inventory_exc:  # noqa: BLE001
-                        # Inventory failure is not absence. Force the deletion
-                        # helper to obtain its own three stable cross-plane
-                        # absence observations before any principal marker can
-                        # be retired.
                         role_present = True
                         cleanup_errors.append(
                             "database role inventory: "
                             f"{type(inventory_exc).__name__}: {inventory_exc}"
                         )
-                role_cleanup_succeeded = not role_present
-                if role_present:
+                role_cleanup_succeeded = (
+                    not role_present and role_contract_error is None and session_cleanup_succeeded
+                )
+                if (
+                    role_present
+                    and role_contract_error is None
+                    and session_cleanup_succeeded
+                    and credential_cleanup_succeeded
+                    and account_cleanup_succeeded
+                ):
                     try:
                         _delete_bootstrap_role(
                             client,
                             deployer_cursor,
                             instance_name=instance_name,
+                            database_name=database_name,
                             application_id=application_id,
+                            display_name=display_name,
+                            target_application_id=target_application_id,
+                            external_id=external_id,
+                            service_principal_id=principal_id,
+                            allow_absent_managed_event_triggers=(
+                                allow_absent_managed_event_triggers
+                            ),
+                            bootstrap_lock_cursor=bootstrap_lock_cursor,
+                            bootstrap_lock_key=bootstrap_lock_key,
+                            allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
+                            expected_executor=expected_executor,
+                            admin_database_recovery=admin_database_recovery,
+                            signed_tombstone_authority=True,
                         )
                         role_cleanup_succeeded = True
+                    except TargetDatabaseReappearedError:
+                        raise
                     except Exception as exc:  # noqa: BLE001 - continue independent cleanup
-                        if role_contract_error is not None:
-                            cleanup_errors.append(
-                                "database role contract: "
-                                f"{type(role_contract_error).__name__}: {role_contract_error}"
-                            )
                         cleanup_errors.append(f"database role cleanup: {type(exc).__name__}: {exc}")
-                principal_deletion_authorized = role_cleanup_succeeded
-                if not role_cleanup_succeeded and not credential_cleanup_succeeded:
-                    try:
-                        _ensure_orphan_tombstone(
-                            client,
-                            base_external_id=external_id,
-                            application_id=application_id,
-                            signing_key=str(marker_signing_key or ""),
-                        )
-                        principal_deletion_authorized = True
-                    except Exception as exc:  # noqa: BLE001 - preserve original marker
-                        cleanup_errors.append(
-                            f"orphan marker persistence: {type(exc).__name__}: {exc}"
-                        )
-                if principal_deletion_authorized:
-                    try:
-                        _delete_bootstrap_principal(
-                            client,
-                            principal_id=principal_id,
-                            display_name=display_name,
-                            external_id=external_id,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - aggregate every cleanup failure
-                        cleanup_errors.append(f"principal cleanup: {type(exc).__name__}: {exc}")
-                elif credential_cleanup_succeeded:
+                if not credential_cleanup_succeeded:
                     cleanup_errors.append(
-                        "principal cleanup: retained inactive credential-free marker because "
-                        "database role deletion was unproven"
+                        "principal cleanup: retained exact signed identity because credential "
+                        "cleanup was unproven"
                     )
-                else:
+                elif not account_cleanup_succeeded:
                     cleanup_errors.append(
-                        "principal cleanup: retained because durable orphan marker "
-                        "persistence was unproven"
+                        "principal cleanup: retained exact signed identity because account "
+                        "principal cleanup was unproven"
+                    )
+                elif not role_cleanup_succeeded:
+                    cleanup_errors.append(
+                        "account principal cleanup: completed before database role deletion; "
+                        "signed tombstone and OAuth role label retained"
                     )
                 cleanup_groups.extend(cleanup_errors)
 
             for application_id in commented_roles:
                 if application_id in handled_roles:
                     continue
+                session_contract_valid = True
                 try:
-                    role_present = _assert_bootstrap_role_contract(
+                    _fence_and_drain_bootstrap_role(
                         client,
                         deployer_cursor,
                         instance_name=instance_name,
                         database_name=database_name,
                         application_id=application_id,
+                        display_name=display_name,
                         target_application_id=target_application_id,
                         external_id=external_id,
                         service_principal_id=None,
+                        expected_executor=expected_executor,
+                        allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                        bootstrap_lock_cursor=bootstrap_lock_cursor,
+                        bootstrap_lock_key=bootstrap_lock_key,
+                        allow_unlocked_recovery_for_tests=(allow_unlocked_recovery_for_tests),
                     )
-                except Exception:  # exact marker owns quarantine even under drift
-                    try:
-                        role_present = _role_exists_on_either_plane(
-                            client,
-                            deployer_cursor,
-                            instance_name=instance_name,
-                            application_id=application_id,
-                        )
-                    except Exception:  # inventory failure is never treated as absence
-                        role_present = True
-                if role_present:
-                    try:
-                        _delete_bootstrap_role(
-                            client,
-                            deployer_cursor,
-                            instance_name=instance_name,
-                            application_id=application_id,
-                        )
-                    except Exception as exc:  # noqa: BLE001 - aggregate all cleanup
-                        cleanup_groups.append(
-                            f"commented database role cleanup: {type(exc).__name__}: {exc}"
-                        )
+                except Exception as exc:
+                    session_contract_valid = False
+                    cleanup_groups.append(
+                        "commented database role session cleanup: " f"{type(exc).__name__}: {exc}"
+                    )
+                if session_contract_valid:
+                    cleanup_groups.append(
+                        "commented database role cleanup: retained because a legacy comment "
+                        "does not prove secret or account-principal cleanup"
+                    )
             if cleanup_groups:
                 raise RuntimeError(
                     f"temporary Lakebase bootstrap cleanup was incomplete: {cleanup_groups!r}"

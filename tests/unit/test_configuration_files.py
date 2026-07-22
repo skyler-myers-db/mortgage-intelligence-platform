@@ -84,6 +84,7 @@ def test_bundle_resource_names_are_parameterized_for_isolated_staging():
     dev_match = re.search(r"(?ms)^  dev:\n(?P<body>.*?)(?=^  prod:\n)", content)
     assert dev_match
     assert "profile: DEFAULT" not in dev_match.group("body")
+    assert "run_as:\n      user_name: ${workspace.current_user.userName}" in dev_match.group("body")
 
 
 def test_dev_bundle_pins_real_genie_space_for_signed_deploy():
@@ -122,9 +123,9 @@ def test_python_jobs_receive_bundle_catalog_variable():
             rf"\s+- \"--mode={mode}\"\n"
             rf"\s+- \"--table=\$\{{var\.uc_catalog\}}\.silver\.market_rates_weekly\""
         )
-        assert re.search(pattern, content), (
-            f"FRED {mode} task must target ${{var.uc_catalog}}.silver.market_rates_weekly"
-        )
+        assert re.search(
+            pattern, content
+        ), f"FRED {mode} task must target ${{var.uc_catalog}}.silver.market_rates_weekly"
 
 
 def test_lakebase_jobs_receive_the_same_bundle_resource_namespace():
@@ -186,7 +187,9 @@ def test_deploy_overwrites_stale_genie_id_before_bundle_and_after_rebind():
         'step "rebind Genie space — bind trusted assets from '
         'genie/mortgage_lead_intelligence_space.yml"'
     )
-    downstream = content.index('step "prove agentic Lakebase Sync under deployer authority"', rebind)
+    downstream = content.index(
+        'step "prove agentic Lakebase Sync under deployer authority"', rebind
+    )
     rebind_block = content[rebind:downstream]
     assert 'GENIE_SPACE_ID="$(< genie/space_id.txt)"' in rebind_block
     assert "export GENIE_SPACE_ID" in rebind_block
@@ -195,19 +198,19 @@ def test_deploy_overwrites_stale_genie_id_before_bundle_and_after_rebind():
 def test_every_verifier_convergence_uses_the_normalized_lakebase_instance():
     content = (REPO / "scripts" / "deploy.sh").read_text(encoding="utf-8")
     calls = content.split("-m tools.databricks.provision_m2m_oauth")[1:]
-    verifier_calls = [call.split("step ", 1)[0] for call in calls if "--identity-role verifier" in call.split("step ", 1)[0]]
+    verifier_calls = [
+        call.split("step ", 1)[0]
+        for call in calls
+        if "--identity-role verifier" in call.split("step ", 1)[0]
+    ]
 
     assert len(verifier_calls) == 2
     assert all('--lakebase-instance "$MIP_LAKEBASE_INSTANCE"' in call for call in verifier_calls)
 
 
 def test_live_workflows_propagate_the_resource_namespace():
-    deploy = (REPO / ".github" / "workflows" / "deploy-dev.yml").read_text(
-        encoding="utf-8"
-    )
-    nightly = (REPO / ".github" / "workflows" / "nightly.yml").read_text(
-        encoding="utf-8"
-    )
+    deploy = (REPO / ".github" / "workflows" / "deploy-dev.yml").read_text(encoding="utf-8")
+    nightly = (REPO / ".github" / "workflows" / "nightly.yml").read_text(encoding="utf-8")
 
     variables = (
         "MIP_APP_NAME",

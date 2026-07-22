@@ -529,6 +529,49 @@ def test_campaign_approval_rejects_treatment_contract_changed_after_draft(
     )
 
 
+def test_campaign_approval_rejects_household_dedup_changed_after_draft(
+    monkeypatch,
+    fake_lakebase_client,
+) -> None:
+    campaign_state: dict[str, object] = {
+        "household_dedup": {
+            "enabled": False,
+            "dedupe_unit": "borrower",
+            "primary_contact_strategy": "highest_opportunity_eligible",
+        }
+    }
+    _install_campaign_rows(
+        monkeypatch,
+        fake_lakebase_client,
+        campaign_state=campaign_state,
+    )
+    draft = _draft(
+        campaign_id=CAMPAIGN_A,
+        variant_name="Primary",
+        headers={"X-Forwarded-Email": OWNER},
+    )
+    campaign_state["household_dedup"] = {
+        "enabled": True,
+        "dedupe_unit": "household",
+        "primary_contact_strategy": "highest_opportunity_eligible",
+    }
+    monkeypatch.setattr(settings, "app_env", "production")
+
+    response = client.post(
+        "/api/outreach/approve",
+        json=_approval(draft),
+        headers={"X-Forwarded-Email": OWNER},
+    )
+
+    assert response.status_code == 409
+    assert response.json()["detail"] == (
+        "Campaign targeting contract is invalid; rebuild the campaign."
+    )
+    assert not any(
+        "INSERT INTO mip_app.approvals" in sql for sql, _params in fake_lakebase_client.executes
+    )
+
+
 def test_campaign_rejection_rechecks_saved_cohort_membership(
     monkeypatch,
     fake_lakebase_client,

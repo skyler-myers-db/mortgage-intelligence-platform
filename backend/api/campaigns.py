@@ -102,6 +102,11 @@ def patch_campaign(
             raise HTTPException(status_code=404, detail="campaign not found")
         actor = resolve_actor(request)
         _assert_campaign_visible(result, actor=actor, is_admin=_is_admin(request))
+        if (
+            payload.status == "archived"
+            and str(result.get("treatment_state") or "") == "building"
+        ):
+            actor = require_admin(request)
         if payload.status in {"approved", "live", "active"}:
             approver = require_approver(request)
             payload = authorize_campaign_status_transition(

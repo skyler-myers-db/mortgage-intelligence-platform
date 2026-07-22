@@ -168,8 +168,17 @@ from jobs.lakebase_migration_postflight import (  # noqa: E402
 from jobs.lakebase_migration_postflight import (
     _postflight_app_role_grants as _postflight_app_role_grants,
 )
+from jobs.lakebase_migration_provider_plane import (
+    _close_public_schema_boundary as _close_public_schema_boundary,
+)
+from jobs.lakebase_migration_provider_plane import (
+    _postflight_no_pre_boundary_sessions as _postflight_no_pre_boundary_sessions,
+)
 from jobs.lakebase_migration_provider_plane import (  # noqa: E402
     _postflight_provider_schema_boundary as _postflight_provider_schema_boundary,
+)
+from jobs.lakebase_migration_provider_plane import (
+    _postflight_public_schema_boundary as _postflight_public_schema_boundary,
 )
 from jobs.lakebase_migration_roles import (
     _raise_object_inventory_mismatch as _raise_object_inventory_mismatch,

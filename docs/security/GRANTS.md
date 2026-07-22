@@ -508,9 +508,10 @@ function ownership, `public` function identity, empty signature,
 leakproof/security-definer/config/binary attributes, raw UTF-8 `prosrc`
 SHA-256, and source byte length. `NULL` command tags remain distinct from an
 empty array because `NULL` would permit every DDL command. The only accepted
-function ACL states are PostgreSQL's first-install `NULL` representation and
-the explicit `cloud_admin`-owner-only ACL produced when this migration revokes
-PUBLIC `EXECUTE`. A partial inventory, extra trigger, source-byte drift, extra
+function ACL states are the exact provider representations reviewed by the
+code-owned contract, including the historical `cloud_admin`-owner-only state.
+Migration never tries to rewrite these provider-owned routines. A partial
+inventory, extra trigger, source-byte drift, extra
 grantee, or any shape mismatch aborts before quarantine or schema SQL.
 
 These provider-plane hooks grant Databricks' gateway, superuser, reader, and
@@ -532,10 +533,33 @@ the App and verifier must have no ownership or effective schema, table, column,
 sequence, or routine capability there. The two provider views exposed in
 `public`, `databricks_list_roles` and `databricks_synced_table_managers`, are
 pinned by owner, view kind, security options, raw view-definition SHA-256 and
-byte length, PUBLIC `SELECT` shape, and absence of direct runtime grants. Only
-after that proof may migration exclude provider objects from mutation-generating
-inventories. They remain in independent effective-access audits. Production has
-no name-only exclusion and no provider-schema absence seam.
+byte length, PUBLIC `SELECT` shape, and absence of direct runtime grants.
+Lakebase also installs additional `cloud_admin`-owned routines and relations in
+`public` whose ACLs the deployer cannot mutate. The dedicated MIP database
+therefore pins the exact
+`public` schema owner/provider ACL, removes PUBLIC `USAGE`, and requires App and
+verifier to have neither `USAGE` nor `CREATE`. Direct runtime relation, column,
+routine, and provider-default grants are audited independently even while
+dormant. Only after those proofs may migration exclude provider objects from
+mutation-generating inventories. Provider PUBLIC relation/routine ACLs remain
+latent behind the closed schema. Production has no name-only exclusion or
+provider-schema absence seam. Because Lakebase records the PUBLIC grant under
+the `pg_database_owner` pseudo-role, closure first proves the executor has exact
+`SET` authority, assumes that role transaction-locally for the revoke, and
+resets it before postflight; a plain ambient-owner revoke is not accepted.
+
+Public-schema closure commits in a short fail-safe transaction before schema
+hooks or the broader ACL transaction. The schema transaction and later ACL
+transaction each require zero App/verifier database sessions, so no backend
+that resolved a provider OID before closure survives; every later session
+begins behind the hardened namespace. Module 0 defines no
+user views or materialized views and preflight rejects their `_RETURN` rules;
+only `cloud_admin`-owned `public` relations are exempt after the ownership,
+direct-ACL, stored-dependency, and closed-schema proofs succeed.
+Callable App routines must have zero argument defaults and no stored dependency
+on a `cloud_admin` public routine or relation. Existing default, generated-expression,
+constraint, rule, policy, expression-index, and trigger inventories cover the
+other stored execution surfaces.
 
 The separate ACL transaction repeats the exact managed event-trigger preflight
 before its first `REVOKE`, `GRANT`, or `ALTER DEFAULT PRIVILEGES` statement and
@@ -568,7 +592,10 @@ provider contract: `public.databricks_create_role(text,text)`, function kind,
 return type, `cloud_admin` owner, C language, volatility/parallel/strict/
 leakproof/security-definer/config attributes, extension identity/version/
 namespace, database-specific `databricks_writer_<database oid>` extension
-owner, binary path, raw source SHA-256 and byte length, and `NULL` ACL. Any
+owner, binary path, raw source SHA-256 and byte length, and the exact provider
+PUBLIC-executable ACL required by the one-use caller. An owner-only state is a
+provider-remediation failure; deployment does not attempt to grant on a
+`cloud_admin` function. Any
 metadata drift or missing extension membership fails before creating a
 credential or database role. If an App binding or legacy provisioner already created the exact unsafe
 profile, replacement is allowed only while the App is stopped/quiesced and only
@@ -578,43 +605,203 @@ verifier objects. Exact reviewed ACLs are revoked before the control-plane role
 delete and the dependency audit must then be empty. Cross-database or
 unreviewed dependencies fail closed. The
 role is recreated under the same service-principal client-id name, its OAuth
-label and `NOREPLICATION` profile are rechecked. Because the exact creator
-`ADMIN` membership emitted by `databricks_create_role()` is recorded as granted
-by `cloud_admin`, the caller cannot revoke it directly. Deployment instead uses
-a newly created, one-use workspace service principal and temporary database role
-as the SQL caller. That temporary role has only `CREATEROLE`, database `CREATE`,
-and its provider-default transient `REPLICATION` flag; its credential is kept in
-memory, and both the database role and workspace principal are deleted
-immediately after the target role is created. Deleting the caller removes the
-creator-membership edge. Its exact attributes, authenticated identities,
-membership shape, cleanup, and absence are all verified. Any other relationship
-or incomplete cleanup blocks release. The resulting target graph must be empty
-before the ACL migration, which must commit before App activation.
+label and the complete role profile are rechecked: connection limit, validity,
+password and per-role configuration, per-database settings, security labels,
+every membership edge, and every `pg_shdepend` dependency are exact. Because
+the creator `ADMIN` membership emitted by `databricks_create_role()` is recorded
+as granted by `cloud_admin`, the caller cannot revoke it directly. Deployment
+instead uses a newly created, one-use workspace service principal and its
+provider-created SQL role as the caller. The bootstrap role receives neither
+database `CREATE` nor `public` schema access.
 
-The one-use workspace principal has a deterministic display name and
-`externalId` derived from the instance, database, and target application ID;
-its database role is stamped with the same source-owned marker before mutable
-profile, relationship, or dependency checks. Every deploy retry recovers both
-the verifier marker and any existing App marker immediately after acquiring the
-exclusive signed lease, before build or bundle work. A clean first install must
-instead prove three stable observations of both the Lakebase instance and the
-workspace marker being absent. All other recovery paths also require three
-stable absence observations to tolerate delayed control-plane visibility.
-Discovered credentials are disabled and revoked before Lakebase marker
-inventory. If database-role deletion cannot be proven after credential cleanup,
-the inactive, credential-free workspace marker is retained for the next retry;
-if credential cleanup itself is unproven and the role has not reached SQL
-visibility, deployment first creates and proves a separate inactive,
-credential-free deterministic orphan tombstone. Its display marker contains
-the original bootstrap application ID plus an Ed25519 signer identity and
-signature; its bounded `externalId` is a digest of that complete signed marker.
-The signer must belong to the configured current/previous/historical proof-key
-registry, so legitimate proof-key rotation does not strand recovery. A later
-retry deletes the role through the signed original application ID and retires
-the tombstone only after stable role absence. If tombstone persistence is not
-proven, the original principal is retained rather than destroying the only
-recovery handle. Independent cleanup failures are aggregated and block the
-release.
+The full state transition is serialized by one session advisory lock acquired
+on the canonical `databricks_postgres` administration database. Its key is
+derived from the raw instance identity and normalized target identity, so the
+same lock covers a present target database, an absent target database, recovery,
+and creation. Every mutation proves the exact advisory-lock row and original
+backend PID immediately before acting. Finalization proves the exact unlock and
+zero residual advisory-lock rows. `current_user` and `session_user` must both be
+the expected deployer on administrative connections and the expected bootstrap
+identity on the one-use invocation connection.
+
+After proving the closed `public` boundary and the exact provider function
+contract, deployment atomically publishes a target-bound private schema and one
+zero-argument `LANGUAGE SQL SECURITY INVOKER` wrapper with an SQL-
+standard `BEGIN ATOMIC` body. The exact deployer must be the database owner,
+have database `CREATE`, and have `SET` authority for `pg_database_owner`.
+PostgreSQL's pseudo-role does not itself inherit the real owner's database
+`CREATE`: the deployer therefore creates the schema with explicit
+`AUTHORIZATION pg_database_owner`, then assumes that role transaction-locally
+for every remaining owner-scoped mutation; the pseudo-role owns both the schema and function
+so a later database owner can recover them without depending on one persistent
+deployer. Schema creation, provider-default-ACL removal,
+function creation, PUBLIC revocation, bootstrap grants, and exact postflight
+share that transaction. The initial schema ACL must match the live provider
+chain exactly: `pg_database_owner` grants grant-option access to
+`databricks_superuser`, which grants writer/reader access, while
+`pg_database_owner` grants gateway access directly. An owner-authorized
+`CASCADE` revoke removes only that already-proven provider chain before the
+wrapper pins its owner, function kind, zero argument/default/variadic shape,
+return type, SQL language, invoker security, volatility, parallel safety,
+leakproof/strict flags, `search_path=pg_catalog`,
+`createrole_self_grant=''`, non-null parsed `prosqlbody`, and the full canonical
+`pg_get_functiondef()` text, SHA-256, and byte length. Its parsed body hard-binds
+the reviewed application ID, casts both provider arguments to
+`pg_catalog.text`, and returns `NULL` unless `current_user` and `session_user`
+both equal the exact disposable bootstrap application ID. A normal `pg_depend`
+edge must bind the wrapper to the exact
+`public.databricks_create_role(text,text)` OID. The bootstrap role receives only
+direct `USAGE` on the private schema and `EXECUTE` on the wrapper, without
+PUBLIC access, `public` schema `USAGE`, or grant option. The provider primitive,
+wrapper, both temporary grants, and their object/shared-dependency rows are
+rechecked through the deployer immediately before opening the single invocation
+connection. Because the wrapper is security-invoker, any provider-created
+creator edge is attributable only to the disposable bootstrap caller; an edge
+to the wrapper owner or deployer is rejected before commit.
+
+The bootstrap credential is kept only in memory. Before a secret or database
+role exists, deployment persists a separate inactive, credential-free signed
+tombstone. The provider-owned role and private wrapper are created with zero
+secrets and zero bootstrap sessions. Only after their exact contracts pass does
+deployment create one 600-second OAuth secret, require the same singleton
+immutable secret ID on the workspace and account planes, authenticate the exact
+bootstrap identity, mint exactly one bounded database credential, and retain
+exactly one autocommit database backend. The retained backend is pinned by PID,
+role OID, username, current and session user, database, application name,
+backend start, backend type, and client address.
+
+Deployment then attempts exact secret deletion through both control planes and
+requires three stable empty secret inventories on each plane. A mutation error from one
+plane is not independently authoritative when the other plane has already
+deleted their shared object; only the subsequent stable two-plane inventory can
+resolve that outcome. It deletes the exact signed principal through account
+SCIM and requires direct immutable-ID GETs to show continuous account and
+workspace absence for 30 seconds within a 180-second deadline, proving it
+absent from both the account and workspace. The exact DELETE
+is repeated if the account object reappears, and every observation also proves
+zero account-workspace assignments and zero App bindings. Service-principal
+LIST omission never proves deletion. Workspace PATCH/deactivation and workspace
+principal deletion are not cleanup authority: live identity-federated
+workspaces ignored `externalId`; workspace deletion only removed the assignment
+while leaving the account principal active. Dedicated bounded
+account OAuth is therefore required for this transition.
+
+After initial OAuth authentication, deployment captures only the access token's
+numeric JWT expiry and rejects a non-M2M client, a missing/non-numeric expiry, or
+a remaining lifetime outside the 30-second-to-65-minute policy; the bearer token
+itself is never retained in proof state. After control-plane retirement,
+deployment always waits through the later of the captured OAuth access-token and
+database-credential expiries, plus 120 seconds. No early authentication error
+may optimize that boundary away. It then requires three
+spaced, fresh-client attempts to use the destroyed bootstrap credential. Every
+attempt is bracketed by two newly constructed OAuth-M2M clients for the
+identity-pinned agent-runtime control, and all three clients perform the same
+exact read-only Lakebase instance API call. A PAT/workspace client cannot serve
+as that control. The control application ID is validated before its read, and
+the observations are separated by five seconds. Deployment also requires three
+fresh-deployer-bracketed attempts to reuse the old database token. The read
+probe cannot mint a second database credential, preserving the one-mint
+contract. Only PostgreSQL SQLSTATE class 28 counts as database rejection, and
+only a reviewed OAuth authentication rejection counts as destroyed-credential
+rejection. A generic network, TLS, timeout, or transport error is inconclusive.
+The rejection probes use pg8000's TLS/SCRAM path because libpq collapses
+startup authentication failures into a connection error without exposing the
+server field; pg8000 must return the structured PostgreSQL `C` field, and error
+message text is never promoted to class-28 evidence.
+Throughout the mandatory wait, every opened probe backend is closed and drained
+while the canonical lock, principal absence, and sole retained backend are
+heartbeated. Only the resulting secret-free `ADMITTED` proof permits provider
+invocation.
+
+The deployer also cannot `ALTER`, comment, or directly drop Databricks'
+provider-owned bootstrap role. On the successful creation path, the admitted
+retained backend is recaptured immediately before invocation, switches from
+autocommit to an explicit transaction, and repeats the lock, principal,
+singleton-backend, provider, wrapper, event-trigger, and target-absence proofs.
+No governed mutation occurs between that final preflight and the target-bound
+wrapper call. On cleanup and recovery paths, deployment captures the bootstrap
+role OID and exact PIDs, terminates only the independently bound backends, and
+requires three stable zero-session observations. It rechecks the immutable SQL and
+control-plane contract immediately before using the provider role-delete API,
+then proves the captured sessions, role OID, SQL role, and control-plane role
+absent. A failed secret proof, account deletion, session fence, admission proof,
+or role contract retains the role, OAuth security-label handle, and signed
+tombstone and blocks release; a legacy
+comment alone never authorizes deletion.
+
+Wrapper revokes and `DROP ... RESTRICT` teardown are atomic and run after
+transaction-locally assuming `pg_database_owner`. Exact wrapper metadata,
+managed event-trigger inventory, and the canonical lock are reproved before
+each mutation and immediately before commit. A fresh deployer connection
+performs final reconciliation after every bootstrap attempt; the potentially
+failed invocation or DDL connection is never reused as evidence. Provider-call
+or commit transport ambiguity requires three stable observations. An exact
+committed target is adopted as success, stable absence propagates the original
+failure, and an indeterminate target is retained with credentials revoked,
+sessions drained where identity proof permits, and durable signed evidence. It
+blocks release rather than authorizing target deletion. A generic error never
+authorizes deletion.
+
+Recovery accepts only the four finite wrapper ACL states and, separately, the
+four historical direct-provider ACL states emitted by reviewed versions. Mixed
+wrapper/legacy states are rejected. Every surviving state pins schema/function
+ownership to `pg_database_owner`, the full caller/target-bound canonical
+definition, and exact object, provider-function, and shared dependencies. An
+extra object, ACL, dependency, relationship, live session, ambiguous
+termination, or incomplete cleanup retains the inactive,
+credential-free marker and blocks release. The resulting target graph and
+transient wrapper inventory must both be empty before the ACL migration, which
+must commit before App activation.
+
+The one-use workspace principal uses an exact 100-byte signed `displayName`.
+Its compact prefix reserves one namespace derived from the instance, database,
+and target application ID, and its full Ed25519 signature binds the complete
+reservation and internal ownership marker. The SCIM `externalId` must remain
+unset because live Databricks create and PATCH operations did not persist it.
+Every deploy retry recovers both the verifier marker and any existing App
+marker under the canonical lock before build or bundle work. A clean first
+install must instead prove three stable observations of both the Lakebase
+instance and the signed workspace marker being absent. The instance is checked
+again after principal inventory and before each workspace mutation.
+Absent-instance recovery remains bound to the initially resolved immutable
+SCIM ID: if another deploy deletes principal P and creates P2 with the same
+reserved namespace, the stale worker cannot follow that namespace onto P2.
+
+The deterministic v3 tombstone is also exactly 100 bytes and is created before
+the first credential or SQL role mutation. Its display is `p`, a five-character
+target digest, the 22-character encoded original application UUID, the
+eight-character encoded immutable numeric SCIM ID, and the 64-character encoded
+Ed25519 signature tail. The tombstone's explicit SCIM `applicationId` stores
+the signature's first 16 bytes. The signature binds the complete target marker,
+original application ID, and original SCIM ID. Recovery reconstructs the full
+signature and accepts only the configured current, previous, or historical
+proof-key registry.
+
+Deployed v2 markers remain strictly readable but do not contain a principal ID
+and therefore cannot authorize application-ID-only account deletion. Before
+role cleanup, recovery may upgrade v2 to v3 only when the original immutable
+SCIM ID is independently supplied by the exact OAuth security label or a direct
+SCIM proof. It publishes and verifies v3 before retiring v2, tolerates only that
+finite controlled overlap, and re-discovers a unique v3 marker before role
+deletion so no recovery-authority gap exists. When workspace LIST omits an
+original principal, the exact OAuth label supplies its immutable SCIM ID and
+recovery performs a direct GET before selecting the
+absent-principal secret path. The tombstone is account-deleted only after exact secret,
+account-principal, role, OID, PID, SQL, and control-plane absence is proven. If
+any step is unproven, the remaining signed authority is retained and the release
+fails. If the canonical lock is lost during ordinary recovery, no workspace,
+account, or provider-role mutation is permitted. The finalizer's only exception
+is credential quarantine of the exact immutable principal
+created and already verified by that run; it may not discover or mutate a replacement identity.
+If the entire Lakebase instance is absent, no SQL inventory or advisory lock is
+available. That path uses repeated immutable direct GET absence for 30 seconds
+and is strictly read-only. Any bootstrap principal or signed tombstone blocks
+recovery and is retained until an existing reviewed instance connection can
+prove and remove the corresponding SQL role; production never uses an unlocked
+test bypass to mutate it.
+When the target database is absent, recovery executes on
+`databricks_postgres`, proves SQL and control-plane absence before each role
+mutation, and switches to full target recovery if the database reappears.
 
 For an existing Databricks App, deployment reads and pins the immutable App,
 client, and SCIM IDs and proves the exact App is stopped before updating its
@@ -628,9 +815,12 @@ only OAuth roles:
 - https://docs.databricks.com/aws/en/oltp/projects/postgres-roles
 
 Before the migration command below, converge both identities at the stopped
-deployment boundary:
+deployment boundary. The reviewed agent-runtime identity is the distinct fresh
+OAuth-M2M positive control; supply it only to the convergence child:
 
 ```bash
+export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET="$DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET"
 .venv/bin/python -m tools.databricks.converge_lakebase_oauth_role \
   --lakebase-instance "$LAKEBASE_INSTANCE_NAME" \
   --lakebase-database "$LAKEBASE_DATABASE" \
@@ -649,8 +839,10 @@ deployment boundary:
 
 Live release verification then authenticates separately as the App and
 verifier, proves `current_user`, the exact profile, security label, memberships,
-and expected normal query, and requires a replication-mode `IDENTIFY_SYSTEM`
-attempt to be rejected. It creates no replication slot. A successful
+absence of `public.USAGE`/`public.CREATE`, and expected normal query, and
+requires a replication-mode `IDENTIFY_SYSTEM`
+attempt to be rejected with structured PostgreSQL SQLSTATE `42501` through
+pg8000's replication startup path. It creates no replication slot. A successful
 replication command is a release blocker regardless of ordinary ACL postflight.
 
 The catalog-driven migration is the only supported path for an externally
@@ -681,20 +873,28 @@ export MIP_TENANT_ID="<reviewed-tenant-slug>"
 ```
 
 That command resolves the app's authoritative
-`service_principal_client_id` through the Databricks Apps SDK, then
+`service_principal_client_id` through the Databricks Apps SDK, commits the
+fail-safe public-schema quarantine, proves zero old target sessions, then
 inventory-reconciles both identities across every non-system schema, table-like
 object, sequence, overloaded routine, direct table-column ACL, direct/default
-ACL, and recursive role-membership path in one rollback-capable ACL transaction.
+ACL, and recursive role-membership path in a rollback-capable ACL transaction.
 The bundle task carries the same verifier client ID as a reviewed bundle
 variable and passes the required flag. A missing/template verifier therefore
 fails in the job before it opens Lakebase or applies schema SQL; a local shell
 export alone is not considered remote-job configuration.
+The bundle pins `run_as.user_name` to the resolved deployment identity in both
+development and production targets; live release evidence must confirm the
+created migration job reports that exact run-as instead of relying on its
+historical creator.
 It removes direct and PUBLIC column grants before applying the table-level
 matrices, then independently rejects any effective
 `has_any_column_privilege` capability that is not backed by the corresponding
-table privilege. It intentionally revokes PUBLIC `EXECUTE` on user routines and
+table privilege. It intentionally revokes PUBLIC `EXECUTE` on deployer-owned
+user routines and
 removes the built-in future-routine default for every role that can create in a
-user schema; this Lakebase database is dedicated to MIP app state. Only
+user schema; immutable `cloud_admin` routines and relations in `public` remain
+only behind the closed namespace described above. This Lakebase database is dedicated to MIP
+app state. Only
 the immutable reviewed validator functions regain app `EXECUTE`; the verifier
 receives no routine execution. A missing owner authority, unsafe role
 attribute, any direct or recursive parent membership (including inherited

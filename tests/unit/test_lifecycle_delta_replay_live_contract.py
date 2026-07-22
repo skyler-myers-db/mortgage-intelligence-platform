@@ -82,6 +82,8 @@ def test_live_config_requires_credentials_and_explicit_mutation_opt_in(
 def test_live_proof_attempts_both_drops_after_setup_failure(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("MIP_LIVE_SCRATCH_SUFFIX", "gha_123")
+    monkeypatch.setenv("MIP_LIFECYCLE_SMOKE_SCHEMA", "unreviewed_schema")
     statements: list[str] = []
 
     def fail_target_create(
@@ -103,11 +105,36 @@ def test_live_proof_attempts_both_drops_after_setup_failure(
 
     cleanup = [" ".join(statement.split()) for statement in statements[-2:]]
     assert len(cleanup) == 2
-    assert cleanup[0].startswith("DROP TABLE IF EXISTS `mip`.`audit`.`lifecycle_replay_target_")
-    assert cleanup[1].startswith("DROP TABLE IF EXISTS `mip`.`audit`.`lifecycle_replay_borrower_")
+    assert cleanup == [
+        "DROP TABLE IF EXISTS `mip`.`audit`.`lifecycle_replay_target_gha_123`",
+        "DROP TABLE IF EXISTS `mip`.`audit`.`lifecycle_replay_borrower_gha_123`",
+    ]
+    assert all("unreviewed_schema" not in statement for statement in statements)
 
 
 @pytest.mark.parametrize("unsafe", ["audit.prod", "audit;drop", "audit-name", ""])
 def test_scratch_identifiers_fail_closed(unsafe: str) -> None:
     with pytest.raises(ValueError, match="unsafe schema identifier"):
         replay_live._safe_identifier(unsafe, field="schema")
+
+
+@pytest.mark.parametrize(
+    "suffix",
+    ["", "gha_", "gha_123_extra", "manual_123", "gha-123", "gha_12.3"],
+)
+def test_lifecycle_scratch_suffix_is_github_run_only(
+    monkeypatch: pytest.MonkeyPatch,
+    suffix: str,
+) -> None:
+    monkeypatch.setenv("MIP_LIVE_SCRATCH_SUFFIX", suffix)
+
+    with pytest.raises(ValueError, match=r"expected deterministic gha_\[0-9\]\+"):
+        replay_live._scratch_suffix()
+
+
+def test_lifecycle_scratch_suffix_accepts_numeric_github_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("MIP_LIVE_SCRATCH_SUFFIX", "gha_123456")
+
+    assert replay_live._scratch_suffix() == "gha_123456"

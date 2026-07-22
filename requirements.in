@@ -17,6 +17,12 @@ mlflow>=3.1.3,<4
 # so CI deploys must carry it explicitly instead of relying on ambient tooling.
 boto3==1.43.50
 cryptography==48.0.1  # security floor for GHSA-537c-gmf6-5ccf via google-auth
+# Security floors for GHSA-2f96-g7mh-g2hx, GHSA-v396-v7q4-x2qj,
+# GHSA-956x-8gvw-wg5v, GHSA-8ppf-4f7h-5ppj, and GHSA-hm4w-wwcw-mr6r.
+# MLflow and google-auth pull these transitively; pin the reviewed fixes so a
+# lock refresh cannot silently restore the vulnerable releases.
+gitpython>=3.1.51,<4
+pyasn1>=0.6.4,<1
 # Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179.
 # databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
 # so pip-audit failures have a first-party dependency contract to resolve.
@@ -26,6 +32,10 @@ pyjwt==2.13.0
 # silently reintroduce the vulnerable image decoder.
 pillow==12.3.0
 psycopg[binary]>=3.2.10,<3.4
+# libpq discards structured SQLSTATE fields on startup-auth failures. The
+# Lakebase credential fence and replication startup gate use pg8000 only for
+# rejection probes so password and privilege failures retain server SQLSTATE.
+pg8000==1.31.5
 pytest==9.0.3
 pytest-cov==6.0.0
 pytest-xdist==3.8.0

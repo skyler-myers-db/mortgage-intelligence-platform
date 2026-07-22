@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import time
 import uuid
 from collections.abc import Callable
@@ -10,6 +11,8 @@ from typing import Any
 import psycopg
 from psycopg import sql as psql
 
+from databricks.sdk import WorkspaceClient
+from databricks.sdk.config import Config
 from jobs.lakebase_migration_contracts import (
     _MANAGED_OAUTH_ROLE_FUNCTION_ACLS,
     _MANAGED_OAUTH_ROLE_FUNCTION_OWNER_ONLY_ACL,
@@ -17,56 +20,33 @@ from jobs.lakebase_migration_contracts import (
     _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES,
     _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256,
 )
+from jobs.lakebase_migration_provider_plane import _postflight_public_schema_boundary
+from tools.databricks.lakebase_oauth_role_profile import (
+    assert_oauth_security_label,
+    read_profile,
+)
 
 SAFE_OAUTH_PROFILE = (False, False, False, False, False, True, True)
 LEGACY_API_OAUTH_PROFILE = (False, False, False, True, False, True, True)
 _BOOTSTRAP_API_PROFILE = (False, True, False, True, False, True, True)
 _ROLE_FUNCTION_SOURCE_SHA256 = _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_SHA256
 _ROLE_FUNCTION_SOURCE_BYTES = _MANAGED_OAUTH_ROLE_FUNCTION_SOURCE_BYTES
+_SDK_HTTP_TIMEOUT_SECONDS = 30
+_SDK_RETRY_TIMEOUT_SECONDS = 30
+_CONTROL_CLIENT_ID_ENV = "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID"
+_CONTROL_CLIENT_SECRET_ENV = "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET"
 
 
-def read_profile(cursor: Any, application_id: str) -> tuple[bool, ...] | None:
-    cursor.execute(
-        """
-        SELECT rolsuper,
-               rolcreaterole,
-               rolcreatedb,
-               rolreplication,
-               rolbypassrls,
-               rolinherit,
-               rolcanlogin
-        FROM pg_roles
-        WHERE rolname = %s
-        """,
-        (application_id,),
-    )
-    row = cursor.fetchone()
-    return tuple(row) if row is not None else None
+def _bounded_bootstrap_workspace_client(**kwargs: Any) -> WorkspaceClient:
+    """Build the one-use M2M client with finite control-plane retries."""
 
-
-def assert_oauth_security_label(
-    cursor: Any,
-    *,
-    application_id: str,
-    service_principal_id: str,
-) -> None:
-    cursor.execute(
-        """
-        SELECT label.provider, label.label
-        FROM pg_roles role
-        LEFT JOIN pg_shseclabel label
-          ON label.classoid = 'pg_authid'::regclass
-         AND label.objoid = role.oid
-        WHERE role.rolname = %s
-        ORDER BY label.provider, label.label
-        """,
-        (application_id,),
-    )
-    expected = [("databricks_auth", f"id={service_principal_id},type=service_principal")]
-    if cursor.fetchall() != expected:
-        raise RuntimeError(
-            f"Lakebase role {application_id!r} has an invalid OAuth security label"
+    return WorkspaceClient(
+        config=Config(
+            **kwargs,
+            http_timeout_seconds=_SDK_HTTP_TIMEOUT_SECONDS,
+            retry_timeout_seconds=_SDK_RETRY_TIMEOUT_SECONDS,
         )
+    )
 
 
 def _connection_kwargs(
@@ -75,6 +55,7 @@ def _connection_kwargs(
     instance_name: str,
     database_name: str,
     database_user: str,
+    autocommit: bool,
 ) -> dict[str, Any]:
     instance = client.database.get_database_instance(instance_name)
     host = str(getattr(instance, "read_write_dns", "") or "").strip()
@@ -95,8 +76,22 @@ def _connection_kwargs(
         "password": token,
         "sslmode": "require",
         "connect_timeout": 15,
-        "autocommit": True,
+        # Provider role creation and its exact SQL postflight are one unit.
+        # A caller may override nothing here: commit is always explicit below.
+        "autocommit": autocommit,
     }
+
+
+def _workspace_database_identity(client: Any) -> tuple[str, set[str]]:
+    identity = client.current_user.me()
+    ordered = [
+        str(getattr(identity, field, "") or "").strip()
+        for field in ("application_id", "user_name")
+        if str(getattr(identity, field, "") or "").strip()
+    ]
+    if not ordered:
+        raise RuntimeError("current Databricks identity has no database login name")
+    return ordered[0], set(ordered)
 
 
 def _assert_exact_bootstrap_membership(
@@ -133,8 +128,14 @@ def _assert_exact_bootstrap_membership(
             "cloud_admin",
         )
     ]
-    if cursor.fetchall() != expected:
-        raise RuntimeError("databricks_create_role returned an unreviewed bootstrap membership")
+    # The provider extension's attribution may use session_user or may create
+    # no creator edge. Observe the live graph. Only the disposable bootstrap
+    # edge (or no edge) can become a successful committed target.
+    actual = cursor.fetchall()
+    if actual not in ([], expected):
+        raise RuntimeError(
+            "databricks_create_role returned an unreviewed bootstrap membership: " f"{actual!r}"
+        )
 
 
 def _assert_no_relationships(
@@ -163,8 +164,6 @@ def _assert_no_relationships(
 
 def _assert_role_function_contract(
     deployer_cursor: Any,
-    *,
-    allow_legacy_acl_repair: bool = True,
 ) -> None:
     """Pin the provider-owned C primitive before a privileged caller executes it."""
 
@@ -205,7 +204,9 @@ def _assert_role_function_contract(
         JOIN pg_namespace extension_namespace ON extension_namespace.oid = extension.extnamespace
         JOIN pg_roles extension_owner ON extension_owner.oid = extension.extowner
         CROSS JOIN pg_database database_object
-        WHERE routine.oid = to_regprocedure('public.databricks_create_role(text,text)')
+        WHERE namespace.nspname = 'public'
+          AND routine.proname = 'databricks_create_role'
+          AND routine.proargtypes = '25 25'::oidvector
           AND database_object.datname = current_database()
         """
     )
@@ -245,19 +246,10 @@ def _assert_role_function_contract(
     expected = (*expected[:-1], function_acl)
     if actual != expected:
         raise RuntimeError("Databricks OAuth role-creation function contract drifted")
-    if function_acl == _MANAGED_OAUTH_ROLE_FUNCTION_OWNER_ONLY_ACL:
-        if not allow_legacy_acl_repair:
-            raise RuntimeError(
-                "Databricks OAuth role-creation function PUBLIC execution repair did not converge"
-            )
-        deployer_cursor.execute(
-            "GRANT EXECUTE ON FUNCTION public.databricks_create_role(text,text) TO PUBLIC"
-        )
-        _assert_role_function_contract(
-            deployer_cursor,
-            allow_legacy_acl_repair=False,
-        )
-    elif function_acl not in _MANAGED_OAUTH_ROLE_FUNCTION_PUBLIC_ACLS:
+    if (
+        function_acl == _MANAGED_OAUTH_ROLE_FUNCTION_OWNER_ONLY_ACL
+        or function_acl not in _MANAGED_OAUTH_ROLE_FUNCTION_PUBLIC_ACLS
+    ):
         raise RuntimeError(
             "Databricks OAuth role-creation function is not executable by bootstrap identities"
         )
@@ -285,21 +277,24 @@ def _wait_for_profile(
             return
         if attempt + 1 < attempts:
             time.sleep(1)
-    raise RuntimeError(
-        f"temporary Lakebase bootstrap role profile did not converge: {actual!r}"
-    )
+    raise RuntimeError(f"temporary Lakebase bootstrap role profile did not converge: {actual!r}")
 
 
-def create_login_only_role(
+def _create_login_only_role_locked(
     client: Any,
     deployer_cursor: Any,
     *,
+    account_client: Any,
     instance_name: str,
     database_name: str,
     application_id: str,
     service_principal_id: str,
     connect: Callable[..., Any] = psycopg.connect,
     workspace_client_factory: Callable[..., Any] | None = None,
+    allow_absent_managed_event_triggers: bool = False,
+    bootstrap_lock_cursor: Any,
+    bootstrap_lock_key: Any,
+    expected_executor: str,
 ) -> None:
     """Create a safe role via a one-use creator, then delete the creator.
 
@@ -314,48 +309,125 @@ def create_login_only_role(
         DatabaseInstanceRoleAttributes,
         DatabaseInstanceRoleIdentityType,
     )
+    from tools.databricks.lakebase_oauth_role_bootstrap_cleanup import (
+        finalize_bootstrap_identity,
+    )
+    from tools.databricks.lakebase_oauth_role_bootstrap_lock import (
+        assert_bootstrap_lock_held,
+    )
+    from tools.databricks.lakebase_oauth_role_bootstrap_sessions import (
+        assert_exact_session_identity,
+        cleanup_executor_identity,
+    )
+    from tools.databricks.lakebase_oauth_role_bootstrap_target import (
+        assert_residual_target_contract,
+        prove_target_absent,
+    )
+    from tools.databricks.lakebase_oauth_role_bootstrap_wrapper import (
+        _event_trigger_preflight,
+        assert_wrapper_contract,
+        create_wrapper,
+    )
     from tools.databricks.lakebase_oauth_role_recovery import (
         _assert_bootstrap_principal_contract,
         _assert_bootstrap_role_contract,
         _bootstrap_identity_contract,
+        _marker_signing_key,
         recover_stale_bootstrap_identities,
+    )
+    from tools.databricks.lakebase_oauth_role_scim_marker import (
+        bootstrap_principal_display_name,
+    )
+    from tools.databricks.lakebase_oauth_role_tombstone import (
+        ensure_orphan_tombstone,
     )
 
     if workspace_client_factory is None:
-        from databricks.sdk import WorkspaceClient
+        workspace_client_factory = _bounded_bootstrap_workspace_client
 
-        workspace_client_factory = WorkspaceClient
-
-    bootstrap_name, bootstrap_external_id = _bootstrap_identity_contract(
+    bootstrap_reservation_name, bootstrap_external_id = _bootstrap_identity_contract(
         instance_name=instance_name,
         database_name=database_name,
         application_id=application_id,
     )
+    marker_signing_key = _marker_signing_key()
+    if marker_signing_key is None:
+        raise RuntimeError(
+            "MIP_AI_GATEWAY_PROOF_SIGNING_KEY is required for Lakebase bootstrap markers"
+        )
+    bootstrap_name = bootstrap_principal_display_name(
+        reservation_name=bootstrap_reservation_name,
+        ownership_marker=bootstrap_external_id,
+        signing_key=marker_signing_key,
+    )
+    control_application_id = os.environ.get(_CONTROL_CLIENT_ID_ENV, "").strip()
+    control_client_secret = os.environ.get(_CONTROL_CLIENT_SECRET_ENV, "").strip()
+    if not control_application_id or not control_client_secret:
+        raise RuntimeError(
+            "fresh OAuth-M2M Lakebase bootstrap control credentials are required"
+        )
+    if control_application_id == application_id:
+        raise RuntimeError(
+            "Lakebase bootstrap control identity must be distinct from the target"
+        )
     bootstrap_sp: Any | None = None
+    bootstrap_application_id = ""
+    bootstrap_scim_id = ""
     create_attempted = False
+    provider_invocation_attempted = False
+    retain_bootstrap_evidence = False
     primary_error: BaseException | None = None
     cleanup_errors: list[str] = []
+    provider_transaction_diagnostics: list[str] = []
     try:
         recover_stale_bootstrap_identities(
             client,
             deployer_cursor,
+            account_client=account_client,
             instance_name=instance_name,
             database_name=database_name,
             target_application_id=application_id,
+            allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
+            expected_executor=expected_executor,
+        )
+        _postflight_public_schema_boundary(
+            deployer_cursor,
+            (),
+            principal_label="one-use OAuth bootstrap",
+            allow_legacy_public_usage=False,
+            allow_empty_target_roles=True,
         )
         _assert_role_function_contract(deployer_cursor)
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
+        prove_target_absent(
+            client,
+            deployer_cursor,
+            instance_name=instance_name,
+            application_id=application_id,
+            expected_executor=expected_executor,
+        )
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
         create_attempted = True
         bootstrap_sp = client.service_principals.create(
             display_name=bootstrap_name,
-            external_id=bootstrap_external_id,
             active=True,
         )
-        bootstrap_application_id = str(
-            getattr(bootstrap_sp, "application_id", "") or ""
-        ).strip()
+        bootstrap_application_id = str(getattr(bootstrap_sp, "application_id", "") or "").strip()
         bootstrap_scim_id = str(getattr(bootstrap_sp, "id", "") or "").strip()
         if not bootstrap_application_id or not bootstrap_scim_id:
             raise RuntimeError("temporary Lakebase bootstrap principal has incomplete identity")
+        if bootstrap_application_id == control_application_id:
+            raise RuntimeError(
+                "Lakebase bootstrap control identity collided with the one-use principal"
+            )
         verified_scim_id, verified_application_id = _assert_bootstrap_principal_contract(
             client,
             bootstrap_sp,
@@ -367,11 +439,34 @@ def create_login_only_role(
             or verified_application_id != bootstrap_application_id
         ):
             raise RuntimeError("temporary Lakebase bootstrap creation identity changed")
-        secret_response = client.service_principal_secrets_proxy.create(bootstrap_scim_id)
-        bootstrap_secret = str(getattr(secret_response, "secret", "") or "")
-        if not bootstrap_secret:
-            raise RuntimeError("temporary Lakebase bootstrap credential was not returned")
-
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
+        # Persist signed, immutable two-id recovery authority before either
+        # credentials or the provider-owned SQL role can exist. Databricks may
+        # hide a deactivated SCIM principal from GET while its secret proxy and
+        # Lakebase role remain addressable.
+        ensure_orphan_tombstone(
+            client,
+            base_external_id=bootstrap_external_id,
+            application_id=bootstrap_application_id,
+            principal_id=bootstrap_scim_id,
+            signing_key=marker_signing_key,
+        )
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
+        _event_trigger_preflight(
+            deployer_cursor,
+            principal_label="bootstrap role CREATE",
+            allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+        )
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
         client.database.create_database_instance_role(
             instance_name,
             DatabaseInstanceRole(
@@ -398,41 +493,145 @@ def create_login_only_role(
             target_application_id=application_id,
             external_id=bootstrap_external_id,
             service_principal_id=bootstrap_scim_id,
+            expected_executor=expected_executor,
+            expected_privileges=frozenset(),
+            allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
         ):
             raise RuntimeError("temporary Lakebase bootstrap role disappeared after creation")
-        deployer_cursor.execute(
-            psql.SQL("GRANT CREATE ON DATABASE {} TO {}").format(
-                psql.Identifier(database_name),
-                psql.Identifier(bootstrap_application_id),
-            )
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
         )
-
-        bootstrap_client = workspace_client_factory(
-            host=client.config.host,
-            client_id=bootstrap_application_id,
-            client_secret=bootstrap_secret,
-            auth_type="oauth-m2m",
-        )
-        me = bootstrap_client.current_user.me()
-        authenticated_ids = {
-            str(getattr(me, field, "") or "").strip()
-            for field in ("application_id", "user_name")
-        }
-        if bootstrap_application_id not in authenticated_ids:
-            raise RuntimeError("temporary Lakebase bootstrap authenticated as the wrong identity")
-        connection_kwargs = _connection_kwargs(
-            bootstrap_client,
+        wrapper_schema = create_wrapper(
+            deployer_cursor,
             instance_name=instance_name,
             database_name=database_name,
-            database_user=bootstrap_application_id,
+            target_application_id=application_id,
+            bootstrap_application_id=bootstrap_application_id,
+            expected_executor=expected_executor,
+            allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
         )
-        with connect(**connection_kwargs) as connection, connection.cursor() as cursor:
-            cursor.execute("SELECT current_user")
-            if cursor.fetchone() != (bootstrap_application_id,):
-                raise RuntimeError("temporary Lakebase bootstrap database identity mismatch")
+        from tools.databricks.lakebase_oauth_role_bootstrap_orchestration import (
+            execute_admitted_provider_bootstrap,
+        )
+
+        def presecret_contract() -> None:
+            assert_bootstrap_lock_held(
+                bootstrap_lock_cursor,
+                lock_key=bootstrap_lock_key,
+            )
+            if not _assert_bootstrap_role_contract(
+                client,
+                deployer_cursor,
+                instance_name=instance_name,
+                database_name=database_name,
+                application_id=bootstrap_application_id,
+                target_application_id=application_id,
+                external_id=bootstrap_external_id,
+                service_principal_id=bootstrap_scim_id,
+                expected_executor=expected_executor,
+                expected_privileges=frozenset({"USAGE", "EXECUTE"}),
+                allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+            ):
+                raise RuntimeError("temporary Lakebase bootstrap role disappeared before auth")
+            _assert_role_function_contract(deployer_cursor)
+            assert_wrapper_contract(
+                deployer_cursor,
+                instance_name=instance_name,
+                database_name=database_name,
+                target_application_id=application_id,
+                bootstrap_application_id=bootstrap_application_id,
+                expected_executor=expected_executor,
+                expected_privileges=frozenset({"USAGE", "EXECUTE"}),
+            )
+
+        def positive_control() -> None:
+            control_kwargs = _connection_kwargs(
+                client,
+                instance_name=instance_name,
+                database_name=database_name,
+                database_user=expected_executor,
+                autocommit=True,
+            )
+            control_connection = connect(**control_kwargs)
+            control_cursor: Any | None = None
+            try:
+                control_cursor = control_connection.cursor()
+                cleanup_executor_identity(
+                    control_cursor,
+                    excluded_application_id=bootstrap_application_id,
+                    expected_executor=expected_executor,
+                )
+                control_cursor.execute("SELECT 1")
+                if control_cursor.fetchone() != (1,):
+                    raise RuntimeError("fresh Lakebase deployer control query failed")
+            finally:
+                if control_cursor is not None and callable(getattr(control_cursor, "close", None)):
+                    control_cursor.close()
+                if callable(getattr(control_connection, "close", None)):
+                    control_connection.close()
+
+        def preinvoke_contract(cursor: Any) -> None:
+            assert_bootstrap_lock_held(
+                bootstrap_lock_cursor,
+                lock_key=bootstrap_lock_key,
+            )
+            if not _assert_bootstrap_role_contract(
+                client,
+                deployer_cursor,
+                instance_name=instance_name,
+                database_name=database_name,
+                application_id=bootstrap_application_id,
+                target_application_id=application_id,
+                external_id=bootstrap_external_id,
+                service_principal_id=bootstrap_scim_id,
+                expected_executor=expected_executor,
+                expected_privileges=frozenset({"USAGE", "EXECUTE"}),
+                allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+                signed_tombstone_authority=True,
+            ):
+                raise RuntimeError("temporary Lakebase bootstrap role disappeared before invoke")
+            _assert_role_function_contract(cursor)
+            assert_wrapper_contract(
+                cursor,
+                instance_name=instance_name,
+                database_name=database_name,
+                target_application_id=application_id,
+                bootstrap_application_id=bootstrap_application_id,
+                expected_executor=bootstrap_application_id,
+                expected_privileges=frozenset({"USAGE", "EXECUTE"}),
+            )
+            _event_trigger_preflight(
+                cursor,
+                principal_label="target-bound bootstrap wrapper invocation",
+                allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+            )
+            prove_target_absent(
+                client,
+                deployer_cursor,
+                instance_name=instance_name,
+                application_id=application_id,
+                expected_executor=expected_executor,
+            )
+
+        def mark_provider_invocation() -> None:
+            nonlocal provider_invocation_attempted
+            provider_invocation_attempted = True
+
+        def invoke_provider(cursor: Any) -> None:
             cursor.execute(
-                "SELECT public.databricks_create_role(%s, 'SERVICE_PRINCIPAL')",
-                (application_id,),
+                psql.SQL("SELECT {}.{}()").format(
+                    psql.Identifier(wrapper_schema),
+                    psql.Identifier("create_target_role"),
+                )
+            )
+
+        def validate_provider_result(cursor: Any) -> None:
+            assert_exact_session_identity(
+                cursor,
+                application_id=bootstrap_application_id,
             )
             if read_profile(cursor, application_id) != SAFE_OAUTH_PROFILE:
                 raise RuntimeError("databricks_create_role returned unsafe role attributes")
@@ -447,20 +646,121 @@ def create_login_only_role(
                 bootstrap_application_id=bootstrap_application_id,
             )
 
+        execute_admitted_provider_bootstrap(
+            client,
+            account_client,
+            deployer_cursor,
+            workspace_client_factory=workspace_client_factory,
+            connect=connect,
+            workspace_host=client.config.host,
+            instance_name=instance_name,
+            database_name=database_name,
+            bootstrap_application_id=bootstrap_application_id,
+            bootstrap_scim_id=bootstrap_scim_id,
+            bootstrap_reservation_name=bootstrap_reservation_name,
+            bootstrap_external_id=bootstrap_external_id,
+            control_application_id=control_application_id,
+            control_client_secret=control_client_secret,
+            expected_executor=expected_executor,
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
+            presecret_contract=presecret_contract,
+            positive_control=positive_control,
+            preinvoke_contract=preinvoke_contract,
+            mark_provider_invocation=mark_provider_invocation,
+            invoke_provider=invoke_provider,
+            validate_provider_result=validate_provider_result,
+            transaction_diagnostics=provider_transaction_diagnostics,
+            # Resolve at the call boundary so deterministic tests can replace
+            # this module's clock without weakening the production wait.
+            sleep=time.sleep,
+        )
+
+        # Do not infer provider attribution from SECURITY INVOKER alone. Re-read
+        # the committed product through the deployer and accept only no creator
+        # edge or the disposable bootstrap edge. Any other state is quarantined.
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
+        assert_residual_target_contract(
+            client,
+            deployer_cursor,
+            instance_name=instance_name,
+            application_id=application_id,
+            service_principal_id=service_principal_id,
+            allowed_creator_roles=frozenset({bootstrap_application_id}),
+            expected_executor=expected_executor,
+        )
+
     except BaseException as exc:
         primary_error = exc
+        if provider_invocation_attempted:
+            try:
+                from tools.databricks.lakebase_oauth_role_bootstrap_reconcile import (
+                    classify_residual_target,
+                    quarantine_indeterminate_target,
+                )
+
+                residual_state = classify_residual_target(
+                    client,
+                    connect=connect,
+                    instance_name=instance_name,
+                    database_name=database_name,
+                    application_id=application_id,
+                    service_principal_id=service_principal_id,
+                    allowed_creator_roles=frozenset({bootstrap_application_id}),
+                    expected_executor=expected_executor,
+                    bootstrap_lock_cursor=bootstrap_lock_cursor,
+                    bootstrap_lock_key=bootstrap_lock_key,
+                )
+                if residual_state == "exact":
+                    primary_error = None
+                elif residual_state == "indeterminate":
+                    retain_bootstrap_evidence = True
+                    cleanup_errors.extend(provider_transaction_diagnostics)
+                    quarantine_indeterminate_target(
+                        client,
+                        connect=connect,
+                        instance_name=instance_name,
+                        database_name=database_name,
+                        application_id=application_id,
+                        service_principal_id=service_principal_id,
+                        expected_executor=expected_executor,
+                        allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                        bootstrap_lock_cursor=bootstrap_lock_cursor,
+                        bootstrap_lock_key=bootstrap_lock_key,
+                    )
+                    cleanup_errors.append(
+                        "target reconciliation: residual state was not stably exact or absent"
+                    )
+            except Exception as compensation_error:
+                retain_bootstrap_evidence = True
+                cleanup_errors.append(
+                    "target reconciliation: "
+                    f"{type(compensation_error).__name__}: {compensation_error}"
+                )
     finally:
         if create_attempted:
-            try:
-                recover_stale_bootstrap_identities(
+            cleanup_errors.extend(
+                finalize_bootstrap_identity(
                     client,
-                    deployer_cursor,
+                    account_client=account_client,
+                    connect=connect,
                     instance_name=instance_name,
                     database_name=database_name,
                     target_application_id=application_id,
+                    bootstrap_application_id=bootstrap_application_id,
+                    bootstrap_scim_id=bootstrap_scim_id,
+                    bootstrap_display_name=bootstrap_name,
+                    bootstrap_external_id=bootstrap_external_id,
+                    expected_executor=expected_executor,
+                    retain_evidence=retain_bootstrap_evidence,
+                    allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                    bootstrap_lock_cursor=bootstrap_lock_cursor,
+                    bootstrap_lock_key=bootstrap_lock_key,
                 )
-            except Exception as exc:  # noqa: BLE001 - cleanup must retain original failure
-                cleanup_errors.append(f"bootstrap recovery: {type(exc).__name__}: {exc}")
+            )
 
     if primary_error is not None:
         if cleanup_errors:
@@ -478,3 +778,115 @@ def create_login_only_role(
         service_principal_id=service_principal_id,
     )
     _assert_no_relationships(deployer_cursor, application_id)
+
+
+def create_login_only_role(
+    client: Any,
+    deployer_cursor: Any,
+    *,
+    account_client: Any,
+    instance_name: str,
+    database_name: str,
+    application_id: str,
+    service_principal_id: str,
+    connect: Callable[..., Any] = psycopg.connect,
+    workspace_client_factory: Callable[..., Any] | None = None,
+    allow_absent_managed_event_triggers: bool = False,
+    bootstrap_lock_cursor: Any | None = None,
+    bootstrap_lock_key: Any | None = None,
+) -> None:
+    """Serialize one target on the instance-wide canonical admin database."""
+
+    from tools.databricks.lakebase_oauth_role_bootstrap_lock import (
+        acquire_bootstrap_lock,
+        release_bootstrap_lock,
+    )
+    from tools.databricks.lakebase_oauth_role_bootstrap_sessions import (
+        cleanup_executor_identity,
+    )
+
+    if not application_id or application_id != application_id.strip():
+        raise ValueError("application_id must be non-empty canonical text")
+    if (bootstrap_lock_cursor is None) != (bootstrap_lock_key is None):
+        raise ValueError("bootstrap lock cursor and key must be supplied together")
+    if bootstrap_lock_cursor is not None and bootstrap_lock_key is not None:
+        from tools.databricks.lakebase_oauth_role_bootstrap_lock import (
+            assert_bootstrap_lock_held,
+        )
+
+        _database_user, accepted_users = _workspace_database_identity(client)
+        executor = cleanup_executor_identity(
+            deployer_cursor,
+            excluded_application_id=application_id,
+        )
+        if executor not in accepted_users:
+            raise RuntimeError("Lakebase deployer authenticated as the wrong identity")
+        cleanup_executor_identity(
+            bootstrap_lock_cursor,
+            excluded_application_id=application_id,
+            expected_executor=executor,
+        )
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
+        _create_login_only_role_locked(
+            client,
+            deployer_cursor,
+            account_client=account_client,
+            instance_name=instance_name,
+            database_name=database_name,
+            application_id=application_id,
+            service_principal_id=service_principal_id,
+            connect=connect,
+            workspace_client_factory=workspace_client_factory,
+            allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
+            expected_executor=executor,
+        )
+        return
+
+    database_user, accepted_users = _workspace_database_identity(client)
+    lock_kwargs = _connection_kwargs(
+        client,
+        instance_name=instance_name,
+        database_name="databricks_postgres",
+        database_user=database_user,
+        autocommit=True,
+    )
+    with connect(**lock_kwargs) as lock_connection, lock_connection.cursor() as lock_cursor:
+        executor = cleanup_executor_identity(
+            lock_cursor,
+            excluded_application_id=application_id,
+        )
+        if executor not in accepted_users:
+            raise RuntimeError("canonical Lakebase lock authenticated as the wrong identity")
+        cleanup_executor_identity(
+            deployer_cursor,
+            excluded_application_id=application_id,
+            expected_executor=executor,
+        )
+        lock_key = acquire_bootstrap_lock(
+            lock_cursor,
+            instance_name=instance_name,
+            target_application_id=application_id,
+        )
+        try:
+            _create_login_only_role_locked(
+                client,
+                deployer_cursor,
+                account_client=account_client,
+                instance_name=instance_name,
+                database_name=database_name,
+                application_id=application_id,
+                service_principal_id=service_principal_id,
+                connect=connect,
+                workspace_client_factory=workspace_client_factory,
+                allow_absent_managed_event_triggers=(allow_absent_managed_event_triggers),
+                bootstrap_lock_cursor=lock_cursor,
+                bootstrap_lock_key=lock_key,
+                expected_executor=executor,
+            )
+        finally:
+            release_bootstrap_lock(lock_cursor, lock_key=lock_key)

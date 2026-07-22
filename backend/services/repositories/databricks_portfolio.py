@@ -506,6 +506,11 @@ class DatabricksPortfolioRepository:
     _CAMPAIGN_GET_SQL = f"""
     SELECT c.campaign_id::text, c.name, c.owner_email, c.status, c.json_contract_version,
            c.treatment_state,
+           c.treatment_build_lease_until,
+           (
+             c.treatment_build_lease_until IS NOT NULL
+             AND c.treatment_build_lease_until <= now()
+           ) AS treatment_build_lease_expired,
            c.criteria,
            c.suppression_policy, c.message_variants AS legacy_message_variants,
            {_NORMALIZED_CAMPAIGN_VARIANTS_SQL.format(campaign_id_ref="c.campaign_id")},
@@ -519,7 +524,24 @@ class DatabricksPortfolioRepository:
     _CAMPAIGN_PATCH_SQL = f"""
     WITH updated_campaign AS (
       UPDATE mip_app.campaigns
-      SET status = %(status)s, updated_at = %(transition_at)s::timestamptz
+      SET status = %(status)s,
+          treatment_state = CASE
+            WHEN %(status)s = 'archived'
+             AND treatment_state = 'building'
+             AND treatment_build_lease_until IS NOT NULL
+             AND treatment_build_lease_until <= now()
+            THEN 'failed'
+            ELSE treatment_state
+          END,
+          treatment_build_lease_until = CASE
+            WHEN %(status)s = 'archived'
+             AND treatment_state = 'building'
+             AND treatment_build_lease_until IS NOT NULL
+             AND treatment_build_lease_until <= now()
+            THEN NULL
+            ELSE treatment_build_lease_until
+          END,
+          updated_at = %(transition_at)s::timestamptz
       WHERE campaign_id = %(campaign_id)s::uuid
         AND status = %(current_status)s
         AND treatment_state = %(current_treatment_state)s
@@ -527,7 +549,14 @@ class DatabricksPortfolioRepository:
           treatment_state = 'ready'
           OR (
             %(status)s = 'archived'
-            AND treatment_state IN ('legacy_unbound', 'failed')
+            AND (
+              treatment_state IN ('legacy_unbound', 'failed')
+              OR (
+                treatment_state = 'building'
+                AND treatment_build_lease_until IS NOT NULL
+                AND treatment_build_lease_until <= now()
+              )
+            )
           )
         )
       RETURNING campaign_id::text, name, owner_email, status, json_contract_version, criteria,
@@ -1312,10 +1341,13 @@ class DatabricksPortfolioRepository:
         if existing is None:
             raise LakebaseError("campaign status update returned no row")
         treatment_state = str(existing.get("treatment_state") or "legacy_unbound")
-        can_quarantine = payload.status == "archived" and treatment_state in {
-            "legacy_unbound",
-            "failed",
-        }
+        can_quarantine = payload.status == "archived" and (
+            treatment_state in {"legacy_unbound", "failed"}
+            or (
+                treatment_state == "building"
+                and existing.get("treatment_build_lease_expired") is True
+            )
+        )
         if treatment_state != "ready" and not can_quarantine:
             raise HTTPException(
                 status_code=409,

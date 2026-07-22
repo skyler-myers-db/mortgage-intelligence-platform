@@ -54,8 +54,9 @@ _APP_ROLE_SEQUENCE_PRIVILEGES: dict[str, tuple[str, ...]] = {
 # Only immutable, SECURITY INVOKER validation helpers are callable by the app.
 # Trigger functions remain executable by PostgreSQL's trigger machinery without
 # being exposed as a runtime API. Signatures use oidvectortypes(proargtypes), so
-# argument names/defaults cannot destabilize the matrix; a new overload fails
-# inventory postflight until it is reviewed explicitly.
+# argument names cannot destabilize the matrix; a new overload fails inventory
+# postflight until reviewed. Callable helpers must also have zero argument
+# defaults and no stored dependency on a cloud_admin-owned public routine.
 _APP_ROLE_ROUTINE_PRIVILEGES: dict[tuple[str, str], tuple[str, ...]] = {
     ("campaign_jsonb_has_only_keys", "jsonb, text[]"): ("EXECUTE",),
     ("campaign_jsonb_text_array_is_reviewed", "jsonb, text, integer"): ("EXECUTE",),
@@ -216,9 +217,7 @@ _MANAGED_EVENT_TRIGGER_CONTRACT: dict[str, _ManagedEventTriggerContractRow] = {
         function_strict=False,
         function_config=None,
         function_binary=None,
-        function_source_sha256=(
-            "f8bab6f3ee88910938aaf7f2639fda82627f15d615ac497f91853d9822d3c65b"
-        ),
+        function_source_sha256=("f8bab6f3ee88910938aaf7f2639fda82627f15d615ac497f91853d9822d3c65b"),
         function_source_bytes=1244,
     ),
     "on_create_sequence": _ManagedEventTriggerContractRow(
@@ -240,9 +239,7 @@ _MANAGED_EVENT_TRIGGER_CONTRACT: dict[str, _ManagedEventTriggerContractRow] = {
         function_strict=False,
         function_config=None,
         function_binary=None,
-        function_source_sha256=(
-            "e5a5d3ac90274b875777ed4bd2ee3430fb860759d66ecb0bce2591b29f1761ba"
-        ),
+        function_source_sha256=("e5a5d3ac90274b875777ed4bd2ee3430fb860759d66ecb0bce2591b29f1761ba"),
         function_source_bytes=736,
     ),
     "on_create_table_or_view": _ManagedEventTriggerContractRow(
@@ -269,16 +266,15 @@ _MANAGED_EVENT_TRIGGER_CONTRACT: dict[str, _ManagedEventTriggerContractRow] = {
         function_strict=False,
         function_config=None,
         function_binary=None,
-        function_source_sha256=(
-            "36601edce210b90953d4b1e84e84ad92fd9d77cc48d5dff7c79086cae5aacb82"
-        ),
+        function_source_sha256=("36601edce210b90953d4b1e84e84ad92fd9d77cc48d5dff7c79086cae5aacb82"),
         function_source_bytes=1189,
     ),
 }
 
 # PostgreSQL represents the default owner-plus-PUBLIC EXECUTE state as NULL.
-# Our ACL transaction revokes PUBLIC, after which the only accepted explicit
-# ACL is owner EXECUTE. No runtime or arbitrary grantee is permitted.
+# Earlier hardened databases can retain the exact cloud_admin-owner-only state.
+# Both are provider-owned, immutable representations; runtime lookup is denied
+# at the public-schema boundary and no runtime/arbitrary grantee is permitted.
 _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS: frozenset[tuple[str, ...] | None] = frozenset(
     {None, ("cloud_admin=X/cloud_admin",)}
 )
@@ -300,20 +296,6 @@ _MANAGED_OAUTH_ROLE_FUNCTION_ACLS = frozenset(
         _MANAGED_OAUTH_ROLE_FUNCTION_OWNER_ONLY_ACL,
     }
 )
-_MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES = frozenset(
-    {
-        ("public", "databricks_create_role", "text, text"),
-        *(
-            (
-                contract.function_schema,
-                contract.function_name,
-                contract.function_arguments,
-            )
-            for contract in _MANAGED_EVENT_TRIGGER_CONTRACT.values()
-        ),
-    }
-)
-
 _PROVIDER_SCHEMA_NAME = "__db_system"
 _PROVIDER_SCHEMA_OWNER = "databricks_control_plane"
 _PROVIDER_DATABASE_WRITER_ROLE_PREFIX = "databricks_writer_"
@@ -452,9 +434,7 @@ _SAFE_SCHEMA_HOOK_PG_CATALOG_OPERATORS = frozenset(
 )
 _AUDIT_SEQUENCE_DEFAULT_KEY = ("mip_app", "action_audit", "audit_sequence")
 _AUDIT_SEQUENCE_DEFAULT_EXPRESSION = "nextval('mip_app.action_audit_audit_sequence_seq'::regclass)"
-_SQL_STRING_LITERAL_RE = re.compile(
-    r"(?is)(?<![a-z0-9_$])(?:E'(?:''|\\.|[^'])*'|'(?:''|[^'])*')"
-)
+_SQL_STRING_LITERAL_RE = re.compile(r"(?is)(?<![a-z0-9_$])(?:E'(?:''|\\.|[^'])*'|'(?:''|[^'])*')")
 _SQL_FUNCTION_CALL_RE = re.compile(
     r'(?ix)(?:(?:"[^"]+"|[a-z_][a-z0-9_$]*)\s*\.\s*)?' r'(?P<name>"[^"]+"|[a-z_][a-z0-9_$]*)\s*\('
 )
@@ -477,7 +457,12 @@ _TABLE_PRIVILEGE_NAMES = (
 _SEQUENCE_PRIVILEGE_NAMES = ("USAGE", "SELECT", "UPDATE")
 _COLUMN_PRIVILEGE_NAMES = ("SELECT", "INSERT", "UPDATE", "REFERENCES")
 _SCHEMA_PRIVILEGE_NAMES = ("USAGE", "CREATE")
-_APP_ROLE_OPTIONAL_BASELINE_SCHEMA_PRIVILEGES = frozenset({("public", "USAGE")})
+# The application database is dedicated to Module 0. Runtime identities must
+# not inherit PostgreSQL's default ``public`` schema lookup surface: managed
+# Lakebase installs provider-owned routines there whose ACLs cannot be altered
+# by the database deployer. Stored expressions are reviewed separately by the
+# executable-hook contract, so no ambient runtime schema access is required.
+_APP_ROLE_OPTIONAL_BASELINE_SCHEMA_PRIVILEGES: frozenset[tuple[str, str]] = frozenset()
 _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES = (
     "rolsuper",
     "rolcreaterole",

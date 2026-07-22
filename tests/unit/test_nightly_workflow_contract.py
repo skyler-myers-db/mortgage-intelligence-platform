@@ -13,11 +13,14 @@ import subprocess
 import textwrap
 from pathlib import Path
 
+import yaml
+
 REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
 LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
 CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
+ECONOMICS_SCATTER_SPEC = REPO / "frontend" / "tests" / "e2e" / "economics_scatter.spec.ts"
 
 
 def _workflow_run_block(step_name: str) -> str:
@@ -73,6 +76,12 @@ def test_live_validation_is_manual_only() -> None:
     assert "workflow_dispatch:" in text
     assert "\n  schedule:" not in text
     assert "cron:" not in text
+
+
+def test_live_playwright_job_budgets_cold_app_and_serial_browser_matrix() -> None:
+    workflow = yaml.safe_load(NIGHTLY.read_text(encoding="utf-8"))
+
+    assert int(workflow["jobs"]["playwright-e2e-live"]["timeout-minutes"]) >= 90
 
 
 def test_live_validation_refreshes_live_snapshot_before_live_parity() -> None:
@@ -284,6 +293,28 @@ def test_live_playwright_executes_live_hardening_and_excludes_mocked_console() -
     assert "page.route('**/api/**'" in console_text
 
 
+def test_mocked_economics_canary_is_explicitly_separate_from_real_uc_proof() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    spec = ECONOMICS_SCATTER_SPEC.read_text(encoding="utf-8")
+    real_block = _workflow_run_block("Run real-UC Playwright specs")
+    mocked_block = _workflow_run_block("Run mocked economics scatter response-shape canary")
+
+    assert "ECONOMICS_SCATTER_MOCKED" not in real_block
+    assert "ECONOMICS_SCATTER_MOCKED: '1'" in text
+    assert "--grep '^mocked response-shape canary:'" in mocked_block
+    assert "test.skip(" in spec
+    assert "!MOCKED_POINTS_CANARY" in spec
+
+
+def test_real_genie_browser_proof_executes_bound_native_follow_up() -> None:
+    spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
+
+    assert "followUpResponse.request().postDataJSON()" in spec
+    assert "followUpRequest.conversation_id" in spec
+    assert "toBe(firstConversationId)" in spec
+    assert "standalone native Genie follow-up" in spec
+
+
 def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 
@@ -442,8 +473,18 @@ def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> Non
     assert "tests/integration/test_lifecycle_delta_replay_live.py" in block
     assert "tests/integration/test_campaign_treatment_at_cap_live.py" in block
     assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in block
+    assert "tools.databricks.cleanup_lifecycle_replay_scratch" in block
     assert "tools.databricks.cleanup_campaign_treatment_scratch" in block
     assert "--stale-older-than-hours 2" in block
+
+    lifecycle_cleanup_pos = text.index(
+        "- name: Always clean deterministic lifecycle replay scratch tables"
+    )
+    lifecycle_cleanup_next = text.index("\n      - name:", lifecycle_cleanup_pos + 1)
+    lifecycle_cleanup_block = text[lifecycle_cleanup_pos:lifecycle_cleanup_next]
+    assert "if: always()" in lifecycle_cleanup_block
+    assert "tools.databricks.cleanup_lifecycle_replay_scratch" in lifecycle_cleanup_block
+    assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in lifecycle_cleanup_block
 
     cleanup_pos = text.index("- name: Always clean deterministic treatment scratch table")
     cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
@@ -451,6 +492,35 @@ def test_lifecycle_delta_replay_is_in_explicit_low_volume_mutation_gate() -> Non
     assert "if: always()" in cleanup_block
     assert "tools.databricks.cleanup_campaign_treatment_scratch" in cleanup_block
     assert "MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}" in cleanup_block
+
+
+def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation() -> None:
+    text = NIGHTLY.read_text(encoding="utf-8")
+    workflow = yaml.safe_load(text)
+
+    assert workflow["concurrency"]["group"] == "mip-dev-live-state"
+    marker_block = _workflow_run_block("Derive governed live campaign run marker")
+    assert 'str.maketrans("0123456789", "abcdefghij")' in marker_block
+    assert "MIP_LIVE_CAMPAIGN_RUN_MARKER=" in marker_block
+
+    mutation_block = _workflow_run_block("Low-volume deployed workflow contracts")
+    assert "tools.cleanup_live_campaign_fixtures" in mutation_block
+    assert "--all-run-markers" in mutation_block
+    assert mutation_block.index("--all-run-markers") < mutation_block.index("pytest -q")
+
+    cleanup_pos = text.index("- name: Always archive run-marked live campaign fixtures")
+    cleanup_next = text.index("\n      - name:", cleanup_pos + 1)
+    cleanup_block = text[cleanup_pos:cleanup_next]
+    assert "if: always()" in cleanup_block
+    assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in cleanup_block
+    assert (
+        "DATABRICKS_ADMIN_CLIENT_SECRET: "
+        "${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}"
+    ) in cleanup_block
+    assert cleanup_block.count("tools/oauth_m2m_mint.py") == 2
+    assert "tools.cleanup_live_campaign_fixtures" in cleanup_block
+    assert '--run-marker "$MIP_LIVE_CAMPAIGN_RUN_MARKER"' in cleanup_block
+    assert "unset MIP_CLEANUP_OWNER_BEARER_TOKEN" in cleanup_block
 
 
 def test_nightly_agent_eval_passes_distinct_normal_and_admin_bearers() -> None:

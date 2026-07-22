@@ -16,6 +16,8 @@ import pytest
 import yaml
 
 from backend.services.databricks_jobs import MANAGED_JOBS
+from tools.databricks import lakebase_oauth_role_bootstrap_admission as admission
+from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orchestration
 
 REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
@@ -693,6 +695,7 @@ YLW=""
 RST=""
 run_with_account_identity() {{ "$@"; }}
 run_with_proof_signing_authority() {{ "$@"; }}
+run_with_lakebase_bootstrap_authority() {{ "$@"; }}
 mint_m2m_token() {{ printf 'mint %s\n' "$*" >> {shlex.quote(str(calls))}; }}
 {_first_install_cleanup_block()}
 {_app_failure_compensation_block()}
@@ -765,6 +768,7 @@ RED=""
 YLW=""
 RST=""
 run_with_proof_signing_authority() {{ "$@"; }}
+run_with_lakebase_bootstrap_authority() {{ "$@"; }}
 {_first_install_cleanup_block()}
 cleanup_failed_first_install_app
 """,
@@ -832,6 +836,7 @@ RST=""
 PYTHON={shlex.quote(str(fake_python))}
 step() {{ :; }}
 run_with_proof_signing_authority() {{ "$@"; }}
+run_with_lakebase_bootstrap_authority() {{ "$@"; }}
 stop_app_after_failed_deploy() {{
   printf 'stop:%s\\n' "$APP_UPGRADE_STATE" >> {shlex.quote(str(calls))}
   return 0
@@ -1000,9 +1005,7 @@ def test_stale_runtime_bootstrap_grants_are_reconciled_before_build_or_bundle() 
         'step "recover interrupted verifier Lakebase role bootstrap"'
     )
     app_inventory = script.index('_EXISTING_APPS_JSON="$(databricks apps list -o json)"')
-    app_role_recovery = script.index(
-        'step "recover interrupted App Lakebase role bootstrap"'
-    )
+    app_role_recovery = script.index('step "recover interrupted App Lakebase role bootstrap"')
     journal_status = script.index(
         'step "read signed first-install journal at the immediate recovery boundary"',
         app_role_recovery,
@@ -1089,20 +1092,38 @@ def test_unproven_lakebase_access_forces_stop_without_signed_blue_restore(
     assert "converge_campaign_treatment_access" in calls
 
 
-def test_every_lakebase_role_recovery_and_convergence_gets_bounded_signing_key() -> None:
+def test_every_lakebase_role_recovery_gets_bounded_signing_and_account_authority() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     command = '"$PYTHON" -m tools.databricks.converge_lakebase_oauth_role'
     bounded = re.findall(
-        r"run_with_proof_signing_authority \\\n\s+"
+        r"run_with_lakebase_bootstrap_authority \\\n\s+"
         r'"\$PYTHON" -m tools\.databricks\.converge_lakebase_oauth_role',
         script,
     )
 
     assert len(bounded) == script.count(command)
+    assert 'run_with_account_identity run_with_proof_signing_authority "$@"' in script
     assert not re.search(
         r'(?m)^\s*run "\$PYTHON" -m tools\.databricks\.converge_lakebase_oauth_role',
         script,
     )
+
+
+def test_lakebase_bootstrap_receives_only_explicit_fresh_m2m_control_names() -> None:
+    helper = _shell_function("run_with_lakebase_bootstrap_authority")
+
+    assert 'control_client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"' in helper
+    assert 'control_client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"' in helper
+    assert (
+        'export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_ID="$control_client_id"'
+        in helper
+    )
+    assert (
+        'export MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET="$control_client_secret"'
+        in helper
+    )
+    assert "fresh OAuth-M2M Lakebase bootstrap control credentials are missing" in helper
+    assert 'export DATABRICKS_CLIENT_SECRET="$control_client_secret"' not in helper
 
 
 @pytest.mark.parametrize("mode", ("revoke_failure", "remaining"))
@@ -1415,7 +1436,7 @@ def test_deploy_dev_has_cost_and_permission_guards() -> None:
     assert "permissions:" in text
     assert "contents: read" in text
     assert "concurrency:" in text
-    assert "group: mip-dev-deploy" in text
+    assert "group: mip-dev-live-state" in text
     assert "cancel-in-progress: false" in text
 
 
@@ -1667,13 +1688,10 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     assert "mip_lakebase_migrate" in script
     assert 'export MIP_AI_GATEWAY_VERIFIER_CLIENT_ID="$DATABRICKS_VERIFIER_CLIENT_ID"' in script
     assert (
-        'export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"'
-        in script
+        'export BUNDLE_VAR_ai_gateway_verifier_client_id="$DATABRICKS_VERIFIER_CLIENT_ID"' in script
     )
     assert "ai_gateway_verifier_client_id:" in bundle
-    assert (
-        '"--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"' in bundle
-    )
+    assert '"--ai-gateway-verifier-client-id=${var.ai_gateway_verifier_client_id}"' in bundle
     assert '"--require-ai-gateway-verifier"' in bundle
     verifier_export = script.index("export BUNDLE_VAR_ai_gateway_verifier_client_id=")
     bundle_apply = script.index('tools.databricks.bundle_env deploy -t "$TARGET"')
@@ -1914,9 +1932,10 @@ def test_full_lakebase_migration_never_runs_after_app_snapshot_activation() -> N
 
     assert migration < activation
     assert "jobs/lakebase_migrate.py" not in script[activation:]
-    assert script.count(
-        'run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"'
-    ) == 1
+    assert (
+        script.count('run_job_with_retry databricks bundle run mip_lakebase_migrate -t "$TARGET"')
+        == 1
+    )
 
 
 def test_first_install_never_uses_an_app_inclusive_bundle_deploy_before_migration() -> None:
@@ -1940,9 +1959,9 @@ def test_first_install_never_uses_an_app_inclusive_bundle_deploy_before_migratio
     bundle_line_end = script.index("\n", bundle_apply)
     bundle_line = script[bundle_apply:bundle_line_end]
     assert '"${BUNDLE_NON_APP_ARGS[@]}"' in bundle_line
-    assert "kind != \"apps\"" in script[:bundle_apply]
+    assert 'kind != "apps"' in script[:bundle_apply]
     assert "--no-compute" in script[app_create:app_bind]
-    assert "--json \"@$FIRST_INSTALL_MARKED_PAYLOAD\"" in script[app_create:app_bind]
+    assert '--json "@$FIRST_INSTALL_MARKED_PAYLOAD"' in script[app_create:app_bind]
     assert "tools.databricks.app_resource_bindings verify" in script[bundle_apply:app_bind]
     assert app_create < identity_claim < app_bind
     assert "deploy full bundle for first App creation" not in script
@@ -2022,9 +2041,7 @@ def test_exact_unsigned_first_install_cleanup_converges_through_signed_helper(
     assert calls.index("app_first_install_journal status") < calls.index(
         "converge_lakebase_oauth_role"
     )
-    assert calls.index("converge_lakebase_oauth_role") < calls.index(
-        "bundle_env deployment unbind"
-    )
+    assert calls.index("converge_lakebase_oauth_role") < calls.index("bundle_env deployment unbind")
     assert calls.index("bundle_env deployment unbind") < calls.index(
         "app_first_install_journal delete"
     )
@@ -2112,13 +2129,9 @@ def test_initial_retry_routes_claimed_and_unclaimed_absence_separately() -> None
     status = script.index(
         'step "read signed first-install journal at the immediate recovery boundary"'
     )
-    unclaimed = script.index(
-        'FIRST_INSTALL_JOURNAL_STATUS" == "orphan_unclaimed"', status
-    )
+    unclaimed = script.index('FIRST_INSTALL_JOURNAL_STATUS" == "orphan_unclaimed"', status)
     clear = script.index("tools.databricks.app_first_install_journal clear-absent", unclaimed)
-    claimed = script.index(
-        'FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed"', clear
-    )
+    claimed = script.index('FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed"', clear)
     journal_role_recovery = script.index(
         'step "recover interrupted Lakebase bootstrap for journaled App identity"',
         status,
@@ -2130,7 +2143,7 @@ def test_initial_retry_routes_claimed_and_unclaimed_absence_separately() -> None
     assert "recover_journaled_first_install_lakebase_bootstrap" in recovery_block
     helper = _shell_function("recover_journaled_first_install_lakebase_bootstrap")
     assert '--application-id "$FIRST_INSTALL_APP_CLIENT_ID"' in helper
-    assert "run_with_proof_signing_authority" in helper
+    assert "run_with_lakebase_bootstrap_authority" in helper
 
 
 def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
@@ -2139,8 +2152,7 @@ def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY" in script
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS" in script
     assert (
-        'export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$verifier_historical_keys"'
-        in script
+        'export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$verifier_historical_keys"' in script
     )
 
 
@@ -2197,7 +2209,9 @@ def test_first_install_creation_is_preceded_by_signed_durable_recovery_intent() 
     )
     complete = script.index("finalize_signed_first_install_capture", capture)
 
-    assert recovery_function < recovery_stop < recovery_quarantine < recovery_quiesce < recovery_delete
+    assert (
+        recovery_function < recovery_stop < recovery_quarantine < recovery_quiesce < recovery_delete
+    )
     assert inventory < status < recover < recovery_call < audit_recover
     assert audit_recover < prepare < ambiguous_create_guard < create
     assert create < verify < claim < bind < capture < complete
@@ -3075,10 +3089,13 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: " "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
     )
     assert workflow.count(secret_binding) == 2
-    assert workflow.count(
-        "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: "
-        "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
-    ) == 1
+    assert (
+        workflow.count(
+            "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: "
+            "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
+        )
+        == 1
+    )
     model_binding = (
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: "
         "${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}"
@@ -3119,8 +3136,8 @@ def test_otlp_is_an_exact_overlay_on_the_governed_target_and_rollback() -> None:
 
     assert otlp_preflight < lease < resource_build < snapshot < capture
     assert "MIP_OTEL_HEADERS must never be provided as plaintext" in script
-    assert "--otel-header-secret-scope" in script[otlp_preflight:resource_build + 500]
-    assert "--otel-header-secret-key" in script[otlp_preflight:resource_build + 500]
+    assert "--otel-header-secret-scope" in script[otlp_preflight : resource_build + 500]
+    assert "--otel-header-secret-key" in script[otlp_preflight : resource_build + 500]
     assert "--otel-endpoint" in script[otlp_preflight:lease]
     assert "--otel-header-resource otel_headers" in script[otlp_preflight:lease]
     assert '"${OTEL_DEPLOY_PAYLOAD_ARGS[@]}"' in script[snapshot:capture]
@@ -3718,9 +3735,7 @@ def test_claimed_first_install_trap_authenticates_before_stop(
     )
 
     assert result.returncode == 0, result.stderr
-    assert calls.index("app_first_install_journal status") < calls.index(
-        "stop_app_fail_closed"
-    )
+    assert calls.index("app_first_install_journal status") < calls.index("stop_app_fail_closed")
     assert "--expected-app-id app-object-id" in calls
     assert "--expected-client-id app-client-id" in calls
     assert "--expected-scim-id app-scim-id" in calls
@@ -3866,8 +3881,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: P
 
     assert result.returncode == 1
     assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)"
-        in result.stderr
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)" in result.stderr
     )
     assert "step 1: preflight" in result.stdout
     assert "step 2:" not in result.stdout
@@ -4007,8 +4021,7 @@ def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path
 
     assert result.returncode == 1
     assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)"
-        in result.stderr
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)" in result.stderr
     )
     assert "cotality id-mask secret: configured" not in result.stdout
     assert "step 2:" not in result.stdout
@@ -4052,8 +4065,7 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
 
     assert result.returncode == 1
     assert (
-        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)"
-        in result.stderr
+        "MIP_COTALITY_ID_MASK_SECRET is required for target 'prod' (APP_ENV=prod)" in result.stderr
     )
     assert "cotality id-mask secret: configured" not in result.stdout
     assert "step 2:" not in result.stdout
@@ -4162,3 +4174,13 @@ def test_exact_source_gate_rejects_dirty_uploaded_source(
     assert result.returncode == 2
     assert "refusing deployment from dirty source" in result.stderr
     assert expected_path in result.stderr
+
+
+def test_deploy_timeout_covers_two_serial_auth_expiry_fences_with_margin() -> None:
+    workflow = yaml.safe_load(DEPLOY_DEV.read_text(encoding="utf-8"))
+    timeout_seconds = int(workflow["jobs"]["deploy"]["timeout-minutes"]) * 60
+    serialized_admission_seconds = 2 * (
+        admission._MAX_BOOTSTRAP_AUTH_TTL + orchestration._EXPIRY_SKEW
+    ).total_seconds()
+
+    assert timeout_seconds >= serialized_admission_seconds + 60 * 60

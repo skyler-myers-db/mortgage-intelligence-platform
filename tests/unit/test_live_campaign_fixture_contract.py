@@ -230,6 +230,7 @@ def test_idempotency_approval_fixture_approves_campaign_before_returning(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     campaign_id = "campaign-idempotency-approval-fixture"
+    marker = "ghabcdearf"
     events: list[str] = []
     recommendation = _recommendation_response()
     variants = recommendation["variants"]
@@ -241,6 +242,7 @@ def test_idempotency_approval_fixture_approves_campaign_before_returning(
         "_tiny_reviewed_campaign_criteria",
         lambda: ({"states": ["IL"]}, ["B-0000000000001"]),
     )
+    monkeypatch.setenv("MIP_LIVE_CAMPAIGN_RUN_MARKER", marker)
 
     def approve(actual_campaign_id: str) -> None:
         assert actual_campaign_id == campaign_id
@@ -256,6 +258,8 @@ def test_idempotency_approval_fixture_approves_campaign_before_returning(
         if path == "/api/portfolio/campaign-recommendation":
             return 200, recommendation
         if path == "/api/portfolio/create":
+            assert payload is not None
+            assert payload["name"] == f"Live Lakebase approval contract {marker}"
             return 200, {"campaign_id": campaign_id}
         assert (method, path) == ("GET", f"/api/campaigns/{campaign_id}")
         return 200, {

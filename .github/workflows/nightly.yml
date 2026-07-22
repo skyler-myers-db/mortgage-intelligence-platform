@@ -34,7 +34,9 @@ on:
         default: false
 
 concurrency:
-  group: live-validation-${{ github.ref }}
+  # Share the deployment lane across refs: both workflows target the same App
+  # and durable Lakebase rows, so neither may stop or clean under the other.
+  group: mip-dev-live-state
   cancel-in-progress: false
 
 env:
@@ -406,7 +408,11 @@ jobs:
     name: Playwright (real-UC golden path)
     needs: parity-live
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # This one on-demand release job installs three browsers, runs the governed
+    # Lakebase mutation suite, allows a 10-minute App warm-up, executes Agent
+    # Evaluation, then serializes the real-UC and procurement browser matrices.
+    # A 25-minute cap could cancel a healthy cold-workspace proof mid-gate.
+    timeout-minutes: 90
     env:
       # Deliberately omit LAKEBASE_HOST / _USER / _PASSWORD here so the
       # backend's `_resolve_lakebase_connection_params` takes the SDK
@@ -495,6 +501,23 @@ jobs:
           echo "MIP_APP_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "MIP_API_URL=$APP_URL" >> "$GITHUB_ENV"
           echo "::notice::Live Playwright will target deployed app at $APP_URL."
+      - name: Derive governed live campaign run marker
+        run: |
+          python - <<'PY'
+          import os
+
+          run_id = os.environ.get("GITHUB_RUN_ID", "")
+          run_attempt = os.environ.get("GITHUB_RUN_ATTEMPT", "")
+          if not run_id.isdigit() or not run_attempt.isdigit():
+              raise SystemExit("GitHub run identity is not numeric")
+          encode = str.maketrans("0123456789", "abcdefghij")
+          marker = f"gha{run_id.translate(encode)}r{run_attempt.translate(encode)}"
+          if len(marker) > 40:
+              raise SystemExit("encoded GitHub run marker is unexpectedly long")
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
+              handle.write(f"MIP_LIVE_CAMPAIGN_RUN_MARKER={marker}\n")
+          print("::notice::Derived a non-PII live campaign run marker.")
+          PY
       - name: Mint per-run Playwright Bearer tokens
         # M2M OAuth is required for deployed app auth. The service principal
         # is intentionally non-admin; the smoke step below proves it can read
@@ -665,6 +688,14 @@ jobs:
           MIP_LIVE_MUTATION_OK: '1'
           MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}
         run: |
+          python -m tools.cleanup_live_campaign_fixtures \
+            --base-url "$MIP_APP_URL" \
+            --all-run-markers
+          python -m tools.databricks.cleanup_lifecycle_replay_scratch \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
+            --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+            --suffix "$MIP_LIVE_SCRATCH_SUFFIX" \
+            --stale-older-than-hours 2
           python -m tools.databricks.cleanup_campaign_treatment_scratch \
             --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
             --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
@@ -678,6 +709,47 @@ jobs:
             tests/integration/test_lifecycle_delta_replay_live.py \
             tests/integration/test_campaign_treatment_at_cap_live.py \
             tests/integration/test_lineage_manifest_live.py
+      - name: Always archive run-marked live campaign fixtures
+        if: always()
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+          DATABRICKS_ADMIN_CLIENT_ID: ${{ secrets.DATABRICKS_ADMIN_CLIENT_ID }}
+          DATABRICKS_ADMIN_CLIENT_SECRET: ${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}
+        run: |
+          set -euo pipefail
+          token_dir="$(mktemp -d)"
+          trap 'rm -rf "$token_dir"' EXIT
+          python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_CLIENT_ID \
+            --client-secret-env DATABRICKS_CLIENT_SECRET \
+            --output-file "$token_dir/owner"
+          python tools/oauth_m2m_mint.py \
+            --client-id-env DATABRICKS_ADMIN_CLIENT_ID \
+            --client-secret-env DATABRICKS_ADMIN_CLIENT_SECRET \
+            --output-file "$token_dir/admin"
+          MIP_CLEANUP_OWNER_BEARER_TOKEN="$(<"$token_dir/owner")"
+          MIP_CLEANUP_ADMIN_BEARER_TOKEN="$(<"$token_dir/admin")"
+          export MIP_CLEANUP_OWNER_BEARER_TOKEN MIP_CLEANUP_ADMIN_BEARER_TOKEN
+          python -m tools.cleanup_live_campaign_fixtures \
+            --base-url "$MIP_APP_URL" \
+            --owner-token-env MIP_CLEANUP_OWNER_BEARER_TOKEN \
+            --admin-token-env MIP_CLEANUP_ADMIN_BEARER_TOKEN \
+            --run-marker "$MIP_LIVE_CAMPAIGN_RUN_MARKER"
+          unset MIP_CLEANUP_OWNER_BEARER_TOKEN MIP_CLEANUP_ADMIN_BEARER_TOKEN
+      - name: Always clean deterministic lifecycle replay scratch tables
+        if: always()
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_WAREHOUSE_ID: ${{ secrets.DATABRICKS_WAREHOUSE_ID }}
+          MIP_LIVE_SCRATCH_SUFFIX: gha_${{ github.run_id }}
+        run: |
+          python -m tools.databricks.cleanup_lifecycle_replay_scratch \
+            --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
+            --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+            --suffix "$MIP_LIVE_SCRATCH_SUFFIX"
       - name: Always clean deterministic treatment scratch table
         if: always()
         env:
@@ -789,6 +861,18 @@ jobs:
         run: |
           npx playwright test \
             tests/e2e/genie_proof_layout.spec.ts \
+            --reporter=list --workers=1
+      - name: Run mocked economics scatter response-shape canary
+        # The selected test route-fulfills only the dense points response to
+        # exercise cluster pagination. It is deliberately separated from the
+        # real-UC step and must never be cited as live data proof.
+        working-directory: frontend
+        env:
+          ECONOMICS_SCATTER_MOCKED: '1'
+        run: |
+          npx playwright test \
+            tests/e2e/economics_scatter.spec.ts \
+            --grep '^mocked response-shape canary:' \
             --reporter=list --workers=1
       - name: Run procurement accessibility and browser/device matrix
         # Separate from the golden path so the standard live suite stays

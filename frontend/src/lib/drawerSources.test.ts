@@ -9,6 +9,7 @@ import {
   DRAWER_SOURCES,
   evidenceDestinationFor,
 } from './drawerSources';
+import lineageManifest from '../../../backend/resources/lineage_manifest.json';
 
 describe('home headline KPI sources cite the metric view (S1)', () => {
   it('routes the headline view lineage to its own drawer entry', () => {
@@ -283,6 +284,16 @@ describe('descriptorFor', () => {
       expect(destination.kind).toBe('lakebase');
       if (destination.kind === 'lakebase') {
         expect(destination.objectPaths.every((path) => path.startsWith('mip_app.'))).toBe(true);
+      }
+    }
+  });
+
+  it('maps every declared drawer lineage family to the governed manifest', () => {
+    const manifestFamilyIds = new Set(lineageManifest.families.map((family) => family.id));
+
+    for (const [key, source] of Object.entries(DRAWER_SOURCES)) {
+      if (source.lineageFamily) {
+        expect(manifestFamilyIds.has(source.lineageFamily), `${key} lineageFamily`).toBe(true);
       }
     }
   });

@@ -21,11 +21,13 @@ class _GovernedTransitionRepo:
         *,
         owner_email: str,
         current_status: str = "pending_review",
+        treatment_state: str = "ready",
         validation_actor: str | None = None,
         validation_now: datetime | None = None,
     ) -> None:
         self.owner_email = owner_email
         self.current_status = current_status
+        self.treatment_state = treatment_state
         self.validation_actor = validation_actor
         self.validation_now = validation_now
         self.patch_calls = 0
@@ -37,7 +39,7 @@ class _GovernedTransitionRepo:
             name="Governed compatibility campaign",
             owner_email=self.owner_email,
             status=status or self.current_status,  # type: ignore[arg-type]
-            treatment_state="ready",
+            treatment_state=self.treatment_state,  # type: ignore[arg-type]
             criteria={"marketing_eligibility": "Eligible only"},
             suppression_policy={"default": "eligible_only"},
             message_variants=[],
@@ -92,6 +94,32 @@ def test_campaigns_router_lists_and_patches_visible_campaign() -> None:
 def test_campaigns_router_rejects_invalid_campaign_id() -> None:
     response = client.get("/api/campaigns/not a valid id")
     assert response.status_code == 422
+
+
+def test_building_campaign_quarantine_requires_admin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = "campaign-owner@example.com"
+    repo = _GovernedTransitionRepo(owner_email=owner, treatment_state="building")
+    monkeypatch.setitem(app.dependency_overrides, get_portfolio_repository, lambda: repo)
+    monkeypatch.setattr(settings, "admin_emails", "admin@example.com")
+
+    denied = client.patch(
+        "/api/campaigns/11111111-1111-4111-8111-111111111111",
+        headers=_headers(owner),
+        json={"status": "archived", "rationale": "Quarantine abandoned build"},
+    )
+    assert denied.status_code == 403
+    assert repo.patch_calls == 0
+
+    repo.owner_email = "admin@example.com"
+    allowed = client.patch(
+        "/api/campaigns/11111111-1111-4111-8111-111111111111",
+        headers=_headers("admin@example.com"),
+        json={"status": "archived", "rationale": "Quarantine abandoned build"},
+    )
+    assert allowed.status_code == 200
+    assert repo.patch_calls == 1
 
 
 @pytest.mark.parametrize("target_status", ["approved", "live", "active"])

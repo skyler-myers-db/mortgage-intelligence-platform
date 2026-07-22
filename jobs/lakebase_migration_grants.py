@@ -11,14 +11,17 @@ from jobs.lakebase_migration_contracts import (
     _APP_ROLE_ROUTINE_PRIVILEGES,
     _APP_ROLE_SEQUENCE_PRIVILEGES,
     _APP_ROLE_TABLE_PRIVILEGES,
-    _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES,
-    _MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT,
 )
 from jobs.lakebase_migration_postflight import (
     _postflight_ai_gateway_verifier_grants,
     _postflight_app_role_grants,
 )
-from jobs.lakebase_migration_provider_plane import _postflight_provider_schema_boundary
+from jobs.lakebase_migration_provider_plane import (
+    _close_public_schema_boundary,
+    _postflight_no_pre_boundary_sessions,
+    _postflight_provider_schema_boundary,
+    _postflight_public_schema_boundary,
+)
 from jobs.lakebase_migration_roles import (
     _resolve_ai_gateway_verifier_role,
     _resolve_app_role,
@@ -37,11 +40,7 @@ def _resolve_database_roles(
     _resolve_app_role_fn: Callable[..., str],
     _resolve_verifier_role_fn: Callable[[], str | None],
 ) -> _ResolvedDatabaseRoles:
-    role = (
-        _resolve_app_role_fn()
-        if app_name is None
-        else _resolve_app_role_fn(app_name=app_name)
-    )
+    role = _resolve_app_role_fn() if app_name is None else _resolve_app_role_fn(app_name=app_name)
     verifier_role = _resolve_verifier_role_fn()
     if verifier_role == role:
         raise RuntimeError(
@@ -200,9 +199,13 @@ def _apply_app_role_grants(
                 raise RuntimeError("Lakebase current database lookup returned no row")
             database_name = str(database_row[0])
             target_roles = tuple(
-                target_role
-                for target_role in (role, verifier_role)
-                if target_role is not None
+                target_role for target_role in (role, verifier_role) if target_role is not None
+            )
+            _postflight_event_trigger_inventory(
+                cur,
+                role,
+                principal_label="ACL pre-cutover",
+                allow_absent_managed=allow_absent_managed_event_triggers,
             )
             _postflight_provider_schema_boundary(
                 cur,
@@ -210,6 +213,19 @@ def _apply_app_role_grants(
                 principal_label="ACL preflight",
                 allow_absent_provider_schema=allow_absent_provider_schema,
             )
+            _close_public_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="ACL public-schema cutover",
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
+            if not allow_absent_provider_schema:
+                # Make the lookup denial visible to every backend before
+                # checking for sessions that could retain an already-resolved
+                # provider OID. If later reconciliation fails, this fail-safe
+                # quarantine is intentionally durable and retry-idempotent.
+                conn.commit()
+                _postflight_no_pre_boundary_sessions(cur, target_roles)
             _postflight_oauth_role_function_contract(
                 cur,
                 principal_label="ACL preflight",
@@ -248,17 +264,17 @@ def _apply_app_role_grants(
                 SELECT n.nspname, c.relname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_roles owner ON owner.oid = c.relowner
                 WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
                   AND n.nspname <> '__db_system'
                   AND NOT (
                       n.nspname = 'public'
-                      AND c.relname = ANY(%s::text[])
+                      AND owner.rolname = 'cloud_admin'
                   )
                 ORDER BY n.nspname, c.relname
-                """,
-                (sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT),),
+                """
             )
             all_table_identifiers = [
                 psql.Identifier(str(row[0]), str(row[1])).as_string() for row in cur.fetchall()
@@ -268,10 +284,15 @@ def _apply_app_role_grants(
                 SELECT n.nspname, c.relname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_roles owner ON owner.oid = c.relowner
                 WHERE c.relkind = 'S'
                   AND n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
                   AND n.nspname <> '__db_system'
+                  AND NOT (
+                      n.nspname = 'public'
+                      AND owner.rolname = 'cloud_admin'
+                  )
                 ORDER BY n.nspname, c.relname
                 """
             )
@@ -401,6 +422,7 @@ def _apply_app_role_grants(
                     a.attname
                 FROM pg_class c
                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                JOIN pg_roles owner ON owner.oid = c.relowner
                 JOIN pg_attribute a ON a.attrelid = c.oid
                 CROSS JOIN LATERAL aclexplode(a.attacl) e
                 LEFT JOIN pg_roles grantee ON grantee.oid = e.grantee
@@ -410,7 +432,7 @@ def _apply_app_role_grants(
                   AND n.nspname <> '__db_system'
                   AND NOT (
                       n.nspname = 'public'
-                      AND c.relname = ANY(%s::text[])
+                      AND owner.rolname = 'cloud_admin'
                   )
                   AND a.attnum > 0
                   AND NOT a.attisdropped
@@ -420,7 +442,7 @@ def _apply_app_role_grants(
                   )
                 ORDER BY n.nspname, c.relname, a.attname
                 """,
-                (sorted(_MANAGED_PROVIDER_PUBLIC_VIEW_CONTRACT), *target_roles),
+                tuple(target_roles),
             )
             column_acl_revokes = [
                 (
@@ -449,6 +471,13 @@ def _apply_app_role_grants(
                 WHERE d.defaclobjtype IN ('r', 'S', 'f')
                   AND (
                       grantee.rolname IN ({role_placeholders})
+                  )
+                  AND NOT (
+                      owner.rolname = 'cloud_admin'
+                      AND (
+                          d.defaclnamespace = 0
+                          OR n.nspname = 'public'
+                      )
                   )
                   AND (
                       d.defaclnamespace = 0
@@ -544,11 +573,10 @@ def _apply_app_role_grants(
                 _security_definer,
                 routine_owner,
             ) in all_routines:
-                if (
-                    (routine_schema, _routine_name, _routine_arguments)
-                    in _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES
-                    and routine_owner == "cloud_admin"
-                ):
+                if routine_schema == "public" and routine_owner == "cloud_admin":
+                    # Provider-owned public routines are immutable from the
+                    # deployer plane. The exact public-schema boundary above
+                    # removes runtime lookup instead of masking failed REVOKEs.
                     continue
                 cur.execute(
                     f"REVOKE ALL PRIVILEGES ON {routine_kind} {routine_identity} "
@@ -556,8 +584,8 @@ def _apply_app_role_grants(
                 )
                 # Lakebase is an isolated app-state database.  Its reviewed
                 # policy deliberately removes PostgreSQL's built-in PUBLIC
-                # EXECUTE default from every user routine so a SECURITY
-                # DEFINER helper cannot become an ambient privilege tunnel.
+                # EXECUTE default from every deployer-owned user routine so a
+                # SECURITY DEFINER helper cannot become an ambient tunnel.
                 cur.execute(
                     f"REVOKE ALL PRIVILEGES ON {routine_kind} {routine_identity} FROM PUBLIC"
                 )
@@ -594,11 +622,7 @@ def _apply_app_role_grants(
                     _security_definer,
                     routine_owner,
                 ) in all_routines:
-                    if (
-                        (routine_schema, _routine_name, _routine_arguments)
-                        in _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES
-                        and routine_owner == "cloud_admin"
-                    ):
+                    if routine_schema == "public" and routine_owner == "cloud_admin":
                         continue
                     cur.execute(
                         f"REVOKE ALL PRIVILEGES ON {routine_kind} {routine_identity} "
@@ -689,6 +713,13 @@ def _apply_app_role_grants(
                 cur,
                 target_roles,
                 principal_label="ACL postflight",
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
+            _postflight_public_schema_boundary(
+                cur,
+                target_roles,
+                principal_label="ACL postflight",
+                allow_legacy_public_usage=False,
                 allow_absent_provider_schema=allow_absent_provider_schema,
             )
             conn.commit()

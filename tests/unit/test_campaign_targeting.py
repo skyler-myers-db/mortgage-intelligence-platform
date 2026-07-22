@@ -52,6 +52,13 @@ def test_treatment_contract_fingerprint_is_canonical_and_binds_execution_fields(
     assert expected != _fingerprint(criteria={"states": ["NY"]})
     assert expected != _fingerprint(suppression_policy={"frequency_cap_days": 60})
     assert expected != _fingerprint(holdout={"method": "hash_modulo", "size_pct": 20})
+    assert expected != _fingerprint(
+        household_dedup={
+            "enabled": True,
+            "dedupe_unit": "household",
+            "primary_contact_strategy": "highest_opportunity_eligible",
+        }
+    )
 
 
 def test_bound_campaign_uses_only_immutable_t0_proof_and_live_frequency_cap() -> None:

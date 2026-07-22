@@ -16,6 +16,9 @@ from uuid import uuid4
 
 import pytest
 
+from tests.integration.live_campaign_cleanup import CampaignFixtureTracker
+from tools.cleanup_live_campaign_fixtures import run_scoped_campaign_name
+
 APP_URL = (os.environ.get("MIP_APP_URL") or "").rstrip("/")
 TOKEN = os.environ.get("MIP_BEARER_TOKEN") or os.environ.get("DATABRICKS_TOKEN") or ""
 ADMIN_TOKEN = os.environ.get("MIP_ADMIN_BEARER_TOKEN") or TOKEN
@@ -66,6 +69,27 @@ def _request(
         except json.JSONDecodeError:
             parsed = body
         return exc.code, parsed
+
+
+def _campaign_conflict_probe(*args: object, **kwargs: object) -> tuple[int, object]:
+    raise RuntimeError("live campaign conflict probe is not initialized")
+
+
+@pytest.fixture(autouse=True)
+def _archive_created_campaigns(monkeypatch: pytest.MonkeyPatch) -> object:
+    original_request = _request
+    tracker = CampaignFixtureTracker(default_token=TOKEN)
+
+    def tracked_request(*args: object, **kwargs: object) -> tuple[int, object]:
+        return tracker.request(original_request, *args, **kwargs)
+
+    def conflict_probe(*args: object, **kwargs: object) -> tuple[int, object]:
+        return tracker.conflict_probe(original_request, *args, **kwargs)
+
+    monkeypatch.setattr(__name__ + "._request", tracked_request)
+    monkeypatch.setattr(__name__ + "._campaign_conflict_probe", conflict_probe)
+    yield
+    tracker.cleanup(original_request, admin_token=ADMIN_TOKEN)
 
 
 def _assert_dev_mutation_target() -> None:
@@ -134,7 +158,7 @@ def test_live_campaign_replay_and_admin_audit_filters_agree() -> None:
     generation_mode = recommendation.get("generation_mode")
     generator_label = recommendation.get("generator_label")
     payload: dict[str, object] = {
-        "name": "Live campaign audit contract",
+        "name": run_scoped_campaign_name("Live campaign audit contract"),
         "criteria": criteria,
         "suppression_policy": {"marketing_eligibility": "Eligible only"},
         "message_variants": [
@@ -177,8 +201,10 @@ def test_live_campaign_replay_and_admin_audit_filters_agree() -> None:
     assert replay.get("audit_event_id") == audit_event_id
 
     conflicting_payload = dict(payload)
-    conflicting_payload["name"] = "Conflicting live campaign payload"
-    status, conflict = _request(
+    conflicting_payload["name"] = run_scoped_campaign_name(
+        "Conflicting live campaign payload"
+    )
+    status, conflict = _campaign_conflict_probe(
         "POST",
         "/api/portfolio/create",
         conflicting_payload,

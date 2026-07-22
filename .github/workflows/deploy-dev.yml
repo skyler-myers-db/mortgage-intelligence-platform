@@ -19,13 +19,19 @@ permissions:
   contents: read
 
 concurrency:
-  group: mip-dev-deploy
+  # Share one durable-state lane with nightly live validation: deployment may
+  # stop the App and both workflows mutate the same dev Lakebase records.
+  group: mip-dev-live-state
   cancel-in-progress: false
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    # A first install may perform two serial one-use role convergences. Each
+    # deliberately waits through a captured 65-minute OAuth/database lease
+    # plus skew, so the manual deploy gate needs room for both and for the
+    # subsequent bundle, migration, refresh, and smoke steps.
+    timeout-minutes: 240
     environment: dev
     steps:
       - uses: actions/checkout@v6

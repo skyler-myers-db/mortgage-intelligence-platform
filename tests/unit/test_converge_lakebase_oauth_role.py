@@ -7,13 +7,24 @@ from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
+from databricks.sdk.errors import NotFound
 
+from jobs.lakebase_migration_contracts import _MANAGED_EVENT_TRIGGER_CONTRACT
 from tools.databricks import converge_lakebase_oauth_role as role_convergence
+from tools.databricks import converge_lakebase_oauth_role_recovery as convergence_recovery
+from tools.databricks import lakebase_oauth_role_bootstrap_lock as bootstrap_lock
+from tools.databricks import lakebase_oauth_role_bootstrap_target as bootstrap_target
 from tools.databricks import lakebase_oauth_role_recovery as role_recovery
+from tools.databricks import lakebase_oauth_role_recovery_absent as absent_recovery
 
 
 @pytest.fixture(autouse=True)
 def _stub_ephemeral_bootstrap(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(convergence_recovery.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(bootstrap_lock.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(bootstrap_target.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(role_recovery.time, "sleep", lambda _seconds: None)
+
     def bootstrap(_client: Any, cursor: Any, **_kwargs: Any) -> None:
         state = cursor.state
         state.executed.append("EPHEMERAL_BOOTSTRAP")
@@ -54,11 +65,19 @@ class _State:
         self.function_exists = True
         self.deleted = 0
         self.executed: list[str] = []
+        self.advisory_lock_held = False
+        self.advisory_backend_pid = 6001
+        self.sessions: list[int] = []
+        self.target_database_present = True
+        self.delete_failures = 0
+        self.settings: tuple[Any, ...] = (-1, None, "********", None)
+        self.database_settings: list[tuple[Any, ...]] = []
 
 
 class _Cursor:
-    def __init__(self, state: _State) -> None:
+    def __init__(self, state: _State, *, database_name: str) -> None:
         self.state = state
+        self.database_name = database_name
         self._one: tuple[Any, ...] | None = None
         self._all: list[tuple[Any, ...]] = []
 
@@ -77,26 +96,87 @@ class _Cursor:
         if rendered.startswith("REVOKE "):
             self.state.dependencies = []
             return
-        if rendered == "SELECT current_user":
-            self._one = ("deployer@example.com",)
+        if "FROM pg_event_trigger event_trigger" in rendered:
+            self._all = [
+                (
+                    name,
+                    contract.event,
+                    contract.enabled,
+                    contract.tags,
+                    contract.event_owner,
+                    contract.function_schema,
+                    contract.function_name,
+                    contract.function_arguments,
+                    contract.function_kind,
+                    contract.function_return_type,
+                    contract.function_security_definer,
+                    contract.function_owner,
+                    contract.function_language,
+                    contract.function_volatility,
+                    contract.function_parallel_safety,
+                    contract.function_leakproof,
+                    contract.function_strict,
+                    contract.function_config,
+                    contract.function_binary,
+                    None,
+                    contract.function_source_sha256,
+                    contract.function_source_bytes,
+                )
+                for name, contract in sorted(_MANAGED_EVENT_TRIGGER_CONTRACT.items())
+            ]
+        elif rendered == "SELECT current_user, session_user":
+            self._one = ("deployer@example.com", "deployer@example.com")
+        elif rendered == "SELECT current_database()":
+            self._one = (self.database_name,)
+        elif rendered == "SELECT pg_backend_pid()":
+            self._one = (self.state.advisory_backend_pid,)
+        elif rendered == "SELECT pg_try_advisory_lock(%s)":
+            self.state.advisory_lock_held = True
+            self._one = (True,)
+        elif rendered == "SELECT pg_advisory_unlock(%s)":
+            released = self.state.advisory_lock_held
+            self.state.advisory_lock_held = False
+            self._one = (released,)
+        elif "FROM pg_locks" in rendered:
+            self._one = (1 if self.state.advisory_lock_held else 0,)
         elif "FROM pg_roles" in rendered and "rolreplication" in rendered:
             self._one = self.state.profile
+        elif rendered.startswith("SELECT oid, rolname FROM pg_roles"):
+            self._all = [(5102, "service-principal-id")] if self.state.profile is not None else []
+        elif rendered == "SELECT oid FROM pg_roles WHERE rolname = %s":
+            self._all = [(5102,)] if self.state.profile is not None else []
+        elif "SELECT rolconnlimit, rolvaliduntil, rolpassword, rolconfig" in rendered:
+            self._all = [self.state.settings] if self.state.profile else []
+        elif "FROM pg_db_role_setting setting" in rendered:
+            self._all = list(self.state.database_settings)
+        elif "FROM pg_stat_activity" in rendered:
+            self._all = [(pid, 5102, "service-principal-id") for pid in self.state.sessions]
+        elif rendered == "SELECT pg_terminate_backend(%s)":
+            pid = int(_params[0])
+            if pid in self.state.sessions:
+                self.state.sessions.remove(pid)
+            self._one = (True,)
         elif rendered.startswith("SELECT 1 FROM pg_auth_members"):
             self._one = (1,) if self.state.relationships else None
         elif "FROM pg_auth_members" in rendered:
             self._all = list(self.state.relationships)
         elif "FROM pg_shdepend" in rendered:
             self._all = list(self.state.dependencies)
+        elif rendered == "SELECT oid FROM pg_database WHERE datname = current_database()":
+            self._one = (42,)
+        elif rendered == "SELECT 1 FROM pg_database WHERE datname = %s":
+            self._one = (1,) if self.state.target_database_present else None
         elif "FROM pg_database WHERE datname" in rendered:
             self._one = (42,)
         elif "FROM pg_roles role" in rendered and "pg_shseclabel" in rendered:
-            self._all = [
-                ("databricks_auth", "id=service-principal-scim-id,type=service_principal")
-            ]
+            self._all = [("databricks_auth", "id=service-principal-scim-id,type=service_principal")]
         elif "to_regprocedure" in rendered:
             self._one = (self.state.function_exists,)
         elif rendered.startswith("CREATE EXTENSION"):
             self.state.function_exists = True
+        elif rendered.startswith("ALTER ROLE") and rendered.endswith("NOLOGIN"):
+            assert self.state.profile is not None
+            self.state.profile = (*self.state.profile[:-1], False)
 
     def fetchone(self) -> tuple[Any, ...] | None:
         return self._one
@@ -105,9 +185,25 @@ class _Cursor:
         return self._all
 
 
-class _Connection:
+class _Transaction:
     def __init__(self, state: _State) -> None:
         self.state = state
+
+    def __enter__(self) -> _Transaction:
+        self.state.executed.append("BEGIN_TRANSACTION")
+        return self
+
+    def __exit__(self, *args: object) -> None:
+        self.state.executed.append(
+            "ROLLBACK_TRANSACTION" if args and args[0] is not None else "COMMIT_TRANSACTION"
+        )
+        return None
+
+
+class _Connection:
+    def __init__(self, state: _State, *, database_name: str = "mip_app_state") -> None:
+        self.state = state
+        self.database_name = database_name
 
     def __enter__(self) -> _Connection:
         return self
@@ -116,7 +212,10 @@ class _Connection:
         return None
 
     def cursor(self) -> _Cursor:
-        return _Cursor(self.state)
+        return _Cursor(self.state, database_name=self.database_name)
+
+    def transaction(self) -> _Transaction:
+        return _Transaction(self.state)
 
 
 def _client(state: _State) -> MagicMock:
@@ -170,10 +269,29 @@ def _client(state: _State) -> MagicMock:
 
     def delete_role(_instance: str, _application_id: str) -> None:
         state.executed.append("CONTROL_PLANE_DELETE")
+        if state.delete_failures:
+            state.delete_failures -= 1
+            raise RuntimeError("injected control-plane delete failure")
         state.deleted += 1
         state.profile = None
+        state.relationships = []
+        state.dependencies = []
+        state.sessions = []
+
+    def list_roles(_instance: str) -> Any:
+        if state.profile is None:
+            return iter([])
+        return iter(
+            [
+                SimpleNamespace(
+                    name="service-principal-id",
+                    identity_type=SimpleNamespace(value=state.identity_type),
+                )
+            ]
+        )
 
     client.database.get_database_instance_role.side_effect = get_role
+    client.database.list_database_instance_roles.side_effect = list_roles
     client.database.delete_database_instance_role.side_effect = delete_role
     return client
 
@@ -185,6 +303,7 @@ def _converge(
 ) -> role_convergence.RoleConvergenceResult:
     return role_convergence.converge_role(
         _client(state),
+        account_client=MagicMock(),
         instance_name="mip-app-state",
         database_name="mip_app_state",
         application_id="service-principal-id",
@@ -192,6 +311,7 @@ def _converge(
         repair_legacy_replication=repair,
         app_name="mip-app",
         connect=lambda **_kwargs: _Connection(state),
+        allow_absent_provider_schema=True,
     )
 
 
@@ -205,6 +325,65 @@ def test_exact_login_only_role_is_idempotent() -> None:
 
     assert result == role_convergence.RoleConvergenceResult(False, False)
     assert state.deleted == 0
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        (1, None, "********", None),
+        (-1, "2027-01-01", "********", None),
+        (-1, None, "unexpected", None),
+        (-1, None, "********", ["search_path=public"]),
+    ],
+)
+def test_existing_safe_role_setting_drift_is_never_accepted(
+    settings: tuple[Any, ...],
+) -> None:
+    state = _State(role_convergence.SAFE_OAUTH_PROFILE)
+    state.settings = settings
+
+    with pytest.raises(RuntimeError, match="setting contract drifted"):
+        _converge(state)
+
+    assert state.deleted == 0
+
+
+def test_existing_safe_role_database_scoped_setting_is_never_accepted() -> None:
+    state = _State(role_convergence.SAFE_OAUTH_PROFILE)
+    state.database_settings = [(42, 5102, ["statement_timeout=0"])]
+
+    with pytest.raises(RuntimeError, match="database-scoped role settings"):
+        _converge(state)
+
+    assert state.deleted == 0
+
+
+def test_safe_role_still_runs_public_schema_quarantine_before_early_return(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    state = _State(role_convergence.SAFE_OAUTH_PROFILE)
+    calls: list[tuple[tuple[str, ...], str]] = []
+
+    def close_boundary(_cursor: Any, roles: tuple[str, ...], **kwargs: Any) -> None:
+        calls.append((roles, str(kwargs["principal_label"])))
+
+    monkeypatch.setattr(
+        role_convergence,
+        "_close_public_schema_boundary",
+        close_boundary,
+    )
+
+    result = _converge(state)
+
+    assert result == role_convergence.RoleConvergenceResult(False, False)
+    assert calls == [(("service-principal-id",), "OAuth role convergence quarantine")]
+    event_preflight = next(
+        index
+        for index, statement in enumerate(state.executed)
+        if "FROM pg_event_trigger event_trigger" in statement
+    )
+    assert event_preflight < state.executed.index("BEGIN_TRANSACTION")
+    assert state.executed.index("BEGIN_TRANSACTION") < state.executed.index("COMMIT_TRANSACTION")
 
 
 def test_exact_reviewed_routine_acl_is_idempotent() -> None:
@@ -277,12 +456,14 @@ def test_app_role_creation_requires_exact_app_name() -> None:
     with pytest.raises(RuntimeError, match="exact Databricks App name"):
         role_convergence.converge_role(
             _client(state),
+            account_client=MagicMock(),
             instance_name="mip-app-state",
             database_name="mip_app_state",
             application_id="service-principal-id",
             role_contract="app",
             repair_legacy_replication=False,
             connect=lambda **_kwargs: _Connection(state),
+            allow_absent_provider_schema=True,
         )
 
     assert state.profile is None
@@ -332,6 +513,7 @@ def test_stopped_app_precondition_rejects_wrong_target_identity_without_stop() -
     with pytest.raises(RuntimeError, match="does not match"):
         role_convergence.converge_role(
             client,
+            account_client=MagicMock(),
             instance_name="mip-app-state",
             database_name="mip_app_state",
             application_id="service-principal-id",
@@ -339,6 +521,7 @@ def test_stopped_app_precondition_rejects_wrong_target_identity_without_stop() -
             repair_legacy_replication=True,
             app_name="mip-app",
             connect=lambda **_kwargs: _Connection(state),
+            allow_absent_provider_schema=True,
         )
 
     assert state.deleted == 0
@@ -350,6 +533,7 @@ def test_running_app_is_stopped_and_identity_pinned_before_legacy_repair() -> No
 
     result = role_convergence.converge_role(
         client,
+        account_client=MagicMock(),
         instance_name="mip-app-state",
         database_name="mip_app_state",
         application_id="service-principal-id",
@@ -358,6 +542,7 @@ def test_running_app_is_stopped_and_identity_pinned_before_legacy_repair() -> No
         app_name="mip-app",
         stop_app_for_mutation=True,
         connect=lambda **_kwargs: _Connection(state),
+        allow_absent_provider_schema=True,
     )
 
     assert result == role_convergence.RoleConvergenceResult(False, True)
@@ -373,6 +558,7 @@ def test_stop_for_mutation_rejects_app_identity_drift() -> None:
     with pytest.raises(RuntimeError, match="does not match"):
         role_convergence.converge_role(
             client,
+            account_client=MagicMock(),
             instance_name="mip-app-state",
             database_name="mip_app_state",
             application_id="service-principal-id",
@@ -381,6 +567,7 @@ def test_stop_for_mutation_rejects_app_identity_drift() -> None:
             app_name="mip-app",
             stop_app_for_mutation=True,
             connect=lambda **_kwargs: _Connection(state),
+            allow_absent_provider_schema=True,
         )
 
     assert state.deleted == 0
@@ -394,6 +581,7 @@ def test_stop_for_mutation_rejects_app_scim_identity_drift() -> None:
     with pytest.raises(RuntimeError, match="does not match"):
         role_convergence.converge_role(
             client,
+            account_client=MagicMock(),
             instance_name="mip-app-state",
             database_name="mip_app_state",
             application_id="service-principal-id",
@@ -402,6 +590,7 @@ def test_stop_for_mutation_rejects_app_scim_identity_drift() -> None:
             app_name="mip-app",
             stop_app_for_mutation=True,
             connect=lambda **_kwargs: _Connection(state),
+            allow_absent_provider_schema=True,
         )
 
     assert state.deleted == 0
@@ -420,9 +609,7 @@ def test_legacy_replication_profile_fails_without_explicit_repair() -> None:
 def test_non_acl_dependency_rejects_replacement(dependency_kind: str) -> None:
     state = _State(
         role_convergence.LEGACY_API_OAUTH_PROFILE,
-        dependencies=[
-            (42, "pg_class", 0, dependency_kind, "mip_app", "campaigns", "", "r")
-        ],
+        dependencies=[(42, "pg_class", 0, dependency_kind, "mip_app", "campaigns", "", "r")],
     )
 
     with pytest.raises(RuntimeError, match="unreviewed ACL or shared dependencies"):
@@ -493,9 +680,7 @@ def test_sql_creation_must_produce_exact_safe_profile() -> None:
 def test_bootstrap_rejects_unreviewed_creator_membership_shape() -> None:
     state = _State(
         None,
-        create_relationships=[
-            ("service-principal-id", "other-identity", True, False, False)
-        ],
+        create_relationships=[("service-principal-id", "other-identity", True, False, False)],
     )
 
     with pytest.raises(RuntimeError, match="unreviewed bootstrap membership"):
@@ -561,56 +746,73 @@ def test_recovery_only_clean_workspace_never_opens_a_database_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(role_recovery.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(absent_recovery, "_ABSENCE_STABILITY_SECONDS", 0.0)
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "test-signing-key")
     client = MagicMock()
     client.service_principals.list.side_effect = lambda **_kwargs: iter([])
     client.database.list_database_instances.side_effect = lambda: iter([])
+    client.database.get_database_instance.side_effect = NotFound("absent")
 
     role_convergence.recover_role_bootstrap(
         client,
+        account_client=MagicMock(),
         instance_name="mip-app-state",
         database_name="mip_app_state",
         application_id="service-principal-id",
         connect=lambda **_kwargs: pytest.fail("clean workspace attempted a DB connection"),
     )
 
-    assert client.database.list_database_instances.call_count == 3
-    client.database.get_database_instance.assert_not_called()
+    assert client.database.get_database_instance.call_count == 2
+    client.database.list_database_instances.assert_not_called()
 
 
-def test_recovery_only_instance_present_database_absent_never_blocks_bundle_retry(
+def test_recovery_only_database_absent_uses_canonical_admin_connection(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class MissingDatabaseError(RuntimeError):
         sqlstate = "3D000"
 
     monkeypatch.setattr(role_recovery.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(absent_recovery, "_ABSENCE_STABILITY_SECONDS", 0.0)
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", "test-signing-key")
     client = MagicMock()
     client.service_principals.list.side_effect = lambda **_kwargs: iter([])
     client.database.list_database_instances.side_effect = lambda: iter(
         [SimpleNamespace(name="mip-app-state")]
     )
     client.database.get_database_instance.return_value = SimpleNamespace(
-        read_write_dns="instance.database.cloud.databricks.com"
+        name="mip-app-state",
+        read_write_dns="instance.database.cloud.databricks.com",
     )
     client.database.generate_database_credential.return_value = SimpleNamespace(token="token")
     client.current_user.me.return_value = SimpleNamespace(
-        application_id="deployment-service-principal",
-        user_name=None,
+        application_id=None,
+        user_name="deployer@example.com",
     )
     connection_attempts = 0
+    state = _State(None)
+    state.target_database_present = False
 
-    def connect(**_kwargs: Any) -> Any:
+    def connect(**kwargs: Any) -> Any:
         nonlocal connection_attempts
         connection_attempts += 1
+        if kwargs["dbname"] == "databricks_postgres":
+            return _Connection(state, database_name="databricks_postgres")
         raise MissingDatabaseError("database does not exist")
 
     role_convergence.recover_role_bootstrap(
         client,
+        account_client=MagicMock(),
         instance_name="mip-app-state",
         database_name="mip_app_state",
         application_id="service-principal-id",
         connect=connect,
     )
 
-    assert connection_attempts == 3
-    assert client.database.list_database_instances.call_count == 1
+    assert connection_attempts == 4
+    assert client.database.get_database_instance.call_count == 3
+    assert all(
+        call.args == ("mip-app-state",)
+        for call in client.database.get_database_instance.call_args_list
+    )
+    client.database.list_database_instances.assert_not_called()

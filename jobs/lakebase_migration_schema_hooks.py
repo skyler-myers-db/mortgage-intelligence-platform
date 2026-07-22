@@ -86,9 +86,7 @@ def _postflight_oauth_role_function_contract(
     function_config = None if row[12] is None else tuple(str(item) for item in row[12])
     function_acl = None if row[21] is None else tuple(sorted(str(item) for item in row[21]))
     if function_acl not in _MANAGED_OAUTH_ROLE_FUNCTION_ACLS:
-        raise RuntimeError(
-            f"Lakebase {principal_label} OAuth role-function contract drifted"
-        )
+        raise RuntimeError(f"Lakebase {principal_label} OAuth role-function contract drifted")
     actual = (*row[:12], function_config, *row[13:21], function_acl)
     expected = (
         "public",
@@ -115,9 +113,7 @@ def _postflight_oauth_role_function_contract(
         function_acl,
     )
     if actual != expected:
-        raise RuntimeError(
-            f"Lakebase {principal_label} OAuth role-function contract drifted"
-        )
+        raise RuntimeError(f"Lakebase {principal_label} OAuth role-function contract drifted")
 
 
 def _schema_hook_function_calls(expression: object) -> set[str]:
@@ -204,12 +200,14 @@ def _preflight_executable_schema_hooks(
             FROM pg_rewrite rewrite_rule
             JOIN pg_class relation ON relation.oid = rewrite_rule.ev_class
             JOIN pg_namespace namespace ON namespace.oid = relation.relnamespace
+            JOIN pg_roles relation_owner ON relation_owner.oid = relation.relowner
             WHERE namespace.nspname NOT IN ('pg_catalog', 'information_schema')
               AND namespace.nspname !~ '^pg_'
               AND namespace.nspname <> '__db_system'
               AND NOT (
                   rewrite_rule.rulename = '_RETURN'
-                  AND relation.relkind IN ('v', 'm')
+                  AND namespace.nspname = 'public'
+                  AND relation_owner.rolname = 'cloud_admin'
               )
 
             UNION ALL
@@ -421,9 +419,11 @@ def _preflight_executable_schema_hooks(
             )
             continue
 
-        # No Module 0 migration defines these ambient execution surfaces. View
-        # _RETURN rules are excluded in SQL because they are structural, not
-        # DML rewrite hooks.
+        # No Module 0 migration defines these ambient execution surfaces.
+        # Structural view _RETURN rules are included deliberately because they
+        # can retain OID-bound provider dependencies. Only cloud_admin-owned
+        # public views are excluded after the public/provider boundary has
+        # already denied lookup and rejected direct target ACLs.
         if kind in {"generated_expression", "rewrite_rule", "row_policy"}:
             unexpected.append(row)
             continue
@@ -786,12 +786,7 @@ def _postflight_event_trigger_inventory(
         for name in expected_names & actual_names
         if actual_acls[name] not in _MANAGED_EVENT_TRIGGER_FUNCTION_ACLS
     )
-    if (
-        expected_names != actual_names
-        or duplicate_names
-        or drifted
-        or forbidden_acls
-    ):
+    if expected_names != actual_names or duplicate_names or drifted or forbidden_acls:
         raise RuntimeError(
             f"Lakebase {principal_label} global event-trigger inventory mismatch: "
             f"missing={sorted(expected_names - actual_names)}, "

@@ -1840,7 +1840,7 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('ask-genie: native Conversation API turn renders governed proof and feedback', async ({ page }) => {
-    test.setTimeout(150_000);
+    test.setTimeout(420_000);
 
     await gotoApp(page, '/ask-genie');
 
@@ -1893,6 +1893,68 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     await expect(proofDrawer.locator('.evidence-chip').first()).toBeVisible();
     await expect(proofDrawer.locator('pre.genie-proof__sql')).toContainText(/borrower_360/i);
     await proofDrawer.getByRole('button', { name: /Close Genie proof/i }).click();
+
+    const firstConversationId = payload.conversation_id!.trim();
+    const followUpQuestion = payload.follow_up_questions![0].trim();
+    // Reload to prove the ordinary composer path restores the server-owned
+    // conversation from browser state. The former regression passed an ID
+    // only from answer-surface buttons, while typed/sample questions silently
+    // started a new thread after restoration.
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    const restoredQuestion = page.locator('textarea[aria-label="Ask Genie — question"]');
+    await expect(restoredQuestion).toBeVisible();
+    await restoredQuestion.fill(followUpQuestion);
+    const followUpResponsePromise = page.waitForResponse((candidate) => (
+      candidate.request().method() === 'POST'
+      && /\/api\/(?:v1\/)?genie\/message$/.test(candidate.url())
+    ), { timeout: 120_000 });
+    await page.getByRole('button', { name: /^Ask Genie$/i }).first().click();
+    const followUpResponse = await followUpResponsePromise;
+    const followUpRequest = followUpResponse.request().postDataJSON() as {
+      question?: string;
+      conversation_id?: string | null;
+    };
+    expect(followUpRequest.question).toBe(followUpQuestion);
+    expect(
+      followUpRequest.conversation_id,
+      'live follow-up POST must carry the first native conversation id',
+    ).toBe(firstConversationId);
+    expect(followUpResponse.status(), 'native Genie follow-up returned non-200').toBe(200);
+    const followUpPayload = await followUpResponse.json() as LiveGeniePayload;
+    expect(followUpPayload.source, 'follow-up must remain on the native Genie tier').toBe('genie');
+    expect(followUpPayload.conversation_id).toBe(firstConversationId);
+    expectLiveGenieTurn(followUpPayload, 'standalone native Genie follow-up');
+
+    const followUpSurface = page.locator('.surface.surface--inset', {
+      has: page.getByLabel('Answer source: Databricks Genie Conversation API'),
+    }).last();
+    await expectLiveGenieUi(
+      followUpSurface,
+      followUpPayload,
+      'standalone native Genie follow-up',
+    );
+
+    const sampleGroup = page.getByRole('group', { name: 'Suggested Genie questions' });
+    const sampleButton = sampleGroup.getByRole('button').first();
+    await expect(sampleButton).toBeVisible();
+    const sampleQuestion = (await sampleButton.textContent())?.trim();
+    expect(sampleQuestion, 'restored composer sample question is empty').toBeTruthy();
+    const sampleResponsePromise = page.waitForResponse((candidate) => (
+      candidate.request().method() === 'POST'
+      && /\/api\/(?:v1\/)?genie\/message$/.test(candidate.url())
+    ), { timeout: 120_000 });
+    await sampleButton.click();
+    const sampleResponse = await sampleResponsePromise;
+    const sampleRequest = sampleResponse.request().postDataJSON() as {
+      question?: string;
+      conversation_id?: string | null;
+    };
+    expect(sampleRequest.question).toBe(sampleQuestion);
+    expect(
+      sampleRequest.conversation_id,
+      'live sample POST must keep the restored native conversation id',
+    ).toBe(firstConversationId);
+    expect(sampleResponse.status(), 'restored Genie sample returned non-200').toBe(200);
   });
 
   test('ask-genie: listed days-on-market prompt returns trusted app proof', async ({ page }) => {

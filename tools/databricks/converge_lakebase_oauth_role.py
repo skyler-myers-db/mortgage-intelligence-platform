@@ -1,12 +1,4 @@
-"""Converge a Lakebase OAuth service-principal role without REPLICATION.
-
-Lakebase's Database Instances role-create API currently creates OAuth roles with
-``rolreplication=true`` even when every API-exposed attribute is disabled.  The
-documented ``databricks_create_role`` SQL function creates the same OAuth role
-with LOGIN only.  This helper uses that SQL path and can repair only the exact
-legacy API-created profile after proving that the role owns nothing and has no
-role relationships.
-"""
+"""Converge exact Lakebase OAuth roles to LOGIN-only without REPLICATION."""
 
 from __future__ import annotations
 
@@ -25,6 +17,12 @@ from jobs.lakebase_migration_contracts import (
     _APP_ROLE_SEQUENCE_PRIVILEGES,
     _APP_ROLE_TABLE_PRIVILEGES,
 )
+from jobs.lakebase_migration_provider_plane import (
+    _close_public_schema_boundary,
+    _postflight_no_pre_boundary_sessions,
+    _postflight_public_schema_boundary,
+)
+from jobs.lakebase_migration_schema_hooks import _postflight_event_trigger_inventory
 from tools.databricks.lakebase_oauth_role_bootstrap import (
     LEGACY_API_OAUTH_PROFILE,
     SAFE_OAUTH_PROFILE,
@@ -38,12 +36,22 @@ from tools.databricks.lakebase_oauth_role_bootstrap import (
 from tools.databricks.lakebase_oauth_role_bootstrap import (
     read_profile as _read_profile,
 )
-from tools.databricks.lakebase_oauth_role_recovery import (
-    recover_bootstrap_principals_for_absent_instance as _recover_absent_instance_bootstrap,
+from tools.databricks.lakebase_oauth_role_bootstrap_target import (
+    _assert_target_role_settings,
+    delete_fenced_target_role,
+)
+from tools.databricks.lakebase_oauth_role_profile import (
+    assert_service_principal_metadata as _assert_service_principal_metadata,
+)
+from tools.databricks.lakebase_oauth_role_profile import (
+    resolve_service_principal_id as _resolve_service_principal_id,
 )
 from tools.databricks.lakebase_oauth_role_recovery import (
     recover_stale_bootstrap_identities as _recover_stale_bootstrap_identities,
 )
+
+_SDK_HTTP_TIMEOUT_SECONDS = 30
+_SDK_RETRY_TIMEOUT_SECONDS = 30
 
 
 @dataclass(frozen=True)
@@ -53,50 +61,7 @@ class RoleConvergenceResult:
 
 
 class RoleRelationshipMismatchError(RuntimeError):
-    """Raised when an OAuth role has an unreviewed membership edge."""
-
-
-def _diag(message: str) -> None:
-    print(f"[mip-lakebase-oauth-role] {message}")
-
-
-def _identity_type_value(role: Any) -> str:
-    value = getattr(role, "identity_type", None)
-    return str(getattr(value, "value", value) or "")
-
-
-def _assert_service_principal_metadata(
-    client: Any,
-    *,
-    instance_name: str,
-    application_id: str,
-) -> None:
-    role = client.database.get_database_instance_role(instance_name, application_id)
-    identity_type = _identity_type_value(role)
-    if identity_type != "SERVICE_PRINCIPAL":
-        raise RuntimeError(
-            f"Lakebase role {application_id!r} has identity_type={identity_type or 'absent'!r}; "
-            "only a SERVICE_PRINCIPAL OAuth role is permitted"
-        )
-
-
-def _resolve_service_principal_id(client: Any, application_id: str) -> str:
-    principals = [
-        principal
-        for principal in client.service_principals.list(
-            filter=f'applicationId eq "{application_id}"'
-        )
-        if str(getattr(principal, "application_id", "") or "") == application_id
-    ]
-    if len(principals) != 1:
-        raise RuntimeError(
-            f"expected one exact Databricks service principal for {application_id!r}; "
-            f"found {len(principals)}"
-        )
-    principal_id = str(getattr(principals[0], "id", "") or "").strip()
-    if not principal_id:
-        raise RuntimeError("Databricks service principal has no immutable SCIM id")
-    return principal_id
+    pass
 
 
 def _reviewed_acl_objects(role_contract: str) -> tuple[set[str], set[str], set[tuple[str, str]]]:
@@ -104,16 +69,10 @@ def _reviewed_acl_objects(role_contract: str) -> tuple[set[str], set[str], set[t
         return {"ai_gateway_proof_ledger"}, set(), set()
     if role_contract != "app":
         raise ValueError(f"unsupported role contract {role_contract!r}")
-    tables = {
-        name for name, privileges in _APP_ROLE_TABLE_PRIVILEGES.items() if privileges
-    }
-    sequences = {
-        name for name, privileges in _APP_ROLE_SEQUENCE_PRIVILEGES.items() if privileges
-    }
+    tables = {name for name, privileges in _APP_ROLE_TABLE_PRIVILEGES.items() if privileges}
+    sequences = {name for name, privileges in _APP_ROLE_SEQUENCE_PRIVILEGES.items() if privileges}
     routines = {
-        identity
-        for identity, privileges in _APP_ROLE_ROUTINE_PRIVILEGES.items()
-        if privileges
+        identity for identity, privileges in _APP_ROLE_ROUTINE_PRIVILEGES.items() if privileges
     }
     return tables, sequences, routines
 
@@ -210,16 +169,27 @@ def _revoke_reviewed_acl_dependencies(
     application_id: str,
     database_name: str,
     role_contract: str,
+    allow_absent_managed_event_triggers: bool,
 ) -> None:
-    """Remove only the dependency whitelist already proved safe to rotate."""
-
     tables, sequences, routines = _reviewed_acl_objects(role_contract)
     role = psql.Identifier(application_id)
+    _postflight_event_trigger_inventory(
+        cursor,
+        application_id,
+        principal_label="OAuth role database ACL REVOKE",
+        allow_absent_managed=allow_absent_managed_event_triggers,
+    )
     cursor.execute(
         psql.SQL("REVOKE CONNECT ON DATABASE {} FROM {}").format(
             psql.Identifier(database_name),
             role,
         )
+    )
+    _postflight_event_trigger_inventory(
+        cursor,
+        application_id,
+        principal_label="OAuth role schema ACL REVOKE",
+        allow_absent_managed=allow_absent_managed_event_triggers,
     )
     cursor.execute(
         psql.SQL("REVOKE USAGE ON SCHEMA {} FROM {}").format(
@@ -228,6 +198,12 @@ def _revoke_reviewed_acl_dependencies(
         )
     )
     for table in sorted(tables):
+        _postflight_event_trigger_inventory(
+            cursor,
+            application_id,
+            principal_label="OAuth role table ACL REVOKE",
+            allow_absent_managed=allow_absent_managed_event_triggers,
+        )
         cursor.execute(
             psql.SQL("REVOKE ALL PRIVILEGES ON TABLE {}.{} FROM {}").format(
                 psql.Identifier("mip_app"),
@@ -236,6 +212,12 @@ def _revoke_reviewed_acl_dependencies(
             )
         )
     for sequence in sorted(sequences):
+        _postflight_event_trigger_inventory(
+            cursor,
+            application_id,
+            principal_label="OAuth role sequence ACL REVOKE",
+            allow_absent_managed=allow_absent_managed_event_triggers,
+        )
         cursor.execute(
             psql.SQL("REVOKE ALL PRIVILEGES ON SEQUENCE {}.{} FROM {}").format(
                 psql.Identifier("mip_app"),
@@ -244,6 +226,12 @@ def _revoke_reviewed_acl_dependencies(
             )
         )
     for name, arguments in sorted(routines):
+        _postflight_event_trigger_inventory(
+            cursor,
+            application_id,
+            principal_label="OAuth role function ACL REVOKE",
+            allow_absent_managed=allow_absent_managed_event_triggers,
+        )
         cursor.execute(
             psql.SQL("REVOKE ALL PRIVILEGES ON FUNCTION {}.{}({}) FROM {}").format(
                 psql.Identifier("mip_app"),
@@ -313,15 +301,11 @@ def _assert_app_is_stopped(
     application_id: str,
     service_principal_id: str,
 ) -> None:
-    """Require an immutable App compute boundary before its role can change."""
-
     reviewed_name = str(app_name or "").strip()
     if not reviewed_name:
         raise RuntimeError("App role mutation requires the exact Databricks App name")
     app = client.apps.get(reviewed_name)
-    actual_client_id = str(
-        getattr(app, "service_principal_client_id", "") or ""
-    ).strip()
+    actual_client_id = str(getattr(app, "service_principal_client_id", "") or "").strip()
     actual_scim_id = str(getattr(app, "service_principal_id", "") or "").strip()
     if actual_client_id != application_id or actual_scim_id != service_principal_id:
         raise RuntimeError("Databricks App identity does not match the OAuth role mutation target")
@@ -341,8 +325,6 @@ def _stop_app_for_role_mutation(
     application_id: str,
     service_principal_id: str,
 ) -> None:
-    """Stop the exact App before changing the OAuth role it authenticates as."""
-
     reviewed_name = str(app_name or "").strip()
     if not reviewed_name:
         raise RuntimeError("App role mutation requires the exact Databricks App name")
@@ -350,11 +332,7 @@ def _stop_app_for_role_mutation(
     app_id = str(getattr(app, "id", "") or "").strip()
     client_id = str(getattr(app, "service_principal_client_id", "") or "").strip()
     scim_id = str(getattr(app, "service_principal_id", "") or "").strip()
-    if (
-        not app_id
-        or client_id != application_id
-        or scim_id != service_principal_id
-    ):
+    if not app_id or client_id != application_id or scim_id != service_principal_id:
         raise RuntimeError("Databricks App identity does not match the OAuth role mutation target")
 
     from tools.databricks.stop_app_fail_closed import stop_app_fail_closed
@@ -425,14 +403,19 @@ def _connection_kwargs(
 
 
 def _assert_connection_identity(cursor: Any, accepted_users: set[str]) -> str:
-    cursor.execute("SELECT current_user")
+    cursor.execute("SELECT current_user, session_user")
     row = cursor.fetchone()
-    current_user = str(row[0] if row else "")
-    if current_user not in accepted_users:
+    identities = tuple(str(value or "") for value in row or ())
+    if (
+        len(identities) != 2
+        or identities[0] != identities[1]
+        or not all(value in accepted_users for value in identities)
+    ):
         raise RuntimeError(
-            f"Lakebase authenticated as unexpected identity {current_user!r}; refusing role mutation"
+            f"Lakebase authenticated as unexpected identities {identities!r}; "
+            "refusing role mutation"
         )
-    return current_user
+    return identities[0]
 
 
 def _wait_for_role_metadata(
@@ -456,7 +439,9 @@ def _wait_for_role_metadata(
             if attempt + 1 < attempts:
                 time.sleep(1)
     assert last_error is not None
-    raise RuntimeError("created Lakebase role did not converge in the control plane") from last_error
+    raise RuntimeError(
+        "created Lakebase role did not converge in the control plane"
+    ) from last_error
 
 
 def _wait_for_profile(
@@ -478,9 +463,10 @@ def _wait_for_profile(
     )
 
 
-def converge_role(
+def _converge_role_locked(
     client: Any,
     *,
+    account_client: Any,
     instance_name: str,
     database_name: str,
     application_id: str,
@@ -490,8 +476,14 @@ def converge_role(
     stop_app_for_mutation: bool = False,
     connect: Callable[..., Any] = psycopg.connect,
     workspace_client_factory: Callable[..., Any] | None = None,
+    allow_absent_provider_schema: bool = False,
+    bootstrap_lock_cursor: Any,
+    bootstrap_lock_key: Any,
 ) -> RoleConvergenceResult:
-    """Create or validate an exact LOGIN-only OAuth service-principal role."""
+    from tools.databricks.lakebase_oauth_role_bootstrap_lock import (
+        assert_bootstrap_lock_held,
+    )
+
     application_id = application_id.strip()
     if not application_id:
         raise ValueError("application_id is required")
@@ -506,14 +498,51 @@ def converge_role(
 
     with connect(**connection_kwargs) as connection, connection.cursor() as cursor:
         creator_role = _assert_connection_identity(cursor, accepted_users)
+        assert_bootstrap_lock_held(
+            bootstrap_lock_cursor,
+            lock_key=bootstrap_lock_key,
+        )
+        _postflight_event_trigger_inventory(
+            cursor,
+            application_id,
+            principal_label="OAuth role convergence preflight",
+            allow_absent_managed=allow_absent_provider_schema,
+        )
         _recover_stale_bootstrap_identities(
             client,
             cursor,
+            account_client=account_client,
             instance_name=instance_name,
             database_name=database_name,
             target_application_id=application_id,
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
+            expected_executor=creator_role,
         )
         profile = _read_profile(cursor, application_id)
+        target_roles = (application_id,) if profile is not None else ()
+        _postflight_event_trigger_inventory(
+            cursor,
+            application_id,
+            principal_label="OAuth role public-schema cutover",
+            allow_absent_managed=allow_absent_provider_schema,
+        )
+        with connection.transaction():
+            _close_public_schema_boundary(
+                cursor,
+                target_roles,
+                principal_label="OAuth role convergence quarantine",
+                allow_absent_provider_schema=allow_absent_provider_schema,
+                allow_empty_target_roles=profile is None,
+            )
+        if target_roles:
+            _postflight_no_pre_boundary_sessions(
+                cursor,
+                target_roles,
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
+        if profile is not None:
+            _assert_target_role_settings(cursor, application_id)
         if profile == SAFE_OAUTH_PROFILE:
             _assert_service_principal_metadata(
                 client,
@@ -563,21 +592,34 @@ def converge_role(
             _create_login_only_role(
                 client,
                 cursor,
+                account_client=account_client,
                 instance_name=instance_name,
                 database_name=database_name,
                 application_id=application_id,
                 service_principal_id=service_principal_id,
                 connect=connect,
                 workspace_client_factory=workspace_client_factory,
+                bootstrap_lock_cursor=bootstrap_lock_cursor,
+                bootstrap_lock_key=bootstrap_lock_key,
             )
             _wait_for_role_metadata(
                 client,
                 instance_name=instance_name,
                 application_id=application_id,
             )
+            _postflight_public_schema_boundary(
+                cursor,
+                (application_id,),
+                principal_label="created OAuth role quarantine",
+                allow_legacy_public_usage=False,
+                allow_absent_provider_schema=allow_absent_provider_schema,
+            )
             return RoleConvergenceResult(True, False)
 
-        if profile not in {SAFE_OAUTH_PROFILE, LEGACY_API_OAUTH_PROFILE}:
+        if profile not in {
+            SAFE_OAUTH_PROFILE,
+            LEGACY_API_OAUTH_PROFILE,
+        }:
             raise RuntimeError(
                 f"Lakebase role {application_id!r} has unreviewed attributes {profile!r}; "
                 "refusing mutation"
@@ -626,85 +668,127 @@ def converge_role(
             application_id=application_id,
             database_name=database_name,
             role_contract=role_contract,
+            allow_absent_managed_event_triggers=allow_absent_provider_schema,
         )
 
-        client.database.delete_database_instance_role(instance_name, application_id)
-        _wait_for_profile(
+        delete_fenced_target_role(
+            client,
             cursor,
+            instance_name=instance_name,
             application_id=application_id,
-            expected=None,
+            service_principal_id=service_principal_id,
+            allowed_creator_roles=frozenset({creator_role}),
+            expected_executor=creator_role,
+            expected_profile=profile,
+            allow_absent_managed_event_triggers=allow_absent_provider_schema,
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
         )
         _create_login_only_role(
             client,
             cursor,
+            account_client=account_client,
             instance_name=instance_name,
             database_name=database_name,
             application_id=application_id,
             service_principal_id=service_principal_id,
             connect=connect,
             workspace_client_factory=workspace_client_factory,
+            bootstrap_lock_cursor=bootstrap_lock_cursor,
+            bootstrap_lock_key=bootstrap_lock_key,
         )
         _wait_for_role_metadata(
             client,
             instance_name=instance_name,
             application_id=application_id,
         )
+        _postflight_public_schema_boundary(
+            cursor,
+            (application_id,),
+            principal_label="replaced OAuth role quarantine",
+            allow_legacy_public_usage=False,
+            allow_absent_provider_schema=allow_absent_provider_schema,
+        )
         return RoleConvergenceResult(False, True)
+
+
+def converge_role(
+    client: Any,
+    *,
+    account_client: Any,
+    instance_name: str,
+    database_name: str,
+    application_id: str,
+    role_contract: str,
+    repair_legacy_replication: bool,
+    app_name: str | None = None,
+    stop_app_for_mutation: bool = False,
+    connect: Callable[..., Any] = psycopg.connect,
+    workspace_client_factory: Callable[..., Any] | None = None,
+    allow_absent_provider_schema: bool = False,
+) -> RoleConvergenceResult:
+    from tools.databricks.lakebase_oauth_role_bootstrap_lock import (
+        acquire_bootstrap_lock,
+        release_bootstrap_lock,
+    )
+
+    application_id = application_id.strip()
+    if not application_id:
+        raise ValueError("application_id is required")
+    admin_kwargs, accepted_users = _connection_kwargs(
+        client,
+        instance_name=instance_name,
+        database_name="databricks_postgres",
+    )
+    with connect(**admin_kwargs) as lock_connection, lock_connection.cursor() as lock_cursor:
+        _assert_connection_identity(lock_cursor, accepted_users)
+        lock_key = acquire_bootstrap_lock(
+            lock_cursor,
+            instance_name=instance_name,
+            target_application_id=application_id,
+        )
+        try:
+            return _converge_role_locked(
+                client,
+                account_client=account_client,
+                instance_name=instance_name,
+                database_name=database_name,
+                application_id=application_id,
+                role_contract=role_contract,
+                repair_legacy_replication=repair_legacy_replication,
+                app_name=app_name,
+                stop_app_for_mutation=stop_app_for_mutation,
+                connect=connect,
+                workspace_client_factory=workspace_client_factory,
+                allow_absent_provider_schema=allow_absent_provider_schema,
+                bootstrap_lock_cursor=lock_cursor,
+                bootstrap_lock_key=lock_key,
+            )
+        finally:
+            release_bootstrap_lock(lock_cursor, lock_key=lock_key)
 
 
 def recover_role_bootstrap(
     client: Any,
     *,
+    account_client: Any,
     instance_name: str,
     database_name: str,
     application_id: str,
     connect: Callable[..., Any] = psycopg.connect,
 ) -> None:
-    """Recover only the deterministic one-use creator for a target identity."""
-
-    application_id = application_id.strip()
-    if not application_id:
-        raise ValueError("application_id is required")
-    if _recover_absent_instance_bootstrap(
-        client,
-        instance_name=instance_name,
-        database_name=database_name,
-        target_application_id=application_id,
-    ):
-        return
-    connection_kwargs, accepted_users = _connection_kwargs(
-        client,
-        instance_name=instance_name,
-        database_name=database_name,
+    from tools.databricks.converge_lakebase_oauth_role_recovery import (
+        recover_role_bootstrap as recover,
     )
 
-    def target_database_is_absent() -> bool:
-        try:
-            with connect(**connection_kwargs):
-                return False
-        except Exception as exc:
-            if getattr(exc, "sqlstate", None) == "3D000":
-                return True
-            raise
-
-    if _recover_absent_instance_bootstrap(
+    recover(
         client,
+        account_client=account_client,
         instance_name=instance_name,
         database_name=database_name,
-        target_application_id=application_id,
-        resource_absence_probe=target_database_is_absent,
-        recover_control_plane_roles=True,
-    ):
-        return
-    with connect(**connection_kwargs) as connection, connection.cursor() as cursor:
-        _assert_connection_identity(cursor, accepted_users)
-        _recover_stale_bootstrap_identities(
-            client,
-            cursor,
-            instance_name=instance_name,
-            database_name=database_name,
-            target_application_id=application_id,
-        )
+        application_id=application_id,
+        connect=connect,
+    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -741,20 +825,32 @@ def _build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
     from databricks.sdk import WorkspaceClient
+    from databricks.sdk.config import Config
+    from tools.databricks.lakebase_oauth_role_account_principal import (
+        account_client_from_env,
+    )
 
-    client = WorkspaceClient()
+    client = WorkspaceClient(
+        config=Config(
+            http_timeout_seconds=_SDK_HTTP_TIMEOUT_SECONDS,
+            retry_timeout_seconds=_SDK_RETRY_TIMEOUT_SECONDS,
+        )
+    )
+    account_client = account_client_from_env()
     if args.recover_bootstrap_only:
         recover_role_bootstrap(
             client,
+            account_client=account_client,
             instance_name=args.lakebase_instance,
             database_name=args.lakebase_database,
             application_id=args.application_id,
         )
-        _diag("one-use bootstrap recovery passed")
+        print("[mip-lakebase-oauth-role] one-use bootstrap recovery passed")
         return 0
 
     result = converge_role(
         client,
+        account_client=account_client,
         instance_name=args.lakebase_instance,
         database_name=args.lakebase_database,
         application_id=args.application_id,
@@ -770,7 +866,7 @@ def main(argv: list[str] | None = None) -> int:
         if result.created
         else "already-login-only"
     )
-    _diag(f"role convergence passed state={state}")
+    print(f"[mip-lakebase-oauth-role] role convergence passed state={state}")
     return 0
 
 

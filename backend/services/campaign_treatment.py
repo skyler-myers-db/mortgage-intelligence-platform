@@ -94,6 +94,7 @@ SET treatment_materialization_id = %(new_materialization_id)s::uuid,
     treatment_build_lease_until = now() + interval '{_BUILD_LEASE_MINUTES} minutes',
     updated_at = now()
 WHERE campaign_id = %(campaign_id)s::uuid
+  AND status = 'draft'
   AND treatment_state = 'building'
   AND treatment_materialization_id = %(materialization_id)s::uuid
   AND treatment_contract_fingerprint = %(contract_fingerprint)s

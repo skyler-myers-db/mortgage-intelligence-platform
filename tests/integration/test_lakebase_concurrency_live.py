@@ -18,6 +18,8 @@ from backend.schemas.portfolio import (
     PortfolioCreateRequest,
 )
 from tests.fixtures.live_campaign_lifecycle import approve_campaign_for_outreach
+from tests.integration.live_campaign_cleanup import CampaignFixtureTracker
+from tools.cleanup_live_campaign_fixtures import run_scoped_campaign_name
 
 APP_URL = (os.environ.get("MIP_APP_URL") or "").rstrip("/")
 TOKEN = os.environ.get("MIP_BEARER_TOKEN") or ""
@@ -73,6 +75,19 @@ def _request(
         except json.JSONDecodeError:
             parsed = body
         return exc.code, parsed
+
+
+@pytest.fixture(autouse=True)
+def _archive_created_campaigns(monkeypatch: pytest.MonkeyPatch) -> object:
+    original_request = _request
+    tracker = CampaignFixtureTracker(default_token=TOKEN)
+
+    def tracked_request(*args: object, **kwargs: object) -> tuple[int, object]:
+        return tracker.request(original_request, *args, **kwargs)
+
+    monkeypatch.setattr(__name__ + "._request", tracked_request)
+    yield
+    tracker.cleanup(original_request, admin_token=ADMIN_TOKEN)
 
 
 def _required_string(payload: dict[str, object], field: str) -> str:
@@ -184,7 +199,7 @@ def _create_campaign() -> tuple[str, str, str, list[str]]:
     assert recommendation_status == 200, raw_recommendation
     assert isinstance(raw_recommendation, dict), raw_recommendation
     payload, recommendation = _reviewed_campaign_create_payload(
-        name="Live Lakebase concurrency contract",
+        name=run_scoped_campaign_name("Live Lakebase concurrency contract"),
         criteria=criteria,
         raw_recommendation=raw_recommendation,
     )

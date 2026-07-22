@@ -7,7 +7,6 @@ from jobs.lakebase_migration_contracts import (
     _COLUMN_PRIVILEGE_NAMES,
     _MANAGED_OAUTH_ROLE_ATTRIBUTE_NAMES,
     _MANAGED_OAUTH_ROLE_ATTRIBUTE_PROFILE,
-    _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES,
     _SCHEMA_PRIVILEGE_NAMES,
 )
 
@@ -21,10 +20,9 @@ def _postflight_effective_schema_privileges(
     """Fail closed on inherited or PUBLIC schema access outside the matrix."""
 
     # ``has_schema_privilege`` reports effective access, including grants
-    # inherited through PUBLIC or another role. Direct reconciliation cannot
-    # safely alter those unrelated principals, so the deploy must fail instead.
-    # ``public.USAGE`` is the sole optional baseline; system schemas are
-    # excluded deliberately.
+    # inherited through PUBLIC or another role. The dedicated application
+    # database removes PostgreSQL's default ``public.USAGE`` grant so provider-
+    # owned routines in that namespace are not an ambient runtime API.
     cur.execute(  # type: ignore[attr-defined]
         """
         SELECT n.nspname, privilege.name
@@ -243,12 +241,17 @@ def _postflight_direct_column_privileges(
             e.privilege_type
         FROM pg_class c
         JOIN pg_namespace n ON n.oid = c.relnamespace
+        JOIN pg_roles owner ON owner.oid = c.relowner
         JOIN pg_attribute a ON a.attrelid = c.oid
         CROSS JOIN LATERAL aclexplode(a.attacl) e
         LEFT JOIN pg_roles grantee ON grantee.oid = e.grantee
         WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
           AND n.nspname NOT IN ('pg_catalog', 'information_schema')
           AND n.nspname !~ '^pg_'
+          AND NOT (
+              n.nspname = 'public'
+              AND owner.rolname = 'cloud_admin'
+          )
           AND a.attnum > 0
           AND NOT a.attisdropped
           AND (e.grantee = 0 OR grantee.rolname = %s)
@@ -286,9 +289,10 @@ def _postflight_effective_column_only_privileges(
           AND n.nspname !~ '^pg_'
           AND has_any_column_privilege(%s, c.oid, privilege.name)
           AND NOT has_table_privilege(%s, c.oid, privilege.name)
+          AND has_schema_privilege(%s, n.oid, 'USAGE')
         ORDER BY n.nspname, c.relname, privilege.name
         """,
-        (list(_COLUMN_PRIVILEGE_NAMES), role, role),
+        (list(_COLUMN_PRIVILEGE_NAMES), role, role, role),
     )
     column_only_privileges = list(cur.fetchall())  # type: ignore[attr-defined]
     if column_only_privileges:
@@ -316,39 +320,85 @@ def _postflight_effective_routine_privileges(
             p.prokind,
             p.prosecdef,
             owner.rolname,
+            p.pronargdefaults,
+            EXISTS (
+                SELECT 1
+                FROM pg_depend dependency
+                LEFT JOIN pg_proc provider_routine
+                  ON dependency.refclassid = 'pg_proc'::regclass
+                 AND dependency.refobjid = provider_routine.oid
+                LEFT JOIN pg_class provider_relation
+                  ON dependency.refclassid = 'pg_class'::regclass
+                 AND dependency.refobjid = provider_relation.oid
+                JOIN pg_namespace provider_namespace
+                  ON provider_namespace.oid = COALESCE(
+                      provider_routine.pronamespace,
+                      provider_relation.relnamespace
+                  )
+                JOIN pg_roles provider_owner
+                  ON provider_owner.oid = COALESCE(
+                      provider_routine.proowner,
+                      provider_relation.relowner
+                  )
+                WHERE dependency.classid = 'pg_proc'::regclass
+                  AND dependency.objid = p.oid
+                  AND dependency.refclassid IN (
+                      'pg_proc'::regclass,
+                      'pg_class'::regclass
+                  )
+                  AND provider_namespace.nspname = 'public'
+                  AND provider_owner.rolname = 'cloud_admin'
+            ),
             EXISTS (
                 SELECT 1
                 FROM aclexplode(p.proacl) direct_acl
                 JOIN pg_roles direct_grantee ON direct_grantee.oid = direct_acl.grantee
                 WHERE direct_grantee.rolname = %s
                   AND direct_acl.privilege_type = 'EXECUTE'
+            ),
+            EXISTS (
+                SELECT 1
+                FROM aclexplode(
+                    COALESCE(p.proacl, acldefault('f', p.proowner))
+                ) public_acl
+                WHERE public_acl.grantee = 0
+                  AND public_acl.privilege_type = 'EXECUTE'
             )
         FROM pg_proc p
         JOIN pg_namespace n ON n.oid = p.pronamespace
         JOIN pg_roles owner ON owner.oid = p.proowner
         WHERE n.nspname NOT IN ('pg_catalog', 'information_schema')
           AND n.nspname !~ '^pg_'
-          AND has_function_privilege(%s, p.oid, 'EXECUTE')
+          AND (
+              (
+                  has_function_privilege(%s, p.oid, 'EXECUTE')
+                  AND has_schema_privilege(%s, n.oid, 'USAGE')
+              )
+              OR EXISTS (
+                  SELECT 1
+                  FROM aclexplode(p.proacl) direct_acl
+                  JOIN pg_roles direct_grantee
+                    ON direct_grantee.oid = direct_acl.grantee
+                  WHERE direct_grantee.rolname = %s
+                    AND direct_acl.privilege_type = 'EXECUTE'
+              )
+              OR (
+                  NOT (n.nspname = 'public' AND owner.rolname = 'cloud_admin')
+                  AND EXISTS (
+                      SELECT 1
+                      FROM aclexplode(
+                          COALESCE(p.proacl, acldefault('f', p.proowner))
+                      ) public_acl
+                      WHERE public_acl.grantee = 0
+                        AND public_acl.privilege_type = 'EXECUTE'
+                  )
+              )
+          )
         ORDER BY n.nspname, p.proname, oidvectortypes(p.proargtypes)
         """,
-        (role, role),
+        (role, role, role, role),
     )
     actual_rows = list(cur.fetchall())  # type: ignore[attr-defined]
-    provider_rows = {
-        (
-            str(schema),
-            str(name),
-            str(arguments),
-        )
-        for schema, name, arguments, _kind, security_definer, owner, direct_grant in actual_rows
-        if (str(schema), str(name), str(arguments))
-        in _MANAGED_PROVIDER_PUBLIC_ROUTINE_IDENTITIES
-        and str(_kind) == "f"
-        and str(schema) == "public"
-        and str(owner) == "cloud_admin"
-        and not bool(security_definer)
-        and not bool(direct_grant)
-    }
     actual = {
         (
             str(schema),
@@ -357,13 +407,26 @@ def _postflight_effective_routine_privileges(
             str(kind),
             bool(security_definer),
             str(owner) == role,
+            int(argument_defaults),
+            bool(provider_dependency),
             bool(direct_grant),
+            bool(public_execute),
         )
-        for schema, name, arguments, kind, security_definer, owner, direct_grant in actual_rows
-        if (str(schema), str(name), str(arguments)) not in provider_rows
+        for (
+            schema,
+            name,
+            arguments,
+            kind,
+            security_definer,
+            owner,
+            argument_defaults,
+            provider_dependency,
+            direct_grant,
+            public_execute,
+        ) in actual_rows
     }
     expected_rows = {
-        ("mip_app", name, arguments, "f", False, False, True)
+        ("mip_app", name, arguments, "f", False, False, 0, False, True, False)
         for (name, arguments), privileges in expected.items()
         if "EXECUTE" in privileges
     }
@@ -407,6 +470,11 @@ def _postflight_effective_default_privileges(
                   n.nspname NOT IN ('pg_catalog', 'information_schema')
                   AND n.nspname !~ '^pg_'
               )
+          )
+          AND NOT (
+              owner.rolname = 'cloud_admin'
+              AND n.nspname = 'public'
+              AND e.grantee = 0
           )
           AND CASE
               WHEN e.grantee = 0 THEN TRUE
