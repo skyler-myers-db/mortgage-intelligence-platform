@@ -460,3 +460,31 @@ def test_archive_retries_transient_patch_and_confirms_with_get() -> None:
     )
 
     assert calls == ["GET", "PATCH", "GET", "PATCH", "GET"]
+
+
+def test_archive_accepts_scalar_success_on_final_attempt_only_after_get() -> None:
+    calls: list[str] = []
+    status = "draft"
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        nonlocal status
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": status}
+        status = "archived"
+        return 200, "mutation response intentionally ignored"
+
+    archive_campaign_fixture(
+        request,
+        campaign_id="campaign-id",
+        admin_token="admin-token",
+        attempts=1,
+        retry_interval_seconds=0,
+    )
+
+    assert calls == ["GET", "PATCH", "GET"]

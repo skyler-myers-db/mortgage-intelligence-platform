@@ -514,7 +514,7 @@ def test_principal_absence_delegates_to_direct_two_plane_helper_with_long_deadli
         account,
         principal_id="12345",
         application_id=APPLICATION_ID,
-        attempts=90,
+        deadline_seconds=180.0,
     )
 
 

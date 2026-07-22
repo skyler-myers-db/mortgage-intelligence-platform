@@ -96,8 +96,10 @@ def test_campaigns_router_rejects_invalid_campaign_id() -> None:
     assert response.status_code == 422
 
 
-def test_building_campaign_quarantine_requires_admin(
+@pytest.mark.parametrize("route", ["campaigns", "portfolio"])
+def test_building_campaign_quarantine_requires_admin_across_aliases(
     monkeypatch: pytest.MonkeyPatch,
+    route: str,
 ) -> None:
     owner = "campaign-owner@example.com"
     repo = _GovernedTransitionRepo(owner_email=owner, treatment_state="building")
@@ -105,7 +107,7 @@ def test_building_campaign_quarantine_requires_admin(
     monkeypatch.setattr(settings, "admin_emails", "admin@example.com")
 
     denied = client.patch(
-        "/api/campaigns/11111111-1111-4111-8111-111111111111",
+        f"/api/{route}/11111111-1111-4111-8111-111111111111",
         headers=_headers(owner),
         json={"status": "archived", "rationale": "Quarantine abandoned build"},
     )
@@ -114,7 +116,7 @@ def test_building_campaign_quarantine_requires_admin(
 
     repo.owner_email = "admin@example.com"
     allowed = client.patch(
-        "/api/campaigns/11111111-1111-4111-8111-111111111111",
+        f"/api/{route}/11111111-1111-4111-8111-111111111111",
         headers=_headers("admin@example.com"),
         json={"status": "archived", "rationale": "Quarantine abandoned build"},
     )

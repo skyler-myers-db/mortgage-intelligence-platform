@@ -11,6 +11,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
+from backend.api.campaign_authorization import authorize_campaign_quarantine_actor
 from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
@@ -102,11 +103,12 @@ def patch_campaign(
             raise HTTPException(status_code=404, detail="campaign not found")
         actor = resolve_actor(request)
         _assert_campaign_visible(result, actor=actor, is_admin=_is_admin(request))
-        if (
-            payload.status == "archived"
-            and str(result.get("treatment_state") or "") == "building"
-        ):
-            actor = require_admin(request)
+        actor = authorize_campaign_quarantine_actor(
+            request,
+            requested_status=payload.status,
+            treatment_state=result.get("treatment_state"),
+            actor=actor,
+        )
         if payload.status in {"approved", "live", "active"}:
             approver = require_approver(request)
             payload = authorize_campaign_status_transition(

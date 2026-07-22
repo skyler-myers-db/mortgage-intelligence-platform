@@ -315,6 +315,23 @@ def test_real_genie_browser_proof_executes_bound_native_follow_up() -> None:
     assert "standalone native Genie follow-up" in spec
 
 
+def test_live_genie_campaign_action_archives_the_exact_created_campaign() -> None:
+    spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
+    action_pos = spec.index(
+        "ask-genie: dynamic chart, proof drawer, and governed action confirmation"
+    )
+    next_test_pos = spec.index("\n  test(", action_pos + 1)
+    action_block = spec[action_pos:next_test_pos]
+
+    assert "async function archiveLiveCampaign" in spec
+    assert "Authorization: `Bearer ${ADMIN_BEARER}`" in spec
+    assert "expected_status: campaign.status" in spec
+    assert "final GET ${confirmed.status()}" in spec
+    assert "typeof actionPayload.campaign_id === 'string'" in action_block
+    assert "finally" in action_block
+    assert "archiveLiveCampaign(page.request, campaignId)" in action_block
+
+
 def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
     text = NIGHTLY.read_text(encoding="utf-8")
 

@@ -5,6 +5,7 @@ from copy import deepcopy
 import pytest
 
 from tools.cleanup_live_campaign_fixtures import (
+    _archive_campaign,
     cleanup_live_campaign_fixtures,
     run_scoped_campaign_name,
 )
@@ -173,3 +174,31 @@ def test_cleanup_rejects_truncated_inventory_without_absence_claim() -> None:
             run_marker=None,
             sleep=lambda _seconds: None,
         )
+
+
+def test_archive_accepts_scalar_success_on_final_attempt_only_after_get() -> None:
+    calls: list[str] = []
+    status = "draft"
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        nonlocal status
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": status}
+        status = "archived"
+        return 200, "mutation response intentionally ignored"
+
+    _archive_campaign(
+        request,
+        campaign_id="campaign-id",
+        admin_token="admin-token",
+        sleep=lambda _seconds: None,
+        attempts=1,
+    )
+
+    assert calls == ["GET", "PATCH", "GET"]

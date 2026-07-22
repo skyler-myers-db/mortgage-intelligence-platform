@@ -28,7 +28,14 @@
  *     prototype's BEM class names; no brittle xpath.
  */
 import { randomUUID } from 'node:crypto';
-import { test, expect, type APIRequestContext, type Locator, type Page } from '@playwright/test';
+import {
+  test,
+  expect,
+  type APIRequestContext,
+  type APIResponse,
+  type Locator,
+  type Page,
+} from '@playwright/test';
 
 // Gate: skip everything unless E2E_LIVE=1 is set by the nightly workflow.
 const LIVE = process.env.E2E_LIVE === '1';
@@ -297,6 +304,79 @@ async function fetchAuditEvents(
   const payload = await resp.json();
   expect(Array.isArray(payload), 'GET /api/audit/events should return an array').toBe(true);
   return payload as AuditRow[];
+}
+
+async function archiveLiveCampaign(
+  request: APIRequestContext,
+  campaignId: string,
+): Promise<void> {
+  expect(ADMIN_BEARER, 'live campaign teardown requires the distinct admin bearer').not.toBe('');
+  let lastResult = 'no request attempted';
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    let current: APIResponse;
+    try {
+      current = await request.get(`${API_URL}/api/campaigns/${campaignId}`, {
+        headers: { Authorization: `Bearer ${ADMIN_BEARER}` },
+        timeout: 30_000,
+      });
+    } catch {
+      lastResult = 'GET transport error';
+      if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
+      continue;
+    }
+    lastResult = `GET ${current.status()}`;
+    if (current.status() === 200) {
+      const campaign = await current.json() as { status?: string };
+      if (campaign.status === 'archived') return;
+      expect(campaign.status, 'live campaign teardown requires a current status').toBeTruthy();
+      let archived: APIResponse;
+      try {
+        archived = await request.patch(`${API_URL}/api/campaigns/${campaignId}`, {
+          headers: {
+            Authorization: `Bearer ${ADMIN_BEARER}`,
+            'Content-Type': 'application/json',
+          },
+          data: {
+            status: 'archived',
+            expected_status: campaign.status,
+            rationale: 'Archive the exact live Genie action fixture.',
+          },
+          timeout: 30_000,
+        });
+      } catch {
+        lastResult = 'PATCH transport error';
+        if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
+        continue;
+      }
+      lastResult = `PATCH ${archived.status()}`;
+      if (
+        archived.status() !== 200
+        && archived.status() !== 409
+        && archived.status() !== 429
+        && archived.status() < 500
+      ) {
+        throw new Error(`live campaign teardown was rejected: ${lastResult}`);
+      }
+      let confirmed: APIResponse;
+      try {
+        confirmed = await request.get(`${API_URL}/api/campaigns/${campaignId}`, {
+          headers: { Authorization: `Bearer ${ADMIN_BEARER}` },
+          timeout: 30_000,
+        });
+      } catch {
+        lastResult = 'final GET transport error';
+        if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
+        continue;
+      }
+      lastResult = `final GET ${confirmed.status()}`;
+      if (confirmed.status() === 200) {
+        const body = await confirmed.json() as { status?: string };
+        if (body.status === 'archived') return;
+      }
+    }
+    if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
+  }
+  throw new Error(`live campaign teardown did not converge: ${lastResult}`);
 }
 
 async function findBorrowerWithEvidenceProducts(
@@ -2008,7 +2088,11 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
   });
 
   test('ask-genie: dynamic chart, proof drawer, and governed action confirmation', async ({ page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(180_000);
+    expect(
+      ADMIN_BEARER,
+      'live Genie action proof requires the distinct admin bearer for teardown',
+    ).not.toBe('');
 
     await gotoApp(page, '/ask-genie');
 
@@ -2053,10 +2137,17 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     const response = await actionResponse;
     expect(response.status(), 'Create draft campaign action should succeed').toBe(200);
     const actionPayload = await response.json();
-    expect(actionPayload.action_type).toBe('create_draft_campaign');
-    expect(actionPayload.audit_event_id).toBeTruthy();
-    expect(actionPayload.campaign_id).toBeTruthy();
-    await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });
+    const campaignId = typeof actionPayload.campaign_id === 'string'
+      ? actionPayload.campaign_id.trim()
+      : '';
+    try {
+      expect(actionPayload.action_type).toBe('create_draft_campaign');
+      expect(actionPayload.audit_event_id).toBeTruthy();
+      expect(campaignId).toBeTruthy();
+      await expect(page).toHaveURL(/\/lead-queue\?/, { timeout: 20_000 });
+    } finally {
+      if (campaignId) await archiveLiveCampaign(page.request, campaignId);
+    }
   });
 
   test('ask-genie: open cohort action carries ZIP answer filters into Lead Queue', async ({ page }) => {

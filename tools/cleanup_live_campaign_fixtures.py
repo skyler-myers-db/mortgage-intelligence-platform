@@ -104,8 +104,29 @@ def _archive_campaign(
                 sleep(retry_interval_seconds)
             continue
         last_result = (patch_status, patched)
-        if patch_status == 200 and isinstance(patched, dict):
-            # Only the next GET may complete the durable proof.
+        if patch_status == 200:
+            # Reconcile in the same bounded attempt so a final successful
+            # PATCH cannot be discarded merely because no outer retry remains.
+            try:
+                final_status, final_campaign = request(
+                    "GET",
+                    f"/api/campaigns/{campaign_id}",
+                    token=admin_token,
+                )
+            except Exception as exc:  # noqa: BLE001 - bounded observation retry
+                last_result = f"{type(exc).__name__}: {exc}"
+                if attempt + 1 < attempts:
+                    sleep(retry_interval_seconds)
+                continue
+            last_result = (final_status, final_campaign)
+            if (
+                final_status == 200
+                and isinstance(final_campaign, dict)
+                and str(final_campaign.get("status") or "").strip() == "archived"
+            ):
+                return
+            if attempt + 1 < attempts:
+                sleep(retry_interval_seconds)
             continue
         if patch_status in {409, 429} or patch_status >= 500:
             if attempt + 1 < attempts:

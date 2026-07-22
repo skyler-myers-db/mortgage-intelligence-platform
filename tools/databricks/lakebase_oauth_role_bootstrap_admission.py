@@ -401,7 +401,9 @@ def prove_bootstrap_principal_absent(
         account_client,
         principal_id=service_principal_id,
         application_id=application_id,
-        attempts=attempts,
+        # The direct helper polls both planes every two seconds. Preserve this
+        # wrapper's observation-count contract as a real wall-clock deadline.
+        deadline_seconds=float(attempts) * 2.0,
     )
     return 3
 

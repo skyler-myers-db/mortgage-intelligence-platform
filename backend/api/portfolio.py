@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
 
+from backend.api.campaign_authorization import authorize_campaign_quarantine_actor
 from backend.schemas.campaign_status import authorize_campaign_status_transition
 from backend.schemas.common import validate_public_opaque_id
 from backend.schemas.portfolio import (
@@ -244,6 +245,12 @@ def patch_portfolio(
             raise HTTPException(status_code=404, detail="portfolio not found")
         actor = resolve_actor(request)
         _assert_portfolio_visible(result, actor=actor, is_admin=_is_admin(request))
+        actor = authorize_campaign_quarantine_actor(
+            request,
+            requested_status=payload.status,
+            treatment_state=result.get("treatment_state"),
+            actor=actor,
+        )
         current_status = str(result.get("status") or "")
         if payload.status in {"approved", "live", "active"}:
             approver = require_approver(request)

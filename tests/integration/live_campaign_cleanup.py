@@ -341,9 +341,29 @@ def archive_campaign_fixture(
                 sleep(retry_interval_seconds)
             continue
         last_result = (status, archived)
-        if status == 200 and isinstance(archived, dict):
-            # A separate GET, never the mutation response, is the final
-            # durable absence-from-active-inventory proof.
+        if status == 200:
+            # A separate GET in the same bounded attempt, never the mutation
+            # response shape, is the durable proof. This preserves a final
+            # successful PATCH when no outer retry remains.
+            try:
+                final_status, final_campaign = request(
+                    "GET",
+                    f"/api/campaigns/{campaign_id}",
+                    token=admin_token,
+                )
+            except Exception:  # noqa: BLE001 - retry ambiguous observation
+                if _attempt + 1 < attempts:
+                    sleep(retry_interval_seconds)
+                continue
+            last_result = (final_status, final_campaign)
+            if (
+                final_status == 200
+                and isinstance(final_campaign, dict)
+                and str(final_campaign.get("status") or "").strip() == "archived"
+            ):
+                return
+            if _attempt + 1 < attempts:
+                sleep(retry_interval_seconds)
             continue
         if status == 409 or status == 429 or status >= 500:
             if _attempt + 1 < attempts:
