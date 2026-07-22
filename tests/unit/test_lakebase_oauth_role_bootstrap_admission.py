@@ -918,8 +918,8 @@ def test_connected_old_token_capture_failure_is_never_counted_as_auth_rejection(
     probe_cursor.close.assert_called_once_with()
 
 
-def test_final_admission_proof_is_secret_free_and_only_admitted_result_is_ready() -> None:
-    admitted = admission.finalize_bootstrap_admission_proof(
+def test_final_retirement_proof_is_secret_free_and_only_admitted_result_can_commit() -> None:
+    admitted = admission.finalize_bootstrap_retirement_proof(
         lease=_lease(token="never-print-final-token"),
         retained_backend=_backend(),
         secret_plane_absence_observations=3,
@@ -930,7 +930,7 @@ def test_final_admission_proof_is_secret_free_and_only_admitted_result_is_ready(
             rejection_observations=3,
         ),
     )
-    expiry_required = admission.finalize_bootstrap_admission_proof(
+    expiry_required = admission.finalize_bootstrap_retirement_proof(
         lease=_lease(token="never-print-final-token"),
         retained_backend=_backend(),
         secret_plane_absence_observations=3,
@@ -943,8 +943,8 @@ def test_final_admission_proof_is_secret_free_and_only_admitted_result_is_ready(
         ),
     )
 
-    assert admitted.ready_for_provider_invocation is True
-    assert expiry_required.ready_for_provider_invocation is False
+    assert admitted.ready_for_commit is True
+    assert expiry_required.ready_for_commit is False
     assert "never-print-final-token" not in repr(admitted)
     assert "token" not in admitted.__dict__
     assert set(admitted.__dict__) == {

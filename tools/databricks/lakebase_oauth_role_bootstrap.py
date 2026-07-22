@@ -375,6 +375,8 @@ def _create_login_only_role_locked(
     bootstrap_scim_id = ""
     create_attempted = False
     provider_invocation_attempted = False
+    provider_commit_attempted = False
+    provider_commit_completed = False
     retain_bootstrap_evidence = False
     primary_error: BaseException | None = None
     cleanup_errors: list[str] = []
@@ -516,6 +518,9 @@ def _create_login_only_role_locked(
         from tools.databricks.lakebase_oauth_role_bootstrap_orchestration import (
             execute_admitted_provider_bootstrap,
         )
+        from tools.databricks.lakebase_oauth_role_bootstrap_provider_boundary import (
+            assert_provider_boundary_contract,
+        )
 
         def presecret_contract() -> None:
             assert_bootstrap_lock_held(
@@ -573,53 +578,36 @@ def _create_login_only_role_locked(
                 if callable(getattr(control_connection, "close", None)):
                     control_connection.close()
 
-        def preinvoke_contract(cursor: Any) -> None:
-            assert_bootstrap_lock_held(
-                bootstrap_lock_cursor,
-                lock_key=bootstrap_lock_key,
-            )
-            if not _assert_bootstrap_role_contract(
+        def provider_boundary_contract(cursor: Any, *, before_commit: bool) -> None:
+            assert_provider_boundary_contract(
                 client,
                 deployer_cursor,
-                instance_name=instance_name,
-                database_name=database_name,
-                application_id=bootstrap_application_id,
-                target_application_id=application_id,
-                external_id=bootstrap_external_id,
-                service_principal_id=bootstrap_scim_id,
-                expected_executor=expected_executor,
-                expected_privileges=frozenset({"USAGE", "EXECUTE"}),
-                allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
-                signed_tombstone_authority=True,
-            ):
-                raise RuntimeError("temporary Lakebase bootstrap role disappeared before invoke")
-            _assert_role_function_contract(cursor)
-            assert_wrapper_contract(
                 cursor,
                 instance_name=instance_name,
                 database_name=database_name,
                 target_application_id=application_id,
                 bootstrap_application_id=bootstrap_application_id,
-                expected_executor=bootstrap_application_id,
-                expected_privileges=frozenset({"USAGE", "EXECUTE"}),
-                expected_function_fingerprint=wrapper_function_fingerprint,
-            )
-            _event_trigger_preflight(
-                cursor,
-                principal_label="target-bound bootstrap wrapper invocation",
-                allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
-            )
-            prove_target_absent(
-                client,
-                deployer_cursor,
-                instance_name=instance_name,
-                application_id=application_id,
+                bootstrap_service_principal_id=bootstrap_scim_id,
+                bootstrap_external_id=bootstrap_external_id,
                 expected_executor=expected_executor,
+                expected_function_fingerprint=wrapper_function_fingerprint,
+                allow_absent_managed_event_triggers=allow_absent_managed_event_triggers,
+                bootstrap_lock_cursor=bootstrap_lock_cursor,
+                bootstrap_lock_key=bootstrap_lock_key,
+                require_target_absence=not before_commit,
             )
 
         def mark_provider_invocation() -> None:
             nonlocal provider_invocation_attempted
             provider_invocation_attempted = True
+
+        def mark_provider_commit() -> None:
+            nonlocal provider_commit_attempted
+            provider_commit_attempted = True
+
+        def mark_provider_commit_completed() -> None:
+            nonlocal provider_commit_completed
+            provider_commit_completed = True
 
         def invoke_provider(cursor: Any) -> None:
             cursor.execute(
@@ -658,6 +646,7 @@ def _create_login_only_role_locked(
             database_name=database_name,
             bootstrap_application_id=bootstrap_application_id,
             bootstrap_scim_id=bootstrap_scim_id,
+            bootstrap_display_name=bootstrap_name,
             bootstrap_reservation_name=bootstrap_reservation_name,
             bootstrap_external_id=bootstrap_external_id,
             control_application_id=control_application_id,
@@ -667,8 +656,15 @@ def _create_login_only_role_locked(
             bootstrap_lock_key=bootstrap_lock_key,
             presecret_contract=presecret_contract,
             positive_control=positive_control,
-            preinvoke_contract=preinvoke_contract,
+            preinvoke_contract=lambda cursor: provider_boundary_contract(
+                cursor, before_commit=False
+            ),
+            precommit_contract=lambda cursor: provider_boundary_contract(
+                cursor, before_commit=True
+            ),
             mark_provider_invocation=mark_provider_invocation,
+            mark_provider_commit=mark_provider_commit,
+            mark_provider_commit_completed=mark_provider_commit_completed,
             invoke_provider=invoke_provider,
             validate_provider_result=validate_provider_result,
             transaction_diagnostics=provider_transaction_diagnostics,
@@ -715,8 +711,17 @@ def _create_login_only_role_locked(
                     bootstrap_lock_cursor=bootstrap_lock_cursor,
                     bootstrap_lock_key=bootstrap_lock_key,
                 )
-                if residual_state == "exact":
+                if (
+                    residual_state == "exact"
+                    and provider_commit_attempted
+                    and not provider_commit_completed
+                ):
                     primary_error = None
+                elif residual_state == "exact":
+                    retain_bootstrap_evidence = True
+                    cleanup_errors.append(
+                        "target reconciliation: exact target cannot erase a lifecycle failure"
+                    )
                 elif residual_state == "indeterminate":
                     retain_bootstrap_evidence = True
                     cleanup_errors.extend(provider_transaction_diagnostics)

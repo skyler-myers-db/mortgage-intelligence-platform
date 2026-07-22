@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import ANY, MagicMock
 
 import pytest
 from databricks.sdk.errors import NotFound
@@ -267,6 +267,21 @@ def _install_happy_path(
         "_capture_same_backend",
         lambda *_args, **_kwargs: step("backend:recapture"),
     )
+    monkeypatch.setattr(
+        orchestration,
+        "_assert_principal_active_once",
+        lambda *_args, **_kwargs: step("principal:active"),
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "_assert_provider_auth_fresh",
+        lambda *_args, **_kwargs: step("provider-auth:fresh"),
+    )
+    monkeypatch.setattr(
+        orchestration,
+        "_assert_transaction_survivability",
+        lambda *_args, **_kwargs: step("transaction-timeout:safe"),
+    )
     return connection, step
 
 
@@ -290,8 +305,17 @@ def _execute(
     def preinvoke(_cursor: Any) -> None:
         step("contract:preinvoke")
 
+    def precommit(_cursor: Any) -> None:
+        step("contract:precommit")
+
     def mark() -> None:
         step("provider:marked")
+
+    def mark_commit() -> None:
+        step("provider:commit-marked")
+
+    def mark_commit_completed() -> None:
+        step("provider:commit-completed")
 
     def invoke(_cursor: Any) -> None:
         assert connection.autocommit is False
@@ -308,6 +332,7 @@ def _execute(
         database_name="mip_app_state",
         bootstrap_application_id=APPLICATION_ID,
         bootstrap_scim_id=SCIM_ID,
+        bootstrap_display_name="signed-bootstrap-display",
         bootstrap_reservation_name="mip-bootstrap-reservation",
         bootstrap_external_id="signed-ownership-marker",
         control_application_id=CONTROL_APPLICATION_ID,
@@ -318,7 +343,10 @@ def _execute(
         presecret_contract=lambda: step("contract:presecret"),
         positive_control=lambda: step("control:fresh-deployer"),
         preinvoke_contract=preinvoke,
+        precommit_contract=precommit,
         mark_provider_invocation=mark,
+        mark_provider_commit=mark_commit,
+        mark_provider_commit_completed=mark_commit_completed,
         invoke_provider=invoke,
         validate_provider_result=lambda _cursor: step("provider:validate"),
         transaction_diagnostics=[],
@@ -327,7 +355,7 @@ def _execute(
     )
 
 
-def test_full_admission_order_gates_provider_and_discards_secrets(monkeypatch: Any) -> None:
+def test_provider_result_stays_uncommitted_until_retirement_proof(monkeypatch: Any) -> None:
     events: list[str] = []
 
     proof = _execute(monkeypatch, events)
@@ -346,24 +374,33 @@ def test_full_admission_order_gates_provider_and_discards_secrets(monkeypatch: A
         "backend:inventory",
         "secret:revoke",
         "secret:empty:2",
+        "principal:active",
+        "contract:preinvoke",
+        "backend:recapture",
+        "principal:active",
+        "transaction-timeout:safe",
+        "contract:preinvoke",
+        "secret:empty:3",
+        "provider-auth:fresh",
+        "provider:marked",
+        "provider:invoke",
+        "provider:validate",
         "principal:retire",
         "principal:absent",
         "admission:heartbeat",
         "cached-m2m:rejected",
         "old-token:probe",
-        "contract:preinvoke",
-        "backend:recapture",
         "admission:heartbeat",
-        "contract:preinvoke",
-        "provider:marked",
-        "provider:invoke",
+        "contract:precommit",
         "provider:validate",
+        "provider:commit-marked",
         "transaction:commit",
+        "provider:commit-completed",
     ]
     previous = -1
     for name in required_order:
         previous = events.index(name, previous + 1)
-    assert proof.ready_for_provider_invocation is True
+    assert proof.ready_for_commit is True
     assert "database-token-never-log" not in repr(proof)
     assert "m2m-secret-never-log" not in repr(events)
     assert events[-2:] == ["cursor:close", "connection:close"]
@@ -385,13 +422,12 @@ def test_full_admission_order_gates_provider_and_discards_secrets(monkeypatch: A
         "backend:inventory",
         "secret:revoke",
         "secret:empty:2",
-        "principal:retire",
-        "principal:absent",
-        "cached-m2m:rejected",
-        "old-token:probe",
-        "admission:heartbeat",
+        "principal:active",
         "contract:preinvoke",
         "backend:recapture",
+        "provider-auth:fresh",
+        "transaction-timeout:safe",
+        "secret:empty:3",
     ],
 )
 def test_every_admission_failure_keeps_provider_invocation_at_zero(
@@ -409,13 +445,14 @@ def test_every_admission_failure_keeps_provider_invocation_at_zero(
         assert "connection:close" in events
 
 
-def test_admission_always_waits_past_expiry_before_single_rejection_proof(
+def test_retirement_always_waits_past_expiry_before_single_rejection_proof(
     monkeypatch: Any,
 ) -> None:
     events: list[str] = []
     now_values = iter(
         [
             datetime(2026, 7, 22, 12, 59, tzinfo=UTC),
+            datetime(2026, 7, 22, 12, 59, 10, tzinfo=UTC),
             datetime(2026, 7, 22, 13, 1, tzinfo=UTC),
             datetime(2026, 7, 22, 13, 2, tzinfo=UTC),
         ]
@@ -429,12 +466,13 @@ def test_admission_always_waits_past_expiry_before_single_rejection_proof(
         sleep=lambda seconds: events.append(f"expiry:sleep:{int(seconds)}"),
     )
 
-    assert proof.ready_for_provider_invocation is True
+    assert proof.ready_for_commit is True
     assert events.count("old-token:probe") == 1
-    assert events.count("admission:heartbeat") == 4
+    assert events.count("admission:heartbeat") == 3
     assert "expiry:sleep:15" in events
     assert events.index("expiry:sleep:15") < events.index("old-token:probe")
-    assert events.index("old-token:probe") < events.index("provider:invoke")
+    assert events.index("provider:invoke") < events.index("expiry:sleep:15")
+    assert events.index("old-token:probe") < events.index("transaction:commit")
 
 
 def test_cached_m2m_rejection_is_proved_only_after_access_token_expiry(
@@ -444,6 +482,7 @@ def test_cached_m2m_rejection_is_proved_only_after_access_token_expiry(
     now_values = iter(
         [
             datetime(2026, 7, 22, 12, 59, tzinfo=UTC),
+            datetime(2026, 7, 22, 12, 59, 10, tzinfo=UTC),
             datetime(2026, 7, 22, 13, 1, tzinfo=UTC),
             datetime(2026, 7, 22, 13, 2, tzinfo=UTC),
         ]
@@ -457,11 +496,12 @@ def test_cached_m2m_rejection_is_proved_only_after_access_token_expiry(
         sleep=lambda seconds: events.append(f"expiry:sleep:{int(seconds)}"),
     )
 
-    assert proof.ready_for_provider_invocation is True
+    assert proof.ready_for_commit is True
     assert events.count("cached-m2m:rejected") == 1
     assert events.count("old-token:probe") == 1
     assert events.index("expiry:sleep:15") < events.index("cached-m2m:rejected")
-    assert events.index("cached-m2m:rejected") < events.index("provider:invoke")
+    assert events.index("provider:invoke") < events.index("cached-m2m:rejected")
+    assert events.index("cached-m2m:rejected") < events.index("transaction:commit")
 
 
 def test_post_invocation_validation_failure_rolls_back_exact_transaction(
@@ -477,6 +517,105 @@ def test_post_invocation_validation_failure_rolls_back_exact_transaction(
     assert "transaction:rollback" in events
     assert "transaction:commit" not in events
     assert events[-2:] == ["cursor:close", "connection:close"]
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [
+        "principal:retire",
+        "principal:absent",
+        "admission:heartbeat",
+        "cached-m2m:rejected",
+        "old-token:probe",
+        "contract:precommit",
+        "provider:commit-marked",
+    ],
+)
+def test_every_postinvoke_retirement_failure_rolls_back_before_commit(
+    monkeypatch: Any,
+    failure: str,
+) -> None:
+    events: list[str] = []
+
+    with pytest.raises(RuntimeError, match="injected"):
+        _execute(monkeypatch, events, fail_at=failure)
+
+    assert events.index("provider:invoke") < events.index(failure)
+    assert "transaction:rollback" in events
+    assert "transaction:commit" not in events
+    assert events[-2:] == ["cursor:close", "connection:close"]
+
+
+@pytest.mark.parametrize(
+    "now",
+    [
+        datetime(2026, 7, 22, 12, 58, tzinfo=UTC),
+        datetime(2026, 7, 22, 12, 59, 31, tzinfo=UTC),
+        datetime(2026, 7, 22, 13, 0, tzinfo=UTC),
+    ],
+)
+def test_provider_invocation_requires_bounded_unexpired_auth(now: datetime) -> None:
+    with pytest.raises(RuntimeError, match="too close to expiry"):
+        orchestration._assert_provider_auth_fresh(
+            lease=_lease(),
+            m2m_access_token_expires_at=EXPIRES_AT,
+            now=now,
+        )
+
+
+def test_provider_invocation_accepts_more_than_two_minutes_of_auth_headroom() -> None:
+    orchestration._assert_provider_auth_fresh(
+        lease=_lease(),
+        m2m_access_token_expires_at=EXPIRES_AT,
+        now=datetime(2026, 7, 22, 12, 57, 59, tzinfo=UTC),
+    )
+
+
+@pytest.mark.parametrize("timeouts", [(1.0, 0.0, None), (0.0, 1.0, None), (0.0, 0.0, 1.0)])
+def test_provider_transaction_rejects_any_timeout_that_remains_enabled(
+    timeouts: tuple[float, float, float | None],
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [(None,), timeouts]
+
+    with pytest.raises(RuntimeError, match="timeouts remain enabled"):
+        orchestration._assert_transaction_survivability(cursor)
+
+
+@pytest.mark.parametrize(
+    ("initial_transaction_timeout", "final_timeouts"),
+    [(None, (0.0, 0.0, None)), ("5min", (0.0, 0.0, 0.0))],
+)
+def test_provider_transaction_disables_every_supported_timeout(
+    initial_transaction_timeout: str | None,
+    final_timeouts: tuple[float, float, float | None],
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [
+        (initial_transaction_timeout,),
+        final_timeouts,
+    ]
+
+    orchestration._assert_transaction_survivability(cursor)
+
+
+@pytest.mark.parametrize(
+    "final_timeouts",
+    [
+        None,
+        ("not-a-number", 0.0, None),
+        (float("nan"), 0.0, None),
+        (0.0, float("inf"), None),
+    ],
+)
+def test_provider_transaction_rejects_malformed_timeout_proof(
+    final_timeouts: tuple[Any, ...] | None,
+) -> None:
+    cursor = MagicMock()
+    cursor.fetchone.side_effect = [(None,), final_timeouts]
+
+    with pytest.raises(RuntimeError, match="timeout"):
+        orchestration._assert_transaction_survivability(cursor)
 
 
 def test_zero_backend_preflight_pins_one_exact_role_and_no_sessions() -> None:
@@ -625,6 +764,71 @@ def test_principal_heartbeat_requires_direct_absence_and_empty_relationships() -
         service_principal_id=SCIM_ID,
         application_id=APPLICATION_ID,
     )
+
+
+def test_preinvoke_principal_fence_requires_exact_active_identity_on_both_planes(
+    monkeypatch: Any,
+) -> None:
+    display_name = "signed-bootstrap-display"
+    principal = SimpleNamespace(
+        id=SCIM_ID,
+        application_id=APPLICATION_ID,
+        display_name=display_name,
+        external_id="",
+        active=True,
+        groups=[],
+        roles=[],
+        entitlements=[],
+    )
+    boundary = MagicMock()
+    app_boundary = MagicMock()
+    monkeypatch.setattr(
+        orchestration,
+        "assert_account_workspace_assignment_boundary",
+        boundary,
+    )
+    monkeypatch.setattr(orchestration, "assert_no_workspace_app_binding", app_boundary)
+
+    orchestration._assert_principal_active_once(
+        SimpleNamespace(service_principals=SimpleNamespace(get=lambda _id: principal)),
+        SimpleNamespace(service_principals=SimpleNamespace(get=lambda _id: principal)),
+        service_principal_id=SCIM_ID,
+        application_id=APPLICATION_ID,
+        display_name=display_name,
+    )
+
+    boundary.assert_called_once_with(
+        ANY,
+        ANY,
+        principal_id=SCIM_ID,
+        application_id=APPLICATION_ID,
+        display_name=display_name,
+        expected_workspace_active=True,
+    )
+    app_boundary.assert_called_once_with(ANY, application_ids={APPLICATION_ID})
+
+
+def test_preinvoke_principal_fence_rejects_inactive_identity() -> None:
+    principal = SimpleNamespace(
+        id=SCIM_ID,
+        application_id=APPLICATION_ID,
+        display_name="signed-bootstrap-display",
+        external_id="",
+        active=False,
+        groups=[],
+        roles=[],
+        entitlements=[],
+    )
+    client = SimpleNamespace(service_principals=SimpleNamespace(get=lambda _id: principal))
+
+    with pytest.raises(RuntimeError, match="active contract drifted"):
+        orchestration._assert_principal_active_once(
+            client,
+            client,
+            service_principal_id=SCIM_ID,
+            application_id=APPLICATION_ID,
+            display_name="signed-bootstrap-display",
+        )
 
 
 def test_retained_backend_recapture_rejects_any_identity_change(monkeypatch: Any) -> None:

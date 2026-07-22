@@ -19,10 +19,14 @@ from backend.services.ai_gateway_proof_attestation import (
 from tools.databricks import lakebase_oauth_role_account_inventory as account_inventory
 from tools.databricks import lakebase_oauth_role_account_principal as account_principal
 from tools.databricks import lakebase_oauth_role_bootstrap as bootstrap
+from tools.databricks import lakebase_oauth_role_bootstrap_admission as bootstrap_admission
 from tools.databricks import lakebase_oauth_role_bootstrap_credentials as bootstrap_credentials
 from tools.databricks import lakebase_oauth_role_bootstrap_lock as bootstrap_lock
 from tools.databricks import (
     lakebase_oauth_role_bootstrap_orchestration as bootstrap_orchestration,
+)
+from tools.databricks import (
+    lakebase_oauth_role_bootstrap_provider_boundary as bootstrap_provider_boundary,
 )
 from tools.databricks import lakebase_oauth_role_bootstrap_sessions as bootstrap_sessions
 from tools.databricks import lakebase_oauth_role_bootstrap_target as bootstrap_target
@@ -187,6 +191,7 @@ class _State:
         self.fail_target_role_delete_attempts = 0
         self.fail_secret_list = False
         self.fail_secret_delete = False
+        self.omit_bootstrap_assignment = False
         self.fail_creator_sp_delete = False
         self.fail_account_principal_delete = False
         self.fail_marker_inventory = False
@@ -261,6 +266,7 @@ class _State:
         self.fail_schema_grant_after_commit = False
         self.fail_function_grant_after_commit = False
         self.fail_provider_call_after_commit = False
+        self.fail_provider_commit_before_apply = False
         self.provider_commit_ambiguity_seen = False
         self.reconciliation_target_profile_read_failures = 0
         self.provider_commit_residual_relationships: list[tuple[Any, ...]] | None = None
@@ -868,11 +874,21 @@ class _BootstrapCursor:
             self._one = (42,)
         elif rendered == "SELECT current_user, session_user":
             self._one = (_CREATOR, self.state.bootstrap_session_user)
+        elif "idle_in_transaction_session_timeout" in rendered:
+            self._one = (0.0, 0.0, None)
+        elif "current_setting('transaction_timeout', true)" in rendered:
+            self._one = (None,)
         elif "create_target_role" in rendered:
             assert "FROM pg_event_trigger event_trigger" in self.state.bootstrap_statements[-2]
             self.state.actions.append(("provider_call", self.state.advisory_lock_checks))
             if self.state.fail_provider_call_before_statement:
                 raise RuntimeError("injected provider rejection")
+            if not self.state.bootstrap_sp_present or not self.state.bootstrap_sp_active:
+                raise RuntimeError(
+                    "[Databricks Auth] Unauthorized to access Databricks workspace"
+                )
+            if self.state.bootstrap_secrets:
+                raise RuntimeError("provider invocation retained a reusable OAuth secret")
             self.state.target_profile = self.state.create_profile
             self.state.target_relationships = list(self.state.create_relationships)
             if self.state.fail_provider_call_after_statement:
@@ -956,6 +972,9 @@ class _BootstrapConnection:
         return _BootstrapCursor(self.state)
 
     def commit(self) -> None:
+        if self.state.fail_provider_commit_before_apply:
+            self.state.fail_provider_commit_before_apply = False
+            raise RuntimeError("injected provider commit failure before apply")
         self._snapshot = None
         if self.state.fail_provider_call_after_commit:
             self.state.fail_provider_call_after_commit = False
@@ -1120,7 +1139,7 @@ def _client(state: _State, *, secret: str = "one-use-secret") -> MagicMock:
     def list_assignments(workspace_id: int) -> Any:
         assert workspace_id == 42
         principal_ids = list(state.orphan_tombstones)
-        if state.bootstrap_sp_present:
+        if state.bootstrap_sp_present and not state.omit_bootstrap_assignment:
             principal_ids.append(_CREATOR_SCIM_ID)
         return iter(
             SimpleNamespace(
@@ -1485,6 +1504,47 @@ def test_one_use_creator_leaves_safe_role_and_empty_membership_graph() -> None:
                 for candidate in state.deployer_statements[previous_mutation + 1 : index]
             )
             previous_mutation = index
+
+
+def test_reappearing_secret_at_final_boundary_blocks_provider_invocation() -> None:
+    state = _State()
+    original_proof = bootstrap_orchestration.prove_bootstrap_secret_planes_empty
+    proof_calls = 0
+
+    def inject_on_final_proof(*args: Any, **kwargs: Any) -> int:
+        nonlocal proof_calls
+        proof_calls += 1
+        if proof_calls == 3:
+            state.bootstrap_secrets = ["reappeared-secret"]
+        return original_proof(*args, **kwargs)
+
+    with (
+        patch.object(bootstrap_admission.time, "sleep", lambda _seconds: None),
+        patch.object(
+            bootstrap_orchestration,
+            "prove_bootstrap_secret_planes_empty",
+            side_effect=inject_on_final_proof,
+        ),
+        pytest.raises(RuntimeError, match="secret-plane absence did not converge"),
+    ):
+        _run(state)
+
+    action_names = [action for action, _check in state.actions]
+    assert proof_calls == 3
+    assert action_names.index("secret_create") < action_names.index("secret_delete")
+    assert not any(action == "provider_call" for action, _ in state.actions)
+    assert state.target_profile is None
+
+
+def test_missing_workspace_assignment_blocks_provider_invocation() -> None:
+    state = _State()
+    state.omit_bootstrap_assignment = True
+
+    with pytest.raises(RuntimeError, match="assignment drifted"):
+        _run(state)
+
+    assert not any(action == "provider_call" for action, _ in state.actions)
+    assert state.target_profile is None
 
 
 def test_bootstrap_caller_qualified_deparse_uses_published_raw_fingerprint() -> None:
@@ -2091,6 +2151,21 @@ def test_commit_ambiguous_exact_provider_product_forward_converges() -> None:
     assert state.wrapper_function_execute is False
 
 
+def test_commit_failure_before_apply_rolls_back_and_propagates_original_error() -> None:
+    state = _State()
+    state.fail_provider_commit_before_apply = True
+
+    with pytest.raises(RuntimeError, match="commit failure before apply"):
+        _run(state)
+
+    assert state.target_profile is None
+    assert state.target_relationships == []
+    assert state.creator_profile is None
+    assert state.bootstrap_sp_present is False
+    assert state.wrapper_schema_exists is False
+    assert state.orphan_tombstones == {}
+
+
 def test_exact_commit_response_loss_with_rollback_failure_forward_converges() -> None:
     state = _State()
     state.fail_provider_call_after_commit = True
@@ -2128,8 +2203,58 @@ def test_provider_socket_loss_after_statement_rolls_back_to_stable_absence() -> 
     assert state.creator_profile is None
 
 
+def test_postinvoke_expiry_proof_failure_rolls_back_and_cleans_all_residue() -> None:
+    state = _State()
+
+    with (
+        patch.object(
+            bootstrap_orchestration,
+            "prove_destroyed_m2m_credential_rejected",
+            side_effect=RuntimeError("injected expiry proof failure"),
+        ),
+        pytest.raises(RuntimeError, match="expiry proof failure"),
+    ):
+        _run(state)
+
+    assert any(action == "provider_call" for action, _ in state.actions)
+    assert state.target_profile is None
+    assert state.target_relationships == []
+    assert state.creator_profile is None
+    assert state.bootstrap_sp_present is False
+    assert state.wrapper_schema_exists is False
+    assert state.orphan_tombstones == {}
+
+
+def test_precommit_contract_failure_rolls_back_and_cleans_all_residue() -> None:
+    state = _State()
+    original = bootstrap_provider_boundary.assert_provider_boundary_contract
+
+    def fail_precommit(*args: Any, **kwargs: Any) -> None:
+        if kwargs["require_target_absence"] is False:
+            raise RuntimeError("injected precommit contract failure")
+        original(*args, **kwargs)
+
+    with (
+        patch.object(
+            bootstrap_provider_boundary,
+            "assert_provider_boundary_contract",
+            side_effect=fail_precommit,
+        ),
+        pytest.raises(RuntimeError, match="precommit contract failure"),
+    ):
+        _run(state)
+
+    assert any(action == "provider_call" for action, _ in state.actions)
+    assert state.target_profile is None
+    assert state.target_relationships == []
+    assert state.creator_profile is None
+    assert state.bootstrap_sp_present is False
+    assert state.wrapper_schema_exists is False
+    assert state.orphan_tombstones == {}
+
+
 @pytest.mark.parametrize("rollback_mode", ["failed", "residual"])
-def test_provider_statement_loss_with_exact_residual_forward_converges(
+def test_precommit_statement_loss_with_impossible_exact_residual_blocks(
     rollback_mode: str,
 ) -> None:
     state = _State()
@@ -2139,11 +2264,12 @@ def test_provider_statement_loss_with_exact_residual_forward_converges(
     else:
         state.provider_rollback_leaves_target = True
 
-    _run(state)
+    with pytest.raises(RuntimeError, match="exact target cannot erase a lifecycle failure"):
+        _run(state)
 
     assert state.target_profile == bootstrap.SAFE_OAUTH_PROFILE
     assert state.target_deleted is False
-    assert state.creator_profile is None
+    assert state.orphan_tombstones
 
 
 @pytest.mark.parametrize(
@@ -2834,6 +2960,8 @@ def test_account_principal_delete_failure_retains_provider_role_and_tombstone() 
     assert state.bootstrap_sp_active is True
     assert state.bootstrap_sp_present is True
     assert state.orphan_tombstones
+    assert state.target_profile is None
+    assert any(action == "provider_call" for action, _ in state.actions)
     assert not any(action == "creator_delete" for action, _ in state.actions)
 
 

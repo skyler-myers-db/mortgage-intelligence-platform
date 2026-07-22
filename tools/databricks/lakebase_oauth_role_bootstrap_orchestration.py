@@ -5,6 +5,7 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from math import isfinite
 from typing import Any
 
 from databricks.sdk.errors import NotFound
@@ -12,17 +13,18 @@ from tools.databricks.lakebase_oauth_role_account_inventory import (
     assert_no_workspace_app_binding,
 )
 from tools.databricks.lakebase_oauth_role_account_principal import (
+    assert_account_workspace_assignment_boundary,
     assert_no_account_workspace_assignments,
     prove_exact_principal_absent_window,
     retire_bootstrap_account_principal,
 )
 from tools.databricks.lakebase_oauth_role_bootstrap_admission import (
     BootstrapAdmissionOutcome,
-    BootstrapAdmissionProof,
+    BootstrapRetirementProof,
     DatabaseCredentialLease,
     assert_singleton_bootstrap_secret_planes,
     capture_cached_m2m_access_token_expiry,
-    finalize_bootstrap_admission_proof,
+    finalize_bootstrap_retirement_proof,
     mint_database_credential_lease,
     open_retained_bootstrap_backend,
     prove_bootstrap_secret_planes_empty,
@@ -42,6 +44,7 @@ from tools.databricks.lakebase_oauth_role_bootstrap_sessions import (
 _BOOTSTRAP_SECRET_LIFETIME = "600s"  # nosec B105
 _EXPIRY_SKEW = timedelta(seconds=120)
 _HEARTBEAT_SECONDS = 15.0
+_PROVIDER_AUTH_MINIMUM_REMAINING = timedelta(seconds=120)
 
 
 def _close(resource: Any) -> None:
@@ -173,6 +176,122 @@ def _assert_principal_absent_once(
     )
 
 
+def _assert_principal_active_once(
+    workspace_client: Any,
+    account_client: Any,
+    *,
+    service_principal_id: str,
+    application_id: str,
+    display_name: str,
+) -> None:
+    expected = (service_principal_id, application_id, display_name, "")
+    for plane, api in (
+        ("workspace", workspace_client.service_principals),
+        ("account", account_client.service_principals),
+    ):
+        principal = api.get(service_principal_id)
+        identity = tuple(
+            str(getattr(principal, field, "") or "")
+            for field in ("id", "application_id", "display_name", "external_id")
+        )
+        if (
+            identity != expected
+            or getattr(principal, "active", None) is not True
+            or any(
+                getattr(principal, field, None)
+                for field in ("groups", "roles", "entitlements")
+            )
+        ):
+            raise RuntimeError(
+                f"temporary Lakebase {plane} principal active contract drifted"
+            )
+    assert_account_workspace_assignment_boundary(
+        account_client,
+        workspace_client,
+        principal_id=service_principal_id,
+        application_id=application_id,
+        display_name=display_name,
+        expected_workspace_active=True,
+    )
+    assert_no_workspace_app_binding(
+        workspace_client,
+        application_ids={application_id},
+    )
+
+
+def _assert_provider_auth_fresh(
+    *,
+    lease: DatabaseCredentialLease,
+    m2m_access_token_expires_at: datetime,
+    now: datetime,
+) -> None:
+    if now.tzinfo is None or now.utcoffset() is None or now.utcoffset().total_seconds() != 0:
+        raise RuntimeError("temporary Lakebase provider-invocation clock is not UTC")
+    remaining = min(lease.expires_at, m2m_access_token_expires_at) - now.astimezone(UTC)
+    if remaining <= _PROVIDER_AUTH_MINIMUM_REMAINING:
+        raise RuntimeError(
+            "temporary Lakebase provider authorization is too close to expiry"
+        )
+
+
+def _assert_transaction_survivability(
+    cursor: Any,
+) -> None:
+    cursor.execute("SET statement_timeout = 0")
+    cursor.execute("SET idle_in_transaction_session_timeout = 0")
+    cursor.execute("SELECT current_setting('transaction_timeout', true)")
+    transaction_setting = cursor.fetchone()
+    if transaction_setting is None or len(transaction_setting) != 1:
+        raise RuntimeError("temporary Lakebase transaction-timeout inventory is absent")
+    if transaction_setting[0] is not None:
+        cursor.execute("SET transaction_timeout = 0")
+    cursor.execute(
+        """
+        SELECT EXTRACT(
+                   EPOCH FROM current_setting(
+                       'statement_timeout'
+                   )::pg_catalog.interval
+               )::double precision,
+               EXTRACT(
+                   EPOCH FROM current_setting(
+                       'idle_in_transaction_session_timeout'
+                   )::pg_catalog.interval
+               )::double precision,
+               CASE
+                   WHEN current_setting('transaction_timeout', true) IS NULL THEN NULL
+                   ELSE EXTRACT(
+                       EPOCH FROM current_setting(
+                           'transaction_timeout'
+                       )::pg_catalog.interval
+                   )::double precision
+               END
+        """
+    )
+    row = cursor.fetchone()
+    if row is None or len(row) != 3:
+        raise RuntimeError("temporary Lakebase provider transaction timeout proof is absent")
+    try:
+        statement_timeout = float(row[0])
+        idle_timeout = float(row[1])
+        transaction_timeout = None if row[2] is None else float(row[2])
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise RuntimeError(
+            "temporary Lakebase provider transaction timeout proof is invalid"
+        ) from exc
+    observed = tuple(
+        value
+        for value in (statement_timeout, idle_timeout, transaction_timeout)
+        if value is not None
+    )
+    if (
+        not all(isfinite(value) for value in observed)
+        or statement_timeout != 0
+        or idle_timeout != 0
+        or transaction_timeout not in (None, 0)
+    ):
+        raise RuntimeError("temporary Lakebase provider transaction timeouts remain enabled")
+
+
 def _capture_same_backend(
     cursor: Any,
     *,
@@ -270,6 +389,7 @@ def execute_admitted_provider_bootstrap(
     database_name: str,
     bootstrap_application_id: str,
     bootstrap_scim_id: str,
+    bootstrap_display_name: str,
     bootstrap_reservation_name: str,
     bootstrap_external_id: str,
     control_application_id: str,
@@ -280,14 +400,17 @@ def execute_admitted_provider_bootstrap(
     presecret_contract: Callable[[], None],
     positive_control: Callable[[], None],
     preinvoke_contract: Callable[[Any], None],
+    precommit_contract: Callable[[Any], None],
     mark_provider_invocation: Callable[[], None],
+    mark_provider_commit: Callable[[], None],
+    mark_provider_commit_completed: Callable[[], None],
     invoke_provider: Callable[[Any], None],
     validate_provider_result: Callable[[Any], None],
     transaction_diagnostics: list[str],
     now_factory: Callable[[], datetime] = lambda: datetime.now(UTC),
     sleep: Callable[[float], None] = time.sleep,
-) -> BootstrapAdmissionProof:
-    """Admit one retained backend, then and only then invoke the provider."""
+) -> BootstrapRetirementProof:
+    """Invoke once with valid auth, then retire every capability before commit."""
 
     if (
         not control_application_id
@@ -380,28 +503,6 @@ def execute_admitted_provider_bootstrap(
                     f"{revocation_diagnostics!r}"
                 ) from exc
             raise
-        retire_bootstrap_account_principal(
-            account_client,
-            workspace_client,
-            principal_id=bootstrap_scim_id,
-            application_id=bootstrap_application_id,
-            bootstrap_reservation_name=bootstrap_reservation_name,
-            ownership_marker=bootstrap_external_id,
-            bootstrap_lock_cursor=bootstrap_lock_cursor,
-            bootstrap_lock_key=bootstrap_lock_key,
-            allow_unlocked_recovery_for_tests=False,
-        )
-        prove_exact_principal_absent_window(
-            account_client,
-            workspace_client,
-            principal_id=bootstrap_scim_id,
-            application_id=bootstrap_application_id,
-            bootstrap_reservation_name=bootstrap_reservation_name,
-            ownership_marker=bootstrap_external_id,
-            expected_workspace_active=True,
-        )
-        principal_absence = 3
-
         def fresh_destroyed_credential_read() -> Any:
             destroyed_client = workspace_client_factory(
                 host=workspace_host,
@@ -430,90 +531,131 @@ def execute_admitted_provider_bootstrap(
             if str(getattr(observed, "name", "") or "").strip() != instance_name:
                 raise RuntimeError("Lakebase OAuth-M2M positive control changed instances")
 
-        # Secret deletion does not revoke a bearer already cached by the SDK,
-        # and a database password can remain valid for its full lease. Always
-        # cross both captured expiries; no early 401 or 28P01 observation may
-        # optimize this boundary away.
-        _wait_through_bootstrap_auth_expiry(
+        _assert_principal_active_once(
             workspace_client,
             account_client,
-            deployer_cursor,
-            retained_cursor,
-            lease=lease,
-            m2m_access_token_expires_at=m2m_access_token_expires_at,
-            retained_backend=retained_backend,
             service_principal_id=bootstrap_scim_id,
             application_id=bootstrap_application_id,
-            bootstrap_lock_cursor=bootstrap_lock_cursor,
-            bootstrap_lock_key=bootstrap_lock_key,
-            now_factory=now_factory,
-            sleep=sleep,
-        )
-        m2m_proof = prove_destroyed_m2m_credential_rejected(
-            fresh_destroyed_credential_read,
-            positive_control=fresh_m2m_lakebase_control,
-            sleep=sleep,
-        )
-        old_token_proof = prove_old_database_token_reuse_rejected(
-            connect,
-            lease=lease,
-            deployer_cursor=deployer_cursor,
-            retained_backend=retained_backend,
-            expected_executor=expected_executor,
-            positive_control=positive_control,
-            auth_probe_connect=structured_database_auth_connect,
-        )
-        if old_token_proof.outcome is not BootstrapAdmissionOutcome.ADMITTED:
-            raise RuntimeError(
-                "temporary Lakebase database credential remained reusable after expiry"
-            )
-        proof = finalize_bootstrap_admission_proof(
-            lease=lease,
-            retained_backend=retained_backend,
-            secret_plane_absence_observations=secret_absence,
-            principal_absence_observations=principal_absence,
-            m2m_secret_proof=m2m_proof,
-            old_token_proof=old_token_proof,
-        )
-        if not proof.ready_for_provider_invocation:
-            raise RuntimeError("temporary Lakebase bootstrap admission did not converge")
-
-        _admission_heartbeat(
-            workspace_client,
-            account_client,
-            deployer_cursor,
-            retained_cursor,
-            lease=lease,
-            retained_backend=retained_backend,
-            service_principal_id=bootstrap_scim_id,
-            application_id=bootstrap_application_id,
-            bootstrap_lock_cursor=bootstrap_lock_cursor,
-            bootstrap_lock_key=bootstrap_lock_key,
+            display_name=bootstrap_display_name,
         )
         preinvoke_contract(retained_cursor)
         retained_connection.autocommit = False
         if getattr(retained_connection, "autocommit", None) is not False:
             raise RuntimeError("temporary Lakebase provider transaction did not start explicitly")
         _capture_same_backend(retained_cursor, lease=lease, expected=retained_backend)
-        _admission_heartbeat(
+        _assert_principal_active_once(
             workspace_client,
             account_client,
-            deployer_cursor,
-            retained_cursor,
-            lease=lease,
-            retained_backend=retained_backend,
             service_principal_id=bootstrap_scim_id,
             application_id=bootstrap_application_id,
-            bootstrap_lock_cursor=bootstrap_lock_cursor,
-            bootstrap_lock_key=bootstrap_lock_key,
+            display_name=bootstrap_display_name,
         )
+        _assert_transaction_survivability(retained_cursor)
         preinvoke_contract(retained_cursor)
+        secret_absence = prove_bootstrap_secret_planes_empty(
+            workspace_client,
+            account_client,
+            service_principal_id=bootstrap_scim_id,
+        )
+        _assert_provider_auth_fresh(
+            lease=lease,
+            m2m_access_token_expires_at=m2m_access_token_expires_at,
+            now=now_factory(),
+        )
         try:
             mark_provider_invocation()
             invoke_provider(retained_cursor)
             validate_provider_result(retained_cursor)
+
+            # The provider requires a live Databricks identity at invocation.
+            # Keep its result uncommitted while every reusable form of that
+            # identity is retired and proved unusable.
+            retire_bootstrap_account_principal(
+                account_client,
+                workspace_client,
+                principal_id=bootstrap_scim_id,
+                application_id=bootstrap_application_id,
+                bootstrap_reservation_name=bootstrap_reservation_name,
+                ownership_marker=bootstrap_external_id,
+                bootstrap_lock_cursor=bootstrap_lock_cursor,
+                bootstrap_lock_key=bootstrap_lock_key,
+                allow_unlocked_recovery_for_tests=False,
+            )
+            prove_exact_principal_absent_window(
+                account_client,
+                workspace_client,
+                principal_id=bootstrap_scim_id,
+                application_id=bootstrap_application_id,
+                bootstrap_reservation_name=bootstrap_reservation_name,
+                ownership_marker=bootstrap_external_id,
+                expected_workspace_active=True,
+            )
+
+            # Secret deletion does not revoke a bearer already cached by the
+            # SDK, and a database password can remain valid for its full lease.
+            # Cross both expiries before publishing the provider result.
+            _wait_through_bootstrap_auth_expiry(
+                workspace_client,
+                account_client,
+                deployer_cursor,
+                retained_cursor,
+                lease=lease,
+                m2m_access_token_expires_at=m2m_access_token_expires_at,
+                retained_backend=retained_backend,
+                service_principal_id=bootstrap_scim_id,
+                application_id=bootstrap_application_id,
+                bootstrap_lock_cursor=bootstrap_lock_cursor,
+                bootstrap_lock_key=bootstrap_lock_key,
+                now_factory=now_factory,
+                sleep=sleep,
+            )
+            m2m_proof = prove_destroyed_m2m_credential_rejected(
+                fresh_destroyed_credential_read,
+                positive_control=fresh_m2m_lakebase_control,
+                sleep=sleep,
+            )
+            old_token_proof = prove_old_database_token_reuse_rejected(
+                connect,
+                lease=lease,
+                deployer_cursor=deployer_cursor,
+                retained_backend=retained_backend,
+                expected_executor=expected_executor,
+                positive_control=positive_control,
+                auth_probe_connect=structured_database_auth_connect,
+            )
+            if old_token_proof.outcome is not BootstrapAdmissionOutcome.ADMITTED:
+                raise RuntimeError(
+                    "temporary Lakebase database credential remained reusable after expiry"
+                )
+            proof = finalize_bootstrap_retirement_proof(
+                lease=lease,
+                retained_backend=retained_backend,
+                secret_plane_absence_observations=secret_absence,
+                principal_absence_observations=3,
+                m2m_secret_proof=m2m_proof,
+                old_token_proof=old_token_proof,
+            )
+            if not proof.ready_for_commit:
+                raise RuntimeError("temporary Lakebase bootstrap retirement did not converge")
+
+            _admission_heartbeat(
+                workspace_client,
+                account_client,
+                deployer_cursor,
+                retained_cursor,
+                lease=lease,
+                retained_backend=retained_backend,
+                service_principal_id=bootstrap_scim_id,
+                application_id=bootstrap_application_id,
+                bootstrap_lock_cursor=bootstrap_lock_cursor,
+                bootstrap_lock_key=bootstrap_lock_key,
+            )
+            precommit_contract(retained_cursor)
+            validate_provider_result(retained_cursor)
             assert_bootstrap_lock_held(bootstrap_lock_cursor, lock_key=bootstrap_lock_key)
+            mark_provider_commit()
             retained_connection.commit()
+            mark_provider_commit_completed()
         except BaseException:
             try:
                 retained_connection.rollback()

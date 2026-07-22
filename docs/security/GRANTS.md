@@ -674,23 +674,35 @@ immutable secret ID on the workspace and account planes, authenticate the exact
 bootstrap identity, mint exactly one bounded database credential, and retain
 exactly one autocommit database backend. The retained backend is pinned by PID,
 role OID, username, current and session user, database, application name,
-backend start, backend type, and client address.
+backend start, backend type, and client address. Deployment then deletes the
+secret through both control planes and proves three stable empty secret inventories. It
+requires the exact principal to remain active and assigned on both planes,
+disables statement, idle-in-transaction, and supported whole-transaction
+timeouts on the disposable session, re-proves stable empty secret inventories
+at the final invocation boundary, and requires more than 120 seconds on both
+captured authentication leases immediately before the provider call.
 
-Deployment then attempts exact secret deletion through both control planes and
-requires three stable empty secret inventories on each plane. A mutation error from one
-plane is not independently authoritative when the other plane has already
-deleted their shared object; only the subsequent stable two-plane inventory can
-resolve that outcome. It deletes the exact signed principal through account
-SCIM and requires direct immutable-ID GETs to show continuous account and
-workspace absence for 30 seconds within a 180-second deadline, proving it
-absent from both the account and workspace. The exact DELETE
-is repeated if the account object reappears, and every observation also proves
-zero account-workspace assignments and zero App bindings. Service-principal
-LIST omission never proves deletion. Workspace PATCH/deactivation and workspace
-principal deletion are not cleanup authority: live identity-federated
-workspaces ignored `externalId`; workspace deletion only removed the assignment
-while leaving the account principal active. Dedicated bounded
-account OAuth is therefore required for this transition.
+The retained backend starts an explicit transaction, repeats the lock,
+principal, singleton-backend, provider, wrapper, event-trigger, and
+target-absence proofs, and invokes the target-bound wrapper while the provider
+can still authorize the live Databricks principal. The result, OAuth label, and
+exact creator edge are validated but remain uncommitted. A provider error or
+any later retirement-proof error rolls the transaction back; only an ambiguous
+commit response may forward-reconcile an exact target. An exact target can
+never erase a pre-commit or post-commit lifecycle failure.
+
+While the provider result remains uncommitted, deployment deletes the exact
+signed principal through account SCIM and requires direct immutable-ID GETs to
+show continuous account and workspace absence for 30 seconds within a
+180-second deadline, proving it absent from both the account and workspace. The
+exact DELETE is repeated if the account object reappears, and every observation
+also proves zero account-workspace assignments
+and zero App bindings. Service-principal LIST omission never proves deletion.
+Workspace PATCH/deactivation and workspace principal deletion are not cleanup
+authority: live identity-federated workspaces ignored `externalId`; workspace deletion only removed the assignment
+while leaving the account principal active.
+Dedicated bounded account OAuth is therefore required for this
+transition.
 
 After initial OAuth authentication, deployment captures only the access token's
 numeric JWT expiry and rejects a non-M2M client, a missing/non-numeric expiry, or
@@ -716,21 +728,25 @@ server field; pg8000 must return the structured PostgreSQL `C` field, and error
 message text is never promoted to class-28 evidence.
 Throughout the mandatory wait, every opened probe backend is closed and drained
 while the canonical lock, principal absence, and sole retained backend are
-heartbeated. Only the resulting secret-free `ADMITTED` proof permits provider
-invocation.
+heartbeated. Only the resulting secret-free retirement proof permits the
+already-validated provider transaction to commit. Immediately before commit,
+deployment rechecks the same backend, provider and wrapper fingerprints,
+bootstrap role, exact uncommitted target/profile/label/creator edge, managed
+event triggers, and canonical lock. This deliberately keeps a catalog-role
+transaction open across the expiry boundary so no target is published before
+retirement proof. The disposable session verifies all supported transaction
+timeouts remain disabled before invocation; live pre-deploy verification must
+also confirm the isolated lock footprint.
 
 The deployer also cannot `ALTER`, comment, or directly drop Databricks'
-provider-owned bootstrap role. On the successful creation path, the admitted
-retained backend is recaptured immediately before invocation, switches from
-autocommit to an explicit transaction, and repeats the lock, principal,
-singleton-backend, provider, wrapper, event-trigger, and target-absence proofs.
-No governed mutation occurs between that final preflight and the target-bound
-wrapper call. On cleanup and recovery paths, deployment captures the bootstrap
+provider-owned bootstrap role. No governed mutation occurs between the final
+pre-invocation fence and the target-bound wrapper call. On cleanup and recovery
+paths, deployment captures the bootstrap
 role OID and exact PIDs, terminates only the independently bound backends, and
 requires three stable zero-session observations. It rechecks the immutable SQL and
 control-plane contract immediately before using the provider role-delete API,
 then proves the captured sessions, role OID, SQL role, and control-plane role
-absent. A failed secret proof, account deletion, session fence, admission proof,
+absent. A failed secret proof, account deletion, session fence, retirement proof,
 or role contract retains the role, OAuth security-label handle, and signed
 tombstone and blocks release; a legacy
 comment alone never authorizes deletion.

@@ -112,8 +112,8 @@ class OldTokenReuseProof:
 
 
 @dataclass(frozen=True)
-class BootstrapAdmissionProof:
-    """Secret-free result that alone decides whether provider invocation is safe."""
+class BootstrapRetirementProof:
+    """Secret-free result that alone decides whether the provider transaction may commit."""
 
     outcome: BootstrapAdmissionOutcome
     retained_backend: BootstrapBackendIdentity
@@ -148,7 +148,7 @@ class BootstrapAdmissionProof:
             raise ValueError("temporary Lakebase token-expiry proof is incomplete")
 
     @property
-    def ready_for_provider_invocation(self) -> bool:
+    def ready_for_commit(self) -> bool:
         return self.outcome is BootstrapAdmissionOutcome.ADMITTED
 
 
@@ -613,7 +613,7 @@ def prove_old_database_token_reuse_rejected(
     )
 
 
-def finalize_bootstrap_admission_proof(
+def finalize_bootstrap_retirement_proof(
     *,
     lease: DatabaseCredentialLease,
     retained_backend: BootstrapBackendIdentity,
@@ -621,10 +621,10 @@ def finalize_bootstrap_admission_proof(
     principal_absence_observations: int,
     m2m_secret_proof: M2MSecretRejectionProof,
     old_token_proof: OldTokenReuseProof,
-) -> BootstrapAdmissionProof:
+) -> BootstrapRetirementProof:
     """Discard the token-bearing lease and return only immutable proof metadata."""
 
-    return BootstrapAdmissionProof(
+    return BootstrapRetirementProof(
         outcome=old_token_proof.outcome,
         retained_backend=retained_backend,
         credential_expires_at=lease.expires_at,
