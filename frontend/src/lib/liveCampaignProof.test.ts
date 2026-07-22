@@ -71,11 +71,30 @@ describe('live campaign proof recovery', () => {
     expect(patch).toHaveBeenCalledTimes(1);
   });
 
+  it('reconciles a committed final PATCH when its response is lost', async () => {
+    const get = vi.fn()
+      .mockResolvedValueOnce(response(200, { name: 'Genie strategy draft ghabcdearf', status: 'draft' }))
+      .mockResolvedValueOnce(response(200, { name: 'Genie strategy draft ghabcdearf', status: 'archived' }));
+    const patch = vi.fn().mockRejectedValueOnce(new Error('response lost after commit'));
+
+    await expect(archiveLiveCampaign(request({ get, patch }), {
+      adminBearer: 'admin',
+      apiUrl: 'https://app.example',
+      campaignId: 'campaign-id',
+      expectedName: 'Genie strategy draft ghabcdearf',
+      attempts: 1,
+      sleep: async () => undefined,
+    })).resolves.toBeUndefined();
+
+    expect(get).toHaveBeenCalledTimes(2);
+    expect(patch).toHaveBeenCalledTimes(1);
+  });
+
   it('archives the exact ID before surfacing a missing persisted run marker', async () => {
     const get = vi.fn()
       .mockResolvedValueOnce(response(200, { name: 'Genie strategy draft', status: 'draft' }))
       .mockResolvedValueOnce(response(200, { name: 'Genie strategy draft', status: 'archived' }));
-    const patch = vi.fn().mockResolvedValueOnce(response(200, {}));
+    const patch = vi.fn().mockRejectedValueOnce(new Error('response lost after commit'));
 
     await expect(archiveLiveCampaign(request({ get, patch }), {
       adminBearer: 'admin',

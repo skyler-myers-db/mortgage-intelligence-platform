@@ -143,9 +143,9 @@ export async function archiveLiveCampaign(
         if (attempt + 1 < attempts) await sleep(1_000);
         continue;
       }
-      let archived: LiveCampaignResponse;
+      let patchStatus: number | null = null;
       try {
-        archived = await request.patch(
+        const archived = await request.patch(
           `${options.apiUrl}/api/campaigns/${options.campaignId}`,
           {
             headers: {
@@ -160,20 +160,23 @@ export async function archiveLiveCampaign(
             timeout: 30_000,
           },
         );
+        patchStatus = archived.status();
+        lastResult = `PATCH ${patchStatus}`;
       } catch {
         lastResult = 'PATCH transport error';
-        if (attempt + 1 < attempts) await sleep(1_000);
-        continue;
       }
-      lastResult = `PATCH ${archived.status()}`;
       if (
-        archived.status() !== 200
-        && archived.status() !== 409
-        && archived.status() !== 429
-        && archived.status() < 500
+        patchStatus !== null
+        && patchStatus !== 200
+        && patchStatus !== 409
+        && patchStatus !== 429
+        && patchStatus < 500
       ) {
         throw new Error(`live campaign teardown was rejected: ${lastResult}`);
       }
+      // A transport exception does not prove the PATCH failed. Always perform
+      // the same-attempt GET so the final retry can reconcile a committed
+      // archive and still validate its persisted run marker.
       let confirmed: LiveCampaignResponse;
       try {
         confirmed = await request.get(
