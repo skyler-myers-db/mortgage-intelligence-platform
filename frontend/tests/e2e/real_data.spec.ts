@@ -32,10 +32,14 @@ import {
   test,
   expect,
   type APIRequestContext,
-  type APIResponse,
   type Locator,
   type Page,
 } from '@playwright/test';
+
+import {
+  archiveLiveCampaign,
+  reconcileGenieCampaignAction,
+} from '../../src/lib/liveCampaignProof';
 
 // Gate: skip everything unless E2E_LIVE=1 is set by the nightly workflow.
 const LIVE = process.env.E2E_LIVE === '1';
@@ -308,116 +312,6 @@ async function fetchAuditEvents(
   const payload = await resp.json();
   expect(Array.isArray(payload), 'GET /api/audit/events should return an array').toBe(true);
   return payload as AuditRow[];
-}
-
-async function archiveLiveCampaign(
-  request: APIRequestContext,
-  campaignId: string,
-): Promise<void> {
-  expect(ADMIN_BEARER, 'live campaign teardown requires the distinct admin bearer').not.toBe('');
-  let lastResult = 'no request attempted';
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    let current: APIResponse;
-    try {
-      current = await request.get(`${API_URL}/api/campaigns/${campaignId}`, {
-        headers: { Authorization: `Bearer ${ADMIN_BEARER}` },
-        timeout: 30_000,
-      });
-    } catch {
-      lastResult = 'GET transport error';
-      if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
-      continue;
-    }
-    lastResult = `GET ${current.status()}`;
-    if (current.status() === 200) {
-      const campaign = await current.json() as { status?: string };
-      if (campaign.status === 'archived') return;
-      expect(campaign.status, 'live campaign teardown requires a current status').toBeTruthy();
-      let archived: APIResponse;
-      try {
-        archived = await request.patch(`${API_URL}/api/campaigns/${campaignId}`, {
-          headers: {
-            Authorization: `Bearer ${ADMIN_BEARER}`,
-            'Content-Type': 'application/json',
-          },
-          data: {
-            status: 'archived',
-            expected_status: campaign.status,
-            rationale: 'Archive the exact live Genie action fixture.',
-          },
-          timeout: 30_000,
-        });
-      } catch {
-        lastResult = 'PATCH transport error';
-        if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
-        continue;
-      }
-      lastResult = `PATCH ${archived.status()}`;
-      if (
-        archived.status() !== 200
-        && archived.status() !== 409
-        && archived.status() !== 429
-        && archived.status() < 500
-      ) {
-        throw new Error(`live campaign teardown was rejected: ${lastResult}`);
-      }
-      let confirmed: APIResponse;
-      try {
-        confirmed = await request.get(`${API_URL}/api/campaigns/${campaignId}`, {
-          headers: { Authorization: `Bearer ${ADMIN_BEARER}` },
-          timeout: 30_000,
-        });
-      } catch {
-        lastResult = 'final GET transport error';
-        if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
-        continue;
-      }
-      lastResult = `final GET ${confirmed.status()}`;
-      if (confirmed.status() === 200) {
-        const body = await confirmed.json() as { status?: string };
-        if (body.status === 'archived') return;
-      }
-    }
-    if (attempt < 9) await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  throw new Error(`live campaign teardown did not converge: ${lastResult}`);
-}
-
-async function reconcileGenieCampaignAction(
-  request: APIRequestContext,
-  submittedPayload: Record<string, unknown>,
-): Promise<string> {
-  let lastResult = 'no replay attempted';
-  for (let attempt = 0; attempt < 5; attempt += 1) {
-    let replay: APIResponse;
-    try {
-      replay = await request.post(`${API_URL}/api/genie/actions`, {
-        headers: { ...AUTH_HEADERS, 'Content-Type': 'application/json' },
-        data: submittedPayload,
-        timeout: 30_000,
-      });
-    } catch {
-      lastResult = 'POST transport error';
-      if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
-      continue;
-    }
-    lastResult = `POST ${replay.status()}`;
-    if (replay.status() === 200) {
-      try {
-        const body = await replay.json() as { campaign_id?: unknown };
-        if (typeof body.campaign_id === 'string' && body.campaign_id.trim()) {
-          return body.campaign_id.trim();
-        }
-        lastResult = 'POST 200 without campaign_id';
-      } catch {
-        lastResult = 'POST 200 with unreadable response';
-      }
-    } else if (replay.status() !== 429 && replay.status() < 500) {
-      throw new Error(`Genie campaign replay was rejected: ${lastResult}`);
-    }
-    if (attempt < 4) await new Promise((resolve) => setTimeout(resolve, 1_000));
-  }
-  throw new Error(`Genie campaign replay did not recover its durable ID: ${lastResult}`);
 }
 
 async function findBorrowerWithEvidenceProducts(
@@ -2201,9 +2095,18 @@ test.describe('Module 0 — real-UC golden path (nightly only)', () => {
     } finally {
       if (submittedPayload) {
         if (!campaignId) {
-          campaignId = await reconcileGenieCampaignAction(page.request, submittedPayload);
+          campaignId = await reconcileGenieCampaignAction(page.request, {
+            apiUrl: API_URL,
+            authHeaders: AUTH_HEADERS,
+            submittedPayload,
+          });
         }
-        await archiveLiveCampaign(page.request, campaignId);
+        await archiveLiveCampaign(page.request, {
+          adminBearer: ADMIN_BEARER,
+          apiUrl: API_URL,
+          campaignId,
+          expectedName: `Genie strategy draft ${LIVE_CAMPAIGN_RUN_MARKER}`,
+        });
       }
     }
   });

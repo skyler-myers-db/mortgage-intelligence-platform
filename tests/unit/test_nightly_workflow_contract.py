@@ -18,6 +18,8 @@ import yaml
 REPO = Path(__file__).resolve().parents[2]
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 REAL_DATA_SPEC = REPO / "frontend" / "tests" / "e2e" / "real_data.spec.ts"
+LIVE_CAMPAIGN_PROOF = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.ts"
+LIVE_CAMPAIGN_PROOF_TEST = REPO / "frontend" / "src" / "lib" / "liveCampaignProof.test.ts"
 LIVE_HARDENING_SPEC = REPO / "frontend" / "tests" / "e2e" / "live_hardening_regressions.spec.ts"
 CONSOLE_LAYOUT_SPEC = REPO / "frontend" / "tests" / "e2e" / "console-layout.spec.ts"
 ECONOMICS_SCATTER_SPEC = REPO / "frontend" / "tests" / "e2e" / "economics_scatter.spec.ts"
@@ -317,25 +319,33 @@ def test_real_genie_browser_proof_executes_bound_native_follow_up() -> None:
 
 def test_live_genie_campaign_action_archives_the_exact_created_campaign() -> None:
     spec = REAL_DATA_SPEC.read_text(encoding="utf-8")
+    proof = LIVE_CAMPAIGN_PROOF.read_text(encoding="utf-8")
+    proof_test = LIVE_CAMPAIGN_PROOF_TEST.read_text(encoding="utf-8")
     action_pos = spec.index(
         "ask-genie: dynamic chart, proof drawer, and governed action confirmation"
     )
     next_test_pos = spec.index("\n  test(", action_pos + 1)
     action_block = spec[action_pos:next_test_pos]
 
-    assert "async function archiveLiveCampaign" in spec
-    assert "async function reconcileGenieCampaignAction" in spec
-    assert "Authorization: `Bearer ${ADMIN_BEARER}`" in spec
-    assert "expected_status: campaign.status" in spec
-    assert "final GET ${confirmed.status()}" in spec
+    assert "export async function archiveLiveCampaign" in proof
+    assert "export async function reconcileGenieCampaignAction" in proof
+    assert "Authorization: `Bearer ${options.adminBearer}`" in proof
+    assert "expected_status: currentStatus" in proof
+    assert "final GET ${confirmed.status()}" in proof
+    assert "assertExpectedNameAfterCleanup" in proof
     assert "const actionRequest = page.waitForRequest" in action_block
     assert "LIVE_CAMPAIGN_RUN_MARKER" in action_block
     assert "submittedRequest.postDataJSON()" in action_block
     assert "typeof actionPayload.campaign_id === 'string'" in action_block
     assert "finally" in action_block
-    assert "reconcileGenieCampaignAction(page.request, submittedPayload)" in action_block
-    assert "archiveLiveCampaign(page.request, campaignId)" in action_block
+    assert "reconcileGenieCampaignAction(page.request, {" in action_block
+    assert "archiveLiveCampaign(page.request, {" in action_block
+    assert "expectedName: `Genie strategy draft ${LIVE_CAMPAIGN_RUN_MARKER}`" in action_block
     assert 'AUTH_HEADERS[\'X-MIP-Live-Campaign-Run-Marker\']' in spec
+    assert "response lost" in proof_test
+    assert "response(503" in proof_test
+    assert "truncated response" in proof_test
+    assert "campaign marker was not persisted" in proof_test
 
 
 def test_live_playwright_credentials_fail_before_browser_proofs() -> None:
