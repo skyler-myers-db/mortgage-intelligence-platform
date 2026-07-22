@@ -38,7 +38,7 @@ def test_live_campaign_cleanup_retries_cas_and_uses_only_public_api() -> None:
         admin_token="admin-token",
     )
 
-    assert [call[0] for call in calls] == ["GET", "PATCH", "GET", "PATCH", "GET"]
+    assert [call[0] for call in calls] == ["GET", "PATCH", "GET", "GET"]
     assert all(call[1] == "/api/campaigns/campaign-id" for call in calls)
     assert all(call[3] == "admin-token" for call in calls)
 
@@ -459,7 +459,7 @@ def test_archive_retries_transient_patch_and_confirms_with_get() -> None:
         retry_interval_seconds=0,
     )
 
-    assert calls == ["GET", "PATCH", "GET", "PATCH", "GET"]
+    assert calls == ["GET", "PATCH", "GET", "GET", "PATCH", "GET"]
 
 
 def test_archive_accepts_scalar_success_on_final_attempt_only_after_get() -> None:
@@ -488,3 +488,86 @@ def test_archive_accepts_scalar_success_on_final_attempt_only_after_get() -> Non
     )
 
     assert calls == ["GET", "PATCH", "GET"]
+
+
+def test_archive_reconciles_final_patch_commit_then_transport_loss() -> None:
+    calls: list[str] = []
+    status = "draft"
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        nonlocal status
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": status}
+        status = "archived"
+        raise OSError("response lost after commit")
+
+    archive_campaign_fixture(
+        request,
+        campaign_id="campaign-id",
+        admin_token="admin-token",
+        attempts=1,
+        retry_interval_seconds=0,
+    )
+
+    assert calls == ["GET", "PATCH", "GET"]
+
+
+@pytest.mark.parametrize("patch_status", [409, 429, 503])
+def test_archive_reconciles_final_retryable_response_after_commit(patch_status: int) -> None:
+    calls: list[str] = []
+    status = "draft"
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        nonlocal status
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": status}
+        status = "archived"
+        return patch_status, {"detail": "ambiguous retryable response"}
+
+    archive_campaign_fixture(
+        request,
+        campaign_id="campaign-id",
+        admin_token="admin-token",
+        attempts=1,
+        retry_interval_seconds=0,
+    )
+
+    assert calls == ["GET", "PATCH", "GET"]
+
+
+def test_archive_does_not_confirm_definitive_patch_rejection() -> None:
+    calls: list[str] = []
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": "draft"}
+        return 403, {"detail": "forbidden"}
+
+    with pytest.raises(AssertionError, match="governed campaign cleanup failed"):
+        archive_campaign_fixture(
+            request,
+            campaign_id="campaign-id",
+            admin_token="admin-token",
+            attempts=1,
+            retry_interval_seconds=0,
+        )
+
+    assert calls == ["GET", "PATCH"]

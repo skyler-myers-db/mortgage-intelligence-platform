@@ -256,3 +256,86 @@ def test_archive_accepts_scalar_success_on_final_attempt_only_after_get() -> Non
     )
 
     assert calls == ["GET", "PATCH", "GET"]
+
+
+def test_archive_reconciles_final_patch_commit_then_transport_loss() -> None:
+    calls: list[str] = []
+    status = "draft"
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        nonlocal status
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": status}
+        status = "archived"
+        raise OSError("response lost after commit")
+
+    _archive_campaign(
+        request,
+        campaign_id="campaign-id",
+        admin_token="admin-token",
+        sleep=lambda _seconds: None,
+        attempts=1,
+    )
+
+    assert calls == ["GET", "PATCH", "GET"]
+
+
+@pytest.mark.parametrize("patch_status", [409, 429, 503])
+def test_archive_reconciles_final_retryable_response_after_commit(patch_status: int) -> None:
+    calls: list[str] = []
+    status = "draft"
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        nonlocal status
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": status}
+        status = "archived"
+        return patch_status, {"detail": "ambiguous retryable response"}
+
+    _archive_campaign(
+        request,
+        campaign_id="campaign-id",
+        admin_token="admin-token",
+        sleep=lambda _seconds: None,
+        attempts=1,
+    )
+
+    assert calls == ["GET", "PATCH", "GET"]
+
+
+def test_archive_does_not_confirm_definitive_patch_rejection() -> None:
+    calls: list[str] = []
+
+    def request(
+        method: str,
+        _path: str,
+        _payload: dict[str, object] | None = None,
+        **_kwargs: object,
+    ) -> tuple[int, object]:
+        calls.append(method)
+        if method == "GET":
+            return 200, {"status": "draft"}
+        return 403, {"detail": "forbidden"}
+
+    with pytest.raises(RuntimeError, match="could not be archived"):
+        _archive_campaign(
+            request,
+            campaign_id="campaign-id",
+            admin_token="admin-token",
+            sleep=lambda _seconds: None,
+            attempts=1,
+        )
+
+    assert calls == ["GET", "PATCH"]

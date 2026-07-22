@@ -300,7 +300,7 @@ def archive_campaign_fixture(
         or retry_interval_seconds < 0
     ):
         raise RuntimeError("live campaign cleanup identity is incomplete")
-    last_result: tuple[int, object] | None = None
+    last_result: object = None
     for _attempt in range(attempts):
         try:
             status, campaign = request(
@@ -308,7 +308,8 @@ def archive_campaign_fixture(
                 f"/api/campaigns/{campaign_id}",
                 token=admin_token,
             )
-        except Exception:  # noqa: BLE001 - retry ambiguous transport outcomes
+        except Exception as exc:  # noqa: BLE001 - retry ambiguous transport outcomes
+            last_result = f"{type(exc).__name__}: {exc}"
             if _attempt + 1 < attempts:
                 sleep(retry_interval_seconds)
             continue
@@ -325,8 +326,9 @@ def archive_campaign_fixture(
             if _attempt + 1 < attempts:
                 sleep(retry_interval_seconds)
             continue
+        patch_status: int | None = None
         try:
-            status, archived = request(
+            patch_status, archived = request(
                 "PATCH",
                 f"/api/campaigns/{campaign_id}",
                 {
@@ -336,25 +338,28 @@ def archive_campaign_fixture(
                 },
                 token=admin_token,
             )
-        except Exception:  # noqa: BLE001 - GET on the next pass resolves commit state
-            if _attempt + 1 < attempts:
-                sleep(retry_interval_seconds)
-            continue
-        last_result = (status, archived)
-        if status == 200:
-            # A separate GET in the same bounded attempt, never the mutation
-            # response shape, is the durable proof. This preserves a final
-            # successful PATCH when no outer retry remains.
-            try:
-                final_status, final_campaign = request(
-                    "GET",
-                    f"/api/campaigns/{campaign_id}",
-                    token=admin_token,
-                )
-            except Exception:  # noqa: BLE001 - retry ambiguous observation
-                if _attempt + 1 < attempts:
-                    sleep(retry_interval_seconds)
-                continue
+        except Exception as exc:  # noqa: BLE001 - same-attempt GET resolves commit state
+            last_result = f"{type(exc).__name__}: {exc}"
+        else:
+            last_result = (patch_status, archived)
+        if (
+            patch_status is not None
+            and patch_status not in {200, 409, 429}
+            and patch_status < 500
+        ):
+            break
+        # The PATCH result is ambiguous after transport loss and retryable
+        # HTTP responses. Always use a separate same-attempt GET as the
+        # durable proof, including when no outer retry remains.
+        try:
+            final_status, final_campaign = request(
+                "GET",
+                f"/api/campaigns/{campaign_id}",
+                token=admin_token,
+            )
+        except Exception as exc:  # noqa: BLE001 - retry ambiguous observation
+            last_result = f"{type(exc).__name__}: {exc}"
+        else:
             last_result = (final_status, final_campaign)
             if (
                 final_status == 200
@@ -362,14 +367,8 @@ def archive_campaign_fixture(
                 and str(final_campaign.get("status") or "").strip() == "archived"
             ):
                 return
-            if _attempt + 1 < attempts:
-                sleep(retry_interval_seconds)
-            continue
-        if status == 409 or status == 429 or status >= 500:
-            if _attempt + 1 < attempts:
-                sleep(retry_interval_seconds)
-            continue
-        break
+        if _attempt + 1 < attempts:
+            sleep(retry_interval_seconds)
     raise AssertionError(
         f"governed campaign cleanup failed for {campaign_id}: {last_result!r}"
     )

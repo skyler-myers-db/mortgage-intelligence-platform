@@ -88,6 +88,7 @@ def _archive_campaign(
             if attempt + 1 < attempts:
                 sleep(retry_interval_seconds)
             continue
+        patch_status: int | None = None
         try:
             patch_status, patched = request(
                 "PATCH",
@@ -101,24 +102,22 @@ def _archive_campaign(
             )
         except Exception as exc:  # noqa: BLE001 - next GET resolves commit ambiguity
             last_result = f"{type(exc).__name__}: {exc}"
-            if attempt + 1 < attempts:
-                sleep(retry_interval_seconds)
-            continue
-        last_result = (patch_status, patched)
-        if patch_status == 200:
-            # Reconcile in the same bounded attempt so a final successful
-            # PATCH cannot be discarded merely because no outer retry remains.
-            try:
-                final_status, final_campaign = request(
-                    "GET",
-                    f"/api/campaigns/{campaign_id}",
-                    token=admin_token,
-                )
-            except Exception as exc:  # noqa: BLE001 - bounded observation retry
-                last_result = f"{type(exc).__name__}: {exc}"
-                if attempt + 1 < attempts:
-                    sleep(retry_interval_seconds)
-                continue
+        else:
+            last_result = (patch_status, patched)
+        if patch_status is not None and patch_status not in {200, 409, 429} and patch_status < 500:
+            break
+        # PATCH transport loss and retryable HTTP results are ambiguous: the
+        # server may have committed before the response failed. Reconcile in
+        # this same attempt so the final retry is still authoritative.
+        try:
+            final_status, final_campaign = request(
+                "GET",
+                f"/api/campaigns/{campaign_id}",
+                token=admin_token,
+            )
+        except Exception as exc:  # noqa: BLE001 - bounded observation retry
+            last_result = f"{type(exc).__name__}: {exc}"
+        else:
             last_result = (final_status, final_campaign)
             if (
                 final_status == 200
@@ -126,14 +125,8 @@ def _archive_campaign(
                 and str(final_campaign.get("status") or "").strip() == "archived"
             ):
                 return
-            if attempt + 1 < attempts:
-                sleep(retry_interval_seconds)
-            continue
-        if patch_status in {409, 429} or patch_status >= 500:
-            if attempt + 1 < attempts:
-                sleep(retry_interval_seconds)
-            continue
-        break
+        if attempt + 1 < attempts:
+            sleep(retry_interval_seconds)
     raise RuntimeError(f"live campaign {campaign_id} could not be archived: {last_result!r}")
 
 
