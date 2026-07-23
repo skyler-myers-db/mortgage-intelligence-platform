@@ -276,6 +276,13 @@ def _deploy_auth_function_block() -> str:
     return text[start:end]
 
 
+def _identity_casefold_function_block() -> str:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = text.index("same_identity_casefold() {")
+    end = text.index("\n}\n", start) + len("\n}\n")
+    return text[start:end]
+
+
 def _proof_heartbeat_launcher_block() -> str:
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     start = text.index("start_proof_signing_heartbeat() {")
@@ -1025,8 +1032,8 @@ def test_stale_runtime_bootstrap_grants_are_reconciled_before_build_or_bundle() 
 
     assert (
         lease
-        < verifier_role_recovery
         < app_inventory
+        < verifier_role_recovery
         < app_role_recovery
         < journal_status
         < journal_role_recovery
@@ -1235,6 +1242,63 @@ def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None
     remint_pos = text.index("A full deploy can exceed the workspace OAuth TTL")
     eval_pos = text.index("-m tools.databricks.run_agent_eval")
     assert remint_pos < eval_pos
+
+
+def test_dynamic_app_identity_separation_is_casefolded_before_recovery(
+    tmp_path: Path,
+) -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    existing_identity = script.index("_EXISTING_APP_SP_CLIENT_ID _EXISTING_APP_SP_SCIM_ID")
+    existing_guard = script.index(
+        'if same_identity_casefold \\\n'
+        '      "$DATABRICKS_ACCOUNT_CLIENT_ID" "$_EXISTING_APP_SP_CLIENT_ID"',
+        existing_identity,
+    )
+    existing_recovery = script.index(
+        'step "recover interrupted App Lakebase role bootstrap"',
+        existing_identity,
+    )
+    owner_audit = script.index(
+        'step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"',
+        existing_identity,
+    )
+    assert existing_identity < existing_guard < owner_audit < existing_recovery
+
+    app_resolution = script.index('APP_RESOURCE_JSON="$(databricks apps get')
+    new_guard = script.index(
+        'if same_identity_casefold \\\n'
+        '    "$DATABRICKS_ACCOUNT_CLIENT_ID" "$APP_SP_CLIENT_ID"',
+        app_resolution,
+    )
+    migration = script.index(
+        'step "converge App Lakebase OAuth role to exact LOGIN-only profile"',
+        app_resolution,
+    )
+    assert app_resolution < new_guard < migration
+
+    harness = tmp_path / "casefold-app-identity.sh"
+    harness.write_text(
+        textwrap.dedent(
+            f"""
+            #!/usr/bin/env bash
+            set -euo pipefail
+            PYTHON={shlex.quote(sys.executable)}
+            {_identity_casefold_function_block()}
+            same_identity_casefold shared-app-id SHARED-APP-ID
+            if same_identity_casefold shared-app-id different-app-id; then
+              exit 90
+            fi
+            """
+        ),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_deploy_binds_deployer_auth_and_keeps_normal_app_oauth_shell_scoped() -> None:
@@ -1575,6 +1639,8 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers(
         "Normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs "
         "must be pairwise distinct." in text
     )
+    assert "os.environ[name].strip().casefold()" in text
+    assert ").strip().casefold()" in text
     assert (
         "MIP_APPROVER_IDENTITIES=${DATABRICKS_CLIENT_ID},${DATABRICKS_OPERATOR2_CLIENT_ID}" in text
     )
@@ -3747,6 +3813,7 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     assert "deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" in script
     assert 'resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"' in script
     assert "account-SCIM OAuth client must be distinct from" in script
+    assert "account_client_id not in values" in script
     assert script.index("existing target App service principal") < script.index(
         'step "keep existing App treatment writes quiesced through non-App release work"'
     )

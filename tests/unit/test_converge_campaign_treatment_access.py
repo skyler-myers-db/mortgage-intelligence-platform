@@ -7,9 +7,11 @@ from databricks.sdk.errors import NotFound, PermissionDenied
 
 from tools.databricks.converge_campaign_treatment_access import (
     _effective_privileges,
-    converge_campaign_treatment_access,
     target_group_membership_probe,
     target_identity_groups_probe,
+)
+from tools.databricks.converge_campaign_treatment_access import (
+    converge_campaign_treatment_access as _converge_campaign_treatment_access,
 )
 from tools.databricks.uc_owner_policy import account_client_from_env
 
@@ -49,6 +51,7 @@ class _ServicePrincipals:
                     id="sp-id",
                     application_id="app-client",
                     display_name="app-sp",
+                    active=True,
                 )
             ]
         if self.deployer_application_id and self.deployer_application_id in filter:
@@ -56,6 +59,7 @@ class _ServicePrincipals:
                 SimpleNamespace(
                     id=self.deployer_id,
                     application_id=self.deployer_application_id,
+                    active=True,
                 )
             ]
         return []
@@ -113,6 +117,42 @@ class _Users:
 
 class _AccountGroups(_Groups):
     pass
+
+
+def _mirrored_account(workspace: object) -> object:
+    def users_list(**kwargs: object) -> list[object]:
+        return [
+            SimpleNamespace(
+                id=getattr(item, "id", None),
+                user_name=getattr(item, "user_name", None),
+                active=True,
+            )
+            for item in workspace.users.list(**kwargs)
+        ]
+
+    def service_principals_list(**kwargs: object) -> list[object]:
+        return [
+            SimpleNamespace(
+                id=getattr(item, "id", None),
+                application_id=getattr(item, "application_id", None),
+                active=True,
+            )
+            for item in workspace.service_principals.list(**kwargs)
+        ]
+
+    return SimpleNamespace(
+        config=SimpleNamespace(client_id="dedicated-account-client"),
+        users=SimpleNamespace(list=users_list),
+        service_principals=SimpleNamespace(list=service_principals_list),
+        groups=workspace.groups,
+    )
+
+
+def converge_campaign_treatment_access(**kwargs: object) -> bool:
+    if "account_factory" not in kwargs:
+        workspace = kwargs["workspace"]
+        kwargs["account_factory"] = lambda: _mirrored_account(workspace)
+    return _converge_campaign_treatment_access(**kwargs)  # type: ignore[arg-type]
 
 
 class _StatementExecution:
@@ -261,11 +301,21 @@ def _workspace(
 def _account_factory(*, owner_group: str, target_is_member: bool) -> object:
     return SimpleNamespace(
         config=SimpleNamespace(client_id="dedicated-account-client"),
+        users=SimpleNamespace(
+            list=lambda **_: [
+                SimpleNamespace(
+                    id="deployer-id",
+                    user_name="deployer",
+                    active=True,
+                )
+            ]
+        ),
         service_principals=SimpleNamespace(
             list=lambda **_: [
                 SimpleNamespace(
                     id="account-sp-id",
                     application_id="app-client",
+                    active=True,
                 )
             ]
         ),
@@ -406,6 +456,43 @@ def test_rejects_target_app_canonical_application_id_as_deployer() -> None:
     )
 
     with pytest.raises(RuntimeError, match="Deploying identity must be distinct"):
+        converge_campaign_treatment_access(
+            warehouse_id="warehouse-1",
+            catalog="mip",
+            principal="app-client",
+            mode="quiesce",
+            workspace=workspace,  # type: ignore[arg-type]
+        )
+
+    assert execution.statements == []
+
+
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("application_id", "APP-CLIENT"),
+        ("id", " sp-id "),
+        ("active", False),
+    ],
+)
+def test_rejects_noncanonical_workspace_target_before_treatment_sql(
+    attribute: str,
+    value: object,
+) -> None:
+    workspace, execution, _ = _workspace()
+    target = SimpleNamespace(
+        id="sp-id",
+        application_id="app-client",
+        display_name="app-sp",
+        active=True,
+    )
+    setattr(target, attribute, value)
+    workspace.service_principals = SimpleNamespace(
+        list=lambda **_kwargs: [target],
+        get=lambda _sp_id: SimpleNamespace(id="sp-id", roles=[], entitlements=[]),
+    )
+
+    with pytest.raises(RuntimeError, match="did not resolve to one exact, active"):
         converge_campaign_treatment_access(
             warehouse_id="warehouse-1",
             catalog="mip",
@@ -602,8 +689,15 @@ def test_rejects_nested_app_membership_in_approved_owner_group() -> None:
     }
     account = SimpleNamespace(
         config=SimpleNamespace(client_id="dedicated-account-client"),
+        users=SimpleNamespace(list=lambda **_: []),
         service_principals=SimpleNamespace(
-            list=lambda **_: [SimpleNamespace(id="account-sp-id", application_id="app-client")]
+            list=lambda **_: [
+                SimpleNamespace(
+                    id="account-sp-id",
+                    application_id="app-client",
+                    active=True,
+                )
+            ]
         ),
         groups=SimpleNamespace(
             list=lambda **_: list(account_groups.values()),
@@ -671,6 +765,79 @@ def test_rejects_reused_account_client_before_target_secret_creation(
         return False
 
     with pytest.raises(RuntimeError, match="must be distinct"):
+        converge_campaign_treatment_access(
+            warehouse_id="warehouse-1",
+            catalog="mip",
+            principal="app-client",
+            mode="quiesce",
+            approved_owner_principals={owner_group},
+            account_factory=lambda: account,  # type: ignore[arg-type]
+            group_membership_probe=probe,
+            workspace=workspace,  # type: ignore[arg-type]
+        )
+
+    assert not probe_called
+    assert execution.statements == []
+
+
+@pytest.mark.parametrize(
+    "colliding_env",
+    [
+        "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+    ],
+)
+def test_rejects_case_variant_reused_account_client_for_every_app_facing_m2m(
+    monkeypatch: pytest.MonkeyPatch,
+    colliding_env: str,
+) -> None:
+    owner_group = "customer-platform-governance"
+    workspace, execution, _ = _workspace(
+        owner=owner_group,
+        metastore_owner=owner_group,
+        owner_group=owner_group,
+    )
+    account = _account_factory(owner_group=owner_group, target_is_member=False)
+    account.config.client_id = "shared-privileged-client"
+    monkeypatch.setenv(colliding_env, "SHARED-PRIVILEGED-CLIENT")
+
+    with pytest.raises(RuntimeError, match="must be distinct"):
+        converge_campaign_treatment_access(
+            warehouse_id="warehouse-1",
+            catalog="mip",
+            principal="app-client",
+            mode="quiesce",
+            approved_owner_principals={owner_group},
+            account_factory=lambda: account,  # type: ignore[arg-type]
+            group_membership_probe=lambda *_: False,
+            workspace=workspace,  # type: ignore[arg-type]
+        )
+
+    assert execution.statements == []
+
+
+def test_rejects_inactive_target_account_principal_before_owner_proof() -> None:
+    owner_group = "customer-platform-governance"
+    workspace, execution, _ = _workspace(
+        owner=owner_group,
+        metastore_owner=owner_group,
+        owner_group=owner_group,
+    )
+    account = _account_factory(owner_group=owner_group, target_is_member=False)
+    target = SimpleNamespace(
+        id="account-sp-id",
+        application_id="app-client",
+        active=False,
+    )
+    account.service_principals.list = lambda **_: [target]
+    probe_called = False
+
+    def probe(*_args: object) -> bool:
+        nonlocal probe_called
+        probe_called = True
+        return False
+
+    with pytest.raises(RuntimeError, match="could not be resolved authoritatively"):
         converge_campaign_treatment_access(
             warehouse_id="warehouse-1",
             catalog="mip",

@@ -94,13 +94,16 @@ membership and is matched to the approved group's immutable account ID. A
 positive result, omitted or malformed evidence, failed API request, identity or
 group mismatch, or unproven secret cleanup fails the deployment closed. No SQL
 warehouse access is required. The account OAuth identity therefore needs
-account-admin authority for a first install with an approved group owner,
-because the bundle-created target App does not exist early enough for delegated
-management to be granted in advance. After that install, downscope it to
-Service Principal Manager on every forbidden normal, operator2, admin,
-verifier, agent-runtime, and now-existing target-App principal whose membership
-is probed. It must itself be distinct from every app-facing M2M and target-App
-principal. The
+account-admin authority: before the first install, the bundle-created target
+App does not exist early enough for delegated management to be granted, and
+every deploy must resolve accessible UC owners that legitimately exist at
+account scope without assigning those owners to MIP. Service Principal Manager
+on every forbidden normal, operator2, admin, verifier, agent-runtime, and
+now-existing target-App principal is not a substitute for account
+user/group/service-principal inventory authority. Keep this account-admin
+identity isolated to deployment and verification; never expose it to the App
+or an app-facing M2M. It must itself be distinct from every app-facing M2M and
+target-App principal. The
 deployment also fails closed on unresolved, ambiguous, or App-owned objects.
 Configure that separate identity through `DATABRICKS_ACCOUNT_HOST`,
 `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and
@@ -367,7 +370,16 @@ workspace, with no direct or group-derived assignment to a workspace retained
 by the foreign-catalog policy. It separately checks the owner on every
 inventoried catalog, schema, table, function, volume, and registered model.
 Objects visible to MIP retain the full approved-owner workspace/account
-resolution. For an exactly policy-matched catalog whose bindings deny MIP, the
+resolution. Every accessible object's owner must resolve exactly once as a
+user, service principal, or group under the separated account OAuth identity.
+A MIP workspace projection may be absent; when present, its principal type and
+immutable ID must exactly match the account principal. This rejects
+cross-plane and cross-type ambiguity without assigning unrelated owners to
+MIP. The account-plane target service-principal ID is resolved in the same
+snapshot and remains forbidden; group owners still require the frozen
+target-credential membership proof. Ambiguous, noncanonical, inactive, or
+unresolved account owners fail closed. For an exactly policy-matched catalog whose
+bindings deny MIP, the
 pass does not require an unrelated owner to exist in MIP workspace SCIM;
 instead, it excludes the runtime application ID, both immutable SCIM IDs,
 observed runtime display aliases, every frozen group ID and name, and implicit

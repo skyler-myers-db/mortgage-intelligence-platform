@@ -68,6 +68,47 @@ class _DirectoryApi:
         return list(self.entries)
 
 
+def _mirrored_account(workspace: object) -> object:
+    def users_list(**kwargs: object) -> list[object]:
+        return [
+            SimpleNamespace(
+                id=getattr(item, "id", None),
+                user_name=getattr(item, "user_name", None),
+                active=True,
+            )
+            for item in workspace.users.list(**kwargs)
+        ]
+
+    def service_principals_list(**kwargs: object) -> list[object]:
+        return [
+            SimpleNamespace(
+                id=getattr(item, "id", None),
+                application_id=getattr(item, "application_id", None),
+                active=True,
+            )
+            for item in workspace.service_principals.list(**kwargs)
+        ]
+
+    def group_get(group_id: str) -> object:
+        matches = [
+            item
+            for item in workspace.groups.list()
+            if getattr(item, "id", None) == group_id
+        ]
+        assert len(matches) == 1
+        return matches[0]
+
+    return SimpleNamespace(
+        config=SimpleNamespace(client_id="account-client"),
+        users=SimpleNamespace(list=users_list),
+        service_principals=SimpleNamespace(list=service_principals_list),
+        groups=SimpleNamespace(
+            list=lambda **kwargs: workspace.groups.list(**kwargs),
+            get=group_get,
+        ),
+    )
+
+
 def _workspace(
     *,
     catalog: object | None = None,
@@ -104,7 +145,13 @@ def _workspace(
         service_principals=_DirectoryApi(
             service_principals
             if service_principals is not None
-            else [SimpleNamespace(id="runtime-scim-id", application_id="runtime-app-client")]
+            else [
+                SimpleNamespace(
+                    id="runtime-scim-id",
+                    application_id="runtime-app-client",
+                    active=True,
+                )
+            ]
         ),
         groups=_DirectoryApi(groups or []),
     )
@@ -120,9 +167,9 @@ def _ensure(
     account_factory: object | None = None,
     group_membership_probe: object | None = None,
 ) -> tuple[bool, bool]:
-    kwargs: dict[str, object] = {}
-    if account_factory is not None:
-        kwargs["account_factory"] = account_factory
+    kwargs: dict[str, object] = {
+        "account_factory": account_factory or (lambda: _mirrored_account(workspace))
+    }
     if group_membership_probe is not None:
         kwargs["group_membership_probe"] = group_membership_probe
     return ensure_pipeline_namespace(
@@ -209,6 +256,33 @@ def test_foreign_catalog_is_rejected_before_schema_mutation() -> None:
     assert schemas.create_calls == []
 
 
+@pytest.mark.parametrize(
+    ("attribute", "value"),
+    [
+        ("application_id", "RUNTIME-APP-CLIENT"),
+        ("id", " runtime-scim-id "),
+        ("active", False),
+    ],
+)
+def test_noncanonical_forbidden_target_precedes_namespace_mutation(
+    attribute: str,
+    value: object,
+) -> None:
+    target = SimpleNamespace(
+        id="runtime-scim-id",
+        application_id="runtime-app-client",
+        active=True,
+    )
+    setattr(target, attribute, value)
+    workspace, catalogs, schemas = _workspace(service_principals=[target])
+
+    with pytest.raises(RuntimeError, match="active workspace service principal"):
+        _ensure(workspace)
+
+    assert catalogs.create_calls == []
+    assert schemas.create_calls == []
+
+
 def test_unapproved_existing_owner_is_rejected() -> None:
     workspace, _, _ = _workspace(catalog=_catalog(owner="unexpected@example.com"), schema=_schema())
 
@@ -225,10 +299,28 @@ def test_explicit_approved_group_owner_is_accepted() -> None:
     )
     account = SimpleNamespace(
         config=SimpleNamespace(client_id="account-client"),
-        service_principals=_DirectoryApi(
-            [SimpleNamespace(id="runtime-account-id", application_id="runtime-app-client")]
+        users=_DirectoryApi(
+            [
+                SimpleNamespace(
+                    id="deployer-id",
+                    user_name="deployer@example.com",
+                    active=True,
+                )
+            ]
         ),
-        groups=SimpleNamespace(get=lambda _id: owner_group),
+        service_principals=_DirectoryApi(
+            [
+                SimpleNamespace(
+                    id="runtime-account-id",
+                    application_id="runtime-app-client",
+                    active=True,
+                )
+            ]
+        ),
+        groups=SimpleNamespace(
+            list=lambda **_: [owner_group],
+            get=lambda _id: owner_group,
+        ),
     )
 
     assert _ensure(
@@ -286,12 +378,20 @@ def test_configured_runtime_owner_is_forbidden_even_when_allowlisted() -> None:
 
 
 def test_existing_target_app_owner_is_explicitly_forbidden() -> None:
-    target = SimpleNamespace(id="target-app-scim-id", application_id="target-app-client")
+    target = SimpleNamespace(
+        id="target-app-scim-id",
+        application_id="target-app-client",
+        active=True,
+    )
     workspace, _, _ = _workspace(
         catalog=_catalog(owner="target-app-client"),
         schema=_schema(owner="target-app-client"),
         service_principals=[
-            SimpleNamespace(id="runtime-scim-id", application_id="runtime-app-client"),
+            SimpleNamespace(
+                id="runtime-scim-id",
+                application_id="runtime-app-client",
+                active=True,
+            ),
             target,
         ],
     )
@@ -315,7 +415,11 @@ def test_ambiguous_configured_owner_resolution_is_rejected() -> None:
             ambiguous_user,
         ],
         service_principals=[
-            SimpleNamespace(id="runtime-scim-id", application_id="runtime-app-client"),
+            SimpleNamespace(
+                id="runtime-scim-id",
+                application_id="runtime-app-client",
+                active=True,
+            ),
             ambiguous_sp,
         ],
     )
@@ -333,10 +437,28 @@ def test_forbidden_group_membership_is_rejected_with_credential_proof() -> None:
     )
     account = SimpleNamespace(
         config=SimpleNamespace(client_id="account-client"),
-        service_principals=_DirectoryApi(
-            [SimpleNamespace(id="runtime-account-id", application_id="runtime-app-client")]
+        users=_DirectoryApi(
+            [
+                SimpleNamespace(
+                    id="deployer-id",
+                    user_name="deployer@example.com",
+                    active=True,
+                )
+            ]
         ),
-        groups=SimpleNamespace(get=lambda _id: owner_group),
+        service_principals=_DirectoryApi(
+            [
+                SimpleNamespace(
+                    id="runtime-account-id",
+                    application_id="runtime-app-client",
+                    active=True,
+                )
+            ]
+        ),
+        groups=SimpleNamespace(
+            list=lambda **_: [owner_group],
+            get=lambda _id: owner_group,
+        ),
     )
 
     with pytest.raises(RuntimeError, match="member of approved owner group"):
@@ -366,11 +488,29 @@ def test_inconclusive_identity_group_proof_precedes_namespace_mutation() -> None
 
     account = SimpleNamespace(
         config=SimpleNamespace(client_id="account-client"),
+        users=_DirectoryApi(
+            [
+                SimpleNamespace(
+                    id="deployer-id",
+                    user_name="deployer@example.com",
+                    active=True,
+                )
+            ]
+        ),
         service_principals=_DirectoryApi(
-            [SimpleNamespace(id="runtime-account-id", application_id="runtime-app-client")]
+            [
+                SimpleNamespace(
+                    id="runtime-account-id",
+                    application_id="runtime-app-client",
+                    active=True,
+                )
+            ]
         ),
         service_principal_secrets=Secrets(),
-        groups=SimpleNamespace(get=lambda _id: owner_group),
+        groups=SimpleNamespace(
+            list=lambda **_: [owner_group],
+            get=lambda _id: owner_group,
+        ),
     )
 
     def denied_probe(

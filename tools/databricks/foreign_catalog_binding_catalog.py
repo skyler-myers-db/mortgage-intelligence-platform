@@ -95,12 +95,14 @@ def snapshot(
         raise RuntimeError(f"catalog {catalog} did not resolve exactly once in unbound inventory")
     item = matches[0]
     name = _text(getattr(item, "name", None))
-    owner = _text(getattr(item, "owner", None))
+    owner = getattr(item, "owner", None)
     catalog_type = _text(getattr(item, "catalog_type", None)).upper()
     isolation_mode = _text(getattr(item, "isolation_mode", None)).upper()
     if (
         name != catalog
+        or not isinstance(owner, str)
         or not owner
+        or owner != owner.strip()
         or not catalog_type
         or isolation_mode not in {"OPEN", "ISOLATED"}
     ):

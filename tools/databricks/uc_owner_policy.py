@@ -20,18 +20,21 @@ def _escaped_filter(value: str) -> str:
 def account_client_from_env() -> AccountClient:
     """Build account SCIM auth without inheriting workspace PAT configuration."""
 
-    values = {
-        "host": os.environ.get("DATABRICKS_ACCOUNT_HOST", "").strip(),
-        "account_id": os.environ.get("DATABRICKS_ACCOUNT_ID", "").strip(),
-        "client_id": os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", "").strip(),
-        "client_secret": os.environ.get("DATABRICKS_ACCOUNT_CLIENT_SECRET", "").strip(),
+    raw_values = {
+        "host": os.environ.get("DATABRICKS_ACCOUNT_HOST", ""),
+        "account_id": os.environ.get("DATABRICKS_ACCOUNT_ID", ""),
+        "client_id": os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", ""),
+        "client_secret": os.environ.get("DATABRICKS_ACCOUNT_CLIENT_SECRET", ""),
     }
-    missing = sorted(name for name, value in values.items() if not value)
+    missing = sorted(name for name, value in raw_values.items() if not value)
     if missing:
         raise RuntimeError(
-            "Approved group owners require dedicated account OAuth configuration: "
+            "Approved UC owners require dedicated account OAuth configuration: "
             + ", ".join(missing)
         )
+    if any(value != value.strip() for value in raw_values.values()):
+        raise RuntimeError("Dedicated account OAuth configuration is not canonical")
+    values = raw_values
     return AccountClient(
         host=values["host"],
         account_id=values["account_id"],
@@ -70,17 +73,43 @@ def _account_principal_id(account: AccountClient, *, application_id: str) -> str
     service principal's own credentials.
     """
 
+    if not application_id or application_id != application_id.strip():
+        raise RuntimeError("Target App application id is not canonical")
     escaped = _escaped_filter(application_id)
-    principals = [
-        item
-        for item in account.service_principals.list(filter=f'applicationId eq "{escaped}"')
-        if _canonical(getattr(item, "application_id", "")) == _canonical(application_id)
-    ]
+    principals: list[object] = []
+    for item in account.service_principals.list(
+        filter=f'applicationId eq "{escaped}"'
+    ):
+        raw_application_id = getattr(item, "application_id", None)
+        if (
+            not isinstance(raw_application_id, str)
+            or not raw_application_id
+            or raw_application_id != raw_application_id.strip()
+        ):
+            raise RuntimeError(
+                "Target App account identity returned a noncanonical application id"
+            )
+        if (
+            raw_application_id != application_id
+            and raw_application_id.casefold() == application_id.casefold()
+        ):
+            raise RuntimeError(
+                "Target App account identity returned a case-variant application id"
+            )
+        if raw_application_id == application_id:
+            principals.append(item)
     if len(principals) != 1:
         raise RuntimeError("Target App identity did not resolve exactly once in account SCIM")
-    principal_id = str(getattr(principals[0], "id", "") or "").strip()
-    if not principal_id:
-        raise RuntimeError("Target App account principal has no immutable id")
+    principal = principals[0]
+    if getattr(principal, "active", None) is not True:
+        raise RuntimeError("Target App account principal is inactive")
+    principal_id = getattr(principal, "id", None)
+    if (
+        not isinstance(principal_id, str)
+        or not principal_id
+        or principal_id != principal_id.strip()
+    ):
+        raise RuntimeError("Target App account principal has no canonical immutable id")
 
     return principal_id
 
@@ -97,21 +126,38 @@ class ApprovedOwnerPolicy:
     _account_client: AccountClient | None = field(default=None, init=False)
     _account_target_sp_id: str = field(default="", init=False)
     _account_group_names: dict[str, str] = field(default_factory=dict, init=False)
-    _resolved: dict[str, tuple[str, str]] = field(default_factory=dict, init=False)
+    _expected_group_names: dict[str, str] = field(default_factory=dict, init=False)
+    _resolved: dict[str, tuple[str, str, str]] = field(default_factory=dict, init=False)
     _current_name: str = field(default="", init=False)
     _current_id: str = field(default="", init=False)
     _group_membership_results: dict[str, bool] = field(default_factory=dict, init=False)
 
     def __post_init__(self) -> None:
         current = self.workspace.current_user.me()
-        current_name = _canonical(getattr(current, "user_name", ""))
-        current_id = _canonical(getattr(current, "id", ""))
-        current_application_id = _canonical(getattr(current, "application_id", ""))
-        if not current_name or not current_id:
+        raw_current_name = getattr(current, "user_name", None)
+        raw_current_id = getattr(current, "id", None)
+        raw_current_application_id = getattr(current, "application_id", "") or ""
+        if (
+            not isinstance(raw_current_name, str)
+            or not raw_current_name
+            or raw_current_name != raw_current_name.strip()
+            or not isinstance(raw_current_id, str)
+            or not raw_current_id
+            or raw_current_id != raw_current_id.strip()
+            or not isinstance(raw_current_application_id, str)
+            or raw_current_application_id != raw_current_application_id.strip()
+        ):
             raise RuntimeError(
                 "Deploying identity must expose canonical user_name and immutable id"
             )
-        if {current_name, current_id, current_application_id}.intersection(self.target.aliases):
+        current_name = raw_current_name.casefold()
+        current_id = raw_current_id
+        current_application_id = raw_current_application_id.casefold()
+        if {
+            current_name,
+            current_id.casefold(),
+            current_application_id,
+        }.intersection(self.target.aliases):
             raise RuntimeError(
                 "Deploying identity must be distinct from the target App service principal"
             )
@@ -123,94 +169,183 @@ class ApprovedOwnerPolicy:
         self._current_name = current_name
         self._current_id = current_id
 
-    def _exact(self, items: Iterable[object], attribute: str, expected: str) -> list[object]:
-        return [item for item in items if _canonical(getattr(item, attribute, "")) == expected]
+    @staticmethod
+    def _exact(
+        items: Iterable[object],
+        attribute: str,
+        expected: str,
+    ) -> list[object]:
+        matches: list[object] = []
+        for item in items:
+            raw = getattr(item, attribute, None)
+            if not isinstance(raw, str) or not raw or raw != raw.strip():
+                raise RuntimeError(
+                    "Approved UC owner inventory returned a noncanonical identity"
+                )
+            if raw != expected and raw.casefold() == expected.casefold():
+                raise RuntimeError(
+                    "Approved UC owner inventory returned a case-variant identity"
+                )
+            if raw == expected:
+                matches.append(item)
+        return matches
+
+    def _dedicated_account_client(self) -> AccountClient:
+        if self._account_client is not None:
+            return self._account_client
+        try:
+            account = self.account_factory()
+        except Exception as exc:
+            raise RuntimeError(
+                "Dedicated account OAuth client could not be constructed"
+            ) from exc
+        raw_account_client_id = (
+            getattr(getattr(account, "config", None), "client_id", "")
+            or os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", "")
+        )
+        if (
+            not isinstance(raw_account_client_id, str)
+            or not raw_account_client_id
+            or raw_account_client_id != raw_account_client_id.strip()
+        ):
+            raise RuntimeError("Dedicated account OAuth client has no canonical client id")
+        account_client_id = raw_account_client_id.casefold()
+        separated_ids: set[str] = set()
+        for name in (
+            "DATABRICKS_CLIENT_ID",
+            "DATABRICKS_OPERATOR2_CLIENT_ID",
+            "DATABRICKS_ADMIN_CLIENT_ID",
+            "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
+            "DATABRICKS_VERIFIER_CLIENT_ID",
+            "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        ):
+            raw = os.environ.get(name, "")
+            if not raw:
+                continue
+            if raw != raw.strip():
+                raise RuntimeError(f"{name} is not canonical")
+            separated_ids.add(raw.casefold())
+        if account_client_id in self.target.aliases.union(separated_ids):
+            raise RuntimeError(
+                "Dedicated account OAuth client must be distinct from the "
+                "target App and every app-facing M2M identity"
+            )
+        try:
+            account_target_sp_id = _account_principal_id(
+                account,
+                application_id=self.target.application_id,
+            )
+        except Exception as exc:
+            raise RuntimeError(
+                "Target App account identity could not be resolved authoritatively"
+            ) from exc
+        self._account_client = account
+        self._account_target_sp_id = account_target_sp_id
+        return account
+
+    @staticmethod
+    def _principal_id(item: object, *, owner: str) -> str:
+        raw = getattr(item, "id", None)
+        if not isinstance(raw, str) or not raw or raw != raw.strip():
+            raise RuntimeError(f"Approved UC owner {owner!r} has no canonical immutable id")
+        return raw
 
     def _resolve(self, owner: str, *, query_name: str) -> tuple[str, str]:
         cached = self._resolved.get(owner)
         if cached is not None:
-            return cached
+            cached_name, kind, principal_id = cached
+            if query_name != cached_name:
+                raise RuntimeError(
+                    "Governed UC owner identity changed within the inventory snapshot"
+                )
+            return kind, principal_id
         escaped = _escaped_filter(query_name)
-        users = self._exact(
+        workspace_users = self._exact(
             self.workspace.users.list(filter=f'userName eq "{escaped}"'),
             "user_name",
-            owner,
+            query_name,
         )
-        service_principals = self._exact(
+        workspace_service_principals = self._exact(
             self.workspace.service_principals.list(filter=f'applicationId eq "{escaped}"'),
             "application_id",
-            owner,
+            query_name,
         )
-        groups = self._exact(
+        workspace_groups = self._exact(
             self.workspace.groups.list(filter=f'displayName eq "{escaped}"'),
             "display_name",
-            owner,
+            query_name,
         )
-        candidates: list[tuple[str, object]] = [
-            *(("user", item) for item in users),
-            *(("service_principal", item) for item in service_principals),
-            *(("group", item) for item in groups),
+        workspace_candidates: list[tuple[str, object]] = [
+            *(("user", item) for item in workspace_users),
+            *(("service_principal", item) for item in workspace_service_principals),
+            *(("group", item) for item in workspace_groups),
         ]
-        if len(candidates) != 1:
+        if len(workspace_candidates) > 1:
             raise RuntimeError(
-                f"Approved UC owner {owner!r} did not resolve to exactly one principal"
+                f"Approved UC owner {owner!r} did not resolve to exactly one "
+                "principal in workspace SCIM"
             )
-        kind, item = candidates[0]
-        principal_id = str(getattr(item, "id", "") or "").strip()
-        if not principal_id:
-            raise RuntimeError(f"Approved UC owner {owner!r} has no immutable id")
-        if owner == self._current_name and _canonical(principal_id) != self._current_id:
+
+        account = self._dedicated_account_client()
+        try:
+            account_users = self._exact(
+                account.users.list(filter=f'userName eq "{escaped}"'),
+                "user_name",
+                query_name,
+            )
+            account_service_principals = self._exact(
+                account.service_principals.list(
+                    filter=f'applicationId eq "{escaped}"'
+                ),
+                "application_id",
+                query_name,
+            )
+            account_groups = self._exact(
+                account.groups.list(filter=f'displayName eq "{escaped}"'),
+                "display_name",
+                query_name,
+            )
+        except RuntimeError:
+            raise
+        except Exception as exc:
+            raise RuntimeError(
+                "Approved UC owner account inventory failed closed"
+            ) from exc
+        account_candidates: list[tuple[str, object]] = [
+            *(("user", item) for item in account_users),
+            *(("service_principal", item) for item in account_service_principals),
+            *(("group", item) for item in account_groups),
+        ]
+        if len(account_candidates) != 1:
+            raise RuntimeError(
+                f"Approved UC owner {owner!r} did not resolve to exactly one "
+                "principal in account SCIM"
+            )
+        kind, item = account_candidates[0]
+        principal_id = self._principal_id(item, owner=owner)
+        if kind in {"user", "service_principal"} and getattr(item, "active", None) is not True:
+            raise RuntimeError(f"Approved UC owner {owner!r} is inactive in account SCIM")
+        if workspace_candidates:
+            workspace_kind, workspace_item = workspace_candidates[0]
+            workspace_id = self._principal_id(workspace_item, owner=owner)
+            if workspace_kind != kind or workspace_id != principal_id:
+                raise RuntimeError(
+                    f"Approved UC owner {owner!r} did not resolve identically "
+                    "across workspace and account SCIM"
+                )
+        if owner == self._current_name and principal_id != self._current_id:
             raise RuntimeError(
                 "Current deployer owner name resolved to a different immutable principal"
             )
         resolved = (kind, principal_id)
-        self._resolved[owner] = resolved
+        self._resolved[owner] = (query_name, *resolved)
+        if kind == "group":
+            self._expected_group_names[principal_id] = query_name
         return resolved
 
     def _assert_group_excludes_target(self, *, owner: str, group_id: str) -> None:
         if not self._account_target_sp_id:
-            try:
-                self._account_client = self.account_factory()
-            except Exception as exc:
-                raise RuntimeError(
-                    "Dedicated account OAuth client could not be constructed"
-                ) from exc
-            account_client_id = _canonical(
-                getattr(
-                    getattr(self._account_client, "config", None),
-                    "client_id",
-                    "",
-                )
-                or os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", "")
-            )
-            if not account_client_id:
-                raise RuntimeError("Dedicated account OAuth client has no canonical client id")
-            separated_ids = {
-                _canonical(os.environ.get(name, ""))
-                for name in (
-                    "DATABRICKS_CLIENT_ID",
-                    "DATABRICKS_OPERATOR2_CLIENT_ID",
-                    "DATABRICKS_ADMIN_CLIENT_ID",
-                    "DATABRICKS_VERIFIER_CLIENT_ID",
-                )
-            }
-            separated_ids.discard("")
-            if account_client_id in self.target.aliases.union(separated_ids):
-                raise RuntimeError(
-                    "Dedicated account OAuth client must be distinct from the "
-                    "target App and every app-facing M2M identity"
-                )
-            try:
-                assert self._account_client is not None
-                self._account_target_sp_id = _account_principal_id(
-                    self._account_client,
-                    application_id=self.target.application_id,
-                )
-            except Exception as exc:
-                raise RuntimeError(
-                    "Authoritative account-level group membership is required "
-                    f"for approved group owner {owner!r}"
-                ) from exc
+            self._dedicated_account_client()
         account_sp_id = self._account_target_sp_id
         raw_account_name = self._account_group_names.get(group_id, "")
         if not raw_account_name:
@@ -221,18 +356,28 @@ class ApprovedOwnerPolicy:
                 raise RuntimeError(
                     f"Approved group owner {owner!r} did not resolve in account SCIM"
                 ) from exc
-            hydrated_id = str(getattr(account_group, "id", "") or "").strip()
+            hydrated_id = getattr(account_group, "id", None)
+            if (
+                not isinstance(hydrated_id, str)
+                or not hydrated_id
+                or hydrated_id != hydrated_id.strip()
+            ):
+                raise RuntimeError("Account SCIM hydrated group id is not canonical")
             if hydrated_id != group_id:
                 raise RuntimeError("Account SCIM hydrated group id mismatch")
-            raw_account_name = str(getattr(account_group, "display_name", "") or "").strip()
-            if not raw_account_name:
-                raise RuntimeError(f"Account SCIM group {group_id!r} has no display name")
+            raw_account_name = getattr(account_group, "display_name", None)
+            expected_name = self._expected_group_names.get(group_id, "")
+            if (
+                not isinstance(raw_account_name, str)
+                or not raw_account_name
+                or raw_account_name != raw_account_name.strip()
+                or not expected_name
+                or raw_account_name != expected_name
+            ):
+                raise RuntimeError(
+                    f"Account SCIM group {group_id!r} has no exact display name"
+                )
             self._account_group_names[group_id] = raw_account_name
-        account_name = _canonical(raw_account_name)
-        if not account_name or account_name != owner:
-            raise RuntimeError(
-                f"Approved group owner {owner!r} did not resolve identically in account SCIM"
-            )
         if self.group_membership_probe is None or self._account_client is None:
             raise RuntimeError(
                 "Credential-backed target identity membership proof is required "
@@ -253,6 +398,11 @@ class ApprovedOwnerPolicy:
                     "Credential-backed target identity membership proof failed "
                     f"for approved group owner {owner!r}"
                 ) from exc
+            if type(target_is_member) is not bool:
+                raise RuntimeError(
+                    "Credential-backed target identity membership proof returned "
+                    f"malformed evidence for approved group owner {owner!r}"
+                )
             self._group_membership_results[owner] = target_is_member
         else:
             target_is_member = cached_membership
@@ -265,7 +415,15 @@ class ApprovedOwnerPolicy:
         for item in objects:
             if item is None:
                 continue
-            owner_text = str(getattr(item, "owner", "") or "").strip()
+            owner_text = getattr(item, "owner", None)
+            if (
+                not isinstance(owner_text, str)
+                or not owner_text
+                or owner_text != owner_text.strip()
+            ):
+                raise RuntimeError(
+                    "Governed UC object inventory returned a noncanonical owner"
+                )
             owner = _canonical(owner_text)
             if owner in self.target.aliases:
                 raise RuntimeError("Target App service principal cannot own governed UC objects")
@@ -274,7 +432,10 @@ class ApprovedOwnerPolicy:
                     "Governed UC owner is outside the explicit approved-owner contract"
                 )
             kind, principal_id = self._resolve(owner, query_name=owner_text)
-            if _canonical(principal_id) in self.target.aliases:
+            if _canonical(principal_id) in self.target.aliases or (
+                self._account_target_sp_id
+                and principal_id == self._account_target_sp_id
+            ):
                 raise RuntimeError("Target App service principal cannot own governed UC objects")
             if kind == "group":
                 self._assert_group_excludes_target(owner=owner, group_id=principal_id)

@@ -16,6 +16,17 @@ def _text(value: object) -> str:
     return str(getattr(value, "value", value) or "").strip()
 
 
+def _exact_owner(item: object, *, label: str) -> str:
+    owner = getattr(item, "owner", None)
+    if (
+        not isinstance(owner, str)
+        or not owner
+        or owner != owner.strip()
+    ):
+        raise RuntimeError(f"{label} returned a noncanonical owner")
+    return owner
+
+
 def _effective_privileges(
     workspace: Any,
     *,
@@ -127,15 +138,13 @@ def _assert_not_runtime_owned(
     owner_aliases: set[str],
     label: str,
 ) -> None:
-    owner = _text(getattr(item, "owner", None))
-    if not owner:
-        raise RuntimeError(f"{label} returned an empty owner")
+    owner = _exact_owner(item, label=label)
     if owner.casefold() in owner_aliases:
         raise RuntimeError(f"agent-runtime is an effective owner of forbidden {label}")
 
 
 def _assert_system_owned(item: object, *, label: str) -> None:
-    if _text(getattr(item, "owner", None)) != "System user":
+    if _exact_owner(item, label=label) != "System user":
         raise RuntimeError(f"{label} is not owned by Databricks System user")
 
 
@@ -151,15 +160,22 @@ def _assert_no_catalog_child_privileges(
     """Inventory a non-MIP catalog so a direct child grant cannot hide below it."""
 
     normalized_catalog_type = catalog_type.strip().upper()
-    expected_catalog_owner = catalog_owner.strip()
-    if not normalized_catalog_type or not expected_catalog_owner:
+    expected_catalog_owner = catalog_owner
+    if (
+        not normalized_catalog_type
+        or not expected_catalog_owner
+        or expected_catalog_owner != expected_catalog_owner.strip()
+    ):
         raise RuntimeError("foreign catalog inventory has incomplete identity evidence")
     managed_online = normalized_catalog_type == "MANAGED_ONLINE_CATALOG"
     information_schema_owner = expected_catalog_owner if managed_online else "System user"
 
     def check_owner(item: object, *, reviewed_system_object: bool = False) -> None:
         if reviewed_system_object:
-            if _text(getattr(item, "owner", None)) != information_schema_owner:
+            if _exact_owner(
+                item,
+                label="foreign information-schema object",
+            ) != information_schema_owner:
                 expected = (
                     "the managed-online catalog owner"
                     if managed_online

@@ -17,11 +17,9 @@ from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     _PLATFORM_CATALOGS,
     _account_group_evidence,
-    _account_runtime_identity,
     _assert_metastore_owner_inventory_identity,
     _assert_runtime_workspace_assignment_boundary,
     _normalized_target_groups,
-    _target_identity,
     parse_foreign_catalog_binding_policy,
 )
 from tools.databricks.converge_campaign_treatment_access import (
@@ -33,6 +31,10 @@ from tools.databricks.foreign_catalog_binding_catalog import (
     policy_payload,
     snapshot,
     state_kind,
+)
+from tools.databricks.uc_target_identity import (
+    account_target_identity,
+    workspace_target_identity,
 )
 from tools.databricks.workspace_system_group_evidence import (
     workspace_users_group_evidence,
@@ -125,7 +127,7 @@ def account_actor_identity(
         or client_id.casefold() != expected_account_client_id.casefold()
     ):
         raise RuntimeError("UC remediation account authority identity drifted")
-    scim_id, display_name = _account_runtime_identity(
+    scim_id, display_name = account_target_identity(
         account,
         application_id=client_id,
     )
@@ -176,11 +178,14 @@ def boundary_evidence(
         expected_account_id=expected_account_id,
         expected_account_client_id=expected_account_client_id,
     )
-    runtime_scim_id, runtime_display_name = _account_runtime_identity(
+    runtime_scim_id, runtime_display_name = account_target_identity(
         account,
         application_id=application_id,
     )
-    workspace_runtime = _target_identity(workspace, application_id=application_id)
+    workspace_runtime = workspace_target_identity(
+        workspace,
+        application_id=application_id,
+    )
     workspace_host = _text(getattr(getattr(workspace, "config", None), "host", None))
     if not workspace_host:
         raise RuntimeError("UC remediation found no workspace host")

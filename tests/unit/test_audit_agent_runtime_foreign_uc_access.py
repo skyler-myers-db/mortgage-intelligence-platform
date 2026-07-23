@@ -8,6 +8,10 @@ import pytest
 from databricks.sdk.errors import PermissionDenied
 
 from tools.databricks import audit_agent_runtime_foreign_uc_access as auditor
+from tools.databricks.uc_owner_policy import (
+    ApprovedOwnerPolicy,
+    TargetServicePrincipal,
+)
 
 APPLICATION_ID = "runtime-client"
 INVENTORY_PRINCIPAL = "deployer@example.com"
@@ -173,7 +177,7 @@ def _workspace(
         SimpleNamespace(
             name="__databricks_internal",
             isolation_mode="OPEN",
-            owner="System user",
+            owner=owner_overrides.get("__databricks_internal", "System user"),
             catalog_type="INTERNAL_CATALOG",
         ),
         *(extra_catalogs or []),
@@ -239,6 +243,7 @@ def _workspace(
                         application_id=APPLICATION_ID,
                         id="runtime-scim-id",
                         display_name="runtime-workspace",
+                        active=True,
                     )
                 ]
                 if APPLICATION_ID in str(kwargs.get("filter", ""))
@@ -409,6 +414,17 @@ def _account() -> object:
     )
     return SimpleNamespace(
         config=SimpleNamespace(client_id="account-auditor"),
+        users=SimpleNamespace(
+            list=lambda **_kwargs: iter(
+                [
+                    SimpleNamespace(
+                        id="foreign-owner-id",
+                        user_name=FOREIGN_OWNER,
+                        active=True,
+                    )
+                ]
+            )
+        ),
         service_principals=SimpleNamespace(
             list=lambda **_kwargs: iter(
                 [
@@ -462,6 +478,26 @@ def _audit(workspace: Any, **kwargs: Any) -> object:
         expected_inventory_principal=INVENTORY_PRINCIPAL,
         **kwargs,
     )
+
+
+def _platform_only_workspace() -> object:
+    workspace = _workspace()
+    catalogs = [
+        item
+        for item in workspace.catalogs.list(
+            include_browse=True,
+            include_unbound=True,
+        )
+        if item.name != "other"
+    ]
+    workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+    models = [
+        item
+        for item in workspace.registered_models.list(include_browse=True)
+        if not str(getattr(item, "full_name", "")).startswith("other.")
+    ]
+    workspace.registered_models.list = lambda **_kwargs: iter(models)
+    return workspace
 
 
 def _runtime_groups(additional: dict[str, str] | None = None) -> dict[str, str]:
@@ -977,6 +1013,120 @@ def test_foreign_uc_control_plane_passes_only_with_complete_zero_access() -> Non
     assert proof.workspace_id == WORKSPACE_ID
 
 
+def test_foreign_uc_control_plane_proves_empty_ordinary_foreign_inventory() -> None:
+    proof = _audit(_platform_only_workspace())
+
+    assert proof.audited_catalogs == frozenset()
+
+
+@pytest.mark.parametrize(
+    ("plane", "attribute", "value"),
+    [
+        ("workspace", "application_id", APPLICATION_ID.upper()),
+        ("workspace", "application_id", f" {APPLICATION_ID} "),
+        ("workspace", "application_id", 123),
+        ("workspace", "id", " runtime-scim-id "),
+        ("workspace", "display_name", " runtime-workspace "),
+        ("account", "application_id", APPLICATION_ID.upper()),
+        ("account", "application_id", f" {APPLICATION_ID} "),
+        ("account", "id", f" {ACCOUNT_SCIM_ID} "),
+        ("account", "id", 123),
+        ("account", "display_name", " runtime "),
+    ],
+)
+def test_foreign_uc_control_plane_rejects_noncanonical_target_with_empty_inventory(
+    plane: str,
+    attribute: str,
+    value: object,
+) -> None:
+    workspace = _platform_only_workspace()
+    account = _account()
+    if plane == "workspace":
+        target = next(
+            workspace.service_principals.list(
+                filter=f'applicationId eq "{APPLICATION_ID}"'
+            )
+        )
+        setattr(target, attribute, value)
+        workspace.service_principals.list = lambda **_kwargs: iter([target])
+    else:
+        target = next(account.service_principals.list())
+        setattr(target, attribute, value)
+        account.service_principals.list = lambda **_kwargs: iter([target])
+
+    with pytest.raises(
+        RuntimeError,
+        match="(noncanonical|case-variant)",
+    ):
+        _audit(
+            workspace,
+            account_factory=lambda: account,
+        )
+
+
+@pytest.mark.parametrize("plane", ["workspace", "account"])
+def test_foreign_uc_control_plane_rejects_inactive_target_with_empty_inventory(
+    plane: str,
+) -> None:
+    workspace = _platform_only_workspace()
+    account = _account()
+    if plane == "workspace":
+        target = next(
+            workspace.service_principals.list(
+                filter=f'applicationId eq "{APPLICATION_ID}"'
+            )
+        )
+        target.active = False
+        workspace.service_principals.list = lambda **_kwargs: iter([target])
+    else:
+        target = next(account.service_principals.list())
+        target.active = False
+        account.service_principals.list = lambda **_kwargs: iter([target])
+
+    with pytest.raises(RuntimeError, match="inactive"):
+        _audit(
+            workspace,
+            account_factory=lambda: account,
+        )
+
+
+@pytest.mark.parametrize("raw_owner", [" System user ", 123])
+def test_foreign_uc_control_plane_rejects_noncanonical_internal_catalog_owner(
+    raw_owner: object,
+) -> None:
+    with pytest.raises(RuntimeError, match="noncanonical owner"):
+        _audit(
+            _workspace(
+                owner_overrides={
+                    "__databricks_internal": raw_owner,  # type: ignore[dict-item]
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("full_name", "raw_owner"),
+    [
+        ("other.information_schema", " System user "),
+        ("other.information_schema.tables", " System user "),
+        ("other.information_schema", 123),
+        ("other.information_schema.tables", 123),
+    ],
+)
+def test_foreign_uc_control_plane_rejects_noncanonical_information_schema_owner(
+    full_name: str,
+    raw_owner: object,
+) -> None:
+    with pytest.raises(RuntimeError, match="noncanonical owner"):
+        _audit(
+            _workspace(
+                owner_overrides={
+                    full_name: raw_owner,  # type: ignore[dict-item]
+                }
+            )
+        )
+
+
 def test_foreign_uc_control_plane_accepts_managed_online_information_schema_contract() -> None:
     workspace = _workspace()
     _add_managed_online_catalog(workspace)
@@ -1007,6 +1157,28 @@ def test_foreign_uc_control_plane_binds_managed_online_information_schema_owner(
     )
 
     with pytest.raises(RuntimeError, match="managed-online catalog owner"):
+        _audit(workspace)
+
+
+@pytest.mark.parametrize(
+    ("information_schema_owner", "information_table_owner"),
+    [
+        (" foreign-owner@example.com ", None),
+        (None, " foreign-owner@example.com "),
+    ],
+)
+def test_foreign_uc_control_plane_rejects_noncanonical_managed_online_metadata_owner(
+    information_schema_owner: str | None,
+    information_table_owner: str | None,
+) -> None:
+    workspace = _workspace()
+    _add_managed_online_catalog(
+        workspace,
+        information_schema_owner=information_schema_owner,
+        information_table_owner=information_table_owner,
+    )
+
+    with pytest.raises(RuntimeError, match="noncanonical owner"):
         _audit(workspace)
 
 
@@ -1185,6 +1357,23 @@ def test_foreign_uc_control_plane_requires_current_metastore_ownership() -> None
         _audit(workspace)
 
 
+@pytest.mark.parametrize("raw_owner", [" deployer@example.com ", 123])
+def test_foreign_uc_control_plane_rejects_noncanonical_metastore_owner(
+    raw_owner: object,
+) -> None:
+    with pytest.raises(RuntimeError, match="noncanonical owner"):
+        _audit(
+            _workspace(
+                owner=raw_owner,  # type: ignore[arg-type]
+            )
+        )
+
+
+def test_foreign_uc_control_plane_rejects_case_variant_metastore_owner() -> None:
+    with pytest.raises(RuntimeError, match="own the current metastore directly"):
+        _audit(_workspace(owner=INVENTORY_PRINCIPAL.upper()))
+
+
 def test_foreign_uc_control_plane_rejects_display_name_owner_group() -> None:
     workspace = _workspace(owner="metastore-owners")
 
@@ -1265,11 +1454,537 @@ def test_foreign_uc_control_plane_accepts_unassigned_binding_excluded_owner() ->
     assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
 
 
+@pytest.mark.parametrize("raw_owner", [" padded-owner@example.com ", 123])
+def test_foreign_uc_control_plane_rejects_noncanonical_binding_denied_catalog_owner(
+    raw_owner: object,
+) -> None:
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=raw_owner,
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="noncanonical owner"):
+        _audit(
+            workspace,
+            foreign_catalog_binding_policy=_binding_policy(),
+        )
+
+
 def test_foreign_uc_control_plane_still_rejects_unresolved_accessible_owner() -> None:
     owner = "unassigned-owner@example.com"
 
     with pytest.raises(RuntimeError, match="did not resolve to exactly one principal"):
         _audit(_workspace(owner_overrides={"other": owner}))
+
+
+def test_foreign_uc_control_plane_resolves_account_only_accessible_owner() -> None:
+    owner = "account-only-owner@example.com"
+    account = _account()
+    account.users.list = lambda **_kwargs: iter(
+        [
+            SimpleNamespace(
+                id="foreign-owner-id",
+                user_name=FOREIGN_OWNER,
+                active=True,
+            ),
+            SimpleNamespace(id="account-owner-id", user_name=owner, active=True),
+        ]
+    )
+
+    proof = _audit(
+        _workspace(owner_overrides={"other": owner}),
+        account_factory=lambda: account,
+    )
+
+    assert proof.audited_catalogs == frozenset({"other"})
+
+
+def test_foreign_uc_control_plane_rejects_inactive_account_only_owner() -> None:
+    owner = "account-only-owner@example.com"
+    account = _account()
+    account.users.list = lambda **_kwargs: iter(
+        [
+            SimpleNamespace(
+                id="foreign-owner-id",
+                user_name=FOREIGN_OWNER,
+                active=True,
+            ),
+            SimpleNamespace(id="account-owner-id", user_name=owner, active=False),
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="inactive in account SCIM"):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+        )
+
+
+def test_foreign_uc_control_plane_wraps_account_owner_inventory_error() -> None:
+    owner = "account-only-owner@example.com"
+    account = _account()
+
+    def denied(**_kwargs: object) -> object:
+        raise PermissionDenied("account users denied")
+
+    account.users.list = denied
+
+    with pytest.raises(RuntimeError, match="account inventory failed closed"):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+        )
+
+
+def test_foreign_uc_control_plane_rejects_ambiguous_account_only_owner() -> None:
+    owner = "ambiguous-account-owner"
+    account = _account()
+    account.users.list = lambda **_kwargs: iter(
+        [
+            SimpleNamespace(
+                id="foreign-owner-id",
+                user_name=FOREIGN_OWNER,
+                active=True,
+            ),
+            SimpleNamespace(id="account-owner-id", user_name=owner, active=True),
+        ]
+    )
+    account_group = SimpleNamespace(
+        id="account-owner-group-id",
+        display_name=owner,
+        members=[],
+    )
+    account_users = next(account.groups.list())
+    account.groups.list = lambda **_kwargs: iter([account_users, account_group])
+    account.groups.get = lambda group_id: (
+        account_group if group_id == account_group.id else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="did not resolve to exactly one principal"):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+        )
+
+
+def test_foreign_uc_control_plane_does_not_mask_workspace_owner_ambiguity() -> None:
+    owner = FOREIGN_OWNER
+    workspace = _workspace(owner_overrides={"other": owner})
+    system_group_list = workspace.groups.list
+    workspace.groups.list = lambda **kwargs: (
+        system_group_list(**kwargs)
+        if kwargs.get("attributes")
+        == "id,displayName,meta,entitlements,roles,externalId"
+        else iter([SimpleNamespace(id="workspace-owner-group-id", display_name=owner)])
+    )
+    account = _account()
+    account_owner_queries = 0
+
+    def account_users(**_kwargs: object) -> object:
+        nonlocal account_owner_queries
+        account_owner_queries += 1
+        return iter([])
+
+    account.users.list = account_users
+
+    with pytest.raises(RuntimeError, match="did not resolve to exactly one principal"):
+        _audit(workspace, account_factory=lambda: account)
+
+    assert account_owner_queries == 0
+
+
+def test_foreign_uc_control_plane_reconciles_same_user_across_both_planes() -> None:
+    proof = _audit(_workspace())
+
+    assert proof.audited_catalogs == frozenset({"other"})
+
+
+def test_foreign_uc_control_plane_rejects_cross_plane_user_id_drift() -> None:
+    account = _account()
+    account.users.list = lambda **_kwargs: iter(
+        [
+            SimpleNamespace(
+                id="different-account-owner-id",
+                user_name=FOREIGN_OWNER,
+                active=True,
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="identically across workspace and account"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_workspace_user_account_group_collision() -> None:
+    account = _account()
+    account.users.list = lambda **_kwargs: iter([])
+    account_users = next(account.groups.list())
+    colliding_group = SimpleNamespace(
+        id="colliding-account-group-id",
+        display_name=FOREIGN_OWNER,
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, colliding_group])
+    account.groups.get = lambda group_id: (
+        colliding_group if group_id == colliding_group.id else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="identically across workspace and account"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_workspace_user_account_sp_collision() -> None:
+    account = _account()
+    target_principal = next(account.service_principals.list())
+    account.users.list = lambda **_kwargs: iter([])
+    account.service_principals.list = lambda **kwargs: iter(
+        [
+            SimpleNamespace(
+                id="colliding-account-sp-id",
+                application_id=FOREIGN_OWNER,
+                active=True,
+            )
+        ]
+        if FOREIGN_OWNER in str(kwargs.get("filter", ""))
+        else [target_principal]
+    )
+
+    with pytest.raises(RuntimeError, match="identically across workspace and account"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_workspace_group_account_user_collision() -> None:
+    workspace = _workspace()
+    system_group_list = workspace.groups.list
+    workspace.users.list = lambda **_kwargs: iter([])
+    workspace.groups.list = lambda **kwargs: (
+        system_group_list(**kwargs)
+        if kwargs.get("attributes")
+        == "id,displayName,meta,entitlements,roles,externalId"
+        else iter(
+            [
+                SimpleNamespace(
+                    id="colliding-workspace-group-id",
+                    display_name=FOREIGN_OWNER,
+                )
+            ]
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="identically across workspace and account"):
+        _audit(workspace)
+
+
+@pytest.mark.parametrize(
+    ("catalog_owner", "schema_owner"),
+    [
+        (FOREIGN_OWNER, FOREIGN_OWNER.upper()),
+        (FOREIGN_OWNER.upper(), FOREIGN_OWNER),
+    ],
+)
+def test_foreign_uc_control_plane_rejects_mixed_case_owner_snapshot(
+    catalog_owner: str,
+    schema_owner: str,
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="(case-variant identity|identity changed within the inventory snapshot)",
+    ):
+        _audit(
+            _workspace(
+                owner_overrides={
+                    "other": catalog_owner,
+                    "other.sandbox": schema_owner,
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize("raw_owner", [" padded-owner@example.com ", 123])
+def test_foreign_uc_control_plane_rejects_noncanonical_raw_owner(
+    raw_owner: object,
+) -> None:
+    with pytest.raises(RuntimeError, match="noncanonical owner"):
+        _audit(
+            _workspace(
+                owner_overrides={"other": raw_owner},  # type: ignore[dict-item]
+            )
+        )
+
+
+def test_foreign_uc_control_plane_rejects_noncanonical_account_owner_id() -> None:
+    owner = "account-only-owner@example.com"
+    account = _account()
+    account.users.list = lambda **_kwargs: iter(
+        [
+            SimpleNamespace(
+                id=" padded-account-owner-id ",
+                user_name=owner,
+                active=True,
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="no canonical immutable id"):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+        )
+
+
+@pytest.mark.parametrize(
+    "returned_name",
+    [
+        " account-only-owner@example.com ",
+        "ACCOUNT-ONLY-OWNER@EXAMPLE.COM",
+        123,
+    ],
+)
+def test_foreign_uc_control_plane_rejects_noncanonical_account_owner_name(
+    returned_name: object,
+) -> None:
+    owner = "account-only-owner@example.com"
+    account = _account()
+    account.users.list = lambda **_kwargs: iter(
+        [
+            SimpleNamespace(
+                id="account-owner-id",
+                user_name=returned_name,
+                active=True,
+            )
+        ]
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="(noncanonical|case-variant) identity",
+    ):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+        )
+
+
+def test_foreign_uc_control_plane_resolves_distinct_account_only_sp_owner() -> None:
+    owner = "account-only-owner-sp"
+    account = _account()
+    target_principal = next(account.service_principals.list())
+    account.service_principals.list = lambda **kwargs: iter(
+        [
+            SimpleNamespace(
+                id="account-owner-sp-id",
+                application_id=owner,
+                active=True,
+            )
+        ]
+        if owner in str(kwargs.get("filter", ""))
+        else [target_principal]
+    )
+
+    proof = _audit(
+        _workspace(owner_overrides={"other": owner}),
+        account_factory=lambda: account,
+    )
+
+    assert proof.audited_catalogs == frozenset({"other"})
+
+
+def test_foreign_uc_control_plane_rejects_target_account_id_owner_alias() -> None:
+    owner = "target-owner-alias"
+    account = _account()
+    target_principal = next(account.service_principals.list())
+    account.service_principals.list = lambda **kwargs: iter(
+        [
+            SimpleNamespace(
+                id=ACCOUNT_SCIM_ID,
+                application_id=owner,
+                active=True,
+            )
+        ]
+        if owner in str(kwargs.get("filter", ""))
+        else [target_principal]
+    )
+
+    with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+        )
+
+
+def test_foreign_uc_control_plane_resolves_account_only_group_owner() -> None:
+    owner = "account-only-owner-group"
+    account = _account()
+    account_users = next(account.groups.list())
+    owner_group = SimpleNamespace(
+        id="account-owner-group-id",
+        display_name=owner,
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, owner_group])
+    account.groups.get = lambda group_id: (
+        owner_group if group_id == owner_group.id else account_users
+    )
+
+    proof = _audit(
+        _workspace(owner_overrides={"other": owner}),
+        account_factory=lambda: account,
+    )
+
+    assert proof.audited_catalogs == frozenset({"other"})
+
+
+@pytest.mark.parametrize(
+    ("hydrated_id", "hydrated_name", "error"),
+    [
+        (" padded-owner-group-id ", "account-only-owner-group", "not canonical"),
+        ("different-owner-group-id", "account-only-owner-group", "id mismatch"),
+        ("account-owner-group-id", "Account-Only-Owner-Group", "exact display name"),
+        ("account-owner-group-id", 123, "exact display name"),
+    ],
+)
+def test_foreign_uc_control_plane_rejects_account_only_group_identity_drift(
+    hydrated_id: str,
+    hydrated_name: object,
+    error: str,
+) -> None:
+    owner = "account-only-owner-group"
+    account = _account()
+    account_users = next(account.groups.list())
+    listed_owner_group = SimpleNamespace(
+        id="account-owner-group-id",
+        display_name=owner,
+        members=[],
+    )
+    account.groups.list = lambda **kwargs: (
+        iter([account_users])
+        if kwargs.get("attributes")
+        else iter([account_users, listed_owner_group])
+    )
+    account.groups.get = lambda group_id: (
+        account_users
+        if group_id == account_users.id
+        else SimpleNamespace(
+            id=hydrated_id,
+            display_name=hydrated_name,
+            members=[],
+        )
+    )
+
+    with pytest.raises(RuntimeError, match=error):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+        )
+
+
+def test_foreign_uc_control_plane_rejects_account_only_group_membership() -> None:
+    owner = "account-only-owner-group"
+    account = _account()
+    account_users = next(account.groups.list())
+    owner_group = SimpleNamespace(
+        id="account-owner-group-id",
+        display_name=owner,
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, owner_group])
+    account.groups.get = lambda group_id: (
+        owner_group if group_id == owner_group.id else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="member of approved owner group"):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+            group_membership_probe=lambda *_args: True,
+        )
+
+
+@pytest.mark.parametrize("malformed_evidence", [None, 0, [], {}])
+def test_foreign_uc_control_plane_rejects_malformed_group_membership_evidence(
+    malformed_evidence: object,
+) -> None:
+    owner = "account-only-owner-group"
+    account = _account()
+    account_users = next(account.groups.list())
+    owner_group = SimpleNamespace(
+        id="account-owner-group-id",
+        display_name=owner,
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, owner_group])
+    account.groups.get = lambda group_id: (
+        owner_group if group_id == owner_group.id else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="malformed evidence"):
+        _audit(
+            _workspace(owner_overrides={"other": owner}),
+            account_factory=lambda: account,
+            group_membership_probe=lambda *_args: malformed_evidence,
+        )
+
+
+def test_malformed_group_membership_evidence_is_not_cached() -> None:
+    owner = "account-only-owner-group"
+    workspace = _workspace()
+    account = _account()
+    account_users = next(account.groups.list())
+    owner_group = SimpleNamespace(
+        id="account-owner-group-id",
+        display_name=owner,
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, owner_group])
+    account.groups.get = lambda group_id: (
+        owner_group if group_id == owner_group.id else account_users
+    )
+    outcomes = iter([None, False])
+    calls = 0
+
+    def probe(*_args: object) -> object:
+        nonlocal calls
+        calls += 1
+        return next(outcomes)
+
+    policy = ApprovedOwnerPolicy(
+        workspace=workspace,
+        target=TargetServicePrincipal(
+            application_id=APPLICATION_ID,
+            scim_id="runtime-scim-id",
+            display_name="runtime-workspace",
+        ),
+        configured_principals={owner},
+        account_factory=lambda: account,
+        group_membership_probe=probe,  # type: ignore[arg-type]
+    )
+    item = SimpleNamespace(owner=owner)
+
+    with pytest.raises(RuntimeError, match="malformed evidence"):
+        policy.assert_objects((item,))
+
+    policy.assert_objects((item,))
+    assert calls == 2
 
 
 @pytest.mark.parametrize("full_name", ["other", "other.sandbox.secret_model"])
@@ -1429,6 +2144,51 @@ def test_foreign_uc_control_plane_accepts_unassigned_binding_excluded_model_owne
     )
 
     assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
+
+
+@pytest.mark.parametrize("raw_owner", [" padded-model-owner@example.com ", 123])
+def test_foreign_uc_control_plane_rejects_noncanonical_binding_denied_model_owner(
+    raw_owner: object,
+) -> None:
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=FOREIGN_OWNER,
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+    models = list(workspace.registered_models.list(include_browse=True))
+    models.append(
+        SimpleNamespace(
+            full_name="hidden.private.noncanonical_owner",
+            catalog_name="hidden",
+            owner=raw_owner,
+        )
+    )
+    workspace.registered_models.list = lambda **_kwargs: iter(models)
+
+    with pytest.raises(RuntimeError, match="noncanonical owner"):
+        _audit(
+            workspace,
+            foreign_catalog_binding_policy=_binding_policy(),
+        )
 
 
 def test_binding_excluded_account_users_owner_rejects_without_group_inventory() -> None:
@@ -1931,12 +2691,16 @@ def test_foreign_uc_control_plane_uses_target_credential_for_group_ownership() -
 
     account = _account()
     account_users = next(account.groups.list())
+    account_owner_group = SimpleNamespace(
+        id="owner-group-id",
+        display_name="runtime-owners",
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter(
+        [account_users, account_owner_group]
+    )
     account.groups.get = lambda group_id: (
-        SimpleNamespace(
-            id="owner-group-id",
-            display_name="runtime-owners",
-            members=[],
-        )
+        account_owner_group
         if group_id == "owner-group-id"
         else account_users
     )

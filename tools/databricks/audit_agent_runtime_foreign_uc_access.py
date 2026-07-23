@@ -36,6 +36,10 @@ from tools.databricks.uc_owner_policy import (
     TargetServicePrincipal,
     account_client_from_env,
 )
+from tools.databricks.uc_target_identity import (
+    account_target_identity,
+    workspace_target_identity,
+)
 from tools.databricks.workspace_system_group_evidence import (
     workspace_users_group_evidence,
 )
@@ -45,23 +49,15 @@ _PLATFORM_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system
 _ACCOUNT_USERS_GROUP = "account users"
 
 
-def _target_identity(workspace: Any, *, application_id: str) -> TargetServicePrincipal:
-    escaped = application_id.replace('"', '\\"')
-    matches = [
-        item
-        for item in workspace.service_principals.list(filter=f'applicationId eq "{escaped}"')
-        if _text(getattr(item, "application_id", None)).casefold() == application_id.casefold()
-    ]
-    if len(matches) != 1:
-        raise RuntimeError("agent-runtime identity did not resolve exactly once in workspace SCIM")
-    scim_id = _text(getattr(matches[0], "id", None))
-    if not scim_id:
-        raise RuntimeError("agent-runtime identity has no immutable workspace SCIM id")
-    return TargetServicePrincipal(
-        application_id=application_id,
-        scim_id=scim_id,
-        display_name=_text(getattr(matches[0], "display_name", None)),
-    )
+def _exact_owner(item: object, *, context: str) -> str:
+    owner = getattr(item, "owner", None)
+    if (
+        not isinstance(owner, str)
+        or not owner
+        or owner != owner.strip()
+    ):
+        raise RuntimeError(f"{context} returned a noncanonical owner")
+    return owner
 
 
 def _assert_no_foreign_ownership(
@@ -74,9 +70,10 @@ def _assert_no_foreign_ownership(
 ) -> None:
     """Reject direct or target-credential-proven group ownership of foreign objects."""
 
-    owners = {_text(getattr(item, "owner", None)) for item in objects}
-    if "" in owners:
-        raise RuntimeError("foreign UC object inventory returned an empty owner")
+    owners = {
+        _exact_owner(item, context="foreign UC object inventory")
+        for item in objects
+    }
     policy = ApprovedOwnerPolicy(
         workspace=workspace,
         target=target,
@@ -99,14 +96,24 @@ def _assert_metastore_owner_inventory_identity(
         expected_principal=expected_principal,
     )
     caller = workspace.current_user.me()
-    caller_name = _text(getattr(caller, "user_name", None))
+    caller_name = getattr(caller, "user_name", None)
+    if (
+        not isinstance(caller_name, str)
+        or not caller_name
+        or caller_name != caller_name.strip()
+        or caller_name != expected_principal
+    ):
+        raise RuntimeError(
+            "UC control-plane audit is running as a noncanonical inventory principal"
+        )
     metastore_id = _text(getattr(workspace.metastores.current(), "metastore_id", None))
     if not metastore_id:
         raise RuntimeError("UC control-plane audit found no current metastore identity")
-    owner = _text(getattr(workspace.metastores.get(metastore_id), "owner", None))
-    if not owner:
-        raise RuntimeError("UC control-plane audit found no current metastore owner")
-    if owner.casefold() != caller_name.casefold():
+    owner = _exact_owner(
+        workspace.metastores.get(metastore_id),
+        context="UC control-plane metastore inventory",
+    )
+    if owner != caller_name:
         raise RuntimeError(
             "UC control-plane audit requires the expected caller to own the current "
             "metastore directly"
@@ -210,23 +217,6 @@ def parse_foreign_catalog_binding_policy(raw: str) -> dict[str, CatalogBindingEv
             bindings=tuple(sorted(normalized_bindings)),
         )
     return policy
-
-
-def _account_runtime_identity(account: Any, *, application_id: str) -> tuple[str, str]:
-    escaped = application_id.replace('"', '\\"')
-    matches = [
-        item
-        for item in account.service_principals.list(filter=f'applicationId eq "{escaped}"')
-        if _text(getattr(item, "application_id", None)).casefold() == application_id.casefold()
-    ]
-    if len(matches) != 1:
-        raise RuntimeError("agent-runtime identity did not resolve exactly once in account SCIM")
-    item = matches[0]
-    scim_id = _text(getattr(item, "id", None))
-    active = getattr(item, "active", None)
-    if not scim_id or active is not True:
-        raise RuntimeError("agent-runtime account identity is incomplete or inactive")
-    return scim_id, _text(getattr(item, "display_name", None))
 
 
 def _account_group_evidence(
@@ -375,9 +365,10 @@ def _assert_no_binding_denied_runtime_ownership(
         "account users",
     }
     for item in objects:
-        owner = _text(getattr(item, "owner", None))
-        if not owner:
-            raise RuntimeError("binding-denied foreign UC object has no owner")
+        owner = _exact_owner(
+            item,
+            context="binding-denied foreign UC object inventory",
+        )
         if owner.casefold() in owner_aliases:
             raise RuntimeError(
                 "agent-runtime service principal cannot own governed UC objects"
@@ -587,7 +578,13 @@ def audit_foreign_uc_access(
     principal = application_id.strip()
     mip_catalog = catalog.strip()
     inventory_principal = expected_inventory_principal.strip()
-    if not principal or not mip_catalog or not inventory_principal:
+    if (
+        not principal
+        or not mip_catalog
+        or not inventory_principal
+        or application_id != principal
+        or expected_inventory_principal != inventory_principal
+    ):
         raise ValueError("application ID, MIP catalog, and inventory principal are required")
     metastore_id, workspace_id = _assert_metastore_owner_inventory_identity(
         workspace,
@@ -597,8 +594,11 @@ def audit_foreign_uc_access(
         foreign_catalog_binding_policy
     )
     account = account_factory()
-    workspace_target = _target_identity(workspace, application_id=principal)
-    account_target_scim_id, account_target_display_name = _account_runtime_identity(
+    workspace_target = workspace_target_identity(
+        workspace,
+        application_id=principal,
+    )
+    account_target_scim_id, account_target_display_name = account_target_identity(
         account,
         application_id=principal,
     )
@@ -673,7 +673,10 @@ def audit_foreign_uc_access(
     if internal is not None:
         isolation_mode, item = internal
         catalog_type = _text(getattr(item, "catalog_type", None)).upper()
-        owner = _text(getattr(item, "owner", None))
+        owner = _exact_owner(
+            item,
+            context="Databricks internal catalog inventory",
+        )
         if isolation_mode != "OPEN" or catalog_type != "INTERNAL_CATALOG" or owner != "System user":
             raise RuntimeError(
                 "Databricks internal catalog does not match the fixed platform identity"
@@ -708,10 +711,14 @@ def audit_foreign_uc_access(
 
     def inspect_catalog(foreign_catalog: str) -> None:
         isolation_mode, catalog_object = catalog_inventory[foreign_catalog]
+        catalog_owner = _exact_owner(
+            catalog_object,
+            context=f"UC control-plane catalog {foreign_catalog}",
+        )
         evidence = _binding_evidence(
             workspace,
             catalog=foreign_catalog,
-            owner=_text(getattr(catalog_object, "owner", None)),
+            owner=catalog_owner,
             catalog_type=_text(getattr(catalog_object, "catalog_type", None)).upper(),
             isolation_mode=isolation_mode,
             workspace_id=workspace_id,
@@ -746,7 +753,7 @@ def audit_foreign_uc_access(
             workspace,
             catalog=foreign_catalog,
             catalog_type=_text(getattr(catalog_object, "catalog_type", None)),
-            catalog_owner=_text(getattr(catalog_object, "owner", None)),
+            catalog_owner=catalog_owner,
             principal=principal,
             owner_check=record_owner,
         )

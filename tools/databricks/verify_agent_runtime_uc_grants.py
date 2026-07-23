@@ -38,6 +38,7 @@ from tools.databricks.agent_runtime_uc_inventory import (
     _assert_system_owned,
     _catalog_name,
     _effective_privilege_sources,
+    _exact_owner,
     _full_name,
     _schema_name,
     _text,
@@ -177,7 +178,7 @@ def _assert_system_catalog_baseline(
         schema_name = _text(getattr(schema, "name", None))
         if not schema_name:
             raise RuntimeError("system schema inventory returned an empty name")
-        schema_owner = _text(getattr(schema, "owner", None))
+        schema_owner = _exact_owner(schema, label=f"system schema {schema_name}")
         if schema_name == "data_quality_monitoring":
             if not schema_owner or schema_owner.casefold() in runtime_owner_aliases:
                 raise RuntimeError("system.data_quality_monitoring has an invalid platform owner")
@@ -195,7 +196,7 @@ def _assert_system_catalog_baseline(
             if system_schema_name != "data_quality_monitoring":
                 _assert_system_owned(item, label=label)
                 return
-            owner = _text(getattr(item, "owner", None))
+            owner = _exact_owner(item, label=label)
             if owner != system_schema_owner:
                 raise RuntimeError(
                     "system.data_quality_monitoring child owner drifted from its "
@@ -366,7 +367,10 @@ def verify_effective_uc_boundary(
     visible_catalogs = list(workspace.catalogs.list(include_browse=True))
     visible_catalog_names = {_text(getattr(item, "name", None)) for item in visible_catalogs}
     visible_catalog_owners = {
-        _text(getattr(item, "name", None)): _text(getattr(item, "owner", None))
+        _text(getattr(item, "name", None)): _exact_owner(
+            item,
+            label=f"catalog {_text(getattr(item, 'name', None)) or '<unknown>'}",
+        )
         for item in visible_catalogs
     }
     visible_catalog_types = {
@@ -521,7 +525,8 @@ def verify_effective_uc_boundary(
         _full_name(model)
         for model in other_registered_models
         if _full_name(model) in _SYSTEM_AI_MODELS
-        and _text(getattr(model, "owner", None)) != "System user"
+        and _exact_owner(model, label=f"registered model {_full_name(model)}")
+        != "System user"
     )
     if invalid_system_owners:
         raise RuntimeError(
@@ -532,7 +537,8 @@ def verify_effective_uc_boundary(
         _full_name(model)
         for model in other_registered_models
         if _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
-        and _text(getattr(model, "owner", None)) != "System user"
+        and _exact_owner(model, label=f"registered model {_full_name(model)}")
+        != "System user"
     )
     if invalid_platform_model_owners:
         raise RuntimeError(
@@ -710,7 +716,8 @@ def verify_effective_uc_boundary(
                 if (
                     not actual_sources
                     or any(sources != runtime_direct for sources in actual_sources.values())
-                    or _text(getattr(table, "owner", None)) != principal
+                    or _exact_owner(table, label=f"table {table_full_name}")
+                    != principal
                 ):
                     raise RuntimeError(
                         f"agent-runtime inference table {table_name} lacks exact direct "
@@ -776,7 +783,8 @@ def verify_effective_uc_boundary(
         if (
             not actual_sources
             or any(sources != runtime_direct for sources in actual_sources.values())
-            or _text(getattr(model, "owner", None)) != principal
+            or _exact_owner(model, label=f"registered model {full_name}")
+            != principal
         ):
             raise RuntimeError(
                 f"agent-runtime Gateway model {full_name} lacks exact direct runtime ownership"

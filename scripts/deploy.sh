@@ -297,6 +297,15 @@ else
   PYTHON="python3"
 fi
 
+same_identity_casefold() {
+  "$PYTHON" - "$1" "$2" <<'PYEOF'
+import sys
+
+left, right = (value.strip().casefold() for value in sys.argv[1:])
+raise SystemExit(0 if left and right and left == right else 1)
+PYEOF
+}
+
 RESTORE_RENDERED_SQL_FAIL_CLOSED=0
 APP_DEPLOY_PAYLOAD=""
 APP_LAST_DEPLOY_PAYLOAD=""
@@ -2020,8 +2029,9 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID \
       DATABRICKS_VERIFIER_CLIENT_ID \
       DATABRICKS_AGENT_RUNTIME_CLIENT_ID; do
-      if [[ -n "${!_SEPARATED_CLIENT_ENV:-}" && \
-            "$DATABRICKS_ACCOUNT_CLIENT_ID" == "${!_SEPARATED_CLIENT_ENV}" ]]; then
+      if [[ -n "${!_SEPARATED_CLIENT_ENV:-}" ]] && \
+         same_identity_casefold \
+           "$DATABRICKS_ACCOUNT_CLIENT_ID" "${!_SEPARATED_CLIENT_ENV}"; then
         echo "${RED}[deploy] ERROR: account-SCIM OAuth client must be distinct from ${_SEPARATED_CLIENT_ENV}.${RST}" >&2
         exit 1
       fi
@@ -2033,14 +2043,25 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     "$DATABRICKS_CLIENT_ID" "$DATABRICKS_OPERATOR2_CLIENT_ID" \
     "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
     "$DATABRICKS_VERIFIER_CLIENT_ID" \
-    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" <<'PYEOF'
+    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    "$DATABRICKS_ACCOUNT_CLIENT_ID" <<'PYEOF'
 import sys
 
-values = [value.strip() for value in sys.argv[1:]]
-raise SystemExit(0 if all(values) and len(values) == len(set(values)) else 1)
+values = [value.strip().casefold() for value in sys.argv[1:-1]]
+account_client_id = sys.argv[-1].strip().casefold()
+raise SystemExit(
+    0
+    if (
+        all(values)
+        and len(values) == len(set(values))
+        and account_client_id
+        and account_client_id not in values
+    )
+    else 1
+)
 PYEOF
   then
-    echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs must be pairwise distinct.${RST}" >&2
+    echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
     exit 1
   fi
   _CONFIGURED_ADMIN_IDENTITIES="$(deployment_control_value MIP_ADMIN_IDENTITIES)"
@@ -2101,25 +2122,8 @@ PYEOF
     --source-git-sha "$SOURCE_GIT_SHA" \
     --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --parent-pid "$$"
-  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" ]]; then
-    step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
-    run_with_account_identity \
-      "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
-      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
-      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
-      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
-      --allow-missing-mip-catalog
-    # Recover any deterministic one-use Lakebase role creators left by a prior
-    # SIGKILL immediately after the lease winner is known.
-    step "recover interrupted verifier Lakebase role bootstrap"
-    run_with_lakebase_bootstrap_authority \
-      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
-      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
-      --lakebase-database "$LAKEBASE_DATABASE" \
-      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
-      --role-contract verifier \
-      --recover-bootstrap-only
-  fi
+  # Inventory and separate the immutable target before the account credential
+  # can resolve owners, recover roles, or authorize any App-addressed action.
   _EXISTING_APPS_JSON="$(databricks apps list -o json)"
   _EXISTING_APP_IDENTITY="$(printf '%s' "$_EXISTING_APPS_JSON" | "$PYTHON" -c '
 import json, os, sys
@@ -2155,6 +2159,33 @@ else:
       --expected-client-id "$_EXISTING_APP_SP_CLIENT_ID"
       --expected-scim-id "$_EXISTING_APP_SP_SCIM_ID"
     )
+    # OAuth application IDs are compared case-insensitively throughout the
+    # identity policy.
+    # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
+    if same_identity_casefold \
+      "$DATABRICKS_ACCOUNT_CLIENT_ID" "$_EXISTING_APP_SP_CLIENT_ID"; then
+      echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the existing target App service principal.${RST}" >&2
+      exit 4
+    fi
+  fi
+  if [[ "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" ]]; then
+    step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
+    run_with_account_identity \
+      "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+      --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+      --allow-missing-mip-catalog
+    # Recover any deterministic one-use Lakebase role creators left by a prior
+    # SIGKILL immediately after the lease winner is known.
+    step "recover interrupted verifier Lakebase role bootstrap"
+    run_with_lakebase_bootstrap_authority \
+      "$PYTHON" -m tools.databricks.converge_lakebase_oauth_role \
+      --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+      --lakebase-database "$LAKEBASE_DATABASE" \
+      --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
+      --role-contract verifier \
+      --recover-bootstrap-only
   fi
   if [[ -n "$_EXISTING_APP_SP_CLIENT_ID" && \
         "${MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS:-0}" != "1" ]]; then
@@ -2367,12 +2398,6 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
           --lakebase-instance "$MIP_LAKEBASE_INSTANCE"
         FIRST_INSTALL_JOURNAL_STATUS="absent"
       fi
-    fi
-    # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
-    if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" && \
-          "$DATABRICKS_ACCOUNT_CLIENT_ID" == "$_EXISTING_APP_SP_CLIENT_ID" ]]; then
-      echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the existing target App service principal.${RST}" >&2
-      exit 4
     fi
     step "keep existing App treatment writes quiesced through non-App release work"
   else
@@ -2758,8 +2783,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     --expected-scim-id "$APP_SP_SCIM_ID"
   )
   # shellcheck disable=SC2031  # Bounded account subshell does not change parent value.
-  if [[ -n "$DATABRICKS_ACCOUNT_CLIENT_ID" && \
-        "$DATABRICKS_ACCOUNT_CLIENT_ID" == "$APP_SP_CLIENT_ID" ]]; then
+  if same_identity_casefold \
+    "$DATABRICKS_ACCOUNT_CLIENT_ID" "$APP_SP_CLIENT_ID"; then
     echo "${RED}[deploy] account-SCIM OAuth client must be distinct from the target App service principal.${RST}" >&2
     exit 4
   fi

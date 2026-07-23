@@ -32,6 +32,7 @@ from tools.databricks.uc_owner_policy import (
     account_client_from_env,
     parse_approved_owner_principals,
 )
+from tools.databricks.uc_target_identity import workspace_target_identity
 from tools.databricks.workspace_auth import deployment_workspace_client
 
 _IDENTIFIER_RE = re.compile(r"^[a-z_][a-z0-9_]{0,254}$")
@@ -49,14 +50,6 @@ def _validate_identifier(label: str, value: str) -> str:
     if not _IDENTIFIER_RE.fullmatch(normalized):
         raise ValueError(f"Invalid {label} identifier: {value!r}")
     return normalized
-
-
-def _canonical(value: object) -> str:
-    return str(value or "").strip().casefold()
-
-
-def _escaped_filter(value: str) -> str:
-    return value.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def _enum_name(value: object) -> str:
@@ -78,21 +71,21 @@ def _forbidden_targets(
         principal = raw_principal.strip()
         if not principal:
             continue
-        escaped = _escaped_filter(principal)
-        matches = [
-            item
-            for item in workspace.service_principals.list(filter=f'applicationId eq "{escaped}"')
-            if _canonical(getattr(item, "application_id", "")) == _canonical(principal)
-        ]
-        if len(matches) != 1:
+        if principal != raw_principal:
+            raise RuntimeError(
+                f"Forbidden UC owner {raw_principal!r} is not canonical"
+            )
+        try:
+            target = workspace_target_identity(
+                workspace,
+                application_id=principal,
+            )
+        except RuntimeError as exc:
             raise RuntimeError(
                 f"Forbidden UC owner {principal!r} did not resolve to exactly one "
-                "workspace service principal"
-            )
-        scim_id = str(getattr(matches[0], "id", "") or "").strip()
-        if not scim_id:
-            raise RuntimeError(f"Forbidden UC owner {principal!r} has no immutable SCIM id")
-        targets.append(TargetServicePrincipal(application_id=principal, scim_id=scim_id))
+                "active workspace service principal"
+            ) from exc
+        targets.append(target)
     if not targets:
         raise RuntimeError("At least one forbidden App/M2M UC owner is required")
     return tuple(targets)

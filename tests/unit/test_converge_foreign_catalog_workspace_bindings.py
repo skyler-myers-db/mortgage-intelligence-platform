@@ -114,6 +114,21 @@ def _lease(
     }
 
 
+@pytest.mark.parametrize("raw_owner", [" alpha-owner ", 123])
+def test_catalog_snapshot_rejects_noncanonical_raw_owner(
+    raw_owner: object,
+) -> None:
+    workspace = _Workspace()
+    workspace.metadata["alpha"]["owner"] = raw_owner
+
+    with pytest.raises(RuntimeError, match="incomplete metadata"):
+        catalog_state.snapshot(
+            workspace,
+            "alpha",
+            mip_workspace_id=MIP_WORKSPACE_ID,
+        )
+
+
 class _WorkspaceFiles:
     def __init__(self, owner: _Workspace) -> None:
         self.owner = owner

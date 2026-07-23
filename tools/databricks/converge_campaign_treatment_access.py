@@ -27,6 +27,7 @@ from tools.databricks.uc_owner_policy import (
     account_client_from_env,
     parse_approved_owner_principals,
 )
+from tools.databricks.uc_target_identity import workspace_target_identity
 from tools.databricks.workspace_auth import deployment_workspace_client
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
@@ -251,25 +252,24 @@ def _object_presence(
 
 
 def _identity_context(workspace: WorkspaceClient, principal: str) -> TargetServicePrincipal:
-    escaped = principal.replace('"', '\\"')
-    matches = list(workspace.service_principals.list(filter=f'applicationId eq "{escaped}"'))
-    if len(matches) != 1:
-        raise RuntimeError(
-            f"expected one service principal for application id {principal!r}, "
-            f"found {len(matches)}"
+    try:
+        target = workspace_target_identity(
+            workspace,
+            application_id=principal,
         )
-    match = matches[0]
-    sp_id = str(getattr(match, "id", "") or "").strip()
-    if not sp_id:
-        raise RuntimeError("App service principal has no SCIM identifier")
-    groups = resolve_effective_groups(workspace, sp_id=sp_id)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"App service principal {principal!r} did not resolve to one exact, "
+            "active workspace identity"
+        ) from exc
+    groups = resolve_effective_groups(workspace, sp_id=target.scim_id)
     assert_non_admin_service_principal(
         workspace,
-        sp_id=sp_id,
+        sp_id=target.scim_id,
         effective_groups=groups,
         identity_role="app-runtime",
     )
-    return TargetServicePrincipal(application_id=principal, scim_id=sp_id)
+    return target
 
 
 def _privilege_name(privilege: object) -> str:
@@ -432,6 +432,8 @@ def converge_campaign_treatment_access(
         raise ValueError(f"Unsupported access convergence mode: {mode!r}")
     catalog_name = _validate_identifier("catalog", catalog)
     principal_name = principal.strip()
+    if principal_name != principal:
+        raise ValueError("principal must be canonical")
     principal_sql = _quoted_principal(principal_name)
     catalog_sql = _quoted_identifier(catalog_name)
     schema_sql = f"{catalog_sql}.{_quoted_identifier(_SCHEMA)}"

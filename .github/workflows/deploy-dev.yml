@@ -136,10 +136,12 @@ jobs:
               "DATABRICKS_VERIFIER_CLIENT_ID",
               "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
           )
-          values = [os.environ[name].strip() for name in names]
+          values = [os.environ[name].strip().casefold() for name in names]
           if len(set(values)) != len(values):
               raise SystemExit("Normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs must be pairwise distinct.")
-          account_client_id = os.environ.get("DATABRICKS_ACCOUNT_CLIENT_ID", "").strip()
+          account_client_id = os.environ.get(
+              "DATABRICKS_ACCOUNT_CLIENT_ID", ""
+          ).strip().casefold()
           if account_client_id and account_client_id in values:
               raise SystemExit("Account-SCIM OAuth client must be distinct from every app-facing M2M client ID.")
           PY
