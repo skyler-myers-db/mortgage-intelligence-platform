@@ -1189,6 +1189,99 @@ def test_every_lakebase_role_recovery_gets_bounded_signing_and_account_authority
     )
 
 
+def test_every_app_rollback_gets_bounded_signing_and_account_authority() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    command = '"$PYTHON" -m tools.databricks.app_deployment_rollback'
+    bounded = re.findall(
+        r"run_with_account_identity \\\n\s+"
+        r"run_with_proof_signing_authority \\\n\s+"
+        r'"\$PYTHON" -m tools\.databricks\.app_deployment_rollback',
+        script,
+    )
+    capture = _shell_function("capture_last_good_app")
+
+    assert len(bounded) == script.count(command)
+    assert (
+        'run_with_account_identity \\\n'
+        '    run_with_proof_signing_authority "$PYTHON" "${args[@]}"'
+        in capture
+    )
+    assert "tools.databricks.app_deployment_rollback capture" in capture
+
+
+def test_app_rollback_nested_authorities_export_scoped_credentials(
+    tmp_path: Path,
+) -> None:
+    probe = tmp_path / "rollback-authority-probe.py"
+    result_file = tmp_path / "rollback-authority.json"
+    probe.write_text(
+        "import json, os, sys\n"
+        "names = (\n"
+        '    "DATABRICKS_ACCOUNT_CLIENT_ID",\n'
+        '    "DATABRICKS_ACCOUNT_CLIENT_SECRET",\n'
+        '    "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",\n'
+        ")\n"
+        "with open(sys.argv[1], 'w', encoding='utf-8') as handle:\n"
+        "    json.dump({name: os.environ.get(name) for name in names}, handle)\n",
+        encoding="utf-8",
+    )
+    command = textwrap.dedent(
+        f"""
+        set -euo pipefail
+        DRY_RUN=0
+        DIM=""
+        RED=""
+        RST=""
+        DATABRICKS_ACCOUNT_CLIENT_ID=account-client
+        DATABRICKS_ACCOUNT_CLIENT_SECRET=account-secret
+        MIP_AI_GATEWAY_PROOF_SIGNING_KEY=proof-secret
+        export -n DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
+        export -n MIP_AI_GATEWAY_PROOF_SIGNING_KEY
+        {_shell_function("run_with_account_identity")}
+        {_shell_function("run_with_proof_signing_authority")}
+        run_with_account_identity run_with_proof_signing_authority \
+          {shlex.quote(sys.executable)} {shlex.quote(str(probe))} \
+          {shlex.quote(str(result_file))}
+        {shlex.quote(sys.executable)} -c 'import os; raise SystemExit(any(
+            name in os.environ
+            for name in (
+                "DATABRICKS_ACCOUNT_CLIENT_ID",
+                "DATABRICKS_ACCOUNT_CLIENT_SECRET",
+                "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
+            )
+        ))'
+        """
+    )
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key
+        not in {
+            "DATABRICKS_ACCOUNT_CLIENT_ID",
+            "DATABRICKS_ACCOUNT_CLIENT_SECRET",
+            "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
+        }
+    }
+
+    result = subprocess.run(
+        ["bash", "-c", command],
+        cwd=REPO,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert json.loads(result_file.read_text(encoding="utf-8")) == {
+        "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
+        "DATABRICKS_ACCOUNT_CLIENT_SECRET": "account-secret",
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": "proof-secret",
+    }
+    assert "account-secret" not in result.stdout + result.stderr
+    assert "proof-secret" not in result.stdout + result.stderr
+
+
 def test_lakebase_bootstrap_receives_only_explicit_fresh_m2m_control_names() -> None:
     helper = _shell_function("run_with_lakebase_bootstrap_authority")
 

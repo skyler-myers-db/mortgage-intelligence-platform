@@ -518,8 +518,9 @@ restore_signed_blue_while_quiesced() {
   if declare -F mint_m2m_token >/dev/null; then
     mint_signed_app_proof_token || return 1
   fi
-  run_with_proof_signing_authority \
-    "$PYTHON" -m tools.databricks.app_deployment_rollback restore \
+  run_with_account_identity \
+    run_with_proof_signing_authority \
+      "$PYTHON" -m tools.databricks.app_deployment_rollback restore \
     --app-name "$APP_FAIL_CLOSED_NAME" \
     --scope "$APP_ROLLBACK_SECRET_SCOPE" \
     --base-url "${MIP_APP_URL:?App URL is required for exact rollback proof}" \
@@ -2371,8 +2372,9 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
       step "prove or reconcile the signed last-good App before non-App mutations"
       APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
-      run_with_proof_signing_authority \
-        "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
+      run_with_account_identity \
+        run_with_proof_signing_authority \
+          "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
         --app-name "$_GRANTS_APP_NAME" \
         --scope "$APP_ROLLBACK_SECRET_SCOPE" \
         --base-url "${MIP_APP_URL:?existing App URL is required}" \
@@ -2423,8 +2425,9 @@ print(str(matches[0].get("url") or "").strip() if len(matches) == 1 else "")
       FOREIGN_CATALOG_REMEDIATION_COMPLETE=1
       if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 ]]; then
         step "restart and re-prove only the exact signed-blue App after UC preflight"
-        run_with_proof_signing_authority \
-          "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
+        run_with_account_identity \
+          run_with_proof_signing_authority \
+            "$PYTHON" -m tools.databricks.app_deployment_rollback ensure \
           --app-name "$_GRANTS_APP_NAME" \
           --scope "$APP_ROLLBACK_SECRET_SCOPE" \
           --base-url "${MIP_APP_URL:?existing App URL is required}" \
@@ -3266,7 +3269,8 @@ capture_last_good_app() {
   if [[ -n "$binding" ]]; then
     args+=(--expected-gateway-binding "$binding")
   fi
-  run_with_proof_signing_authority "$PYTHON" "${args[@]}"
+  run_with_account_identity \
+    run_with_proof_signing_authority "$PYTHON" "${args[@]}"
 }
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
