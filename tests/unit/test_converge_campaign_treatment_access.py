@@ -9,6 +9,7 @@ from tools.databricks.converge_campaign_treatment_access import (
     _effective_privileges,
     converge_campaign_treatment_access,
     target_group_membership_probe,
+    target_identity_groups_probe,
 )
 from tools.databricks.uc_owner_policy import account_client_from_env
 
@@ -719,6 +720,7 @@ def test_target_group_probe_uses_short_lived_secret_and_deletes_it() -> None:
         "app-client",
         "owner-group-id",
         "Customer's Governance",
+        expected_workspace_scim_id="account-sp-id",
         workspace_host="https://workspace.example.invalid",
         workspace_factory=workspace_factory,  # type: ignore[arg-type]
     )
@@ -769,9 +771,47 @@ def test_target_group_probe_recognizes_effective_group_by_immutable_id() -> None
         "app-client",
         "owner-group-id",
         "mip owners",
+        expected_workspace_scim_id="account-sp-id",
         workspace_host="https://workspace.example.invalid",
         workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
     )
+
+
+def test_target_identity_groups_probe_returns_complete_frozen_snapshot() -> None:
+    deleted: list[tuple[str, str]] = []
+
+    class Secrets:
+        def create(self, _sp_id: str, *, lifetime: str) -> object:
+            assert lifetime == "300s"
+            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
+
+        def delete(self, sp_id: str, secret_id: str) -> None:
+            deleted.append((sp_id, secret_id))
+
+    account = SimpleNamespace(service_principal_secrets=Secrets())
+    identity = {
+        "id": "workspace-sp-id",
+        "userName": "app-client",
+        "groups": [
+            {"value": "account-users-id", "display": "account users"},
+            {"value": "dynamic-group-id", "display": "Dynamic Governance"},
+        ],
+    }
+
+    assert target_identity_groups_probe(
+        account,  # type: ignore[arg-type]
+        "account-sp-id",
+        "app-client",
+        expected_workspace_scim_id="workspace-sp-id",
+        workspace_host="https://workspace.example.invalid",
+        workspace_factory=lambda **_: SimpleNamespace(
+            api_client=SimpleNamespace(do=lambda *_args, **_kwargs: identity)
+        ),  # type: ignore[arg-type]
+    ) == {
+        "account-users-id": "account users",
+        "dynamic-group-id": "Dynamic Governance",
+    }
+    assert deleted == [("account-sp-id", "temporary-secret-id")]
 
 
 def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
@@ -802,6 +842,7 @@ def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
             "app-client",
             "owner-group-id",
             "mip owners",
+            expected_workspace_scim_id="account-sp-id",
             workspace_host="https://workspace.example.invalid",
             workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
         )
@@ -844,6 +885,44 @@ def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
             },
             "group without an id",
         ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"value": "unlabeled-group"}],
+            },
+            "group without a display name",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [
+                    {"value": "duplicate-id", "display": "first name"},
+                    {"value": "duplicate-id", "display": "second name"},
+                ],
+            },
+            "duplicate group id",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [
+                    {"value": "first-id", "display": "Same Name"},
+                    {"value": "second-id", "display": " same name "},
+                ],
+            },
+            "duplicate group name",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": ["not-a-group"],
+            },
+            "malformed group",
+        ),
     ],
 )
 def test_target_group_probe_rejects_mismatched_or_malformed_identity_evidence(
@@ -869,6 +948,7 @@ def test_target_group_probe_rejects_mismatched_or_malformed_identity_evidence(
             "app-client",
             "owner-group-id",
             "mip owners",
+            expected_workspace_scim_id="account-sp-id",
             workspace_host="https://workspace.example.invalid",
             workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
         )
@@ -894,6 +974,7 @@ def test_target_group_probe_fails_closed_when_secret_cleanup_fails() -> None:
             "app-client",
             "owner-group-id",
             "customer-platform-governance",
+            expected_workspace_scim_id="account-sp-id",
             workspace_host="https://workspace.example.invalid",
             workspace_factory=lambda **_: SimpleNamespace(
                 api_client=SimpleNamespace(do=lambda *_args, **_kwargs: identity)

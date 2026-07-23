@@ -334,22 +334,39 @@ becomes visible to the runtime-authenticated inventory, the proof fails rather
 than suppressing the lookup.
 
 The same control-plane pass resolves the runtime service principal exactly once
-in account SCIM, requires it to be active, and rejects every ordinary account
-group membership. The Databricks-managed `account users` baseline may be
-implicit and absent from explicit SCIM membership; if it is returned, it is the
-only accepted system group. The pass enumerates every workspace assigned to the
-current metastore and requires exactly one direct, immutable-ID-matched `USER`
-assignment in the MIP workspace, with no direct or group-derived assignment to
-a workspace retained by the foreign-catalog policy. Unknown isolation modes,
-incomplete or duplicate binding identities, unsupported binding types, policy
-drift, account-group drift, workspace-assignment drift, and binding-read errors
-fail closed.
-It separately checks the owner on every inventoried catalog, schema, table,
-function, volume, and registered model. Direct runtime ownership fails. Group
-owners are resolved by immutable workspace and account SCIM IDs, then a bounded
-temporary runtime credential reads that identity's own direct, nested, and
-dynamic group collection; cleanup failure is fatal. Ownership therefore cannot
-masquerade as an empty grants response. The exact `__databricks_internal`
+in both account and MIP workspace SCIM and requires the account identity to be
+active. One bounded temporary runtime credential then reads that identity's own
+direct, nested, and dynamic `/Me.groups` collection; cleanup failure is fatal.
+The temporary secret is created and deleted against the immutable account SCIM
+ID, while `/Me.id` must equal the separately resolved workspace SCIM ID and
+`/Me.userName` must equal the runtime application ID.
+That credentialed result is the frozen authoritative membership snapshot for
+the entire pass. Any membership inferred positively from account group members
+must appear under the same immutable group ID and name in the snapshot, but
+account-member omission is not treated as negative evidence under Automatic
+Identity Management. Every ordinary group in the snapshot is rejected. The
+Databricks-managed `account users` baseline may be implicit and is the only
+accepted system group. Its immutable identity must still be present in either
+the hydrated account group inventory or the credentialed target snapshot; if
+both omit it, the audit cannot exclude an opaque system-group ID and fails
+closed.
+
+The pass enumerates every workspace assigned to the current metastore and
+requires exactly one direct, immutable-ID-matched `USER` assignment in the MIP
+workspace, with no direct or group-derived assignment to a workspace retained
+by the foreign-catalog policy. It separately checks the owner on every
+inventoried catalog, schema, table, function, volume, and registered model.
+Objects visible to MIP retain the full approved-owner workspace/account
+resolution. For an exactly policy-matched catalog whose bindings deny MIP, the
+pass does not require an unrelated owner to exist in MIP workspace SCIM;
+instead, it excludes the runtime application ID, both immutable SCIM IDs,
+observed runtime display aliases, every frozen group ID and name, and implicit
+`account users` from the catalog and registered-model owner fields. Direct or
+group-derived runtime ownership therefore fails without weakening the workspace
+binding proof. Unknown isolation modes, incomplete or duplicate identity
+evidence, unsupported binding types, policy drift, account-group drift,
+workspace-assignment drift, and binding-read errors fail closed. Ownership
+cannot masquerade as an empty grants response. The exact `__databricks_internal`
 catalog is excluded only when its SDK identity remains `INTERNAL_CATALOG`,
 `System user`-owned, and `OPEN`; lookalike names or source drift fail.
 The runtime-authenticated half also treats ownership as authority: the runtime's
@@ -385,8 +402,9 @@ catalog-only model listings without a schema.
 Shared-metastore remediation is a separately reviewed, fail-closed operation.
 `tools/databricks/converge_foreign_catalog_workspace_bindings.py` accepts only a
 clean committed source SHA, an active signed App deployment lease, the stopped
-App's immutable identity, the exact account authority and runtime SCIM
-identities, and a versioned binding policy. Its signed manifest preserves every
+App's immutable identity, the exact account authority, the distinct runtime
+account/workspace SCIM IDs and display aliases, and a versioned binding policy.
+Its signed manifest preserves every
 non-MIP metastore workspace as `READ_WRITE` for a formerly `OPEN` catalog and
 preserves the exact existing bindings of every already-`ISOLATED` catalog.
 Catalog metadata is read from the authoritative `include_unbound` inventory,
@@ -409,6 +427,18 @@ the MIP control plane cannot observe, so matching only the former catalog-level
 grant list would not prove that reopening restores the former access boundary.
 Recovery therefore resumes the signed fail-closed desired state. The final
 postflight re-reads the entire policy rather than trusting per-catalog success.
+The current signed-manifest schema is v4. Correctly signed v3 fences remain
+readable so completed/stale operations can still be classified and interrupted
+operations can be reauthorized into a fresh v4 boundary. A v3 manifest can
+never be persisted anew, applied, resumed, or verified as mutation authority;
+it must first be reauthorized under a descendant lease, which seals the
+distinct live account and workspace runtime identities. Only that explicit
+v3-parent migration may cross a historical source SHA: `recover-local` requires
+the parent lease ID, and the signed v4 child records the current clean SHA.
+Ordinary v4 recovery remains exact-source-pinned.
+Every signed account, App, and runtime identity field must already be a
+canonical trimmed string; validation never compares a normalized copy while
+retaining a different raw identity.
 Because the excluded MIP workspace cannot enumerate foreign direct grants after
 convergence, the live postflight must separately use each retained bound
 workspace to prove its expected access and grant behavior.

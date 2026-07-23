@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -15,10 +16,16 @@ from tools.databricks import foreign_catalog_binding_journal as journal
 from tools.databricks.agent_runtime_uc_inventory import _text
 from tools.databricks.audit_agent_runtime_foreign_uc_access import (
     _PLATFORM_CATALOGS,
+    _account_group_evidence,
     _account_runtime_identity,
     _assert_metastore_owner_inventory_identity,
     _assert_runtime_workspace_assignment_boundary,
+    _normalized_target_groups,
+    _target_identity,
     parse_foreign_catalog_binding_policy,
+)
+from tools.databricks.converge_campaign_treatment_access import (
+    target_identity_groups_probe,
 )
 from tools.databricks.foreign_catalog_binding_catalog import (
     desired_bindings,
@@ -28,7 +35,8 @@ from tools.databricks.foreign_catalog_binding_catalog import (
     state_kind,
 )
 
-MANIFEST_VERSION = 3
+MANIFEST_VERSION = 4
+LEGACY_MANIFEST_VERSION = 3
 MANIFEST_TTL = timedelta(minutes=30)
 MINIMUM_CHANGE_WINDOW = timedelta(minutes=5)
 ATTESTATION_FIELDS = {
@@ -153,6 +161,7 @@ def boundary_evidence(
     expected_account_id: str,
     expected_account_client_id: str,
     approved_workspace_ids: set[str],
+    target_groups_probe: Callable[..., dict[str, str]] = target_identity_groups_probe,
 ) -> dict[str, object]:
     app_identity = stopped_app_identity(workspace, app_name)
     metastore_id, workspace_id = _assert_metastore_owner_inventory_identity(
@@ -168,9 +177,31 @@ def boundary_evidence(
         account,
         application_id=application_id,
     )
+    workspace_runtime = _target_identity(workspace, application_id=application_id)
+    workspace_host = _text(getattr(getattr(workspace, "config", None), "host", None))
+    if not workspace_host:
+        raise RuntimeError("UC remediation found no workspace host")
+    effective_target_groups = _normalized_target_groups(
+        target_groups_probe(
+            account,
+            runtime_scim_id,
+            application_id,
+            expected_workspace_scim_id=workspace_runtime.scim_id,
+            workspace_host=workspace_host,
+        )
+    )
+    account_effective_groups, implicit_system_groups = _account_group_evidence(
+        account,
+        target_scim_id=runtime_scim_id,
+    )
     metastore_workspace_ids = _assert_runtime_workspace_assignment_boundary(
         account,
         application_id=application_id,
+        target_scim_ids={runtime_scim_id, workspace_runtime.scim_id},
+        account_target_scim_id=runtime_scim_id,
+        account_effective_groups=account_effective_groups,
+        effective_target_groups=effective_target_groups,
+        implicit_system_groups=implicit_system_groups,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
         approved_foreign_workspace_ids=approved_workspace_ids,
@@ -183,8 +214,10 @@ def boundary_evidence(
         "account_identity": account_identity,
         "runtime_identity": {
             "application_id": application_id,
-            "scim_id": runtime_scim_id,
-            "display_name": runtime_display_name,
+            "account_scim_id": runtime_scim_id,
+            "account_display_name": runtime_display_name,
+            "workspace_scim_id": workspace_runtime.scim_id,
+            "workspace_display_name": workspace_runtime.display_name,
         },
     }
 
@@ -201,10 +234,45 @@ def _string_record(
 ) -> dict[str, str]:
     if not isinstance(value, dict) or set(value) != keys:
         raise RuntimeError(f"UC remediation {label} identity is incomplete")
-    normalized = {str(key): str(item).strip() for key, item in value.items()}
+    if any(
+        not isinstance(item, str) or item != item.strip()
+        for item in value.values()
+    ):
+        raise RuntimeError(f"UC remediation {label} identity is not canonical")
+    normalized = {str(key): item for key, item in value.items()}
     if not all(normalized.values()):
         raise RuntimeError(f"UC remediation {label} identity is incomplete")
     return normalized
+
+
+def _runtime_identity_record(value: object) -> dict[str, str]:
+    keys = {
+        "application_id",
+        "account_scim_id",
+        "account_display_name",
+        "workspace_scim_id",
+        "workspace_display_name",
+    }
+    if not isinstance(value, dict) or set(value) != keys:
+        raise RuntimeError("UC remediation runtime identity is incomplete")
+    if any(
+        not isinstance(item, str) or item != item.strip()
+        for item in value.values()
+    ):
+        raise RuntimeError("UC remediation runtime identity is not canonical")
+    normalized = {str(key): item for key, item in value.items()}
+    required = keys - {"workspace_display_name"}
+    if any(not normalized[key] for key in required):
+        raise RuntimeError("UC remediation runtime identity is incomplete")
+    return normalized
+
+
+def _legacy_runtime_identity_record(value: object) -> dict[str, str]:
+    return _string_record(
+        value,
+        keys={"application_id", "scim_id", "display_name"},
+        label="legacy runtime",
+    )
 
 
 def _validate_lease(value: object, *, manifest_expiry: datetime) -> None:
@@ -380,8 +448,10 @@ def validated_manifest(value: object) -> dict[str, Any]:
         for key, value in manifest.items()
         if key not in ATTESTATION_FIELDS | {"manifest_sha256"}
     }
+    version = manifest["version"]
     if (
-        manifest["version"] != MANIFEST_VERSION
+        type(version) is not int
+        or version not in {LEGACY_MANIFEST_VERSION, MANIFEST_VERSION}
         or manifest["kind"] != "foreign-catalog-binding-manifest"
         or manifest["manifest_sha256"] != journal.digest(unsigned)
         or manifest["policy_sha256"] != journal.digest(manifest["policy"])
@@ -408,10 +478,10 @@ def validated_manifest(value: object) -> dict[str, Any]:
         keys={"account_id", "application_id", "scim_id", "display_name"},
         label="account authority",
     )
-    runtime_identity = _string_record(
-        manifest["runtime_identity"],
-        keys={"application_id", "scim_id", "display_name"},
-        label="runtime",
+    runtime_identity = (
+        _legacy_runtime_identity_record(manifest["runtime_identity"])
+        if version == LEGACY_MANIFEST_VERSION
+        else _runtime_identity_record(manifest["runtime_identity"])
     )
     app_identity = _string_record(
         manifest["app_identity"],
@@ -575,6 +645,8 @@ def persist_manifest(
     now: datetime | None = None,
 ) -> None:
     manifest = validated_manifest(manifest)
+    if manifest["version"] != MANIFEST_VERSION:
+        raise RuntimeError("legacy UC remediation manifest must be reauthorized")
     source_git_sha = str(manifest["source_git_sha"])
     deployment_lease.assert_held(
         workspace,
@@ -632,9 +704,17 @@ def recover_persisted_manifest(
             lease_id=fenced_lease_id,
         )
     )
+    legacy_source_migration = (
+        manifest["version"] == LEGACY_MANIFEST_VERSION
+        and parent_lease_id is not None
+        and fenced_lease_id != lease_id
+    )
     if (
         manifest["app_name"] != app_name
-        or manifest["source_git_sha"] != source_git_sha
+        or (
+            manifest["source_git_sha"] != source_git_sha
+            and not legacy_source_migration
+        )
         or manifest["lease"]["lease_id"] != fenced_lease_id
         or stopped_app_identity(workspace, app_name) != manifest["app_identity"]
     ):
@@ -661,7 +741,10 @@ def reauthorize_manifest(
     original = validated_manifest(original_manifest)
     policy = parse_foreign_catalog_binding_policy(policy_json)
     if (
-        original["source_git_sha"] != source_git_sha
+        (
+            original["source_git_sha"] != source_git_sha
+            and original["version"] != LEGACY_MANIFEST_VERSION
+        )
         or original["policy"] != policy_payload(policy)
         or original["app_name"] != app_name
         or original["mip_catalog"] != mip_catalog
@@ -726,12 +809,17 @@ def reauthorize_manifest(
         str(original["runtime_identity"]["application_id"]).casefold()
         == application_id.casefold()
     )
+    original_runtime = original["runtime_identity"]
+    current_runtime = boundary["runtime_identity"]
+    same_runtime_boundary = (
+        current_runtime["account_scim_id"] == original_runtime["scim_id"]
+        and current_runtime["account_display_name"] == original_runtime["display_name"]
+        if original["version"] == LEGACY_MANIFEST_VERSION
+        else current_runtime == original_runtime
+    )
     if (
         current_static_boundary != expected_static_boundary
-        or (
-            same_runtime
-            and boundary["runtime_identity"] != original["runtime_identity"]
-        )
+        or (same_runtime and not same_runtime_boundary)
     ):
         raise RuntimeError("UC remediation recovery identity boundary drifted")
     for prestate in original["prestate"]:
@@ -761,6 +849,7 @@ def reauthorize_manifest(
             "operation_id": str(uuid4()),
             "created_at": current.isoformat(),
             "expires_at": expires.isoformat(),
+            "source_git_sha": source_git_sha,
             "parent_manifest_sha256": journal.digest(original),
             "lease": lease_evidence(lease),
             "runtime_identity": boundary["runtime_identity"],

@@ -30,9 +30,7 @@ from tools.databricks.agent_runtime_uc_inventory import (
 from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
-from tools.databricks.converge_campaign_treatment_access import (
-    target_group_membership_probe,
-)
+from tools.databricks.converge_campaign_treatment_access import target_identity_groups_probe
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     TargetServicePrincipal,
@@ -55,13 +53,17 @@ def _target_identity(workspace: Any, *, application_id: str) -> TargetServicePri
     scim_id = _text(getattr(matches[0], "id", None))
     if not scim_id:
         raise RuntimeError("agent-runtime identity has no immutable workspace SCIM id")
-    return TargetServicePrincipal(application_id=application_id, scim_id=scim_id)
+    return TargetServicePrincipal(
+        application_id=application_id,
+        scim_id=scim_id,
+        display_name=_text(getattr(matches[0], "display_name", None)),
+    )
 
 
 def _assert_no_foreign_ownership(
     workspace: Any,
     *,
-    application_id: str,
+    target: TargetServicePrincipal,
     objects: list[object],
     account_factory: Callable[[], Any],
     group_membership_probe: Callable[[Any, str, str, str, str], bool] | None,
@@ -71,27 +73,12 @@ def _assert_no_foreign_ownership(
     owners = {_text(getattr(item, "owner", None)) for item in objects}
     if "" in owners:
         raise RuntimeError("foreign UC object inventory returned an empty owner")
-    workspace_host = _text(getattr(getattr(workspace, "config", None), "host", None))
-    if not workspace_host:
-        raise RuntimeError("UC control-plane audit found no workspace host")
-    membership_probe = group_membership_probe or (
-        lambda account, account_sp_id, target_id, owner_group_id, owner_group: (
-            target_group_membership_probe(
-                account,
-                account_sp_id,
-                target_id,
-                owner_group_id,
-                owner_group,
-                workspace_host=workspace_host,
-            )
-        )
-    )
     policy = ApprovedOwnerPolicy(
         workspace=workspace,
-        target=_target_identity(workspace, application_id=application_id),
+        target=target,
         configured_principals=owners,
         account_factory=account_factory,
-        group_membership_probe=membership_probe,
+        group_membership_probe=group_membership_probe,
     )
     policy.assert_objects(objects)
 
@@ -238,8 +225,16 @@ def _account_runtime_identity(account: Any, *, application_id: str) -> tuple[str
     return scim_id, _text(getattr(item, "display_name", None))
 
 
-def _effective_account_groups(account: Any, *, target_scim_id: str) -> dict[str, str]:
+def _account_group_evidence(
+    account: Any,
+    *,
+    target_scim_id: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Return positive account memberships and immutable system-group aliases."""
+
     groups_by_id: dict[str, tuple[str, tuple[str, ...]]] = {}
+    group_ids_by_name: dict[str, str] = {}
+    system_groups: dict[str, str] = {}
     for listed in account.groups.list(attributes="id,displayName,members"):
         group_id = _text(getattr(listed, "id", None))
         if not group_id:
@@ -258,7 +253,13 @@ def _effective_account_groups(account: Any, *, target_scim_id: str) -> dict[str,
             member_ids.append(member_id)
         if group_id in groups_by_id:
             raise RuntimeError("account group inventory returned a duplicate immutable ID")
+        canonical_name = display_name.casefold()
+        if canonical_name in group_ids_by_name:
+            raise RuntimeError("account group inventory returned a duplicate display name")
         groups_by_id[group_id] = (display_name, tuple(member_ids))
+        group_ids_by_name[canonical_name] = group_id
+        if canonical_name == "account users":
+            system_groups[group_id] = display_name
     effective_ids: set[str] = set()
     frontier = {target_scim_id}
     while frontier:
@@ -268,33 +269,173 @@ def _effective_account_groups(account: Any, *, target_scim_id: str) -> dict[str,
                 effective_ids.add(group_id)
                 next_frontier.add(group_id)
         frontier = next_frontier
-    return {group_id: groups_by_id[group_id][0] for group_id in effective_ids}
+    return (
+        {group_id: groups_by_id[group_id][0] for group_id in effective_ids},
+        system_groups,
+    )
+
+
+def _normalized_target_groups(value: object) -> dict[str, str]:
+    """Validate an injected or credential-derived target group snapshot."""
+
+    if not isinstance(value, dict):
+        raise RuntimeError("credentialed target group inventory is malformed")
+    normalized: dict[str, str] = {}
+    ids_by_name: dict[str, str] = {}
+    for raw_group_id, raw_group_name in value.items():
+        if not isinstance(raw_group_id, str) or not isinstance(raw_group_name, str):
+            raise RuntimeError("credentialed target group inventory is malformed")
+        group_id = raw_group_id.strip()
+        group_name = raw_group_name.strip()
+        canonical_name = group_name.casefold()
+        if not group_id or not group_name:
+            raise RuntimeError("credentialed target group inventory is incomplete")
+        if group_id in normalized or canonical_name in ids_by_name:
+            raise RuntimeError("credentialed target group inventory is ambiguous")
+        normalized[group_id] = group_name
+        ids_by_name[canonical_name] = group_id
+    return normalized
+
+
+def _snapshot_membership_probe(
+    *,
+    account: Any,
+    account_target_scim_id: str,
+    application_id: str,
+    effective_groups: dict[str, str],
+    implicit_system_groups: dict[str, str],
+) -> Callable[[Any, str, str, str, str], bool]:
+    """Bind approved-owner checks to the audit's frozen target snapshot."""
+
+    def probe(
+        observed_account: Any,
+        observed_account_sp_id: str,
+        observed_application_id: str,
+        owner_group_id: str,
+        owner_group_name: str,
+    ) -> bool:
+        if (
+            observed_account is not account
+            or observed_account_sp_id != account_target_scim_id
+            or observed_application_id.casefold() != application_id.casefold()
+        ):
+            raise RuntimeError("approved-owner identity differs from the frozen audit snapshot")
+        group_id = owner_group_id.strip()
+        group_name = owner_group_name.strip()
+        implicit_name = implicit_system_groups.get(group_id)
+        if implicit_name is not None:
+            if implicit_name.casefold() != group_name.casefold():
+                raise RuntimeError(
+                    "managed system group snapshot returned a mismatched group name"
+                )
+            return True
+        if group_name.casefold() == "account users":
+            if implicit_system_groups:
+                raise RuntimeError(
+                    "managed system group snapshot returned a mismatched group id"
+                )
+            return True
+        observed_name = effective_groups.get(group_id)
+        if observed_name is not None:
+            if observed_name.casefold() != group_name.casefold():
+                raise RuntimeError(
+                    "credentialed target group snapshot returned a mismatched group name"
+                )
+            return True
+        if any(name.casefold() == group_name.casefold() for name in effective_groups.values()):
+            raise RuntimeError(
+                "credentialed target group snapshot returned a mismatched group id"
+            )
+        return False
+
+    return probe
+
+
+def _assert_no_binding_denied_runtime_ownership(
+    *,
+    target_aliases: set[str],
+    effective_groups: dict[str, str],
+    implicit_system_groups: dict[str, str],
+    objects: list[object],
+) -> None:
+    """Reject target ownership without resolving unrelated owners in MIP SCIM."""
+
+    owner_aliases = {
+        *(value.casefold() for value in target_aliases if value.strip()),
+        *(group_id.casefold() for group_id in effective_groups),
+        *(group_name.casefold() for group_name in effective_groups.values()),
+        *(group_id.casefold() for group_id in implicit_system_groups),
+        *(group_name.casefold() for group_name in implicit_system_groups.values()),
+        "account users",
+    }
+    for item in objects:
+        owner = _text(getattr(item, "owner", None))
+        if not owner:
+            raise RuntimeError("binding-denied foreign UC object has no owner")
+        if owner.casefold() in owner_aliases:
+            raise RuntimeError(
+                "agent-runtime service principal cannot own governed UC objects"
+            )
 
 
 def _assert_runtime_workspace_assignment_boundary(
     account: Any,
     *,
     application_id: str,
+    target_scim_ids: set[str],
+    account_target_scim_id: str,
+    account_effective_groups: dict[str, str],
+    effective_target_groups: dict[str, str],
+    implicit_system_groups: dict[str, str],
     metastore_id: str,
     workspace_id: str,
     approved_foreign_workspace_ids: set[str],
 ) -> set[str]:
     """Prove the runtime is assigned only to MIP, never to bound foreign workspaces."""
 
-    target_scim_id, _display_name = _account_runtime_identity(
-        account,
-        application_id=application_id,
-    )
-    effective_groups = _effective_account_groups(account, target_scim_id=target_scim_id)
+    normalized_target_ids = {value.strip() for value in target_scim_ids if value.strip()}
+    if account_target_scim_id not in normalized_target_ids:
+        raise RuntimeError("agent-runtime immutable SCIM identity snapshot is inconsistent")
+    for group_id, group_name in account_effective_groups.items():
+        observed_name = effective_target_groups.get(group_id)
+        if observed_name is None or observed_name.casefold() != group_name.casefold():
+            raise RuntimeError(
+                "agent-runtime account and credentialed group identities disagree"
+            )
+    target_group_ids_by_name = {
+        group_name.casefold(): group_id
+        for group_id, group_name in effective_target_groups.items()
+    }
+    for group_id, group_name in implicit_system_groups.items():
+        observed_name = effective_target_groups.get(group_id)
+        observed_id = target_group_ids_by_name.get(group_name.casefold())
+        if (
+            observed_name is not None
+            and observed_name.casefold() != group_name.casefold()
+        ) or (observed_id is not None and observed_id != group_id):
+            raise RuntimeError(
+                "agent-runtime managed system group identities disagree"
+            )
+    effective_groups = dict(effective_target_groups)
     ordinary_groups = {
         group_id: name
         for group_id, name in effective_groups.items()
-        if name != "account users"
+        if name.casefold() != "account users"
     }
     if ordinary_groups:
         raise RuntimeError(
             "agent-runtime has forbidden ordinary account group membership"
         )
+    if not implicit_system_groups and "account users" not in target_group_ids_by_name:
+        raise RuntimeError(
+            "agent-runtime managed system group identity could not be proven"
+        )
+    assignment_group_ids = {*effective_groups, *implicit_system_groups}
+    assignment_group_names = {
+        *(name.casefold() for name in effective_groups.values()),
+        *(name.casefold() for name in implicit_system_groups.values()),
+        "account users",
+    }
     metastore_workspace_ids = {
         _text(item) for item in account.metastore_assignments.list(metastore_id)
     }
@@ -306,7 +447,8 @@ def _assert_runtime_workspace_assignment_boundary(
     ):
         raise RuntimeError("foreign catalog policy references an invalid metastore workspace")
     for assigned_workspace_id in sorted(metastore_workspace_ids):
-        target_assignments: list[tuple[str, ...]] = []
+        direct_assignments: list[tuple[str, ...]] = []
+        group_assignments: list[tuple[str, ...]] = []
         for assignment in account.workspace_assignment.list(int(assigned_workspace_id)):
             principal = getattr(assignment, "principal", None)
             principal_id = _text(getattr(principal, "principal_id", None))
@@ -314,27 +456,48 @@ def _assert_runtime_workspace_assignment_boundary(
                 getattr(principal, "service_principal_name", None)
             )
             group_name = _text(getattr(principal, "group_name", None))
-            direct_id_match = principal_id == target_scim_id
+            user_name = _text(getattr(principal, "user_name", None))
+            permissions = tuple(
+                sorted(_text(item).upper() for item in getattr(assignment, "permissions", []))
+            )
+            if (
+                principal is None
+                or not principal_id
+                or not permissions
+                or _text(getattr(assignment, "error", None))
+                or sum(bool(value) for value in (service_principal_name, group_name, user_name))
+                != 1
+            ):
+                raise RuntimeError(
+                    "agent-runtime workspace assignment inventory is incomplete"
+                )
+            direct_id_match = principal_id in normalized_target_ids
             direct_name_match = service_principal_name.casefold() == application_id.casefold()
             if direct_name_match != direct_id_match:
                 raise RuntimeError(
                     "agent-runtime workspace assignment identity fields disagree"
                 )
-            if (
-                direct_id_match
-                or principal_id in effective_groups
-                or group_name in {*effective_groups.values(), "account users"}
-            ):
-                permissions = tuple(
-                    sorted(_text(item).upper() for item in getattr(assignment, "permissions", []))
+            group_id_match = principal_id in assignment_group_ids
+            group_name_match = group_name.casefold() in assignment_group_names
+            if group_id_match != group_name_match:
+                raise RuntimeError(
+                    "agent-runtime workspace group assignment identity fields disagree"
                 )
-                if not principal_id or not permissions:
+            if group_id_match:
+                expected_group_name = {
+                    **implicit_system_groups,
+                    **effective_groups,
+                }[principal_id]
+                if expected_group_name.casefold() != group_name.casefold():
                     raise RuntimeError(
-                        "agent-runtime workspace assignment inventory is incomplete"
+                        "agent-runtime workspace group assignment identity fields disagree"
                     )
-                target_assignments.append(permissions)
-        expected = [("USER",)] if assigned_workspace_id == workspace_id else []
-        if target_assignments != expected:
+            if direct_id_match:
+                direct_assignments.append(permissions)
+            if group_name_match:
+                group_assignments.append(permissions)
+        expected_direct = [("USER",)] if assigned_workspace_id == workspace_id else []
+        if direct_assignments != expected_direct or group_assignments:
             raise RuntimeError(
                 "agent-runtime has an unexpected account workspace assignment on "
                 f"{assigned_workspace_id}"
@@ -396,6 +559,7 @@ def audit_foreign_uc_access(
     foreign_catalog_binding_policy: str = "",
     account_factory: Callable[[], Any] = account_client_from_env,
     group_membership_probe: Callable[[Any, str, str, str, str], bool] | None = None,
+    target_groups_probe: Callable[..., dict[str, str]] = target_identity_groups_probe,
 ) -> ControlPlaneForeignCatalogProof:
     """Prove zero target-principal access on every ordinary foreign catalog."""
 
@@ -412,6 +576,45 @@ def audit_foreign_uc_access(
         foreign_catalog_binding_policy
     )
     account = account_factory()
+    workspace_target = _target_identity(workspace, application_id=principal)
+    account_target_scim_id, account_target_display_name = _account_runtime_identity(
+        account,
+        application_id=principal,
+    )
+    workspace_host = _text(getattr(getattr(workspace, "config", None), "host", None))
+    if not workspace_host:
+        raise RuntimeError("UC control-plane audit found no workspace host")
+    effective_target_groups = _normalized_target_groups(
+        target_groups_probe(
+            account,
+            account_target_scim_id,
+            principal,
+            expected_workspace_scim_id=workspace_target.scim_id,
+            workspace_host=workspace_host,
+        )
+    )
+    account_effective_groups, implicit_system_groups = _account_group_evidence(
+        account,
+        target_scim_id=account_target_scim_id,
+    )
+    target = TargetServicePrincipal(
+        application_id=principal,
+        scim_id=workspace_target.scim_id,
+        display_name=workspace_target.display_name,
+        additional_aliases=frozenset(
+            {
+                account_target_scim_id,
+                account_target_display_name,
+            }
+        ),
+    )
+    frozen_membership_probe = group_membership_probe or _snapshot_membership_probe(
+        account=account,
+        account_target_scim_id=account_target_scim_id,
+        application_id=principal,
+        effective_groups=effective_target_groups,
+        implicit_system_groups=implicit_system_groups,
+    )
     approved_foreign_workspace_ids = {
         binding_workspace_id
         for evidence in binding_policy.values()
@@ -420,6 +623,11 @@ def audit_foreign_uc_access(
     _assert_runtime_workspace_assignment_boundary(
         account,
         application_id=principal,
+        target_scim_ids={account_target_scim_id, workspace_target.scim_id},
+        account_target_scim_id=account_target_scim_id,
+        account_effective_groups=account_effective_groups,
+        effective_target_groups=effective_target_groups,
+        implicit_system_groups=implicit_system_groups,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
         approved_foreign_workspace_ids=approved_foreign_workspace_ids,
@@ -463,6 +671,7 @@ def audit_foreign_uc_access(
         excluded_catalogs.add(mip_catalog)
     foreign_catalogs = sorted(set(catalog_inventory) - excluded_catalogs)
     foreign_objects: list[object] = []
+    binding_denied_objects: list[object] = []
     binding_denied_catalogs: dict[str, CatalogBindingEvidence] = {}
     foreign_objects_lock = Lock()
 
@@ -470,9 +679,12 @@ def audit_foreign_uc_access(
         with foreign_objects_lock:
             foreign_objects.append(item)
 
+    def record_binding_denied_owner(item: object) -> None:
+        with foreign_objects_lock:
+            binding_denied_objects.append(item)
+
     def inspect_catalog(foreign_catalog: str) -> None:
         isolation_mode, catalog_object = catalog_inventory[foreign_catalog]
-        record_owner(catalog_object)
         evidence = _binding_evidence(
             workspace,
             catalog=foreign_catalog,
@@ -488,9 +700,11 @@ def audit_foreign_uc_access(
                     f"UC control-plane catalog {foreign_catalog} does not match the "
                     "reviewed binding-denial policy"
                 )
+            record_binding_denied_owner(catalog_object)
             with foreign_objects_lock:
                 binding_denied_catalogs[foreign_catalog] = evidence
             return
+        record_owner(catalog_object)
         if foreign_catalog in binding_policy:
             raise RuntimeError(
                 f"UC control-plane catalog {foreign_catalog} is not binding-denied as reviewed"
@@ -537,9 +751,10 @@ def audit_foreign_uc_access(
             )
         if model_catalog in {mip_catalog, *_PLATFORM_CATALOGS}:
             continue
-        record_owner(model)
         if model_catalog in binding_denied_catalogs:
+            record_binding_denied_owner(model)
             continue
+        record_owner(model)
         _assert_privileges(
             workspace,
             securable_type="function",
@@ -547,12 +762,18 @@ def audit_foreign_uc_access(
             principal=principal,
             expected=set(),
         )
+    _assert_no_binding_denied_runtime_ownership(
+        target_aliases=target.aliases,
+        effective_groups=effective_target_groups,
+        implicit_system_groups=implicit_system_groups,
+        objects=binding_denied_objects,
+    )
     _assert_no_foreign_ownership(
         workspace,
-        application_id=principal,
+        target=target,
         objects=foreign_objects,
         account_factory=lambda: account,
-        group_membership_probe=group_membership_probe,
+        group_membership_probe=frozen_membership_probe,
     )
     if set(binding_policy) != set(binding_denied_catalogs):
         raise RuntimeError("foreign catalog binding-denial policy was not fully proven")

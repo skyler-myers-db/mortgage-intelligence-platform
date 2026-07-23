@@ -45,10 +45,21 @@ def account_client_from_env() -> AccountClient:
 class TargetServicePrincipal:
     application_id: str
     scim_id: str
+    display_name: str = ""
+    additional_aliases: frozenset[str] = field(default_factory=frozenset)
 
     @property
     def aliases(self) -> set[str]:
-        return {_canonical(self.application_id), _canonical(self.scim_id)}
+        return {
+            value
+            for value in (
+                _canonical(self.application_id),
+                _canonical(self.scim_id),
+                _canonical(self.display_name),
+                *(_canonical(alias) for alias in self.additional_aliases),
+            )
+            if value
+        }
 
 
 def _account_principal_id(account: AccountClient, *, application_id: str) -> str:

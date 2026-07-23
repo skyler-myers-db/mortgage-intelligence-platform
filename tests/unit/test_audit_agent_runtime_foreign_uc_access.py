@@ -233,7 +233,13 @@ def _workspace(
         ),
         service_principals=SimpleNamespace(
             list=lambda **kwargs: iter(
-                [SimpleNamespace(application_id=APPLICATION_ID, id="runtime-scim-id")]
+                [
+                    SimpleNamespace(
+                        application_id=APPLICATION_ID,
+                        id="runtime-scim-id",
+                        display_name="runtime-workspace",
+                    )
+                ]
                 if APPLICATION_ID in str(kwargs.get("filter", ""))
                 else []
             )
@@ -419,6 +425,10 @@ def _account() -> object:
 
 def _audit(workspace: Any, **kwargs: Any) -> object:
     kwargs.setdefault("account_factory", _account)
+    kwargs.setdefault(
+        "target_groups_probe",
+        lambda *_args, **_probe_kwargs: {"account-users-id": "account users"},
+    )
     return auditor.audit_foreign_uc_access(
         workspace,
         application_id=APPLICATION_ID,
@@ -498,8 +508,85 @@ def test_foreign_uc_control_plane_rejects_assignment_name_omission_for_target_id
         else []
     )
 
-    with pytest.raises(RuntimeError, match="identity fields disagree"):
+    with pytest.raises(RuntimeError, match="assignment inventory is incomplete"):
         _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_group_assignment_as_direct_runtime() -> None:
+    account = _account()
+    direct = list(account.workspace_assignment.list(int(WORKSPACE_ID)))
+    account.workspace_assignment.list = lambda workspace_id: iter(
+        [
+            *direct,
+            SimpleNamespace(
+                permissions=["USER"],
+                principal=SimpleNamespace(
+                    principal_id="account-users-id",
+                    service_principal_name="",
+                    group_name="account users",
+                    user_name="",
+                ),
+            ),
+        ]
+        if str(workspace_id) == WORKSPACE_ID
+        else []
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected account workspace assignment"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_mismatched_system_group_assignment() -> None:
+    account = _account()
+    account.workspace_assignment.list = lambda workspace_id: iter(
+        [
+            SimpleNamespace(
+                permissions=["USER"],
+                principal=SimpleNamespace(
+                    principal_id="wrong-id",
+                    service_principal_name="",
+                    group_name="account users",
+                    user_name="",
+                ),
+            )
+        ]
+        if str(workspace_id) == WORKSPACE_ID
+        else []
+    )
+
+    with pytest.raises(RuntimeError, match="group assignment identity fields disagree"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_unnamed_retained_workspace_assignment() -> None:
+    account = _account()
+    account.groups.list = lambda **_kwargs: iter([])
+    account.groups.get = lambda _group_id: None
+    original = account.workspace_assignment.list
+    account.workspace_assignment.list = lambda workspace_id: iter(
+        [
+            SimpleNamespace(
+                permissions=["USER"],
+                principal=SimpleNamespace(
+                    principal_id="account-users-id",
+                    service_principal_name="",
+                    group_name="",
+                    user_name="",
+                ),
+            )
+        ]
+        if str(workspace_id) == OTHER_WORKSPACE_ID
+        else original(workspace_id)
+    )
+
+    with pytest.raises(RuntimeError, match="assignment inventory is incomplete"):
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {
+                "account-users-id": "account users"
+            },
+        )
 
 
 def test_foreign_uc_control_plane_rejects_runtime_non_system_account_group() -> None:
@@ -525,7 +612,14 @@ def test_foreign_uc_control_plane_rejects_runtime_non_system_account_group() -> 
     )
 
     with pytest.raises(RuntimeError, match="forbidden ordinary account group"):
-        _audit(_workspace(), account_factory=lambda: account)
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {
+                "account-users-id": "account users",
+                "foreign-group-id": "foreign-data-users",
+            },
+        )
 
 
 def test_foreign_uc_control_plane_accepts_implicit_account_users_baseline() -> None:
@@ -537,6 +631,117 @@ def test_foreign_uc_control_plane_accepts_implicit_account_users_baseline() -> N
 
     assert proof.application_id == APPLICATION_ID
     assert proof.workspace_id == WORKSPACE_ID
+
+
+def test_foreign_uc_control_plane_uses_one_frozen_target_group_snapshot() -> None:
+    calls: list[tuple[str, str, str, str]] = []
+
+    def probe(
+        _account: object,
+        account_sp_id: str,
+        application_id: str,
+        *,
+        expected_workspace_scim_id: str,
+        workspace_host: str,
+    ) -> dict[str, str]:
+        calls.append(
+            (
+                account_sp_id,
+                expected_workspace_scim_id,
+                application_id,
+                workspace_host,
+            )
+        )
+        return {"account-users-id": "account users"}
+
+    proof = _audit(_workspace(), target_groups_probe=probe)
+
+    assert proof.application_id == APPLICATION_ID
+    assert calls == [
+        (
+            ACCOUNT_SCIM_ID,
+            "runtime-scim-id",
+            APPLICATION_ID,
+            "https://workspace.example.invalid",
+        )
+    ]
+
+
+def test_foreign_uc_control_plane_rejects_dynamic_target_group_absent_from_account_members() -> None:
+    account = _account()
+    account.groups.list = lambda **_kwargs: iter([])
+    account.groups.get = lambda _group_id: None
+
+    with pytest.raises(RuntimeError, match="forbidden ordinary account group"):
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {
+                "dynamic-id": "dynamic-governance"
+            },
+        )
+
+
+def test_foreign_uc_control_plane_rejects_account_group_missing_from_target_snapshot() -> None:
+    with pytest.raises(RuntimeError, match="account and credentialed group identities disagree"):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: {},
+        )
+
+
+def test_foreign_uc_control_plane_rejects_mismatched_credentialed_system_group_id() -> None:
+    account = _account()
+    account_users = next(account.groups.list())
+    account_users.members = []
+
+    with pytest.raises(RuntimeError, match="managed system group identities disagree"):
+        _audit(
+            _workspace(),
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {
+                "different-id": "account users"
+            },
+        )
+
+
+def test_foreign_uc_control_plane_rejects_duplicate_account_group_display_names() -> None:
+    account = _account()
+    account_users = next(account.groups.list())
+    duplicate = SimpleNamespace(
+        id="duplicate-account-users-id",
+        display_name="Account Users",
+        members=[],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, duplicate])
+    account.groups.get = lambda group_id: (
+        duplicate if group_id == duplicate.id else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate display name"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+@pytest.mark.parametrize(
+    "snapshot",
+    [
+        [],
+        {"": "account users"},
+        {"account-users-id": ""},
+        {"group-1": "Same Group", "group-2": " same group "},
+    ],
+)
+def test_foreign_uc_control_plane_rejects_malformed_target_group_snapshot(
+    snapshot: object,
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="credentialed target group inventory is (malformed|incomplete|ambiguous)",
+    ):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: snapshot,
+        )
 
 
 def test_foreign_uc_control_plane_passes_only_with_complete_zero_access() -> None:
@@ -800,6 +1005,317 @@ def test_foreign_uc_control_plane_accepts_binding_excluded_catalog_grants() -> N
     assert proof.grant_audited_catalogs == frozenset({"other"})
     assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
     assert ("catalog", "hidden", None) not in workspace.grants.calls
+
+
+def test_foreign_uc_control_plane_accepts_unassigned_binding_excluded_owner() -> None:
+    owner = "unassigned-owner@example.com"
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=owner,
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    proof = _audit(
+        workspace,
+        foreign_catalog_binding_policy=_binding_policy(owner=owner),
+    )
+
+    assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
+
+
+def test_foreign_uc_control_plane_still_rejects_unresolved_accessible_owner() -> None:
+    owner = "unassigned-owner@example.com"
+
+    with pytest.raises(RuntimeError, match="did not resolve to exactly one principal"):
+        _audit(_workspace(owner_overrides={"other": owner}))
+
+
+@pytest.mark.parametrize("full_name", ["other", "other.sandbox.secret_model"])
+def test_foreign_uc_control_plane_rejects_implicit_account_users_owner(
+    full_name: str,
+) -> None:
+    workspace = _workspace(owner_overrides={full_name: "account users"})
+    workspace.groups.list = lambda **_kwargs: iter(
+        [SimpleNamespace(display_name="account users", id="account-users-id")]
+    )
+    account = _account()
+    account_users = next(account.groups.list())
+    account_users.members = []
+
+    with pytest.raises(RuntimeError, match="member of approved owner group"):
+        _audit(
+            workspace,
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {},
+        )
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [
+        APPLICATION_ID,
+        APPLICATION_ID.upper(),
+        ACCOUNT_SCIM_ID,
+        "runtime-scim-id",
+        "runtime",
+        "runtime-workspace",
+        "account users",
+        "account-users-id",
+    ],
+)
+def test_foreign_uc_control_plane_rejects_binding_excluded_account_alias_owner(
+    owner: str,
+) -> None:
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=owner,
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
+        _audit(
+            workspace,
+            foreign_catalog_binding_policy=_binding_policy(owner=owner),
+        )
+
+
+def test_foreign_uc_control_plane_rejects_binding_excluded_model_ownership() -> None:
+    owner = "unassigned-owner@example.com"
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=owner,
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+    models = list(workspace.registered_models.list(include_browse=True))
+    models.append(
+        SimpleNamespace(
+            full_name="hidden.private.runtime_owned",
+            catalog_name="hidden",
+            owner=APPLICATION_ID,
+        )
+    )
+    workspace.registered_models.list = lambda **_kwargs: iter(models)
+
+    with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
+        _audit(
+            workspace,
+            foreign_catalog_binding_policy=_binding_policy(owner=owner),
+        )
+
+
+def test_foreign_uc_control_plane_accepts_unassigned_binding_excluded_model_owner() -> None:
+    owner = "unassigned-owner@example.com"
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=owner,
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+    models = list(workspace.registered_models.list(include_browse=True))
+    models.append(
+        SimpleNamespace(
+            full_name="hidden.private.human_owned",
+            catalog_name="hidden",
+            owner=owner,
+        )
+    )
+    workspace.registered_models.list = lambda **_kwargs: iter(models)
+
+    proof = _audit(
+        workspace,
+        foreign_catalog_binding_policy=_binding_policy(owner=owner),
+    )
+
+    assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
+
+
+def test_binding_excluded_account_users_owner_rejects_without_group_inventory() -> None:
+    account = _account()
+    account.groups.list = lambda **_kwargs: iter([])
+    account.groups.get = lambda _group_id: None
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner="account users",
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="managed system group identity could not be proven"):
+        _audit(
+            workspace,
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {},
+            foreign_catalog_binding_policy=_binding_policy(owner="account users"),
+        )
+
+
+def test_binding_excluded_account_users_id_rejects_when_identity_is_omitted() -> None:
+    account = _account()
+    account.groups.list = lambda **_kwargs: iter([])
+    account.groups.get = lambda _group_id: None
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner="account-users-id",
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="managed system group identity could not be proven"):
+        _audit(
+            workspace,
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {},
+            foreign_catalog_binding_policy=_binding_policy(owner="account-users-id"),
+        )
+
+
+def test_binding_excluded_account_users_id_rejects_when_membership_is_implicit() -> None:
+    account = _account()
+    account_users = next(account.groups.list())
+    account_users.members = []
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner="account-users-id",
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
+        _audit(
+            workspace,
+            account_factory=lambda: account,
+            target_groups_probe=lambda *_args, **_kwargs: {},
+            foreign_catalog_binding_policy=_binding_policy(owner="account-users-id"),
+        )
 
 
 def test_foreign_uc_control_plane_accepts_binding_excluded_hidden_children() -> None:
@@ -1163,6 +1679,17 @@ def test_foreign_uc_control_plane_rejects_direct_ownership(full_name: str) -> No
 
     with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
         _audit(workspace)
+
+
+@pytest.mark.parametrize(
+    "owner",
+    [ACCOUNT_SCIM_ID, "runtime-scim-id", "runtime", "runtime-workspace"],
+)
+def test_foreign_uc_control_plane_rejects_accessible_runtime_alias_owner(
+    owner: str,
+) -> None:
+    with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
+        _audit(_workspace(owner_overrides={"other": owner}))
 
 
 def test_foreign_uc_control_plane_uses_target_credential_for_group_ownership() -> None:

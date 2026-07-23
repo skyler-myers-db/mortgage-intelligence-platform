@@ -56,6 +56,8 @@ def _guard(
     mip_catalog: str,
     now: datetime | None = None,
 ) -> dict[str, str | int]:
+    if manifest["version"] != manifest_plan.MANIFEST_VERSION:
+        raise RuntimeError("legacy UC remediation manifest must be reauthorized")
     current = now or datetime.now(UTC)
     if current >= manifest_plan.parse_timestamp(manifest["expires_at"], "manifest expiration"):
         raise RuntimeError("UC remediation signed change window expired")

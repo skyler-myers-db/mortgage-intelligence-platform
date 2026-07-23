@@ -59,17 +59,16 @@ def _quoted_principal(value: str) -> str:
     return f"`{principal}`"
 
 
-def target_group_membership_probe(
+def target_identity_groups_probe(
     account: AccountClient,
     account_sp_id: str,
     application_id: str,
-    owner_group_id: str,
-    owner_group: str,
     *,
+    expected_workspace_scim_id: str,
     workspace_host: str,
     workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
-) -> bool:
-    """Evaluate effective group membership as the target App identity.
+) -> dict[str, str]:
+    """Return authoritative effective groups as the target App identity.
 
     Account SCIM cannot prove a negative membership result when Automatic
     Identity Management is enabled. Mint a bounded target-SP credential and
@@ -85,15 +84,12 @@ def target_group_membership_probe(
     principal_id = account_sp_id.strip()
     if not principal_id:
         raise RuntimeError("Account service-principal id is required for identity proof")
-    group_id = owner_group_id.strip()
-    if not group_id:
-        raise RuntimeError("Account group id is required for identity proof")
-    group_name = owner_group.strip()
-    if not group_name:
-        raise RuntimeError("Account group name is required for identity proof")
+    workspace_principal_id = expected_workspace_scim_id.strip()
+    if not workspace_principal_id:
+        raise RuntimeError("Workspace service-principal id is required for identity proof")
     secret_id = ""
     probe_error: BaseException | None = None
-    target_is_member = False
+    effective_groups: dict[str, str] = {}
     try:
         created = account.service_principal_secrets.create(
             principal_id,
@@ -119,7 +115,10 @@ def target_group_membership_probe(
             raise RuntimeError("Target identity membership proof returned a malformed identity")
         identity_id = str(identity.get("id") or "").strip()
         identity_name = str(identity.get("userName") or "").strip()
-        if identity_id != principal_id or _canonical(identity_name) != _canonical(application_id):
+        if (
+            identity_id != workspace_principal_id
+            or _canonical(identity_name) != _canonical(application_id)
+        ):
             raise RuntimeError("Temporary credential authenticated as a different target identity")
         if "groups" not in identity:
             raise RuntimeError(
@@ -130,7 +129,7 @@ def target_group_membership_probe(
             raise RuntimeError(
                 "Target identity membership proof returned a malformed groups collection"
             )
-        expected_name = _canonical(group_name)
+        group_ids_by_name: dict[str, str] = {}
         for group in groups:
             if not isinstance(group, dict):
                 raise RuntimeError("Target identity membership proof returned a malformed group")
@@ -140,17 +139,21 @@ def target_group_membership_probe(
                 raise RuntimeError(
                     "Target identity membership proof returned a group without an id"
                 )
-            if observed_id == group_id:
-                if observed_name and _canonical(observed_name) != expected_name:
-                    raise RuntimeError(
-                        "Target identity membership proof returned a mismatched group name"
-                    )
-                target_is_member = True
-                break
-            if observed_name and _canonical(observed_name) == expected_name:
+            if not observed_name:
                 raise RuntimeError(
-                    "Target identity membership proof returned a mismatched group id"
+                    "Target identity membership proof returned a group without a display name"
                 )
+            canonical_name = _canonical(observed_name)
+            if observed_id in effective_groups:
+                raise RuntimeError(
+                    "Target identity membership proof returned a duplicate group id"
+                )
+            if canonical_name in group_ids_by_name:
+                raise RuntimeError(
+                    "Target identity membership proof returned a duplicate group name"
+                )
+            effective_groups[observed_id] = observed_name
+            group_ids_by_name[canonical_name] = observed_id
     except BaseException as exc:
         probe_error = exc
     finally:
@@ -163,7 +166,47 @@ def target_group_membership_probe(
                 ) from cleanup_error
     if probe_error is not None:
         raise probe_error
-    return target_is_member
+    return effective_groups
+
+
+def target_group_membership_probe(
+    account: AccountClient,
+    account_sp_id: str,
+    application_id: str,
+    owner_group_id: str,
+    owner_group: str,
+    *,
+    expected_workspace_scim_id: str,
+    workspace_host: str,
+    workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
+) -> bool:
+    """Evaluate one owner group against the target's authoritative snapshot."""
+
+    group_id = owner_group_id.strip()
+    if not group_id:
+        raise RuntimeError("Account group id is required for identity proof")
+    group_name = owner_group.strip()
+    if not group_name:
+        raise RuntimeError("Account group name is required for identity proof")
+    effective_groups = target_identity_groups_probe(
+        account,
+        account_sp_id,
+        application_id,
+        expected_workspace_scim_id=expected_workspace_scim_id,
+        workspace_host=workspace_host,
+        workspace_factory=workspace_factory,
+    )
+    expected_name = _canonical(group_name)
+    observed_name = effective_groups.get(group_id)
+    if observed_name is not None:
+        if _canonical(observed_name) != expected_name:
+            raise RuntimeError(
+                "Target identity membership proof returned a mismatched group name"
+            )
+        return True
+    if any(_canonical(name) == expected_name for name in effective_groups.values()):
+        raise RuntimeError("Target identity membership proof returned a mismatched group id")
+    return False
 
 
 def _get_or_none(getter: Callable[[str], object], name: str) -> object | None:
@@ -387,6 +430,7 @@ def converge_campaign_treatment_access(
                 application_id,
                 owner_group_id,
                 owner_group,
+                expected_workspace_scim_id=target.scim_id,
                 workspace_host=workspace_host,
             )
         )

@@ -285,8 +285,10 @@ def _manifest(workspace: _Workspace, policy_json: str = "") -> dict[str, Any]:
         },
         "runtime_identity": {
             "application_id": "runtime-client",
-            "scim_id": "runtime-scim",
-            "display_name": "runtime",
+            "account_scim_id": "runtime-account-scim",
+            "account_display_name": "runtime",
+            "workspace_scim_id": "runtime-workspace-scim",
+            "workspace_display_name": "runtime workspace",
         },
         "app_name": "mip-staging",
         "mip_catalog": "mip",
@@ -323,6 +325,36 @@ def _manifest(workspace: _Workspace, policy_json: str = "") -> dict[str, Any]:
         lease_id=LEASE_ID,
     )
     return manifest
+
+
+def _legacy_manifest(workspace: _Workspace) -> dict[str, Any]:
+    current = _manifest(workspace)
+    unsigned = {
+        key: value
+        for key, value in current.items()
+        if key
+        not in {
+            "manifest_sha256",
+            "attestation_alg",
+            "attestation_verify_key",
+            "attestation_signature",
+        }
+    }
+    unsigned["version"] = manifest_plan.LEGACY_MANIFEST_VERSION
+    unsigned["runtime_identity"] = {
+        "application_id": "runtime-client",
+        "scim_id": "runtime-account-scim",
+        "display_name": "runtime",
+    }
+    legacy = manifest_plan.validated_manifest(manifest_plan._seal_manifest(unsigned))
+    workspace.workspace.records.clear()
+    journal.persist_operation(
+        workspace,
+        manifest=legacy,
+        app_name="mip-staging",
+        lease_id=LEASE_ID,
+    )
+    return legacy
 
 
 def _common(policy_json: str = "") -> dict[str, object]:
@@ -729,8 +761,10 @@ def test_manifest_seals_app_runtime_account_and_lease_identity(
         },
         "runtime_identity": {
             "application_id": "runtime-client",
-            "scim_id": "runtime-scim",
-            "display_name": "runtime",
+            "account_scim_id": "runtime-account-scim",
+            "account_display_name": "runtime",
+            "workspace_scim_id": "runtime-workspace-scim",
+            "workspace_display_name": "runtime workspace",
         },
     }
     monkeypatch.setattr(
@@ -766,6 +800,87 @@ def test_manifest_signature_tamper_is_rejected() -> None:
 
     with pytest.raises(RuntimeError, match="signature"):
         manifest_plan.validated_manifest(tampered)
+
+
+def test_manifest_requires_distinct_account_and_workspace_runtime_identity() -> None:
+    manifest = _manifest(_Workspace())
+    unsigned = {
+        key: value
+        for key, value in manifest.items()
+        if key
+        not in {
+            "manifest_sha256",
+            "attestation_alg",
+            "attestation_verify_key",
+            "attestation_signature",
+        }
+    }
+    unsigned["runtime_identity"] = {
+        "application_id": "runtime-client",
+        "scim_id": "ambiguous-runtime-scim",
+        "display_name": "runtime",
+    }
+
+    with pytest.raises(RuntimeError, match="runtime identity is incomplete"):
+        manifest_plan.validated_manifest(manifest_plan._seal_manifest(unsigned))
+
+
+def test_signed_legacy_manifest_remains_readable_but_cannot_mutate() -> None:
+    workspace = _Workspace()
+    legacy = _legacy_manifest(workspace)
+
+    assert legacy["version"] == manifest_plan.LEGACY_MANIFEST_VERSION
+    assert manifest_plan.validated_manifest(legacy) == legacy
+    with pytest.raises(RuntimeError, match="legacy.*must be reauthorized"):
+        converger.apply_manifest(
+            workspace,
+            object(),
+            manifest=legacy,
+            action="resume",
+            **_common(),
+        )
+    with pytest.raises(RuntimeError, match="legacy.*must be reauthorized"):
+        manifest_plan.persist_manifest(
+            workspace,
+            manifest=legacy,
+            lease_id=LEASE_ID,
+        )
+
+
+@pytest.mark.parametrize(
+    ("legacy", "field", "value"),
+    [
+        (True, "application_id", " runtime-client "),
+        (True, "scim_id", " runtime-account-scim "),
+        (True, "display_name", "runtime "),
+        (True, "application_id", 123),
+        (False, "workspace_scim_id", " runtime-workspace-scim "),
+    ],
+)
+def test_signed_runtime_identity_must_be_canonical(
+    legacy: bool,
+    field: str,
+    value: object,
+) -> None:
+    workspace = _Workspace()
+    manifest = _legacy_manifest(workspace) if legacy else _manifest(workspace)
+    unsigned = {
+        key: item
+        for key, item in manifest.items()
+        if key
+        not in {
+            "manifest_sha256",
+            "attestation_alg",
+            "attestation_verify_key",
+            "attestation_signature",
+        }
+    }
+    runtime_identity = dict(unsigned["runtime_identity"])
+    runtime_identity[field] = value
+    unsigned["runtime_identity"] = runtime_identity
+
+    with pytest.raises(RuntimeError, match="runtime identity is not canonical"):
+        manifest_plan.validated_manifest(manifest_plan._seal_manifest(unsigned))
 
 
 def test_guard_rejects_expired_signed_manifest_before_any_mutation() -> None:
@@ -878,6 +993,32 @@ def test_signed_completion_is_bound_to_exact_manifest() -> None:
             manifest=manifest,
             app_name="mip-staging",
         )
+
+
+def test_completed_legacy_fence_remains_recoverable() -> None:
+    workspace = _Workspace()
+    legacy = _legacy_manifest(workspace)
+    journal.complete_operation(
+        workspace,
+        manifest=legacy,
+        app_name="mip-staging",
+        lease_id=LEASE_ID,
+    )
+
+    recovered = manifest_plan.validated_manifest(
+        journal.recover_operation(
+            workspace,
+            app_name="mip-staging",
+            lease_id=LEASE_ID,
+        )
+    )
+
+    assert recovered == legacy
+    assert journal.operation_completed(
+        workspace,
+        manifest=recovered,
+        app_name="mip-staging",
+    )
 
 
 def test_previous_signing_key_fence_supports_signed_verification(
@@ -1051,8 +1192,10 @@ def test_incomplete_operation_reauthorizes_across_runtime_writer_rotation(
     }
     old_runtime = {
         "application_id": "old-runtime-client",
-        "scim_id": "old-runtime-scim",
-        "display_name": "old runtime",
+        "account_scim_id": "old-runtime-account-scim",
+        "account_display_name": "old runtime",
+        "workspace_scim_id": "old-runtime-workspace-scim",
+        "workspace_display_name": "old runtime workspace",
     }
     unsigned["runtime_identity"] = old_runtime
     old_lease = dict(unsigned["lease"])
@@ -1072,8 +1215,10 @@ def test_incomplete_operation_reauthorizes_across_runtime_writer_rotation(
     new_lease_id = "55555555-5555-4555-8555-555555555555"
     current_runtime = {
         "application_id": "new-runtime-client",
-        "scim_id": "new-runtime-scim",
-        "display_name": "new runtime",
+        "account_scim_id": "new-runtime-account-scim",
+        "account_display_name": "new runtime",
+        "workspace_scim_id": "new-runtime-workspace-scim",
+        "workspace_display_name": "new runtime workspace",
     }
     monkeypatch.setattr(
         manifest_plan.deployment_lease,
@@ -1122,6 +1267,184 @@ def test_incomplete_operation_reauthorizes_across_runtime_writer_rotation(
         "application_id"
     ]
     assert replacement["parent_manifest_sha256"] == journal.digest(interrupted)
+
+
+def test_incomplete_legacy_operation_reauthorizes_to_v4(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    legacy = _legacy_manifest(workspace)
+    current_source_sha = "b" * 40
+    new_lease_id = "55555555-5555-4555-8555-555555555555"
+    monkeypatch.setattr(
+        manifest_plan.deployment_lease,
+        "assert_held",
+        lambda *_args, **_kwargs: _lease(
+            lease_id=new_lease_id,
+            generation_id="66666666-6666-4666-8666-666666666666",
+            generation_seq=4,
+        ),
+    )
+    expected_boundary = {
+        key: legacy[key]
+        for key in (
+            "app_identity",
+            "metastore_id",
+            "mip_workspace_id",
+            "metastore_workspace_ids",
+            "account_identity",
+        )
+    }
+    expected_boundary["runtime_identity"] = {
+        "application_id": "runtime-client",
+        "account_scim_id": "runtime-account-scim",
+        "account_display_name": "runtime",
+        "workspace_scim_id": "runtime-workspace-scim",
+        "workspace_display_name": "runtime workspace",
+    }
+    monkeypatch.setattr(
+        manifest_plan,
+        "stopped_app_identity",
+        lambda *_args, **_kwargs: legacy["app_identity"],
+    )
+    recovered = manifest_plan.recover_persisted_manifest(
+        workspace,
+        app_name="mip-staging",
+        lease_id=new_lease_id,
+        parent_lease_id=LEASE_ID,
+        source_git_sha=current_source_sha,
+    )
+    assert recovered == legacy
+
+    monkeypatch.setattr(
+        manifest_plan,
+        "boundary_evidence",
+        lambda *_args, **_kwargs: expected_boundary,
+    )
+
+    replacement = manifest_plan.reauthorize_manifest(
+        workspace,
+        object(),
+        original_manifest=recovered,
+        policy_json=_policy(),
+        app_name="mip-staging",
+        application_id="runtime-client",
+        expected_inventory_principal="deployer@example.com",
+        expected_account_id="account-id",
+        expected_account_client_id="account-client",
+        mip_catalog="mip",
+        lease_id=new_lease_id,
+        source_git_sha=current_source_sha,
+    )
+
+    assert replacement["version"] == manifest_plan.MANIFEST_VERSION
+    assert replacement["source_git_sha"] == current_source_sha
+    assert replacement["runtime_identity"] == expected_boundary["runtime_identity"]
+    assert replacement["parent_manifest_sha256"] == journal.digest(legacy)
+
+
+def test_cli_recovers_old_source_v3_and_reauthorizes_v4(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _Workspace()
+    legacy = _legacy_manifest(workspace)
+    current_source_sha = "b" * 40
+    new_lease_id = "55555555-5555-4555-8555-555555555555"
+    fresh_lease = _lease(
+        lease_id=new_lease_id,
+        generation_id="66666666-6666-4666-8666-666666666666",
+        generation_seq=4,
+    )
+    expected_boundary = {
+        key: legacy[key]
+        for key in (
+            "app_identity",
+            "metastore_id",
+            "mip_workspace_id",
+            "metastore_workspace_ids",
+            "account_identity",
+        )
+    }
+    expected_boundary["runtime_identity"] = {
+        "application_id": "runtime-client",
+        "account_scim_id": "runtime-account-scim",
+        "account_display_name": "runtime",
+        "workspace_scim_id": "runtime-workspace-scim",
+        "workspace_display_name": "runtime workspace",
+    }
+    monkeypatch.setattr(converger, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(converger, "account_client_from_env", lambda: object())
+    monkeypatch.setattr(manifest_plan, "source_sha", lambda _repo: current_source_sha)
+    monkeypatch.setattr(
+        manifest_plan.deployment_lease,
+        "assert_held",
+        lambda *_args, **_kwargs: fresh_lease,
+    )
+    monkeypatch.setattr(
+        manifest_plan,
+        "stopped_app_identity",
+        lambda *_args, **_kwargs: legacy["app_identity"],
+    )
+    monkeypatch.setattr(
+        manifest_plan,
+        "boundary_evidence",
+        lambda *_args, **_kwargs: expected_boundary,
+    )
+    recovered_path = tmp_path / "legacy.json"
+    replacement_path = tmp_path / "v4.json"
+    common = [
+        "--app-name",
+        "mip-staging",
+        "--application-id",
+        "runtime-client",
+        "--expected-inventory-principal",
+        "deployer@example.com",
+        "--expected-account-id",
+        "account-id",
+        "--expected-account-client-id",
+        "account-client",
+        "--mip-catalog",
+        "mip",
+        "--lease-id",
+        new_lease_id,
+        "--policy-json",
+        _policy(),
+    ]
+
+    assert (
+        converger.main(
+            [
+                "recover-local",
+                *common,
+                "--parent-lease-id",
+                LEASE_ID,
+                "--manifest",
+                str(recovered_path),
+            ]
+        )
+        == 0
+    )
+    assert json.loads(recovered_path.read_text()) == legacy
+    assert (
+        converger.main(
+            [
+                "reauthorize",
+                *common,
+                "--manifest",
+                str(recovered_path),
+                "--out-manifest",
+                str(replacement_path),
+            ]
+        )
+        == 0
+    )
+    replacement = manifest_plan.validated_manifest(
+        json.loads(replacement_path.read_text())
+    )
+    assert replacement["version"] == manifest_plan.MANIFEST_VERSION
+    assert replacement["source_git_sha"] == current_source_sha
+    assert replacement["parent_manifest_sha256"] == journal.digest(legacy)
 
 
 @pytest.mark.parametrize(

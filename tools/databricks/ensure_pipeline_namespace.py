@@ -111,27 +111,32 @@ def _owner_policies(
         or os.environ.get("MIP_DEPLOYER_DATABRICKS_HOST", "")
         or os.environ.get("DATABRICKS_HOST", "")
     ).strip()
-    membership_probe = group_membership_probe or (
-        lambda account, account_sp_id, application_id, owner_group_id, owner_group: (
-            target_group_membership_probe(
-                account,
-                account_sp_id,
-                application_id,
-                owner_group_id,
-                owner_group,
-                workspace_host=workspace_host,
-            )
-        )
-    )
+    targets = _forbidden_targets(workspace, forbidden_principals)
     policies = tuple(
         ApprovedOwnerPolicy(
             workspace=workspace,
             target=target,
             configured_principals=set(configured_principals),
             account_factory=account_factory,
-            group_membership_probe=membership_probe,
+            group_membership_probe=group_membership_probe
+            or (
+                lambda account,
+                account_sp_id,
+                application_id,
+                owner_group_id,
+                owner_group,
+                expected_workspace_scim_id=target.scim_id: target_group_membership_probe(
+                    account,
+                    account_sp_id,
+                    application_id,
+                    owner_group_id,
+                    owner_group,
+                    expected_workspace_scim_id=expected_workspace_scim_id,
+                    workspace_host=workspace_host,
+                )
+            ),
         )
-        for target in _forbidden_targets(workspace, forbidden_principals)
+        for target in targets
     )
     # Force exact SCIM resolution of the current deployer before the first
     # namespace mutation. ApprovedOwnerPolicy otherwise resolves an owner only
