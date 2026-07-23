@@ -345,11 +345,12 @@ the entire pass. Any membership inferred positively from account group members
 must appear under the same immutable group ID and name in the snapshot, but
 account-member omission is not treated as negative evidence under Automatic
 Identity Management. Every ordinary group in the snapshot is rejected. The
-Databricks-managed `account users` baseline may be implicit and is the only
-accepted system group. Its immutable identity must still be present in either
-the hydrated account group inventory or the credentialed target snapshot; if
-both omit it, the audit cannot exclude an opaque system-group ID and fails
-closed.
+Databricks-managed `account users` baseline is the only exception: Databricks
+may return it from hydrated account members, the target snapshot, or only one
+of those planes because the membership is implicit. When both planes return
+it, its immutable ID and name must agree. Its immutable identity must still be
+present in at least one plane; if both omit it, the audit cannot exclude an
+opaque system-group ID and fails closed.
 
 The pass enumerates every workspace assigned to the current metastore and
 requires exactly one direct, immutable-ID-matched `USER` assignment in the MIP

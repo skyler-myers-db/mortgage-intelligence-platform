@@ -397,6 +397,8 @@ def _assert_runtime_workspace_assignment_boundary(
     if account_target_scim_id not in normalized_target_ids:
         raise RuntimeError("agent-runtime immutable SCIM identity snapshot is inconsistent")
     for group_id, group_name in account_effective_groups.items():
+        if group_name.casefold() == "account users":
+            continue
         observed_name = effective_target_groups.get(group_id)
         if observed_name is None or observed_name.casefold() != group_name.casefold():
             raise RuntimeError(

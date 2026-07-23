@@ -633,6 +633,16 @@ def test_foreign_uc_control_plane_accepts_implicit_account_users_baseline() -> N
     assert proof.workspace_id == WORKSPACE_ID
 
 
+def test_foreign_uc_control_plane_accepts_target_omitted_account_users_baseline() -> None:
+    proof = _audit(
+        _workspace(),
+        target_groups_probe=lambda *_args, **_kwargs: {},
+    )
+
+    assert proof.application_id == APPLICATION_ID
+    assert proof.workspace_id == WORKSPACE_ID
+
+
 def test_foreign_uc_control_plane_uses_one_frozen_target_group_snapshot() -> None:
     calls: list[tuple[str, str, str, str]] = []
 
@@ -682,10 +692,23 @@ def test_foreign_uc_control_plane_rejects_dynamic_target_group_absent_from_accou
         )
 
 
-def test_foreign_uc_control_plane_rejects_account_group_missing_from_target_snapshot() -> None:
+def test_foreign_uc_control_plane_rejects_ordinary_group_missing_from_target_snapshot() -> None:
+    account = _account()
+    account_users = next(account.groups.list())
+    ordinary_group = SimpleNamespace(
+        id="ordinary-group-id",
+        display_name="ordinary-group",
+        members=[SimpleNamespace(value=ACCOUNT_SCIM_ID)],
+    )
+    account.groups.list = lambda **_kwargs: iter([account_users, ordinary_group])
+    account.groups.get = lambda group_id: (
+        ordinary_group if group_id == ordinary_group.id else account_users
+    )
+
     with pytest.raises(RuntimeError, match="account and credentialed group identities disagree"):
         _audit(
             _workspace(),
+            account_factory=lambda: account,
             target_groups_probe=lambda *_args, **_kwargs: {},
         )
 
