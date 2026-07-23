@@ -5,14 +5,27 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-import httpx
-from databricks.sdk import WorkspaceClient
+# Direct ``python tools/<script>.py`` execution puts ``tools/`` first on
+# sys.path, where the local ``tools/databricks`` package can shadow the
+# installed ``databricks`` SDK namespace. Release probes must behave the same
+# under direct and ``python -m`` invocation.
+_TOOLS_DIR = str(Path(__file__).resolve().parent)
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+while _TOOLS_DIR in sys.path:
+    sys.path.remove(_TOOLS_DIR)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-from tools.databricks.app_health_contract import canonical_workspace_app_url
+import httpx  # noqa: E402
+from databricks.sdk import WorkspaceClient  # noqa: E402
+
+from tools.databricks.app_health_contract import canonical_workspace_app_url  # noqa: E402
 
 
 def validate_green_response(body: object, *, expected_endpoint: str) -> None:

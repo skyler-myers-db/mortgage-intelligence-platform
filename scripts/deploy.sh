@@ -3717,7 +3717,7 @@ print(gateway_runtime_binding_hash(
 PYEOF
 )"
     step "prove the active App snapshot is bound to the green runtime contract"
-    run "$PYTHON" tools/verify_deployed_app_contract.py \
+    run "$PYTHON" -m tools.verify_deployed_app_contract \
       --base-url "$MIP_APP_URL" \
       --app-name "$APP_NAME" \
       --token-env MIP_BEARER_TOKEN \
@@ -3725,7 +3725,7 @@ PYEOF
       --gateway-binding-sha256 "$AGENT_RUNTIME_BINDING_SHA256" \
       --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
     step "prove the App reaches green Agent Responses and its reviewed planner/data path"
-    run "$PYTHON" tools/verify_app_agent_green_path.py \
+    run "$PYTHON" -m tools.verify_app_agent_green_path \
       --base-url "$MIP_APP_URL" \
       --app-name "$APP_NAME" \
       --token-env MIP_BEARER_TOKEN \

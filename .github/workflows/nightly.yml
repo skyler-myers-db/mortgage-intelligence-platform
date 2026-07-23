@@ -181,7 +181,7 @@ jobs:
             exit 1
           fi
           echo "MIP_DEPLOYED_APP_URL=$APP_URL" >> "$GITHUB_ENV"
-          python tools/verify_deployed_app_contract.py \
+          python -m tools.verify_deployed_app_contract \
             --base-url "$APP_URL" \
             --token-env DATABRICKS_TOKEN \
             --git-sha "$GITHUB_SHA" \
@@ -676,7 +676,7 @@ jobs:
           PY
       - name: Recheck deployed commit and Gateway binding with the browser identity
         run: |
-          python tools/verify_deployed_app_contract.py \
+          python -m tools.verify_deployed_app_contract \
             --base-url "$MIP_APP_URL" \
             --token-env MIP_NON_ADMIN_BEARER_TOKEN \
             --git-sha "$GITHUB_SHA" \

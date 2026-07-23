@@ -5,13 +5,26 @@ from __future__ import annotations
 
 import argparse
 import os
+import sys
 from collections.abc import Mapping
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
-from databricks.sdk import WorkspaceClient
+# Direct ``python tools/<script>.py`` execution puts ``tools/`` first on
+# sys.path, where the local ``tools/databricks`` package can shadow the
+# installed ``databricks`` SDK namespace. Keep both direct and module
+# invocation safe because release workflows have historically used both.
+_TOOLS_DIR = str(Path(__file__).resolve().parent)
+_REPO_ROOT = str(Path(__file__).resolve().parents[1])
+while _TOOLS_DIR in sys.path:
+    sys.path.remove(_TOOLS_DIR)
+if _REPO_ROOT not in sys.path:
+    sys.path.insert(0, _REPO_ROOT)
 
-from tools.databricks.app_health_contract import authenticated_app_health
+from databricks.sdk import WorkspaceClient  # noqa: E402
+
+from tools.databricks.app_health_contract import authenticated_app_health  # noqa: E402
 
 _DEPLOYMENT_LEASE_ENV = "MIP_APP_DEPLOYMENT_LEASE_ID"
 

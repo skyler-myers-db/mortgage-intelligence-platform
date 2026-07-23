@@ -125,7 +125,7 @@ def test_live_validation_proves_source_bound_app_before_expensive_mutations() ->
 
     assert resolve_pos < app_proof_pos < refresh_pos < grant_pos < exact_proof_pos
     app_proof_block = text[app_proof_pos:refresh_pos]
-    assert "tools/verify_deployed_app_contract.py" in app_proof_block
+    assert "python -m tools.verify_deployed_app_contract" in app_proof_block
     assert '--git-sha "$GITHUB_SHA"' in app_proof_block
     assert "MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" in app_proof_block
 
@@ -183,7 +183,7 @@ def test_live_browser_rechecks_exact_contract_before_live_mutations() -> None:
 
     assert resolve_pos < mint_pos < recheck_pos < mutations_pos
     recheck_block = job[recheck_pos:mutations_pos]
-    assert "tools/verify_deployed_app_contract.py" in recheck_block
+    assert "python -m tools.verify_deployed_app_contract" in recheck_block
     assert "--token-env MIP_NON_ADMIN_BEARER_TOKEN" in recheck_block
     assert '--git-sha "$GITHUB_SHA"' in recheck_block
 

@@ -1801,7 +1801,7 @@ def test_deploy_uses_isolated_release_probe_only_during_signed_capture_gate() ->
         candidate,
     )
     probe_access = script.index("--mode probe", negative)
-    positive = script.index("tools/verify_deployed_app_contract.py", probe_access)
+    positive = script.index("tools.verify_deployed_app_contract", probe_access)
     capture = script.index('capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"', positive)
     runtime_access = script.index("--mode runtime", capture)
     retire = script.index(
@@ -2030,9 +2030,9 @@ def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> N
         "retire pinned blue runtime resources only after every green release gate"
     )
     assert activate < retire
-    assert "tools/verify_deployed_app_contract.py" in script[activate:retire]
+    assert "-m tools.verify_deployed_app_contract" in script[activate:retire]
     assert '--deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:' in script[activate:retire]
-    assert "tools/verify_app_agent_green_path.py" in script[activate:retire]
+    assert "-m tools.verify_app_agent_green_path" in script[activate:retire]
     assert "tools.databricks.verify_hosted_agent_tool_execution" in script[activate:retire]
     assert script.index("read independent governed fn_build_cohort expectation") < retire
     assert script.index("tools.databricks.verify_ai_gateway_exact_proof") < retire
