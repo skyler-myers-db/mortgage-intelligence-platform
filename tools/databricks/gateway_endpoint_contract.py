@@ -18,6 +18,7 @@ from backend.agents.gateway_contract import (
     GATEWAY_WORKLOAD_TYPE,
 )
 from backend.agents.supervisor_contract import supervisor_contract_hash
+from databricks.sdk.errors import BadRequest
 from databricks.sdk.service.serving import (
     AiGatewayConfig,
     AiGatewayInferenceTableConfig,
@@ -36,6 +37,9 @@ _BURST_SCALING_ENABLED = GATEWAY_BURST_SCALING_ENABLED
 _ROUTE_OPTIMIZED = GATEWAY_ROUTE_OPTIMIZED
 _TRAFFIC_PERCENTAGE = GATEWAY_TRAFFIC_PERCENTAGE
 _ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
+_CUSTOM_MODEL_RATE_LIMITS_UNSUPPORTED = (
+    "Rate limits are only supported by endpoints with foundation models or external models."
+)
 
 _SERVED_MODEL_OUTPUT_FIELDS = frozenset(
     {
@@ -391,10 +395,20 @@ def endpoint_policy_matches(details: Any) -> bool:
 
 
 def clear_deprecated_endpoint_rate_limits(workspace: Any, *, endpoint: str) -> None:
-    """Authoritatively clear a legacy field omitted from endpoint GET responses."""
+    """Clear the legacy field, or prove this custom-model endpoint cannot hold it."""
 
     try:
         response = workspace.serving_endpoints.put(endpoint, rate_limits=[])
+    except BadRequest as exc:
+        # Databricks does not expose this legacy field on endpoint GET.  For a
+        # custom-model endpoint, however, the dedicated rate-limit API itself
+        # is authoritative negative evidence: the control plane rejects the
+        # resource class before accepting any rate-limit state.  Match the
+        # typed error and exact provider message so permission, transport, and
+        # unrelated validation failures remain hard gates.
+        if str(exc).strip() == _CUSTOM_MODEL_RATE_LIMITS_UNSUPPORTED:
+            return
+        raise RuntimeError("Gateway deprecated endpoint rate-limit reconciliation failed") from exc
     except Exception as exc:  # noqa: BLE001 - unsupported/inconclusive is a hard gate
         raise RuntimeError("Gateway deprecated endpoint rate-limit reconciliation failed") from exc
     if getattr(response, "rate_limits", None) != []:

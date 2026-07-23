@@ -7,11 +7,12 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from databricks.sdk.errors import NotFound
+from databricks.sdk.errors import BadRequest, NotFound
 from mlflow.exceptions import RestException
 
 import backend.agents.gateway_contract as gateway_contract
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
+from tools.databricks import gateway_endpoint_contract as endpoint_contract
 from tools.databricks import gateway_model_attestation as attestation
 from tools.databricks import gateway_registration_journal as journal_store
 from tools.databricks import gateway_registration_recovery as registration_recovery
@@ -4064,6 +4065,49 @@ def test_gateway_agent_postflight_rejects_inconclusive_deprecated_rate_limits(
     )
 
     with pytest.raises(RuntimeError, match="reconciliation was inconclusive"):
+        gateway._clear_deprecated_endpoint_rate_limits(
+            SimpleNamespace(serving_endpoints=serving),
+            endpoint="mip-growth-agent-gateway",
+        )
+
+
+def test_gateway_agent_postflight_accepts_typed_custom_model_rate_limit_rejection(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serving = _ServingEndpoints()
+
+    def reject_custom_model(_name: str, *, rate_limits: list[object]) -> object:
+        assert rate_limits == []
+        raise BadRequest(endpoint_contract._CUSTOM_MODEL_RATE_LIMITS_UNSUPPORTED)
+
+    monkeypatch.setattr(serving, "put", reject_custom_model)
+
+    gateway._clear_deprecated_endpoint_rate_limits(
+        SimpleNamespace(serving_endpoints=serving),
+        endpoint="mip-growth-agent-gateway",
+    )
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        BadRequest("Rate limits are not authorized."),
+        PermissionError(endpoint_contract._CUSTOM_MODEL_RATE_LIMITS_UNSUPPORTED),
+    ],
+)
+def test_gateway_agent_postflight_rejects_other_rate_limit_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+) -> None:
+    serving = _ServingEndpoints()
+
+    def fail(_name: str, *, rate_limits: list[object]) -> object:
+        assert rate_limits == []
+        raise error
+
+    monkeypatch.setattr(serving, "put", fail)
+
+    with pytest.raises(RuntimeError, match="reconciliation failed"):
         gateway._clear_deprecated_endpoint_rate_limits(
             SimpleNamespace(serving_endpoints=serving),
             endpoint="mip-growth-agent-gateway",
