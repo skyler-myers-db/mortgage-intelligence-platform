@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -32,15 +31,22 @@ from tools.databricks.agent_runtime_uc_baseline import (
     consume_issued_control_plane_foreign_catalog_proof,
 )
 from tools.databricks.agent_runtime_uc_inventory import (
+    _assert_authenticated_runtime,
+    _assert_mip_child_identity,
+    _assert_mip_schema_identity,
     _assert_no_catalog_child_privileges,
     _assert_not_runtime_owned,
     _assert_privileges,
+    _assert_registered_model_identity,
     _assert_system_owned,
     _catalog_name,
     _effective_privilege_sources,
     _exact_owner,
     _full_name,
+    _inference_table_suffix,
+    _reviewed_model_family,
     _schema_name,
+    _strict_text,
     _text,
 )
 from tools.databricks.gateway_uc_model_provenance import assert_gateway_model_provenance
@@ -49,52 +55,12 @@ _DATABRICKS_INTERNAL_CATALOG = "__databricks_internal"
 _PLATFORM_RUNTIME_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system"})
 
 
-def _reviewed_inference_table(name: str, *, family_prefix: str) -> bool:
-    pattern = re.compile(
-        rf"{re.escape(family_prefix)}_[0-9a-f]{{12}}_payload"
-        rf"(?:_request_logs|_assessment_logs)?"
-    )
-    return pattern.fullmatch(name) is not None
-
-
-def _reviewed_model_family(name: str, *, family_name: str) -> bool:
-    return re.fullmatch(rf"{re.escape(family_name)}_[0-9a-f]{{12}}", name) is not None
-
-
-def _assert_authenticated_runtime(workspace: Any, *, application_id: str) -> set[str]:
-    """Bind the visibility inventory to the runtime identity whose access it proves."""
-
-    caller = workspace.current_user.me()
-    principals = {
-        _text(getattr(caller, "user_name", None)),
-        _text(getattr(caller, "application_id", None)),
-    } - {""}
-    if application_id not in principals:
-        raise RuntimeError(
-            "agent-runtime UC inventory is not authenticated as the expected runtime identity"
-        )
-    caller_id = _text(getattr(caller, "id", None))
-    if not caller_id:
-        raise RuntimeError("agent-runtime identity has no immutable SCIM id")
-    groups = getattr(caller, "groups", None)
-    if groups is None:
-        raise RuntimeError("agent-runtime identity omitted its effective groups collection")
-    owner_aliases = {caller_id.casefold(), *(value.casefold() for value in principals)}
-    for group in groups:
-        group_id = _text(getattr(group, "value", None))
-        display = _text(getattr(group, "display", None))
-        if not group_id or not display:
-            raise RuntimeError("agent-runtime effective group identity is incomplete")
-        owner_aliases.update({group_id.casefold(), display.casefold()})
-    return owner_aliases
-
-
 def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
     """Require the exact Databricks-managed samples inheritance contract."""
 
     for schema in workspace.schemas.list("samples", include_browse=True):
         _assert_system_owned(schema, label="samples schema")
-        schema_name = _text(getattr(schema, "name", None))
+        schema_name = _strict_text(getattr(schema, "name", None))
         schema_full_name = _full_name(schema, fallback=f"samples.{schema_name}")
         schema_sources = {action: set(_SAMPLES_INHERITED) for action in _SAMPLES_SCHEMA_PRIVILEGES}
         if schema_name == "information_schema":
@@ -112,7 +78,7 @@ def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
         )
         for function in workspace.functions.list("samples", schema_name, include_browse=True):
             _assert_system_owned(function, label="samples function")
-            function_name = _text(getattr(function, "name", None))
+            function_name = _strict_text(getattr(function, "name", None))
             _assert_privileges(
                 workspace,
                 securable_type="function",
@@ -132,7 +98,7 @@ def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
             omit_properties=True,
         ):
             _assert_system_owned(table, label="samples table")
-            table_name = _text(getattr(table, "name", None))
+            table_name = _strict_text(getattr(table, "name", None))
             table_sources = set(_SAMPLES_INHERITED)
             if (
                 schema_name == "information_schema"
@@ -152,7 +118,7 @@ def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
             )
         for volume in workspace.volumes.list("samples", schema_name, include_browse=True):
             _assert_system_owned(volume, label="samples volume")
-            volume_name = _text(getattr(volume, "name", None))
+            volume_name = _strict_text(getattr(volume, "name", None))
             _assert_privileges(
                 workspace,
                 securable_type="volume",
@@ -175,7 +141,7 @@ def _assert_system_catalog_baseline(
     """Allow only the reviewed immutable Databricks account-users system baseline."""
 
     for schema in workspace.schemas.list("system", include_browse=True):
-        schema_name = _text(getattr(schema, "name", None))
+        schema_name = _strict_text(getattr(schema, "name", None))
         if not schema_name:
             raise RuntimeError("system schema inventory returned an empty name")
         schema_owner = _exact_owner(schema, label=f"system schema {schema_name}")
@@ -220,7 +186,7 @@ def _assert_system_catalog_baseline(
             include_browse=True,
         ):
             assert_child_owner(function, label="system function")
-            function_name = _text(getattr(function, "name", None))
+            function_name = _strict_text(getattr(function, "name", None))
             _assert_privileges(
                 workspace,
                 securable_type="function",
@@ -248,7 +214,7 @@ def _assert_system_catalog_baseline(
             omit_properties=True,
         ):
             assert_child_owner(table, label="system table")
-            table_name = _text(getattr(table, "name", None))
+            table_name = _strict_text(getattr(table, "name", None))
             _assert_privileges(
                 workspace,
                 securable_type="table",
@@ -272,7 +238,7 @@ def _assert_system_catalog_baseline(
             )
         for volume in workspace.volumes.list("system", schema_name, include_browse=True):
             assert_child_owner(volume, label="system volume")
-            volume_name = _text(getattr(volume, "name", None))
+            volume_name = _strict_text(getattr(volume, "name", None))
             _assert_privileges(
                 workspace,
                 securable_type="volume",
@@ -326,7 +292,9 @@ def verify_effective_uc_boundary(
         application_id=principal,
     )
 
-    metastore_id = _text(getattr(workspace.metastores.current(), "metastore_id", None))
+    metastore_id = _strict_text(
+        getattr(workspace.metastores.current(), "metastore_id", None)
+    )
     if not metastore_id:
         raise RuntimeError("workspace has no current metastore identity")
     consumed_control_plane_proof = None
@@ -365,26 +333,40 @@ def verify_effective_uc_boundary(
         expected_source_map={"USE_CATALOG": set(runtime_direct)},
     )
     visible_catalogs = list(workspace.catalogs.list(include_browse=True))
-    visible_catalog_names = {_text(getattr(item, "name", None)) for item in visible_catalogs}
+    visible_catalog_name_list = [
+        _strict_text(getattr(item, "name", None)) for item in visible_catalogs
+    ]
+    visible_catalog_names = set(visible_catalog_name_list)
+    if len(visible_catalog_name_list) != len(visible_catalog_names):
+        raise RuntimeError("workspace catalog inventory returned duplicate names")
     visible_catalog_owners = {
-        _text(getattr(item, "name", None)): _exact_owner(
+        _strict_text(getattr(item, "name", None)): _exact_owner(
             item,
-            label=f"catalog {_text(getattr(item, 'name', None)) or '<unknown>'}",
+            label=(
+                f"catalog "
+                f"{_strict_text(getattr(item, 'name', None)) or '<unknown>'}"
+            ),
         )
         for item in visible_catalogs
     }
     visible_catalog_types = {
-        _text(getattr(item, "name", None)): _text(getattr(item, "catalog_type", None)).upper()
+        _strict_text(getattr(item, "name", None)): _text(
+            getattr(item, "catalog_type", None)
+        ).upper()
         for item in visible_catalogs
     }
     visible_catalog_modes = {
-        _text(getattr(item, "name", None)): _text(getattr(item, "isolation_mode", None)).upper()
+        _strict_text(getattr(item, "name", None)): _text(
+            getattr(item, "isolation_mode", None)
+        ).upper()
         for item in visible_catalogs
     }
     if catalog_name not in visible_catalog_names:
         raise RuntimeError("configured MIP catalog is missing from workspace inventory")
     mip_catalog_object = next(
-        item for item in visible_catalogs if _text(getattr(item, "name", None)) == catalog_name
+        item
+        for item in visible_catalogs
+        if _strict_text(getattr(item, "name", None)) == catalog_name
     )
     _assert_not_runtime_owned(
         mip_catalog_object,
@@ -494,6 +476,11 @@ def verify_effective_uc_boundary(
                 future.result()
 
     all_registered_models = list(workspace.registered_models.list(include_browse=True))
+    for model in all_registered_models:
+        _assert_registered_model_identity(model)
+    registered_model_full_names = [_full_name(model) for model in all_registered_models]
+    if len(registered_model_full_names) != len(set(registered_model_full_names)):
+        raise RuntimeError("workspace registered-model inventory returned duplicate identities")
     if any(not _catalog_name(model) for model in all_registered_models):
         raise RuntimeError("workspace registered-model inventory lacks a catalog name")
     registered_models = [
@@ -610,14 +597,28 @@ def verify_effective_uc_boundary(
                 future.result()
 
     schemas = list(workspace.schemas.list(catalog_name, include_browse=True))
-    schema_names = {_text(getattr(schema, "name", None)) for schema in schemas}
+    schema_name_list = [
+        _strict_text(getattr(schema, "name", None)) for schema in schemas
+    ]
+    schema_names = set(schema_name_list)
+    if len(schema_name_list) != len(schema_names):
+        raise RuntimeError("MIP schema inventory returned duplicate names")
     if not {"gold", "audit"}.issubset(schema_names):
         raise RuntimeError("MIP catalog is missing the reviewed agent schemas")
+    reviewed_inference_suffixes: set[str] = set()
     for schema in schemas:
-        schema_name = _text(getattr(schema, "name", None))
+        schema_name = _strict_text(getattr(schema, "name", None))
         if not schema_name:
             raise RuntimeError("MIP schema inventory returned an empty name")
         schema_full_name = _full_name(schema, fallback=f"{catalog_name}.{schema_name}")
+        if schema_full_name != f"{catalog_name}.{schema_name}":
+            raise RuntimeError("MIP schema inventory returned an invalid parent identity")
+        _assert_mip_schema_identity(
+            schema,
+            catalog_name=catalog_name,
+            schema_name=schema_name,
+            full_name=schema_full_name,
+        )
         if schema_name == "information_schema":
             _assert_system_owned(schema, label=f"schema {schema_full_name}")
         else:
@@ -644,17 +645,36 @@ def verify_effective_uc_boundary(
             expected_source_map=schema_sources,
         )
 
-        for function in workspace.functions.list(
-            catalog_name,
-            schema_name,
-            include_browse=True,
-        ):
-            function_name = _text(getattr(function, "name", None))
+        functions = list(
+            workspace.functions.list(
+                catalog_name,
+                schema_name,
+                include_browse=True,
+            )
+        )
+        function_full_names: set[str] = set()
+        for function in functions:
+            function_name = _strict_text(getattr(function, "name", None))
             if not function_name:
                 raise RuntimeError("MIP function inventory returned an empty name")
             function_full_name = _full_name(
                 function,
                 fallback=f"{schema_full_name}.{function_name}",
+            )
+            if function_full_name != f"{schema_full_name}.{function_name}":
+                raise RuntimeError(
+                    "MIP function inventory returned an invalid parent identity"
+                )
+            if function_full_name in function_full_names:
+                raise RuntimeError("MIP function inventory returned a duplicate identity")
+            function_full_names.add(function_full_name)
+            _assert_mip_child_identity(
+                function,
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                item_name=function_name,
+                full_name=function_full_name,
+                label="function",
             )
             _assert_not_runtime_owned(
                 function,
@@ -675,19 +695,36 @@ def verify_effective_uc_boundary(
                 expected_source_map=({"EXECUTE": set(runtime_direct)} if expected else None),
             )
 
-        for table in workspace.tables.list(
-            catalog_name,
-            schema_name,
-            include_browse=True,
-            omit_columns=True,
-            omit_properties=True,
-        ):
-            table_name = _text(getattr(table, "name", None))
+        tables = list(
+            workspace.tables.list(
+                catalog_name,
+                schema_name,
+                include_browse=True,
+                omit_columns=True,
+                omit_properties=True,
+            )
+        )
+        table_full_names: set[str] = set()
+        for table in tables:
+            table_name = _strict_text(getattr(table, "name", None))
             if not table_name:
                 raise RuntimeError("MIP table inventory returned an empty name")
             table_full_name = _full_name(
                 table,
                 fallback=f"{schema_full_name}.{table_name}",
+            )
+            if table_full_name != f"{schema_full_name}.{table_name}":
+                raise RuntimeError("MIP table inventory returned an invalid parent identity")
+            if table_full_name in table_full_names:
+                raise RuntimeError("MIP table inventory returned a duplicate identity")
+            table_full_names.add(table_full_name)
+            _assert_mip_child_identity(
+                table,
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                item_name=table_name,
+                full_name=table_full_name,
+                label="table",
             )
             if schema_name == "information_schema":
                 _assert_system_owned(table, label=f"table {table_full_name}")
@@ -703,19 +740,21 @@ def verify_effective_uc_boundary(
                     ),
                 )
                 continue
-            if schema_name == "audit" and _reviewed_inference_table(
-                table_name,
-                family_prefix=table_prefix,
-            ):
+            inference_suffix = (
+                _inference_table_suffix(table_name, family_prefix=table_prefix)
+                if schema_name == "audit"
+                else None
+            )
+            if inference_suffix is not None:
                 actual_sources = _effective_privilege_sources(
                     workspace,
                     securable_type="table",
                     full_name=table_full_name,
                     principal=principal,
                 )
+                # Ownership may be omitted or reported as exact-direct privileges.
                 if (
-                    not actual_sources
-                    or any(sources != runtime_direct for sources in actual_sources.values())
+                    any(sources != runtime_direct for sources in actual_sources.values())
                     or _exact_owner(table, label=f"table {table_full_name}")
                     != principal
                 ):
@@ -723,6 +762,7 @@ def verify_effective_uc_boundary(
                         f"agent-runtime inference table {table_name} lacks exact direct "
                         "runtime ownership"
                     )
+                reviewed_inference_suffixes.add(inference_suffix)
                 continue
             _assert_not_runtime_owned(
                 table,
@@ -737,13 +777,30 @@ def verify_effective_uc_boundary(
                 expected=set(),
             )
 
-        for volume in workspace.volumes.list(catalog_name, schema_name, include_browse=True):
-            volume_name = _text(getattr(volume, "name", None))
+        volumes = list(
+            workspace.volumes.list(catalog_name, schema_name, include_browse=True)
+        )
+        volume_full_names: set[str] = set()
+        for volume in volumes:
+            volume_name = _strict_text(getattr(volume, "name", None))
             if not volume_name:
                 raise RuntimeError("MIP volume inventory returned an empty name")
             volume_full_name = _full_name(
                 volume,
                 fallback=f"{schema_full_name}.{volume_name}",
+            )
+            if volume_full_name != f"{schema_full_name}.{volume_name}":
+                raise RuntimeError("MIP volume inventory returned an invalid parent identity")
+            if volume_full_name in volume_full_names:
+                raise RuntimeError("MIP volume inventory returned a duplicate identity")
+            volume_full_names.add(volume_full_name)
+            _assert_mip_child_identity(
+                volume,
+                catalog_name=catalog_name,
+                schema_name=schema_name,
+                item_name=volume_name,
+                full_name=volume_full_name,
+                label="volume",
             )
             _assert_not_runtime_owned(
                 volume,
@@ -780,9 +837,9 @@ def verify_effective_uc_boundary(
                     + ", ".join(sorted(actual_sources))
                 )
             continue
+        # Model ownership has the same omitted-or-exact-direct representation.
         if (
-            not actual_sources
-            or any(sources != runtime_direct for sources in actual_sources.values())
+            any(sources != runtime_direct for sources in actual_sources.values())
             or _exact_owner(model, label=f"registered model {full_name}")
             != principal
         ):
@@ -804,26 +861,7 @@ def verify_effective_uc_boundary(
             candidate_model=model_name,
         )
         reviewed_model_suffixes.add(full_name.rsplit("_", 1)[-1])
-    inference_suffixes = {
-        match.group(1)
-        for schema in schemas
-        if _text(getattr(schema, "name", None)) == "audit"
-        for table in workspace.tables.list(
-            catalog_name,
-            "audit",
-            include_browse=True,
-            omit_columns=True,
-            omit_properties=True,
-        )
-        if (
-            match := re.fullmatch(
-                rf"{re.escape(table_prefix)}_([0-9a-f]{{12}})_payload"
-                rf"(?:_request_logs|_assessment_logs)?",
-                _text(getattr(table, "name", None)),
-            )
-        )
-    }
-    if not inference_suffixes.issubset(reviewed_model_suffixes):
+    if not reviewed_inference_suffixes.issubset(reviewed_model_suffixes):
         raise RuntimeError("inference-table family is not backed by reviewed Gateway models")
 
 

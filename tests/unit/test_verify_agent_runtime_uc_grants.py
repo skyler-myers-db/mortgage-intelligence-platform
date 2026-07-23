@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import copy
+from enum import Enum
 from types import SimpleNamespace
 from typing import Any
 
@@ -34,6 +35,23 @@ SIGNING_KEY = base64.urlsafe_b64encode(b"u" * 32).decode("ascii").rstrip("=")
 VERIFY_KEY = derive_gateway_proof_verify_key(SIGNING_KEY)
 PREVIOUS_SIGNING_KEY = base64.urlsafe_b64encode(b"v" * 32).decode("ascii").rstrip("=")
 PREVIOUS_VERIFY_KEY = derive_gateway_proof_verify_key(PREVIOUS_SIGNING_KEY)
+
+
+class _FalseyList(list[object]):
+    def __bool__(self) -> bool:
+        return False
+
+
+class _StringSubclass(str):
+    pass
+
+
+class _ForeignPrivilege(Enum):
+    SELECT = "SELECT"
+
+
+class _ForeignSecurableType(Enum):
+    SCHEMA = "SCHEMA"
 
 
 def _contract(
@@ -396,6 +414,8 @@ def _workspace(
             SimpleNamespace(
                 name=table,
                 full_name=f"mip.audit.{table}",
+                catalog_name=CATALOG,
+                schema_name="audit",
                 owner=table_owner,
             ),
             SimpleNamespace(
@@ -538,6 +558,21 @@ def _workspace(
             )
         ],
     }
+    for schema in schemas[CATALOG]:
+        schema.catalog_name = CATALOG
+    for inventory in (functions, tables, volumes):
+        for (item_catalog, item_schema), items in inventory.items():
+            if item_catalog != CATALOG:
+                continue
+            for item in items:
+                item.catalog_name = item_catalog
+                item.schema_name = item_schema
+    for catalog_models in models.values():
+        for item in catalog_models:
+            item_catalog, item_schema, item_name = item.full_name.split(".", 2)
+            item.catalog_name = item_catalog
+            item.schema_name = item_schema
+            item.name = item_name
     grants = _Grants(values)
     return SimpleNamespace(
         config=SimpleNamespace(workspace_id="workspace-id"),
@@ -762,6 +797,507 @@ def test_effective_runtime_uc_boundary_passes_and_reads_all_pages() -> None:
         None,
     ) in workspace.grants.calls
     assert ("table", "other.sandbox.secret", None) in workspace.grants.calls
+
+
+def test_effective_runtime_uc_boundary_accepts_owner_only_gateway_artifacts() -> None:
+    workspace = _workspace(
+        {
+            ("table", f"mip.audit.{TABLE}"): set(),
+            ("function", MODEL): set(),
+        }
+    )
+
+    _verify(workspace)
+
+    assert ("table", f"mip.audit.{TABLE}", None) in workspace.grants.calls
+    assert ("function", MODEL, None) in workspace.grants.calls
+
+
+def test_effective_runtime_uc_boundary_uses_one_validated_audit_table_snapshot() -> None:
+    workspace = _workspace()
+    original = workspace.tables.list
+    audit_calls = 0
+
+    def changing_inventory(catalog: str, schema: str, **kwargs: Any) -> object:
+        nonlocal audit_calls
+        if (catalog, schema) == (CATALOG, "audit"):
+            audit_calls += 1
+            if audit_calls > 1:
+                return iter(
+                    [
+                        SimpleNamespace(
+                            name=TABLE,
+                            full_name=f"{CATALOG}.audit.{TABLE}",
+                            owner="human@example.com",
+                        )
+                    ]
+                )
+        return original(catalog, schema, **kwargs)
+
+    workspace.tables.list = changing_inventory
+
+    _verify(workspace)
+
+    assert audit_calls == 1
+
+
+def test_effective_runtime_uc_boundary_rejects_duplicate_audit_schema() -> None:
+    workspace = _workspace()
+    original = workspace.schemas.list
+    mip_schemas = list(original(CATALOG, include_browse=True))
+    audit = next(item for item in mip_schemas if item.name == "audit")
+    mip_schemas.append(copy.deepcopy(audit))
+
+    def duplicate_audit_schema(catalog: str, **kwargs: Any) -> object:
+        if catalog == CATALOG:
+            return iter(mip_schemas)
+        return original(catalog, **kwargs)
+
+    workspace.schemas.list = duplicate_audit_schema
+
+    with pytest.raises(RuntimeError, match="duplicate names"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("resource", "schema_name"),
+    [
+        ("function", "gold"),
+        ("table", "audit"),
+        ("volume", "audit"),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_duplicate_mip_child(
+    resource: str,
+    schema_name: str,
+) -> None:
+    workspace = _workspace()
+    api = getattr(workspace, f"{resource}s")
+    original = api.list
+
+    def duplicate_child(
+        catalog: str,
+        schema: str,
+        **kwargs: Any,
+    ) -> object:
+        items = list(original(catalog, schema, **kwargs))
+        if (catalog, schema) == (CATALOG, schema_name):
+            items.append(copy.deepcopy(items[0]))
+        return iter(items)
+
+    api.list = duplicate_child
+
+    with pytest.raises(RuntimeError, match="duplicate identity"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_rejects_duplicate_registered_model() -> None:
+    workspace = _workspace()
+    models = list(workspace.registered_models.list(include_browse=True))
+    models.append(copy.deepcopy(next(item for item in models if item.full_name == MODEL)))
+    workspace.registered_models.list = lambda **_kwargs: iter(models)
+
+    with pytest.raises(RuntimeError, match="duplicate identities"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize("full_name", ["mip..orphan_model", "mip.audit."])
+def test_effective_runtime_uc_boundary_rejects_empty_registered_model_tuple_component(
+    full_name: str,
+) -> None:
+    workspace = _workspace(
+        extra_models=[SimpleNamespace(full_name=full_name, owner="admin")],
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete parent identity"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("table_owner", "model_owner"),
+    [
+        ("human@example.com", APPLICATION_ID),
+        (APPLICATION_ID, "human@example.com"),
+        (APPLICATION_ID.upper(), APPLICATION_ID),
+        (APPLICATION_ID, APPLICATION_ID.upper()),
+        (f" {APPLICATION_ID}", APPLICATION_ID),
+        (APPLICATION_ID, f"{APPLICATION_ID} "),
+        (_StringSubclass(APPLICATION_ID), APPLICATION_ID),
+        (APPLICATION_ID, _StringSubclass(APPLICATION_ID)),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_owner_drift_without_explicit_artifact_grants(
+    table_owner: str,
+    model_owner: str,
+) -> None:
+    workspace = _workspace(
+        {
+            ("table", f"mip.audit.{TABLE}"): set(),
+            ("function", MODEL): set(),
+        },
+        table_owner=table_owner,
+        model_owner=model_owner,
+    )
+
+    with pytest.raises(RuntimeError, match="ownership|noncanonical owner"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("securable_type", "full_name"),
+    [
+        ("table", f"mip.audit.{TABLE}"),
+        ("function", MODEL),
+    ],
+)
+def test_effective_runtime_uc_boundary_propagates_owned_artifact_permission_denial(
+    securable_type: str,
+    full_name: str,
+) -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+
+    def deny_owned_artifact(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == (securable_type, full_name):
+            raise PermissionDenied("owned artifact permissions unavailable")
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = deny_owned_artifact
+
+    with pytest.raises(PermissionDenied, match="owned artifact permissions unavailable"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_rejects_empty_owned_artifact_assignment() -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def return_empty_assignment(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=[
+                    SimpleNamespace(principal=APPLICATION_ID, privileges=[])
+                ],
+                next_page_token=None,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_empty_assignment
+
+    with pytest.raises(RuntimeError, match="empty privilege assignment"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize("response", [None, object()])
+def test_effective_runtime_uc_boundary_rejects_invalid_artifact_permission_envelope(
+    response: object,
+) -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def return_invalid_envelope(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return response
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_invalid_envelope
+
+    with pytest.raises(RuntimeError, match="invalid response envelope"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        f" {APPLICATION_ID}",
+        f"{APPLICATION_ID} ",
+        0,
+        APPLICATION_ID.encode(),
+        _StringSubclass(APPLICATION_ID),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_noncanonical_artifact_source(
+    source: object,
+) -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def return_malformed_source(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=[
+                    SimpleNamespace(
+                        principal=source,
+                        privileges=[
+                            SimpleNamespace(
+                                privilege="ALL_PRIVILEGES",
+                                inherited_from_type=None,
+                                inherited_from_name=None,
+                            )
+                        ],
+                    )
+                ],
+                next_page_token=None,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_malformed_source
+
+    with pytest.raises(RuntimeError, match="noncanonical principal"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize("assignments", [0, False, "", (), {}])
+def test_effective_runtime_uc_boundary_rejects_nonlist_artifact_assignments(
+    assignments: object,
+) -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def return_malformed_assignments(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=assignments,
+                next_page_token=None,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_malformed_assignments
+
+    with pytest.raises(RuntimeError, match="non-list privilege assignment collection"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_rejects_falsey_list_with_hidden_grant() -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+    assignments = _FalseyList(
+        [
+            SimpleNamespace(
+                principal="account users",
+                privileges=[
+                    SimpleNamespace(
+                        privilege="SELECT",
+                        inherited_from_type="CATALOG",
+                        inherited_from_name=CATALOG,
+                    )
+                ],
+            )
+        ]
+    )
+
+    def return_falsey_assignments(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=assignments,
+                next_page_token=None,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_falsey_assignments
+
+    with pytest.raises(RuntimeError, match="non-list privilege assignment collection"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_rejects_falsey_privilege_list() -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+    privileges = _FalseyList(
+        [
+            SimpleNamespace(
+                privilege="SELECT",
+                inherited_from_type=None,
+                inherited_from_name=None,
+            )
+        ]
+    )
+
+    def return_falsey_privileges(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=[
+                    SimpleNamespace(
+                        principal=APPLICATION_ID,
+                        privileges=privileges,
+                    )
+                ],
+                next_page_token=None,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_falsey_privileges
+
+    with pytest.raises(RuntimeError, match="non-list privilege collection"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    "privilege",
+    [
+        0,
+        False,
+        "",
+        " ALL_PRIVILEGES",
+        "ALL_PRIVILEGES ",
+        "all_privileges",
+        _StringSubclass("ALL_PRIVILEGES"),
+        _ForeignPrivilege.SELECT,
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_noncanonical_artifact_privilege(
+    privilege: object,
+) -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def return_malformed_privilege(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=[
+                    SimpleNamespace(
+                        principal=APPLICATION_ID,
+                        privileges=[
+                            SimpleNamespace(
+                                privilege=privilege,
+                                inherited_from_type=None,
+                                inherited_from_name=None,
+                            )
+                        ],
+                    )
+                ],
+                next_page_token=None,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_malformed_privilege
+
+    with pytest.raises(RuntimeError, match="noncanonical privilege"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("inherited_type", "inherited_name"),
+    [
+        (" SCHEMA", "mip.audit"),
+        ("SCHEMA ", "mip.audit"),
+        (0, "mip.audit"),
+        ("SCHEMA", 0),
+        (None, "mip.audit"),
+        ("SCHEMA", None),
+        ("", ""),
+        (_StringSubclass("SCHEMA"), "mip.audit"),
+        ("SCHEMA", _StringSubclass("mip.audit")),
+        (_ForeignSecurableType.SCHEMA, "mip.audit"),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_malformed_artifact_inheritance(
+    inherited_type: object,
+    inherited_name: object,
+) -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def return_malformed_inheritance(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=[
+                    SimpleNamespace(
+                        principal=APPLICATION_ID,
+                        privileges=[
+                            SimpleNamespace(
+                                privilege="ALL_PRIVILEGES",
+                                inherited_from_type=inherited_type,
+                                inherited_from_name=inherited_name,
+                            )
+                        ],
+                    )
+                ],
+                next_page_token=None,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_malformed_inheritance
+
+    with pytest.raises(RuntimeError, match="inheritance"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    "next_token",
+    [0, False, " page-2", "page-2 ", _StringSubclass("page-2")],
+)
+def test_effective_runtime_uc_boundary_rejects_noncanonical_artifact_page_token(
+    next_token: object,
+) -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def return_malformed_page_token(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("table", table_full_name):
+            return SimpleNamespace(
+                privilege_assignments=[],
+                next_page_token=next_token,
+            )
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = return_malformed_page_token
+
+    with pytest.raises(RuntimeError, match="noncanonical pagination token"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_reads_all_owned_artifact_permission_pages() -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+    table_full_name = f"mip.audit.{TABLE}"
+
+    def paginate_owned_artifact(*args: Any, **kwargs: Any) -> object:
+        if args[:2] != ("table", table_full_name):
+            return original(*args, **kwargs)
+        if kwargs["page_token"] is None:
+            return SimpleNamespace(privilege_assignments=[], next_page_token="artifact-page-2")
+        assert kwargs["page_token"] == "artifact-page-2"
+        return SimpleNamespace(
+            privilege_assignments=[
+                _assignment(
+                    "SELECT",
+                    principal="account users",
+                    inherited_type="CATALOG",
+                    inherited_name=CATALOG,
+                )
+            ],
+            next_page_token=None,
+        )
+
+    workspace.grants.get_effective = paginate_owned_artifact
+
+    with pytest.raises(RuntimeError, match="direct runtime ownership"):
+        _verify(workspace)
+
+
+def test_owner_only_gateway_model_still_requires_exact_provenance() -> None:
+    workspace = _workspace(
+        {
+            ("table", f"mip.audit.{TABLE}"): set(),
+            ("function", MODEL): set(),
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="provenance"):
+        _verify(
+            workspace,
+            registry_tags={MODEL: _provenance(source_hash="f" * 64)},
+        )
 
 
 def test_effective_runtime_uc_boundary_accepts_zero_access_managed_online_metadata() -> None:
@@ -1000,6 +1536,50 @@ def test_effective_runtime_uc_boundary_requires_runtime_authenticated_inventory(
         _verify(workspace)
 
 
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("user_name", f" {APPLICATION_ID}"),
+        ("application_id", f"{APPLICATION_ID} "),
+        ("id", " runtime-scim-id"),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_noncanonical_runtime_identity(
+    field: str,
+    value: str,
+) -> None:
+    workspace = _workspace()
+    caller = {
+        "user_name": APPLICATION_ID,
+        "application_id": APPLICATION_ID,
+        "id": "runtime-scim-id",
+        "groups": [],
+    }
+    caller[field] = value
+    workspace.current_user.me = lambda: SimpleNamespace(**caller)
+
+    with pytest.raises(RuntimeError, match="noncanonical text"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize("group_field", ["value", "display"])
+def test_effective_runtime_uc_boundary_rejects_noncanonical_runtime_group(
+    group_field: str,
+) -> None:
+    workspace = _workspace()
+    group = {"value": "group-id", "display": "runtime-group"}
+    group[group_field] = f" {group[group_field]}"
+    workspace.current_user.me = lambda: SimpleNamespace(
+        user_name=APPLICATION_ID,
+        application_id=APPLICATION_ID,
+        id="runtime-scim-id",
+        groups=[SimpleNamespace(**group)],
+    )
+
+    with pytest.raises(RuntimeError, match="noncanonical text"):
+        _verify(workspace)
+
+
 def test_effective_runtime_uc_boundary_requires_authoritative_runtime_groups() -> None:
     workspace = _workspace()
     workspace.current_user.me = lambda: SimpleNamespace(
@@ -1229,6 +1809,24 @@ def test_effective_runtime_uc_boundary_allows_source_proven_historical_model() -
     )
 
 
+def test_effective_runtime_uc_boundary_rejects_historical_model_catalog_tuple_drift() -> (
+    None
+):
+    historical, _table, _source_hash = _contract(source_hash="b" * 64)
+    workspace = _workspace(
+        extra_models=[SimpleNamespace(full_name=historical, owner=APPLICATION_ID)],
+    )
+    reviewed = next(
+        item
+        for item in workspace.registered_models.list(include_browse=True)
+        if item.full_name == historical
+    )
+    reviewed.catalog_name = "other"
+
+    with pytest.raises(RuntimeError, match="incomplete parent identity"):
+        _verify(workspace)
+
+
 def test_effective_runtime_uc_boundary_allows_historical_model_attested_to_prior_supervisor() -> (
     None
 ):
@@ -1367,14 +1965,60 @@ def test_effective_runtime_uc_boundary_rejects_unproven_model() -> None:
         )
 
 
-def test_effective_runtime_uc_boundary_rejects_lookalike_table() -> None:
+def test_effective_runtime_uc_boundary_rejects_padded_reviewed_model_name() -> None:
+    workspace = _workspace()
+    models = list(workspace.registered_models.list(include_browse=True))
+    reviewed = next(item for item in models if item.full_name == MODEL)
+    reviewed.full_name = f" {MODEL}"
+    workspace.registered_models.list = lambda **_kwargs: iter(models)
+
+    with pytest.raises(RuntimeError, match="noncanonical text"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("schema_name", "gold"),
+        ("name", "unrelated_model"),
+        ("name", None),
+        ("full_name", None),
+    ],
+)
+def test_effective_runtime_uc_boundary_requires_complete_reviewed_model_parent_tuple(
+    field: str,
+    value: object,
+) -> None:
+    workspace = _workspace(
+        {
+            ("table", f"mip.audit.{TABLE}"): set(),
+            ("function", MODEL): set(),
+        }
+    )
+    reviewed = next(
+        item
+        for item in workspace.registered_models.list(include_browse=True)
+        if item.full_name == MODEL
+    )
+    setattr(reviewed, field, value)
+
+    with pytest.raises(RuntimeError, match="parent identity|missing|forbidden"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize("privileges", [set(), {"SELECT"}])
+def test_effective_runtime_uc_boundary_rejects_lookalike_table(
+    privileges: set[str],
+) -> None:
     lookalike = f"mip.audit.{TABLE}_extra"
-    workspace = _workspace({("table", lookalike): {"SELECT"}})
+    workspace = _workspace({("table", lookalike): privileges})
     workspace.tables.list = lambda catalog, schema, **_kwargs: iter(
         [
             SimpleNamespace(
                 name=f"{TABLE}_extra",
                 full_name=lookalike,
+                catalog_name=CATALOG,
+                schema_name="audit",
                 owner=APPLICATION_ID,
             )
         ]
@@ -1382,7 +2026,73 @@ def test_effective_runtime_uc_boundary_rejects_lookalike_table() -> None:
         else []
     )
 
-    with pytest.raises(RuntimeError, match="effective"):
+    with pytest.raises(RuntimeError, match="effective owner of forbidden table"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_rejects_padded_reviewed_table_name() -> None:
+    workspace = _workspace()
+    tables = list(workspace.tables.list(CATALOG, "audit", include_browse=True))
+    reviewed = next(item for item in tables if item.name == TABLE)
+    reviewed.name = f"{TABLE} "
+
+    with pytest.raises(RuntimeError, match="noncanonical text"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    "full_name",
+    [
+        f"other.audit.{TABLE}",
+        f"{CATALOG}.gold.{TABLE}",
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_reviewed_table_parent_drift(
+    full_name: str,
+) -> None:
+    workspace = _workspace(
+        {
+            ("table", f"mip.audit.{TABLE}"): set(),
+            ("function", MODEL): set(),
+        }
+    )
+    reviewed = next(
+        item
+        for item in workspace.tables.list(CATALOG, "audit", include_browse=True)
+        if item.name == TABLE
+    )
+    reviewed.full_name = full_name
+
+    with pytest.raises(RuntimeError, match="invalid parent identity"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("catalog_name", "other"),
+        ("schema_name", "gold"),
+        ("full_name", None),
+    ],
+)
+def test_effective_runtime_uc_boundary_requires_complete_reviewed_table_parent_tuple(
+    field: str,
+    value: object,
+) -> None:
+    workspace = _workspace(
+        {
+            ("table", f"mip.audit.{TABLE}"): set(),
+            ("function", MODEL): set(),
+        }
+    )
+    reviewed = next(
+        item
+        for item in workspace.tables.list(CATALOG, "audit", include_browse=True)
+        if item.name == TABLE
+    )
+    setattr(reviewed, field, value)
+
+    with pytest.raises(RuntimeError, match="incomplete parent identity"):
         _verify(workspace)
 
 
@@ -1611,6 +2321,7 @@ def test_effective_runtime_uc_boundary_rejects_new_or_reowned_system_model() -> 
             full_name="system.ai.unreviewed_new_model",
             catalog_name="system",
             schema_name="ai",
+            name="unreviewed_new_model",
             owner="System user",
         )
     )
