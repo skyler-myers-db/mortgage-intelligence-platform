@@ -8,6 +8,7 @@ import copy
 import json
 import os
 import shlex
+from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -20,6 +21,7 @@ from backend.agents.gateway_contract import (
 )
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.apps import AppDeployment
+from tools.databricks.app_deployment_health import health as _health
 from tools.databricks.app_deployment_lease import assert_held as assert_deployment_lease_held
 from tools.databricks.app_deployment_state import (
     active_deployment_id as _active_deployment_id,
@@ -33,7 +35,7 @@ from tools.databricks.app_deployment_state import (
 from tools.databricks.app_deployment_state import (
     latest_succeeded as _latest_succeeded,
 )
-from tools.databricks.app_health_contract import authenticated_app_health
+from tools.databricks.app_health_contract import active_app_deployment_pin
 from tools.databricks.app_rollback_record_contract import (
     RECORD_VERSION,
     _load_record,
@@ -69,6 +71,38 @@ from tools.databricks.serving_endpoint_acl import (
 
 DEFAULT_SCOPE = "mip-app-rollback"
 DEPLOY_TIMEOUT = timedelta(minutes=20)
+
+
+@dataclass(frozen=True)
+class SignedLastGoodAppContract:
+    deployment_id: str
+    deployment_lease_id: str
+    git_sha: str
+    gateway_binding_sha256: str | None
+
+
+def _verify_health(
+    workspace: Any,
+    *,
+    app_name: str,
+    base_url: str,
+    bearer_token: str,
+    git_sha: str,
+    gateway_binding: str | None,
+    deployment_lease_id: str,
+) -> None:
+    pin = active_app_deployment_pin(
+        workspace, app_name=app_name, expected_lease_id=deployment_lease_id
+    )
+    actual = _health(
+        workspace,
+        app_name=app_name,
+        base_url=base_url,
+        bearer_token=bearer_token,
+        expected_pin=pin,
+    )
+    if actual != (git_sha, gateway_binding, deployment_lease_id):
+        raise RuntimeError("App health does not match the exact last-good rollback contract")
 
 
 def _expected_lakebase_instance() -> str:
@@ -131,57 +165,6 @@ def _converge_treatment_guard(
     )
     if not existed:
         raise RuntimeError("signed App rollback requires the governed treatment table")
-
-
-def _health(
-    workspace: Any,
-    *,
-    app_name: str,
-    base_url: str,
-    bearer_token: str,
-) -> tuple[str, str | None, str]:
-    body = authenticated_app_health(
-        workspace,
-        app_name=app_name,
-        base_url=base_url,
-        bearer_token=bearer_token,
-    )
-    git_sha = str(body.get("git_sha") or "").strip()
-    binding = body.get("agent_gateway_binding_sha256")
-    lease_id = str(body.get("deployment_lease_id") or "").strip()
-    if len(git_sha) != 40:
-        raise RuntimeError("App health did not expose an exact deployment SHA")
-    if binding is not None and (not isinstance(binding, str) or len(binding) != 64):
-        raise RuntimeError("App health exposed an invalid Gateway binding")
-    try:
-        UUID(lease_id)
-    except ValueError as exc:
-        raise RuntimeError("App health did not expose a valid deployment lease") from exc
-    return git_sha, binding, lease_id
-
-
-def _verify_health(
-    workspace: Any,
-    *,
-    app_name: str,
-    base_url: str,
-    bearer_token: str,
-    git_sha: str,
-    gateway_binding: str | None,
-    deployment_lease_id: str,
-) -> None:
-    actual_sha, actual_binding, actual_lease_id = _health(
-        workspace,
-        app_name=app_name,
-        base_url=base_url,
-        bearer_token=bearer_token,
-    )
-    if (
-        actual_sha != git_sha
-        or actual_binding != gateway_binding
-        or actual_lease_id != deployment_lease_id
-    ):
-        raise RuntimeError("App health does not match the exact last-good rollback contract")
 
 
 def _ensure_started(workspace: Any, *, app_name: str) -> None:
@@ -319,6 +302,30 @@ def _rollback_gateway_endpoint(record: dict[str, Any]) -> str:
     if not endpoint or (metadata_endpoint and metadata_endpoint != endpoint):
         raise RuntimeError("signed App rollback payload has no Gateway endpoint")
     return endpoint
+
+
+def verified_signed_last_good_contract(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+) -> SignedLastGoodAppContract:
+    """Read and verify the durable last-good contract without mutating state."""
+
+    record = _load_record(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        expected_lakebase_instance=_expected_lakebase_instance(),
+    )
+    _assert_record_app_identity(workspace, app_name=app_name, record=record)
+    _stored_resource_proof(workspace, record=record)
+    return SignedLastGoodAppContract(
+        deployment_id=record["deployment_id"],
+        deployment_lease_id=_payload_deployment_lease_id(record["payload"]),
+        git_sha=record["git_sha"],
+        gateway_binding_sha256=record["gateway_binding_sha256"],
+    )
 
 
 def _app_principal(workspace: Any, *, app_name: str) -> str:
@@ -531,11 +538,17 @@ def capture_current(
         UUID(expected_deployment_lease_id)
     except ValueError as exc:
         raise RuntimeError("capture requires a valid deployment lease") from exc
+    candidate_pin = active_app_deployment_pin(
+        workspace,
+        app_name=app_name,
+        expected_lease_id=expected_deployment_lease_id,
+    )
     actual_sha, actual_binding, actual_lease_id = _health(
         workspace,
         app_name=app_name,
         base_url=base_url,
         bearer_token=bearer_token,
+        expected_pin=candidate_pin,
     )
     if (
         actual_sha != expected_git_sha
@@ -559,6 +572,8 @@ def capture_current(
         getattr(latest, "deployment_id", None)
     ):
         raise RuntimeError("latest succeeded App deployment is not the exact active deployment")
+    if candidate_pin.deployment_id != _text(getattr(latest, "deployment_id", None)):
+        raise RuntimeError("health proof did not pin the latest succeeded App deployment")
     resource_proof = _payload_resource_proof(
         workspace,
         payload=candidate,
@@ -644,6 +659,7 @@ def capture_current(
             app_name=app_name,
             base_url=base_url,
             bearer_token=bearer_token,
+            expected_pin=candidate_pin,
         )
         if (post_sha, post_binding, post_lease_id) != (
             expected_git_sha,
@@ -651,6 +667,8 @@ def capture_current(
             expected_deployment_lease_id,
         ):
             raise RuntimeError("App health contract drifted after treatment activation")
+        if _active_deployment_id(workspace, app_name=app_name) != expected_deployment_id:
+            raise RuntimeError("App active deployment changed during post-treatment proof")
         assert_deployment_lease_held(
             workspace,
             app_name=app_name,

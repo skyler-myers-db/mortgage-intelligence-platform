@@ -1,21 +1,27 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from threading import Thread
 
 import pytest
 
 from tools.cleanup_live_campaign_fixtures import (
     _archive_campaign,
+    _http_request,
     cleanup_live_campaign_fixtures,
     run_scoped_campaign_name,
 )
 
 
 def test_run_scoped_name_is_exact_and_public_contract_bounded() -> None:
-    assert run_scoped_campaign_name(
-        "Live campaign audit contract",
-        marker="ghabcdearf",
-    ) == "Live campaign audit contract ghabcdearf"
+    assert (
+        run_scoped_campaign_name(
+            "Live campaign audit contract",
+            marker="ghabcdearf",
+        )
+        == "Live campaign audit contract ghabcdearf"
+    )
     with pytest.raises(RuntimeError, match="marker or label"):
         run_scoped_campaign_name("Customer campaign", marker="ghabcdearf")
     with pytest.raises(RuntimeError, match="marker or label"):
@@ -69,11 +75,7 @@ def test_cleanup_archives_only_exact_marked_run_and_proves_three_absences() -> N
             assert method == "GET" and token == "owner-token"
             active_inventory_reads += 1
             return 200, {
-                "campaigns": [
-                    deepcopy(row)
-                    for row in rows.values()
-                    if row["status"] != "archived"
-                ]
+                "campaigns": [deepcopy(row) for row in rows.values() if row["status"] != "archived"]
             }
         campaign_id = path.rsplit("/", 1)[-1]
         assert token == "admin-token"
@@ -127,9 +129,7 @@ def test_cleanup_recovers_only_exact_run_marked_genie_draft() -> None:
         if path == "/api/campaigns?limit=200":
             assert token == "dedicated-owner-token"
             return 200, {
-                "campaigns": [
-                    deepcopy(row) for row in rows.values() if row["status"] != "archived"
-                ]
+                "campaigns": [deepcopy(row) for row in rows.values() if row["status"] != "archived"]
             }
         campaign_id = path.rsplit("/", 1)[-1]
         assert token == "admin-token"
@@ -228,6 +228,96 @@ def test_cleanup_rejects_truncated_inventory_without_absence_claim() -> None:
             run_marker=None,
             sleep=lambda _seconds: None,
         )
+
+
+def test_cleanup_does_not_reflect_untrusted_inventory_body() -> None:
+    reflected_secret = "cleanup-owner-bearer-reflected-by-app"
+
+    with pytest.raises(RuntimeError) as exc:
+        cleanup_live_campaign_fixtures(
+            lambda *_args, **_kwargs: (503, {"detail": reflected_secret}),
+            owner_token=reflected_secret,
+            admin_token="admin-token",
+            run_marker=None,
+            sleep=lambda _seconds: None,
+        )
+
+    assert reflected_secret not in str(exc.value)
+
+
+def test_archive_does_not_reflect_untrusted_campaign_fields() -> None:
+    reflected_secret = "cleanup-admin-bearer-reflected-by-app"
+
+    with pytest.raises(RuntimeError) as exc:
+        _archive_campaign(
+            lambda *_args, **_kwargs: (503, {"detail": reflected_secret}),
+            campaign_id=reflected_secret,
+            admin_token=reflected_secret,
+            attempts=1,
+            sleep=lambda _seconds: None,
+        )
+
+    assert reflected_secret not in str(exc.value)
+
+
+def test_http_request_never_follows_same_or_cross_origin_redirects() -> None:
+    class CaptureHandler(BaseHTTPRequestHandler):
+        requests: list[tuple[str, str | None]] = []
+
+        def do_GET(self) -> None:
+            self.__class__.requests.append((self.path, self.headers.get("Authorization")))
+            self.send_response(200)
+            self.end_headers()
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    class RedirectHandler(BaseHTTPRequestHandler):
+        redirect_target = ""
+        requests: list[tuple[str, str | None]] = []
+
+        def do_GET(self) -> None:
+            self.__class__.requests.append((self.path, self.headers.get("Authorization")))
+            if self.path == "/capture":
+                self.send_response(200)
+            else:
+                self.send_response(302)
+                self.send_header("Location", self.__class__.redirect_target)
+            self.end_headers()
+
+        def log_message(self, _format: str, *_args: object) -> None:
+            return
+
+    capture = ThreadingHTTPServer(("127.0.0.1", 0), CaptureHandler)
+    redirect = ThreadingHTTPServer(("127.0.0.1", 0), RedirectHandler)
+    threads = [Thread(target=server.serve_forever, daemon=True) for server in (capture, redirect)]
+    for thread in threads:
+        thread.start()
+    try:
+        base_url = f"http://127.0.0.1:{redirect.server_port}"
+        request = _http_request(base_url)
+        bearer = "redirect-sensitive-bearer"
+
+        RedirectHandler.redirect_target = (
+            f"http://127.0.0.1:{capture.server_port}/cross-origin-capture"
+        )
+        cross_status, _ = request("GET", "/inventory-cross", token=bearer)
+
+        RedirectHandler.redirect_target = "/capture"
+        same_status, _ = request("GET", "/inventory-same", token=bearer)
+    finally:
+        for server in (redirect, capture):
+            server.shutdown()
+            server.server_close()
+        for thread in threads:
+            thread.join(timeout=5)
+
+    assert cross_status == same_status == 302
+    assert CaptureHandler.requests == []
+    assert RedirectHandler.requests == [
+        ("/inventory-cross", f"Bearer {bearer}"),
+        ("/inventory-same", f"Bearer {bearer}"),
+    ]
 
 
 def test_archive_accepts_scalar_success_on_final_attempt_only_after_get() -> None:

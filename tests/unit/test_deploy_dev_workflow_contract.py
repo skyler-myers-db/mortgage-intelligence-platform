@@ -1202,9 +1202,8 @@ def test_every_app_rollback_gets_bounded_signing_and_account_authority() -> None
 
     assert len(bounded) == script.count(command)
     assert (
-        'run_with_account_identity \\\n'
-        '    run_with_proof_signing_authority "$PYTHON" "${args[@]}"'
-        in capture
+        "run_with_account_identity \\\n"
+        '    run_with_proof_signing_authority "$PYTHON" "${args[@]}"' in capture
     )
     assert "tools.databricks.app_deployment_rollback capture" in capture
 
@@ -1343,7 +1342,7 @@ def test_dynamic_app_identity_separation_is_casefolded_before_recovery(
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     existing_identity = script.index("_EXISTING_APP_SP_CLIENT_ID _EXISTING_APP_SP_SCIM_ID")
     existing_guard = script.index(
-        'if same_identity_casefold \\\n'
+        "if same_identity_casefold \\\n"
         '      "$DATABRICKS_ACCOUNT_CLIENT_ID" "$_EXISTING_APP_SP_CLIENT_ID"',
         existing_identity,
     )
@@ -1359,8 +1358,7 @@ def test_dynamic_app_identity_separation_is_casefolded_before_recovery(
 
     app_resolution = script.index('APP_RESOURCE_JSON="$(databricks apps get')
     new_guard = script.index(
-        'if same_identity_casefold \\\n'
-        '    "$DATABRICKS_ACCOUNT_CLIENT_ID" "$APP_SP_CLIENT_ID"',
+        "if same_identity_casefold \\\n" '    "$DATABRICKS_ACCOUNT_CLIENT_ID" "$APP_SP_CLIENT_ID"',
         app_resolution,
     )
     migration = script.index(
@@ -2033,6 +2031,12 @@ def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> N
     assert "-m tools.verify_deployed_app_contract" in script[activate:retire]
     assert '--deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:' in script[activate:retire]
     assert "-m tools.verify_app_agent_green_path" in script[activate:retire]
+    green_probe = script[
+        script.index("-m tools.verify_app_agent_green_path", activate) : script.index(
+            "read independent governed fn_build_cohort expectation", activate
+        )
+    ]
+    assert '--deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:' in green_probe
     assert "tools.databricks.verify_hosted_agent_tool_execution" in script[activate:retire]
     assert script.index("read independent governed fn_build_cohort expectation") < retire
     assert script.index("tools.databricks.verify_ai_gateway_exact_proof") < retire

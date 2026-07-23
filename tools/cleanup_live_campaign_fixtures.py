@@ -33,13 +33,24 @@ _ABSENCE_OBSERVATIONS = 3
 _INVENTORY_LIMIT = 200
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        _request: urllib.request.Request,
+        _file_pointer: object,
+        _code: int,
+        _message: str,
+        _headers: object,
+        _new_url: str,
+    ) -> None:
+        return None
+
+
 def run_scoped_campaign_name(label: str, *, marker: str | None = None) -> str:
     """Bind a durable live fixture to one discoverable GitHub run attempt."""
 
     run_marker = (
-        marker
-        if marker is not None
-        else os.environ.get("MIP_LIVE_CAMPAIGN_RUN_MARKER", "").strip()
+        marker if marker is not None else os.environ.get("MIP_LIVE_CAMPAIGN_RUN_MARKER", "").strip()
     )
     if label not in CAMPAIGN_FIXTURE_LABELS or not RUN_MARKER_RE.fullmatch(run_marker):
         raise RuntimeError("live campaign fixture run marker or label is invalid")
@@ -63,7 +74,7 @@ def _archive_campaign(
     retry_interval_seconds: float = _LEASE_RECOVERY_INTERVAL_SECONDS,
     sleep: Callable[[float], None] = time.sleep,
 ) -> None:
-    last_result: object = None
+    last_result = "no response"
     for attempt in range(attempts):
         try:
             status, campaign = request(
@@ -71,12 +82,12 @@ def _archive_campaign(
                 f"/api/campaigns/{campaign_id}",
                 token=admin_token,
             )
-        except Exception as exc:  # noqa: BLE001 - bounded transport reconciliation
-            last_result = f"{type(exc).__name__}: {exc}"
+        except Exception:  # noqa: BLE001 - bounded transport reconciliation
+            last_result = "GET transport failure"
             if attempt + 1 < attempts:
                 sleep(retry_interval_seconds)
             continue
-        last_result = (status, campaign)
+        last_result = f"GET HTTP {status}"
         if status != 200 or not isinstance(campaign, dict):
             if attempt + 1 < attempts:
                 sleep(retry_interval_seconds)
@@ -100,10 +111,10 @@ def _archive_campaign(
                 },
                 token=admin_token,
             )
-        except Exception as exc:  # noqa: BLE001 - next GET resolves commit ambiguity
-            last_result = f"{type(exc).__name__}: {exc}"
+        except Exception:  # noqa: BLE001 - next GET resolves commit ambiguity
+            last_result = "PATCH transport failure"
         else:
-            last_result = (patch_status, patched)
+            last_result = f"PATCH HTTP {patch_status}"
         if patch_status is not None and patch_status not in {200, 409, 429} and patch_status < 500:
             break
         # PATCH transport loss and retryable HTTP results are ambiguous: the
@@ -115,10 +126,10 @@ def _archive_campaign(
                 f"/api/campaigns/{campaign_id}",
                 token=admin_token,
             )
-        except Exception as exc:  # noqa: BLE001 - bounded observation retry
-            last_result = f"{type(exc).__name__}: {exc}"
+        except Exception:  # noqa: BLE001 - bounded observation retry
+            last_result = "final GET transport failure"
         else:
-            last_result = (final_status, final_campaign)
+            last_result = f"final GET HTTP {final_status}"
             if (
                 final_status == 200
                 and isinstance(final_campaign, dict)
@@ -127,7 +138,7 @@ def _archive_campaign(
                 return
         if attempt + 1 < attempts:
             sleep(retry_interval_seconds)
-    raise RuntimeError(f"live campaign {campaign_id} could not be archived: {last_result!r}")
+    raise RuntimeError(f"marked live campaign could not be archived: {last_result}")
 
 
 def cleanup_live_campaign_fixtures(
@@ -158,7 +169,7 @@ def cleanup_live_campaign_fixtures(
             token=owner_token,
         )
         if status != 200 or not isinstance(body, dict):
-            raise RuntimeError(f"live campaign inventory failed: {(status, body)!r}")
+            raise RuntimeError(f"live campaign inventory failed with HTTP {status}")
         campaigns = body.get("campaigns")
         if not isinstance(campaigns, list):
             raise RuntimeError("live campaign inventory response is malformed")
@@ -198,6 +209,8 @@ def cleanup_live_campaign_fixtures(
 
 
 def _http_request(base_url: str) -> Request:
+    opener = urllib.request.build_opener(_NoRedirectHandler())
+
     def request(
         method: str,
         path: str,
@@ -216,7 +229,7 @@ def _http_request(base_url: str) -> Request:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=90) as response:  # noqa: S310
+            with opener.open(req, timeout=90) as response:
                 raw = response.read().decode("utf-8")
                 return int(response.status), json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:

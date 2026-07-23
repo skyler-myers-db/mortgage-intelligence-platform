@@ -128,6 +128,7 @@ def test_live_validation_proves_source_bound_app_before_expensive_mutations() ->
     assert "python -m tools.verify_deployed_app_contract" in app_proof_block
     assert '--git-sha "$GITHUB_SHA"' in app_proof_block
     assert "MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" in app_proof_block
+    assert '--rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"' in app_proof_block
 
 
 def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
@@ -136,6 +137,9 @@ def test_live_validation_ignores_historical_gateway_resource_secrets() -> None:
     assert "secrets.MIP_AI_GATEWAY_ENDPOINT" not in text
     assert "secrets.MIP_AI_GATEWAY_INFERENCE_TABLE" not in text
     assert "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY" not in text
+    assert (
+        "MIP_AI_GATEWAY_PROOF_VERIFY_KEY: " "${{ vars.MIP_AI_GATEWAY_PROOF_VERIFY_KEY }}"
+    ) in text
     assert text.count("vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") == 2
     assert text.count("-m tools.databricks.export_gateway_runtime_contract") == 2
 
@@ -186,6 +190,16 @@ def test_live_browser_rechecks_exact_contract_before_live_mutations() -> None:
     assert "python -m tools.verify_deployed_app_contract" in recheck_block
     assert "--token-env MIP_NON_ADMIN_BEARER_TOKEN" in recheck_block
     assert '--git-sha "$GITHUB_SHA"' in recheck_block
+    assert '--rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"' in recheck_block
+    assert "DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}" in recheck_block
+    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in recheck_block
+
+
+def test_live_browser_smoke_never_logs_untrusted_response_bodies() -> None:
+    block = _workflow_run_block("Authenticated non-admin smoke (M2M)")
+
+    assert "body=" not in block
+    assert "session!r" not in block
 
 
 def test_live_validation_refresh_steps_use_real_dev_bundle_profile() -> None:
@@ -341,7 +355,7 @@ def test_live_genie_campaign_action_archives_the_exact_created_campaign() -> Non
     assert "reconcileGenieCampaignAction(page.request, {" in action_block
     assert "archiveLiveCampaign(page.request, {" in action_block
     assert "expectedName: `Genie strategy draft ${LIVE_CAMPAIGN_RUN_MARKER}`" in action_block
-    assert 'AUTH_HEADERS[\'X-MIP-Live-Campaign-Run-Marker\']' in spec
+    assert "AUTH_HEADERS['X-MIP-Live-Campaign-Run-Marker']" in spec
     assert "response lost" in proof_test
     assert "response(503" in proof_test
     assert "truncated response" in proof_test
@@ -555,8 +569,7 @@ def test_live_campaign_fixtures_are_run_bound_and_recovered_after_cancellation()
     assert "if: always()" in cleanup_block
     assert "DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}" in cleanup_block
     assert (
-        "DATABRICKS_ADMIN_CLIENT_SECRET: "
-        "${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}"
+        "DATABRICKS_ADMIN_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ADMIN_CLIENT_SECRET }}"
     ) in cleanup_block
     assert cleanup_block.count("tools/oauth_m2m_mint.py") == 2
     assert "tools.cleanup_live_campaign_fixtures" in cleanup_block

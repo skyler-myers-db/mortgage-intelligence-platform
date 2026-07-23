@@ -119,10 +119,7 @@ def mint_token(
         _diag(f"ERROR databricks-sdk not importable: {exc}")
         sys.exit(4)
 
-    _diag(
-        f"minting M2M token for host={env[host_env]} "
-        f"client_id_env={client_id_env}"
-    )
+    _diag(f"minting M2M token for host={env[host_env]} " f"client_id_env={client_id_env}")
 
     try:
         cfg = Config(
@@ -143,10 +140,7 @@ def mint_token(
 
     auth = headers.get("Authorization", "")
     if not auth.startswith("Bearer "):
-        _diag(
-            "ERROR authenticate() returned no Bearer header; "
-            f"keys={list(headers.keys())}"
-        )
+        _diag("ERROR authenticate() returned no Bearer header; " f"keys={list(headers.keys())}")
         sys.exit(3)
 
     token = auth.removeprefix("Bearer ").strip()
@@ -154,14 +148,14 @@ def mint_token(
         _diag("ERROR Bearer header was present but empty")
         sys.exit(3)
 
-    _diag(
-        f"ok token_len={len(token)} auth_type={getattr(cfg, 'auth_type', 'unknown')}"
-    )
+    _diag(f"ok token_len={len(token)} auth_type={getattr(cfg, 'auth_type', 'unknown')}")
     return token
 
 
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Mint a short-lived M2M bearer without logging it.")
+    parser = argparse.ArgumentParser(
+        description="Mint a short-lived M2M bearer without logging it."
+    )
     parser.add_argument("--host-env", default="DATABRICKS_HOST")
     parser.add_argument("--client-id-env", default="DATABRICKS_CLIENT_ID")
     parser.add_argument("--client-secret-env", default="DATABRICKS_CLIENT_SECRET")
@@ -176,7 +170,11 @@ def _parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _write_output(token: str, *, github_env_names: list[str] | None, output_file: Path | None) -> None:
+def _write_output(
+    token: str, *, github_env_names: list[str] | None, output_file: Path | None
+) -> None:
+    if os.environ.get("GITHUB_ACTIONS", "").strip().lower() == "true":
+        print(f"::add-mask::{token}", flush=True)
     if github_env_names:
         github_env_path = os.environ.get("GITHUB_ENV", "").strip()
         if not github_env_path:

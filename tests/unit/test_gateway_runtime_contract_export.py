@@ -940,6 +940,35 @@ def _deployed_app_workspace(*lease_ids: str) -> object:
     return SimpleNamespace(apps=_Apps())
 
 
+def _redacted_deployed_app_workspace() -> object:
+    deployment_id = "deployment-green"
+    deployment = SimpleNamespace(
+        deployment_id=deployment_id,
+        env_vars=[
+            SimpleNamespace(
+                name="MIP_APP_DEPLOYMENT_LEASE_ID",
+                value=None,
+                value_from=None,
+            )
+        ],
+    )
+
+    class _Apps:
+        def get(self, app_name: str) -> object:
+            assert app_name == "mip-app"
+            return SimpleNamespace(
+                url="https://mip-app.example",
+                active_deployment=SimpleNamespace(deployment_id=deployment_id),
+            )
+
+        def get_deployment(self, app_name: str, actual_deployment_id: str) -> object:
+            assert app_name == "mip-app"
+            assert actual_deployment_id == deployment_id
+            return deployment
+
+    return SimpleNamespace(apps=_Apps())
+
+
 def test_verify_deployed_contract_uses_authenticated_health() -> None:
     captured: dict[str, object] = {}
 
@@ -962,10 +991,148 @@ def test_verify_deployed_contract_uses_authenticated_health() -> None:
     assert captured["headers"]["Authorization"] == "Bearer short-lived-bearer"
 
 
+def test_verify_deployed_contract_validates_health_uuid_when_control_plane_redacts() -> None:
+    deployed_contract.verify(
+        workspace=_redacted_deployed_app_workspace(),
+        app_name="mip-app",
+        base_url="https://mip-app.example",
+        bearer_token="short-lived-bearer",
+        git_sha="abc123",
+        gateway_binding_sha256="binding-123",
+        client=SimpleNamespace(
+            get=lambda *_args, **_kwargs: _health_response(lease_id=_DEPLOYMENT_LEASE_ID)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="valid UUID"):
+        deployed_contract.verify(
+            workspace=_redacted_deployed_app_workspace(),
+            app_name="mip-app",
+            base_url="https://mip-app.example",
+            bearer_token="short-lived-bearer",
+            git_sha="abc123",
+            gateway_binding_sha256="binding-123",
+            client=SimpleNamespace(
+                get=lambda *_args, **_kwargs: _health_response(lease_id="attacker")
+            ),
+        )
+
+
+def test_verify_deployed_contract_retries_transient_health_on_same_deployment(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    responses = [
+        SimpleNamespace(status_code=502),
+        _health_response(),
+    ]
+    calls = 0
+    now = [0.0]
+
+    def get(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return responses.pop(0)
+
+    deployed_contract.verify(
+        workspace=_deployed_app_workspace(_DEPLOYMENT_LEASE_ID),
+        app_name="mip-app",
+        base_url="https://mip-app.example",
+        bearer_token="short-lived-bearer",
+        git_sha="abc123",
+        gateway_binding_sha256="binding-123",
+        expected_deployment_lease_id=_DEPLOYMENT_LEASE_ID,
+        client=SimpleNamespace(get=get),
+        health_timeout_s=10,
+        health_interval_s=1,
+        sleep=lambda delay: now.__setitem__(0, now[0] + delay),
+        monotonic=lambda: now[0],
+    )
+
+    assert calls == 2
+    assert now == [1.0]
+    stderr = capsys.readouterr().err
+    assert "HTTP 502" in stderr
+    assert "short-lived-bearer" not in stderr
+
+
+def test_verify_deployed_contract_rejects_deployment_drift_before_retry() -> None:
+    lease_id = _DEPLOYMENT_LEASE_ID
+
+    class _Apps:
+        active_id = "deployment-green"
+
+        def get(self, _app_name: str) -> object:
+            return SimpleNamespace(
+                url="https://mip-app.example",
+                active_deployment=SimpleNamespace(deployment_id=self.active_id),
+            )
+
+        def get_deployment(self, _app_name: str, deployment_id: str) -> object:
+            return SimpleNamespace(
+                deployment_id=deployment_id,
+                env_vars=[
+                    SimpleNamespace(
+                        name="MIP_APP_DEPLOYMENT_LEASE_ID",
+                        value=lease_id,
+                        value_from=None,
+                    )
+                ],
+            )
+
+    apps = _Apps()
+    workspace = SimpleNamespace(apps=apps)
+    sleeps: list[float] = []
+
+    def get(*_args: object, **_kwargs: object) -> object:
+        apps.active_id = "deployment-other"
+        return SimpleNamespace(status_code=502)
+
+    with pytest.raises(RuntimeError, match="changed during proof"):
+        deployed_contract.verify(
+            workspace=workspace,
+            app_name="mip-app",
+            base_url="https://mip-app.example",
+            bearer_token="short-lived-bearer",
+            git_sha="abc123",
+            gateway_binding_sha256="binding-123",
+            expected_deployment_lease_id=lease_id,
+            client=SimpleNamespace(get=get),
+            health_timeout_s=10,
+            health_interval_s=1,
+            sleep=sleeps.append,
+        )
+
+    assert sleeps == []
+
+
+def test_verify_deployed_contract_rejects_signed_deployment_mismatch_before_http() -> None:
+    calls = 0
+
+    def get(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return _health_response()
+
+    with pytest.raises(RuntimeError, match="signed deployment contract"):
+        deployed_contract.verify(
+            workspace=_deployed_app_workspace(_DEPLOYMENT_LEASE_ID),
+            app_name="mip-app",
+            base_url="https://mip-app.example",
+            bearer_token="short-lived-bearer",
+            git_sha="abc123",
+            gateway_binding_sha256="binding-123",
+            expected_deployment_lease_id=_DEPLOYMENT_LEASE_ID,
+            expected_deployment_id="deployment-signed-other",
+            client=SimpleNamespace(get=get),
+        )
+
+    assert calls == 0
+
+
 @pytest.mark.parametrize(
     ("payload", "message"),
     [
-        (_health_response(git_sha="wrong"), "git_sha"),
+        (_health_response(git_sha="wrong"), "git SHA"),
         (_health_response(binding="wrong"), "Gateway binding"),
     ],
     ids=["wrong-sha", "wrong-binding"],
@@ -984,6 +1151,24 @@ def test_verify_deployed_contract_rejects_health_mismatch(
             gateway_binding_sha256="binding-123",
             client=SimpleNamespace(get=lambda *_args, **_kwargs: payload),
         )
+
+
+def test_verify_deployed_contract_does_not_reflect_untrusted_health_fields() -> None:
+    reflected_secret = "runtime-bearer-reflected-by-compromised-app"
+    with pytest.raises(RuntimeError) as exc:
+        deployed_contract.verify(
+            workspace=_deployed_app_workspace(_DEPLOYMENT_LEASE_ID),
+            app_name="mip-app",
+            base_url="https://mip-app.example",
+            bearer_token=reflected_secret,
+            git_sha="abc123",
+            gateway_binding_sha256="binding-123",
+            client=SimpleNamespace(
+                get=lambda *_args, **_kwargs: _health_response(git_sha=reflected_secret)
+            ),
+        )
+
+    assert reflected_secret not in str(exc.value)
 
 
 def test_verify_deployed_contract_rejects_stale_health_from_same_sha_and_binding() -> None:
@@ -1023,6 +1208,13 @@ def test_verify_deployed_contract_rejects_non_unique_active_lease_env(
 
 
 def test_verify_deployed_contract_rejects_explicit_expected_lease_mismatch() -> None:
+    calls = 0
+
+    def get(*_args: object, **_kwargs: object) -> object:
+        nonlocal calls
+        calls += 1
+        return _health_response()
+
     with pytest.raises(RuntimeError, match="expected deployment lease"):
         deployed_contract.verify(
             workspace=_deployed_app_workspace(_DEPLOYMENT_LEASE_ID),
@@ -1032,8 +1224,9 @@ def test_verify_deployed_contract_rejects_explicit_expected_lease_mismatch() -> 
             git_sha="abc123",
             gateway_binding_sha256="binding-123",
             expected_deployment_lease_id=_OTHER_DEPLOYMENT_LEASE_ID,
-            client=SimpleNamespace(get=lambda *_args, **_kwargs: _health_response()),
+            client=SimpleNamespace(get=get),
         )
+    assert calls == 0
 
 
 def test_verify_deployed_contract_cli_requires_token_env(
@@ -1056,3 +1249,50 @@ def test_verify_deployed_contract_cli_requires_token_env(
         )
 
     assert exc.value.code == 2
+
+
+def test_verify_deployed_contract_cli_binds_signed_last_good(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = object()
+    captured: dict[str, object] = {}
+    git_sha = "a" * 40
+    binding = "b" * 64
+    monkeypatch.setenv("MIP_TEST_BEARER", "short-lived-bearer")
+    monkeypatch.setattr(deployed_contract, "WorkspaceClient", lambda: workspace)
+    monkeypatch.setattr(
+        deployed_contract,
+        "verified_signed_last_good_contract",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            deployment_id="deployment-signed",
+            deployment_lease_id=_DEPLOYMENT_LEASE_ID,
+            git_sha=git_sha,
+            gateway_binding_sha256=binding,
+        ),
+    )
+    monkeypatch.setattr(
+        deployed_contract,
+        "verify",
+        lambda **kwargs: captured.update(kwargs),
+    )
+
+    assert (
+        deployed_contract.main(
+            [
+                "--base-url",
+                "https://mip-app.example",
+                "--token-env",
+                "MIP_TEST_BEARER",
+                "--git-sha",
+                git_sha,
+                "--gateway-binding-sha256",
+                binding,
+                "--rollback-scope",
+                "mip-app-rollback",
+            ]
+        )
+        == 0
+    )
+    assert captured["workspace"] is workspace
+    assert captured["expected_deployment_id"] == "deployment-signed"
+    assert captured["expected_deployment_lease_id"] == _DEPLOYMENT_LEASE_ID

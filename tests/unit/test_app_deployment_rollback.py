@@ -14,7 +14,9 @@ from backend.agents.gateway_contract import (
     gateway_runtime_binding_hash,
 )
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
+from tools.databricks import app_deployment_health as deployment_health
 from tools.databricks import app_deployment_rollback as rollback
+from tools.databricks.app_health_contract import ActiveAppDeploymentPin
 from tools.databricks.app_rollback_resource_contract import reviewed_app_resource_contract
 from tools.databricks.supervisor_agent_contract import (
     canonical_supervisor_contract_json,
@@ -202,6 +204,18 @@ class _Apps:
     def list_deployments(self, _app_name: str) -> list[object]:
         return self.deployments
 
+    def get_deployment(self, _app_name: str, deployment_id: str) -> object:
+        return SimpleNamespace(
+            deployment_id=deployment_id,
+            env_vars=[
+                SimpleNamespace(
+                    name="MIP_APP_DEPLOYMENT_LEASE_ID",
+                    value=None,
+                    value_from=None,
+                )
+            ],
+        )
+
     def get(self, _app_name: str) -> object:
         return SimpleNamespace(
             compute_status=SimpleNamespace(state="RUNNING"),
@@ -246,6 +260,66 @@ def _record(workspace: Any) -> dict[str, Any]:
     return json.loads(raw)
 
 
+def test_health_uses_bounded_authenticated_readiness_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, object] = {}
+
+    def wait(*_args: object, **kwargs: object) -> dict[str, object]:
+        captured.update(kwargs)
+        return {
+            "git_sha": GIT_SHA,
+            "agent_gateway_binding_sha256": _binding(),
+            "deployment_lease_id": LEASE_ID,
+        }
+
+    monkeypatch.setattr(deployment_health, "wait_for_authenticated_app_health", wait)
+
+    assert rollback._health(
+        _workspace(),
+        app_name=APP_NAME,
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_pin=ActiveAppDeploymentPin(
+            deployment_id="deployment-blue",
+            lease_id=LEASE_ID,
+        ),
+    ) == (GIT_SHA, _binding(), LEASE_ID)
+    assert captured["timeout_s"] == deployment_health.APP_HEALTH_READY_TIMEOUT_S
+    assert captured["interval_s"] == deployment_health.APP_HEALTH_READY_INTERVAL_S
+    assert captured["bearer_token"] == "token"
+    assert callable(captured["assert_pinned"])
+
+
+def test_health_rejects_active_deployment_drift_during_readiness_wait(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    expected_pin = ActiveAppDeploymentPin(
+        deployment_id="deployment-blue",
+        lease_id=LEASE_ID,
+    )
+
+    def wait(*_args: object, **kwargs: object) -> dict[str, object]:
+        assert_pinned = kwargs["assert_pinned"]
+        assert callable(assert_pinned)
+        assert_pinned()
+        workspace.apps.active_deployment = _deployment("deployment-other")
+        assert_pinned()
+        raise AssertionError("pin drift must fail before returning health")
+
+    monkeypatch.setattr(deployment_health, "wait_for_authenticated_app_health", wait)
+
+    with pytest.raises(RuntimeError, match="changed during proof"):
+        rollback._health(
+            workspace,
+            app_name=APP_NAME,
+            base_url="https://mip.example",
+            bearer_token="token",
+            expected_pin=expected_pin,
+        )
+
+
 def test_capture_persists_exact_immutable_last_good_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -277,6 +351,45 @@ def test_capture_persists_exact_immutable_last_good_contract(
     }
     assert record["app_resources"] == APP_RESOURCES
     assert record["payload_sha256"] == rollback._payload_digest(record["payload"])
+
+
+def test_verified_signed_last_good_contract_is_read_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(
+        rollback,
+        "_health",
+        lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID),
+    )
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    before = dict(workspace.secrets.values)
+    resource_updates = workspace.apps.resource_updates
+    starts = workspace.apps.started
+
+    contract = rollback.verified_signed_last_good_contract(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+    )
+
+    assert contract.deployment_id == "deployment-blue"
+    assert contract.deployment_lease_id == LEASE_ID
+    assert contract.git_sha == GIT_SHA
+    assert contract.gateway_binding_sha256 == _binding()
+    assert workspace.secrets.values == before
+    assert workspace.apps.resource_updates == resource_updates
+    assert workspace.apps.started == starts
 
 
 def test_capture_rejects_payload_that_does_not_bind_observed_gateway(
@@ -465,6 +578,43 @@ def test_capture_requiesces_treatment_when_durable_persistence_fails(
         )
 
     assert modes == ["quiesce"]
+
+
+def test_capture_requiesces_when_deployment_drifts_after_treatment_health(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    modes: list[str] = []
+    health_calls = 0
+
+    def health(*_args: object, **_kwargs: object) -> tuple[str, str, str]:
+        nonlocal health_calls
+        health_calls += 1
+        if health_calls == 2:
+            workspace.apps.active_deployment = _deployment("deployment-other")
+        return GIT_SHA, _binding(), LEASE_ID
+
+    monkeypatch.setattr(rollback, "_health", health)
+    monkeypatch.setattr(
+        rollback,
+        "converge_campaign_treatment_access",
+        lambda **kwargs: modes.append(str(kwargs["mode"])) or True,
+    )
+
+    with pytest.raises(RuntimeError, match="post-treatment proof"):
+        rollback.capture_current(
+            workspace,
+            app_name=APP_NAME,
+            scope="mip",
+            payload=_payload(),
+            base_url="https://mip.example",
+            bearer_token="token",
+            expected_git_sha=GIT_SHA,
+            expected_gateway_binding=_binding(),
+            **CAPTURE_ARGS,
+        )
+
+    assert modes == ["quiesce", "runtime", "quiesce"]
 
 
 def test_capture_persists_proof_before_treatment_activation(

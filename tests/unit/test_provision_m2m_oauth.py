@@ -635,8 +635,10 @@ def test_verifier_grant_options_are_rejected_for_other_roles(option: str) -> Non
 
 def test_mint_output_file_is_mode_0600_and_secret_free_on_console(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.delenv("GITHUB_ACTIONS", raising=False)
     output = tmp_path / "bearer"
     mint._write_output("short-lived-secret", github_env_names=None, output_file=output)
 
@@ -649,9 +651,11 @@ def test_mint_output_file_is_mode_0600_and_secret_free_on_console(
 def test_mint_can_write_same_token_to_multiple_github_env_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     github_env = tmp_path / "github-env"
     monkeypatch.setenv("GITHUB_ENV", str(github_env))
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
 
     mint._write_output(
         "short-lived-secret",
@@ -663,6 +667,21 @@ def test_mint_can_write_same_token_to_multiple_github_env_names(
         "MIP_BEARER_TOKEN=short-lived-secret",
         "MIP_NON_ADMIN_BEARER_TOKEN=short-lived-secret",
     ]
+    assert capsys.readouterr().out == "::add-mask::short-lived-secret\n"
+
+
+def test_mint_masks_output_file_token_in_github_actions(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    output = tmp_path / "bearer"
+
+    mint._write_output("cleanup-secret", github_env_names=None, output_file=output)
+
+    assert output.read_text(encoding="utf-8") == "cleanup-secret\n"
+    assert capsys.readouterr().out == "::add-mask::cleanup-secret\n"
 
 
 def test_normal_happy_path_creates_grants_mints_and_uses_role_owned_secret_names() -> None:

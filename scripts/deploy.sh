@@ -3729,7 +3729,8 @@ PYEOF
       --base-url "$MIP_APP_URL" \
       --app-name "$APP_NAME" \
       --token-env MIP_BEARER_TOKEN \
-      --expected-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+      --expected-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+      --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
     step "read independent governed fn_build_cohort expectation before cutover"
     AGENT_TOOL_EXPECTED_COUNT="$(
       "$PYTHON" -m tools.databricks.read_agent_tool_probe_expectation \

@@ -66,6 +66,7 @@ env:
   MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
   MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
   MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
+  MIP_AI_GATEWAY_PROOF_VERIFY_KEY: ${{ vars.MIP_AI_GATEWAY_PROOF_VERIFY_KEY }}
 
 permissions:
   contents: read
@@ -185,7 +186,8 @@ jobs:
             --base-url "$APP_URL" \
             --token-env DATABRICKS_TOKEN \
             --git-sha "$GITHUB_SHA" \
-            --gateway-binding-sha256 "$MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256"
+            --gateway-binding-sha256 "$MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" \
+            --rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"
       - name: Refresh live FRED market rates before validation
         # The parity gate compares gold borrower scoring against the latest
         # reviewed FRED MORTGAGE30US row. FRED publishes independently of repo
@@ -644,7 +646,7 @@ jobs:
               }:
                   failed.append(
                       f"{label} session: expected non-admin approver, "
-                      f"got status={session_status} body={session!r}"
+                      f"got status={session_status}"
                   )
               for path, expected in checks.items():
                   actual = status(path, token=token)
@@ -661,7 +663,7 @@ jobs:
           }:
               failed.append(
                   "admin session: expected admin approver, "
-                  f"got status={admin_status} body={admin_session!r}"
+                  f"got status={admin_status}"
               )
           verifier_status = status(
               "/api/session",
@@ -675,12 +677,16 @@ jobs:
               raise SystemExit("; ".join(failed))
           PY
       - name: Recheck deployed commit and Gateway binding with the browser identity
+        env:
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
         run: |
           python -m tools.verify_deployed_app_contract \
             --base-url "$MIP_APP_URL" \
             --token-env MIP_NON_ADMIN_BEARER_TOKEN \
             --git-sha "$GITHUB_SHA" \
-            --gateway-binding-sha256 "$MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256"
+            --gateway-binding-sha256 "$MIP_EXPECTED_AGENT_GATEWAY_BINDING_SHA256" \
+            --rollback-scope "$MIP_APP_ROLLBACK_SECRET_SCOPE"
       - name: Low-volume deployed workflow contracts
         # Reuse this manual release workflow rather than creating another
         # schedule. These checks mutate only the dev/sandbox app and prove the
