@@ -310,16 +310,54 @@ statement execution are denied. The exact Supervisor definition/tools and
 declared MLflow resources bound into the source hash are the runtime's only
 governed data paths.
 
-The Unity Catalog postflight is a runtime-credentialed, workspace-global
-visibility inventory. It authenticates as the dedicated agent runtime (never
-as the deployer), uses `include_browse` listings plus the authoritative Grants
-`get_effective` API, and reads every response page. A direct or inherited grant
-on a non-MIP child makes that catalog/schema/object visible to the runtime and
-therefore fails the release gate even when the runtime lacks `USE CATALOG`.
-Bounded parallel catalog walks keep this exact check practical without relying
-on a deployer whose inventory may be incomplete. Registered models are listed
-globally because the Databricks SDK rejects catalog-only model listings without
-a schema.
+The Unity Catalog boundary first runs before the runtime credential can perform
+even its bounded Lakebase bootstrap mutation. On a true first install where the
+MIP catalog is not present yet, this pre-bootstrap view treats every ordinary
+catalog as foreign; after catalog creation, the repeated preflight excludes only
+the configured MIP catalog. Both require the expected workspace administrator
+to prove it directly owns the current metastore. The postflight then requires
+two independent views of the exact runtime application ID. First, that same
+administrator uses that control-plane authority to
+enumerate every ordinary foreign catalog, including unbound catalogs, and reject
+any direct or inherited catalog, child-object, or registered-model privilege.
+It separately checks the owner on every inventoried catalog, schema, table,
+function, volume, and registered model. Direct runtime ownership fails. Group
+owners are resolved by immutable workspace and account SCIM IDs, then a bounded
+temporary runtime credential reads that identity's own direct, nested, and
+dynamic group collection; cleanup failure is fatal. Ownership therefore cannot
+masquerade as an empty grants response. The exact `__databricks_internal`
+catalog is excluded only when its SDK identity remains `INTERNAL_CATALOG`,
+`System user`-owned, and `OPEN`; lookalike names or source drift fail.
+The runtime-authenticated half also treats ownership as authority: the runtime's
+application ID, immutable SCIM ID, and immutable-ID-backed effective group names
+must not own the MIP catalog, any schema, any function, any ordinary table or
+volume, or any unrelated registered model. Only the exact contract-hashed
+Gateway model and inference-table families may remain runtime-owned, and those
+must be owned directly by the application ID with matching signed provenance.
+An unbound foreign catalog also fails closed because its children cannot be
+completely inventoried from the deployment workspace. An authorization error,
+incomplete identity, unknown isolation mode, pagination error, or worker error
+likewise fails this audit; none is interpreted as zero access. The deploy then
+repeats the MIP and reviewed platform inventory while authenticated as the
+dedicated agent runtime (never as the deployer), using `include_browse` listings
+plus the authoritative Grants `get_effective` API and reading every response
+page. The two views are coupled in one process by a typed proof bound to the
+application ID, catalog, metastore, workspace, and complete foreign-catalog set;
+the exact issued object is identity-registered, snapshot-checked, and consumed
+atomically on its single runtime verification, so copies, mutation, or replay
+cannot extend its authority. Only exact ordinary foreign catalogs already
+cleared by that proof are omitted
+from the runtime's otherwise impossible grant lookup. A direct or inherited
+grant on a non-MIP child therefore fails before the runtime receives any UC
+mutation authority, while a runtime-side authorization denial cannot hide a
+grant from the metastore-owner view. Lakebase OAuth-role recovery may then use
+the same service-principal credential only for an exact runtime identity check
+and `database.get_database_instance` positive-control read; the one-use
+bootstrap principal and retained PostgreSQL backend perform the role mutation.
+That helper remains jointly bracketed by account and proof-signing authority.
+Bounded parallel catalog walks keep both exact checks practical.
+Registered models are listed globally because the Databricks SDK rejects
+catalog-only model listings without a schema.
 
 The data-plane allowlist is `USE CATALOG` on MIP, `USE SCHEMA` on `gold` and
 `audit`, `EXECUTE` on the three reviewed functions, runtime ownership of the
@@ -328,8 +366,11 @@ and the documented metastore `USE_MARKETPLACE_ASSETS` baseline. Non-MIP
 exceptions are source- and inheritance-bound: the fixed Databricks-managed
 `system` schema/function/model inventory, the `System user`-owned `samples`
 catalog, direct `account users` metadata access to each catalog's fixed
-`information_schema` table set. New system models or metadata tables fail until
-reviewed. Even metadata-only `BROWSE`, and all `SELECT`, `MODIFY`, `MANAGE`, or
+`information_schema` table set. The managed `system.data_quality_monitoring`
+family is anchored to its non-runtime schema owner and every child must retain
+that exact owner; other reviewed system and samples children remain literal
+`System user` objects. New system models or metadata tables fail until reviewed.
+Even metadata-only `BROWSE`, and all `SELECT`, `MODIFY`, `MANAGE`, or
 creation authority inherited from `account users` on an ordinary customer
 catalog, fails the gate unless added to this fixed platform inventory after
 review; an identical action granted directly to the runtime also fails because

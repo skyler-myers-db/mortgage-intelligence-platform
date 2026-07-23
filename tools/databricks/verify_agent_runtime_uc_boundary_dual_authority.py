@@ -1,0 +1,106 @@
+#!/usr/bin/env python3
+"""Verify runtime UC access with metastore-owner and runtime authority in one process."""
+
+from __future__ import annotations
+
+import argparse
+import os
+from typing import Any
+
+from backend.agents.gateway_contract import DEFAULT_GATEWAY_AGENT_EXPERIMENT
+from databricks.sdk import WorkspaceClient
+from tools.databricks.agent_runtime_uc_inventory import _text
+from tools.databricks.audit_agent_runtime_foreign_uc_access import (
+    audit_foreign_uc_access,
+)
+from tools.databricks.uc_owner_policy import account_client_from_env
+from tools.databricks.verify_agent_runtime_uc_grants import verify_effective_uc_boundary
+
+_AMBIENT_AUTH_KEYS = (
+    "DATABRICKS_ACCOUNT_CLIENT_ID",
+    "DATABRICKS_ACCOUNT_CLIENT_SECRET",
+    "DATABRICKS_ACCOUNT_HOST",
+    "DATABRICKS_ACCOUNT_ID",
+    "DATABRICKS_CONFIG_PROFILE",
+    "DATABRICKS_PASSWORD",
+    "DATABRICKS_TOKEN",
+    "DATABRICKS_USERNAME",
+)
+
+
+def _bind_runtime_auth_environment(*, admin_workspace: Any, application_id: str) -> None:
+    """Replace ambient deployer auth only after its control-plane proof passes."""
+
+    expected_id = application_id.strip()
+    configured_id = os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "").strip()
+    client_secret = os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET", "").strip()
+    host = _text(getattr(getattr(admin_workspace, "config", None), "host", None))
+    if not expected_id or configured_id != expected_id or not client_secret or not host:
+        raise RuntimeError(
+            "dual-authority UC audit lacks exact agent-runtime OAuth credentials or host"
+        )
+    for name in _AMBIENT_AUTH_KEYS:
+        os.environ.pop(name, None)
+    os.environ["DATABRICKS_HOST"] = host
+    os.environ["DATABRICKS_AUTH_TYPE"] = "oauth-m2m"
+    os.environ["DATABRICKS_CLIENT_ID"] = configured_id
+    os.environ["DATABRICKS_CLIENT_SECRET"] = client_secret
+    os.environ["MIP_DISABLE_DOTENV"] = "1"
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--application-id", required=True)
+    parser.add_argument("--expected-inventory-principal", required=True)
+    parser.add_argument("--supervisor-id", required=True)
+    parser.add_argument("--supervisor-endpoint-id", required=True)
+    parser.add_argument("--catalog", default="mip")
+    parser.add_argument("--gateway-model", required=True)
+    parser.add_argument("--gateway-model-family")
+    parser.add_argument("--gateway-experiment-base", default=DEFAULT_GATEWAY_AGENT_EXPERIMENT)
+    parser.add_argument("--genie-space-id", required=True)
+    parser.add_argument("--inference-table-prefix", required=True)
+    args = parser.parse_args(argv)
+
+    admin_workspace = WorkspaceClient()
+    account_client = account_client_from_env()
+    proof = audit_foreign_uc_access(
+        admin_workspace,
+        application_id=args.application_id,
+        catalog=args.catalog,
+        expected_inventory_principal=args.expected_inventory_principal,
+        account_factory=lambda: account_client,
+    )
+    _bind_runtime_auth_environment(
+        admin_workspace=admin_workspace,
+        application_id=args.application_id,
+    )
+    runtime_workspace = WorkspaceClient()
+    verify_effective_uc_boundary(
+        runtime_workspace,
+        application_id=args.application_id,
+        supervisor_id=args.supervisor_id,
+        supervisor_endpoint_id=args.supervisor_endpoint_id,
+        catalog=args.catalog,
+        gateway_model=args.gateway_model,
+        gateway_model_family=args.gateway_model_family,
+        gateway_experiment_base=args.gateway_experiment_base,
+        genie_space_id=args.genie_space_id,
+        inference_table_prefix=args.inference_table_prefix,
+        foreign_control_plane_proof=proof,
+    )
+    post_runtime_proof = audit_foreign_uc_access(
+        admin_workspace,
+        application_id=args.application_id,
+        catalog=args.catalog,
+        expected_inventory_principal=args.expected_inventory_principal,
+        account_factory=lambda: account_client,
+    )
+    if post_runtime_proof != proof:
+        raise RuntimeError("foreign-catalog control-plane proof changed during runtime audit")
+    print("agent-runtime dual-authority effective UC boundary: PASS")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

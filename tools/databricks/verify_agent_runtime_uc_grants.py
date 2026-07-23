@@ -27,9 +27,25 @@ from tools.databricks.agent_runtime_uc_baseline import (
     _SYSTEM_SCHEMA_PRIVILEGES,
     ALLOWED_FUNCTIONS,
     ALLOWED_METASTORE_BASELINE,
-    PrivilegeSource,
+    ControlPlaneForeignCatalogProof,
+    authoritative_workspace_id,
+    consume_issued_control_plane_foreign_catalog_proof,
+)
+from tools.databricks.agent_runtime_uc_inventory import (
+    _assert_no_catalog_child_privileges,
+    _assert_not_runtime_owned,
+    _assert_privileges,
+    _assert_system_owned,
+    _catalog_name,
+    _effective_privilege_sources,
+    _full_name,
+    _schema_name,
+    _text,
 )
 from tools.databricks.gateway_uc_model_provenance import assert_gateway_model_provenance
+
+_DATABRICKS_INTERNAL_CATALOG = "__databricks_internal"
+_PLATFORM_RUNTIME_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system"})
 
 
 def _reviewed_inference_table(name: str, *, family_prefix: str) -> bool:
@@ -44,100 +60,7 @@ def _reviewed_model_family(name: str, *, family_name: str) -> bool:
     return re.fullmatch(rf"{re.escape(family_name)}_[0-9a-f]{{12}}", name) is not None
 
 
-def _text(value: object) -> str:
-    return str(getattr(value, "value", value) or "").strip()
-
-
-def _effective_privileges(
-    workspace: Any,
-    *,
-    securable_type: str,
-    full_name: str,
-    principal: str,
-) -> set[str]:
-    return set(
-        _effective_privilege_sources(
-            workspace,
-            securable_type=securable_type,
-            full_name=full_name,
-            principal=principal,
-        )
-    )
-
-
-def _effective_privilege_sources(
-    workspace: Any,
-    *,
-    securable_type: str,
-    full_name: str,
-    principal: str,
-) -> dict[str, set[PrivilegeSource]]:
-    """Read every effective page and preserve the principal behind each action."""
-
-    token: str | None = None
-    seen_tokens: set[str] = set()
-    privileges: dict[str, set[PrivilegeSource]] = {}
-    while True:
-        response = workspace.grants.get_effective(
-            securable_type,
-            full_name,
-            principal=principal,
-            max_results=1000,
-            page_token=token,
-        )
-        for assignment in getattr(response, "privilege_assignments", None) or []:
-            source = _text(getattr(assignment, "principal", None))
-            if not source:
-                raise RuntimeError("effective permissions returned an empty principal")
-            for privilege in getattr(assignment, "privileges", None) or []:
-                name = _text(getattr(privilege, "privilege", None)).upper()
-                if not name:
-                    raise RuntimeError(
-                        f"effective permissions returned an empty privilege for "
-                        f"{securable_type} {full_name}"
-                    )
-                inherited_type = _text(getattr(privilege, "inherited_from_type", None)).upper()
-                inherited_name = _text(getattr(privilege, "inherited_from_name", None))
-                privileges.setdefault(name, set()).add((source, inherited_type, inherited_name))
-        next_token = _text(getattr(response, "next_page_token", None))
-        if not next_token:
-            return privileges
-        if next_token in seen_tokens:
-            raise RuntimeError("effective permissions pagination repeated a page token")
-        seen_tokens.add(next_token)
-        token = next_token
-
-
-def _assert_privileges(
-    workspace: Any,
-    *,
-    securable_type: str,
-    full_name: str,
-    principal: str,
-    expected: set[str],
-    expected_source_map: dict[str, set[PrivilegeSource]] | None = None,
-) -> None:
-    actual_sources = _effective_privilege_sources(
-        workspace,
-        securable_type=securable_type,
-        full_name=full_name,
-        principal=principal,
-    )
-    actual = set(actual_sources)
-    source_mismatch = expected_source_map is not None and actual_sources != expected_source_map
-    if actual != expected or source_mismatch:
-        raise RuntimeError(
-            "agent-runtime effective UC boundary failed for "
-            f"{securable_type} {full_name}: expected={sorted(expected)}, "
-            f"actual={sorted(actual)}, sources={actual_sources}"
-        )
-
-
-def _full_name(value: object, *, fallback: str = "") -> str:
-    return _text(getattr(value, "full_name", None)) or fallback
-
-
-def _assert_authenticated_runtime(workspace: Any, *, application_id: str) -> None:
+def _assert_authenticated_runtime(workspace: Any, *, application_id: str) -> set[str]:
     """Bind the visibility inventory to the runtime identity whose access it proves."""
 
     caller = workspace.current_user.me()
@@ -149,86 +72,27 @@ def _assert_authenticated_runtime(workspace: Any, *, application_id: str) -> Non
         raise RuntimeError(
             "agent-runtime UC inventory is not authenticated as the expected runtime identity"
         )
-
-
-def _assert_no_catalog_child_privileges(
-    workspace: Any,
-    *,
-    catalog: str,
-    principal: str,
-) -> None:
-    """Inventory a non-MIP catalog so a direct child grant cannot hide below it."""
-
-    for schema in workspace.schemas.list(catalog, include_browse=True):
-        schema_name = _text(getattr(schema, "name", None))
-        if not schema_name:
-            raise RuntimeError("workspace schema inventory returned an empty name")
-        schema_full_name = _full_name(schema, fallback=f"{catalog}.{schema_name}")
-        _assert_privileges(
-            workspace,
-            securable_type="schema",
-            full_name=schema_full_name,
-            principal=principal,
-            expected={"USE_SCHEMA"} if schema_name == "information_schema" else set(),
-            expected_source_map=(
-                {"USE_SCHEMA": set(_ACCOUNT_USERS_DIRECT)}
-                if schema_name == "information_schema"
-                else None
-            ),
-        )
-        inventory: tuple[tuple[str, Any], ...] = (
-            (
-                "function",
-                workspace.functions.list(catalog, schema_name, include_browse=True),
-            ),
-            (
-                "table",
-                workspace.tables.list(
-                    catalog,
-                    schema_name,
-                    include_browse=True,
-                    omit_columns=True,
-                    omit_properties=True,
-                ),
-            ),
-            (
-                "volume",
-                workspace.volumes.list(catalog, schema_name, include_browse=True),
-            ),
-        )
-        for securable_type, objects in inventory:
-            for item in objects:
-                item_name = _text(getattr(item, "name", None))
-                if not item_name:
-                    raise RuntimeError(
-                        f"workspace {securable_type} inventory returned an empty name"
-                    )
-                expected = (
-                    {"SELECT"}
-                    if securable_type == "table"
-                    and schema_name == "information_schema"
-                    and item_name in _CATALOG_INFORMATION_SCHEMA_TABLES
-                    else set()
-                )
-                _assert_privileges(
-                    workspace,
-                    securable_type=securable_type,
-                    full_name=_full_name(
-                        item,
-                        fallback=f"{schema_full_name}.{item_name}",
-                    ),
-                    principal=principal,
-                    expected=expected,
-                    expected_source_map=(
-                        {"SELECT": set(_ACCOUNT_USERS_DIRECT)} if expected else None
-                    ),
-                )
+    caller_id = _text(getattr(caller, "id", None))
+    if not caller_id:
+        raise RuntimeError("agent-runtime identity has no immutable SCIM id")
+    groups = getattr(caller, "groups", None)
+    if groups is None:
+        raise RuntimeError("agent-runtime identity omitted its effective groups collection")
+    owner_aliases = {caller_id.casefold(), *(value.casefold() for value in principals)}
+    for group in groups:
+        group_id = _text(getattr(group, "value", None))
+        display = _text(getattr(group, "display", None))
+        if not group_id or not display:
+            raise RuntimeError("agent-runtime effective group identity is incomplete")
+        owner_aliases.update({group_id.casefold(), display.casefold()})
+    return owner_aliases
 
 
 def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
     """Require the exact Databricks-managed samples inheritance contract."""
 
     for schema in workspace.schemas.list("samples", include_browse=True):
+        _assert_system_owned(schema, label="samples schema")
         schema_name = _text(getattr(schema, "name", None))
         schema_full_name = _full_name(schema, fallback=f"samples.{schema_name}")
         schema_sources = {action: set(_SAMPLES_INHERITED) for action in _SAMPLES_SCHEMA_PRIVILEGES}
@@ -246,6 +110,7 @@ def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
             expected_source_map=schema_sources,
         )
         for function in workspace.functions.list("samples", schema_name, include_browse=True):
+            _assert_system_owned(function, label="samples function")
             function_name = _text(getattr(function, "name", None))
             _assert_privileges(
                 workspace,
@@ -265,6 +130,7 @@ def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
             omit_columns=True,
             omit_properties=True,
         ):
+            _assert_system_owned(table, label="samples table")
             table_name = _text(getattr(table, "name", None))
             table_sources = set(_SAMPLES_INHERITED)
             if (
@@ -284,6 +150,7 @@ def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
                 expected_source_map={"SELECT": table_sources},
             )
         for volume in workspace.volumes.list("samples", schema_name, include_browse=True):
+            _assert_system_owned(volume, label="samples volume")
             volume_name = _text(getattr(volume, "name", None))
             _assert_privileges(
                 workspace,
@@ -298,14 +165,43 @@ def _assert_samples_catalog_baseline(workspace: Any, *, principal: str) -> None:
             )
 
 
-def _assert_system_catalog_baseline(workspace: Any, *, principal: str) -> None:
+def _assert_system_catalog_baseline(
+    workspace: Any,
+    *,
+    principal: str,
+    runtime_owner_aliases: set[str],
+) -> None:
     """Allow only the reviewed immutable Databricks account-users system baseline."""
 
     for schema in workspace.schemas.list("system", include_browse=True):
         schema_name = _text(getattr(schema, "name", None))
         if not schema_name:
             raise RuntimeError("system schema inventory returned an empty name")
+        schema_owner = _text(getattr(schema, "owner", None))
+        if schema_name == "data_quality_monitoring":
+            if not schema_owner or schema_owner.casefold() in runtime_owner_aliases:
+                raise RuntimeError("system.data_quality_monitoring has an invalid platform owner")
+        else:
+            _assert_system_owned(schema, label="system schema")
         schema_full_name = _full_name(schema, fallback=f"system.{schema_name}")
+
+        def assert_child_owner(
+            item: object,
+            *,
+            label: str,
+            system_schema_name: str = schema_name,
+            system_schema_owner: str = schema_owner,
+        ) -> None:
+            if system_schema_name != "data_quality_monitoring":
+                _assert_system_owned(item, label=label)
+                return
+            owner = _text(getattr(item, "owner", None))
+            if owner != system_schema_owner:
+                raise RuntimeError(
+                    "system.data_quality_monitoring child owner drifted from its "
+                    "platform schema owner"
+                )
+
         _assert_privileges(
             workspace,
             securable_type="schema",
@@ -322,6 +218,7 @@ def _assert_system_catalog_baseline(workspace: Any, *, principal: str) -> None:
             schema_name,
             include_browse=True,
         ):
+            assert_child_owner(function, label="system function")
             function_name = _text(getattr(function, "name", None))
             _assert_privileges(
                 workspace,
@@ -349,6 +246,7 @@ def _assert_system_catalog_baseline(workspace: Any, *, principal: str) -> None:
             omit_columns=True,
             omit_properties=True,
         ):
+            assert_child_owner(table, label="system table")
             table_name = _text(getattr(table, "name", None))
             _assert_privileges(
                 workspace,
@@ -372,6 +270,7 @@ def _assert_system_catalog_baseline(workspace: Any, *, principal: str) -> None:
                 ),
             )
         for volume in workspace.volumes.list("system", schema_name, include_browse=True):
+            assert_child_owner(volume, label="system volume")
             volume_name = _text(getattr(volume, "name", None))
             _assert_privileges(
                 workspace,
@@ -383,22 +282,6 @@ def _assert_system_catalog_baseline(workspace: Any, *, principal: str) -> None:
                 principal=principal,
                 expected=set(),
             )
-
-
-def _catalog_name(value: object) -> str:
-    explicit = _text(getattr(value, "catalog_name", None))
-    if explicit:
-        return explicit
-    full_name = _full_name(value)
-    return full_name.split(".", 1)[0] if "." in full_name else ""
-
-
-def _schema_name(value: object) -> str:
-    explicit = _text(getattr(value, "schema_name", None))
-    if explicit:
-        return explicit
-    parts = _full_name(value).split(".", 2)
-    return parts[1] if len(parts) == 3 else ""
 
 
 def verify_effective_uc_boundary(
@@ -414,6 +297,7 @@ def verify_effective_uc_boundary(
     gateway_experiment_base: str = DEFAULT_GATEWAY_AGENT_EXPERIMENT,
     genie_space_id: str,
     model_registry: Any | None = None,
+    foreign_control_plane_proof: ControlPlaneForeignCatalogProof | None = None,
 ) -> None:
     """Require only reviewed functions plus runtime-owned Gateway artifacts in MIP."""
 
@@ -436,11 +320,31 @@ def verify_effective_uc_boundary(
     resource_required = (model_family, experiment_base, genie_id, table_prefix)
     if not all(core_required + resource_required):
         raise ValueError("application ID, Supervisor ID, catalog, model, and table prefix required")
-    _assert_authenticated_runtime(workspace, application_id=principal)
+    runtime_owner_aliases = _assert_authenticated_runtime(
+        workspace,
+        application_id=principal,
+    )
 
     metastore_id = _text(getattr(workspace.metastores.current(), "metastore_id", None))
     if not metastore_id:
         raise RuntimeError("workspace has no current metastore identity")
+    consumed_control_plane_proof = None
+    if foreign_control_plane_proof is not None:
+        consumed_control_plane_proof = consume_issued_control_plane_foreign_catalog_proof(
+            foreign_control_plane_proof
+        )
+        workspace_id = authoritative_workspace_id(workspace)
+        proof_identity = (
+            consumed_control_plane_proof.application_id,
+            consumed_control_plane_proof.catalog,
+            consumed_control_plane_proof.metastore_id,
+            consumed_control_plane_proof.workspace_id,
+        )
+        runtime_identity = (principal, catalog_name, metastore_id, workspace_id)
+        if proof_identity != runtime_identity:
+            raise RuntimeError(
+                "foreign-catalog control-plane proof does not match the runtime boundary"
+            )
     _assert_privileges(
         workspace,
         securable_type="metastore",
@@ -465,8 +369,24 @@ def verify_effective_uc_boundary(
         _text(getattr(item, "name", None)): _text(getattr(item, "owner", None))
         for item in visible_catalogs
     }
+    visible_catalog_types = {
+        _text(getattr(item, "name", None)): _text(getattr(item, "catalog_type", None)).upper()
+        for item in visible_catalogs
+    }
+    visible_catalog_modes = {
+        _text(getattr(item, "name", None)): _text(getattr(item, "isolation_mode", None)).upper()
+        for item in visible_catalogs
+    }
     if catalog_name not in visible_catalog_names:
         raise RuntimeError("configured MIP catalog is missing from workspace inventory")
+    mip_catalog_object = next(
+        item for item in visible_catalogs if _text(getattr(item, "name", None)) == catalog_name
+    )
+    _assert_not_runtime_owned(
+        mip_catalog_object,
+        owner_aliases=runtime_owner_aliases,
+        label=f"catalog {catalog_name}",
+    )
     if "" in visible_catalog_names:
         raise RuntimeError("workspace catalog inventory returned an empty name")
     other_catalogs = sorted(visible_catalog_names - {catalog_name, ""})
@@ -474,6 +394,8 @@ def verify_effective_uc_boundary(
     def inspect_other_catalog(other_catalog: str) -> None:
         is_system = other_catalog == "system"
         if is_system:
+            if visible_catalog_owners.get("system") != "System user":
+                raise RuntimeError("system catalog is not owned by Databricks System user")
             _assert_privileges(
                 workspace,
                 securable_type="catalog",
@@ -482,7 +404,11 @@ def verify_effective_uc_boundary(
                 expected={"USE_CATALOG"},
                 expected_source_map={"USE_CATALOG": set(_ACCOUNT_USERS_DIRECT)},
             )
-            _assert_system_catalog_baseline(workspace, principal=principal)
+            _assert_system_catalog_baseline(
+                workspace,
+                principal=principal,
+                runtime_owner_aliases=runtime_owner_aliases,
+            )
         elif other_catalog == "samples":
             if visible_catalog_owners.get("samples") != "System user":
                 raise RuntimeError("samples catalog is not owned by Databricks System user")
@@ -497,6 +423,27 @@ def verify_effective_uc_boundary(
                 },
             )
             _assert_samples_catalog_baseline(workspace, principal=principal)
+        elif other_catalog == _DATABRICKS_INTERNAL_CATALOG:
+            if (
+                visible_catalog_owners.get(other_catalog) != "System user"
+                or visible_catalog_types.get(other_catalog) != "INTERNAL_CATALOG"
+                or visible_catalog_modes.get(other_catalog) != "OPEN"
+            ):
+                raise RuntimeError(
+                    "Databricks internal catalog does not match the fixed platform identity"
+                )
+            _assert_privileges(
+                workspace,
+                securable_type="catalog",
+                full_name=other_catalog,
+                principal=principal,
+                expected=set(),
+            )
+        elif (
+            consumed_control_plane_proof is not None
+            and other_catalog in consumed_control_plane_proof.audited_catalogs
+        ):
+            return
         else:
             catalog_sources = _effective_privilege_sources(
                 workspace,
@@ -533,6 +480,13 @@ def verify_effective_uc_boundary(
     other_registered_models = [
         model for model in all_registered_models if _catalog_name(model) != catalog_name
     ]
+    for model in registered_models:
+        if not _reviewed_model_family(_full_name(model), family_name=model_family):
+            _assert_not_runtime_owned(
+                model,
+                owner_aliases=runtime_owner_aliases,
+                label=f"registered model {_full_name(model)}",
+            )
     unexpected_system_models = sorted(
         _full_name(model)
         for model in other_registered_models
@@ -556,9 +510,29 @@ def verify_effective_uc_boundary(
             "reviewed system.ai models are not owned by System user: "
             + ", ".join(invalid_system_owners)
         )
-    if other_registered_models:
+    invalid_platform_model_owners = sorted(
+        _full_name(model)
+        for model in other_registered_models
+        if _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
+        and _text(getattr(model, "owner", None)) != "System user"
+    )
+    if invalid_platform_model_owners:
+        raise RuntimeError(
+            "platform registered models are not owned by System user: "
+            + ", ".join(invalid_platform_model_owners)
+        )
+    models_requiring_runtime_audit = [
+        model
+        for model in other_registered_models
+        if (
+            consumed_control_plane_proof is None
+            or _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
+            or _catalog_name(model) not in consumed_control_plane_proof.audited_catalogs
+        )
+    ]
+    if models_requiring_runtime_audit:
         with ThreadPoolExecutor(
-            max_workers=min(_MAX_INVENTORY_WORKERS, len(other_registered_models)),
+            max_workers=min(_MAX_INVENTORY_WORKERS, len(models_requiring_runtime_audit)),
             thread_name_prefix="mip-uc-models",
         ) as executor:
             futures = [
@@ -595,7 +569,7 @@ def verify_effective_uc_boundary(
                         )
                     ),
                 )
-                for model in other_registered_models
+                for model in models_requiring_runtime_audit
             ]
             for future in as_completed(futures):
                 future.result()
@@ -609,6 +583,14 @@ def verify_effective_uc_boundary(
         if not schema_name:
             raise RuntimeError("MIP schema inventory returned an empty name")
         schema_full_name = _full_name(schema, fallback=f"{catalog_name}.{schema_name}")
+        if schema_name == "information_schema":
+            _assert_system_owned(schema, label=f"schema {schema_full_name}")
+        else:
+            _assert_not_runtime_owned(
+                schema,
+                owner_aliases=runtime_owner_aliases,
+                label=f"schema {schema_full_name}",
+            )
         if schema_name in {"gold", "audit"}:
             expected_schema = {"USE_SCHEMA"}
             schema_sources = {"USE_SCHEMA": set(runtime_direct)}
@@ -639,6 +621,11 @@ def verify_effective_uc_boundary(
                 function,
                 fallback=f"{schema_full_name}.{function_name}",
             )
+            _assert_not_runtime_owned(
+                function,
+                owner_aliases=runtime_owner_aliases,
+                label=f"function {function_full_name}",
+            )
             expected = (
                 {"EXECUTE"}
                 if schema_name == "gold" and function_name in ALLOWED_FUNCTIONS
@@ -668,6 +655,7 @@ def verify_effective_uc_boundary(
                 fallback=f"{schema_full_name}.{table_name}",
             )
             if schema_name == "information_schema":
+                _assert_system_owned(table, label=f"table {table_full_name}")
                 expected = {"SELECT"} if table_name in _CATALOG_INFORMATION_SCHEMA_TABLES else set()
                 _assert_privileges(
                     workspace,
@@ -700,6 +688,11 @@ def verify_effective_uc_boundary(
                         "runtime ownership"
                     )
                 continue
+            _assert_not_runtime_owned(
+                table,
+                owner_aliases=runtime_owner_aliases,
+                label=f"table {table_full_name}",
+            )
             _assert_privileges(
                 workspace,
                 securable_type="table",
@@ -712,10 +705,19 @@ def verify_effective_uc_boundary(
             volume_name = _text(getattr(volume, "name", None))
             if not volume_name:
                 raise RuntimeError("MIP volume inventory returned an empty name")
+            volume_full_name = _full_name(
+                volume,
+                fallback=f"{schema_full_name}.{volume_name}",
+            )
+            _assert_not_runtime_owned(
+                volume,
+                owner_aliases=runtime_owner_aliases,
+                label=f"volume {volume_full_name}",
+            )
             _assert_privileges(
                 workspace,
                 securable_type="volume",
-                full_name=_full_name(volume, fallback=f"{schema_full_name}.{volume_name}"),
+                full_name=volume_full_name,
                 principal=principal,
                 expected=set(),
             )

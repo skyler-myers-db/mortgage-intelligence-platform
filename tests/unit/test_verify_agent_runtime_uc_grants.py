@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import base64
+import copy
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from databricks.sdk.errors import PermissionDenied
 from mlflow.entities.model_registry.model_version_search import ModelVersionSearch
 
 from backend.agents.gateway_contract import (
@@ -12,6 +14,10 @@ from backend.agents.gateway_contract import (
 )
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import verify_agent_runtime_uc_grants as verifier
+from tools.databricks.agent_runtime_uc_baseline import (
+    ControlPlaneForeignCatalogProof,
+    _issue_control_plane_foreign_catalog_proof,
+)
 from tools.databricks.gateway_model_attestation import sign_gateway_model_contract
 from tools.databricks.provision_gateway_responses_agent import gateway_resource_hash
 
@@ -116,7 +122,7 @@ class _Grants:
             or full_name == "system"
         ):
             assignment_kwargs["principal"] = "account users"
-        if full_name == "system.ai.meta_llama_3_70b" or full_name in {
+        if full_name in verifier._SYSTEM_AI_MODELS or full_name in {
             f"system.ai.{name}" for name in verifier._SYSTEM_AI_FUNCTIONS
         }:
             assignment_kwargs.update(
@@ -308,51 +314,69 @@ def _workspace(
     values.update(overrides or {})
     schemas: dict[str, list[object]] = {
         CATALOG: [
-            SimpleNamespace(name="gold", full_name="mip.gold"),
-            SimpleNamespace(name="audit", full_name="mip.audit"),
-            SimpleNamespace(name="ref", full_name="mip.ref"),
+            SimpleNamespace(name="gold", full_name="mip.gold", owner="admin"),
+            SimpleNamespace(name="audit", full_name="mip.audit", owner="admin"),
+            SimpleNamespace(name="ref", full_name="mip.ref", owner="admin"),
             SimpleNamespace(
                 name="information_schema",
                 full_name=f"{CATALOG}.information_schema",
+                owner="System user",
             ),
         ],
         "other": [
-            SimpleNamespace(name="sandbox", full_name="other.sandbox"),
+            SimpleNamespace(name="sandbox", full_name="other.sandbox", owner="admin"),
             SimpleNamespace(
                 name="information_schema",
                 full_name="other.information_schema",
+                owner="System user",
             ),
         ],
         "system": [
-            SimpleNamespace(name="ai", full_name="system.ai"),
+            SimpleNamespace(name="ai", full_name="system.ai", owner="System user"),
             SimpleNamespace(
                 name="data_quality_monitoring",
                 full_name="system.data_quality_monitoring",
+                owner="databricks-dqm-platform-principal",
             ),
-            SimpleNamespace(name="information_schema", full_name="system.information_schema"),
-            SimpleNamespace(name="billing", full_name="system.billing"),
+            SimpleNamespace(
+                name="information_schema",
+                full_name="system.information_schema",
+                owner="System user",
+            ),
+            SimpleNamespace(name="billing", full_name="system.billing", owner="System user"),
         ],
         "samples": [
-            SimpleNamespace(name="tpch", full_name="samples.tpch"),
+            SimpleNamespace(name="tpch", full_name="samples.tpch", owner="System user"),
             SimpleNamespace(
                 name="information_schema",
                 full_name="samples.information_schema",
+                owner="System user",
             ),
         ],
     }
     functions: dict[tuple[str, str], list[object]] = {
         (CATALOG, "gold"): [
-            SimpleNamespace(name=name, full_name=f"mip.gold.{name}")
+            SimpleNamespace(name=name, full_name=f"mip.gold.{name}", owner="admin")
             for name in (*sorted(verifier.ALLOWED_FUNCTIONS), "fn_unreviewed")
         ],
         (CATALOG, "audit"): [],
         (CATALOG, "ref"): [],
         (CATALOG, "information_schema"): [],
         ("other", "sandbox"): [
-            SimpleNamespace(name="fn_secret", full_name="other.sandbox.fn_secret")
+            SimpleNamespace(
+                name="fn_secret",
+                full_name="other.sandbox.fn_secret",
+                owner="admin",
+            )
         ],
         ("other", "information_schema"): [],
-        ("system", "ai"): [SimpleNamespace(name="ai_classify", full_name="system.ai.ai_classify")],
+        ("system", "ai"): [
+            SimpleNamespace(
+                name="ai_classify",
+                full_name="system.ai.ai_classify",
+                owner="System user",
+            )
+        ],
         ("system", "data_quality_monitoring"): [],
         ("system", "information_schema"): [],
         ("system", "billing"): [],
@@ -361,7 +385,11 @@ def _workspace(
     }
     tables: dict[tuple[str, str], list[object]] = {
         (CATALOG, "gold"): [
-            SimpleNamespace(name="borrower_360", full_name="mip.gold.borrower_360")
+            SimpleNamespace(
+                name="borrower_360",
+                full_name="mip.gold.borrower_360",
+                owner="admin",
+            )
         ],
         (CATALOG, "audit"): [
             SimpleNamespace(
@@ -369,55 +397,103 @@ def _workspace(
                 full_name=f"mip.audit.{table}",
                 owner=table_owner,
             ),
-            SimpleNamespace(name="action_audit", full_name="mip.audit.action_audit"),
+            SimpleNamespace(
+                name="action_audit",
+                full_name="mip.audit.action_audit",
+                owner="admin",
+            ),
         ],
-        (CATALOG, "ref"): [SimpleNamespace(name="offer_rules", full_name="mip.ref.offer_rules")],
+        (CATALOG, "ref"): [
+            SimpleNamespace(
+                name="offer_rules",
+                full_name="mip.ref.offer_rules",
+                owner="admin",
+            )
+        ],
         (CATALOG, "information_schema"): [
             *(
                 SimpleNamespace(
                     name=name,
                     full_name=f"{CATALOG}.information_schema.{name}",
+                    owner="System user",
                 )
                 for name in sorted(verifier._CATALOG_INFORMATION_SCHEMA_TABLES)
             ),
             SimpleNamespace(
                 name="future_metadata",
                 full_name=f"{CATALOG}.information_schema.future_metadata",
+                owner="System user",
             ),
         ],
-        ("other", "sandbox"): [SimpleNamespace(name="secret", full_name="other.sandbox.secret")],
+        ("other", "sandbox"): [
+            SimpleNamespace(name="secret", full_name="other.sandbox.secret", owner="admin")
+        ],
         ("other", "information_schema"): [
             SimpleNamespace(
                 name="tables",
                 full_name="other.information_schema.tables",
+                owner="System user",
             )
         ],
         ("system", "ai"): [],
-        ("system", "data_quality_monitoring"): [],
-        ("system", "information_schema"): [
-            SimpleNamespace(name="tables", full_name="system.information_schema.tables")
+        ("system", "data_quality_monitoring"): [
+            SimpleNamespace(
+                name="table_results",
+                full_name="system.data_quality_monitoring.table_results",
+                owner="databricks-dqm-platform-principal",
+            )
         ],
-        ("system", "billing"): [SimpleNamespace(name="usage", full_name="system.billing.usage")],
-        ("samples", "tpch"): [SimpleNamespace(name="orders", full_name="samples.tpch.orders")],
+        ("system", "information_schema"): [
+            SimpleNamespace(
+                name="tables",
+                full_name="system.information_schema.tables",
+                owner="System user",
+            )
+        ],
+        ("system", "billing"): [
+            SimpleNamespace(
+                name="usage",
+                full_name="system.billing.usage",
+                owner="System user",
+            )
+        ],
+        ("samples", "tpch"): [
+            SimpleNamespace(
+                name="orders",
+                full_name="samples.tpch.orders",
+                owner="System user",
+            )
+        ],
         ("samples", "information_schema"): [
             SimpleNamespace(
                 name="tables",
                 full_name="samples.information_schema.tables",
+                owner="System user",
             )
         ],
     }
     volumes: dict[tuple[str, str], list[object]] = {
         (CATALOG, "gold"): [],
-        (CATALOG, "audit"): [SimpleNamespace(name="proofs", full_name="mip.audit.proofs")],
+        (CATALOG, "audit"): [
+            SimpleNamespace(name="proofs", full_name="mip.audit.proofs", owner="admin")
+        ],
         (CATALOG, "ref"): [],
         (CATALOG, "information_schema"): [],
-        ("other", "sandbox"): [SimpleNamespace(name="private", full_name="other.sandbox.private")],
+        ("other", "sandbox"): [
+            SimpleNamespace(name="private", full_name="other.sandbox.private", owner="admin")
+        ],
         ("other", "information_schema"): [],
         ("system", "ai"): [],
         ("system", "data_quality_monitoring"): [],
         ("system", "information_schema"): [],
         ("system", "billing"): [],
-        ("samples", "tpch"): [SimpleNamespace(name="datasets", full_name="samples.tpch.datasets")],
+        ("samples", "tpch"): [
+            SimpleNamespace(
+                name="datasets",
+                full_name="samples.tpch.datasets",
+                owner="System user",
+            )
+        ],
         ("samples", "information_schema"): [],
     }
     models: dict[str, list[object]] = {
@@ -463,6 +539,8 @@ def _workspace(
     }
     grants = _Grants(values)
     return SimpleNamespace(
+        config=SimpleNamespace(workspace_id="workspace-id"),
+        get_workspace_id=lambda: "workspace-id",
         service_principals=SimpleNamespace(
             list=lambda **_kwargs: iter(
                 [SimpleNamespace(application_id=APPLICATION_ID, id="runtime-scim-id")]
@@ -483,15 +561,23 @@ def _workspace(
             me=lambda: SimpleNamespace(
                 user_name=APPLICATION_ID,
                 application_id=APPLICATION_ID,
+                id="runtime-scim-id",
+                groups=[],
             )
         ),
         catalogs=SimpleNamespace(
             list=lambda **_kwargs: iter(
                 [
-                    SimpleNamespace(name=CATALOG),
-                    SimpleNamespace(name="other"),
+                    SimpleNamespace(name=CATALOG, owner="admin"),
+                    SimpleNamespace(name="other", owner="admin"),
                     SimpleNamespace(name="system", owner="System user"),
                     SimpleNamespace(name="samples", owner="System user"),
+                    SimpleNamespace(
+                        name="__databricks_internal",
+                        owner="System user",
+                        catalog_type="INTERNAL_CATALOG",
+                        isolation_mode="OPEN",
+                    ),
                 ]
             )
         ),
@@ -521,6 +607,7 @@ def _verify(
     experiment: str = DEFAULT_GATEWAY_AGENT_EXPERIMENT,
     registry_tags: dict[str, dict[str, str]] | None = None,
     model_registry: Any | None = None,
+    foreign_control_plane_proof: ControlPlaneForeignCatalogProof | None = None,
 ) -> None:
     verifier.verify_effective_uc_boundary(
         workspace,
@@ -534,7 +621,20 @@ def _verify(
         genie_space_id=GENIE_SPACE_ID,
         inference_table_prefix=TABLE_PREFIX,
         model_registry=model_registry or _ModelRegistry(registry_tags or {model: _provenance()}),
+        foreign_control_plane_proof=foreign_control_plane_proof,
     )
+
+
+def _foreign_proof(**overrides: Any) -> ControlPlaneForeignCatalogProof:
+    values = {
+        "application_id": APPLICATION_ID,
+        "catalog": CATALOG,
+        "metastore_id": "metastore-id",
+        "workspace_id": "workspace-id",
+        "audited_catalogs": frozenset({"other"}),
+    }
+    values.update(overrides)
+    return _issue_control_plane_foreign_catalog_proof(**values)
 
 
 def test_effective_runtime_uc_boundary_passes_and_reads_all_pages() -> None:
@@ -706,6 +806,150 @@ def test_effective_runtime_uc_boundary_requires_runtime_authenticated_inventory(
 
     with pytest.raises(RuntimeError, match="not authenticated"):
         _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_requires_authoritative_runtime_groups() -> None:
+    workspace = _workspace()
+    workspace.current_user.me = lambda: SimpleNamespace(
+        user_name=APPLICATION_ID,
+        application_id=APPLICATION_ID,
+        id="runtime-scim-id",
+    )
+
+    with pytest.raises(RuntimeError, match="omitted.*groups"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_never_treats_permission_denial_as_zero_access() -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+
+    def deny_foreign_catalog(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("catalog", "other"):
+            raise PermissionDenied("runtime lacks USE CATALOG")
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = deny_foreign_catalog
+
+    with pytest.raises(PermissionDenied, match="runtime lacks USE CATALOG"):
+        _verify(workspace)
+
+
+def test_control_plane_proof_owns_foreign_audit_without_runtime_lookup() -> None:
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+
+    def deny_foreign_catalog(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("catalog", "other"):
+            raise PermissionDenied("runtime lacks USE CATALOG")
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = deny_foreign_catalog
+
+    _verify(workspace, foreign_control_plane_proof=_foreign_proof())
+
+
+def test_control_plane_proof_cannot_be_constructed_or_forged_by_a_caller() -> None:
+    with pytest.raises(TypeError):
+        ControlPlaneForeignCatalogProof(  # type: ignore[call-arg]
+            application_id=APPLICATION_ID,
+            catalog=CATALOG,
+            metastore_id="metastore-id",
+            workspace_id="workspace-id",
+            audited_catalogs=frozenset({"other"}),
+        )
+
+    forged = object.__new__(ControlPlaneForeignCatalogProof)
+    for name, value in (
+        ("application_id", APPLICATION_ID),
+        ("catalog", CATALOG),
+        ("metastore_id", "metastore-id"),
+        ("workspace_id", "workspace-id"),
+        ("audited_catalogs", frozenset({"other"})),
+    ):
+        object.__setattr__(forged, name, value)
+
+    with pytest.raises(RuntimeError, match="not issued by the auditor"):
+        _verify(_workspace(), foreign_control_plane_proof=forged)
+
+    issued = _foreign_proof()
+    derived = copy.copy(issued)
+    object.__setattr__(derived, "audited_catalogs", frozenset({"other", "unreviewed"}))
+    with pytest.raises(RuntimeError, match="not issued by the auditor"):
+        _verify(_workspace(), foreign_control_plane_proof=derived)
+
+    object.__setattr__(issued, "audited_catalogs", frozenset({"other", "unreviewed"}))
+    with pytest.raises(RuntimeError, match="not issued by the auditor"):
+        _verify(_workspace(), foreign_control_plane_proof=issued)
+
+
+def test_control_plane_proof_is_consumed_after_one_runtime_audit() -> None:
+    proof = _foreign_proof()
+
+    _verify(_workspace(), foreign_control_plane_proof=proof)
+
+    with pytest.raises(RuntimeError, match="not issued by the auditor"):
+        _verify(_workspace(), foreign_control_plane_proof=proof)
+
+
+def test_consumed_control_plane_snapshot_cannot_be_changed_after_validation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    proof = _foreign_proof()
+    real_consume = verifier.consume_issued_control_plane_foreign_catalog_proof
+
+    def consume_then_mutate(candidate: ControlPlaneForeignCatalogProof) -> object:
+        snapshot = real_consume(candidate)
+        object.__setattr__(candidate, "application_id", "mutated-runtime")
+        object.__setattr__(candidate, "audited_catalogs", frozenset())
+        return snapshot
+
+    monkeypatch.setattr(
+        verifier,
+        "consume_issued_control_plane_foreign_catalog_proof",
+        consume_then_mutate,
+    )
+    workspace = _workspace()
+    original = workspace.grants.get_effective
+
+    def deny_foreign_catalog(*args: Any, **kwargs: Any) -> object:
+        if args[:2] == ("catalog", "other"):
+            raise PermissionDenied("runtime lacks USE CATALOG")
+        return original(*args, **kwargs)
+
+    workspace.grants.get_effective = deny_foreign_catalog
+
+    _verify(workspace, foreign_control_plane_proof=proof)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"application_id": "other-runtime"},
+        {"catalog": "other_mip"},
+        {"metastore_id": "other-metastore"},
+        {"workspace_id": "other-workspace"},
+    ],
+)
+def test_control_plane_proof_must_match_runtime_boundary(overrides: dict[str, str]) -> None:
+    with pytest.raises(RuntimeError, match="does not match"):
+        _verify(_workspace(), foreign_control_plane_proof=_foreign_proof(**overrides))
+
+
+def test_control_plane_proof_cannot_hide_uninventoried_foreign_catalog() -> None:
+    with pytest.raises(RuntimeError, match="effective|forbidden"):
+        _verify(
+            _workspace({("catalog", "other"): {"BROWSE"}}),
+            foreign_control_plane_proof=_foreign_proof(audited_catalogs=frozenset()),
+        )
+
+
+def test_control_plane_proof_rejects_runtime_config_host_workspace_drift() -> None:
+    workspace = _workspace()
+    workspace.config.workspace_id = "configured-other-workspace"
+
+    with pytest.raises(RuntimeError, match="does not match.*workspace host"):
+        _verify(workspace, foreign_control_plane_proof=_foreign_proof())
 
 
 def test_effective_runtime_uc_boundary_requires_reviewed_schemas() -> None:
@@ -907,6 +1151,150 @@ def test_effective_runtime_uc_boundary_requires_exact_artifact_owners() -> None:
 
 
 @pytest.mark.parametrize(
+    "securable",
+    ["catalog", "schema", "function", "table", "volume", "unrelated_model"],
+)
+def test_effective_runtime_uc_boundary_rejects_other_mip_ownership(
+    securable: str,
+) -> None:
+    workspace = _workspace()
+    if securable == "catalog":
+        catalogs = list(workspace.catalogs.list(include_browse=True))
+        next(item for item in catalogs if item.name == CATALOG).owner = APPLICATION_ID
+        workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+    elif securable == "schema":
+        next(workspace.schemas.list(CATALOG)).owner = APPLICATION_ID
+    elif securable == "function":
+        next(workspace.functions.list(CATALOG, "gold")).owner = APPLICATION_ID
+    elif securable == "table":
+        next(workspace.tables.list(CATALOG, "gold")).owner = APPLICATION_ID
+    elif securable == "volume":
+        next(workspace.volumes.list(CATALOG, "audit")).owner = APPLICATION_ID
+    else:
+        models = list(workspace.registered_models.list(include_browse=True))
+        next(
+            item for item in models if item.full_name == "mip.audit.unrelated_model"
+        ).owner = APPLICATION_ID
+        workspace.registered_models.list = lambda **_kwargs: iter(models)
+
+    with pytest.raises(RuntimeError, match="effective owner of forbidden"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize("owner", ["runtime-owners", "owner-group-id"])
+def test_effective_runtime_uc_boundary_rejects_group_derived_mip_ownership(
+    owner: str,
+) -> None:
+    workspace = _workspace()
+    workspace.current_user.me = lambda: SimpleNamespace(
+        user_name=APPLICATION_ID,
+        application_id=APPLICATION_ID,
+        id="runtime-scim-id",
+        groups=[SimpleNamespace(value="owner-group-id", display="runtime-owners")],
+    )
+    catalogs = list(workspace.catalogs.list(include_browse=True))
+    next(item for item in catalogs if item.name == CATALOG).owner = owner
+    workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+
+    with pytest.raises(RuntimeError, match="effective owner of forbidden catalog"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_rejects_scim_id_ownership_alias() -> None:
+    workspace = _workspace()
+    catalogs = list(workspace.catalogs.list(include_browse=True))
+    next(item for item in catalogs if item.name == CATALOG).owner = "runtime-scim-id"
+    workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+
+    with pytest.raises(RuntimeError, match="effective owner of forbidden catalog"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    "securable",
+    [
+        "system_catalog",
+        "samples_catalog",
+        "system_schema",
+        "samples_schema",
+        "system_function",
+        "system_table",
+        "samples_table",
+        "samples_volume",
+        "samples_model",
+        "mip_information_schema",
+        "mip_information_schema_table",
+    ],
+)
+def test_effective_runtime_uc_boundary_source_binds_platform_owners(
+    securable: str,
+) -> None:
+    workspace = _workspace()
+    if securable in {"system_catalog", "samples_catalog"}:
+        catalogs = list(workspace.catalogs.list(include_browse=True))
+        name = securable.removesuffix("_catalog")
+        next(item for item in catalogs if item.name == name).owner = APPLICATION_ID
+        workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+    elif securable == "system_schema":
+        next(workspace.schemas.list("system")).owner = APPLICATION_ID
+    elif securable == "samples_schema":
+        next(workspace.schemas.list("samples")).owner = APPLICATION_ID
+    elif securable == "system_function":
+        next(workspace.functions.list("system", "ai")).owner = APPLICATION_ID
+    elif securable == "system_table":
+        next(workspace.tables.list("system", "billing")).owner = APPLICATION_ID
+    elif securable == "samples_table":
+        next(workspace.tables.list("samples", "tpch")).owner = APPLICATION_ID
+    elif securable == "samples_volume":
+        next(workspace.volumes.list("samples", "tpch")).owner = APPLICATION_ID
+    elif securable == "samples_model":
+        models = list(workspace.registered_models.list(include_browse=True))
+        next(model for model in models if _catalog(model) == "samples").owner = APPLICATION_ID
+        workspace.registered_models.list = lambda **_kwargs: iter(models)
+    elif securable == "mip_information_schema":
+        next(
+            schema
+            for schema in workspace.schemas.list(CATALOG)
+            if schema.name == "information_schema"
+        ).owner = APPLICATION_ID
+    else:
+        next(workspace.tables.list(CATALOG, "information_schema")).owner = APPLICATION_ID
+
+    with pytest.raises(RuntimeError, match="System user"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_anchors_data_quality_platform_owner() -> None:
+    workspace = _workspace()
+    schema = next(
+        item for item in workspace.schemas.list("system") if item.name == "data_quality_monitoring"
+    )
+    schema.owner = APPLICATION_ID
+    with pytest.raises(RuntimeError, match="invalid platform owner"):
+        _verify(workspace)
+
+    workspace = _workspace()
+    next(
+        workspace.tables.list("system", "data_quality_monitoring")
+    ).owner = "different-platform-principal"
+    with pytest.raises(RuntimeError, match="child owner drifted"):
+        _verify(workspace)
+
+
+def test_effective_runtime_uc_boundary_source_binds_internal_catalog() -> None:
+    with pytest.raises(RuntimeError, match="effective UC boundary"):
+        _verify(_workspace({("catalog", "__databricks_internal"): {"BROWSE"}}))
+
+    workspace = _workspace()
+    catalogs = list(workspace.catalogs.list(include_browse=True))
+    internal = next(item for item in catalogs if item.name == "__databricks_internal")
+    internal.owner = "lookalike-owner"
+    workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+    with pytest.raises(RuntimeError, match="internal catalog.*fixed platform identity"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
     ("securable", "full_name", "tamper"),
     [
         ("metastore", "metastore-id", "principal"),
@@ -994,6 +1382,31 @@ def test_effective_runtime_uc_boundary_rejects_new_or_reowned_system_model() -> 
     workspace.registered_models.list = lambda **_kwargs: iter(models)
     with pytest.raises(RuntimeError, match="System user"):
         _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    "full_name",
+    [
+        "system.ai.databricks-gemini-3-5-flash-lite",
+        "system.ai.databricks-gemini-3-6-flash",
+    ],
+)
+def test_effective_runtime_uc_boundary_accepts_reviewed_live_system_model_shape(
+    full_name: str,
+) -> None:
+    workspace = _workspace(
+        {("function", full_name): {"EXECUTE"}},
+        extra_models=[
+            SimpleNamespace(
+                full_name=full_name,
+                catalog_name="system",
+                schema_name="ai",
+                owner="System user",
+            )
+        ],
+    )
+
+    _verify(workspace)
 
 
 def _catalog(model: object) -> str:

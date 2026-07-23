@@ -1290,6 +1290,55 @@ def test_deploy_binds_deployer_auth_and_keeps_normal_app_oauth_shell_scoped() ->
         assert "deployment_workspace_client()" in helper_text
 
 
+def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
+    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    early_preflight = text.index(
+        'step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"'
+    )
+    first_lakebase_runtime_use = text.index(
+        'step "recover interrupted verifier Lakebase role bootstrap"'
+    )
+    preflight = text.index(
+        'step "preflight agent-runtime foreign UC access before runtime-owned UC mutations"'
+    )
+    first_runtime_use = text.index(
+        'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+    )
+    dual_authority = text.index(
+        'step "prove dual-authority agent-runtime UC boundary before cutover"'
+    )
+    cutover = text.index(
+        'step "prepare runtime-owned Gateway access while preserving the live old Supervisor"'
+    )
+    preflight_block = text[preflight:first_runtime_use]
+    dual_block = text[dual_authority:cutover]
+
+    early_block = text[early_preflight:first_lakebase_runtime_use]
+    assert early_preflight < first_lakebase_runtime_use < preflight
+    assert preflight < first_runtime_use < dual_authority < cutover
+    assert "-m tools.databricks.audit_agent_runtime_foreign_uc_access" in early_block
+    assert '--application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in early_block
+    assert "--allow-missing-mip-catalog" in early_block
+    assert "run_with_account_identity" in early_block
+    assert "run_with_lakebase_bootstrap_authority" not in early_block
+    assert "-m tools.databricks.audit_agent_runtime_foreign_uc_access" in preflight_block
+    assert '--application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in preflight_block
+    assert '--catalog "${MIP_DEFAULT_CATALOG:-mip}"' in preflight_block
+    assert '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"' in preflight_block
+    assert "run_with_account_identity" in preflight_block
+    assert "run_as_m2m_identity" not in preflight_block
+    assert "MIP_LAKEBASE_BOOTSTRAP_CONTROL_CLIENT_SECRET" not in preflight_block
+    assert "-m tools.databricks.verify_agent_runtime_uc_boundary_dual_authority" in dual_block
+    assert '--expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"' in dual_block
+    assert "run_with_account_identity" in dual_block
+    assert "run_with_agent_runtime_credentials" in dual_block
+    assert "run_as_m2m_identity" not in dual_block
+    dual_helper = _shell_function("run_with_agent_runtime_credentials")
+    assert 'export DATABRICKS_AGENT_RUNTIME_CLIENT_ID="$client_id"' in dual_helper
+    assert 'export DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET="$client_secret"' in dual_helper
+    assert 'run "$@"' in dual_helper
+
+
 def test_pii_salt_is_generated_in_a_secure_payload_and_never_logged() -> None:
     text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     block = text[
@@ -1310,9 +1359,7 @@ def test_retained_model_audit_is_read_only_and_rotation_action_is_absent() -> No
     export = text.index(
         'step "export the exact live Gateway resource contract under runtime authority"'
     )
-    read_only = text.index(
-        'step "prove effective agent-runtime privilege boundary across every MIP securable"'
-    )
+    read_only = text.index('step "prove dual-authority agent-runtime UC boundary before cutover"')
     read_only_block = text[read_only : text.index("\n  step ", read_only + 1)]
 
     assert export < read_only
@@ -2355,7 +2402,7 @@ def test_every_mutating_agent_cutover_command_is_bound_to_exact_deployment_lease
         ],
         script[
             script.index("AGENT_RUNTIME_GREEN_ARGS=(") : script.index(
-                'step "prove effective agent-runtime privilege boundary',
+                'step "prove dual-authority agent-runtime UC boundary',
                 script.index("AGENT_RUNTIME_GREEN_ARGS=("),
             )
         ],

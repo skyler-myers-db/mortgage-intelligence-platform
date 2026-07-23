@@ -1338,6 +1338,26 @@ run_as_m2m_identity() {
   )
 }
 
+run_with_agent_runtime_credentials() {
+  local client_id="${DATABRICKS_AGENT_RUNTIME_CLIENT_ID:-}"
+  local client_secret="${DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$client_secret" ]]; then
+    echo "${RED}[deploy] exact agent-runtime credentials are missing for dual-authority audit.${RST}" >&2
+    return 2
+  fi
+  # Preserve deployer auth for the first authority plane. The dedicated values
+  # are exported only inside this subshell and never placed in process arguments.
+  (
+    export DATABRICKS_AGENT_RUNTIME_CLIENT_ID="$client_id"
+    export DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET="$client_secret"
+    run "$@"
+  )
+}
+
 run_with_account_identity() {
   local account_client_id="${DATABRICKS_ACCOUNT_CLIENT_ID:-}"
   local account_client_secret="${DATABRICKS_ACCOUNT_CLIENT_SECRET:-}"
@@ -1971,6 +1991,13 @@ PYEOF
     --source-git-sha "$SOURCE_GIT_SHA" \
     --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --parent-pid "$$"
+  step "preflight agent-runtime foreign UC access before Lakebase bootstrap mutation"
+  run_with_account_identity \
+    "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+    --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --allow-missing-mip-catalog
   # Recover any deterministic one-use Lakebase role creators left by a prior
   # SIGKILL immediately after the lease winner is known. The verifier identity
   # is already immutable; an existing App identity is resolved next. No build,
@@ -3172,6 +3199,12 @@ run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
   --sync-catalog "$DEPLOYMENT_SYNC_CATALOG" \
   --sync-schema "$DEPLOYMENT_SYNC_SCHEMA" \
   --sync-tables "$DEPLOYMENT_SYNC_TABLES"
+step "preflight agent-runtime foreign UC access before runtime-owned UC mutations"
+run_with_account_identity \
+  "$PYTHON" -m tools.databricks.audit_agent_runtime_foreign_uc_access \
+  --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL"
 step "grant exact Genie CAN_RUN to the dedicated agent-runtime identity"
 run "$PYTHON" -m tools.databricks.agent_runtime_access \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
@@ -3334,13 +3367,12 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
       --preserve-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-}"
     )
-    step "prove effective agent-runtime privilege boundary across every MIP securable"
-    run_as_m2m_identity \
-      agent-runtime \
-      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
-      DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
-      "$PYTHON" -m tools.databricks.verify_agent_runtime_uc_grants \
+    step "prove dual-authority agent-runtime UC boundary before cutover"
+    run_with_account_identity \
+      run_with_agent_runtime_credentials \
+        "$PYTHON" -m tools.databricks.verify_agent_runtime_uc_boundary_dual_authority \
       --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+      --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
       --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
       --supervisor-endpoint-id "$MIP_AGENT_SUPERVISOR_ENDPOINT_ID" \
       --catalog "${MIP_DEFAULT_CATALOG:-mip}" \

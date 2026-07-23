@@ -2,6 +2,127 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+from threading import Lock
+from typing import Any
+from weakref import ReferenceType, ref
+
+_CONTROL_PLANE_PROOF_ISSUER = object()
+_CONTROL_PLANE_PROOF_LOCK = Lock()
+_CONTROL_PLANE_PROOF_REGISTRY: dict[
+    int,
+    tuple[
+        ReferenceType[ControlPlaneForeignCatalogProof],
+        tuple[str, str, str, str, frozenset[str]],
+    ],
+] = {}
+
+
+@dataclass(frozen=True, init=False)
+class ControlPlaneForeignCatalogProof:
+    """Opaque in-process evidence from the authoritative foreign-catalog inventory."""
+
+    application_id: str
+    catalog: str
+    metastore_id: str
+    workspace_id: str
+    audited_catalogs: frozenset[str]
+    _issuer: object
+
+
+@dataclass(frozen=True)
+class ConsumedControlPlaneForeignCatalogProof:
+    """Immutable one-use snapshot returned only by successful proof consumption."""
+
+    application_id: str
+    catalog: str
+    metastore_id: str
+    workspace_id: str
+    audited_catalogs: frozenset[str]
+
+
+def _control_plane_proof_snapshot(
+    proof: ControlPlaneForeignCatalogProof,
+) -> tuple[str, str, str, str, frozenset[str]]:
+    return (
+        proof.application_id,
+        proof.catalog,
+        proof.metastore_id,
+        proof.workspace_id,
+        proof.audited_catalogs,
+    )
+
+
+def _issue_control_plane_foreign_catalog_proof(
+    *,
+    application_id: str,
+    catalog: str,
+    metastore_id: str,
+    workspace_id: str,
+    audited_catalogs: frozenset[str],
+) -> ControlPlaneForeignCatalogProof:
+    proof = object.__new__(ControlPlaneForeignCatalogProof)
+    for name, value in (
+        ("application_id", application_id),
+        ("catalog", catalog),
+        ("metastore_id", metastore_id),
+        ("workspace_id", workspace_id),
+        ("audited_catalogs", audited_catalogs),
+        ("_issuer", _CONTROL_PLANE_PROOF_ISSUER),
+    ):
+        object.__setattr__(proof, name, value)
+    proof_id = id(proof)
+
+    def retire(reference: ReferenceType[ControlPlaneForeignCatalogProof]) -> None:
+        with _CONTROL_PLANE_PROOF_LOCK:
+            registered = _CONTROL_PLANE_PROOF_REGISTRY.get(proof_id)
+            if registered is not None and registered[0] is reference:
+                _CONTROL_PLANE_PROOF_REGISTRY.pop(proof_id, None)
+
+    reference = ref(proof, retire)
+    with _CONTROL_PLANE_PROOF_LOCK:
+        _CONTROL_PLANE_PROOF_REGISTRY[proof_id] = (
+            reference,
+            _control_plane_proof_snapshot(proof),
+        )
+    return proof
+
+
+def consume_issued_control_plane_foreign_catalog_proof(
+    proof: ControlPlaneForeignCatalogProof,
+) -> ConsumedControlPlaneForeignCatalogProof:
+    if not isinstance(proof, ControlPlaneForeignCatalogProof):
+        raise RuntimeError("foreign-catalog control-plane proof was not issued by the auditor")
+    with _CONTROL_PLANE_PROOF_LOCK:
+        registered = _CONTROL_PLANE_PROOF_REGISTRY.get(id(proof))
+        if (
+            registered is None
+            or registered[0]() is not proof
+            or registered[1] != _control_plane_proof_snapshot(proof)
+            or getattr(proof, "_issuer", None) is not _CONTROL_PLANE_PROOF_ISSUER
+        ):
+            raise RuntimeError("foreign-catalog control-plane proof was not issued by the auditor")
+        _CONTROL_PLANE_PROOF_REGISTRY.pop(id(proof), None)
+        snapshot = registered[1]
+    return ConsumedControlPlaneForeignCatalogProof(*snapshot)
+
+
+def authoritative_workspace_id(workspace: Any) -> str:
+    """Resolve the host-backed workspace ID and reject conflicting client config."""
+
+    workspace_id = str(workspace.get_workspace_id() or "").strip()
+    if not workspace_id:
+        raise RuntimeError("UC boundary found no authoritative workspace identity")
+    configured = str(
+        getattr(getattr(workspace, "config", None), "workspace_id", None) or ""
+    ).strip()
+    if configured and configured != workspace_id:
+        raise RuntimeError(
+            "configured workspace ID does not match the authenticated workspace host"
+        )
+    return workspace_id
+
+
 ALLOWED_FUNCTIONS = frozenset(
     {
         "fn_build_cohort",
@@ -128,6 +249,8 @@ _SYSTEM_AI_MODELS = frozenset(
         "system.ai.databricks-gemini-3-1-flash-lite",
         "system.ai.databricks-gemini-3-1-pro",
         "system.ai.databricks-gemini-3-5-flash",
+        "system.ai.databricks-gemini-3-5-flash-lite",
+        "system.ai.databricks-gemini-3-6-flash",
         "system.ai.databricks-gemini-3-flash",
         "system.ai.databricks-gemini-3-pro",
         "system.ai.databricks-gemini-3-pro-image",
