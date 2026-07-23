@@ -494,7 +494,16 @@ and the documented metastore `USE_MARKETPLACE_ASSETS` baseline. Non-MIP
 exceptions are source- and inheritance-bound: the fixed Databricks-managed
 `system` schema/function/model inventory, the `System user`-owned `samples`
 catalog, direct `account users` metadata access to each catalog's fixed
-`information_schema` table set. The managed `system.data_quality_monitoring`
+`information_schema` table set. Lakebase database catalogs are a narrower
+metadata exception: only an exact `MANAGED_ONLINE_CATALOG` may report its
+generated `information_schema` schema and children as owned by the exact
+non-runtime parent catalog owner instead of the literal `System user`. Schema
+and child full names must remain bound to that parent, the owner still passes
+the direct and group-derived runtime non-ownership proof, and the agent runtime
+must have zero effective privilege on the catalog and every inventoried child.
+This does not authorize the separate Databricks App service principal's
+reviewed Lakebase sync grants and is not a reason to isolate the MIP state
+catalog from its workspace. The managed `system.data_quality_monitoring`
 family is anchored to its non-runtime schema owner and every child must retain
 that exact owner; other reviewed system and samples children remain literal
 `System user` objects. New system models or metadata tables fail until reviewed.

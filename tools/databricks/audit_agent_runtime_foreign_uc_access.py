@@ -508,6 +508,8 @@ def audit_foreign_uc_access(
         _assert_no_catalog_child_privileges(
             workspace,
             catalog=foreign_catalog,
+            catalog_type=_text(getattr(catalog_object, "catalog_type", None)),
+            catalog_owner=_text(getattr(catalog_object, "owner", None)),
             principal=principal,
             owner_check=record_owner,
         )

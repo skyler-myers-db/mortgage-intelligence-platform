@@ -143,35 +143,56 @@ def _assert_no_catalog_child_privileges(
     workspace: Any,
     *,
     catalog: str,
+    catalog_type: str,
+    catalog_owner: str,
     principal: str,
     owner_check: Callable[[object], None] | None = None,
 ) -> None:
     """Inventory a non-MIP catalog so a direct child grant cannot hide below it."""
 
+    normalized_catalog_type = catalog_type.strip().upper()
+    expected_catalog_owner = catalog_owner.strip()
+    if not normalized_catalog_type or not expected_catalog_owner:
+        raise RuntimeError("foreign catalog inventory has incomplete identity evidence")
+    managed_online = normalized_catalog_type == "MANAGED_ONLINE_CATALOG"
+    information_schema_owner = expected_catalog_owner if managed_online else "System user"
+
     def check_owner(item: object, *, reviewed_system_object: bool = False) -> None:
-        if owner_check is None:
-            return
         if reviewed_system_object:
-            if _text(getattr(item, "owner", None)) != "System user":
-                raise RuntimeError("foreign information-schema object is not owned by System user")
+            if _text(getattr(item, "owner", None)) != information_schema_owner:
+                expected = (
+                    "the managed-online catalog owner"
+                    if managed_online
+                    else "Databricks System user"
+                )
+                raise RuntimeError(
+                    f"foreign information-schema object is not owned by {expected}"
+                )
             return
-        owner_check(item)
+        if owner_check is not None:
+            owner_check(item)
 
     for schema in workspace.schemas.list(catalog, include_browse=True):
         schema_name = _text(getattr(schema, "name", None))
         if not schema_name:
             raise RuntimeError("workspace schema inventory returned an empty name")
         schema_full_name = _full_name(schema, fallback=f"{catalog}.{schema_name}")
+        if schema_full_name != f"{catalog}.{schema_name}":
+            raise RuntimeError("foreign schema inventory returned an invalid parent identity")
         check_owner(schema, reviewed_system_object=schema_name == "information_schema")
         _assert_privileges(
             workspace,
             securable_type="schema",
             full_name=schema_full_name,
             principal=principal,
-            expected={"USE_SCHEMA"} if schema_name == "information_schema" else set(),
+            expected=(
+                {"USE_SCHEMA"}
+                if schema_name == "information_schema" and not managed_online
+                else set()
+            ),
             expected_source_map=(
                 {"USE_SCHEMA": set(_ACCOUNT_USERS_DIRECT)}
-                if schema_name == "information_schema"
+                if schema_name == "information_schema" and not managed_online
                 else None
             ),
         )
@@ -202,28 +223,30 @@ def _assert_no_catalog_child_privileges(
                     raise RuntimeError(
                         f"workspace {securable_type} inventory returned an empty name"
                     )
+                item_full_name = _full_name(
+                    item,
+                    fallback=f"{schema_full_name}.{item_name}",
+                )
+                if item_full_name != f"{schema_full_name}.{item_name}":
+                    raise RuntimeError(
+                        f"foreign {securable_type} inventory returned an invalid parent identity"
+                    )
                 expected = (
                     {"SELECT"}
                     if securable_type == "table"
                     and schema_name == "information_schema"
                     and item_name in _CATALOG_INFORMATION_SCHEMA_TABLES
+                    and not managed_online
                     else set()
                 )
                 check_owner(
                     item,
-                    reviewed_system_object=(
-                        securable_type == "table"
-                        and schema_name == "information_schema"
-                        and item_name in _CATALOG_INFORMATION_SCHEMA_TABLES
-                    ),
+                    reviewed_system_object=schema_name == "information_schema",
                 )
                 _assert_privileges(
                     workspace,
                     securable_type=securable_type,
-                    full_name=_full_name(
-                        item,
-                        fallback=f"{schema_full_name}.{item_name}",
-                    ),
+                    full_name=item_full_name,
                     principal=principal,
                     expected=expected,
                     expected_source_map=(

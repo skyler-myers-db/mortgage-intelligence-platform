@@ -475,6 +475,8 @@ def verify_effective_uc_boundary(
             _assert_no_catalog_child_privileges(
                 workspace,
                 catalog=other_catalog,
+                catalog_type=visible_catalog_types.get(other_catalog, ""),
+                catalog_owner=visible_catalog_owners.get(other_catalog, ""),
                 principal=principal,
             )
 

@@ -569,10 +569,30 @@ def _workspace(
         catalogs=SimpleNamespace(
             list=lambda **_kwargs: iter(
                 [
-                    SimpleNamespace(name=CATALOG, owner="admin"),
-                    SimpleNamespace(name="other", owner="admin"),
-                    SimpleNamespace(name="system", owner="System user"),
-                    SimpleNamespace(name="samples", owner="System user"),
+                    SimpleNamespace(
+                        name=CATALOG,
+                        owner="admin",
+                        catalog_type="MANAGED_CATALOG",
+                        isolation_mode="OPEN",
+                    ),
+                    SimpleNamespace(
+                        name="other",
+                        owner="admin",
+                        catalog_type="MANAGED_CATALOG",
+                        isolation_mode="OPEN",
+                    ),
+                    SimpleNamespace(
+                        name="system",
+                        owner="System user",
+                        catalog_type="SYSTEM_CATALOG",
+                        isolation_mode="OPEN",
+                    ),
+                    SimpleNamespace(
+                        name="samples",
+                        owner="System user",
+                        catalog_type="MANAGED_CATALOG",
+                        isolation_mode="OPEN",
+                    ),
                     SimpleNamespace(
                         name="__databricks_internal",
                         owner="System user",
@@ -598,6 +618,69 @@ def _workspace(
             )
         ),
         grants=grants,
+    )
+
+
+def _add_runtime_managed_online_catalog(
+    workspace: Any,
+    *,
+    catalog: str = "online_state",
+    information_schema_owner: str = "online-owner@example.com",
+    information_table_owner: str = "online-owner@example.com",
+) -> None:
+    catalogs = list(workspace.catalogs.list(include_browse=True))
+    catalogs.append(
+        SimpleNamespace(
+            name=catalog,
+            owner="online-owner@example.com",
+            catalog_type="MANAGED_ONLINE_CATALOG",
+            isolation_mode="OPEN",
+        )
+    )
+    workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+
+    original_schema_list = workspace.schemas.list
+    workspace.schemas.list = lambda selected, **kwargs: (
+        iter(
+            [
+                SimpleNamespace(
+                    name="information_schema",
+                    full_name=f"{catalog}.information_schema",
+                    owner=information_schema_owner,
+                )
+            ]
+        )
+        if selected == catalog
+        else original_schema_list(selected, **kwargs)
+    )
+
+    original_function_list = workspace.functions.list
+    workspace.functions.list = lambda selected, schema, **kwargs: (
+        iter([])
+        if selected == catalog
+        else original_function_list(selected, schema, **kwargs)
+    )
+
+    original_table_list = workspace.tables.list
+    workspace.tables.list = lambda selected, schema, **kwargs: (
+        iter(
+            [
+                SimpleNamespace(
+                    name="tables",
+                    full_name=f"{catalog}.information_schema.tables",
+                    owner=information_table_owner,
+                )
+            ]
+        )
+        if selected == catalog
+        else original_table_list(selected, schema, **kwargs)
+    )
+
+    original_volume_list = workspace.volumes.list
+    workspace.volumes.list = lambda selected, schema, **kwargs: (
+        iter([])
+        if selected == catalog
+        else original_volume_list(selected, schema, **kwargs)
     )
 
 
@@ -679,6 +762,88 @@ def test_effective_runtime_uc_boundary_passes_and_reads_all_pages() -> None:
         None,
     ) in workspace.grants.calls
     assert ("table", "other.sandbox.secret", None) in workspace.grants.calls
+
+
+def test_effective_runtime_uc_boundary_accepts_zero_access_managed_online_metadata() -> None:
+    workspace = _workspace()
+    _add_runtime_managed_online_catalog(workspace)
+
+    _verify(workspace)
+
+    assert ("catalog", "online_state", None) in workspace.grants.calls
+    assert ("schema", "online_state.information_schema", None) in workspace.grants.calls
+    assert ("table", "online_state.information_schema.tables", None) in workspace.grants.calls
+
+
+@pytest.mark.parametrize(
+    ("securable_type", "full_name", "privilege"),
+    [
+        ("schema", "online_state.information_schema", "USE_SCHEMA"),
+        ("table", "online_state.information_schema.tables", "SELECT"),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_managed_online_metadata_access(
+    securable_type: str,
+    full_name: str,
+    privilege: str,
+) -> None:
+    workspace = _workspace({(securable_type, full_name): {privilege}})
+    _add_runtime_managed_online_catalog(workspace)
+
+    with pytest.raises(RuntimeError, match="effective UC boundary failed"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize(
+    ("information_schema_owner", "information_table_owner"),
+    [
+        ("different-owner@example.com", "online-owner@example.com"),
+        ("online-owner@example.com", "different-owner@example.com"),
+    ],
+)
+def test_effective_runtime_uc_boundary_rejects_managed_online_metadata_owner_drift(
+    information_schema_owner: str,
+    information_table_owner: str,
+) -> None:
+    workspace = _workspace()
+    _add_runtime_managed_online_catalog(
+        workspace,
+        information_schema_owner=information_schema_owner,
+        information_table_owner=information_table_owner,
+    )
+
+    with pytest.raises(RuntimeError, match="managed-online catalog owner"):
+        _verify(workspace)
+
+
+@pytest.mark.parametrize("securable_type", ["schema", "table"])
+def test_effective_runtime_uc_boundary_rejects_ordinary_metadata_owner_drift(
+    securable_type: str,
+) -> None:
+    workspace = _workspace()
+    if securable_type == "schema":
+        schema = next(
+            item
+            for item in workspace.schemas.list("other", include_browse=True)
+            if item.name == "information_schema"
+        )
+        schema.owner = "different-owner@example.com"
+    else:
+        table = next(
+            item
+            for item in workspace.tables.list(
+                "other",
+                "information_schema",
+                include_browse=True,
+                omit_columns=True,
+                omit_properties=True,
+            )
+            if item.name == "tables"
+        )
+        table.owner = "different-owner@example.com"
+
+    with pytest.raises(RuntimeError, match="Databricks System user"):
+        _verify(workspace)
 
 
 def test_effective_runtime_uc_boundary_is_public_key_only_and_never_mutates(

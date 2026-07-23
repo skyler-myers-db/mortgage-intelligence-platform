@@ -263,6 +263,86 @@ def _workspace(
     )
 
 
+def _add_managed_online_catalog(
+    workspace: Any,
+    *,
+    catalog: str = "online_state",
+    owner: str = FOREIGN_OWNER,
+    information_schema_owner: str | None = None,
+    information_table_owner: str | None = None,
+    information_schema_full_name: str | None = None,
+    information_table_full_name: str | None = None,
+    unknown_information_table_owner: str | None = None,
+) -> None:
+    catalogs = list(workspace.catalogs.list(include_browse=True, include_unbound=True))
+    catalogs.append(
+        SimpleNamespace(
+            name=catalog,
+            isolation_mode="OPEN",
+            owner=owner,
+            catalog_type="MANAGED_ONLINE_CATALOG",
+        )
+    )
+    workspace.catalogs.list = lambda **_kwargs: iter(catalogs)
+
+    original_schema_list = workspace.schemas.list
+    workspace.schemas.list = lambda selected, **kwargs: (
+        iter(
+            [
+                SimpleNamespace(
+                    name="information_schema",
+                    full_name=information_schema_full_name
+                    or f"{catalog}.information_schema",
+                    owner=information_schema_owner or owner,
+                )
+            ]
+        )
+        if selected == catalog
+        else original_schema_list(selected, **kwargs)
+    )
+
+    original_function_list = workspace.functions.list
+    workspace.functions.list = lambda selected, schema, **kwargs: (
+        iter([])
+        if selected == catalog
+        else original_function_list(selected, schema, **kwargs)
+    )
+
+    original_table_list = workspace.tables.list
+    workspace.tables.list = lambda selected, schema, **kwargs: (
+        iter(
+            [
+                SimpleNamespace(
+                    name="tables",
+                    full_name=information_table_full_name
+                    or f"{catalog}.information_schema.tables",
+                    owner=information_table_owner or owner,
+                ),
+                *(
+                    [
+                        SimpleNamespace(
+                            name="future_metadata",
+                            full_name=f"{catalog}.information_schema.future_metadata",
+                            owner=unknown_information_table_owner,
+                        )
+                    ]
+                    if unknown_information_table_owner is not None
+                    else []
+                ),
+            ]
+        )
+        if selected == catalog
+        else original_table_list(selected, schema, **kwargs)
+    )
+
+    original_volume_list = workspace.volumes.list
+    workspace.volumes.list = lambda selected, schema, **kwargs: (
+        iter([])
+        if selected == catalog
+        else original_volume_list(selected, schema, **kwargs)
+    )
+
+
 def _binding_policy(
     catalog: str = "hidden",
     *,
@@ -467,6 +547,97 @@ def test_foreign_uc_control_plane_passes_only_with_complete_zero_access() -> Non
     assert proof.audited_catalogs == frozenset({"other"})
     assert proof.application_id == APPLICATION_ID
     assert proof.workspace_id == WORKSPACE_ID
+
+
+def test_foreign_uc_control_plane_accepts_managed_online_information_schema_contract() -> None:
+    workspace = _workspace()
+    _add_managed_online_catalog(workspace)
+
+    proof = _audit(workspace)
+
+    assert proof.audited_catalogs == frozenset({"online_state", "other"})
+    assert ("schema", "online_state.information_schema", None) in workspace.grants.calls
+    assert ("table", "online_state.information_schema.tables", None) in workspace.grants.calls
+
+
+@pytest.mark.parametrize(
+    ("information_schema_owner", "information_table_owner"),
+    [
+        ("different-owner@example.com", None),
+        (None, "different-owner@example.com"),
+    ],
+)
+def test_foreign_uc_control_plane_binds_managed_online_information_schema_owner(
+    information_schema_owner: str | None,
+    information_table_owner: str | None,
+) -> None:
+    workspace = _workspace()
+    _add_managed_online_catalog(
+        workspace,
+        information_schema_owner=information_schema_owner,
+        information_table_owner=information_table_owner,
+    )
+
+    with pytest.raises(RuntimeError, match="managed-online catalog owner"):
+        _audit(workspace)
+
+
+def test_foreign_uc_control_plane_binds_unknown_managed_online_metadata_owner() -> None:
+    workspace = _workspace()
+    _add_managed_online_catalog(
+        workspace,
+        unknown_information_table_owner="different-owner@example.com",
+    )
+
+    with pytest.raises(RuntimeError, match="managed-online catalog owner"):
+        _audit(workspace)
+
+
+@pytest.mark.parametrize(
+    ("information_schema_full_name", "information_table_full_name"),
+    [
+        ("other.information_schema", None),
+        (None, "other.information_schema.tables"),
+    ],
+)
+def test_foreign_uc_control_plane_binds_managed_online_metadata_to_parent(
+    information_schema_full_name: str | None,
+    information_table_full_name: str | None,
+) -> None:
+    workspace = _workspace()
+    _add_managed_online_catalog(
+        workspace,
+        information_schema_full_name=information_schema_full_name,
+        information_table_full_name=information_table_full_name,
+    )
+
+    with pytest.raises(RuntimeError, match="invalid parent identity"):
+        _audit(workspace)
+
+
+@pytest.mark.parametrize(
+    ("securable_type", "full_name", "privilege"),
+    [
+        ("schema", "online_state.information_schema", "USE_SCHEMA"),
+        ("table", "online_state.information_schema.tables", "SELECT"),
+    ],
+)
+def test_foreign_uc_control_plane_requires_zero_managed_online_metadata_access(
+    securable_type: str,
+    full_name: str,
+    privilege: str,
+) -> None:
+    workspace = _workspace(
+        {
+            (securable_type, full_name): [
+                _assignment(privilege, principal="account users")
+            ]
+        }
+    )
+    _add_managed_online_catalog(workspace)
+
+    with pytest.raises(RuntimeError, match="effective UC boundary failed"):
+        _audit(workspace)
 
 
 def test_foreign_uc_control_plane_audits_all_ordinary_catalogs_before_mip_exists() -> None:
