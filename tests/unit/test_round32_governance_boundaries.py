@@ -485,13 +485,16 @@ def test_protected_selection_rejects_every_campaign_recommendation_text_field(
         source_asset="mip.gold.borrower_360",
     )
 
-    with pytest.raises(ValidationError, match="protected-class"):
-        CampaignRecommendationVariant(
-            variant_name="Guidance-led",
-            subject="Mortgage options",
-            body="Contact us to review mortgage options.",
-            hypothesis=copy,
-        )
+    for variant_field in ("subject", "body", "hypothesis"):
+        payload = {
+            "variant_name": "Guidance-led",
+            "subject": "Mortgage options",
+            "body": "Contact us to review mortgage options.",
+            "hypothesis": "A reviewed invitation may support a response.",
+            variant_field: copy,
+        }
+        with pytest.raises(ValidationError, match="protected-class"):
+            CampaignRecommendationVariant(**payload)
     for evidence_field in ("label", "value"):
         payload = {
             "label": "Reviewed signal",
@@ -501,7 +504,7 @@ def test_protected_selection_rejects_every_campaign_recommendation_text_field(
         }
         with pytest.raises(ValidationError, match="protected-class"):
             CampaignRecommendationEvidence(**payload)
-    for response_field in ("audience_summary", "strategy"):
+    for response_field in ("generator_label", "audience_summary", "strategy"):
         payload = {
             "generation_mode": "reviewed_fallback",
             "generator_label": "Mortgage Growth Agent",
