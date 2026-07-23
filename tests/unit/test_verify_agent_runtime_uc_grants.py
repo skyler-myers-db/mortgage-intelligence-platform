@@ -15,6 +15,7 @@ from backend.agents.gateway_contract import (
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import verify_agent_runtime_uc_grants as verifier
 from tools.databricks.agent_runtime_uc_baseline import (
+    CatalogBindingEvidence,
     ControlPlaneForeignCatalogProof,
     _issue_control_plane_foreign_catalog_proof,
 )
@@ -626,15 +627,41 @@ def _verify(
 
 
 def _foreign_proof(**overrides: Any) -> ControlPlaneForeignCatalogProof:
+    audited_catalogs = overrides.pop("audited_catalogs", frozenset({"other"}))
     values = {
         "application_id": APPLICATION_ID,
         "catalog": CATALOG,
         "metastore_id": "metastore-id",
         "workspace_id": "workspace-id",
-        "audited_catalogs": frozenset({"other"}),
+        "grant_audited_catalogs": audited_catalogs,
+        "binding_denied_catalogs": (),
     }
     values.update(overrides)
     return _issue_control_plane_foreign_catalog_proof(**values)
+
+
+def _binding_denied_proof() -> ControlPlaneForeignCatalogProof:
+    return _issue_control_plane_foreign_catalog_proof(
+        application_id=APPLICATION_ID,
+        catalog=CATALOG,
+        metastore_id="metastore-id",
+        workspace_id="workspace-id",
+        grant_audited_catalogs=frozenset(),
+        binding_denied_catalogs=(
+            CatalogBindingEvidence(
+                catalog="other",
+                owner="admin",
+                catalog_type="MANAGED_CATALOG",
+                isolation_mode="ISOLATED",
+                bindings=(
+                    (
+                        "2478181912221244",
+                        "BINDING_TYPE_READ_WRITE",
+                    ),
+                ),
+            ),
+        ),
+    )
 
 
 def test_effective_runtime_uc_boundary_passes_and_reads_all_pages() -> None:
@@ -849,6 +876,47 @@ def test_control_plane_proof_owns_foreign_audit_without_runtime_lookup() -> None
     _verify(workspace, foreign_control_plane_proof=_foreign_proof())
 
 
+def test_binding_denied_proof_requires_catalog_to_remain_hidden_from_runtime() -> None:
+    with pytest.raises(RuntimeError, match="binding-denied.*became visible"):
+        _verify(
+            _workspace(),
+            foreign_control_plane_proof=_binding_denied_proof(),
+        )
+
+
+def test_binding_denied_proof_accepts_catalog_and_models_hidden_from_runtime() -> None:
+    workspace = _workspace()
+    original_catalogs = list(workspace.catalogs.list(include_browse=True))
+    workspace.catalogs.list = lambda **_kwargs: iter(
+        [item for item in original_catalogs if item.name != "other"]
+    )
+    original_models = list(workspace.registered_models.list(include_browse=True))
+    workspace.registered_models.list = lambda **_kwargs: iter(
+        [item for item in original_models if item.catalog_name != "other"]
+    )
+
+    _verify(
+        workspace,
+        foreign_control_plane_proof=_binding_denied_proof(),
+    )
+
+    assert ("catalog", "other", None) not in workspace.grants.calls
+
+
+def test_binding_denied_proof_rejects_model_visible_without_catalog() -> None:
+    workspace = _workspace()
+    original_catalogs = list(workspace.catalogs.list(include_browse=True))
+    workspace.catalogs.list = lambda **_kwargs: iter(
+        [item for item in original_catalogs if item.name != "other"]
+    )
+
+    with pytest.raises(RuntimeError, match="binding-denied.*models became visible"):
+        _verify(
+            workspace,
+            foreign_control_plane_proof=_binding_denied_proof(),
+        )
+
+
 def test_control_plane_proof_cannot_be_constructed_or_forged_by_a_caller() -> None:
     with pytest.raises(TypeError):
         ControlPlaneForeignCatalogProof(  # type: ignore[call-arg]
@@ -856,7 +924,8 @@ def test_control_plane_proof_cannot_be_constructed_or_forged_by_a_caller() -> No
             catalog=CATALOG,
             metastore_id="metastore-id",
             workspace_id="workspace-id",
-            audited_catalogs=frozenset({"other"}),
+            grant_audited_catalogs=frozenset({"other"}),
+            binding_denied_catalogs=(),
         )
 
     forged = object.__new__(ControlPlaneForeignCatalogProof)
@@ -865,7 +934,8 @@ def test_control_plane_proof_cannot_be_constructed_or_forged_by_a_caller() -> No
         ("catalog", CATALOG),
         ("metastore_id", "metastore-id"),
         ("workspace_id", "workspace-id"),
-        ("audited_catalogs", frozenset({"other"})),
+        ("grant_audited_catalogs", frozenset({"other"})),
+        ("binding_denied_catalogs", ()),
     ):
         object.__setattr__(forged, name, value)
 
@@ -874,11 +944,19 @@ def test_control_plane_proof_cannot_be_constructed_or_forged_by_a_caller() -> No
 
     issued = _foreign_proof()
     derived = copy.copy(issued)
-    object.__setattr__(derived, "audited_catalogs", frozenset({"other", "unreviewed"}))
+    object.__setattr__(
+        derived,
+        "grant_audited_catalogs",
+        frozenset({"other", "unreviewed"}),
+    )
     with pytest.raises(RuntimeError, match="not issued by the auditor"):
         _verify(_workspace(), foreign_control_plane_proof=derived)
 
-    object.__setattr__(issued, "audited_catalogs", frozenset({"other", "unreviewed"}))
+    object.__setattr__(
+        issued,
+        "grant_audited_catalogs",
+        frozenset({"other", "unreviewed"}),
+    )
     with pytest.raises(RuntimeError, match="not issued by the auditor"):
         _verify(_workspace(), foreign_control_plane_proof=issued)
 
@@ -901,7 +979,7 @@ def test_consumed_control_plane_snapshot_cannot_be_changed_after_validation(
     def consume_then_mutate(candidate: ControlPlaneForeignCatalogProof) -> object:
         snapshot = real_consume(candidate)
         object.__setattr__(candidate, "application_id", "mutated-runtime")
-        object.__setattr__(candidate, "audited_catalogs", frozenset())
+        object.__setattr__(candidate, "grant_audited_catalogs", frozenset())
         return snapshot
 
     monkeypatch.setattr(

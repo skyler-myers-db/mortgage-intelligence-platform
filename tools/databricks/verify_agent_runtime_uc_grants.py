@@ -389,6 +389,22 @@ def verify_effective_uc_boundary(
     )
     if "" in visible_catalog_names:
         raise RuntimeError("workspace catalog inventory returned an empty name")
+    binding_denied_catalog_names = (
+        {
+            item.catalog
+            for item in consumed_control_plane_proof.binding_denied_catalogs
+        }
+        if consumed_control_plane_proof is not None
+        else set()
+    )
+    unexpectedly_visible_binding_denied = sorted(
+        visible_catalog_names.intersection(binding_denied_catalog_names)
+    )
+    if unexpectedly_visible_binding_denied:
+        raise RuntimeError(
+            "binding-denied foreign catalogs became visible to the agent runtime: "
+            + ", ".join(unexpectedly_visible_binding_denied)
+        )
     other_catalogs = sorted(visible_catalog_names - {catalog_name, ""})
 
     def inspect_other_catalog(other_catalog: str) -> None:
@@ -441,7 +457,7 @@ def verify_effective_uc_boundary(
             )
         elif (
             consumed_control_plane_proof is not None
-            and other_catalog in consumed_control_plane_proof.audited_catalogs
+            and other_catalog in consumed_control_plane_proof.grant_audited_catalogs
         ):
             return
         else:
@@ -521,13 +537,24 @@ def verify_effective_uc_boundary(
             "platform registered models are not owned by System user: "
             + ", ".join(invalid_platform_model_owners)
         )
+    unexpectedly_visible_binding_denied_models = sorted(
+        _full_name(model)
+        for model in other_registered_models
+        if _catalog_name(model) in binding_denied_catalog_names
+    )
+    if unexpectedly_visible_binding_denied_models:
+        raise RuntimeError(
+            "binding-denied foreign registered models became visible to the agent runtime: "
+            + ", ".join(unexpectedly_visible_binding_denied_models)
+        )
     models_requiring_runtime_audit = [
         model
         for model in other_registered_models
         if (
             consumed_control_plane_proof is None
             or _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
-            or _catalog_name(model) not in consumed_control_plane_proof.audited_catalogs
+            or _catalog_name(model)
+            not in consumed_control_plane_proof.grant_audited_catalogs
         )
     ]
     if models_requiring_runtime_audit:

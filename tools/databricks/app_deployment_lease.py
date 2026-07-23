@@ -385,6 +385,7 @@ def _download(workspace: Any, *, app_name: str) -> dict[str, str | int] | None:
         hint = _read_record(workspace, path=_head_path(app_name), app_name=app_name)
     except RuntimeError:
         hint = None
+    record: dict[str, str | int] | None
     if hint is not None:
         canonical = _read_record(
             workspace,
@@ -497,18 +498,13 @@ def _authorize_expired_for_acquire(
     writer = str(existing.get("writer_application_id") or "").strip()
     if (
         not holder
+        or _holder(workspace) != holder
         or writer != writer_application_id
         or str(existing.get("recovery_root_lease_id") or "") != recovery_lease_id
     ):
         raise RuntimeError(
             "expired App deployment lease is not authorized by its durable recovery root"
         )
-    _assert_protected_root(
-        workspace,
-        holder=holder,
-        writer_application_id=writer,
-        object_id=_root_object_id(workspace),
-    )
     return str(existing["recovery_root_lease_id"])
 
 
@@ -635,15 +631,22 @@ def acquire(
             recovery_lease_id=requested_recovery_root,
             now=current,
         )
-    elif (
-        existing is not None
-        and requested_recovery_root
-        and existing.get("recovery_root_lease_id") == requested_recovery_root
-    ):
-        recovery_root = requested_recovery_root
     elif existing is not None and requested_recovery_root:
-        raise RuntimeError(
-            "released App deployment lease does not accept an expired recovery root"
+        authorized_root, _candidates = lease_support.recovery_context(
+            __import__(__name__, fromlist=["*"]),
+            workspace,
+            app_name=app_name,
+        )
+        if authorized_root != requested_recovery_root:
+            raise RuntimeError(
+                "released App deployment lease does not accept this recovery root"
+            )
+        recovery_root = requested_recovery_root
+    elif existing is not None:
+        recovery_root, _candidates = lease_support.recovery_context(
+            __import__(__name__, fromlist=["*"]),
+            workspace,
+            app_name=app_name,
         )
     else:
         recovery_root = ""

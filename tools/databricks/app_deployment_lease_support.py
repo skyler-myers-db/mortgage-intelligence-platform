@@ -143,30 +143,77 @@ def is_legacy_head(
     )
 
 
-def recovery_root(lease: Any, workspace: Any, *, app_name: str) -> str:
-    """Return durable takeover authority only to the signed lease holder."""
+def recovery_context(
+    lease: Any, workspace: Any, *, app_name: str
+) -> tuple[str, list[str]]:
+    """Return the durable root and same-authority lease lineage, newest first."""
 
     record = lease._download(workspace, app_name=app_name)
     if record is None:
-        return ""
-    if record.get("state") == "released":
-        return ""
+        return "", []
     holder = lease._holder(workspace)
-    writer = str(record.get("writer_application_id") or "").strip()
-    if record.get("holder") != holder or not writer:
+    if record.get("state") == "active" and record.get("holder") != holder:
         raise RuntimeError("App deployment lease recovery actor is not its holder")
-    # A SIGKILL may land after the signed generation commits but before its ACL
-    # postflight. Only the exact signed holder may converge that expected ACL.
-    lease._ensure_protected_root(
+    current = lease._read_record(
         workspace,
-        holder=holder,
-        writer_application_id=writer,
+        path=lease._path(app_name),
+        app_name=app_name,
     )
-    recovery = str(record.get("recovery_root_lease_id") or "").strip()
+    if current is None:
+        raise RuntimeError("App deployment lease recovery lineage has no signed base")
+    lineage: list[dict[str, str | int]] = []
+    for _ in range(lease.MAX_CANONICAL_GENERATIONS):
+        lineage.append(current)
+        successor = lease._read_record(
+            workspace,
+            path=lease._successor_path(app_name, str(current["generation_id"])),
+            app_name=app_name,
+        )
+        if successor is None:
+            break
+        lease._validate_transition(current, successor)
+        current = successor
+    else:
+        raise RuntimeError("App deployment lease recovery lineage exceeds its safety bound")
+    if current != record:
+        raise RuntimeError("App deployment lease recovery lineage does not reach its head")
+    selected = next(
+        (
+            ancestor
+            for ancestor in reversed(lineage)
+            if ancestor.get("holder") == holder
+        ),
+        None,
+    )
+    if selected is None:
+        return "", []
+    recovery = str(selected.get("recovery_root_lease_id") or "").strip()
     try:
-        return str(UUID(recovery))
+        recovery = str(UUID(recovery))
     except ValueError as exc:
         raise RuntimeError("App deployment lease recovery root is invalid") from exc
+    candidates: list[str] = []
+    for ancestor in reversed(lineage):
+        if (
+            ancestor.get("recovery_root_lease_id") != recovery
+            or ancestor.get("holder") != holder
+        ):
+            continue
+        candidate = str(ancestor.get("lease_id") or "")
+        if candidate and candidate not in candidates:
+            candidates.append(candidate)
+    if not candidates or recovery not in candidates:
+        raise RuntimeError("App deployment lease recovery lineage is incomplete")
+    return recovery, candidates
+
+
+def recovery_root(lease: Any, workspace: Any, *, app_name: str) -> str:
+    """Return durable takeover authority only to the signed lease holder."""
+
+    recovery, _candidates = recovery_context(
+        lease, workspace, app_name=app_name
+    )
+    return recovery
 
 
 def validate_v4_timestamps(lease: Any, record: dict[str, str | int]) -> None:

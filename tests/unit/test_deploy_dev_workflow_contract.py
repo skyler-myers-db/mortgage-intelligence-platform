@@ -2291,10 +2291,180 @@ def test_expired_lease_recovery_uses_durable_signed_lease_root() -> None:
 
     assert recovery < acquire
     assert "MIP_APP_DEPLOYMENT_RECOVERY_ROOT" in script[recovery:acquire]
+    assert "MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES" in script
     assert "app_first_install_journal takeover-lease" not in script
     assert 'APP_LEASE_RECOVERY_ENV=""' in script
     assert 'rm -f "$APP_LEASE_RECOVERY_ENV"' in script
     assert "FIRST_INSTALL_TAKEOVER_ENV" not in script
+
+
+def test_reviewed_foreign_catalog_remediation_uses_stopped_signed_blue_window() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    stop = script.index(
+        'step "stop the exact App before foreign-catalog recovery or fresh remediation"'
+    )
+    remediation = script.index("run_foreign_catalog_binding_remediation", stop)
+    preflight = script.index(
+        'step "preflight remediated agent-runtime foreign UC access while App is stopped"',
+        remediation,
+    )
+    signed_blue = script.index(
+        'step "prove or reconcile the signed last-good App before non-App mutations"',
+        preflight,
+    )
+    lakebase = script.index(
+        'step "recover interrupted verifier Lakebase role bootstrap after UC preflight"',
+        signed_blue,
+    )
+
+    assert stop < remediation < preflight < signed_blue < lakebase
+    helper = _shell_function("run_foreign_catalog_binding_remediation")
+    assert "converge_foreign_catalog_workspace_bindings" in helper
+    assert "recover-local" in helper
+    assert "reauthorize" in helper
+    assert '"$action"' in helper
+    assert "verify" in helper
+
+
+def _run_foreign_catalog_helper_harness(
+    tmp_path: Path,
+    *,
+    recovery_candidates: str,
+    fail_action: str = "",
+    fail_code: int = 0,
+    recover_code: int = 0,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    calls = tmp_path / "foreign-catalog-helper.log"
+    fake_python = tmp_path / "foreign-catalog-helper-python.sh"
+    fake_python.write_text(
+        """#!/usr/bin/env bash
+action=""
+for value in "$@"; do
+  case "$value" in
+    recover-local|reauthorize|snapshot|apply|resume|verify) action="$value"; break ;;
+  esac
+done
+printf '%s\n' "$action" >> "$CALLS"
+if [[ "$action" == recover-local ]]; then
+  exit "$RECOVER_CODE"
+fi
+if [[ -n "$FAIL_ACTION" && "$action" == "$FAIL_ACTION" ]]; then
+  exit "$FAIL_CODE"
+fi
+exit 0
+""",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "foreign-catalog-helper.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+PYTHON={shlex.quote(str(fake_python))}
+_GRANTS_APP_NAME=mip-app
+DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+DEPLOY_INVENTORY_PRINCIPAL=deployer@example.com
+DATABRICKS_ACCOUNT_ID=account-id
+DATABRICKS_ACCOUNT_CLIENT_ID=account-client
+MIP_DEFAULT_CATALOG=mip
+MIP_APP_DEPLOYMENT_LEASE_ID=current-lease
+MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES={shlex.quote(recovery_candidates)}
+MIP_UC_FOREIGN_CATALOG_BINDING_POLICY='{{"version":1,"catalogs":{{}}}}'
+RED=""
+RST=""
+CALLS={shlex.quote(str(calls))}
+RECOVER_CODE={recover_code}
+FAIL_ACTION={shlex.quote(fail_action)}
+FAIL_CODE={fail_code}
+export CALLS RECOVER_CODE FAIL_ACTION FAIL_CODE
+step() {{ :; }}
+run_with_account_identity() {{ "$@"; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+{_shell_function("run_foreign_catalog_binding_remediation")}
+run_foreign_catalog_binding_remediation
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    recorded = calls.read_text(encoding="utf-8").splitlines() if calls.exists() else []
+    return result, recorded
+
+
+@pytest.mark.parametrize(
+    ("recovery_candidates", "fail_action", "fail_code", "recover_code"),
+    [
+        ("old-lease", "recover-local", 71, 71),
+        ("old-lease", "reauthorize", 72, 0),
+        ("", "snapshot", 73, 0),
+        ("old-lease", "resume", 74, 0),
+        ("", "apply", 75, 0),
+        ("", "verify", 76, 0),
+    ],
+)
+def test_foreign_catalog_helper_propagates_every_child_failure(
+    tmp_path: Path,
+    recovery_candidates: str,
+    fail_action: str,
+    fail_code: int,
+    recover_code: int,
+) -> None:
+    result, calls = _run_foreign_catalog_helper_harness(
+        tmp_path,
+        recovery_candidates=recovery_candidates,
+        fail_action=fail_action,
+        fail_code=fail_code,
+        recover_code=recover_code,
+    )
+
+    assert result.returncode == fail_code, (result.stdout, result.stderr, calls)
+    if fail_action in {"resume", "apply"}:
+        assert "verify" not in calls
+
+
+def test_foreign_catalog_helper_searches_full_lineage_before_absence(
+    tmp_path: Path,
+) -> None:
+    result, calls = _run_foreign_catalog_helper_harness(
+        tmp_path,
+        recovery_candidates="newest,root",
+        recover_code=3,
+    )
+
+    assert result.returncode == 0
+    assert calls == [
+        "recover-local",
+        "recover-local",
+        "snapshot",
+        "apply",
+        "verify",
+    ]
+
+
+def test_foreign_catalog_remediation_rejects_absent_or_unstable_app() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    status = script.index(
+        'step "read signed first-install journal at the immediate recovery boundary"'
+    )
+    absent = script.index(
+        "foreign-catalog remediation requires an existing identity-pinned App",
+        status,
+    )
+    unstable = script.index(
+        "foreign-catalog remediation refuses unstable first-install App state",
+        absent,
+    )
+    remediation = script.index(
+        'step "stop the exact App before foreign-catalog recovery or fresh remediation"',
+        unstable,
+    )
+
+    assert status < absent < unstable < remediation
 
 
 def test_first_install_creation_is_preceded_by_signed_durable_recovery_intent() -> None:
@@ -3539,8 +3709,13 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
 
     assert "rebase_unverified_app:" in workflow
+    assert "remediate_foreign_catalog_bindings:" in workflow
     assert (
         "MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}" in workflow
+    )
+    assert (
+        "MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: "
+        "${{ inputs.remediate_foreign_catalog_bindings && '1' || '0' }}" in workflow
     )
     assert "MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'" in workflow
     assert workflow.count("MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}") == 2
@@ -3555,12 +3730,21 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     binding = "MIP_UC_APPROVED_OWNER_PRINCIPALS: " "${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}"
     assert workflow.count(binding) == 2
     assert "MIP_UC_APPROVED_OWNER_PRINCIPALS=${MIP_UC_APPROVED_OWNER_PRINCIPALS}" in workflow
+    binding_policy = (
+        "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY: "
+        "${{ vars.MIP_UC_FOREIGN_CATALOG_BINDING_POLICY }}"
+    )
+    assert workflow.count(binding_policy) == 2
+    assert (
+        "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY=" "${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY}"
+    ) in workflow
     assert "DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}" in workflow
     assert (
         "DATABRICKS_ACCOUNT_CLIENT_SECRET: " "${{ secrets.DATABRICKS_ACCOUNT_CLIENT_SECRET }}"
     ) in workflow
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     assert "dotenv_value MIP_UC_APPROVED_OWNER_PRINCIPALS" in script
+    assert "deployment_control_value MIP_UC_FOREIGN_CATALOG_BINDING_POLICY" in script
     assert 'resolve_m2m_credential "$_ACCOUNT_AUTH_NAME"' in script
     assert "account-SCIM OAuth client must be distinct from" in script
     assert script.index("existing target App service principal") < script.index(

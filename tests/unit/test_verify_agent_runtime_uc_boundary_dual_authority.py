@@ -40,7 +40,8 @@ def _proof() -> ControlPlaneForeignCatalogProof:
         catalog="mip",
         metastore_id="metastore-id",
         workspace_id="workspace-id",
-        audited_catalogs=frozenset({"other"}),
+        grant_audited_catalogs=frozenset({"other"}),
+        binding_denied_catalogs=(),
     )
 
 
@@ -51,6 +52,7 @@ def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
     runtime = SimpleNamespace(name="runtime")
     clients = iter([admin, runtime])
     events: list[tuple[str, object]] = []
+    policies: list[str] = []
     monkeypatch.setattr(dual, "WorkspaceClient", lambda: next(clients))
     account_client = object()
     monkeypatch.setattr(dual, "account_client_from_env", lambda: account_client)
@@ -58,7 +60,9 @@ def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
         dual,
         "audit_foreign_uc_access",
         lambda workspace, **kwargs: (
-            events.append(("control", (workspace, kwargs["account_factory"]()))) or _proof()
+            policies.append(kwargs["foreign_catalog_binding_policy"])
+            or events.append(("control", (workspace, kwargs["account_factory"]())))
+            or _proof()
         ),
     )
     monkeypatch.setattr(
@@ -76,6 +80,10 @@ def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
     monkeypatch.setenv("DATABRICKS_TOKEN", "deployer-token")
     monkeypatch.setenv("DATABRICKS_ACCOUNT_CLIENT_ID", "account-client")
     monkeypatch.setenv("DATABRICKS_ACCOUNT_CLIENT_SECRET", "account-secret")
+    monkeypatch.setenv(
+        "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY",
+        '{"version":1,"catalogs":{}}',
+    )
 
     assert dual.main(_args()) == 0
 
@@ -88,6 +96,10 @@ def test_dual_authority_cli_couples_control_and_runtime_in_one_process(
     assert "DATABRICKS_TOKEN" not in dual.os.environ
     assert dual.os.environ["DATABRICKS_CLIENT_ID"] == APPLICATION_ID
     assert dual.os.environ["DATABRICKS_AUTH_TYPE"] == "oauth-m2m"
+    assert policies == [
+        '{"version":1,"catalogs":{}}',
+        '{"version":1,"catalogs":{}}',
+    ]
 
 
 def test_dual_authority_cli_never_binds_runtime_when_control_plane_fails(
@@ -149,7 +161,8 @@ def test_dual_authority_cli_rejects_control_plane_drift_after_runtime(
                 catalog="mip",
                 metastore_id="metastore-id",
                 workspace_id="workspace-id",
-                audited_catalogs=frozenset({"other", "new-catalog"}),
+                grant_audited_catalogs=frozenset({"other", "new-catalog"}),
+                binding_denied_catalogs=(),
             ),
         ]
     )

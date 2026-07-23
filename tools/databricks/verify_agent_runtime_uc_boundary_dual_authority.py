@@ -60,6 +60,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gateway-experiment-base", default=DEFAULT_GATEWAY_AGENT_EXPERIMENT)
     parser.add_argument("--genie-space-id", required=True)
     parser.add_argument("--inference-table-prefix", required=True)
+    parser.add_argument(
+        "--foreign-catalog-binding-policy-json",
+        default=os.environ.get("MIP_UC_FOREIGN_CATALOG_BINDING_POLICY", ""),
+    )
     args = parser.parse_args(argv)
 
     admin_workspace = WorkspaceClient()
@@ -69,6 +73,7 @@ def main(argv: list[str] | None = None) -> int:
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
+        foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
         account_factory=lambda: account_client,
     )
     _bind_runtime_auth_environment(
@@ -94,6 +99,7 @@ def main(argv: list[str] | None = None) -> int:
         application_id=args.application_id,
         catalog=args.catalog,
         expected_inventory_principal=args.expected_inventory_principal,
+        foreign_catalog_binding_policy=args.foreign_catalog_binding_policy_json,
         account_factory=lambda: account_client,
     )
     if post_runtime_proof != proof:

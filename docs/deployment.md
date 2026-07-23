@@ -186,10 +186,13 @@ public key, oldest first, in the public GitHub Actions variable
 `MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS`; private keys are still destroyed
 at retirement. Each successor records the public-key epoch and rejects epoch
 regression. The signed chain retains its original recovery root through every
-release, so a killed deploy can present that exact root for an expired takeover
-even when no first-install journal exists. A stranded legacy v2 fence is
-migrated append-only only after its expiry plus the five-minute quiescence
-margin and that exact durable recovery authority.
+release by the same holder. A new holder with no signed history begins a
+separate root, while a returning holder discovers its newest historical root
+without inheriting another holder's authority. A killed deploy can therefore
+present its exact root for an expired takeover even when no first-install
+journal exists. A stranded legacy v2 fence is migrated append-only only after
+its expiry plus the five-minute quiescence margin and that exact durable
+recovery authority.
 
 Before the first Apps API create, deploy writes a signed, lease-bound ownership
 journal under `/.mip-deployment-leases/<app>.first-install.json`. Journal v3
@@ -445,12 +448,14 @@ rename, and blue-resource deletion. Its one-minute heartbeat renews the signed
 fence. A losing contender reads the existing lease without changing that ACL,
 and a heartbeat exits without renewal as soon as it is no longer a child of the
 deployer that launched it. If process death follows the first signed generation
-but precedes its ACL postflight, only that signed holder may converge the exact
-holder/writer ACL before reading its recovery root. After the signed lease
-expires (with renewal bounded by the six-hour cap), the next deployment
-presents that durable root and wins the one deterministic non-overwriting
-successor path. No journal, delete, or overwrite is involved, so an active,
-unrelated, or changed fence cannot be replaced. The
+but precedes its ACL postflight, recovery discovery remains read-only. After the
+signed lease expires (with renewal bounded by the six-hour cap), only the exact
+signed holder and writer may present that durable root and contend on the one
+deterministic non-overwriting successor path. Only the immutable successor
+winner converges the exact new holder/writer ACL and then revalidates the
+authoritative head; a losing historical holder never changes the shared ACL.
+No journal, delete, or overwrite is involved, so an active, unrelated, or
+changed fence cannot be replaced. The
 lease UUID is injected into the App payload and authenticated
 health response, and capture revalidates the live signed lease before and after
 activation. Capture records the

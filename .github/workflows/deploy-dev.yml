@@ -14,6 +14,10 @@ on:
         description: "One-time only: stop an existing App that has no signed rollback record"
         type: boolean
         default: false
+      remediate_foreign_catalog_bindings:
+        description: "One-time reviewed isolation of foreign catalogs from the MIP workspace"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -62,6 +66,7 @@ jobs:
           MIP_ADMIN_GROUP_NAME: ${{ vars.MIP_ADMIN_GROUP_NAME }}
           MIP_APPROVER_GROUP_NAME: ${{ vars.MIP_APPROVER_GROUP_NAME }}
           MIP_UC_APPROVED_OWNER_PRINCIPALS: ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}
+          MIP_UC_FOREIGN_CATALOG_BINDING_POLICY: ${{ vars.MIP_UC_FOREIGN_CATALOG_BINDING_POLICY }}
           MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
           MIP_LENDER_NAME: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
           MIP_LENDER_NMLS_ID: ${{ vars.MIP_LENDER_NMLS_ID }}
@@ -110,7 +115,8 @@ jobs:
           export -n MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY
           export -n MIP_GENIE_ACTION_SECRET_KID MIP_GENIE_ACTION_SECRET_PREVIOUS_KID
           export -n MIP_ADMIN_EMAILS MIP_ADMIN_GROUP_NAME MIP_APPROVER_GROUP_NAME
-          export -n MIP_UC_APPROVED_OWNER_PRINCIPALS MIP_DEFAULT_CATALOG
+          export -n MIP_UC_APPROVED_OWNER_PRINCIPALS
+          export -n MIP_UC_FOREIGN_CATALOG_BINDING_POLICY MIP_DEFAULT_CATALOG
           export -n MIP_APP_NAME MIP_LAKEBASE_INSTANCE LAKEBASE_DATABASE
           export -n MIP_LAKEBASE_SYNC_CATALOG MIP_LAKEBASE_SYNC_SCHEMA
           export -n MIP_LAKEBASE_SYNC_TABLES MIP_RUNTIME_SECRET_SCOPE
@@ -191,6 +197,9 @@ jobs:
             if [ -n "${MIP_UC_APPROVED_OWNER_PRINCIPALS:-}" ]; then
               echo "MIP_UC_APPROVED_OWNER_PRINCIPALS=${MIP_UC_APPROVED_OWNER_PRINCIPALS}"
             fi
+            if [ -n "${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY:-}" ]; then
+              echo "MIP_UC_FOREIGN_CATALOG_BINDING_POLICY=${MIP_UC_FOREIGN_CATALOG_BINDING_POLICY}"
+            fi
             if [ -n "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-}" ]; then
               echo "MIP_AI_GATEWAY_AGENT_MODEL_FAMILY=${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY}"
             fi
@@ -231,6 +240,7 @@ jobs:
           MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY }}
           MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY }}
           MIP_UC_APPROVED_OWNER_PRINCIPALS: ${{ vars.MIP_UC_APPROVED_OWNER_PRINCIPALS }}
+          MIP_UC_FOREIGN_CATALOG_BINDING_POLICY: ${{ vars.MIP_UC_FOREIGN_CATALOG_BINDING_POLICY }}
           MIP_DEFAULT_CATALOG: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
           MIP_LENDER_NAME: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
           MIP_LENDER_NMLS_ID: ${{ vars.MIP_LENDER_NMLS_ID }}
@@ -248,6 +258,7 @@ jobs:
           MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}
           MIP_AI_GATEWAY_TABLE_PREFIX: ${{ vars.MIP_AI_GATEWAY_TABLE_PREFIX }}
           MIP_REBASE_UNVERIFIED_APP: ${{ inputs.rebase_unverified_app && '1' || '0' }}
+          MIP_REMEDIATE_FOREIGN_CATALOG_BINDINGS: ${{ inputs.remediate_foreign_catalog_bindings && '1' || '0' }}
           MIP_REQUIRE_AI_GATEWAY_CLAIMABLE: '1'
           SALESFORCE_INSTANCE_URL: ${{ vars.SALESFORCE_INSTANCE_URL }}
           SALESFORCE_CLIENT_ID: ${{ vars.SALESFORCE_CLIENT_ID }}

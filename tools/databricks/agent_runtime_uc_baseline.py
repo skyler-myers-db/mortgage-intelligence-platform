@@ -7,13 +7,32 @@ from threading import Lock
 from typing import Any
 from weakref import ReferenceType, ref
 
+
+@dataclass(frozen=True, order=True)
+class CatalogBindingEvidence:
+    """Exact control-plane evidence that a workspace cannot access a catalog."""
+
+    catalog: str
+    owner: str
+    catalog_type: str
+    isolation_mode: str
+    bindings: tuple[tuple[str, str], ...]
+
+
 _CONTROL_PLANE_PROOF_ISSUER = object()
 _CONTROL_PLANE_PROOF_LOCK = Lock()
 _CONTROL_PLANE_PROOF_REGISTRY: dict[
     int,
     tuple[
         ReferenceType[ControlPlaneForeignCatalogProof],
-        tuple[str, str, str, str, frozenset[str]],
+        tuple[
+            str,
+            str,
+            str,
+            str,
+            frozenset[str],
+            tuple[CatalogBindingEvidence, ...],
+        ],
     ],
 ] = {}
 
@@ -26,8 +45,15 @@ class ControlPlaneForeignCatalogProof:
     catalog: str
     metastore_id: str
     workspace_id: str
-    audited_catalogs: frozenset[str]
+    grant_audited_catalogs: frozenset[str]
+    binding_denied_catalogs: tuple[CatalogBindingEvidence, ...]
     _issuer: object
+
+    @property
+    def audited_catalogs(self) -> frozenset[str]:
+        return self.grant_audited_catalogs | frozenset(
+            item.catalog for item in self.binding_denied_catalogs
+        )
 
 
 @dataclass(frozen=True)
@@ -38,18 +64,33 @@ class ConsumedControlPlaneForeignCatalogProof:
     catalog: str
     metastore_id: str
     workspace_id: str
-    audited_catalogs: frozenset[str]
+    grant_audited_catalogs: frozenset[str]
+    binding_denied_catalogs: tuple[CatalogBindingEvidence, ...]
+
+    @property
+    def audited_catalogs(self) -> frozenset[str]:
+        return self.grant_audited_catalogs | frozenset(
+            item.catalog for item in self.binding_denied_catalogs
+        )
 
 
 def _control_plane_proof_snapshot(
     proof: ControlPlaneForeignCatalogProof,
-) -> tuple[str, str, str, str, frozenset[str]]:
+) -> tuple[
+    str,
+    str,
+    str,
+    str,
+    frozenset[str],
+    tuple[CatalogBindingEvidence, ...],
+]:
     return (
         proof.application_id,
         proof.catalog,
         proof.metastore_id,
         proof.workspace_id,
-        proof.audited_catalogs,
+        proof.grant_audited_catalogs,
+        proof.binding_denied_catalogs,
     )
 
 
@@ -59,7 +100,8 @@ def _issue_control_plane_foreign_catalog_proof(
     catalog: str,
     metastore_id: str,
     workspace_id: str,
-    audited_catalogs: frozenset[str],
+    grant_audited_catalogs: frozenset[str],
+    binding_denied_catalogs: tuple[CatalogBindingEvidence, ...],
 ) -> ControlPlaneForeignCatalogProof:
     proof = object.__new__(ControlPlaneForeignCatalogProof)
     for name, value in (
@@ -67,7 +109,8 @@ def _issue_control_plane_foreign_catalog_proof(
         ("catalog", catalog),
         ("metastore_id", metastore_id),
         ("workspace_id", workspace_id),
-        ("audited_catalogs", audited_catalogs),
+        ("grant_audited_catalogs", grant_audited_catalogs),
+        ("binding_denied_catalogs", binding_denied_catalogs),
         ("_issuer", _CONTROL_PLANE_PROOF_ISSUER),
     ):
         object.__setattr__(proof, name, value)

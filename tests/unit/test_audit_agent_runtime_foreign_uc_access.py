@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from types import SimpleNamespace
 from typing import Any
 
@@ -12,7 +13,9 @@ APPLICATION_ID = "runtime-client"
 INVENTORY_PRINCIPAL = "deployer@example.com"
 CATALOG = "mip"
 WORKSPACE_ID = "7474645995341779"
+OTHER_WORKSPACE_ID = "2478181912221244"
 FOREIGN_OWNER = "foreign-owner@example.com"
+ACCOUNT_SCIM_ID = "account-runtime-id"
 
 
 def _assignment(
@@ -142,14 +145,30 @@ def _workspace(
     }
     baseline.update(values or {})
     catalogs = [
-        SimpleNamespace(name=CATALOG, isolation_mode="OPEN", owner="mip-owner"),
+        SimpleNamespace(
+            name=CATALOG,
+            isolation_mode="OPEN",
+            owner="mip-owner",
+            catalog_type="MANAGED_CATALOG",
+        ),
         SimpleNamespace(
             name="other",
             isolation_mode="OPEN",
             owner=object_owner("other"),
+            catalog_type="MANAGED_CATALOG",
         ),
-        SimpleNamespace(name="system", isolation_mode="OPEN", owner="System user"),
-        SimpleNamespace(name="samples", isolation_mode="OPEN", owner="System user"),
+        SimpleNamespace(
+            name="system",
+            isolation_mode="OPEN",
+            owner="System user",
+            catalog_type="SYSTEM_CATALOG",
+        ),
+        SimpleNamespace(
+            name="samples",
+            isolation_mode="OPEN",
+            owner="System user",
+            catalog_type="MANAGED_CATALOG",
+        ),
         SimpleNamespace(
             name="__databricks_internal",
             isolation_mode="OPEN",
@@ -158,6 +177,9 @@ def _workspace(
         ),
         *(extra_catalogs or []),
     ]
+    for item in catalogs:
+        if not hasattr(item, "catalog_type"):
+            item.catalog_type = "MANAGED_CATALOG"
 
     def list_catalogs(**kwargs: object) -> Any:
         assert kwargs == {"include_browse": True, "include_unbound": True}
@@ -185,7 +207,14 @@ def _workspace(
         ),
         catalogs=SimpleNamespace(list=list_catalogs),
         workspace_bindings=SimpleNamespace(
-            get_bindings=lambda _type, _name: iter([SimpleNamespace(workspace_id=WORKSPACE_ID)])
+            get_bindings=lambda _type, _name: iter(
+                [
+                    SimpleNamespace(
+                        workspace_id=WORKSPACE_ID,
+                        binding_type="BINDING_TYPE_READ_WRITE",
+                    )
+                ]
+            )
         ),
         schemas=SimpleNamespace(list=lambda catalog, **_kwargs: iter(schemas[catalog])),
         functions=SimpleNamespace(
@@ -234,7 +263,82 @@ def _workspace(
     )
 
 
+def _binding_policy(
+    catalog: str = "hidden",
+    *,
+    owner: str = FOREIGN_OWNER,
+) -> str:
+    return json.dumps(
+        {
+            "version": 1,
+            "catalogs": {
+                catalog: {
+                    "owner": owner,
+                    "catalog_type": "MANAGED_CATALOG",
+                    "bindings": [
+                        {
+                            "workspace_id": OTHER_WORKSPACE_ID,
+                            "binding_type": "BINDING_TYPE_READ_WRITE",
+                        }
+                    ],
+                }
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+
+
+def _account() -> object:
+    account_users = SimpleNamespace(
+        id="account-users-id",
+        display_name="account users",
+        members=[SimpleNamespace(value=ACCOUNT_SCIM_ID)],
+    )
+    return SimpleNamespace(
+        config=SimpleNamespace(client_id="account-auditor"),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: iter(
+                [
+                    SimpleNamespace(
+                        application_id=APPLICATION_ID,
+                        id=ACCOUNT_SCIM_ID,
+                        display_name="runtime",
+                        active=True,
+                    )
+                ]
+            )
+        ),
+        groups=SimpleNamespace(
+            list=lambda **_kwargs: iter([account_users]),
+            get=lambda group_id: account_users
+            if group_id == "account-users-id"
+            else None,
+        ),
+        metastore_assignments=SimpleNamespace(
+            list=lambda _metastore_id: iter([WORKSPACE_ID, OTHER_WORKSPACE_ID])
+        ),
+        workspace_assignment=SimpleNamespace(
+            list=lambda workspace_id: iter(
+                [
+                    SimpleNamespace(
+                        permissions=["USER"],
+                        principal=SimpleNamespace(
+                            principal_id=ACCOUNT_SCIM_ID,
+                            service_principal_name=APPLICATION_ID,
+                            group_name=None,
+                        ),
+                    )
+                ]
+                if str(workspace_id) == WORKSPACE_ID
+                else []
+            )
+        ),
+    )
+
+
 def _audit(workspace: Any, **kwargs: Any) -> object:
+    kwargs.setdefault("account_factory", _account)
     return auditor.audit_foreign_uc_access(
         workspace,
         application_id=APPLICATION_ID,
@@ -242,6 +346,117 @@ def _audit(workspace: Any, **kwargs: Any) -> object:
         expected_inventory_principal=INVENTORY_PRINCIPAL,
         **kwargs,
     )
+
+
+def test_foreign_catalog_binding_policy_rejects_ambiguous_json() -> None:
+    with pytest.raises(ValueError, match="duplicate key"):
+        auditor.parse_foreign_catalog_binding_policy(
+            '{"version":1,"version":1,"catalogs":{}}'
+        )
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "[]",
+        '{"version":true,"catalogs":{}}',
+        '{"version":1.0,"catalogs":{}}',
+        '{"version":2,"catalogs":{}}',
+        '{"version":1,"catalogs":{"hidden":{"owner":"owner","catalog_type":'
+        '"MANAGED_CATALOG","bindings":[]}}}',
+        '{"version":1,"catalogs":{"hidden":{"owner":"owner","catalog_type":'
+        '"MANAGED_CATALOG","bindings":[{"workspace_id":"01","binding_type":'
+        '"BINDING_TYPE_READ_WRITE"}]}}}',
+        '{"version":1,"catalogs":{"hidden":{"owner":"owner","catalog_type":'
+        '"MANAGED_CATALOG","bindings":[{"workspace_id":"2478181912221244",'
+        '"binding_type":"UNKNOWN"}]}}}',
+    ],
+)
+def test_foreign_catalog_binding_policy_rejects_invalid_contract(value: str) -> None:
+    with pytest.raises(ValueError, match="foreign catalog binding policy"):
+        auditor.parse_foreign_catalog_binding_policy(value)
+
+
+def test_foreign_uc_control_plane_rejects_runtime_foreign_workspace_assignment() -> None:
+    account = _account()
+    original = account.workspace_assignment.list
+    account.workspace_assignment.list = lambda workspace_id: iter(
+        [
+            SimpleNamespace(
+                permissions=["USER"],
+                principal=SimpleNamespace(
+                    principal_id=ACCOUNT_SCIM_ID,
+                    service_principal_name=APPLICATION_ID,
+                    group_name=None,
+                ),
+            )
+        ]
+        if str(workspace_id) in {WORKSPACE_ID, OTHER_WORKSPACE_ID}
+        else list(original(workspace_id))
+    )
+
+    with pytest.raises(RuntimeError, match="unexpected account workspace assignment"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_assignment_name_omission_for_target_id() -> None:
+    account = _account()
+    account.workspace_assignment.list = lambda workspace_id: iter(
+        [
+            SimpleNamespace(
+                permissions=["USER"],
+                principal=SimpleNamespace(
+                    principal_id=ACCOUNT_SCIM_ID,
+                    service_principal_name=(
+                        APPLICATION_ID if str(workspace_id) == WORKSPACE_ID else ""
+                    ),
+                    group_name=None,
+                ),
+            )
+        ]
+        if str(workspace_id) in {WORKSPACE_ID, OTHER_WORKSPACE_ID}
+        else []
+    )
+
+    with pytest.raises(RuntimeError, match="identity fields disagree"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_rejects_runtime_non_system_account_group() -> None:
+    account = _account()
+    account_users = next(account.groups.list())
+    foreign_group = SimpleNamespace(
+        id="foreign-group-id",
+        display_name="foreign-data-users",
+        members=[SimpleNamespace(value=ACCOUNT_SCIM_ID)],
+    )
+    account.groups.list = lambda **_kwargs: iter(
+        [
+            account_users,
+            SimpleNamespace(
+                id="foreign-group-id",
+                display_name="foreign-data-users",
+                members=[],
+            ),
+        ]
+    )
+    account.groups.get = lambda group_id: (
+        foreign_group if group_id == "foreign-group-id" else account_users
+    )
+
+    with pytest.raises(RuntimeError, match="forbidden ordinary account group"):
+        _audit(_workspace(), account_factory=lambda: account)
+
+
+def test_foreign_uc_control_plane_accepts_implicit_account_users_baseline() -> None:
+    account = _account()
+    account.groups.list = lambda **_kwargs: iter([])
+    account.groups.get = lambda _group_id: None
+
+    proof = _audit(_workspace(), account_factory=lambda: account)
+
+    assert proof.application_id == APPLICATION_ID
+    assert proof.workspace_id == WORKSPACE_ID
 
 
 def test_foreign_uc_control_plane_passes_only_with_complete_zero_access() -> None:
@@ -378,7 +593,7 @@ def test_foreign_uc_control_plane_rejects_display_name_owner_group() -> None:
         _audit(workspace)
 
 
-def test_foreign_uc_control_plane_rejects_hidden_unbound_catalog_access() -> None:
+def test_foreign_uc_control_plane_accepts_binding_excluded_catalog_grants() -> None:
     workspace = _workspace(
         {("catalog", "hidden"): [_assignment("BROWSE", principal="account users")]},
         extra_catalogs=[
@@ -389,12 +604,117 @@ def test_foreign_uc_control_plane_rejects_hidden_unbound_catalog_access() -> Non
             )
         ],
     )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
 
-    with pytest.raises(RuntimeError, match="forbidden access.*hidden"):
-        _audit(workspace)
+    proof = _audit(
+        workspace,
+        foreign_catalog_binding_policy=_binding_policy(),
+    )
+
+    assert proof.audited_catalogs == frozenset({"hidden", "other"})
+    assert proof.grant_audited_catalogs == frozenset({"other"})
+    assert tuple(item.catalog for item in proof.binding_denied_catalogs) == ("hidden",)
+    assert ("catalog", "hidden", None) not in workspace.grants.calls
 
 
-def test_foreign_uc_control_plane_fails_closed_on_unbound_catalog_children() -> None:
+def test_foreign_uc_control_plane_accepts_binding_excluded_hidden_children() -> None:
+    workspace = _workspace(
+        {
+            ("schema", "hidden.private"): [
+                _assignment("USE_SCHEMA", principal="account users")
+            ]
+        },
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=FOREIGN_OWNER,
+            )
+        ]
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    proof = _audit(
+        workspace,
+        foreign_catalog_binding_policy=_binding_policy(),
+    )
+
+    assert proof.audited_catalogs == frozenset({"hidden", "other"})
+    assert ("schema", "hidden.private", None) not in workspace.grants.calls
+
+
+@pytest.mark.parametrize(
+    "binding_type",
+    [
+        "BINDING_TYPE_READ_ONLY",
+        "BINDING_TYPE_READ_WRITE",
+    ],
+)
+def test_foreign_uc_control_plane_rejects_grants_when_target_workspace_is_bound(
+    binding_type: str,
+) -> None:
+    workspace = _workspace(
+        {("catalog", "hidden"): [_assignment("BROWSE", principal="account users")]},
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=FOREIGN_OWNER,
+            )
+        ],
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type=binding_type,
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="not binding-denied as reviewed"):
+        _audit(
+            workspace,
+            foreign_catalog_binding_policy=_binding_policy(),
+        )
+
+
+def test_foreign_uc_control_plane_propagates_binding_authorization_denial() -> None:
     workspace = _workspace(
         extra_catalogs=[
             SimpleNamespace(
@@ -404,9 +724,187 @@ def test_foreign_uc_control_plane_fails_closed_on_unbound_catalog_children() -> 
             )
         ]
     )
-    workspace.workspace_bindings.get_bindings = lambda _type, _name: iter([])
 
-    with pytest.raises(RuntimeError, match="unbound.*cannot be completely inventoried"):
+    def deny_hidden(_type: str, name: str) -> object:
+        if name == "hidden":
+            raise PermissionDenied("binding inventory requires metastore authority")
+        return iter(
+            [
+                SimpleNamespace(
+                    workspace_id=WORKSPACE_ID,
+                    binding_type="BINDING_TYPE_READ_WRITE",
+                )
+            ]
+        )
+
+    workspace.workspace_bindings.get_bindings = deny_hidden
+
+    with pytest.raises(PermissionDenied, match="binding inventory requires"):
+        _audit(
+            workspace,
+            foreign_catalog_binding_policy=_binding_policy(),
+        )
+
+
+def test_foreign_uc_control_plane_rejects_binding_excluded_runtime_ownership() -> None:
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=APPLICATION_ID,
+            )
+        ]
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="cannot own governed UC objects"):
+        _audit(
+            workspace,
+            foreign_catalog_binding_policy=_binding_policy(
+                owner=APPLICATION_ID,
+            ),
+        )
+
+
+def test_foreign_uc_control_plane_skips_binding_excluded_registered_model_grants() -> None:
+    workspace = _workspace(
+        {
+            ("function", "hidden.private.model"): [
+                _assignment("EXECUTE", principal="account users")
+            ]
+        },
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=FOREIGN_OWNER,
+            )
+        ],
+    )
+    models = list(workspace.registered_models.list(include_browse=True))
+    models.append(
+        SimpleNamespace(
+            full_name="hidden.private.model",
+            catalog_name="hidden",
+            owner=FOREIGN_OWNER,
+        )
+    )
+    workspace.registered_models.list = lambda **_kwargs: iter(models)
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    proof = _audit(
+        workspace,
+        foreign_catalog_binding_policy=_binding_policy(),
+    )
+
+    assert proof.audited_catalogs == frozenset({"hidden", "other"})
+    assert ("function", "hidden.private.model", None) not in workspace.grants.calls
+
+
+@pytest.mark.parametrize(
+    "binding",
+    [
+        SimpleNamespace(
+            workspace_id="",
+            binding_type="BINDING_TYPE_READ_WRITE",
+        ),
+        SimpleNamespace(
+            workspace_id=OTHER_WORKSPACE_ID,
+            binding_type="",
+        ),
+        SimpleNamespace(
+            workspace_id=OTHER_WORKSPACE_ID,
+            binding_type="BINDING_TYPE_UNKNOWN",
+        ),
+    ],
+)
+def test_foreign_uc_control_plane_rejects_incomplete_workspace_binding(
+    binding: object,
+) -> None:
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=FOREIGN_OWNER,
+            )
+        ]
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [binding]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="incomplete workspace binding"):
+        _audit(workspace)
+
+
+def test_foreign_uc_control_plane_rejects_duplicate_workspace_binding() -> None:
+    workspace = _workspace(
+        extra_catalogs=[
+            SimpleNamespace(
+                name="hidden",
+                isolation_mode="ISOLATED",
+                owner=FOREIGN_OWNER,
+            )
+        ]
+    )
+    workspace.workspace_bindings.get_bindings = lambda _type, name: iter(
+        [
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            ),
+            SimpleNamespace(
+                workspace_id=OTHER_WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_ONLY",
+            ),
+        ]
+        if name == "hidden"
+        else [
+            SimpleNamespace(
+                workspace_id=WORKSPACE_ID,
+                binding_type="BINDING_TYPE_READ_WRITE",
+            )
+        ]
+    )
+
+    with pytest.raises(RuntimeError, match="duplicate workspace bindings"):
         _audit(workspace)
 
 
@@ -502,19 +1000,16 @@ def test_foreign_uc_control_plane_uses_target_credential_for_group_ownership() -
         [SimpleNamespace(display_name="runtime-owners", id="owner-group-id")]
     )
 
-    account = SimpleNamespace(
-        config=SimpleNamespace(client_id="account-auditor"),
-        service_principals=SimpleNamespace(
-            list=lambda **_kwargs: iter(
-                [SimpleNamespace(application_id=APPLICATION_ID, id="account-runtime-id")]
-            )
-        ),
-        groups=SimpleNamespace(
-            get=lambda _group_id: SimpleNamespace(
-                id="owner-group-id",
-                display_name="runtime-owners",
-            )
-        ),
+    account = _account()
+    account_users = next(account.groups.list())
+    account.groups.get = lambda group_id: (
+        SimpleNamespace(
+            id="owner-group-id",
+            display_name="runtime-owners",
+            members=[],
+        )
+        if group_id == "owner-group-id"
+        else account_users
     )
     calls: list[tuple[str, str, str, str]] = []
 
@@ -535,4 +1030,4 @@ def test_foreign_uc_control_plane_uses_target_credential_for_group_ownership() -
             group_membership_probe=probe,
         )
 
-    assert calls == [("account-runtime-id", APPLICATION_ID, "owner-group-id", "runtime-owners")]
+    assert calls == [(ACCOUNT_SCIM_ID, APPLICATION_ID, "owner-group-id", "runtime-owners")]

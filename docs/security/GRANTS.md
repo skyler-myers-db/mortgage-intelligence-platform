@@ -318,8 +318,32 @@ the configured MIP catalog. Both require the expected workspace administrator
 to prove it directly owns the current metastore. The postflight then requires
 two independent views of the exact runtime application ID. First, that same
 administrator uses that control-plane authority to
-enumerate every ordinary foreign catalog, including unbound catalogs, and reject
-any direct or inherited catalog, child-object, or registered-model privilege.
+enumerate every ordinary foreign catalog, including unbound catalogs. An
+`OPEN` catalog or an `ISOLATED` catalog bound to the deployment workspace must
+reject any direct or inherited catalog, child-object, or registered-model
+privilege. An `ISOLATED` catalog whose complete authoritative binding inventory
+excludes the deployment workspace is accepted only when its catalog name,
+owner, catalog type, isolation mode, immutable workspace IDs, and binding types
+exactly match the versioned
+`MIP_UC_FOREIGN_CATALOG_BINDING_POLICY` deployment contract. This is a stronger
+workspace-level deny: Databricks enforces the exclusion ahead of explicit
+grants and exposes no child objects to the unbound workspace. The sealed
+control-plane proof records grant-audited catalogs separately from the complete
+typed binding-denial evidence. If a binding-denied catalog or registered model
+becomes visible to the runtime-authenticated inventory, the proof fails rather
+than suppressing the lookup.
+
+The same control-plane pass resolves the runtime service principal exactly once
+in account SCIM, requires it to be active, and rejects every ordinary account
+group membership. The Databricks-managed `account users` baseline may be
+implicit and absent from explicit SCIM membership; if it is returned, it is the
+only accepted system group. The pass enumerates every workspace assigned to the
+current metastore and requires exactly one direct, immutable-ID-matched `USER`
+assignment in the MIP workspace, with no direct or group-derived assignment to
+a workspace retained by the foreign-catalog policy. Unknown isolation modes,
+incomplete or duplicate binding identities, unsupported binding types, policy
+drift, account-group drift, workspace-assignment drift, and binding-read errors
+fail closed.
 It separately checks the owner on every inventoried catalog, schema, table,
 function, volume, and registered model. Direct runtime ownership fails. Group
 owners are resolved by immutable workspace and account SCIM IDs, then a bounded
@@ -334,10 +358,9 @@ must not own the MIP catalog, any schema, any function, any ordinary table or
 volume, or any unrelated registered model. Only the exact contract-hashed
 Gateway model and inference-table families may remain runtime-owned, and those
 must be owned directly by the application ID with matching signed provenance.
-An unbound foreign catalog also fails closed because its children cannot be
-completely inventoried from the deployment workspace. An authorization error,
-incomplete identity, unknown isolation mode, pagination error, or worker error
-likewise fails this audit; none is interpreted as zero access. The deploy then
+An authorization error, incomplete identity, unknown isolation mode, malformed
+binding, pagination error, or worker error likewise fails this audit; none is
+interpreted as zero access. The deploy then
 repeats the MIP and reviewed platform inventory while authenticated as the
 dedicated agent runtime (never as the deployer), using `include_browse` listings
 plus the authoritative Grants `get_effective` API and reading every response
@@ -358,6 +381,111 @@ That helper remains jointly bracketed by account and proof-signing authority.
 Bounded parallel catalog walks keep both exact checks practical.
 Registered models are listed globally because the Databricks SDK rejects
 catalog-only model listings without a schema.
+
+Shared-metastore remediation is a separately reviewed, fail-closed operation.
+`tools/databricks/converge_foreign_catalog_workspace_bindings.py` accepts only a
+clean committed source SHA, an active signed App deployment lease, the stopped
+App's immutable identity, the exact account authority and runtime SCIM
+identities, and a versioned binding policy. Its signed manifest preserves every
+non-MIP metastore workspace as `READ_WRITE` for a formerly `OPEN` catalog and
+preserves the exact existing bindings of every already-`ISOLATED` catalog.
+Catalog metadata is read from the authoritative `include_unbound` inventory,
+not a workspace-scoped `get`. The manifest records the exact direct grants of
+each visible `OPEN` catalog. For an already-`ISOLATED` catalog that excludes the
+MIP workspace, `direct_grants: null` is explicit evidence that the grants API is
+binding-denied; an authorization error is accepted only for that exact
+metadata-and-binding state.
+Before each catalog write it persists a signed immutable intent under the
+lease-protected workspace root, then revalidates the lease, stopped App,
+account assignments, metastore inventory, policy, source SHA, catalog owner,
+catalog type, bindings, and whichever direct-grant evidence is observable in
+that state. After isolation excludes MIP, an exact authorization denial replaces
+the pre-state grant list rather than copying or inventing post-state evidence.
+A killed runner resumes only from the signed pre-state, exact desired state, or
+a narrower `ISOLATED` transitional state. It never automatically reopens a
+catalog after failure. Automated `ISOLATED`-to-`OPEN` rollback is forbidden:
+while MIP is binding-denied, retained workspaces can change child grants that
+the MIP control plane cannot observe, so matching only the former catalog-level
+grant list would not prove that reopening restores the former access boundary.
+Recovery therefore resumes the signed fail-closed desired state. The final
+postflight re-reads the entire policy rather than trusting per-catalog success.
+Because the excluded MIP workspace cannot enumerate foreign direct grants after
+convergence, the live postflight must separately use each retained bound
+workspace to prove its expected access and grant behavior.
+
+The command of record is the manual `deploy-dev` workflow with its one-time
+input, after the exact environment policy has been independently reviewed:
+
+```bash
+BRANCH="$(git branch --show-current)"
+gh workflow run deploy-dev.yml --ref "$BRANCH" \
+  -f remediate_foreign_catalog_bindings=true \
+  -f skip_silver=false \
+  -f skip_smoke=false
+```
+
+That workflow supplies the separated workspace, account-SCIM, runtime, and
+proof-signing authorities. `scripts/deploy.sh` acquires the signed App lease and
+starts its parent-PID-fenced heartbeat. It requires an existing stable App,
+stops the exact immutable App identity before any recovery or fresh catalog
+write, and then runs `snapshot`, `apply`, and `verify`. A signed immutable
+completion record is written only after the whole-policy verification passes.
+The ordinary UC preflight also runs while the App remains stopped. Only after
+that postflight may signed-blue reconciliation start the App; signed blue is
+re-proven before the first Lakebase recovery mutation. An absent or unstable
+first-install App is rejected.
+
+The lease is released from normal deployment cleanup without discarding
+same-deployer recovery authority. Before the next acquire, the append-only
+signed generation chain is authenticated and every lease ID in the current
+same-holder recovery-root lineage is exported newest-first, including across a
+runtime-writer rotation. A different deployer identity receives no authority
+from that lineage, but an intervening released-lease handoff cannot erase the
+original holder's signed recovery route; a returning holder resumes its most
+recent root. Runtime identity is rebound by manifest classification and
+reauthorization rather than by hiding signed ancestors. The deployment probes
+each lineage fence until it finds the newest incomplete operation, a signed
+completion, or proves all candidates absent. Discovery is read-only: only the
+winner of the immutable lease successor race changes the shared root ACL, so a
+losing historical holder cannot overwrite the active winner's holder/writer
+permissions. Invalid or ambiguous evidence is never treated as absence. An
+incomplete operation is reauthorized under the fresh descendant lease and then
+resumed and verified. A completed operation with identical release inputs is
+independently reauthorized and reverified; a completed operation from older
+inputs terminates the historical search and causes a fresh signed snapshot
+under the current reviewed policy. This also recovers an
+interruption during reauthorization before its child fence exists, because the
+older parent lease remains discoverable. Fence recovery verifies historical
+signers through the configured key registry; it does not re-sign old evidence
+with the current key.
+
+An operator investigating a still-active lease may materialize the authoritative
+workspace copy without creating a new snapshot:
+
+```bash
+python -m tools.databricks.converge_foreign_catalog_workspace_bindings \
+  recover-local \
+  --app-name "$MIP_APP_NAME" \
+  --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+  --expected-account-id "$DATABRICKS_ACCOUNT_ID" \
+  --expected-account-client-id "$DATABRICKS_ACCOUNT_CLIENT_ID" \
+  --mip-catalog "$MIP_DEFAULT_CATALOG" \
+  --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --manifest /tmp/mip-foreign-catalog-manifest.json
+```
+
+There is intentionally no rollback CLI that reopens these catalogs. A request
+to restore `OPEN` access requires a separately reviewed change plan that
+inventories current child and effective privileges from every affected
+workspace; the deployment automation cannot infer that state from its signed
+pre-isolation catalog grants.
+
+The same bounded account and proof-signing environment used by deploy is
+required for these diagnostic commands. Never copy credentials into arguments,
+never run without the lease heartbeat, and release the lease with
+`tools.databricks.app_deployment_lease release` when the governed operation
+ends.
 
 The data-plane allowlist is `USE CATALOG` on MIP, `USE SCHEMA` on `gold` and
 `audit`, `EXECUTE` on the three reviewed functions, runtime ownership of the

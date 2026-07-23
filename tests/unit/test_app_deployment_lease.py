@@ -6,6 +6,7 @@ import json
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -1502,6 +1503,226 @@ def test_released_lease_allows_clean_handoff_to_a_new_deployer_identity() -> Non
         workspace, app_name="mip-app", source_git_sha="b" * 40
     )
     assert lease._download(workspace, app_name="mip-app")["lease_id"] == second
+
+
+def test_released_lease_preserves_same_deployer_recovery_lineage() -> None:
+    workspace = _workspace()
+    first = lease.acquire(
+        workspace, app_name="mip-app", source_git_sha="a" * 40
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+
+    recovery, candidates = lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    )
+    assert recovery == first
+    assert candidates == [first]
+
+    second = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="b" * 40,
+        expired_recovery_lease_id=recovery,
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=second)
+
+    recovery, candidates = lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    )
+    assert recovery == first
+    assert candidates == [second, first]
+
+
+def test_recovery_root_cli_exports_every_same_deployer_candidate(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = _workspace()
+    first = lease.acquire(
+        workspace, app_name="mip-app", source_git_sha="a" * 40
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    second = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="b" * 40,
+        expired_recovery_lease_id=first,
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=second)
+    monkeypatch.setattr(lease, "WorkspaceClient", lambda: workspace)
+    output = tmp_path / "recovery.env"
+
+    assert lease.main(
+        [
+            "recovery-root",
+            "--app-name",
+            "mip-app",
+            "--out-env",
+            str(output),
+        ]
+    ) == 0
+
+    values = dict(
+        line.split("=", 1)
+        for line in output.read_text(encoding="utf-8").splitlines()
+    )
+    assert values["MIP_APP_DEPLOYMENT_RECOVERY_ROOT"] == first
+    assert values["MIP_APP_DEPLOYMENT_RECOVERY_LEASE_ID"] == second
+    assert values["MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES"] == f"{second},{first}"
+
+
+def test_released_lineage_remains_discoverable_after_runtime_writer_rotation() -> None:
+    workspace = _workspace()
+    first = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="a" * 40,
+        writer_application_id="old-runtime-writer",
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    recovery, _candidates = lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    )
+    second = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="b" * 40,
+        writer_application_id="new-runtime-writer",
+        expired_recovery_lease_id=recovery,
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=second)
+
+    recovery, candidates = lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    )
+    assert recovery == first
+    assert candidates == [second, first]
+
+
+def test_original_holder_can_recover_lineage_after_released_actor_handoff() -> None:
+    workspace = _workspace()
+    first = lease.acquire(
+        workspace, app_name="mip-app", source_git_sha="a" * 40
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    workspace.current_user.me = lambda: SimpleNamespace(
+        user_name="replacement-deployer@example.com"
+    )
+    assert lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    ) == ("", [])
+    replacement = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="b" * 40,
+        writer_application_id="replacement-runtime-writer",
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=replacement)
+    workspace.current_user.me = lambda: SimpleNamespace(
+        user_name="deployer@example.com"
+    )
+
+    recovery, candidates = lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    )
+    assert recovery == first
+    assert candidates == [first]
+    resumed = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="a" * 40,
+        expired_recovery_lease_id=recovery,
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=resumed)
+    recovery, candidates = lease.lease_support.recovery_context(
+        lease, workspace, app_name="mip-app"
+    )
+    assert recovery == first
+    assert candidates == [resumed, first]
+
+
+def test_losing_historical_holder_cannot_overwrite_winning_lease_acl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace("holder-a@example.com")
+    first = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="a" * 40,
+        writer_application_id="writer-a",
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=first)
+    workspace.current_user.me = lambda: SimpleNamespace(
+        user_name="holder-b@example.com"
+    )
+    second = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="b" * 40,
+        writer_application_id="writer-b",
+    )
+    lease.release(workspace, app_name="mip-app", lease_id=second)
+
+    thread_identity = threading.local()
+    workspace.current_user.me = lambda: SimpleNamespace(
+        user_name=thread_identity.holder
+    )
+    barrier = threading.Barrier(2)
+    real_create = lease._create_generation
+
+    def synchronized_create(
+        client: object,
+        *,
+        app_name: str,
+        record: dict[str, str | int],
+        publish_hint: bool = True,
+    ) -> dict[str, str | int]:
+        if record["operation"] == "acquire":
+            barrier.wait(timeout=5)
+        return real_create(
+            client,
+            app_name=app_name,
+            record=record,
+            publish_hint=publish_hint,
+        )
+
+    monkeypatch.setattr(lease, "_create_generation", synchronized_create)
+
+    def contend(holder: str, writer: str, source: str) -> tuple[str, str]:
+        thread_identity.holder = holder
+        try:
+            lease_id = lease.acquire(
+                workspace,
+                app_name="mip-app",
+                source_git_sha=source * 40,
+                writer_application_id=writer,
+            )
+            return "won", lease_id
+        except RuntimeError as exc:
+            return "lost", str(exc)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(
+            pool.map(
+                lambda args: contend(*args),
+                (
+                    ("holder-a@example.com", "writer-a", "c"),
+                    ("holder-b@example.com", "writer-b", "d"),
+                ),
+            )
+        )
+
+    assert sum(status == "won" for status, _value in outcomes) == 1
+    assert sum(status == "lost" for status, _value in outcomes) == 1
+    head = lease._download(workspace, app_name="mip-app")
+    assert head is not None and head["state"] == "active"
+    thread_identity.holder = str(head["holder"])
+    lease._assert_protected_root(
+        workspace,
+        holder=str(head["holder"]),
+        writer_application_id=str(head["writer_application_id"]),
+        object_id=lease._root_object_id(workspace),
+    )
 
 
 def test_active_lease_recovery_root_is_not_disclosed_to_another_actor() -> None:

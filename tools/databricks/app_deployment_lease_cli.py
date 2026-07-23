@@ -90,11 +90,17 @@ def main(lease: Any, argv: list[str] | None = None) -> int:
     if args.action == "recovery-root":
         if args.out_env is None:
             parser.error("recovery-root requires --out-env")
-        recovery = lease.lease_support.recovery_root(
+        recovery, candidates = lease.lease_support.recovery_context(
             lease, workspace, app_name=args.app_name
         )
+        record = lease._download(workspace, app_name=args.app_name)
+        recovery_lease_id = str(record.get("lease_id") or "") if recovery and record else ""
         args.out_env.write_text(
-            f"MIP_APP_DEPLOYMENT_RECOVERY_ROOT={shlex.quote(recovery)}\n",
+            f"MIP_APP_DEPLOYMENT_RECOVERY_ROOT={shlex.quote(recovery)}\n"
+            "MIP_APP_DEPLOYMENT_RECOVERY_LEASE_ID="
+            f"{shlex.quote(recovery_lease_id)}\n"
+            "MIP_APP_DEPLOYMENT_RECOVERY_CANDIDATES="
+            f"{shlex.quote(','.join(candidates))}\n",
             encoding="utf-8",
         )
     elif args.action == "acquire":
