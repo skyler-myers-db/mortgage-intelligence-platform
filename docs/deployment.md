@@ -414,10 +414,12 @@ explicit stopped-App rebase path once before the next governed capture. Before a
 App start, endpoint ACL grant, rollback deployment, or treatment restoration,
 the rollback tool re-reads those immutable resource IDs, owners, exact endpoint
 configuration, signed model envelope/source, runtime-owned experiment name/ID,
-the experiment's normalized Workspace ACL (one direct runtime `CAN_MANAGE`, no
-other user/service-principal or non-admin group), catalog, App resource target
-IDs, and Genie input and rejects any drift. Capture additionally resolves the
-source-declared App bindings from `databricks bundle summary` and rejects every
+the experiment's normalized Workspace ACL (runtime `CAN_MANAGE` inherited only
+from the independently resolved `/Users/<runtime-client-id>` directory object,
+`admins` inherited only from the workspace root, and no other principal),
+catalog, App resource target IDs, and Genie input and rejects any drift. Capture
+additionally resolves the source-declared App bindings from
+`databricks bundle summary` and rejects every
 extra, missing, wrong-target, wrong-kind, or wrong-permission live binding
 before it can become signed last-good authority. It repeats that proof after
 health verification to close deployment races.

@@ -43,14 +43,23 @@ _MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(
 def _experiment_acl(
     *extra: dict[str, object],
     include_runtime: bool = True,
-    admins_inherited: bool = False,
+    runtime_inherited: bool = True,
+    admins_inherited: bool = True,
 ) -> dict[str, object]:
     entries: list[dict[str, object]] = []
     if include_runtime:
         entries.append(
             {
                 "service_principal_name": "runtime-client",
-                "all_permissions": [{"permission_level": "CAN_MANAGE", "inherited": False}],
+                "all_permissions": [
+                    {
+                        "permission_level": "CAN_MANAGE",
+                        "inherited": runtime_inherited,
+                        "inherited_from_object": (
+                            ["/directories/runtime-home-id"] if runtime_inherited else []
+                        ),
+                    }
+                ],
             }
         )
     entries.append(
@@ -60,6 +69,7 @@ def _experiment_acl(
                 {
                     "permission_level": "CAN_MANAGE",
                     "inherited": admins_inherited,
+                    "inherited_from_object": ["/directories/"] if admins_inherited else [],
                 }
             ],
         }
@@ -251,6 +261,13 @@ def _workspace(
 
     return SimpleNamespace(
         api_client=_ApiClient(rows, experiment_acl or _experiment_acl()),
+        workspace=SimpleNamespace(
+            get_status=lambda path: SimpleNamespace(
+                path=path,
+                object_type="DIRECTORY",
+                object_id="runtime-home-id",
+            )
+        ),
         serving_endpoints=_ServingEndpoints(),
         registered_models=SimpleNamespace(
             get=lambda _name: SimpleNamespace(owner="runtime-client")
@@ -494,10 +511,119 @@ def test_exact_resource_proof_rejects_stored_experiment_id_drift() -> None:
         )
 
 
-def test_exact_resource_proof_requires_direct_runtime_experiment_grant() -> None:
-    with pytest.raises(RuntimeError, match="direct runtime CAN_MANAGE"):
+def test_exact_resource_proof_requires_runtime_experiment_grant() -> None:
+    with pytest.raises(RuntimeError, match="exact runtime CAN_MANAGE"):
         export_contract.resolve_exact_resource_proof(
             _workspace(experiment_acl=_experiment_acl(include_runtime=False)),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+
+
+def test_exact_resource_proof_rejects_direct_runtime_experiment_grant() -> None:
+    with pytest.raises(RuntimeError, match="home directory"):
+        export_contract.resolve_exact_resource_proof(
+            _workspace(experiment_acl=_experiment_acl(runtime_inherited=False)),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+
+
+def test_exact_resource_proof_rejects_wrong_runtime_home_inheritance() -> None:
+    acl = _experiment_acl()
+    runtime_entry = acl["access_control_list"][0]  # type: ignore[index]
+    runtime_entry["all_permissions"][0]["inherited_from_object"] = [  # type: ignore[index]
+        "/directories/attacker-home"
+    ]
+
+    with pytest.raises(RuntimeError, match="home directory"):
+        export_contract.resolve_exact_resource_proof(
+            _workspace(experiment_acl=acl),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+
+
+def test_exact_resource_proof_rejects_runtime_home_identity_drift() -> None:
+    workspace = _workspace()
+    workspace.workspace.get_status = lambda _path: SimpleNamespace(
+        path="/Users/attacker-client",
+        object_type="DIRECTORY",
+        object_id="runtime-home-id",
+    )
+
+    with pytest.raises(RuntimeError, match="home directory identity"):
+        export_contract.resolve_exact_resource_proof(
+            workspace,
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("status", "message"),
+    [
+        (
+            SimpleNamespace(
+                path="/Users/runtime-client",
+                object_type="FILE",
+                object_id="runtime-home-id",
+            ),
+            "home directory identity",
+        ),
+        (
+            SimpleNamespace(
+                path="/Users/runtime-client",
+                object_type="DIRECTORY",
+                object_id=" ",
+            ),
+            "home directory identity",
+        ),
+    ],
+    ids=["wrong-object-type", "blank-object-id"],
+)
+def test_exact_resource_proof_rejects_invalid_runtime_home_status(
+    status: object,
+    message: str,
+) -> None:
+    workspace = _workspace()
+    workspace.workspace.get_status = lambda _path: status
+
+    with pytest.raises(RuntimeError, match=message):
+        export_contract.resolve_exact_resource_proof(
+            workspace,
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+
+
+def test_exact_resource_proof_rejects_missing_runtime_home_status_api() -> None:
+    workspace = _workspace()
+    del workspace.workspace
+
+    with pytest.raises(RuntimeError, match="could not resolve the Gateway runtime home"):
+        export_contract.resolve_exact_resource_proof(
+            workspace,
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
             genie_space_id="space-123",
@@ -553,7 +679,7 @@ def test_exact_resource_proof_rejects_stored_experiment_acl_drift() -> None:
 
     with pytest.raises(RuntimeError, match="stored rollback contract"):
         export_contract.resolve_exact_resource_proof(
-            _workspace(experiment_acl=_experiment_acl(admins_inherited=True)),
+            _workspace(experiment_acl=_experiment_acl(admins_inherited=False)),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
             genie_space_id="space-123",

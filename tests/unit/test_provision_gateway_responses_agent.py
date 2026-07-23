@@ -882,9 +882,32 @@ def _exact_endpoint_details(
         config=SimpleNamespace(
             served_entities=[
                 SimpleNamespace(
-                    burst_scaling_enabled=False,
                     entity_name=model_name,
                     entity_version=str(model_version),
+                    name=served_name,
+                    environment_vars={
+                        **gateway._STATIC_ENV,
+                        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": verify_key,
+                        "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
+                        "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
+                        "MIP_UPSTREAM_SUPERVISOR_CREATOR": runtime_application_id,
+                        "MIP_SUPERVISOR_CATALOG": _CATALOG,
+                        "MIP_SUPERVISOR_GENIE_SPACE_ID": _GENIE_SPACE_ID,
+                        "MIP_SUPERVISOR_CONTRACT_SHA256": gateway.supervisor_contract_hash(
+                            genie_space_id=_GENIE_SPACE_ID,
+                            catalog=_CATALOG,
+                        ),
+                        "MLFLOW_EXPERIMENT_ID": "experiment-7",
+                    },
+                    workload_size="Small",
+                    workload_type="CPU",
+                    scale_to_zero_enabled=True,
+                )
+            ],
+            served_models=[
+                SimpleNamespace(
+                    model_name=model_name,
+                    model_version=str(model_version),
                     name=served_name,
                     environment_vars={
                         **gateway._STATIC_ENV,
@@ -909,6 +932,7 @@ def _exact_endpoint_details(
                 routes=[
                     SimpleNamespace(
                         served_entity_name=served_name,
+                        served_model_name=served_name,
                         traffic_percentage=100,
                     )
                 ]
@@ -924,7 +948,8 @@ def _exact_endpoint_details(
                 catalog_name="mip",
                 schema_name="audit",
                 table_name_prefix=table_prefix,
-            )
+            ),
+            usage_tracking_config=SimpleNamespace(enabled=False),
         ),
     )
 
@@ -991,11 +1016,23 @@ def _experiment_permissions_api() -> object:
                 "access_control_list": [
                     {
                         "service_principal_name": _RUNTIME_APPLICATION_ID,
-                        "all_permissions": [{"permission_level": "CAN_MANAGE", "inherited": False}],
+                        "all_permissions": [
+                            {
+                                "permission_level": "CAN_MANAGE",
+                                "inherited": True,
+                                "inherited_from_object": ["/directories/runtime-home-id"],
+                            }
+                        ],
                     },
                     {
                         "group_name": "admins",
-                        "all_permissions": [{"permission_level": "CAN_MANAGE", "inherited": False}],
+                        "all_permissions": [
+                            {
+                                "permission_level": "CAN_MANAGE",
+                                "inherited": True,
+                                "inherited_from_object": ["/directories/"],
+                            }
+                        ],
                     },
                 ]
             }
@@ -3665,6 +3702,11 @@ def test_ensure_gateway_agent_reuses_exact_live_endpoint_without_mutation(monkey
         ("gateway", "guardrails", SimpleNamespace(input=SimpleNamespace())),
         ("gateway", "rate_limits", [SimpleNamespace(calls=1)]),
         ("gateway", "usage_tracking_config", SimpleNamespace(enabled=True)),
+        (
+            "gateway",
+            "usage_tracking_config",
+            SimpleNamespace(enabled=False, destination="unreviewed"),
+        ),
     ),
 )
 def test_gateway_exact_contract_rejects_every_unreviewed_config_field(
@@ -3704,6 +3746,107 @@ def test_gateway_exact_contract_rejects_every_unreviewed_config_field(
         )
     else:
         assert not gateway._proxy_config_matches(details, entity=entity)
+
+
+def test_gateway_exact_contract_rejects_different_legacy_route_alias() -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    details = _exact_endpoint_details(source_hash=source_hash)
+    entity, _traffic = gateway._served_entity(
+        supervisor_id=_SUPERVISOR_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        model_name=details.config.served_entities[0].entity_name,
+        model_version=5,
+        experiment_id="experiment-7",
+    )
+    details.config.traffic_config.routes[0].served_model_name = "different-model"
+
+    assert not gateway._proxy_config_matches(details, entity=entity)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("burst_scaling_enabled", True),
+        ("instance_profile_arn", "arn:aws:iam::123456789012:instance-profile/rogue"),
+        ("max_provisioned_concurrency", 8),
+        ("min_provisioned_concurrency", 1),
+        ("model_name", "different-model"),
+        ("provisioned_model_units", 2),
+        ("future_mutable_field", "unreviewed"),
+    ),
+)
+def test_gateway_exact_contract_rejects_drifted_legacy_served_model_alias(
+    field: str,
+    value: object,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    details = _exact_endpoint_details(source_hash=source_hash)
+    entity, _traffic = gateway._served_entity(
+        supervisor_id=_SUPERVISOR_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        model_name=details.config.served_entities[0].entity_name,
+        model_version=5,
+        experiment_id="experiment-7",
+    )
+    setattr(details.config.served_models[0], field, value)
+
+    assert not gateway._proxy_config_matches(details, entity=entity)
+
+
+def test_gateway_exact_contract_rejects_multiple_legacy_served_models() -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    details = _exact_endpoint_details(source_hash=source_hash)
+    entity, _traffic = gateway._served_entity(
+        supervisor_id=_SUPERVISOR_ID,
+        upstream_endpoint="managed-supervisor",
+        runtime_application_id=_RUNTIME_APPLICATION_ID,
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+        model_name=details.config.served_entities[0].entity_name,
+        model_version=5,
+        experiment_id="experiment-7",
+    )
+    details.config.served_models.append(details.config.served_models[0])
+
+    assert not gateway._proxy_config_matches(details, entity=entity)
+
+
+@pytest.mark.parametrize("enabled", (0, 0.0, "false", 1))
+def test_gateway_exact_contract_rejects_false_like_usage_tracking_values(
+    enabled: object,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    details = _exact_endpoint_details(source_hash=source_hash)
+    details.ai_gateway.usage_tracking_config.enabled = enabled
+
+    assert not gateway._gateway_matches(
+        details,
+        catalog="mip",
+        schema="audit",
+        table_prefix=details.ai_gateway.inference_table_config.table_name_prefix,
+    )
 
 
 def test_candidate_resource_binding_does_not_inherit_previous_model_key(
@@ -3867,6 +4010,13 @@ def test_gateway_agent_postflight_verifies_signed_v2_contract_and_exact_experime
     verify_gateway_responses_agent(
         SimpleNamespace(
             api_client=_experiment_permissions_api(),
+            workspace=SimpleNamespace(
+                get_status=lambda path: SimpleNamespace(
+                    path=path,
+                    object_type="DIRECTORY",
+                    object_id="runtime-home-id",
+                )
+            ),
             serving_endpoints=serving,
             registered_models=SimpleNamespace(
                 get=lambda _name: SimpleNamespace(owner=_RUNTIME_APPLICATION_ID)

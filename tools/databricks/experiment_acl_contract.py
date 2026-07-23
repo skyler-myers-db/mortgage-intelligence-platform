@@ -69,6 +69,25 @@ def _permission(entry: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _runtime_home_inheritance(workspace: Any, *, runtime_application_id: str) -> str:
+    """Resolve the immutable directory object that owns the runtime experiment."""
+
+    home_path = f"/Users/{runtime_application_id}"
+    try:
+        status = workspace.workspace.get_status(home_path)
+    except Exception as exc:  # noqa: BLE001 - ownership proof is fail-closed
+        raise RuntimeError("could not resolve the Gateway runtime home directory") from exc
+    actual_path = str(getattr(status, "path", "") or "").strip()
+    object_type = str(
+        getattr(getattr(status, "object_type", None), "value", getattr(status, "object_type", ""))
+        or ""
+    ).upper()
+    object_id = str(getattr(status, "object_id", "") or "").strip()
+    if actual_path != home_path or object_type != "DIRECTORY" or not object_id:
+        raise RuntimeError("Gateway runtime home directory identity is invalid")
+    return f"/directories/{object_id}"
+
+
 def resolve_exact_experiment_acl(
     workspace: Any,
     *,
@@ -92,6 +111,10 @@ def resolve_exact_experiment_acl(
     entries = document.get("access_control_list")
     if not isinstance(entries, list) or not entries:
         raise RuntimeError("Gateway MLflow experiment ACL is missing")
+    runtime_home_inheritance = _runtime_home_inheritance(
+        workspace,
+        runtime_application_id=runtime_id,
+    )
 
     normalized: list[dict[str, Any]] = []
     runtime_grants = 0
@@ -101,12 +124,26 @@ def resolve_exact_experiment_acl(
         principal_type, principal_name = _principal(entry)
         permission = _permission(entry)
         if principal_type == "service_principal" and principal_name == runtime_id:
-            if permission["inherited"] or permission["inherited_from_object"]:
+            if permission != {
+                "permission_level": _CAN_MANAGE,
+                "inherited": True,
+                "inherited_from_object": [runtime_home_inheritance],
+            }:
                 raise RuntimeError(
-                    "Gateway MLflow experiment runtime CAN_MANAGE grant is not direct"
+                    "Gateway MLflow experiment runtime CAN_MANAGE grant is not inherited "
+                    "exactly from its home directory"
                 )
             runtime_grants += 1
         elif principal_type == "group" and principal_name == _ADMINS_GROUP:
+            if permission != {
+                "permission_level": _CAN_MANAGE,
+                "inherited": True,
+                "inherited_from_object": ["/directories/"],
+            }:
+                raise RuntimeError(
+                    "Gateway MLflow experiment admins CAN_MANAGE grant is not inherited "
+                    "exactly from the workspace root"
+                )
             admin_grants += 1
         else:
             raise RuntimeError(
@@ -121,7 +158,7 @@ def resolve_exact_experiment_acl(
         )
     if runtime_grants != 1:
         raise RuntimeError(
-            "Gateway MLflow experiment ACL requires one direct runtime CAN_MANAGE grant"
+            "Gateway MLflow experiment ACL requires one exact runtime CAN_MANAGE grant"
         )
     if admin_grants > 1:
         raise RuntimeError("Gateway MLflow experiment ACL has duplicate admins grants")
