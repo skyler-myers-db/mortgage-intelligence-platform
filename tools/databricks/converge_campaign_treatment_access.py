@@ -113,11 +113,22 @@ def target_identity_groups_probe(
         )
         if not isinstance(identity, dict):
             raise RuntimeError("Target identity membership proof returned a malformed identity")
-        identity_id = str(identity.get("id") or "").strip()
-        identity_name = str(identity.get("userName") or "").strip()
+        identity_id = identity.get("id")
+        identity_name = identity.get("userName")
+        if (
+            not isinstance(identity_id, str)
+            or not identity_id
+            or identity_id != identity_id.strip()
+            or not isinstance(identity_name, str)
+            or not identity_name
+            or identity_name != identity_name.strip()
+        ):
+            raise RuntimeError(
+                "Target identity membership proof returned a malformed identity"
+            )
         if (
             identity_id != workspace_principal_id
-            or _canonical(identity_name) != _canonical(application_id)
+            or identity_name != application_id
         ):
             raise RuntimeError("Temporary credential authenticated as a different target identity")
         if "groups" not in identity:
@@ -133,17 +144,26 @@ def target_identity_groups_probe(
         for group in groups:
             if not isinstance(group, dict):
                 raise RuntimeError("Target identity membership proof returned a malformed group")
-            observed_id = str(group.get("value") or "").strip()
-            observed_name = str(group.get("display") or "").strip()
-            if not observed_id:
+            observed_id = group.get("value")
+            observed_name = group.get("display")
+            if observed_id in (None, ""):
                 raise RuntimeError(
                     "Target identity membership proof returned a group without an id"
                 )
-            if not observed_name:
+            if observed_name in (None, ""):
                 raise RuntimeError(
                     "Target identity membership proof returned a group without a display name"
                 )
-            canonical_name = _canonical(observed_name)
+            if (
+                not isinstance(observed_id, str)
+                or observed_id != observed_id.strip()
+                or not isinstance(observed_name, str)
+                or observed_name != observed_name.strip()
+            ):
+                raise RuntimeError(
+                    "Target identity membership proof returned a malformed group"
+                )
+            canonical_name = observed_name.casefold()
             if observed_id in effective_groups:
                 raise RuntimeError(
                     "Target identity membership proof returned a duplicate group id"

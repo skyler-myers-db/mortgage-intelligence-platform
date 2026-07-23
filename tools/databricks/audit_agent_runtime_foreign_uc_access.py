@@ -36,9 +36,13 @@ from tools.databricks.uc_owner_policy import (
     TargetServicePrincipal,
     account_client_from_env,
 )
+from tools.databricks.workspace_system_group_evidence import (
+    workspace_users_group_evidence,
+)
 
 _DATABRICKS_INTERNAL_CATALOG = "__databricks_internal"
 _PLATFORM_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system"})
+_ACCOUNT_USERS_GROUP = "account users"
 
 
 def _target_identity(workspace: Any, *, application_id: str) -> TargetServicePrincipal:
@@ -285,11 +289,13 @@ def _normalized_target_groups(value: object) -> dict[str, str]:
     for raw_group_id, raw_group_name in value.items():
         if not isinstance(raw_group_id, str) or not isinstance(raw_group_name, str):
             raise RuntimeError("credentialed target group inventory is malformed")
-        group_id = raw_group_id.strip()
-        group_name = raw_group_name.strip()
+        group_id = raw_group_id
+        group_name = raw_group_name
         canonical_name = group_name.casefold()
         if not group_id or not group_name:
             raise RuntimeError("credentialed target group inventory is incomplete")
+        if group_id != group_id.strip() or group_name != group_name.strip():
+            raise RuntimeError("credentialed target group inventory is malformed")
         if group_id in normalized or canonical_name in ids_by_name:
             raise RuntimeError("credentialed target group inventory is ambiguous")
         normalized[group_id] = group_name
@@ -387,6 +393,7 @@ def _assert_runtime_workspace_assignment_boundary(
     account_effective_groups: dict[str, str],
     effective_target_groups: dict[str, str],
     implicit_system_groups: dict[str, str],
+    workspace_system_groups: dict[str, str],
     metastore_id: str,
     workspace_id: str,
     approved_foreign_workspace_ids: set[str],
@@ -408,6 +415,17 @@ def _assert_runtime_workspace_assignment_boundary(
         group_name.casefold(): group_id
         for group_id, group_name in effective_target_groups.items()
     }
+    for group_id, group_name in workspace_system_groups.items():
+        observed_name = effective_target_groups.get(group_id)
+        observed_id = target_group_ids_by_name.get(group_name.casefold())
+        if (
+            observed_name is None
+            or observed_name != group_name
+            or observed_id != group_id
+        ):
+            raise RuntimeError(
+                "agent-runtime workspace users system group identity disagrees"
+            )
     for group_id, group_name in implicit_system_groups.items():
         observed_name = effective_target_groups.get(group_id)
         observed_id = target_group_ids_by_name.get(group_name.casefold())
@@ -422,7 +440,8 @@ def _assert_runtime_workspace_assignment_boundary(
     ordinary_groups = {
         group_id: name
         for group_id, name in effective_groups.items()
-        if name.casefold() != "account users"
+        if name.casefold() != _ACCOUNT_USERS_GROUP
+        and group_id not in workspace_system_groups
     }
     if ordinary_groups:
         raise RuntimeError(
@@ -599,6 +618,7 @@ def audit_foreign_uc_access(
         account,
         target_scim_id=account_target_scim_id,
     )
+    workspace_system_groups = workspace_users_group_evidence(workspace)
     target = TargetServicePrincipal(
         application_id=principal,
         scim_id=workspace_target.scim_id,
@@ -630,6 +650,7 @@ def audit_foreign_uc_access(
         account_effective_groups=account_effective_groups,
         effective_target_groups=effective_target_groups,
         implicit_system_groups=implicit_system_groups,
+        workspace_system_groups=workspace_system_groups,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
         approved_foreign_workspace_ids=approved_foreign_workspace_ids,

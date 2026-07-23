@@ -862,6 +862,18 @@ def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
             "different target identity",
         ),
         (
+            {"id": "account-sp-id", "userName": "APP-CLIENT", "groups": []},
+            "different target identity",
+        ),
+        (
+            {"id": " account-sp-id ", "userName": "app-client", "groups": []},
+            "malformed identity",
+        ),
+        (
+            {"id": "account-sp-id", "userName": " app-client ", "groups": []},
+            "malformed identity",
+        ),
+        (
             {
                 "id": "account-sp-id",
                 "userName": "app-client",
@@ -897,6 +909,38 @@ def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
             {
                 "id": "account-sp-id",
                 "userName": "app-client",
+                "groups": [{"value": " padded-id", "display": "mip owners"}],
+            },
+            "malformed group",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"value": "owner-group-id", "display": " mip owners "}],
+            },
+            "malformed group",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"value": 123, "display": "mip owners"}],
+            },
+            "malformed group",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
+                "groups": [{"value": "owner-group-id", "display": 123}],
+            },
+            "malformed group",
+        ),
+        (
+            {
+                "id": "account-sp-id",
+                "userName": "app-client",
                 "groups": [
                     {"value": "duplicate-id", "display": "first name"},
                     {"value": "duplicate-id", "display": "second name"},
@@ -910,7 +954,7 @@ def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
                 "userName": "app-client",
                 "groups": [
                     {"value": "first-id", "display": "Same Name"},
-                    {"value": "second-id", "display": " same name "},
+                    {"value": "second-id", "display": "same name"},
                 ],
             },
             "duplicate group name",

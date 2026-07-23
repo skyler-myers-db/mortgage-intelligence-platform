@@ -34,6 +34,9 @@ from tools.databricks.foreign_catalog_binding_catalog import (
     snapshot,
     state_kind,
 )
+from tools.databricks.workspace_system_group_evidence import (
+    workspace_users_group_evidence,
+)
 
 MANIFEST_VERSION = 4
 LEGACY_MANIFEST_VERSION = 3
@@ -194,6 +197,7 @@ def boundary_evidence(
         account,
         target_scim_id=runtime_scim_id,
     )
+    workspace_system_groups = workspace_users_group_evidence(workspace)
     metastore_workspace_ids = _assert_runtime_workspace_assignment_boundary(
         account,
         application_id=application_id,
@@ -202,6 +206,7 @@ def boundary_evidence(
         account_effective_groups=account_effective_groups,
         effective_target_groups=effective_target_groups,
         implicit_system_groups=implicit_system_groups,
+        workspace_system_groups=workspace_system_groups,
         metastore_id=metastore_id,
         workspace_id=workspace_id,
         approved_foreign_workspace_ids=approved_workspace_ids,

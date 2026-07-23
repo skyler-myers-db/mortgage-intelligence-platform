@@ -16,6 +16,7 @@ WORKSPACE_ID = "7474645995341779"
 OTHER_WORKSPACE_ID = "2478181912221244"
 FOREIGN_OWNER = "foreign-owner@example.com"
 ACCOUNT_SCIM_ID = "account-runtime-id"
+WORKSPACE_USERS_GROUP_ID = "workspace-users-id"
 
 
 def _assignment(
@@ -244,7 +245,32 @@ def _workspace(
                 else []
             )
         ),
-        groups=SimpleNamespace(list=lambda **_kwargs: iter([])),
+        groups=SimpleNamespace(
+            list=lambda **kwargs: (
+                iter(
+                    [
+                        SimpleNamespace(
+                            id=WORKSPACE_USERS_GROUP_ID,
+                            display_name="users",
+                            meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+                            entitlements=[
+                                SimpleNamespace(value="workspace-access"),
+                                SimpleNamespace(value="databricks-sql-access"),
+                            ],
+                            roles=[],
+                            external_id=None,
+                        )
+                    ]
+                )
+                if kwargs
+                == {
+                    "attributes": (
+                        "id,displayName,meta,entitlements,roles,externalId"
+                    )
+                }
+                else iter([])
+            )
+        ),
         registered_models=SimpleNamespace(
             list=lambda **_kwargs: iter(
                 [
@@ -427,7 +453,7 @@ def _audit(workspace: Any, **kwargs: Any) -> object:
     kwargs.setdefault("account_factory", _account)
     kwargs.setdefault(
         "target_groups_probe",
-        lambda *_args, **_probe_kwargs: {"account-users-id": "account users"},
+        lambda *_args, **_probe_kwargs: {WORKSPACE_USERS_GROUP_ID: "users"},
     )
     return auditor.audit_foreign_uc_access(
         workspace,
@@ -436,6 +462,13 @@ def _audit(workspace: Any, **kwargs: Any) -> object:
         expected_inventory_principal=INVENTORY_PRINCIPAL,
         **kwargs,
     )
+
+
+def _runtime_groups(additional: dict[str, str] | None = None) -> dict[str, str]:
+    return {
+        WORKSPACE_USERS_GROUP_ID: "users",
+        **(additional or {}),
+    }
 
 
 def test_foreign_catalog_binding_policy_rejects_ambiguous_json() -> None:
@@ -583,9 +616,9 @@ def test_foreign_uc_control_plane_rejects_unnamed_retained_workspace_assignment(
         _audit(
             _workspace(),
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {
-                "account-users-id": "account users"
-            },
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+                {"account-users-id": "account users"}
+            ),
         )
 
 
@@ -615,10 +648,12 @@ def test_foreign_uc_control_plane_rejects_runtime_non_system_account_group() -> 
         _audit(
             _workspace(),
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {
-                "account-users-id": "account users",
-                "foreign-group-id": "foreign-data-users",
-            },
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+                {
+                    "account-users-id": "account users",
+                    "foreign-group-id": "foreign-data-users",
+                }
+            ),
         )
 
 
@@ -627,16 +662,177 @@ def test_foreign_uc_control_plane_accepts_implicit_account_users_baseline() -> N
     account.groups.list = lambda **_kwargs: iter([])
     account.groups.get = lambda _group_id: None
 
-    proof = _audit(_workspace(), account_factory=lambda: account)
+    proof = _audit(
+        _workspace(),
+        account_factory=lambda: account,
+        target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+            {"account-users-id": "account users"}
+        ),
+    )
 
     assert proof.application_id == APPLICATION_ID
     assert proof.workspace_id == WORKSPACE_ID
 
 
+def test_foreign_uc_control_plane_accepts_exact_workspace_users_system_group() -> None:
+    proof = _audit(
+        _workspace(),
+        target_groups_probe=lambda *_args, **_kwargs: {
+            WORKSPACE_USERS_GROUP_ID: "users"
+        },
+    )
+
+    assert proof.application_id == APPLICATION_ID
+
+
+def test_foreign_uc_control_plane_rejects_missing_workspace_users_membership() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="workspace users system group identity disagrees",
+    ):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: {
+                "account-users-id": "account users"
+            },
+        )
+
+
+def test_foreign_uc_control_plane_rejects_mismatched_workspace_users_id() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="workspace users system group identity disagrees",
+    ):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: {
+                "different-users-id": "users"
+            },
+        )
+
+
+def test_foreign_uc_control_plane_rejects_mismatched_workspace_users_name() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="workspace users system group identity disagrees",
+    ):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: {
+                WORKSPACE_USERS_GROUP_ID: "Users"
+            },
+        )
+
+
+def test_foreign_uc_control_plane_rejects_workspace_admins_system_group() -> None:
+    with pytest.raises(RuntimeError, match="forbidden ordinary account group"):
+        _audit(
+            _workspace(),
+            target_groups_probe=lambda *_args, **_kwargs: {
+                WORKSPACE_USERS_GROUP_ID: "users",
+                "workspace-admins-id": "admins",
+            },
+        )
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        [],
+        [
+            SimpleNamespace(
+                id="",
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+            )
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="Users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+            )
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="users",
+                meta=SimpleNamespace(resource_type="Group"),
+            )
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+            ),
+            SimpleNamespace(
+                id="duplicate-users-id",
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+            ),
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+                external_id="external-users",
+            )
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+                roles=[SimpleNamespace(value="account_admin")],
+            )
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+                entitlements=[SimpleNamespace(value="allow-cluster-create")],
+            )
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+                entitlements=[SimpleNamespace(value="workspace-access")],
+            )
+        ],
+        [
+            SimpleNamespace(
+                id=WORKSPACE_USERS_GROUP_ID,
+                display_name="users",
+                meta=SimpleNamespace(resource_type="WorkspaceGroup"),
+                entitlements=[
+                    SimpleNamespace(value="workspace-access"),
+                    SimpleNamespace(value="workspace-access"),
+                ],
+            )
+        ],
+    ],
+)
+def test_foreign_uc_control_plane_rejects_unproven_workspace_users_identity(
+    groups: list[object],
+) -> None:
+    workspace = _workspace()
+    workspace.groups.list = lambda **_kwargs: iter(groups)
+
+    with pytest.raises(RuntimeError, match="workspace users system group"):
+        _audit(workspace)
+
+
 def test_foreign_uc_control_plane_accepts_target_omitted_account_users_baseline() -> None:
     proof = _audit(
         _workspace(),
-        target_groups_probe=lambda *_args, **_kwargs: {},
+        target_groups_probe=lambda *_args, **_kwargs: {
+            WORKSPACE_USERS_GROUP_ID: "users"
+        },
     )
 
     assert proof.application_id == APPLICATION_ID
@@ -662,7 +858,7 @@ def test_foreign_uc_control_plane_uses_one_frozen_target_group_snapshot() -> Non
                 workspace_host,
             )
         )
-        return {"account-users-id": "account users"}
+        return _runtime_groups()
 
     proof = _audit(_workspace(), target_groups_probe=probe)
 
@@ -686,9 +882,9 @@ def test_foreign_uc_control_plane_rejects_dynamic_target_group_absent_from_accou
         _audit(
             _workspace(),
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {
-                "dynamic-id": "dynamic-governance"
-            },
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+                {"dynamic-id": "dynamic-governance"}
+            ),
         )
 
 
@@ -709,7 +905,7 @@ def test_foreign_uc_control_plane_rejects_ordinary_group_missing_from_target_sna
         _audit(
             _workspace(),
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {},
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
         )
 
 
@@ -722,9 +918,9 @@ def test_foreign_uc_control_plane_rejects_mismatched_credentialed_system_group_i
         _audit(
             _workspace(),
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {
-                "different-id": "account users"
-            },
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(
+                {"different-id": "account users"}
+            ),
         )
 
 
@@ -752,6 +948,10 @@ def test_foreign_uc_control_plane_rejects_duplicate_account_group_display_names(
         {"": "account users"},
         {"account-users-id": ""},
         {"group-1": "Same Group", "group-2": " same group "},
+        {" padded-id": "users"},
+        {"workspace-users-id": " users "},
+        {1: "users"},
+        {"workspace-users-id": 1},
     ],
 )
 def test_foreign_uc_control_plane_rejects_malformed_target_group_snapshot(
@@ -1077,8 +1277,12 @@ def test_foreign_uc_control_plane_rejects_implicit_account_users_owner(
     full_name: str,
 ) -> None:
     workspace = _workspace(owner_overrides={full_name: "account users"})
-    workspace.groups.list = lambda **_kwargs: iter(
-        [SimpleNamespace(display_name="account users", id="account-users-id")]
+    system_group_list = workspace.groups.list
+    workspace.groups.list = lambda **kwargs: (
+        system_group_list(**kwargs)
+        if kwargs.get("attributes")
+        == "id,displayName,meta,entitlements,roles,externalId"
+        else iter([SimpleNamespace(display_name="account users", id="account-users-id")])
     )
     account = _account()
     account_users = next(account.groups.list())
@@ -1088,7 +1292,7 @@ def test_foreign_uc_control_plane_rejects_implicit_account_users_owner(
         _audit(
             workspace,
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {},
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
         )
 
 
@@ -1260,7 +1464,7 @@ def test_binding_excluded_account_users_owner_rejects_without_group_inventory() 
         _audit(
             workspace,
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {},
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
             foreign_catalog_binding_policy=_binding_policy(owner="account users"),
         )
 
@@ -1298,7 +1502,7 @@ def test_binding_excluded_account_users_id_rejects_when_identity_is_omitted() ->
         _audit(
             workspace,
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {},
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
             foreign_catalog_binding_policy=_binding_policy(owner="account-users-id"),
         )
 
@@ -1336,7 +1540,7 @@ def test_binding_excluded_account_users_id_rejects_when_membership_is_implicit()
         _audit(
             workspace,
             account_factory=lambda: account,
-            target_groups_probe=lambda *_args, **_kwargs: {},
+            target_groups_probe=lambda *_args, **_kwargs: _runtime_groups(),
             foreign_catalog_binding_policy=_binding_policy(owner="account-users-id"),
         )
 
@@ -1717,8 +1921,12 @@ def test_foreign_uc_control_plane_rejects_accessible_runtime_alias_owner(
 
 def test_foreign_uc_control_plane_uses_target_credential_for_group_ownership() -> None:
     workspace = _workspace(owner_overrides={"other": "runtime-owners"})
-    workspace.groups.list = lambda **_kwargs: iter(
-        [SimpleNamespace(display_name="runtime-owners", id="owner-group-id")]
+    system_group_list = workspace.groups.list
+    workspace.groups.list = lambda **kwargs: (
+        system_group_list(**kwargs)
+        if kwargs.get("attributes")
+        == "id,displayName,meta,entitlements,roles,externalId"
+        else iter([SimpleNamespace(display_name="runtime-owners", id="owner-group-id")])
     )
 
     account = _account()

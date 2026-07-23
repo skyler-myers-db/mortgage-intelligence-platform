@@ -345,12 +345,21 @@ the entire pass. Any membership inferred positively from account group members
 must appear under the same immutable group ID and name in the snapshot, but
 account-member omission is not treated as negative evidence under Automatic
 Identity Management. Every ordinary group in the snapshot is rejected. The
-Databricks-managed `account users` baseline is the only exception: Databricks
-may return it from hydrated account members, the target snapshot, or only one
-of those planes because the membership is implicit. When both planes return
-it, its immutable ID and name must agree. Its immutable identity must still be
-present in at least one plane; if both omit it, the audit cannot exclude an
-opaque system-group ID and fails closed.
+Databricks-managed account `account users` and current-workspace `users`
+baselines are the only exceptions. The account baseline may appear in hydrated
+account members, the target snapshot, or only one of those planes because its
+membership is implicit. When both planes return it, its immutable ID and name
+must agree. Its immutable identity must still be present in at least one plane;
+if both omit it, the audit cannot exclude an opaque account-system-group ID and
+fails closed. The workspace baseline must resolve exactly once as the exact
+`users` `WorkspaceGroup`, with no roles or external identity and either the
+current locked empty entitlement set or the exact legacy
+`workspace-access`/`databricks-sql-access` set. The target's own `/Me.groups`
+snapshot must return that same immutable ID and name. `admins`, entitlement
+migration clone groups, and every ordinary account or workspace group remain
+forbidden. The `users` baseline carries real workspace authority; the audit
+retains it in ownership and workspace-assignment checks rather than treating it
+as privilege-free.
 
 The pass enumerates every workspace assigned to the current metastore and
 requires exactly one direct, immutable-ID-matched `USER` assignment in the MIP
