@@ -42,6 +42,9 @@ class ProvisionedResources:
     replaced_supervisor_creator: str | None = None
     replaced_supervisor_create_time: str | None = None
     agent_runtime_application_id: str | None = None
+    agent_proxy_application_id: str | None = None
+    agent_proxy_credential_id: str | None = None
+    agent_proxy_secret_reference: str | None = None
 
     def env_lines(self) -> list[str]:
         """Render shell-safe, sourceable assignments without losing explicit names."""
@@ -63,6 +66,18 @@ class ProvisionedResources:
                     assignment(
                         "MIP_AGENT_RUNTIME_CLIENT_ID",
                         self.agent_runtime_application_id or "",
+                    ),
+                    assignment(
+                        "MIP_AGENT_PROXY_CLIENT_ID",
+                        self.agent_proxy_application_id or "",
+                    ),
+                    assignment(
+                        "MIP_AGENT_PROXY_CREDENTIAL_ID",
+                        self.agent_proxy_credential_id or "",
+                    ),
+                    assignment(
+                        "MIP_AGENT_PROXY_SECRET_REFERENCE",
+                        self.agent_proxy_secret_reference or "",
                     ),
                     assignment("MIP_AGENT_SUPERVISOR_NAME", self.agent_supervisor_name or ""),
                     assignment("MIP_AGENT_SERVING_ENDPOINT", self.agent_serving_endpoint),

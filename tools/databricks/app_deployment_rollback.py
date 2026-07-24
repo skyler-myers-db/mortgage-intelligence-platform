@@ -3,23 +3,17 @@
 
 from __future__ import annotations
 
-import argparse
-import copy
-import json
 import os
-import shlex
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
-from pathlib import Path
 from typing import Any, cast
 from uuid import UUID
 
 from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_ENDPOINT,
     LEGACY_GATEWAY_ENDPOINT,
-    gateway_runtime_binding_hash,
 )
-from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.apps import AppDeployment
 from tools.databricks.app_deployment_health import health as _health
 from tools.databricks.app_deployment_lease import assert_held as assert_deployment_lease_held
@@ -30,29 +24,38 @@ from tools.databricks.app_deployment_state import (
     deployment_state as _deployment_state,
 )
 from tools.databricks.app_deployment_state import (
-    immutable_source as _immutable_source,
-)
-from tools.databricks.app_deployment_state import (
     latest_succeeded as _latest_succeeded,
 )
 from tools.databricks.app_health_contract import active_app_deployment_pin
+from tools.databricks.app_proxy_retirement_journal import (
+    capture_proxy_retirement_ids as _capture_proxy_retirement_ids,
+)
+from tools.databricks.app_rollback_gateway_binding import (
+    payload_gateway_binding as _payload_gateway_binding,
+)
+from tools.databricks.app_rollback_record_builder import (
+    build_app_rollback_record as _record_from,
+)
 from tools.databricks.app_rollback_record_contract import (
+    LEGACY_RECORD_VERSION,
     RECORD_VERSION,
+    _delete_legacy_record,
     _load_record,
-    _payload_digest,
+    _save_legacy_record,
     _save_record,
     _text,
     _validated_gateway_resources,
     _validated_payload,
 )
 from tools.databricks.app_rollback_record_contract import (
+    _payload_digest as _payload_digest,  # noqa: F401 - compatibility for callers/tests
+)
+from tools.databricks.app_rollback_record_contract import (
     _record_key as _contract_record_key,
 )
 from tools.databricks.app_rollback_resource_contract import (
     app_resource_contract,
-    app_resource_contract_digest,
     restore_signed_app_resource_contract,
-    reviewed_app_resource_contract,
     validated_app_resource_contract,
 )
 from tools.databricks.converge_campaign_treatment_access import (
@@ -62,6 +65,10 @@ from tools.databricks.converge_campaign_treatment_access import (
 from tools.databricks.export_gateway_runtime_contract import (
     ExactGatewayRuntimeProof,
     resolve_exact_resource_proof,
+)
+from tools.databricks.gateway_legacy_rollback import (
+    assert_live_legacy_gateway_resources,
+    validated_legacy_gateway_resources,
 )
 from tools.databricks.lakebase_instance_contract import resolve_lakebase_instance_aliases
 from tools.databricks.serving_endpoint_acl import (
@@ -79,6 +86,8 @@ class SignedLastGoodAppContract:
     deployment_lease_id: str
     git_sha: str
     gateway_binding_sha256: str | None
+    active_proxy_credential_id: str | None
+    pending_proxy_credential_retirement_ids: tuple[str, ...]
 
 
 def _verify_health(
@@ -188,34 +197,6 @@ def _env_map(payload: dict[str, object]) -> dict[str, str]:
     }
 
 
-def _payload_gateway_binding(payload: dict[str, object]) -> str | None:
-    env = _env_map(payload)
-    names = (
-        "MIP_AGENT_SERVING_ENDPOINT",
-        "MIP_AGENT_SUPERVISOR_ID",
-        "MIP_AGENT_SUPERVISOR_ENDPOINT",
-        "MIP_AGENT_RUNTIME_CLIENT_ID",
-        "MIP_AI_GATEWAY_AGENT_MODEL",
-        "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
-        "MIP_AI_GATEWAY_INFERENCE_TABLE",
-    )
-    if not all(env.get(name) for name in names):
-        return None
-    try:
-        version = int(env["MIP_AI_GATEWAY_AGENT_MODEL_VERSION"])
-    except ValueError as exc:
-        raise RuntimeError("App rollback payload has an invalid Gateway model version") from exc
-    return gateway_runtime_binding_hash(
-        endpoint=env["MIP_AGENT_SERVING_ENDPOINT"],
-        supervisor_id=env["MIP_AGENT_SUPERVISOR_ID"],
-        upstream_endpoint=env["MIP_AGENT_SUPERVISOR_ENDPOINT"],
-        runtime_application_id=env["MIP_AGENT_RUNTIME_CLIENT_ID"],
-        model_name=env["MIP_AI_GATEWAY_AGENT_MODEL"],
-        model_version=version,
-        inference_table=env["MIP_AI_GATEWAY_INFERENCE_TABLE"],
-    )
-
-
 def _payload_deployment_lease_id(payload: dict[str, object]) -> str:
     lease_id = _env_map(payload).get("MIP_APP_DEPLOYMENT_LEASE_ID", "").strip()
     try:
@@ -236,6 +217,9 @@ def _payload_resource_proof(
         "MIP_DEFAULT_CATALOG",
         "MIP_AGENT_SUPERVISOR_NAME",
         "MIP_AGENT_RUNTIME_CLIENT_ID",
+        "MIP_AGENT_PROXY_CLIENT_ID",
+        "MIP_AGENT_PROXY_CREDENTIAL_ID",
+        "MIP_AGENT_PROXY_SECRET_REFERENCE",
         "MIP_AI_GATEWAY_ENDPOINT",
         "MIP_AI_GATEWAY_AGENT_MODEL",
         "MIP_AI_GATEWAY_AGENT_MODEL_VERSION",
@@ -253,6 +237,9 @@ def _payload_resource_proof(
         catalog=env["MIP_DEFAULT_CATALOG"],
         genie_space_id=genie_space_id,
         runtime_application_id=env["MIP_AGENT_RUNTIME_CLIENT_ID"],
+        proxy_caller_application_id=env["MIP_AGENT_PROXY_CLIENT_ID"],
+        proxy_caller_credential_id=env["MIP_AGENT_PROXY_CREDENTIAL_ID"],
+        proxy_caller_secret_reference=env["MIP_AGENT_PROXY_SECRET_REFERENCE"],
         supervisor_id=env["MIP_AGENT_SUPERVISOR_ID"],
         gateway_endpoint=env["MIP_AI_GATEWAY_ENDPOINT"],
         gateway_model_family_name=env.get("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY"),
@@ -281,6 +268,16 @@ def _stored_resource_proof(
     *,
     record: dict[str, Any],
 ) -> ExactGatewayRuntimeProof:
+    if record.get("version", RECORD_VERSION) == LEGACY_RECORD_VERSION:
+        legacy = validated_legacy_gateway_resources(record.get("gateway_resources"))
+        verified = assert_live_legacy_gateway_resources(
+            workspace,
+            expected=legacy,
+        )
+        return ExactGatewayRuntimeProof(
+            contract={key: value for key, value in verified.items() if key != "resource_digest"},
+            digest=verified["resource_digest"],
+        )
     resources = _validated_gateway_resources(record.get("gateway_resources"))
     return resolve_exact_resource_proof(
         workspace,
@@ -320,12 +317,105 @@ def verified_signed_last_good_contract(
     )
     _assert_record_app_identity(workspace, app_name=app_name, record=record)
     _stored_resource_proof(workspace, record=record)
+    active_proxy_credential_id = (
+        str(record["gateway_resources"]["proxy_caller_credential_id"])
+        if record["version"] == RECORD_VERSION
+        else None
+    )
     return SignedLastGoodAppContract(
         deployment_id=record["deployment_id"],
         deployment_lease_id=_payload_deployment_lease_id(record["payload"]),
         git_sha=record["git_sha"],
         gateway_binding_sha256=record["gateway_binding_sha256"],
+        active_proxy_credential_id=active_proxy_credential_id,
+        pending_proxy_credential_retirement_ids=tuple(
+            record["pending_proxy_credential_retirement_ids"]
+        ),
     )
+
+
+def assert_proxy_credential_retirement(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+    proxy_application_id: str,
+    retained_credential_id: str,
+    retired_credential_ids: tuple[str, ...],
+) -> dict[str, Any]:
+    """Bind a requested cleanup to the exact active signed retirement journal."""
+    expected_lakebase_instance = _expected_lakebase_instance()
+    record = _load_record(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        expected_lakebase_instance=expected_lakebase_instance,
+    )
+    if record["version"] != RECORD_VERSION:
+        raise RuntimeError("proxy-credential retirement requires a current rollback record")
+    resources = record["gateway_resources"]
+    if proxy_application_id.strip() != resources["proxy_caller_application_id"]:
+        raise RuntimeError("proxy application does not match the signed App record")
+    active_credential_id = resources["proxy_caller_credential_id"]
+    if retained_credential_id.strip() != active_credential_id:
+        raise RuntimeError("retained proxy credential does not match the signed App record")
+    expected_retired = tuple(
+        sorted(
+            {
+                value.strip()
+                for value in retired_credential_ids
+                if value.strip() and value.strip() != active_credential_id
+            }
+        )
+    )
+    pending = tuple(record["pending_proxy_credential_retirement_ids"])
+    if expected_retired != pending:
+        raise RuntimeError("proxy-credential cleanup does not match the signed retirement journal")
+    _assert_record_app_identity(workspace, app_name=app_name, record=record)
+    _stored_resource_proof(workspace, record=record)
+    if _active_deployment_id(workspace, app_name=app_name) != record["deployment_id"]:
+        raise RuntimeError("active App changed before proxy-retirement journal completion")
+    return record
+
+
+def complete_proxy_credential_retirement(
+    workspace: Any,
+    *,
+    app_name: str,
+    scope: str,
+    proxy_application_id: str,
+    retained_credential_id: str,
+    retired_credential_ids: tuple[str, ...],
+    assert_provider_cleanup: Callable[[], None],
+) -> None:
+    """Clear the signed retirement journal after exact provider cleanup."""
+
+    record = assert_proxy_credential_retirement(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        proxy_application_id=proxy_application_id,
+        retained_credential_id=retained_credential_id,
+        retired_credential_ids=retired_credential_ids,
+    )
+    pending = tuple(record["pending_proxy_credential_retirement_ids"])
+    assert_provider_cleanup()
+    if not pending:
+        return
+    record["pending_proxy_credential_retirement_ids"] = ()
+    _save_record(workspace, scope=scope, record=record)
+    persisted = _load_record(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+        expected_lakebase_instance=_expected_lakebase_instance(),
+    )
+    if (
+        persisted["deployment_id"] != record["deployment_id"]
+        or persisted["gateway_resources"] != record["gateway_resources"]
+        or persisted["pending_proxy_credential_retirement_ids"]
+    ):
+        raise RuntimeError("proxy-retirement journal completion did not converge exactly")
 
 
 def _app_principal(workspace: Any, *, app_name: str) -> str:
@@ -373,39 +463,16 @@ def _converge_rollback_endpoint_acl(
         )
 
 
-def _record_from(
+def _save_versioned_record(
+    workspace: Any,
     *,
-    app_name: str,
-    deployment: object,
-    payload: dict[str, object],
-    git_sha: str,
-    gateway_binding: str | None,
-    gateway_resources: dict[str, str],
-    app_resources: list[dict[str, object]],
-    app_service_principal_client_id: str,
-    app_service_principal_scim_id: str,
-    expected_lakebase_instance: str,
-) -> dict[str, Any]:
-    immutable_payload = copy.deepcopy(payload)
-    immutable_payload["source_code_path"] = _immutable_source(deployment)
-    immutable_payload = _validated_payload(
-        immutable_payload,
-        expected_lakebase_instance=expected_lakebase_instance,
-    )
-    return {
-        "version": RECORD_VERSION,
-        "app_name": app_name,
-        "deployment_id": _text(getattr(deployment, "deployment_id", None)),
-        "app_service_principal_client_id": app_service_principal_client_id,
-        "app_service_principal_scim_id": app_service_principal_scim_id,
-        "git_sha": git_sha,
-        "gateway_binding_sha256": gateway_binding,
-        "gateway_resources": _validated_gateway_resources(gateway_resources),
-        "app_resources": validated_app_resource_contract(app_resources),
-        "app_resources_sha256": app_resource_contract_digest(app_resources),
-        "payload": immutable_payload,
-        "payload_sha256": _payload_digest(immutable_payload),
-    }
+    scope: str,
+    record: dict[str, Any],
+) -> None:
+    if record.get("version") == LEGACY_RECORD_VERSION:
+        _save_legacy_record(workspace, scope=scope, record=record)
+    else:
+        _save_record(workspace, scope=scope, record=record)
 
 
 def ensure_current(
@@ -498,7 +565,7 @@ def ensure_current(
             record.get("attestation_verify_key")
             != os.environ.get("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", "").strip()
         ):
-            _save_record(workspace, scope=scope, record=record)
+            _save_versioned_record(workspace, scope=scope, record=record)
         return _rollback_gateway_endpoint(record)
     except BaseException:
         _converge_treatment_guard(
@@ -591,6 +658,21 @@ def capture_current(
         getattr(latest, "deployment_id", None)
     ):
         raise RuntimeError("App active deployment changed during last-good capture")
+    try:
+        previous_record = _load_record(
+            workspace,
+            app_name=app_name,
+            scope=scope,
+            expected_lakebase_instance=expected_lakebase_instance,
+        )
+    except RuntimeError as exc:
+        if not str(exc).startswith("no server-owned last-good App rollback contract exists"):
+            raise
+        previous_record = None
+    pending_proxy_credential_retirement_ids = _capture_proxy_retirement_ids(
+        previous_record,
+        candidate_gateway_resources=gateway_resources,
+    )
     app_client_id, app_scim_id = _app_identity(workspace, app_name=app_name)
     app_resources = app_resource_contract(workspace, app_name=app_name)
     reviewed_resources = validated_app_resource_contract(expected_app_resources)
@@ -609,6 +691,9 @@ def capture_current(
         app_service_principal_client_id=app_client_id,
         app_service_principal_scim_id=app_scim_id,
         expected_lakebase_instance=expected_lakebase_instance,
+        pending_proxy_credential_retirement_ids=(
+            pending_proxy_credential_retirement_ids
+        ),
     )
     expected_deployment_id = _text(getattr(latest, "deployment_id", None))
     treatment_activated = False
@@ -640,6 +725,11 @@ def capture_current(
         )
         if persisted_record["deployment_id"] != expected_deployment_id:
             raise RuntimeError("App rollback contract readback names another deployment")
+        _delete_legacy_record(
+            workspace,
+            scope=scope,
+            app_name=app_name,
+        )
         if _active_deployment_id(workspace, app_name=app_name) != expected_deployment_id:
             raise RuntimeError("App active deployment changed during last-good persistence")
         _converge_treatment_guard(
@@ -770,8 +860,12 @@ def restore_last_good(
             app_service_principal_client_id=app_client_id,
             app_service_principal_scim_id=app_scim_id,
             expected_lakebase_instance=expected_lakebase_instance,
+            pending_proxy_credential_retirement_ids=tuple(
+                record["pending_proxy_credential_retirement_ids"]
+            ),
+            record_version=int(record["version"]),
         )
-        _save_record(workspace, scope=scope, record=refreshed)
+        _save_versioned_record(workspace, scope=scope, record=refreshed)
         if restore_treatment:
             _converge_treatment_guard(
                 workspace,
@@ -791,107 +885,10 @@ def restore_last_good(
         raise
 
 
-def _payload_file(path: str) -> dict[str, object]:
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("App deployment payload file is invalid") from exc
-    if not isinstance(value, dict):
-        raise RuntimeError("App deployment payload file is not an object")
-    return value
-
-
-def _reviewed_resources_file(path: str) -> list[dict[str, object]]:
-    try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise RuntimeError("bundle summary file is invalid") from exc
-    resources = value.get("resources")
-    if isinstance(resources, list):
-        return validated_app_resource_contract(resources)
-    return reviewed_app_resource_contract(value)
-
-
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=("ensure", "capture", "restore"))
-    parser.add_argument("--app-name", required=True)
-    parser.add_argument("--scope", default=DEFAULT_SCOPE)
-    parser.add_argument("--base-url", required=True)
-    parser.add_argument("--token-env", required=True)
-    parser.add_argument("--payload")
-    parser.add_argument("--expected-git-sha")
-    parser.add_argument("--expected-gateway-binding")
-    parser.add_argument("--deployment-lease-id")
-    parser.add_argument("--genie-space-id")
-    parser.add_argument("--bundle-summary")
-    parser.add_argument("--app-resource-payload")
-    parser.add_argument("--revoke-endpoint", action="append", default=[])
-    parser.add_argument("--treatment-warehouse-id")
-    parser.add_argument("--treatment-catalog", default="mip")
-    parser.add_argument("--out-env", type=Path)
-    args = parser.parse_args(argv)
-    token = os.environ.get(args.token_env, "").strip()
-    if not token:
-        parser.error(f"{args.token_env} is empty")
-    workspace = WorkspaceClient()
-    common = {
-        "workspace": workspace,
-        "app_name": args.app_name,
-        "scope": args.scope,
-        "base_url": args.base_url,
-        "bearer_token": token,
-    }
-    if args.action == "ensure":
-        if not args.treatment_warehouse_id:
-            parser.error("--treatment-warehouse-id is required for ensure")
-        endpoint = ensure_current(
-            **common,
-            treatment_warehouse_id=args.treatment_warehouse_id,
-            treatment_catalog=args.treatment_catalog,
-        )
-        if args.out_env is not None:
-            args.out_env.write_text(
-                f"MIP_APP_ROLLBACK_GATEWAY_ENDPOINT={shlex.quote(endpoint)}\n",
-                encoding="utf-8",
-            )
-    elif args.action == "restore":
-        if not args.treatment_warehouse_id:
-            parser.error("--treatment-warehouse-id is required for restore")
-        restore_last_good(
-            **common,
-            treatment_warehouse_id=args.treatment_warehouse_id,
-            treatment_catalog=args.treatment_catalog,
-            revoke_endpoints=tuple(args.revoke_endpoint),
-        )
-    else:
-        if not args.payload:
-            parser.error("--payload is required for capture")
-        payload = _payload_file(args.payload)
-        if not args.expected_git_sha:
-            parser.error("--expected-git-sha is required for capture")
-        if not args.genie_space_id:
-            parser.error("--genie-space-id is required for capture")
-        if not args.deployment_lease_id:
-            parser.error("--deployment-lease-id is required for capture")
-        resource_contract_path = args.app_resource_payload or args.bundle_summary
-        if not resource_contract_path:
-            parser.error("--app-resource-payload is required for capture")
-        if not args.treatment_warehouse_id:
-            parser.error("--treatment-warehouse-id is required for capture")
-        capture_current(
-            **common,
-            payload=payload,
-            expected_git_sha=args.expected_git_sha,
-            expected_gateway_binding=args.expected_gateway_binding,
-            expected_deployment_lease_id=args.deployment_lease_id,
-            genie_space_id=args.genie_space_id,
-            expected_app_resources=_reviewed_resources_file(resource_contract_path),
-            treatment_warehouse_id=args.treatment_warehouse_id,
-            treatment_catalog=args.treatment_catalog,
-        )
-    print(f"App last-good rollback contract {args.action}: PASS")
-    return 0
+    from tools.databricks.app_deployment_rollback_cli import main as cli_main
+
+    return cli_main(argv)
 
 
 if __name__ == "__main__":

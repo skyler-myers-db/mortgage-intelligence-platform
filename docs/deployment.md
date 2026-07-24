@@ -100,7 +100,7 @@ verified by the live smoke test.
 
 ### Per-run M2M identities
 
-Live app validation and agent ownership use six service principals and store only their OAuth
+Live app validation and agent ownership use seven service principals and store only their OAuth
 client credentials. No bearer token is a GitHub secret or `.env.local` value:
 
 One-shot OAuth secrets are written only to the repository detected from the
@@ -117,6 +117,7 @@ does not require this binding and can run from a customer fork unchanged.
 | candidate release probe | `mip-release-probe-ci-sp` | `DATABRICKS_RELEASE_PROBE_CLIENT_ID`, `DATABRICKS_RELEASE_PROBE_CLIENT_SECRET` |
 | AI Gateway verifier | `mip-ai-gateway-verifier-ci-sp` | `DATABRICKS_VERIFIER_CLIENT_ID`, `DATABRICKS_VERIFIER_CLIENT_SECRET` |
 | agent resource runtime | `mip-agent-runtime-ci-sp` | `DATABRICKS_AGENT_RUNTIME_CLIENT_ID`, `DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET` |
+| Supervisor proxy caller | `mip-agent-supervisor-proxy-ci-sp` | `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE` |
 
 For a fresh workspace, create credentials **before** running deploy. The
 credentials-only mode never lists or grants an App, Lakebase instance, Gateway
@@ -145,19 +146,23 @@ python tools/databricks/provision_m2m_oauth.py \
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role agent_runtime \
   --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
+python tools/databricks/provision_m2m_oauth.py \
+  --pre-app-bootstrap --identity-role agent_proxy \
+  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 ```
 
 If a reserved principal already exists but its one-shot secret is unavailable,
-repeat that role's command with `--rotate`; credentials-only bootstrap refuses
-to report success for an existing principal without an explicit rotation.
+repeat that role's command with `--rotate` when any OAuth credential remains.
+If a compensated partial delivery left the exact principal with zero
+credentials, the same bootstrap command resumes safely without `--rotate`.
 Create the separate account-SCIM OAuth principal and store
 `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and
 `DATABRICKS_ACCOUNT_CLIENT_SECRET` independently; it must not reuse any of the
-six workspace client IDs. A first install with an approved group owner requires
+seven workspace client IDs. A first install with an approved group owner requires
 account-admin authority because the bundle-created target App cannot be
 delegated in advance. After that install, downscope the account principal to
 Service Principal Manager on every normal, operator2, admin, release-probe,
-verifier, agent-runtime, and now-existing target-App principal so later deploys
+verifier, agent-runtime, agent-proxy, and now-existing target-App principal so later deploys
 can create and revoke each five-minute target-identity proof credential. Also
 configure the two distinct Ed25519 private keys
 `MIP_AI_GATEWAY_PROOF_SIGNING_KEY` and
@@ -285,6 +290,14 @@ retains owner capabilities on that exact payload table. That does not expand
 the data it can observe: the same runtime already processes those request and
 response payloads in flight, and it receives no access to any other audit or
 borrower table.
+The agent-proxy identity is independently excluded from every App, Lakebase
+instance, SQL warehouse, and serving endpoint ACL. It receives direct
+`CAN_QUERY` on exactly one managed Supervisor, direct `CAN_RUN` on one Genie
+space, and direct `USE CATALOG`, `USE SCHEMA`, and `EXECUTE` only for the three
+reviewed `mip.gold` functions. A target-authenticated dual-authority audit
+enumerates every visible UC catalog, schema, function, table, volume, and
+registered model before cutover and again after blue retirement; inherited,
+foreign, ownership, or fourth-function authority fails deployment.
 Before green activation, a principal-pinned workspace-admin global audit
 enumerates every admin-visible Genie space and customer-created serving
 endpoint. ID-less, creator-less Databricks foundation-model endpoints are
@@ -301,8 +314,9 @@ For an existing principal whose prior client secret is unavailable or being
 replaced, add `--rotate`; without it, the existing secret remains unchanged.
 
 For local `scripts/deploy.sh`, provide the normal, admin, release-probe,
-verifier, and agent-runtime client credential pairs plus the second-operator client ID
-through the process environment or `.env.local`. The script rejects reused
+verifier, agent-runtime, and agent-proxy client credential pairs plus the
+second-operator client ID and active proxy credential ID through the process
+environment or `.env.local`. The script rejects reused
 client IDs, mints distinct normal/admin bearers at preflight, and uses only the
 release-probe bearer while an unsigned rebase remains quarantined. It remints
 the active automation bearers immediately before Agent Evaluation and the final
@@ -397,24 +411,47 @@ the exact release candidate must use the current key. Verification is
 read-only: deploy never rewrites retained model-version tags, and unsigned,
 source-drifted, or wrong-epoch versions fail closed.
 
-The deployed proxy also re-reads the immutable Supervisor ID, creator,
+The deployed proxy authenticates the signed resource envelope and re-reads the
+immutable Supervisor ID, creator,
 description, instructions, exact four-tool set, zero-example contract, and the
 live Unity Catalog metadata/body hashes for all three reviewed SQL functions
-before every inference. A post-deploy mutation therefore fails the product
-request closed instead of remaining a nominally verified Supervisor path.
+before every inference, using only the dedicated proxy OAuth identity. The
+model declares no automatic private Databricks resources, so Model Serving
+creator credentials are not a second caller. A post-deploy mutation therefore
+fails the product request closed instead of remaining a nominally verified
+Supervisor path. The deployment verifier separately re-proves the immutable
+private endpoint ID and the outer Gateway/model/experiment allocation.
 
 App activation has a separate blue/green rollback contract. Before changing an
 existing App, deploy requires a server-owned
-`mip-app-rollback/app-last-good-v5-mip-app` secret whose Ed25519 signature and
+`mip-app-rollback/app-last-good-v6-mip-app` secret whose Ed25519 signature and
 digest bind the full environment payload, exact health SHA, App service-
 principal client and SCIM IDs, Gateway binding, succeeded deployment ID,
 immutable `/Workspace/Users/.../src/...` source artifact, and the complete live
-Supervisor/Gateway/model/experiment/inference-table resource proof. The v5
+Supervisor/Gateway/model/experiment/inference-table resource proof. The v6
+record scope is deterministically App-bound: names ending in `-app` append
+`-rollback`, while an environment suffix after `-app-` is preserved after the
+inserted `-rollback-` segment (for example,
+`mip-app-pr105-staging` → `mip-app-rollback-pr105-staging`). It contains an
+App/deployer ownership marker, and is re-audited before every record read,
+write, or legacy-key deletion. Its direct ACL must be exactly the original
+deployer plus `admins` at `MANAGE`, and its only permitted non-marker keys are
+that App's v5/v6 rollback records. An unmarked pre-existing scope, foreign ACL,
+or unrelated key blocks deployment without adoption or cleanup.
+The only bounded adoption path is an unmarked, exact-current-deployer scope
+containing solely that App's v5 key; deploy verifies the v5 Ed25519 signature,
+schema, digests, and Lakebase binding before writing the ownership marker, then
+the normal signed-blue verifier re-proves all live resources before any
+rollback authority is exercised.
+The v6
 payload must also bind matching `MIP_LAKEBASE_INSTANCE` and
-`LAKEBASE_INSTANCE_NAME` values to the current deployment target. Older v4
-records are intentionally not rollback authority; an operator must use the
-explicit stopped-App rebase path once before the next governed capture. Before any
-App start, endpoint ACL grant, rollback deployment, or treatment restoration,
+`LAKEBASE_INSTANCE_NAME` values to the current deployment target. An existing,
+signed v5 record is accepted only through its original proxyless field set,
+digest, signature algorithm, and exact live-resource verifier. The first
+durable v6 capture deletes that legacy key. Older v4 records are intentionally
+not rollback authority; an operator must use the explicit stopped-App rebase
+path once before the next governed capture. Before any App start, endpoint ACL
+grant, rollback deployment, or treatment restoration,
 the rollback tool re-reads those immutable resource IDs, owners, exact endpoint
 configuration, signed model envelope/source, runtime-owned experiment name/ID,
 the experiment's normalized Workspace ACL (runtime `CAN_MANAGE` inherited only
@@ -479,9 +516,10 @@ last-good contract. Remove the flag only after the first successful signed
 capture; a failed attempt that remains unsigned requires another explicit
 recovery invocation. Once a record exists, the exceptional path refuses to run
 even if the flag is mistakenly selected. Routine CI must never set it. New
-installations capture their first record automatically. Override
-the dedicated scope only with the reviewed non-secret
-`MIP_APP_ROLLBACK_SECRET_SCOPE` setting.
+installations capture their first record automatically.
+`MIP_APP_ROLLBACK_SECRET_SCOPE` is a reviewed non-secret setting, but its value
+must match that deterministic transformation; arbitrary shared scopes are
+rejected before workspace mutation.
 
 Databricks Agent Model endpoints currently support AI Gateway payload logging,
 but not Gateway rate limiting or usage tracking. The provisioner therefore

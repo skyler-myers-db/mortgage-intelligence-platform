@@ -23,6 +23,15 @@ from backend.agents.gateway_contract import (
     gateway_runtime_binding_hash,
     verified_gateway_runtime_resource_environment,
 )
+from backend.agents.gateway_provider_shape import (
+    field as _field,
+)
+from backend.agents.gateway_provider_shape import (
+    legacy_served_model_matches,
+    provider_bool_matches,
+    route_targets_served_entity,
+    usage_tracking_is_disabled,
+)
 from backend.agents.supervisor_contract import supervisor_contract_hash
 from backend.config.settings import Settings
 
@@ -35,12 +44,6 @@ class VerifiedSupervisorRuntime:
     model_name: str
     source_hash: str
     task: str
-
-
-def _field(value: object, name: str) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(name)
-    return getattr(value, name, None)
 
 
 def _enum_text(value: object) -> str:
@@ -83,6 +86,9 @@ def _resource_environment(settings: Settings) -> dict[str, str]:
         "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": (
             settings.mip_gateway_model_attestation_verify_key or ""
         ).strip(),
+        "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY": (
+            settings.mip_gateway_model_attestation_previous_verify_key or ""
+        ).strip(),
     }
 
 
@@ -90,13 +96,18 @@ def verify_supervisor_runtime(
     client: Any,
     settings: Settings,
 ) -> tuple[VerifiedSupervisorRuntime | None, str | None]:
-    """Bind managed identity, reviewed proxy bytes, upstream, and Gateway config.
+    """Bind the signed managed identity to the live, App-queryable Gateway.
 
     Endpoint names and feature flags are only configuration. Every generation
     path calls this helper immediately before inference and labels output as
-    Supervisor-generated only if the live workspace proves the complete chain:
-    managed Supervisor identity -> reviewed single-model proxy -> exact
-    AI Gateway inference-table binding.
+    Supervisor-generated only if the authenticated resource envelope and live
+    outer endpoint prove the reviewed single-model proxy and exact AI Gateway
+    inference-table binding.
+
+    The App identity intentionally has no direct permission on the private
+    managed Supervisor endpoint. Deployment-time control-plane verification
+    proves that private endpoint and signs its immutable identity into the
+    resource envelope; this App-safe verifier must never query it.
     """
 
     if not settings.mip_agent_orchestrator:
@@ -114,6 +125,9 @@ def verify_supervisor_runtime(
     resource_digest = (settings.mip_expected_agent_gateway_resource_sha256 or "").strip()
     expected_binding = (settings.mip_expected_agent_gateway_binding_sha256 or "").strip()
     runtime_application_id = (settings.mip_agent_runtime_client_id or "").strip()
+    proxy_application_id = (settings.mip_agent_proxy_client_id or "").strip()
+    proxy_credential_id = (settings.mip_agent_proxy_credential_id or "").strip()
+    proxy_secret_reference = (settings.mip_agent_proxy_secret_reference or "").strip()
     if (
         not endpoint
         or not gateway_endpoint
@@ -122,6 +136,9 @@ def verify_supervisor_runtime(
         or not model_name
         or model_version is None
         or not runtime_application_id
+        or not proxy_application_id
+        or not proxy_credential_id
+        or not proxy_secret_reference
         or not experiment_id
         or not experiment_name
         or not model_source
@@ -147,6 +164,9 @@ def verify_supervisor_runtime(
         "gateway_experiment_name": experiment_name,
         "gateway_experiment_id": experiment_id,
         "gateway_inference_table": inference_table,
+        "proxy_caller_application_id": proxy_application_id,
+        "proxy_caller_credential_id": proxy_credential_id,
+        "proxy_caller_secret_reference": proxy_secret_reference,
     }
     if any(expected_resources.get(key) != value for key, value in expected_scope.items()):
         return None, "gateway_resource_contract_scope_mismatch"
@@ -166,6 +186,9 @@ def verify_supervisor_runtime(
             model_name=model_name,
             model_version=model_version,
             inference_table=inference_table,
+            proxy_caller_application_id=proxy_application_id,
+            proxy_caller_credential_id=proxy_credential_id,
+            proxy_caller_secret_reference=proxy_secret_reference,
         )
         != expected_binding
     ):
@@ -197,6 +220,11 @@ def verify_supervisor_runtime(
         if len(entities) != 1:
             return None, "gateway_proxy_entity_count_mismatch"
         entity = entities[0]
+        legacy_models = _field(config, "served_models") or []
+        if len(legacy_models) > 1 or (
+            legacy_models and not legacy_served_model_matches(legacy_models[0], entity)
+        ):
+            return None, "gateway_proxy_legacy_model_mismatch"
         if str(_field(entity, "entity_name") or "") != model_name:
             return None, "gateway_proxy_model_mismatch"
         try:
@@ -213,6 +241,9 @@ def verify_supervisor_runtime(
             "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": supervisor_endpoint,
             "MIP_UPSTREAM_SUPERVISOR_CREATOR": runtime_application_id,
+            "MIP_UPSTREAM_PROXY_CLIENT_ID": proxy_application_id,
+            "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": proxy_credential_id,
+            "MIP_UPSTREAM_PROXY_CLIENT_SECRET": proxy_secret_reference,
             "MIP_SUPERVISOR_CATALOG": settings.mip_default_catalog,
             "MIP_SUPERVISOR_GENIE_SPACE_ID": settings.genie_space_id or "",
             "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(
@@ -252,7 +283,10 @@ def verify_supervisor_runtime(
             return None, "gateway_proxy_workload_type_mismatch"
         if _field(entity, "scale_to_zero_enabled") is not GATEWAY_SCALE_TO_ZERO_ENABLED:
             return None, "gateway_proxy_scale_to_zero_mismatch"
-        if _field(entity, "burst_scaling_enabled") is not GATEWAY_BURST_SCALING_ENABLED:
+        if not provider_bool_matches(
+            _field(entity, "burst_scaling_enabled"),
+            GATEWAY_BURST_SCALING_ENABLED,
+        ):
             return None, "gateway_proxy_burst_scaling_mismatch"
         traffic = _field(config, "traffic_config")
         routes = _field(traffic, "routes") or []
@@ -260,7 +294,7 @@ def verify_supervisor_runtime(
             return None, "gateway_proxy_traffic_mismatch"
         route = routes[0]
         if (
-            str(_field(route, "served_entity_name") or "") != expected_entity_name
+            not route_targets_served_entity(route, expected_entity_name)
             or _field(route, "traffic_percentage") != GATEWAY_TRAFFIC_PERCENTAGE
         ):
             return None, "gateway_proxy_traffic_mismatch"
@@ -295,18 +329,9 @@ def verify_supervisor_runtime(
             _field(gateway, "fallback_config") is not None
             or _field(gateway, "guardrails") is not None
             or (_field(gateway, "rate_limits") or [])
-            or _field(gateway, "usage_tracking_config") is not None
+            or not usage_tracking_is_disabled(_field(gateway, "usage_tracking_config"))
         ):
             return None, "gateway_policy_mismatch"
-
-        supervisor_details = get_endpoint(supervisor_endpoint)
-        actual_supervisor_endpoint_id = str(_field(supervisor_details, "id") or "").strip()
-        if actual_supervisor_endpoint_id != expected_resources["supervisor_endpoint_id"]:
-            return None, "supervisor_endpoint_id_mismatch"
-        if not _runtime_creator_matches(
-            _field(supervisor_details, "creator"), runtime_application_id
-        ):
-            return None, "supervisor_endpoint_creator_mismatch"
 
         return (
             VerifiedSupervisorRuntime(

@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Provision MIP-owned Databricks agentic resources.
-
-This helper intentionally provisions only resources owned by the Mortgage
-Intelligence Platform. It refuses to reuse unrelated workspace AI Gateway or
-Supervisor Agent demos because doing so would make the app claim governance it
-does not control.
-"""
+"""Provision only MIP-owned Databricks agentic resources, never unrelated demos."""
 
 from __future__ import annotations
 
@@ -38,6 +32,7 @@ from tools.databricks.agent_runtime_access import (  # noqa: E402
     assert_current_runtime_identity,
     assert_runtime_creator,
 )
+from tools.databricks.agentic_env_file import write_agentic_env  # noqa: E402
 from tools.databricks.agentic_provisioning_cli import build_parser  # noqa: E402
 from tools.databricks.agentic_resource_contract import (  # noqa: E402
     ProvisionedResources,
@@ -59,11 +54,13 @@ from tools.databricks.supervisor_agent_contract import (  # noqa: E402
     SUPERVISOR_DESCRIPTION,
     SUPERVISOR_INSTRUCTIONS,
     SupervisorContractDrift,
-    supervisor_contract_document,
     supervisor_replacement_name,
 )
 from tools.databricks.supervisor_agent_contract import (  # noqa: E402
     supervisor_tool_specs as _supervisor_tool_specs,
+)
+from tools.databricks.supervisor_contract_verification import (  # noqa: E402
+    assert_exact_supervisor_contract as _assert_exact_supervisor_contract,
 )
 
 SyncTableDefinition: TypeAlias = tuple[str, str, tuple[str, ...]]
@@ -601,44 +598,13 @@ def assert_exact_supervisor_contract(
     expected_contract: dict[str, Any] | None = None,
 ) -> None:
     """Re-read immutable definition, exact tools, and zero examples."""
-
-    parent = f"supervisor-agents/{supervisor_id}"
-    details = _run(["supervisor-agents", "get-supervisor-agent", parent])
-    if not isinstance(details, dict):
-        raise SupervisorContractDrift(
-            "Supervisor definition postflight returned an invalid payload"
-        )
-    contract = expected_contract or supervisor_contract_document(
-        genie_space_id=genie_space_id,
-        catalog=catalog,
-    )
-    tools = contract.get("tools")
-    if (
-        set(contract) != {"description", "instructions", "tools", "examples"}
-        or not isinstance(tools, list)
-        or contract.get("examples") != []
-    ):
-        raise SupervisorContractDrift("stored Supervisor contract is invalid")
-    specs: list[tuple[str, str, str, dict[str, Any]]] = []
-    for tool in tools:
-        if not isinstance(tool, dict):
-            raise SupervisorContractDrift("stored Supervisor tool contract is invalid")
-        tool_id = str(tool.get("tool_id") or "")
-        tool_type = str(tool.get("tool_type") or "")
-        description = str(tool.get("description") or "")
-        resource = tool.get(tool_type)
-        if not tool_id or not tool_type or not description or not isinstance(resource, dict):
-            raise SupervisorContractDrift("stored Supervisor tool contract is invalid")
-        specs.append((tool_id, tool_type, description, {tool_type: resource}))
-    if details.get("description") != contract["description"]:
-        raise SupervisorContractDrift("Supervisor description drifted from the reviewed contract")
-    if details.get("instructions") != contract["instructions"]:
-        raise SupervisorContractDrift("Supervisor instructions drifted from the reviewed contract")
-    _exact_supervisor_tools(
+    _assert_exact_supervisor_contract(
         supervisor_id,
         genie_space_id=genie_space_id,
         catalog=catalog,
-        specs=specs,
+        run=_run,
+        exact_tools=_exact_supervisor_tools,
+        expected_contract=expected_contract,
     )
 
 
@@ -702,12 +668,6 @@ def _ensure_supervisor_tools(
         genie_space_id=genie_space_id,
         catalog=catalog,
     )
-
-
-def _write_env(path: Path, resources: ProvisionedResources) -> None:
-    text = "\n".join(resources.env_lines()) + "\n"
-    path.write_text(text, encoding="utf-8")
-    print(f"[agentic] wrote env file: {path}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -781,6 +741,24 @@ def main(argv: list[str] | None = None) -> int:
                 application_id=args.expected_runtime_application_id,
                 resource=f"managed Supervisor endpoint {supervisor_endpoint}",
             )
+    elif not args.skip_gateway:
+        supervisor_id = args.supervisor_id.strip()
+        supervisor_endpoint = args.supervisor_endpoint.strip()
+        if not supervisor_id or not supervisor_endpoint:
+            raise ValueError(
+                "split Gateway provisioning requires the proven Supervisor ID and endpoint"
+            )
+        assert_exact_supervisor_contract(
+            supervisor_id,
+            genie_space_id=args.genie_space_id,
+            catalog=args.catalog,
+        )
+        endpoint_details = workspace.serving_endpoints.get(supervisor_endpoint)
+        assert_runtime_creator(
+            getattr(endpoint_details, "creator", None),
+            application_id=args.expected_runtime_application_id,
+            resource=f"managed Supervisor endpoint {supervisor_endpoint}",
+        )
     gateway_endpoint: str | None = None
     gateway_table: str | None = None
     gateway_model: str | None = None
@@ -788,9 +766,17 @@ def main(argv: list[str] | None = None) -> int:
     gateway_deployment: Any | None = None
     if not args.skip_gateway:
         gateway_endpoint = args.gateway_endpoint
-        if not gateway_endpoint or not supervisor_id or not supervisor_endpoint:
+        if (
+            not gateway_endpoint
+            or not supervisor_id
+            or not supervisor_endpoint
+            or not args.proxy_caller_application_id
+            or not args.proxy_caller_credential_id
+            or not args.proxy_caller_secret_reference
+        ):
             raise ValueError(
-                "AI Gateway provisioning needs both its ResponsesAgent endpoint and Supervisor"
+                "AI Gateway provisioning needs its ResponsesAgent, Supervisor, and "
+                "complete proxy-caller credential binding"
             )
         if gateway_endpoint == supervisor_endpoint:
             raise ValueError(
@@ -811,6 +797,9 @@ def main(argv: list[str] | None = None) -> int:
             inference_table_prefix=args.gateway_table_prefix,
             genie_space_id=args.genie_space_id,
             expected_creator_application_id=args.expected_runtime_application_id,
+            proxy_caller_application_id=args.proxy_caller_application_id,
+            proxy_caller_credential_id=args.proxy_caller_credential_id,
+            proxy_caller_secret_reference=args.proxy_caller_secret_reference,
             deployment_app_name=args.app_name,
             deployment_lease_id=args.deployment_lease_id,
             deployment_source_git_sha=args.deployment_source_git_sha,
@@ -886,11 +875,14 @@ def main(argv: list[str] | None = None) -> int:
             supervisor_binding.replaced_supervisor_create_time if supervisor_binding else None
         ),
         agent_runtime_application_id=args.expected_runtime_application_id or None,
+        agent_proxy_application_id=args.proxy_caller_application_id or None,
+        agent_proxy_credential_id=args.proxy_caller_credential_id or None,
+        agent_proxy_secret_reference=args.proxy_caller_secret_reference or None,
     )
     for line in resources.env_lines():
         print(line)
     if args.out_env:
-        _write_env(args.out_env, resources)
+        write_agentic_env(args.out_env, resources, merge=args.merge_out_env)
     return 0
 
 

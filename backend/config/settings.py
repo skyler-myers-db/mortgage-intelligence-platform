@@ -18,7 +18,7 @@ from collections.abc import Callable
 from functools import lru_cache
 
 from pydantic import AliasChoices, Field, SecretStr, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, PydanticBaseSettingsSource, SettingsConfigDict
 
 from backend.schemas._validators import set_public_lender_name_provider
 from backend.schemas.lender_identity import (
@@ -124,6 +124,21 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Honor the process-wide dotenv kill switch for every instance."""
+        del settings_cls
+        if os.environ.get("MIP_DISABLE_DOTENV", "").strip() == "1":
+            return init_settings, env_settings, file_secret_settings
+        return init_settings, env_settings, dotenv_settings, file_secret_settings
+
     app_env: str = "local"
     mip_git_sha: str | None = Field(
         default=None,
@@ -205,6 +220,9 @@ class Settings(BaseSettings):
             "AI_GATEWAY_AGENT_MODEL_VERSION",
         ),
     )
+    mip_agent_proxy_client_id: str | None = None
+    mip_agent_proxy_credential_id: str | None = None
+    mip_agent_proxy_secret_reference: str | None = None
     mip_ai_gateway_endpoint: str | None = None
     mip_ai_gateway_inference_table: str | None = None
     mip_ai_gateway_agent_model_source: str | None = None

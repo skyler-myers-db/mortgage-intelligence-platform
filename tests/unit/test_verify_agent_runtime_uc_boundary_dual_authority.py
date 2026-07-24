@@ -31,6 +31,12 @@ def _args() -> list[str]:
         "genie-id",
         "--inference-table-prefix",
         "gateway_table",
+        "--proxy-caller-application-id",
+        "proxy-client",
+        "--proxy-caller-credential-id",
+        "proxy-credential",
+        "--proxy-caller-secret-reference",
+        "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}",
     ]
 
 

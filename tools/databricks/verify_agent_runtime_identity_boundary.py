@@ -10,25 +10,13 @@ from typing import Any
 import requests
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.errors import PermissionDenied
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks.agent_runtime_access import assert_current_runtime_identity
-
-_DENIAL_MARKERS = (
-    "403",
-    "forbidden",
-    "permission_denied",
-    "permission denied",
-    "not authorized",
-    "does not have permission",
-    "insufficient privileges",
-)
+from tools.databricks.authorization_denial import is_authorization_denied
 
 
 def _is_denied(value: object) -> bool:
-    return isinstance(value, PermissionDenied) or any(
-        marker in str(value).casefold() for marker in _DENIAL_MARKERS
-    )
+    return is_authorization_denied(value)
 
 
 def _expect_denied(label: str, operation: Callable[[], object]) -> None:
@@ -53,7 +41,7 @@ def _verify_app_http_denial(
         allow_redirects=False,
         timeout=30,
     )
-    if response.status_code not in {401, 403}:
+    if response.status_code != 403:
         raise RuntimeError(
             "agent-runtime Databricks App denial probe unexpectedly returned "
             f"status={response.status_code}"

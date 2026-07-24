@@ -43,6 +43,12 @@ from tests.fixtures.gateway_runtime_resources import (
     signed_gateway_model_tags,
     signed_gateway_runtime_environment,
 )
+from tools.databricks import (
+    export_gateway_runtime_contract,
+    gateway_runtime_resource_binding,
+)
+from tools.databricks.export_gateway_runtime_contract import ExactGatewayRuntimeProof
+from tools.databricks.gateway_resource_identity import GatewayAgentDeployment
 
 
 def _contract() -> dict[str, str]:
@@ -74,6 +80,9 @@ def _contract() -> dict[str, str]:
         "gateway_source_hash",
         "genie_space_id",
         "proof_version",
+        "proxy_caller_application_id",
+        "proxy_caller_credential_id",
+        "proxy_caller_secret_reference",
         "runtime_application_id",
         "supervisor_canonical_name",
         "supervisor_contract_json",
@@ -167,6 +176,9 @@ _MODEL_FAMILY = "mip.audit.mortgage_growth_supervisor_proxy"
 _INFERENCE_FAMILY = "mip.audit.mip_agent_gateway_growth_agent"
 _MODEL_SOURCE = "models:/m-reviewed-proxy"
 _EXPERIMENT_ID = "experiment-7"
+_PROXY_CLIENT_ID = "proxy-client"
+_PROXY_CREDENTIAL_ID = "proxy-credential"
+_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 
 
 def _acl_document() -> dict[str, Any]:
@@ -291,6 +303,9 @@ def _live_resources() -> _LiveResources:
         inference_schema="audit",
         inference_table_prefix="mip_agent_gateway_growth_agent",
         attestation_verify_key=model_verify_key,
+        proxy_caller_application_id=_PROXY_CLIENT_ID,
+        proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
     )
     model_name = f"{_MODEL_FAMILY}_{resource_hash[:12]}"
     experiment_name = (
@@ -331,6 +346,9 @@ def _live_resources() -> _LiveResources:
         "gateway_source_hash": source_hash,
         "genie_space_id": _GENIE_SPACE,
         "proof_version": GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
+        "proxy_caller_application_id": _PROXY_CLIENT_ID,
+        "proxy_caller_credential_id": _PROXY_CREDENTIAL_ID,
+        "proxy_caller_secret_reference": _PROXY_SECRET_REFERENCE,
         "runtime_application_id": _RUNTIME_ID,
         "supervisor_canonical_name": "Mortgage Growth Agent Supervisor",
         "supervisor_contract_json": supervisor_json,
@@ -378,6 +396,9 @@ def _live_resources() -> _LiveResources:
         "MIP_UPSTREAM_SUPERVISOR_ID": _SUPERVISOR_ID,
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": _SUPERVISOR_ENDPOINT,
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": _RUNTIME_ID,
+        "MIP_UPSTREAM_PROXY_CLIENT_ID": _PROXY_CLIENT_ID,
+        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": _PROXY_CREDENTIAL_ID,
+        "MIP_UPSTREAM_PROXY_CLIENT_SECRET": _PROXY_SECRET_REFERENCE,
         "MIP_SUPERVISOR_CATALOG": _CATALOG,
         "MIP_SUPERVISOR_GENIE_SPACE_ID": _GENIE_SPACE,
         "MIP_SUPERVISOR_CONTRACT_SHA256": contract["supervisor_contract_sha256"],
@@ -440,11 +461,15 @@ def _live_resources() -> _LiveResources:
         api_client=_ApiClient(acl),
         serving_endpoints=_NamedResources(
             {
+                _GATEWAY_ENDPOINT: gateway,
                 _SUPERVISOR_ENDPOINT: SimpleNamespace(
                     id=contract["supervisor_endpoint_id"],
+                    name=_SUPERVISOR_ENDPOINT,
                     creator=_RUNTIME_ID,
+                    task="agent/v1/responses",
+                    pending_config=None,
+                    state=SimpleNamespace(ready="READY"),
                 ),
-                _GATEWAY_ENDPOINT: gateway,
             }
         ),
         registered_models=_NamedResources({model_name: SimpleNamespace(owner=_RUNTIME_ID)}),
@@ -475,6 +500,167 @@ def test_live_gateway_runtime_resources_accept_exact_signed_release_state() -> N
     resources = _live_resources()
 
     assert _verify_live(resources) == resources.contract
+
+
+def test_served_binding_preserves_previous_model_attestation_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    contract = _contract()
+    proof = ExactGatewayRuntimeProof(
+        contract=contract,
+        digest=gateway_exact_resource_digest(contract),
+    )
+    monkeypatch.setattr(
+        export_gateway_runtime_contract,
+        "resolve_exact_resource_proof",
+        lambda *_args, **_kwargs: proof,
+    )
+    monkeypatch.setattr(
+        gateway_runtime_resource_binding,
+        "sign_gateway_runtime_resource_contract",
+        lambda _contract: "signature",
+    )
+    observed: dict[str, str] = {}
+
+    def environment(
+        _contract: object,
+        *,
+        signature: str,
+        current_verify_key: str,
+        previous_verify_key: str,
+    ) -> dict[str, str]:
+        observed.update(
+            signature=signature,
+            current_verify_key=current_verify_key,
+            previous_verify_key=previous_verify_key,
+        )
+        return {"MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": proof.digest}
+
+    monkeypatch.setattr(
+        gateway_runtime_resource_binding,
+        "gateway_runtime_resource_environment",
+        environment,
+    )
+    monkeypatch.setattr(
+        gateway_runtime_resource_binding,
+        "served_entity",
+        lambda **_kwargs: (object(), object()),
+    )
+    monkeypatch.setattr(
+        gateway_runtime_resource_binding,
+        "assert_gateway_runtime_resource_binding",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setenv("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "current-key")
+    monkeypatch.setenv(
+        "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
+        "previous-key",
+    )
+    deployment = GatewayAgentDeployment(
+        endpoint="gateway",
+        supervisor_id="supervisor",
+        supervisor_endpoint_id="supervisor-endpoint-id",
+        upstream_endpoint="supervisor-endpoint",
+        runtime_application_id="runtime",
+        proxy_caller_application_id="proxy",
+        proxy_caller_credential_id="credential",
+        proxy_caller_secret_reference="{{secrets/scope/oauth-client-secret-credential}}",
+        model_name="mip.audit.proxy",
+        model_version=7,
+        model_source="models:/m-source",
+        model_attestation_verify_key="current-key",
+        model_family="mip.audit.proxy",
+        source_hash="a" * 64,
+        resource_hash="b" * 64,
+        inference_table="mip.audit.inference",
+        inference_table_prefix="inference",
+        experiment_base="proxy",
+        experiment_name="/Users/runtime/proxy",
+        experiment_id="experiment",
+        catalog="mip",
+        genie_space_id="space",
+    )
+    workspace = SimpleNamespace(
+        serving_endpoints=SimpleNamespace(
+            update_config_and_wait=lambda **_kwargs: None,
+            get=lambda _endpoint: object(),
+        )
+    )
+
+    gateway_runtime_resource_binding.bind_gateway_runtime_resource_contract(
+        workspace,
+        deployment,
+        supervisor_name="Mortgage Growth Agent",
+        assert_single_writer=lambda: None,
+    )
+
+    assert observed == {
+        "signature": "signature",
+        "current_verify_key": "current-key",
+        "previous_verify_key": "previous-key",
+    }
+
+
+def test_live_gateway_runtime_resources_reject_private_supervisor_endpoint_id_drift() -> None:
+    resources = _live_resources()
+    resources.workspace.serving_endpoints.resources[_SUPERVISOR_ENDPOINT].id = (
+        "se-attacker-replacement"
+    )
+
+    with pytest.raises(RuntimeError, match="Supervisor immutable endpoint contract drifted"):
+        _verify_live(resources)
+
+
+def test_live_gateway_runtime_resources_accept_provider_normalized_release_state() -> None:
+    resources = _live_resources()
+    entity = resources.gateway.config.served_entities[0]
+    entity.burst_scaling_enabled = None
+    resources.gateway.config.served_models = [
+        SimpleNamespace(
+            model_name=entity.entity_name,
+            model_version=entity.entity_version,
+            name=entity.name,
+            environment_vars=dict(entity.environment_vars),
+            workload_size=entity.workload_size,
+            workload_type=entity.workload_type,
+            scale_to_zero_enabled=entity.scale_to_zero_enabled,
+        )
+    ]
+    resources.gateway.config.traffic_config.routes[0].served_model_name = entity.name
+    resources.gateway.ai_gateway.usage_tracking_config = SimpleNamespace(enabled=False)
+
+    assert _verify_live(resources) == resources.contract
+
+
+@pytest.mark.parametrize("drift", ["legacy_environment", "usage_tracking"])
+def test_live_gateway_runtime_resources_reject_provider_normalization_drift(
+    drift: str,
+) -> None:
+    resources = _live_resources()
+    entity = resources.gateway.config.served_entities[0]
+    resources.gateway.config.served_models = [
+        SimpleNamespace(
+            model_name=entity.entity_name,
+            model_version=entity.entity_version,
+            name=entity.name,
+            environment_vars=dict(entity.environment_vars),
+            workload_size=entity.workload_size,
+            workload_type=entity.workload_type,
+            scale_to_zero_enabled=entity.scale_to_zero_enabled,
+        )
+    ]
+    if drift == "legacy_environment":
+        resources.gateway.config.served_models[0].environment_vars = {
+            **entity.environment_vars,
+            "MIP_UPSTREAM_SUPERVISOR_ID": "attacker",
+        }
+        error = "served entity contract drifted"
+    else:
+        resources.gateway.ai_gateway.usage_tracking_config = SimpleNamespace(enabled=True)
+        error = "inference-table contract drifted"
+
+    with pytest.raises(RuntimeError, match=error):
+        _verify_live(resources)
 
 
 @pytest.mark.parametrize("drift", ["endpoint_id", "environment"])

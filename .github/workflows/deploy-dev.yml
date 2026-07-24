@@ -89,6 +89,7 @@ jobs:
           DATABRICKS_RELEASE_PROBE_CLIENT_ID: ${{ secrets.DATABRICKS_RELEASE_PROBE_CLIENT_ID }}
           DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
           DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
+          DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}
           DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
           DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
           DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}
@@ -96,7 +97,7 @@ jobs:
         run: |
           set -euo pipefail
           missing=""
-          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
             if [ -z "${!v}" ]; then
               missing="$missing $v"
             fi
@@ -105,10 +106,9 @@ jobs:
             echo "::error::Missing required secrets:$missing"
             exit 1
           fi
-          # Keep this child process limited to the public client IDs it
-          # compares. The shell retains every value for the builtin config
-          # writes below, but Python must not inherit signing keys, PATs,
-          # account credentials, or application secrets.
+          # Retain every value in this shell for config writes, but expose only
+          # the canonical proxy bundle to its bounded parser and only public
+          # client IDs to the subsequent separation check.
           export -n DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_WAREHOUSE_ID GENIE_SPACE_ID
           export -n MIP_COTALITY_ID_MASK_SECRET MIP_GENIE_ACTION_SECRET_CURRENT
           export -n MIP_GENIE_ACTION_SECRET_PREVIOUS MIP_AI_GATEWAY_PROOF_SIGNING_KEY
@@ -125,6 +125,18 @@ jobs:
           export -n MIP_AI_GATEWAY_AGENT_MODEL_FAMILY MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE
           export -n MIP_AI_GATEWAY_TABLE_PREFIX DATABRICKS_ACCOUNT_HOST
           export -n DATABRICKS_ACCOUNT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
+          if ! _AGENT_PROXY_PUBLIC_FIELDS="$(
+            python -m tools.databricks.agent_proxy_credential_bundle public-fields
+          )"; then
+            echo "::error::DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE is invalid"
+            exit 1
+          fi
+          IFS=$'\t' read -r DATABRICKS_AGENT_PROXY_CLIENT_ID \
+            DATABRICKS_AGENT_PROXY_CREDENTIAL_ID <<< "$_AGENT_PROXY_PUBLIC_FIELDS"
+          unset _AGENT_PROXY_PUBLIC_FIELDS
+          export DATABRICKS_AGENT_PROXY_CLIENT_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE
           python - <<'PY'
           import os
 
@@ -135,10 +147,11 @@ jobs:
               "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
               "DATABRICKS_VERIFIER_CLIENT_ID",
               "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+              "DATABRICKS_AGENT_PROXY_CLIENT_ID",
           )
           values = [os.environ[name].strip().casefold() for name in names]
           if len(set(values)) != len(values):
-              raise SystemExit("Normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs must be pairwise distinct.")
+              raise SystemExit("Normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy M2M client IDs must be pairwise distinct.")
           account_client_id = os.environ.get(
               "DATABRICKS_ACCOUNT_CLIENT_ID", ""
           ).strip().casefold()
@@ -148,7 +161,9 @@ jobs:
           export -n DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID
           export -n DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID
           export -n DATABRICKS_VERIFIER_CLIENT_ID
-          export -n DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_ID
+          export -n DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE DATABRICKS_ACCOUNT_CLIENT_ID
           {
             echo "[DEFAULT]"
             echo "host  = ${DATABRICKS_HOST}"
@@ -229,6 +244,7 @@ jobs:
           DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
           DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
           DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET }}
+          DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}
           DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
           DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
           DATABRICKS_ACCOUNT_CLIENT_ID: ${{ secrets.DATABRICKS_ACCOUNT_CLIENT_ID }}
@@ -255,6 +271,7 @@ jobs:
           MIP_LAKEBASE_SYNC_TABLES: ${{ vars.MIP_LAKEBASE_SYNC_TABLES || 'source_readiness,segment_population,funnel_snapshot_daily' }}
           MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
           MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE || 'mip-app-rollback' }}
+          MIP_AGENT_PROXY_SECRET_SCOPE: ${{ vars.MIP_AGENT_PROXY_SECRET_SCOPE }}
           MIP_GENIE_SPACE_NAME: ${{ vars.MIP_GENIE_SPACE_NAME || 'Mortgage Lead Intelligence' }}
           MIP_AI_GATEWAY_AGENT_MODEL_FAMILY: ${{ vars.MIP_AI_GATEWAY_AGENT_MODEL_FAMILY }}
           MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE: ${{ vars.MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE }}

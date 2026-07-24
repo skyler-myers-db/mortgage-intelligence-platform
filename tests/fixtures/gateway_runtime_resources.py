@@ -47,6 +47,11 @@ def gateway_runtime_contract_for_scope(
     gateway_experiment_name: str,
     gateway_experiment_id: str,
     gateway_inference_table: str,
+    proxy_caller_application_id: str = "proxy-client",
+    proxy_caller_credential_id: str = "proxy-credential",
+    proxy_caller_secret_reference: str = (
+        "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+    ),
 ) -> dict[str, str]:
     """Build an exact-field release envelope around an App-visible scope."""
 
@@ -79,6 +84,9 @@ def gateway_runtime_contract_for_scope(
         "genie_space_id": genie_space_id,
         "proof_version": GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
         "runtime_application_id": runtime_application_id,
+        "proxy_caller_application_id": proxy_caller_application_id,
+        "proxy_caller_credential_id": proxy_caller_credential_id,
+        "proxy_caller_secret_reference": proxy_caller_secret_reference,
         "supervisor_canonical_name": "test-supervisor",
         "supervisor_contract_json": '{"test":"supervisor"}',
         "supervisor_contract_sha256": "4" * 64,

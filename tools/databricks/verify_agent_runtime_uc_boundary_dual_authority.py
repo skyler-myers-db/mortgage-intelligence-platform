@@ -60,6 +60,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--gateway-experiment-base", default=DEFAULT_GATEWAY_AGENT_EXPERIMENT)
     parser.add_argument("--genie-space-id", required=True)
     parser.add_argument("--inference-table-prefix", required=True)
+    parser.add_argument("--proxy-caller-application-id", required=True)
+    parser.add_argument("--proxy-caller-credential-id", required=True)
+    parser.add_argument("--proxy-caller-secret-reference", required=True)
     parser.add_argument(
         "--foreign-catalog-binding-policy-json",
         default=os.environ.get("MIP_UC_FOREIGN_CATALOG_BINDING_POLICY", ""),
@@ -93,6 +96,9 @@ def main(argv: list[str] | None = None) -> int:
         genie_space_id=args.genie_space_id,
         inference_table_prefix=args.inference_table_prefix,
         foreign_control_plane_proof=proof,
+        proxy_caller_application_id=args.proxy_caller_application_id,
+        proxy_caller_credential_id=args.proxy_caller_credential_id,
+        proxy_caller_secret_reference=args.proxy_caller_secret_reference,
     )
     post_runtime_proof = audit_foreign_uc_access(
         admin_workspace,

@@ -158,9 +158,10 @@ def _is_platform_foundation_endpoint(details: object) -> bool:
     inventory; they are not customer-created serving securables.
     """
 
-    if str(getattr(details, "id", "") or "").strip() or str(
-        getattr(details, "creator", "") or ""
-    ).strip():
+    if (
+        str(getattr(details, "id", "") or "").strip()
+        or str(getattr(details, "creator", "") or "").strip()
+    ):
         return False
     entities = getattr(getattr(details, "config", None), "served_entities", None) or []
     if not entities:
@@ -252,6 +253,56 @@ def audit_global_serving_endpoint_access(
             raise RuntimeError(
                 f"{principal!r} retains forbidden access to unrelated serving endpoint "
                 f"{name!r}; remove direct or effective group access"
+            )
+
+
+def audit_global_no_serving_endpoint_access(
+    client: Any,
+    *,
+    service_principal: str,
+    service_principal_id: str | None = None,
+    effective_group_names: set[str] | None = None,
+) -> None:
+    """Admin-side proof that an identity has no effective serving access."""
+
+    principal = service_principal.strip()
+    if not principal:
+        raise ValueError("service principal application ID is required")
+    group_names = (
+        effective_group_names
+        if effective_group_names is not None
+        else _effective_group_names(
+            client,
+            service_principal=principal,
+            service_principal_id=service_principal_id,
+        )
+    )
+    try:
+        visible = list(client.serving_endpoints.list())
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"cannot list serving endpoints for global ACL audit: {exc}") from exc
+    for endpoint in visible:
+        name = str(
+            (endpoint.get("name") if isinstance(endpoint, dict) else getattr(endpoint, "name", ""))
+            or ""
+        ).strip()
+        if not name:
+            raise RuntimeError("cannot audit serving ACLs: a visible endpoint has no name")
+        details = client.serving_endpoints.get(name)
+        endpoint_id = str(getattr(details, "id", "") or "").strip()
+        if not endpoint_id:
+            if _is_platform_foundation_endpoint(details):
+                continue
+            raise RuntimeError(f"serving endpoint {name!r} has no immutable id")
+        permissions = client.serving_endpoints.get_permissions(endpoint_id)
+        entry = _principal_entry(permissions, principal)
+        groups = _groups_with_access(
+            permissions,
+            effective_group_names=group_names,
+        )
+        if (entry is not None and _all_levels(entry)) or groups:
+            raise RuntimeError(
+                f"{principal!r} retains forbidden access to serving endpoint {name!r}"
             )
 
 

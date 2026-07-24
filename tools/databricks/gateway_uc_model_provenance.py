@@ -70,6 +70,9 @@ def assert_gateway_model_provenance(
     inference_schema: str,
     inference_table_prefix: str,
     candidate_model: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
 ) -> None:
     """Require signed source/allocation provenance for every visible family version."""
 
@@ -108,6 +111,9 @@ def assert_gateway_model_provenance(
             inference_schema=inference_schema,
             inference_table_prefix=inference_table_prefix,
             attestation_verify_key=gateway_model_attestation_record_key(tags),
+            proxy_caller_application_id=proxy_caller_application_id,
+            proxy_caller_credential_id=proxy_caller_credential_id,
+            proxy_caller_secret_reference=proxy_caller_secret_reference,
         )
         if full_name.rsplit("_", 1)[-1] != contract_hash[:12]:
             raise RuntimeError(f"Gateway model {full_name} lacks source-bound contract provenance")

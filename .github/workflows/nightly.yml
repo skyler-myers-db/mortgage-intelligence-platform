@@ -54,6 +54,7 @@ env:
   MIP_GENIE_SPACE_NAME: ${{ vars.MIP_GENIE_SPACE_NAME || 'Mortgage Lead Intelligence' }}
   MIP_RUNTIME_SECRET_SCOPE: ${{ vars.MIP_RUNTIME_SECRET_SCOPE || 'mip-runtime' }}
   MIP_APP_ROLLBACK_SECRET_SCOPE: ${{ vars.MIP_APP_ROLLBACK_SECRET_SCOPE || 'mip-app-rollback' }}
+  MIP_AGENT_PROXY_SECRET_SCOPE: ${{ vars.MIP_AGENT_PROXY_SECRET_SCOPE }}
   BUNDLE_VAR_uc_catalog: ${{ vars.MIP_DEFAULT_CATALOG || 'mip' }}
   BUNDLE_VAR_lender_name: ${{ vars.MIP_LENDER_NAME || 'Summit Mortgage' }}
   BUNDLE_VAR_lender_nmls_id: ${{ vars.MIP_LENDER_NMLS_ID }}
@@ -163,9 +164,29 @@ jobs:
         env:
           DATABRICKS_AUTH_TYPE: pat
           DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
+          DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}
           MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY: ${{ vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY }}
           MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY }}
         run: |
+          if ! _AGENT_PROXY_PUBLIC_FIELDS="$(
+            (
+              export -n DATABRICKS_HOST DATABRICKS_TOKEN
+              export -n DATABRICKS_AGENT_RUNTIME_CLIENT_ID
+              export -n MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY
+              export -n MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY
+              python -m tools.databricks.agent_proxy_credential_bundle public-fields
+            )
+          )"; then
+            echo "::error::DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE is invalid"
+            exit 1
+          fi
+          IFS=$'\t' read -r DATABRICKS_AGENT_PROXY_CLIENT_ID \
+            DATABRICKS_AGENT_PROXY_CREDENTIAL_ID <<< "$_AGENT_PROXY_PUBLIC_FIELDS"
+          unset _AGENT_PROXY_PUBLIC_FIELDS
+          export DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE
+          MIP_AGENT_PROXY_SECRET_SCOPE="${MIP_AGENT_PROXY_SECRET_SCOPE:-${MIP_APP_NAME}-agent-proxy}"
+          export MIP_AGENT_PROXY_SECRET_REFERENCE="{{secrets/${MIP_AGENT_PROXY_SECRET_SCOPE}/oauth-client-secret-${DATABRICKS_AGENT_PROXY_CREDENTIAL_ID}}}"
           python -m tools.databricks.export_gateway_runtime_contract \
             --github-env "$GITHUB_ENV"
       - name: Fail fast unless the exact app commit and Gateway binding are deployed
@@ -462,10 +483,30 @@ jobs:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
           DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
           DATABRICKS_AGENT_RUNTIME_CLIENT_ID: ${{ secrets.DATABRICKS_AGENT_RUNTIME_CLIENT_ID }}
+          DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: ${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}
           GENIE_SPACE_ID: ${{ secrets.GENIE_SPACE_ID }}
           MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY: ${{ vars.MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY }}
           MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY }}
         run: |
+          if ! _AGENT_PROXY_PUBLIC_FIELDS="$(
+            (
+              export -n DATABRICKS_HOST DATABRICKS_TOKEN GENIE_SPACE_ID
+              export -n DATABRICKS_AGENT_RUNTIME_CLIENT_ID
+              export -n MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY
+              export -n MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY
+              python -m tools.databricks.agent_proxy_credential_bundle public-fields
+            )
+          )"; then
+            echo "::error::DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE is invalid"
+            exit 1
+          fi
+          IFS=$'\t' read -r DATABRICKS_AGENT_PROXY_CLIENT_ID \
+            DATABRICKS_AGENT_PROXY_CREDENTIAL_ID <<< "$_AGENT_PROXY_PUBLIC_FIELDS"
+          unset _AGENT_PROXY_PUBLIC_FIELDS
+          export DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_ID
+          export -n DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE
+          MIP_AGENT_PROXY_SECRET_SCOPE="${MIP_AGENT_PROXY_SECRET_SCOPE:-${MIP_APP_NAME}-agent-proxy}"
+          export MIP_AGENT_PROXY_SECRET_REFERENCE="{{secrets/${MIP_AGENT_PROXY_SECRET_SCOPE}/oauth-client-secret-${DATABRICKS_AGENT_PROXY_CREDENTIAL_ID}}}"
           python -m tools.databricks.export_gateway_runtime_contract \
             --github-env "$GITHUB_ENV"
       - name: Resolve deployed app URL

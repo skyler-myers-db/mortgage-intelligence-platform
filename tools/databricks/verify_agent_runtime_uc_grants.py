@@ -3,14 +3,12 @@
 
 from __future__ import annotations
 
-import argparse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 from mlflow import MlflowClient
 
 from backend.agents.gateway_contract import DEFAULT_GATEWAY_AGENT_EXPERIMENT
-from databricks.sdk import WorkspaceClient
 from tools.databricks.agent_runtime_uc_baseline import (
     _ACCOUNT_USERS_DIRECT,
     _CATALOG_INFORMATION_SCHEMA_TABLES,
@@ -263,6 +261,9 @@ def verify_effective_uc_boundary(
     gateway_model_family: str | None = None,
     gateway_experiment_base: str = DEFAULT_GATEWAY_AGENT_EXPERIMENT,
     genie_space_id: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
     model_registry: Any | None = None,
     foreign_control_plane_proof: ControlPlaneForeignCatalogProof | None = None,
 ) -> None:
@@ -292,9 +293,7 @@ def verify_effective_uc_boundary(
         application_id=principal,
     )
 
-    metastore_id = _strict_text(
-        getattr(workspace.metastores.current(), "metastore_id", None)
-    )
+    metastore_id = _strict_text(getattr(workspace.metastores.current(), "metastore_id", None))
     if not metastore_id:
         raise RuntimeError("workspace has no current metastore identity")
     consumed_control_plane_proof = None
@@ -342,10 +341,7 @@ def verify_effective_uc_boundary(
     visible_catalog_owners = {
         _strict_text(getattr(item, "name", None)): _exact_owner(
             item,
-            label=(
-                f"catalog "
-                f"{_strict_text(getattr(item, 'name', None)) or '<unknown>'}"
-            ),
+            label=(f"catalog " f"{_strict_text(getattr(item, 'name', None)) or '<unknown>'}"),
         )
         for item in visible_catalogs
     }
@@ -376,10 +372,7 @@ def verify_effective_uc_boundary(
     if "" in visible_catalog_names:
         raise RuntimeError("workspace catalog inventory returned an empty name")
     binding_denied_catalog_names = (
-        {
-            item.catalog
-            for item in consumed_control_plane_proof.binding_denied_catalogs
-        }
+        {item.catalog for item in consumed_control_plane_proof.binding_denied_catalogs}
         if consumed_control_plane_proof is not None
         else set()
     )
@@ -512,8 +505,7 @@ def verify_effective_uc_boundary(
         _full_name(model)
         for model in other_registered_models
         if _full_name(model) in _SYSTEM_AI_MODELS
-        and _exact_owner(model, label=f"registered model {_full_name(model)}")
-        != "System user"
+        and _exact_owner(model, label=f"registered model {_full_name(model)}") != "System user"
     )
     if invalid_system_owners:
         raise RuntimeError(
@@ -524,8 +516,7 @@ def verify_effective_uc_boundary(
         _full_name(model)
         for model in other_registered_models
         if _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
-        and _exact_owner(model, label=f"registered model {_full_name(model)}")
-        != "System user"
+        and _exact_owner(model, label=f"registered model {_full_name(model)}") != "System user"
     )
     if invalid_platform_model_owners:
         raise RuntimeError(
@@ -548,8 +539,7 @@ def verify_effective_uc_boundary(
         if (
             consumed_control_plane_proof is None
             or _catalog_name(model) in _PLATFORM_RUNTIME_CATALOGS
-            or _catalog_name(model)
-            not in consumed_control_plane_proof.grant_audited_catalogs
+            or _catalog_name(model) not in consumed_control_plane_proof.grant_audited_catalogs
         )
     ]
     if models_requiring_runtime_audit:
@@ -597,9 +587,7 @@ def verify_effective_uc_boundary(
                 future.result()
 
     schemas = list(workspace.schemas.list(catalog_name, include_browse=True))
-    schema_name_list = [
-        _strict_text(getattr(schema, "name", None)) for schema in schemas
-    ]
+    schema_name_list = [_strict_text(getattr(schema, "name", None)) for schema in schemas]
     schema_names = set(schema_name_list)
     if len(schema_name_list) != len(schema_names):
         raise RuntimeError("MIP schema inventory returned duplicate names")
@@ -662,9 +650,7 @@ def verify_effective_uc_boundary(
                 fallback=f"{schema_full_name}.{function_name}",
             )
             if function_full_name != f"{schema_full_name}.{function_name}":
-                raise RuntimeError(
-                    "MIP function inventory returned an invalid parent identity"
-                )
+                raise RuntimeError("MIP function inventory returned an invalid parent identity")
             if function_full_name in function_full_names:
                 raise RuntimeError("MIP function inventory returned a duplicate identity")
             function_full_names.add(function_full_name)
@@ -755,8 +741,7 @@ def verify_effective_uc_boundary(
                 # Ownership may be omitted or reported as exact-direct privileges.
                 if (
                     any(sources != runtime_direct for sources in actual_sources.values())
-                    or _exact_owner(table, label=f"table {table_full_name}")
-                    != principal
+                    or _exact_owner(table, label=f"table {table_full_name}") != principal
                 ):
                     raise RuntimeError(
                         f"agent-runtime inference table {table_name} lacks exact direct "
@@ -777,9 +762,7 @@ def verify_effective_uc_boundary(
                 expected=set(),
             )
 
-        volumes = list(
-            workspace.volumes.list(catalog_name, schema_name, include_browse=True)
-        )
+        volumes = list(workspace.volumes.list(catalog_name, schema_name, include_browse=True))
         volume_full_names: set[str] = set()
         for volume in volumes:
             volume_name = _strict_text(getattr(volume, "name", None))
@@ -840,8 +823,7 @@ def verify_effective_uc_boundary(
         # Model ownership has the same omitted-or-exact-direct representation.
         if (
             any(sources != runtime_direct for sources in actual_sources.values())
-            or _exact_owner(model, label=f"registered model {full_name}")
-            != principal
+            or _exact_owner(model, label=f"registered model {full_name}") != principal
         ):
             raise RuntimeError(
                 f"agent-runtime Gateway model {full_name} lacks exact direct runtime ownership"
@@ -859,6 +841,9 @@ def verify_effective_uc_boundary(
             inference_schema="audit",
             inference_table_prefix=table_prefix,
             candidate_model=model_name,
+            proxy_caller_application_id=proxy_caller_application_id,
+            proxy_caller_credential_id=proxy_caller_credential_id,
+            proxy_caller_secret_reference=proxy_caller_secret_reference,
         )
         reviewed_model_suffixes.add(full_name.rsplit("_", 1)[-1])
     if not reviewed_inference_suffixes.issubset(reviewed_model_suffixes):
@@ -866,31 +851,11 @@ def verify_effective_uc_boundary(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--application-id", required=True)
-    parser.add_argument("--supervisor-id", required=True)
-    parser.add_argument("--supervisor-endpoint-id", required=True)
-    parser.add_argument("--catalog", default="mip")
-    parser.add_argument("--gateway-model", required=True)
-    parser.add_argument("--gateway-model-family")
-    parser.add_argument("--gateway-experiment-base", default=DEFAULT_GATEWAY_AGENT_EXPERIMENT)
-    parser.add_argument("--genie-space-id", required=True)
-    parser.add_argument("--inference-table-prefix", required=True)
-    args = parser.parse_args(argv)
-    verify_effective_uc_boundary(
-        WorkspaceClient(),
-        application_id=args.application_id,
-        supervisor_id=args.supervisor_id,
-        supervisor_endpoint_id=args.supervisor_endpoint_id,
-        catalog=args.catalog,
-        gateway_model=args.gateway_model,
-        gateway_model_family=args.gateway_model_family,
-        gateway_experiment_base=args.gateway_experiment_base,
-        genie_space_id=args.genie_space_id,
-        inference_table_prefix=args.inference_table_prefix,
+    from tools.databricks.verify_agent_runtime_uc_grants_cli import (
+        main as cli_main,
     )
-    print("agent-runtime effective MIP catalog privilege boundary: PASS")
-    return 0
+
+    return cli_main(argv)
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 from typing import Any
 
 from cryptography.exceptions import InvalidSignature
@@ -25,27 +26,45 @@ from tools.databricks.app_rollback_resource_contract import (
     app_resource_contract_digest,
     validated_app_resource_contract,
 )
+from tools.databricks.app_rollback_secret_scope import (
+    assert_owned_app_rollback_scope,
+)
+from tools.databricks.gateway_legacy_rollback import (
+    validated_legacy_gateway_resources,
+)
 from tools.databricks.lakebase_instance_contract import (
     resolve_lakebase_instance_aliases,
     validated_lakebase_instance_name,
 )
 
-RECORD_VERSION = 5
-DEFAULT_KEY_PREFIX = "app-last-good-v5"
-RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v5"
+RECORD_VERSION = 6
+DEFAULT_KEY_PREFIX = "app-last-good-v6"
+RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v6"
+LEGACY_RECORD_VERSION = 5
+LEGACY_KEY_PREFIX = "app-last-good-v5"
+LEGACY_RECORD_ATTESTATION_ALG = "ed25519-app-rollback-v5"
+_CREDENTIAL_ID_RE = re.compile(r"[A-Za-z0-9._-]{1,128}\Z")
 
 
 def _text(value: object) -> str:
     return str(getattr(value, "value", value) or "").strip()
 
 
-def _record_key(app_name: str) -> str:
+def _normalized_app_name(app_name: str) -> str:
     normalized = app_name.strip()
     if not normalized or any(
         char not in "abcdefghijklmnopqrstuvwxyz0123456789-_" for char in normalized
     ):
         raise ValueError("app name is invalid for the rollback-contract key")
-    return f"{DEFAULT_KEY_PREFIX}-{normalized}"
+    return normalized
+
+
+def _record_key(app_name: str) -> str:
+    return f"{DEFAULT_KEY_PREFIX}-{_normalized_app_name(app_name)}"
+
+
+def _legacy_record_key(app_name: str) -> str:
+    return f"{LEGACY_KEY_PREFIX}-{_normalized_app_name(app_name)}"
 
 
 def _decode_key(value: str, *, expected_len: int) -> bytes:
@@ -84,9 +103,16 @@ def _sign_record(record: dict[str, Any]) -> dict[str, Any]:
     )
     if derived_verify != verify_key:
         raise RuntimeError("App rollback signing and verification keys do not match")
+    version = record.get("version")
+    if version == RECORD_VERSION:
+        algorithm = RECORD_ATTESTATION_ALG
+    elif version == LEGACY_RECORD_VERSION:
+        algorithm = LEGACY_RECORD_ATTESTATION_ALG
+    else:
+        raise RuntimeError("App rollback contract version is invalid")
     signed = copy.deepcopy(record)
     signed.update(
-        attestation_alg=RECORD_ATTESTATION_ALG,
+        attestation_alg=algorithm,
         attestation_verify_key=verify_key,
         attestation_signature=_encode(private.sign(_attestation_payload(record))),
     )
@@ -97,7 +123,14 @@ def _verify_record_attestation(record: dict[str, Any]) -> None:
     configured = os.environ.get("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", "").strip()
     previous = os.environ.get("MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY", "").strip()
     record_key = str(record.get("attestation_verify_key") or "").strip()
-    if record.get("attestation_alg") != RECORD_ATTESTATION_ALG or record_key not in {
+    expected_algorithm = (
+        RECORD_ATTESTATION_ALG
+        if record.get("version") == RECORD_VERSION
+        else LEGACY_RECORD_ATTESTATION_ALG
+        if record.get("version") == LEGACY_RECORD_VERSION
+        else None
+    )
+    if record.get("attestation_alg") != expected_algorithm or record_key not in {
         configured,
         previous,
     } - {""}:
@@ -198,13 +231,36 @@ def _validated_gateway_resources(value: object) -> dict[str, str]:
     return {**resources, "resource_digest": digest}
 
 
+def _validated_pending_proxy_credential_retirement_ids(
+    value: object,
+    *,
+    active_credential_id: str | None,
+) -> tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or any(not isinstance(item, str) for item in value):
+        raise RuntimeError("App rollback proxy-credential retirement journal is invalid")
+    normalized = tuple(item.strip() for item in value)
+    if (
+        any(_CREDENTIAL_ID_RE.fullmatch(item) is None for item in normalized)
+        or len(normalized) != len(set(normalized))
+        or normalized != tuple(sorted(normalized))
+        or (active_credential_id is not None and active_credential_id in normalized)
+    ):
+        raise RuntimeError("App rollback proxy-credential retirement journal is invalid")
+    return normalized
+
+
 def _validated_record(
     value: object,
     *,
     app_name: str,
     expected_lakebase_instance: str,
 ) -> dict[str, Any]:
-    if not isinstance(value, dict) or value.get("version") != RECORD_VERSION:
+    if not isinstance(value, dict) or value.get("version") not in {
+        RECORD_VERSION,
+        LEGACY_RECORD_VERSION,
+    }:
         raise RuntimeError("App rollback contract version is invalid")
     if value.get("app_name") != app_name:
         raise RuntimeError("App rollback contract names a different App")
@@ -219,7 +275,32 @@ def _validated_record(
     app_client_id = str(value.get("app_service_principal_client_id") or "").strip()
     app_scim_id = str(value.get("app_service_principal_scim_id") or "").strip()
     binding = value.get("gateway_binding_sha256")
-    gateway_resources = _validated_gateway_resources(value.get("gateway_resources"))
+    gateway_resources = (
+        _validated_gateway_resources(value.get("gateway_resources"))
+        if value["version"] == RECORD_VERSION
+        else validated_legacy_gateway_resources(value.get("gateway_resources"))
+    )
+    active_proxy_credential_id = (
+        gateway_resources.get("proxy_caller_credential_id")
+        if value["version"] == RECORD_VERSION
+        else None
+    )
+    pending_proxy_credential_retirement_ids = (
+        _validated_pending_proxy_credential_retirement_ids(
+            value.get("pending_proxy_credential_retirement_ids"),
+            active_credential_id=active_proxy_credential_id,
+        )
+        if value["version"] == RECORD_VERSION
+        else ()
+    )
+    legacy_pending = value.get("pending_proxy_credential_retirement_ids")
+    if (
+        value["version"] == LEGACY_RECORD_VERSION
+        and legacy_pending is not None
+        and legacy_pending != ()
+        and legacy_pending != []
+    ):
+        raise RuntimeError("legacy App rollback contract has a proxy retirement journal")
     app_resources = validated_app_resource_contract(value.get("app_resources"))
     if value.get("app_resources_sha256") != app_resource_contract_digest(app_resources):
         raise RuntimeError("App rollback resource binding digest does not match")
@@ -236,6 +317,9 @@ def _validated_record(
         "app_service_principal_scim_id": app_scim_id,
         "gateway_binding_sha256": binding,
         "gateway_resources": gateway_resources,
+        "pending_proxy_credential_retirement_ids": (
+            pending_proxy_credential_retirement_ids
+        ),
         "app_resources": app_resources,
         "app_resources_sha256": app_resource_contract_digest(app_resources),
     }
@@ -248,7 +332,14 @@ def _load_record(
     scope: str,
     expected_lakebase_instance: str,
 ) -> dict[str, Any]:
+    assert_owned_app_rollback_scope(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+    )
     raw = _secret_value(workspace, scope=scope, key=_record_key(app_name))
+    if raw is None:
+        raw = _secret_value(workspace, scope=scope, key=_legacy_record_key(app_name))
     if raw is None:
         raise RuntimeError(
             "no server-owned last-good App rollback contract exists; run the explicit "
@@ -269,17 +360,75 @@ def _load_record(
 
 
 def _save_record(workspace: Any, *, scope: str, record: dict[str, Any]) -> None:
+    if record.get("version") != RECORD_VERSION:
+        raise RuntimeError("current App rollback writer requires a v6 record")
+    _write_record(
+        workspace,
+        scope=scope,
+        record=record,
+        key=_record_key(str(record["app_name"])),
+    )
+
+
+def _save_legacy_record(workspace: Any, *, scope: str, record: dict[str, Any]) -> None:
+    if record.get("version") != LEGACY_RECORD_VERSION:
+        raise RuntimeError("legacy App rollback writer requires a v5 record")
+    _write_record(
+        workspace,
+        scope=scope,
+        record=record,
+        key=_legacy_record_key(str(record["app_name"])),
+    )
+
+
+def _write_record(
+    workspace: Any,
+    *,
+    scope: str,
+    record: dict[str, Any],
+    key: str,
+) -> None:
+    app_name = str(record.get("app_name") or "").strip()
+    assert_owned_app_rollback_scope(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+    )
     signed = _sign_record(record)
     serialized = json.dumps(signed, sort_keys=True, separators=(",", ":"))
     workspace.secrets.put_secret(
         scope=scope,
-        key=_record_key(str(record["app_name"])),
+        key=key,
         string_value=serialized,
     )
     persisted = _secret_value(
         workspace,
         scope=scope,
-        key=_record_key(str(record["app_name"])),
+        key=key,
     )
     if persisted != serialized:
         raise RuntimeError("App rollback contract write did not converge exactly")
+    assert_owned_app_rollback_scope(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+    )
+
+
+def _delete_legacy_record(workspace: Any, *, scope: str, app_name: str) -> None:
+    assert_owned_app_rollback_scope(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+    )
+    key = _legacy_record_key(app_name)
+    if _secret_value(workspace, scope=scope, key=key) is None:
+        return
+    workspace.secrets.delete_secret(scope, key)
+    if _secret_value(workspace, scope=scope, key=key) is not None:
+        raise RuntimeError("legacy App rollback contract deletion did not converge")
+    assert_owned_app_rollback_scope(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+    )

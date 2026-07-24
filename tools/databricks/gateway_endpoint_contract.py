@@ -17,6 +17,16 @@ from backend.agents.gateway_contract import (
     GATEWAY_WORKLOAD_SIZE,
     GATEWAY_WORKLOAD_TYPE,
 )
+from backend.agents.gateway_provider_shape import (
+    field as _field,
+)
+from backend.agents.gateway_provider_shape import (
+    legacy_served_model_matches,
+    provider_bool_matches,
+    route_targets_served_entity,
+    same_scalar,
+    usage_tracking_is_disabled,
+)
 from backend.agents.supervisor_contract import supervisor_contract_hash
 from databricks.sdk.errors import BadRequest
 from databricks.sdk.service.serving import (
@@ -40,57 +50,6 @@ _ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
 _CUSTOM_MODEL_RATE_LIMITS_UNSUPPORTED = (
     "Rate limits are only supported by endpoints with foundation models or external models."
 )
-
-_SERVED_MODEL_OUTPUT_FIELDS = frozenset(
-    {
-        "burst_scaling_enabled",
-        "creation_timestamp",
-        "creator",
-        "environment_vars",
-        "instance_profile_arn",
-        "max_provisioned_concurrency",
-        "min_provisioned_concurrency",
-        "model_name",
-        "model_version",
-        "name",
-        "provisioned_model_units",
-        "scale_to_zero_enabled",
-        "state",
-        "workload_size",
-        "workload_type",
-    }
-)
-
-
-def _serialized_fields(value: Any) -> dict[str, Any] | None:
-    """Return the provider-visible non-null fields, or fail closed."""
-
-    raw: Any
-    if isinstance(value, Mapping):
-        raw = value
-    else:
-        as_dict = getattr(value, "as_dict", None)
-        raw = as_dict() if callable(as_dict) else getattr(value, "__dict__", None)
-    if not isinstance(raw, Mapping) or any(not isinstance(key, str) for key in raw):
-        return None
-    return {key: field_value for key, field_value in raw.items() if field_value is not None}
-
-
-def _field(value: Any, name: str) -> Any:
-    """Read one SDK or mapping field without coercion."""
-
-    if isinstance(value, Mapping):
-        return value.get(name)
-    return getattr(value, name, None)
-
-
-def _same_scalar(actual: Any, expected: Any) -> bool:
-    """Compare SDK scalar values without Python's bool/integer aliasing."""
-
-    actual = getattr(actual, "value", actual)
-    expected = getattr(expected, "value", expected)
-    return type(actual) is type(expected) and actual == expected
-
 
 def model_version_from_config(config: Any, *, model_name: str) -> int | None:
     """Return the version only for one unambiguous matching served entity."""
@@ -138,40 +97,7 @@ def proxy_config_matches(details: Any, *, entity: ServedEntityInput) -> bool:
     if served_models:
         if len(served_models) != 1:
             return False
-        legacy = served_models[0]
-        legacy_fields = _serialized_fields(legacy)
-        if legacy_fields is None or set(legacy_fields) - _SERVED_MODEL_OUTPUT_FIELDS:
-            return False
-        aliases = (
-            ("burst_scaling_enabled", "burst_scaling_enabled"),
-            ("instance_profile_arn", "instance_profile_arn"),
-            ("max_provisioned_concurrency", "max_provisioned_concurrency"),
-            ("min_provisioned_concurrency", "min_provisioned_concurrency"),
-            ("model_name", "entity_name"),
-            ("model_version", "entity_version"),
-            ("name", "name"),
-            ("provisioned_model_units", "provisioned_model_units"),
-            ("scale_to_zero_enabled", "scale_to_zero_enabled"),
-            ("workload_size", "workload_size"),
-            ("workload_type", "workload_type"),
-        )
-        for legacy_field, entity_field in aliases:
-            legacy_value = legacy_fields.get(legacy_field)
-            entity_value = _field(current, entity_field)
-            if legacy_field == "burst_scaling_enabled":
-                # GET omits the provider's false default from either view.
-                legacy_value = False if legacy_value is None else legacy_value
-                entity_value = False if entity_value is None else entity_value
-            if not _same_scalar(legacy_value, entity_value):
-                return False
-        if dict(legacy_fields.get("environment_vars") or {}) != dict(
-            _field(current, "environment_vars") or {}
-        ):
-            return False
-        if (
-            getattr(legacy, "external_model", None) is not None
-            or getattr(legacy, "foundation_model", None) is not None
-        ):
+        if not legacy_served_model_matches(served_models[0], current):
             return False
     scalar_fields = (
         "burst_scaling_enabled",
@@ -191,10 +117,10 @@ def proxy_config_matches(details: Any, *, entity: ServedEntityInput) -> bool:
     for field in scalar_fields:
         actual = _field(current, field)
         expected = _field(entity, field)
-        if field == "burst_scaling_enabled" and expected is False and actual is None:
-            # The provider omits its false default from endpoint GET responses.
-            actual = False
-        if not _same_scalar(actual, expected):
+        if field == "burst_scaling_enabled":
+            if not provider_bool_matches(actual, bool(expected)):
+                return False
+        elif not same_scalar(actual, expected):
             return False
     actual_environment = dict(getattr(current, "environment_vars", None) or {})
     expected_environment = dict(entity.environment_vars or {})
@@ -224,12 +150,10 @@ def proxy_config_matches(details: Any, *, entity: ServedEntityInput) -> bool:
     # canonical served-entity field for custom-model endpoints.  Treat only an
     # exact duplicate as the same route; any different non-empty alias remains
     # unreviewed configuration drift.
-    served_model_name = str(getattr(routes[0], "served_model_name", "") or "") if routes else ""
     return (
         len(routes) == 1
-        and str(getattr(routes[0], "served_entity_name", "") or "") == str(entity.name or "")
-        and served_model_name in {"", str(entity.name or "")}
-        and _same_scalar(getattr(routes[0], "traffic_percentage", None), _TRAFFIC_PERCENTAGE)
+        and route_targets_served_entity(routes[0], str(entity.name or ""))
+        and same_scalar(getattr(routes[0], "traffic_percentage", None), _TRAFFIC_PERCENTAGE)
     )
 
 
@@ -238,6 +162,9 @@ def served_entity(
     supervisor_id: str,
     upstream_endpoint: str,
     runtime_application_id: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
     catalog: str,
     genie_space_id: str,
     model_name: str,
@@ -281,6 +208,9 @@ def served_entity(
         "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream_endpoint,
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": runtime_application_id,
+        "MIP_UPSTREAM_PROXY_CLIENT_ID": proxy_caller_application_id,
+        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": proxy_caller_credential_id,
+        "MIP_UPSTREAM_PROXY_CLIENT_SECRET": proxy_caller_secret_reference,
         "MIP_SUPERVISOR_CATALOG": catalog,
         "MIP_SUPERVISOR_GENIE_SPACE_ID": genie_space_id,
         "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(
@@ -333,24 +263,9 @@ def gateway_matches(
     """Return whether every readable AI Gateway field is exact."""
 
     gateway = getattr(details, "ai_gateway", None)
-    usage_tracking = getattr(gateway, "usage_tracking_config", None)
-    if usage_tracking is None:
-        usage_tracking_matches = True
-    else:
-        as_dict = getattr(usage_tracking, "as_dict", None)
-        if callable(as_dict):
-            usage_tracking_fields = dict(as_dict())
-        elif isinstance(usage_tracking, Mapping):
-            usage_tracking_fields = dict(usage_tracking)
-        else:
-            usage_tracking_fields = {
-                str(key): value for key, value in vars(usage_tracking).items() if value is not None
-            }
-        # The Apps API materializes this explicit disabled default even when
-        # the create request omits usage tracking.  Accept no other shape.
-        usage_tracking_matches = (
-            set(usage_tracking_fields) == {"enabled"} and usage_tracking_fields["enabled"] is False
-        )
+    usage_tracking_matches = usage_tracking_is_disabled(
+        getattr(gateway, "usage_tracking_config", None)
+    )
     if (
         gateway is None
         or getattr(gateway, "fallback_config", None) is not None

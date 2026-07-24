@@ -80,6 +80,8 @@ for _PRIVATE_CREDENTIAL in \
   DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
   DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
   DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+  DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE \
   DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
   export -n "${_PRIVATE_CREDENTIAL?}" 2>/dev/null || true
 done
@@ -331,6 +333,7 @@ APP_FAIL_CLOSED_NAME=""
 APP_EXPECTED_IDENTITY_ARGS=()
 APP_UPGRADE_STATE="first_install"
 APP_ROLLBACK_SECRET_SCOPE="${MIP_APP_ROLLBACK_SECRET_SCOPE:-mip-app-rollback}"
+MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""
 AGENT_RUNTIME_BOOTSTRAP_GRANTS_ACTIVE=0
 TREATMENT_RUNTIME_QUIESCED=0
 APP_SIGNED_BLUE_AVAILABLE=0
@@ -1339,6 +1342,8 @@ mint_m2m_token() {
       DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
       DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
       DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+      DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+      DATABRICKS_AGENT_PROXY_CREDENTIAL_ID \
       DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET
     export DATABRICKS_HOST="${MIP_DATABRICKS_WORKSPACE_HOST:?}"
     export DATABRICKS_AUTH_TYPE="oauth-m2m"
@@ -1465,6 +1470,45 @@ run_with_agent_runtime_credentials() {
   (
     export DATABRICKS_AGENT_RUNTIME_CLIENT_ID="$client_id"
     export DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET="$client_secret"
+    run "$@"
+  )
+}
+
+run_with_agent_proxy_credentials() {
+  local client_id="${DATABRICKS_AGENT_PROXY_CLIENT_ID:-}"
+  local client_secret="${DATABRICKS_AGENT_PROXY_CLIENT_SECRET:-}"
+  local credential_id="${DATABRICKS_AGENT_PROXY_CREDENTIAL_ID:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$client_secret" || -z "$credential_id" ]]; then
+    echo "${RED}[deploy] complete agent-proxy credential binding is missing.${RST}" >&2
+    return 2
+  fi
+  (
+    export DATABRICKS_AGENT_PROXY_CLIENT_ID="$client_id"
+    export DATABRICKS_AGENT_PROXY_CLIENT_SECRET="$client_secret"
+    export DATABRICKS_AGENT_PROXY_CREDENTIAL_ID="$credential_id"
+    run "$@"
+  )
+}
+
+run_with_agent_proxy_binding() {
+  local client_id="${DATABRICKS_AGENT_PROXY_CLIENT_ID:-}"
+  local credential_id="${DATABRICKS_AGENT_PROXY_CREDENTIAL_ID:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$credential_id" ]]; then
+    echo "${RED}[deploy] agent-proxy identity binding is missing.${RST}" >&2
+    return 2
+  fi
+  (
+    export DATABRICKS_AGENT_PROXY_CLIENT_ID="$client_id"
+    export DATABRICKS_AGENT_PROXY_CREDENTIAL_ID="$credential_id"
+    export -n DATABRICKS_AGENT_PROXY_CLIENT_SECRET 2>/dev/null || true
     run "$@"
   )
 }
@@ -1676,6 +1720,9 @@ DEPLOYMENT_SYNC_TABLES="$MIP_LAKEBASE_SYNC_TABLES"
 MIP_GENIE_SPACE_NAME="$(deployment_control_value MIP_GENIE_SPACE_NAME 'Mortgage Lead Intelligence')"
 MIP_RUNTIME_SECRET_SCOPE="$(deployment_control_value MIP_RUNTIME_SECRET_SCOPE mip-runtime)"
 MIP_APP_ROLLBACK_SECRET_SCOPE="$(deployment_control_value MIP_APP_ROLLBACK_SECRET_SCOPE mip-app-rollback)"
+MIP_AGENT_PROXY_SECRET_SCOPE="$(
+  deployment_control_value MIP_AGENT_PROXY_SECRET_SCOPE "${MIP_APP_NAME}-agent-proxy"
+)"
 MIP_OTEL_ENDPOINT="$(deployment_control_value MIP_OTEL_ENDPOINT)"
 MIP_OTEL_HEADERS_SECRET_SCOPE="$(deployment_control_value MIP_OTEL_HEADERS_SECRET_SCOPE)"
 MIP_OTEL_HEADERS_SECRET_KEY="$(deployment_control_value MIP_OTEL_HEADERS_SECRET_KEY)"
@@ -1715,6 +1762,7 @@ export MIP_LAKEBASE_INSTANCE LAKEBASE_INSTANCE_NAME
 export LAKEBASE_DATABASE MIP_LAKEBASE_DATABASE_NAME MIP_LAKEBASE_SYNC_CATALOG
 export MIP_LAKEBASE_SYNC_SCHEMA MIP_LAKEBASE_SYNC_TABLES
 export MIP_GENIE_SPACE_NAME MIP_RUNTIME_SECRET_SCOPE MIP_APP_ROLLBACK_SECRET_SCOPE
+export MIP_AGENT_PROXY_SECRET_SCOPE
 export MIP_OTEL_ENDPOINT MIP_OTEL_HEADERS_SECRET_SCOPE MIP_OTEL_HEADERS_SECRET_KEY
 OTEL_RESOURCE_BINDING_ARGS=()
 OTEL_DEPLOY_PAYLOAD_ARGS=()
@@ -1731,6 +1779,27 @@ fi
 APP_ROLLBACK_SECRET_SCOPE="$MIP_APP_ROLLBACK_SECRET_SCOPE"
 if [[ ! "$MIP_APP_NAME" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
   echo "${RED}[deploy] MIP_APP_NAME must be a lowercase DNS-style name.${RST}" >&2
+  exit 2
+fi
+if [[ "$MIP_AGENT_PROXY_SECRET_SCOPE" != "${MIP_APP_NAME}-agent-proxy" ]]; then
+  echo "${RED}[deploy] MIP_AGENT_PROXY_SECRET_SCOPE must be the deterministic App-bound scope '${MIP_APP_NAME}-agent-proxy'.${RST}" >&2
+  exit 2
+fi
+_EXPECTED_APP_ROLLBACK_SECRET_SCOPE="$("$PYTHON" - "$MIP_APP_NAME" <<'PYEOF'
+import sys
+
+name = sys.argv[1]
+if name.endswith("-app"):
+    print(f"{name}-rollback")
+elif "-app-" in name:
+    prefix, suffix = name.rsplit("-app-", 1)
+    print(f"{prefix}-app-rollback-{suffix}")
+else:
+    print(f"{name}-rollback")
+PYEOF
+)"
+if [[ "$MIP_APP_ROLLBACK_SECRET_SCOPE" != "$_EXPECTED_APP_ROLLBACK_SECRET_SCOPE" ]]; then
+  echo "${RED}[deploy] MIP_APP_ROLLBACK_SECRET_SCOPE must be the deterministic App-bound scope '${_EXPECTED_APP_ROLLBACK_SECRET_SCOPE}'.${RST}" >&2
   exit 2
 fi
 if [[ ! "$MIP_LAKEBASE_INSTANCE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
@@ -1757,7 +1826,8 @@ then
   exit 2
 fi
 if [[ ! "$MIP_RUNTIME_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
-      ! "$MIP_APP_ROLLBACK_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+      ! "$MIP_APP_ROLLBACK_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ || \
+      ! "$MIP_AGENT_PROXY_SECRET_SCOPE" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
   echo "${RED}[deploy] Databricks secret-scope names are invalid.${RST}" >&2
   exit 2
 fi
@@ -1946,6 +2016,20 @@ fi
 # Proxy-model provenance uses a distinct release-signing key. The runtime
 # receives this private key only for the bounded model registration command;
 # it never receives the verifier-only inference-row proof key.
+# The previous public key is safe to load from local configuration and must
+# accompany the current key through provisioning so rotations remain verifiable.
+# shellcheck disable=SC2031  # Parent-shell value is intentionally restored.
+_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED="${MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY:-}"
+if [[ -z "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED" ]]; then
+  _GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED="$(
+    dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY
+  )"
+fi
+if [[ -n "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED" ]]; then
+  export MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY="$(
+    printf '%s' "$_GATEWAY_MODEL_PREVIOUS_KEY_RESOLVED"
+  )"
+fi
 # shellcheck disable=SC2031  # Parent-shell secret is unchanged by M2M subshells.
 _GATEWAY_MODEL_SIGNING_KEY_RESOLVED="${MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY:-}"
 if [[ -z "$_GATEWAY_MODEL_SIGNING_KEY_RESOLVED" ]]; then
@@ -2001,9 +2085,37 @@ for _M2M_NAME in \
   DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET \
   DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
   DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
-  DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET; do
+  DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE; do
   resolve_m2m_credential "$_M2M_NAME" shell
 done
+if [[ "$DRY_RUN" -eq 1 ]]; then
+  # Dry-run fixtures may provide public planning values without usable secret
+  # material. Live deployment deliberately ignores these legacy sources.
+  for _M2M_NAME in \
+    DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_ID; do
+    resolve_m2m_credential "$_M2M_NAME" shell
+  done
+else
+  DATABRICKS_AGENT_PROXY_CLIENT_ID=""
+  DATABRICKS_AGENT_PROXY_CREDENTIAL_ID=""
+  DATABRICKS_AGENT_PROXY_CLIENT_SECRET=""
+fi
+if [[ "$DRY_RUN" -eq 0 && -n "$DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE" ]]; then
+  if ! _AGENT_PROXY_BUNDLE_FIELDS="$(
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE="$DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE" \
+      "$PYTHON" -m tools.databricks.agent_proxy_credential_bundle all-fields
+  )"; then
+    echo "${RED}[deploy] ERROR: agent-proxy credential bundle is invalid.${RST}" >&2
+    exit 1
+  fi
+  IFS=$'\t' read -r DATABRICKS_AGENT_PROXY_CLIENT_ID \
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+    <<< "$_AGENT_PROXY_BUNDLE_FIELDS"
+  unset _AGENT_PROXY_BUNDLE_FIELDS
+  export -n DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE 2>/dev/null || true
+fi
 _GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"
 if [[ "$DRY_RUN" -eq 0 ]]; then
   _M2M_MISSING=""
@@ -2013,6 +2125,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     DATABRICKS_RELEASE_PROBE_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_SECRET \
     DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
     DATABRICKS_AGENT_RUNTIME_CLIENT_ID DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+    DATABRICKS_AGENT_PROXY_CLIENT_ID DATABRICKS_AGENT_PROXY_CLIENT_SECRET \
+    DATABRICKS_AGENT_PROXY_CREDENTIAL_ID DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE \
     DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID \
     DATABRICKS_ACCOUNT_CLIENT_ID DATABRICKS_ACCOUNT_CLIENT_SECRET; do
     if [[ -z "${!_M2M_NAME:-}" ]]; then
@@ -2029,7 +2143,8 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       DATABRICKS_CLIENT_ID DATABRICKS_OPERATOR2_CLIENT_ID \
       DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_RELEASE_PROBE_CLIENT_ID \
       DATABRICKS_VERIFIER_CLIENT_ID \
-      DATABRICKS_AGENT_RUNTIME_CLIENT_ID; do
+      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+      DATABRICKS_AGENT_PROXY_CLIENT_ID; do
       if [[ -n "${!_SEPARATED_CLIENT_ENV:-}" ]] && \
          same_identity_casefold \
            "$DATABRICKS_ACCOUNT_CLIENT_ID" "${!_SEPARATED_CLIENT_ENV}"; then
@@ -2045,6 +2160,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     "$DATABRICKS_ADMIN_CLIENT_ID" "$DATABRICKS_RELEASE_PROBE_CLIENT_ID" \
     "$DATABRICKS_VERIFIER_CLIENT_ID" \
     "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
     "$DATABRICKS_ACCOUNT_CLIENT_ID" <<'PYEOF'
 import sys
 
@@ -2062,7 +2178,7 @@ raise SystemExit(
 )
 PYEOF
   then
-    echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
+    echo "${RED}[deploy] ERROR: normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy M2M client IDs must be pairwise distinct, and account-SCIM must be distinct from all of them.${RST}" >&2
     exit 1
   fi
   _CONFIGURED_ADMIN_IDENTITIES="$(deployment_control_value MIP_ADMIN_IDENTITIES)"
@@ -2123,6 +2239,10 @@ PYEOF
     --source-git-sha "$SOURCE_GIT_SHA" \
     --lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
     --parent-pid "$$"
+  step "prove or create the deterministic owned App rollback secret scope"
+  run "$PYTHON" -m tools.databricks.app_rollback_secret_scope ensure \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE"
   # Inventory and separate the immutable target before the account credential
   # can resolve owners, recover roles, or authorize any App-addressed action.
   _EXISTING_APPS_JSON="$(databricks apps list -o json)"
@@ -2254,6 +2374,8 @@ else:
 else
   export MIP_APP_DEPLOYMENT_LEASE_ID="dry-run-deployment-lease"
   echo "  app automation: normal/admin Bearer mint deferred by --dry-run"
+  step "prove or create the deterministic owned App rollback secret scope"
+  echo "  would prove/create: scope ${APP_ROLLBACK_SECRET_SCOPE}"
 fi
 
 # -----------------------------------------------------------------------------
@@ -2873,6 +2995,11 @@ run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
   --identity-role agent_runtime \
   --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
   --no-mint-secret
+step "re-audit dedicated Supervisor proxy-caller identity isolation"
+run "$PYTHON" -m tools.databricks.provision_m2m_oauth \
+  --identity-role agent_proxy \
+  --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --no-mint-secret
 
 # -----------------------------------------------------------------------------
 # Step 4b: Lakebase migration — BEFORE the app snapshot restart
@@ -2949,7 +3076,10 @@ reconcile_reviewed_function_execute_grants() {
   local _principal
   local _grant_failed=0
   local _postflight_failed=0
-  for _principal in "$APP_SP_CLIENT_ID" "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; do
+  for _principal in \
+    "$APP_SP_CLIENT_ID" \
+    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    "$DATABRICKS_AGENT_PROXY_CLIENT_ID"; do
     for _function_name in fn_build_cohort fn_segment_counts fn_lead_queue_url; do
       if ! apply_uc_grant \
         "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.${_function_name} TO \`${_principal}\`"; then
@@ -2960,7 +3090,8 @@ reconcile_reviewed_function_execute_grants() {
   if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants \
     --catalog "$_GRANTS_CATALOG" \
     --app-application-id "$APP_SP_CLIENT_ID" \
-    --agent-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"; then
+    --agent-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --agent-proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"; then
     _postflight_failed=1
   fi
   if [[ "$_grant_failed" -ne 0 || "$_postflight_failed" -ne 0 ]]; then
@@ -3067,6 +3198,11 @@ GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${DATABRICKS_AGENT_RUNTI
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
+GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
+GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO \`${DATABRICKS_AGENT_PROXY_CLIENT_ID}\`
 GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT CREATE MODEL ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
 GRANT CREATE TABLE ON SCHEMA ${_GRANTS_CATALOG}.audit TO \`${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}\`
@@ -3160,14 +3296,11 @@ fi
 
 step "provision dedicated signed App rollback-contract secret scope"
 if [[ "$DRY_RUN" -eq 1 ]]; then
-  echo "  would inspect/create: scope ${APP_ROLLBACK_SECRET_SCOPE}"
-elif ! databricks secrets list-scopes -o json | "$PYTHON" -c 'import json,sys
-data = json.load(sys.stdin)
-scope = sys.argv[1]
-items = data.get("scopes", []) if isinstance(data, dict) else (data or [])
-names = {s.get("name") for s in items if isinstance(s, dict)}
-sys.exit(0 if scope in names else 1)' "$APP_ROLLBACK_SECRET_SCOPE"; then
-  run databricks secrets create-scope "$APP_ROLLBACK_SECRET_SCOPE"
+  echo "  would re-audit: scope ${APP_ROLLBACK_SECRET_SCOPE}"
+else
+  run "$PYTHON" -m tools.databricks.app_rollback_secret_scope assert \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$APP_ROLLBACK_SECRET_SCOPE"
 fi
 
 # -----------------------------------------------------------------------------
@@ -3269,8 +3402,16 @@ capture_last_good_app() {
   if [[ -n "$binding" ]]; then
     args+=(--expected-gateway-binding "$binding")
   fi
+  if [[ -z "$APP_ROLLBACK_BINDING_ENV" ]]; then
+    APP_ROLLBACK_BINDING_ENV="$(mktemp -t mip-app-blue-binding.XXXXXX.env)"
+  fi
+  args+=(--out-env "$APP_ROLLBACK_BINDING_ENV")
   run_with_account_identity \
     run_with_proof_signing_authority "$PYTHON" "${args[@]}"
+  set -a
+  # shellcheck disable=SC1090
+  . "$APP_ROLLBACK_BINDING_ENV"
+  set +a
 }
 
 if [[ "$DRY_RUN" -eq 0 ]]; then
@@ -3419,7 +3560,7 @@ step "grant exact Genie CAN_RUN to the dedicated agent-runtime identity"
 run "$PYTHON" -m tools.databricks.agent_runtime_access \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
   --application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
-step "provision Supervisor and Gateway under the dedicated agent-runtime identity"
+step "provision the managed Supervisor under the dedicated agent-runtime identity"
 MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
   agent-runtime \
   DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
@@ -3439,8 +3580,95 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
   --lakebase-schema "$DEPLOYMENT_SYNC_SCHEMA" \
   --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
   --skip-sync \
+  --skip-gateway \
   --skip-app-permissions \
   --out-env "$AGENTIC_ENV_FILE"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
+fi
+step "grant and globally audit the dedicated Supervisor proxy caller"
+run "$PYTHON" -m tools.databricks.agent_proxy_access \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
+step "provision the credential-versioned Supervisor proxy secret reference"
+run_with_agent_proxy_credentials \
+  "$PYTHON" -m tools.databricks.provision_agent_proxy_secret \
+  --app-name "$_GRANTS_APP_NAME" \
+  --scope "$MIP_AGENT_PROXY_SECRET_SCOPE" \
+  --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --out-env "$AGENTIC_ENV_FILE"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
+fi
+_AGENT_PROXY_SECRET_REFERENCE="${MIP_AGENT_PROXY_SECRET_REFERENCE:-}"
+if [[ "$DRY_RUN" -eq 1 && -z "$_AGENT_PROXY_SECRET_REFERENCE" ]]; then
+  _AGENT_PROXY_SECRET_REFERENCE='{{secrets/dry-run/oauth-client-secret-dry-run}}'
+fi
+step "provision the governed outer Gateway under agent-runtime authority"
+MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
+  agent-runtime \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+  DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+  "$PYTHON" -m tools.databricks.provision_agentic_resources \
+  --app-name "$_GRANTS_APP_NAME" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --expected-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
+  --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
+  --proxy-caller-secret-reference "$_AGENT_PROXY_SECRET_REFERENCE" \
+  --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
+  --deployment-source-git-sha "$SOURCE_GIT_SHA" \
+  --gateway-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-mip-growth-agent-gateway}" \
+  --gateway-agent-model "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
+  --gateway-agent-experiment "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
+  --gateway-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+  --lakebase-catalog "$DEPLOYMENT_SYNC_CATALOG" \
+  --lakebase-schema "$DEPLOYMENT_SYNC_SCHEMA" \
+  --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
+  --skip-sync \
+  --skip-supervisor \
+  --skip-app-permissions \
+  --merge-out-env \
+  --out-env "$AGENTIC_ENV_FILE"
+step "re-audit the Supervisor proxy caller after Gateway provisioning"
+run "$PYTHON" -m tools.databricks.agent_proxy_access \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
+step "prove dual-authority agent-proxy Unity Catalog boundary"
+run_with_account_identity \
+  run_with_agent_proxy_credentials \
+    "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
+  --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+  --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+_AGENT_PROXY_BOUNDARY_APP_URL="${MIP_APP_URL:-}"
+if [[ "$DRY_RUN" -eq 1 && -z "$_AGENT_PROXY_BOUNDARY_APP_URL" ]]; then
+  _AGENT_PROXY_BOUNDARY_APP_URL="https://dry-run.databricksapps.com"
+fi
+step "prove agent-proxy effective negative authorization boundary before cutover"
+run_with_account_identity \
+  run_with_agent_proxy_credentials \
+    "$PYTHON" -m tools.databricks.verify_agent_proxy_identity_boundary \
+  --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+  --account-host "$DATABRICKS_ACCOUNT_HOST" \
+  --account-id "$DATABRICKS_ACCOUNT_ID" \
+  --app-name "$_GRANTS_APP_NAME" \
+  --app-url "${_AGENT_PROXY_BOUNDARY_APP_URL:?deployed App URL is required}" \
+  --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+  --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+  --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
 if ! revoke_agent_runtime_bootstrap_grants; then
   echo "${RED}[deploy] temporary agent-runtime schema privileges remain; refusing deployment.${RST}" >&2
   exit 1
@@ -3475,7 +3703,10 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     --gateway-table-prefix "$MIP_AI_GATEWAY_TABLE_PREFIX" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
-    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
+    --proxy-caller-secret-reference "$MIP_AGENT_PROXY_SECRET_REFERENCE"
   set -a
   # shellcheck disable=SC1090
   . "$AGENTIC_ENV_FILE"
@@ -3590,7 +3821,10 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       --gateway-model-family "${MIP_AI_GATEWAY_AGENT_MODEL_FAMILY:-${MIP_DEFAULT_CATALOG:-mip}.audit.mortgage_growth_supervisor_proxy}" \
       --gateway-experiment-base "${MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE:-mip-agent-runtime-gateway-proxy}" \
       --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
-      --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}"
+      --inference-table-prefix "${MIP_AI_GATEWAY_TABLE_PREFIX:-mip_agent_gateway_growth_agent}" \
+      --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+      --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
+      --proxy-caller-secret-reference "$MIP_AGENT_PROXY_SECRET_REFERENCE"
     step "prepare runtime-owned Gateway access while preserving the live old Supervisor"
     run "$PYTHON" -m tools.databricks.cutover_agent_runtime_supervisor prepare \
       "${AGENT_RUNTIME_GREEN_ARGS[@]}"
@@ -3701,7 +3935,10 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
       "$MIP_AGENT_RUNTIME_CLIENT_ID" \
       "$MIP_AI_GATEWAY_AGENT_MODEL" \
       "$MIP_AI_GATEWAY_AGENT_MODEL_VERSION" \
-      "$MIP_AI_GATEWAY_INFERENCE_TABLE" <<'PYEOF'
+      "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
+      "$MIP_AGENT_PROXY_CLIENT_ID" \
+      "$MIP_AGENT_PROXY_CREDENTIAL_ID" \
+      "$MIP_AGENT_PROXY_SECRET_REFERENCE" <<'PYEOF'
 import sys
 from backend.agents.gateway_contract import gateway_runtime_binding_hash
 
@@ -3713,6 +3950,9 @@ print(gateway_runtime_binding_hash(
     model_name=sys.argv[5],
     model_version=int(sys.argv[6]),
     inference_table=sys.argv[7],
+    proxy_caller_application_id=sys.argv[8],
+    proxy_caller_credential_id=sys.argv[9],
+    proxy_caller_secret_reference=sys.argv[10],
 ))
 PYEOF
 )"
@@ -3992,6 +4232,72 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --serving-endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT" \
     --serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+  step "re-audit final Supervisor proxy caller access after blue retirement"
+  run "$PYTHON" -m tools.databricks.agent_proxy_access \
+    --supervisor-id "$MIP_AGENT_SUPERVISOR_ID" \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
+  step "re-prove final dual-authority agent-proxy Unity Catalog boundary"
+  run_with_account_identity \
+    run_with_agent_proxy_credentials \
+      "$PYTHON" -m tools.databricks.verify_agent_proxy_uc_boundary_dual_authority \
+    --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}"
+  step "re-prove final agent-proxy effective negative boundary after blue retirement"
+  run_with_account_identity \
+    run_with_agent_proxy_credentials \
+      "$PYTHON" -m tools.databricks.verify_agent_proxy_identity_boundary \
+    --expected-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
+    --account-host "$DATABRICKS_ACCOUNT_HOST" \
+    --account-id "$DATABRICKS_ACCOUNT_ID" \
+    --app-name "$_GRANTS_APP_NAME" \
+    --app-url "${_AGENT_PROXY_BOUNDARY_APP_URL:?deployed App URL is required}" \
+    --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
+    --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+    --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+  AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS=()
+  if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 && \
+        -n "$MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS" ]]; then
+    IFS=',' read -r -a _AGENT_PROXY_SIGNED_BLUE_IDS \
+      <<< "$MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS"
+    for _AGENT_PROXY_SIGNED_BLUE_ID in "${_AGENT_PROXY_SIGNED_BLUE_IDS[@]}"; do
+      if [[ ! "$_AGENT_PROXY_SIGNED_BLUE_ID" =~ ^[A-Za-z0-9._-]{1,128}$ ]]; then
+        echo "${RED}[deploy] signed-blue agent-proxy credential ID is invalid.${RST}" >&2
+        exit 1
+      fi
+      AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS+=(
+        --signed-blue-credential-id "$_AGENT_PROXY_SIGNED_BLUE_ID"
+      )
+    done
+  fi
+  step "remove retired Supervisor proxy OAuth credentials and secret versions"
+  run_with_proof_signing_authority \
+    run_with_agent_proxy_binding \
+      "$PYTHON" -m tools.databricks.provision_agent_proxy_secret \
+    --app-name "$_GRANTS_APP_NAME" \
+    --scope "$MIP_AGENT_PROXY_SECRET_SCOPE" \
+    --rollback-scope "$APP_ROLLBACK_SECRET_SCOPE" \
+    --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --cleanup-signed-blue \
+    "${AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS[@]}"
+  step "prove exact green Gateway inference after proxy credential retirement"
+  mint_app_automation_tokens
+  run "$PYTHON" -m tools.verify_app_agent_green_path \
+    --base-url "$MIP_APP_URL" \
+    --app-name "$APP_NAME" \
+    --token-env MIP_BEARER_TOKEN \
+    --expected-endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+    --deployment-lease-id "${MIP_APP_DEPLOYMENT_LEASE_ID:?App deployment lease is required}"
+  run_as_m2m_identity \
+    verifier \
+    DATABRICKS_VERIFIER_CLIENT_ID \
+    DATABRICKS_VERIFIER_CLIENT_SECRET \
+    "$PYTHON" -m tools.databricks.verify_hosted_agent_tool_execution \
+    --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+    --expected-count "$AGENT_TOOL_EXPECTED_COUNT" \
+    --catalog "${MIP_DEFAULT_CATALOG:-mip}"
   step "re-audit final verifier global access after blue retirement"
   run "$PYTHON" -m tools.databricks.audit_global_m2m_access \
     --application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \

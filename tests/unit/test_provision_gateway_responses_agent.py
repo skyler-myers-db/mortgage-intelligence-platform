@@ -22,7 +22,6 @@ from tools.databricks.gateway_endpoint_contract import (
 )
 from tools.databricks.provision_gateway_responses_agent import (
     GatewayAgentDeployment,
-    ensure_gateway_responses_agent,
     gateway_agent_source_hash,
     verify_gateway_responses_agent,
 )
@@ -32,10 +31,29 @@ _GENIE_SPACE_ID = "space-123"
 _RUNTIME_APPLICATION_ID = "runtime-client"
 _SUPERVISOR_ID = "supervisor-id"
 _SUPERVISOR_ENDPOINT_ID = "supervisor-endpoint-id"
+_PROXY_CLIENT_ID = "proxy-client"
+_PROXY_CREDENTIAL_ID = "proxy-credential"
+_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 _MODEL_SIGNING_KEY = base64.urlsafe_b64encode(b"t" * 32).decode("ascii").rstrip("=")
 _MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(_MODEL_SIGNING_KEY)
 _PREVIOUS_MODEL_SIGNING_KEY = base64.urlsafe_b64encode(b"p" * 32).decode("ascii").rstrip("=")
 _PREVIOUS_MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(_PREVIOUS_MODEL_SIGNING_KEY)
+
+
+def ensure_gateway_responses_agent(workspace: object, **kwargs: Any) -> GatewayAgentDeployment:
+    """Supply the reviewed proxy identity to focused provisioner fixtures."""
+
+    kwargs.setdefault("proxy_caller_application_id", _PROXY_CLIENT_ID)
+    kwargs.setdefault("proxy_caller_credential_id", _PROXY_CREDENTIAL_ID)
+    kwargs.setdefault("proxy_caller_secret_reference", _PROXY_SECRET_REFERENCE)
+    return gateway.ensure_gateway_responses_agent(workspace, **kwargs)
+
+
+def _served_entity(**kwargs: Any) -> tuple[Any, Any]:
+    kwargs.setdefault("proxy_caller_application_id", _PROXY_CLIENT_ID)
+    kwargs.setdefault("proxy_caller_credential_id", _PROXY_CREDENTIAL_ID)
+    kwargs.setdefault("proxy_caller_secret_reference", _PROXY_SECRET_REFERENCE)
+    return gateway._served_entity(**kwargs)
 
 
 def _assert_single_writer() -> None:
@@ -187,6 +205,7 @@ def test_gateway_source_hash_covers_every_served_transitive_module() -> None:
         "ai_gateway_proof_attestation.py",
         "gateway_contract.py",
         "gateway_live_resource_contract.py",
+        "gateway_provider_shape.py",
         "mortgage_growth_supervisor_proxy.py",
         "reviewed_uc_function_contract.py",
         "supervisor_contract.py",
@@ -222,6 +241,9 @@ def test_gateway_resource_hash_binds_every_green_allocation_input() -> None:
         inference_schema="audit",
         inference_table_prefix="mip_agent_gateway_growth_agent",
         attestation_verify_key=_MODEL_VERIFY_KEY,
+        proxy_caller_application_id=_PROXY_CLIENT_ID,
+        proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
     )
     variants = (
         {"source_hash": "b" * 64},
@@ -237,6 +259,18 @@ def test_gateway_resource_hash_binds_every_green_allocation_input() -> None:
                 base64.urlsafe_b64encode(b"n" * 32).decode("ascii").rstrip("=")
             )
         },
+        {"proxy_caller_application_id": "different-proxy-client"},
+        {
+            "proxy_caller_secret_reference": (
+                "{{secrets/other-agent-proxy/oauth-client-secret-" + _PROXY_CREDENTIAL_ID + "}}"
+            )
+        },
+        {
+            "proxy_caller_credential_id": "different-proxy-credential",
+            "proxy_caller_secret_reference": (
+                "{{secrets/mip-agent-proxy/" "oauth-client-secret-different-proxy-credential}}"
+            ),
+        },
     )
     for override in variants:
         values = {
@@ -249,9 +283,46 @@ def test_gateway_resource_hash_binds_every_green_allocation_input() -> None:
             "inference_schema": "audit",
             "inference_table_prefix": "mip_agent_gateway_growth_agent",
             "attestation_verify_key": _MODEL_VERIFY_KEY,
+            "proxy_caller_application_id": _PROXY_CLIENT_ID,
+            "proxy_caller_credential_id": _PROXY_CREDENTIAL_ID,
+            "proxy_caller_secret_reference": _PROXY_SECRET_REFERENCE,
             **override,
         }
         assert gateway.gateway_resource_hash(**values) != baseline
+
+
+@pytest.mark.parametrize(
+    "override",
+    (
+        {"proxy_caller_application_id": _RUNTIME_APPLICATION_ID.upper()},
+        {
+            "proxy_caller_secret_reference": (
+                "{{secrets/mip-agent-proxy/oauth-client-secret-other-credential}}"
+            )
+        },
+    ),
+)
+def test_gateway_resource_hash_rejects_invalid_proxy_credential_binding(
+    override: dict[str, str],
+) -> None:
+    values = {
+        "source_hash": "a" * 64,
+        "supervisor_id": _SUPERVISOR_ID,
+        "supervisor_endpoint_id": _SUPERVISOR_ENDPOINT_ID,
+        "runtime_application_id": _RUNTIME_APPLICATION_ID,
+        "model_name": "mip.audit.proxy",
+        "experiment_name": "mip-agent-runtime-gateway-proxy",
+        "inference_schema": "audit",
+        "inference_table_prefix": "mip_agent_gateway_growth_agent",
+        "attestation_verify_key": _MODEL_VERIFY_KEY,
+        "proxy_caller_application_id": _PROXY_CLIENT_ID,
+        "proxy_caller_credential_id": _PROXY_CREDENTIAL_ID,
+        "proxy_caller_secret_reference": _PROXY_SECRET_REFERENCE,
+        **override,
+    }
+
+    with pytest.raises(ValueError, match="proxy credential binding is invalid"):
+        gateway.gateway_resource_hash(**values)
 
 
 def test_current_model_version_requires_exactly_one_expected_registered_model() -> None:
@@ -837,6 +908,9 @@ def _resource_hash(
     supervisor_endpoint_id: str = _SUPERVISOR_ENDPOINT_ID,
     runtime_application_id: str = _RUNTIME_APPLICATION_ID,
     verify_key: str = _MODEL_VERIFY_KEY,
+    proxy_caller_application_id: str = _PROXY_CLIENT_ID,
+    proxy_caller_credential_id: str = _PROXY_CREDENTIAL_ID,
+    proxy_caller_secret_reference: str = _PROXY_SECRET_REFERENCE,
 ) -> str:
     return gateway.gateway_resource_hash(
         source_hash=source_hash,
@@ -848,6 +922,9 @@ def _resource_hash(
         inference_schema="audit",
         inference_table_prefix="mip_agent_gateway_growth_agent",
         attestation_verify_key=verify_key,
+        proxy_caller_application_id=proxy_caller_application_id,
+        proxy_caller_credential_id=proxy_caller_credential_id,
+        proxy_caller_secret_reference=proxy_caller_secret_reference,
     )
 
 
@@ -892,6 +969,9 @@ def _exact_endpoint_details(
                         "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
                         "MIP_UPSTREAM_SUPERVISOR_CREATOR": runtime_application_id,
+                        "MIP_UPSTREAM_PROXY_CLIENT_ID": _PROXY_CLIENT_ID,
+                        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": _PROXY_CREDENTIAL_ID,
+                        "MIP_UPSTREAM_PROXY_CLIENT_SECRET": _PROXY_SECRET_REFERENCE,
                         "MIP_SUPERVISOR_CATALOG": _CATALOG,
                         "MIP_SUPERVISOR_GENIE_SPACE_ID": _GENIE_SPACE_ID,
                         "MIP_SUPERVISOR_CONTRACT_SHA256": gateway.supervisor_contract_hash(
@@ -916,6 +996,9 @@ def _exact_endpoint_details(
                         "MIP_UPSTREAM_SUPERVISOR_ID": supervisor_id,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
                         "MIP_UPSTREAM_SUPERVISOR_CREATOR": runtime_application_id,
+                        "MIP_UPSTREAM_PROXY_CLIENT_ID": _PROXY_CLIENT_ID,
+                        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": _PROXY_CREDENTIAL_ID,
+                        "MIP_UPSTREAM_PROXY_CLIENT_SECRET": _PROXY_SECRET_REFERENCE,
                         "MIP_SUPERVISOR_CATALOG": _CATALOG,
                         "MIP_SUPERVISOR_GENIE_SPACE_ID": _GENIE_SPACE_ID,
                         "MIP_SUPERVISOR_CONTRACT_SHA256": gateway.supervisor_contract_hash(
@@ -976,6 +1059,9 @@ def _exact_deployment(
         supervisor_endpoint_id=_SUPERVISOR_ENDPOINT_ID,
         upstream_endpoint=upstream,
         runtime_application_id=_RUNTIME_APPLICATION_ID,
+        proxy_caller_application_id=_PROXY_CLIENT_ID,
+        proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
         model_name=model_name,
         model_version=model_version,
         model_source="models:/m-reviewed-proxy",
@@ -1063,25 +1149,18 @@ def test_log_gateway_model_uses_deployment_only_packaging_validation(
         packaging_validation,
     )
 
-    def fake_log_model(*, upstream_endpoint: str, catalog: str, genie_space_id: str) -> object:
-        assert upstream_endpoint == "managed-supervisor"
-        assert catalog == _CATALOG
-        assert genie_space_id == _GENIE_SPACE_ID
+    def fake_log_model() -> object:
         return SimpleNamespace(model_uri="models:/m-reviewed-proxy")
 
     monkeypatch.setattr(gateway, "_log_responses_model", fake_log_model)
 
-    logged = gateway._log_gateway_model(
-        upstream_endpoint="managed-supervisor",
-        catalog=_CATALOG,
-        genie_space_id=_GENIE_SPACE_ID,
-    )
+    logged = gateway._log_gateway_model()
 
     assert logged.model_uri == "models:/m-reviewed-proxy"
     assert events == ["enter", "exit"]
 
 
-def test_logged_model_declares_exact_transitive_resources_and_tool_probe(monkeypatch) -> None:
+def test_logged_model_declares_no_automatic_private_resources(monkeypatch) -> None:
     captured: dict[str, object] = {}
     monkeypatch.setattr(
         gateway,
@@ -1090,29 +1169,10 @@ def test_logged_model_declares_exact_transitive_resources_and_tool_probe(monkeyp
         or SimpleNamespace(model_uri="models:/m-reviewed-proxy"),
     )
 
-    gateway._log_responses_model(
-        upstream_endpoint="managed-supervisor",
-        catalog=_CATALOG,
-        genie_space_id=_GENIE_SPACE_ID,
-    )
+    gateway._log_responses_model()
 
     resources = captured["resources"]
-    assert isinstance(resources, list)
-    assert [type(resource).__name__ for resource in resources] == [
-        "DatabricksServingEndpoint",
-        "DatabricksFunction",
-        "DatabricksFunction",
-        "DatabricksFunction",
-        "DatabricksGenieSpace",
-    ]
-    assert resources[0].name == "managed-supervisor"
-    assert [resource.name for resource in resources[1:4]] == [
-        "mip.gold.fn_build_cohort",
-        "mip.gold.fn_segment_counts",
-        "mip.gold.fn_lead_queue_url",
-    ]
-    assert resources[4].name == _GENIE_SPACE_ID
-    assert all(resource.on_behalf_of_user is False for resource in resources)
+    assert resources == []
     assert captured["input_example"]["max_output_tokens"] == 256
     assert "build_cohort" in captured["input_example"]["input"][0]["content"]
 
@@ -3721,7 +3781,7 @@ def test_gateway_exact_contract_rejects_every_unreviewed_config_field(
         genie_space_id=_GENIE_SPACE_ID,
     )
     details = _exact_endpoint_details(source_hash=source_hash)
-    entity, _traffic = gateway._served_entity(
+    entity, _traffic = _served_entity(
         supervisor_id=_SUPERVISOR_ID,
         upstream_endpoint="managed-supervisor",
         runtime_application_id=_RUNTIME_APPLICATION_ID,
@@ -3756,7 +3816,7 @@ def test_gateway_exact_contract_rejects_different_legacy_route_alias() -> None:
         genie_space_id=_GENIE_SPACE_ID,
     )
     details = _exact_endpoint_details(source_hash=source_hash)
-    entity, _traffic = gateway._served_entity(
+    entity, _traffic = _served_entity(
         supervisor_id=_SUPERVISOR_ID,
         upstream_endpoint="managed-supervisor",
         runtime_application_id=_RUNTIME_APPLICATION_ID,
@@ -3793,7 +3853,7 @@ def test_gateway_exact_contract_rejects_drifted_legacy_served_model_alias(
         genie_space_id=_GENIE_SPACE_ID,
     )
     details = _exact_endpoint_details(source_hash=source_hash)
-    entity, _traffic = gateway._served_entity(
+    entity, _traffic = _served_entity(
         supervisor_id=_SUPERVISOR_ID,
         upstream_endpoint="managed-supervisor",
         runtime_application_id=_RUNTIME_APPLICATION_ID,
@@ -3815,7 +3875,7 @@ def test_gateway_exact_contract_rejects_multiple_legacy_served_models() -> None:
         genie_space_id=_GENIE_SPACE_ID,
     )
     details = _exact_endpoint_details(source_hash=source_hash)
-    entity, _traffic = gateway._served_entity(
+    entity, _traffic = _served_entity(
         supervisor_id=_SUPERVISOR_ID,
         upstream_endpoint="managed-supervisor",
         runtime_application_id=_RUNTIME_APPLICATION_ID,
@@ -3858,7 +3918,7 @@ def test_candidate_resource_binding_does_not_inherit_previous_model_key(
         _PREVIOUS_MODEL_VERIFY_KEY,
     )
 
-    entity, _traffic = gateway._served_entity(
+    entity, _traffic = _served_entity(
         supervisor_id=_SUPERVISOR_ID,
         upstream_endpoint="managed-supervisor",
         runtime_application_id=_RUNTIME_APPLICATION_ID,

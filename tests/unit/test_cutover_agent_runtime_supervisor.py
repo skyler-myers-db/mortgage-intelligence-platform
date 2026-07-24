@@ -19,9 +19,11 @@ from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_v
 from tools.databricks import cutover_agent_runtime_supervisor as cutover
 from tools.databricks.cutover_journal_attestation import sign_cutover_journal
 from tools.databricks.cutover_journal_store import journal_path
+from tools.databricks.gateway_resource_identity import GatewayAgentDeployment
 from tools.databricks.provision_gateway_responses_agent import (
     gateway_agent_model_name,
     gateway_agent_source_hash,
+    gateway_experiment_name,
     gateway_inference_table_prefix,
     gateway_resource_hash,
 )
@@ -36,6 +38,9 @@ OLD_ENDPOINT_ID = "old-endpoint-id"
 GATEWAY = "mip-growth-agent-gateway"
 OLD_GATEWAY = "mip-growth-agent-gateway-old123456789"
 OLD_GATEWAY_ID = "old-gateway-id"
+PROXY_CLIENT_ID = "proxy-client"
+PROXY_CREDENTIAL_ID = "proxy-credential"
+PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
 PREVIOUS_SIGNING_KEY = base64.urlsafe_b64encode(bytes(reversed(range(32)))).decode().rstrip("=")
 MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(
@@ -67,6 +72,9 @@ def _endpoint(*, gateway: bool = False) -> object:
                     SimpleNamespace(
                         environment_vars={
                             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": NEW_ENDPOINT,
+                            "MIP_UPSTREAM_PROXY_CLIENT_ID": PROXY_CLIENT_ID,
+                            "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": PROXY_CREDENTIAL_ID,
+                            "MIP_UPSTREAM_PROXY_CLIENT_SECRET": PROXY_SECRET_REFERENCE,
                             "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": MODEL_VERIFY_KEY,
                             "MLFLOW_EXPERIMENT_ID": "experiment-7",
                         }
@@ -134,6 +142,9 @@ def _green_kwargs() -> dict[str, object]:
         inference_schema=schema,
         inference_table_prefix=table_prefix,
         attestation_verify_key=MODEL_VERIFY_KEY,
+        proxy_caller_application_id=PROXY_CLIENT_ID,
+        proxy_caller_credential_id=PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
     )
     return {
         "canonical_name": "Mortgage Growth Agent",
@@ -497,6 +508,73 @@ def test_green_path_rejects_mlflow_experiment_name_id_alias(
 
     with pytest.raises(RuntimeError, match="experiment name/ID binding drifted"):
         cutover._assert_green_path(workspace, **_green_kwargs())
+
+
+def test_green_path_passes_proxy_credential_binding_to_gateway_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    workspace.registered_models = SimpleNamespace(
+        get=lambda _name: SimpleNamespace(owner=RUNTIME_ID)
+    )
+    green = _green_kwargs()
+    model_family = str(green["gateway_model_family"])
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint=NEW_ENDPOINT,
+        catalog="mip",
+        genie_space_id="space-123",
+    )
+    _catalog, schema, table_prefix = gateway_inference_table_family(catalog="mip").split(".", 2)
+    resource_hash = gateway_resource_hash(
+        source_hash=source_hash,
+        supervisor_id=NEW_ID,
+        supervisor_endpoint_id=NEW_ENDPOINT_ID,
+        runtime_application_id=RUNTIME_ID,
+        model_name=model_family,
+        experiment_name=DEFAULT_GATEWAY_AGENT_EXPERIMENT,
+        inference_schema=schema,
+        inference_table_prefix=table_prefix,
+        attestation_verify_key=MODEL_VERIFY_KEY,
+        proxy_caller_application_id=PROXY_CLIENT_ID,
+        proxy_caller_credential_id=PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
+    )
+    experiment = SimpleNamespace(
+        experiment_id="experiment-7",
+        name=gateway_experiment_name(
+            base_experiment_name=DEFAULT_GATEWAY_AGENT_EXPERIMENT,
+            contract_hash=resource_hash,
+            runtime_application_id=RUNTIME_ID,
+        ),
+        lifecycle_stage="active",
+        tags={"mlflow.ownerEmail": RUNTIME_ID},
+    )
+    mlflow = SimpleNamespace(
+        get_experiment=lambda _id: experiment,
+        get_experiment_by_name=lambda _name: experiment,
+        get_model_version=lambda _name, _version: SimpleNamespace(source="models:/m-model-source"),
+    )
+    verified: list[GatewayAgentDeployment] = []
+    monkeypatch.setattr(cutover, "_supervisor_agents", _agents)
+    monkeypatch.setattr(
+        cutover,
+        "assert_exact_supervisor_contract",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(cutover, "MlflowClient", lambda **_kwargs: mlflow)
+    monkeypatch.setattr(
+        cutover,
+        "verify_gateway_responses_agent",
+        lambda _workspace, deployment, **_kwargs: verified.append(deployment),
+    )
+
+    cutover._assert_green_path(workspace, **green)
+
+    assert len(verified) == 1
+    deployment = verified[0]
+    assert deployment.proxy_caller_application_id == PROXY_CLIENT_ID
+    assert deployment.proxy_caller_credential_id == PROXY_CREDENTIAL_ID
+    assert deployment.proxy_caller_secret_reference == PROXY_SECRET_REFERENCE
 
 
 def test_retire_cleans_pinned_orphan_after_interrupted_agent_delete(

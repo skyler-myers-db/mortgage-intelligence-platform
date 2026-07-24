@@ -43,14 +43,19 @@ The Lakebase Postgres role is different: it is exactly the app resource's
 `service_principal_client_id` returned by `databricks apps get mip-app` /
 `WorkspaceClient().apps.get("mip-app")`. App names, service-principal display
 names, and numeric ids are not accepted as Lakebase role substitutes.
-Live automation has separate normal, admin, AI Gateway verifier, and
-agent-runtime service principals. Only the admin principal is a member of
+Live automation has separate normal, admin, AI Gateway verifier,
+agent-runtime, and managed-Supervisor proxy service principals. Only the admin principal is a member of
 `mip-admin`; the verifier is not app-admin and uses its OAuth application/client
 id as its Lakebase role. The agent runtime owns the managed Supervisor, outer
 Gateway endpoint, registered proxy model, MLflow experiment, and the exact
 inference tables Databricks creates for that endpoint. It has no App, Lakebase,
 warehouse, admin-group, campaign, borrower-table, or unrelated audit-table
 access.
+The agent proxy is a distinct non-owner caller. It has no App, Lakebase,
+warehouse, serving-endpoint ACL, model, experiment, table, volume, or ownership
+authority. It receives direct `CAN_QUERY` on one managed Supervisor, direct
+`CAN_RUN` on one Genie space, and direct `EXECUTE` on exactly the three reviewed
+UC functions.
 Deployment proves that negative claim globally: runtime-credentialed UC checks
 walk every effective catalog child, while an exact principal-pinned workspace
 admin enumerates all Apps, Lakebase instances, Genie spaces, and
@@ -60,12 +65,17 @@ inventory rather than treated as customer serving ACLs. Runtime
 may hold exact direct `CAN_MANAGE` only on its reviewed green endpoints (and a
 pinned runtime-owned blue endpoint during cutover) plus exact direct `CAN_RUN`
 on the reviewed Genie space; verifier may hold exact direct `CAN_QUERY` only on
-the reviewed Gateway. Any unrelated, inherited, group-derived, or broader
+the reviewed Gateway; agent proxy may hold the exact Supervisor/Genie/function
+boundary above. Any unrelated, inherited, group-derived, or broader
 access fails closed, and the endpoint audits repeat after blue retirement.
 The App authenticates the deployer-signed exact resource envelope and inspects
 only the outer Gateway it can query; it never receives direct Supervisor,
-registered-model, or experiment permissions. The runtime-owned proxy performs
-the full private-resource and ACL proof before each inference.
+registered-model, or experiment permissions. The served proxy declares no
+automatic private resources. It authenticates the signed allocation envelope
+and re-proves the managed Supervisor ID, creator, exact tool definition, and UC
+function metadata/body hashes through the dedicated proxy OAuth identity before
+each inference. Deployment separately re-proves the immutable private endpoint
+ID and the full Gateway/model/experiment allocation.
 
 **Companion docs.** [`docs/se-onboarding.md`](../se-onboarding.md) is the
 end-to-end walkthrough; this file is the "grants reference" it links
@@ -263,6 +273,11 @@ GRANT USE SCHEMA ON SCHEMA mip.gold TO `agent-runtime-client-id`;
 GRANT EXECUTE ON FUNCTION mip.gold.fn_build_cohort TO `agent-runtime-client-id`;
 GRANT EXECUTE ON FUNCTION mip.gold.fn_segment_counts TO `agent-runtime-client-id`;
 GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `agent-runtime-client-id`;
+GRANT USE CATALOG ON CATALOG mip TO `agent-proxy-client-id`;
+GRANT USE SCHEMA ON SCHEMA mip.gold TO `agent-proxy-client-id`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_build_cohort TO `agent-proxy-client-id`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_segment_counts TO `agent-proxy-client-id`;
+GRANT EXECUTE ON FUNCTION mip.gold.fn_lead_queue_url TO `agent-proxy-client-id`;
 GRANT USE SCHEMA ON SCHEMA mip.audit TO `agent-runtime-client-id`;
 -- Bootstrap-only; deploy.sh revokes both on EXIT after exact resource convergence.
 GRANT CREATE MODEL ON SCHEMA mip.audit TO `agent-runtime-client-id`;
@@ -306,6 +321,12 @@ and admin membership. The deploy script re-audits those exclusions, proves
 direct Genie `CAN_RUN`, exact UC-function `EXECUTE`, and runtime creator fields.
 Temporary schema-level creation privileges are revoked before App promotion
 and by EXIT compensation after any failed run.
+The agent proxy's dual-authority UC audit runs with both the principal-pinned
+metastore owner and the proxy credential. It enumerates every visible catalog
+child and registered model, rejects foreign or inherited authority, and runs
+before cutover and after blue retirement. Provisioning separately enumerates
+every App, Lakebase instance, warehouse, Supervisor, Genie space, and serving
+endpoint.
 Each deploy also audits that the runtime has no Lakebase role or effective SQL
 warehouse ACL, then runs credentialed negative probes proving App HTTP,
 App-permission administration, service-principal secret listing, and warehouse

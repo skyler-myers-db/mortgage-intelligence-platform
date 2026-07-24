@@ -343,9 +343,7 @@ def test_twenty_simultaneous_cold_snapshots_share_each_dependency_probe(
         release.set()
         snapshots = [future.result(timeout=1.0) for future in futures]
 
-    assert snapshots == [
-        ("ok", {"warehouse": "up", "lakebase": "up", "genie": "up"})
-    ] * 20
+    assert snapshots == [("ok", {"warehouse": "up", "lakebase": "up", "genie": "up"})] * 20
     assert counts == {"warehouse": 1, "lakebase": 1, "genie": 1}
 
 
@@ -513,6 +511,17 @@ def test_authenticated_health_surfaces_deployed_git_sha(
         "mip.audit.mortgage_growth_supervisor_proxy",
     )
     monkeypatch.setattr(health_mod.settings, "mip_agent_gateway_model_version", 7)
+    monkeypatch.setattr(health_mod.settings, "mip_agent_proxy_client_id", "proxy-client")
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_proxy_credential_id",
+        "proxy-credential",
+    )
+    monkeypatch.setattr(
+        health_mod.settings,
+        "mip_agent_proxy_secret_reference",
+        "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}",
+    )
     monkeypatch.setattr(
         health_mod.settings,
         "mip_ai_gateway_inference_table",
@@ -526,6 +535,11 @@ def test_authenticated_health_surfaces_deployed_git_sha(
         model_name="mip.audit.mortgage_growth_supervisor_proxy",
         model_version=7,
         inference_table="mip.audit.mip_agent_gateway_growth_agent",
+        proxy_caller_application_id="proxy-client",
+        proxy_caller_credential_id="proxy-credential",
+        proxy_caller_secret_reference=(
+            "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+        ),
     )
 
     anon = client.get("/api/health")

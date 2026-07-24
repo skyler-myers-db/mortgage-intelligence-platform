@@ -65,7 +65,7 @@ python tools/databricks/provision_m2m_oauth.py \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
 
-# Repeat for the other five separated workspace identities. Group creation is
+# Repeat for the other six separated workspace identities. Group creation is
 # explicit and reviewed only for the admin role.
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
@@ -93,6 +93,11 @@ python tools/databricks/provision_m2m_oauth.py \
     --identity-role agent_runtime \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role agent_proxy \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
 ```
 
 What this runs (in order, all via `databricks-sdk`):
@@ -103,12 +108,23 @@ What this runs (in order, all via `databricks-sdk`):
 2. `w.service_principal_secrets_proxy.create(service_principal_id=...)`
    — mints a one-shot OAuth client_secret. The secret is returned in
    the response's `.secret` field and cannot be retrieved later.
-3. `gh secret set ... --repo ... <stdin>` writes only that role's client ID and
-   client secret, piped via stdin so the value never appears in argv/ps.
+3. `gh secret set ... --repo ... <stdin>` writes each role's credential
+   material via stdin so it never appears in argv/ps. For the agent-proxy role,
+   the only write is one
+   canonical `DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE` JSON value containing
+   its client ID, immutable credential ID, and one-shot secret. Live consumers
+   derive all three values solely from that canonical bundle. If the bundle
+   write fails, the newly minted credential is revoked, its absence is re-read,
+   and the prior bundle remains usable before the tool returns.
 
-This mode performs no App, Lakebase, Gateway, or warehouse lookup or grant and
-does not write `MIP_APP_URL` before an App exists. If a reserved principal
-already exists, add `--rotate`; bootstrap otherwise refuses to mint implicitly.
+This mode performs no App, Lakebase, Gateway, or warehouse grant and does not
+write `MIP_APP_URL` before an App exists. Pre-App bootstrap is creation-only:
+it refuses every existing reserved principal, whether credentialed or not.
+Use the normal identity flow with the canonical expected application ID for a
+reviewed rotation. If a bootstrap sink fails, the command revokes the minted
+credential and removes the principal; if that cleanup cannot be proven, it
+stops with a manual security-reconciliation error instead of implicitly
+resuming an unproven identity.
 Provision the separate account-SCIM client credentials and the two distinct
 Gateway proof/model-attestation signing keys, then run `scripts/deploy.sh`.
 After bundle apply creates the App, deploy grants exact persistent `CAN_USE` to
@@ -130,21 +146,28 @@ Flags of note:
 | Flag                    | Default                                          | Purpose                                                                                           |
 | ----------------------- | ------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
 | `--identity-role`       | `normal`                                         | Selects the reserved principal, client ID, grants, and GitHub sinks as one governance contract.   |
-| `--pre-app-bootstrap`   | off                                              | Credential-only first-install mode; requires the reviewed GitHub sink and forbids App/data-resource options. |
+| `--pre-app-bootstrap`   | off                                              | Creation-only credential first-install mode; refuses every existing principal, requires the reviewed GitHub sink, and forbids App/data-resource options. |
 | `--sp-name`             | role-specific reserved name                      | Optional assertion only; a different or cross-role name is rejected before external calls.        |
 | `--expected-application-id` | role-owned configured client ID, when present | Optional assertion; cross-role and duplicate configured client IDs fail before external calls.    |
 | client ID/secret sink flags | role-owned names                            | Optional assertions only; custom or cross-role GitHub secret destinations are rejected.            |
 | `--app-name`            | resolved from `databricks.yml`                   | Deployed App to grant on.                                                                         |
 | `--gh-repo`             | inferred from `git remote get-url origin`        | Must match the detected origin or `MIP_M2M_GITHUB_REPOSITORY`; a different secret sink is rejected before SDK calls or minting. |
 | `--set-gh-secrets`      | off (explicit opt-in)                            | Required for minting and upload; the tool never prints or stores the one-shot client secret.       |
-| `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Old secret remains valid until revoked in Accounts Console. |
-| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control persistent App grants for both operator identities and the admin identity. Release-probe, verifier, and agent-runtime roles always forbid persistent App `CAN_USE` and reject `--grant-can-use`, including under `--dry-run`. |
+| `--rotate`              | off                                              | If the SP exists, mint a fresh secret. Deployment revokes every non-active agent-proxy credential only after green cutover and blue retirement. |
+| `--grant-can-use` / `--no-grant-can-use` | role-specific | Control persistent App grants for both operator identities and the admin identity. Release-probe, verifier, agent-runtime, and agent-proxy roles always forbid persistent App `CAN_USE` and reject `--grant-can-use`, including under `--dry-run`. |
 | `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
 
 Rotation (replaces the "Rotation cadence" section below when you use
-the SDK path): re-run with `--rotate --set-gh-secrets`. The old secret
-is still valid until revoked in the Accounts Console — same zero-
-downtime order as the UI flow (new secret first, revoke second).
+the SDK path): re-run with `--rotate --set-gh-secrets`. For agent-proxy,
+the old credential remains usable during blue/green overlap; the signed deploy
+then revokes only the explicitly signed-blue OAuth credential IDs and removes
+their matching Databricks secret-key versions after blue retirement. Final
+postflight requires exactly the retained green credential/key. Any additional
+credential or versioned key is preserved but blocks the release for explicit
+security reconciliation. A partial GitHub sink failure revokes the new
+credential and removes the newly created bootstrap principal immediately, so a
+retry cannot strand a valid but undelivered secret or resume an unproven
+identity.
 
 Tests: `.venv/bin/pytest tests/unit/test_provision_m2m_oauth.py -q`
 mocks the full SDK surface to pin the call-order contract; a future
@@ -386,6 +409,12 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
   SQL-warehouse `CAN USE`; it must have no direct, inherited, or effective
   app permission and no direct or nested membership in `mip-admin` or an
   app-authorized group.
+- The managed-Supervisor proxy SP is separate from the runtime owner and every
+  app-facing identity. It receives one Supervisor `CAN_QUERY`, one Genie
+  `CAN_RUN`, and direct execution of the three reviewed UC functions. Global
+  postflights require no App, Lakebase, warehouse, serving-endpoint, foreign
+  catalog, table, volume, model, ownership, inherited, or fourth-function
+  authority.
 - `--identity-role verifier --grant-can-use` is an invalid request. Both the
   CLI (including `--dry-run`) and direct `provision()` calls reject it before
   creating a workspace client, mutating Lakebase/serving/warehouse/App

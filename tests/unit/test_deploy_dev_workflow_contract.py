@@ -223,6 +223,10 @@ def _install_environment_recorder(tmp_path: Path) -> tuple[Path, Path]:
     recorder = bin_dir / "python"
     recorder.write_text(
         "#!/usr/bin/env bash\n"
+        "if [[ \"${1:-}\" == '-m' && "
+        "\"${2:-}\" == 'tools.databricks.agent_proxy_credential_bundle' ]]; then\n"
+        f"  exec {shlex.quote(sys.executable)} \"$@\"\n"
+        "fi\n"
         "{\n"
         "  echo '=== child ==='\n"
         "  /usr/bin/env | /usr/bin/sort\n"
@@ -1325,7 +1329,8 @@ def test_deploy_mints_and_remints_distinct_admin_bearer_for_agent_eval() -> None
     assert "databricks auth token" not in text
     assert "DATABRICKS_ADMIN_CLIENT_ID DATABRICKS_ADMIN_CLIENT_SECRET" in text
     assert (
-        "normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs "
+        "normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy "
+        "M2M client IDs "
         "must be pairwise distinct" in text
     )
     assert (
@@ -1457,7 +1462,7 @@ def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
         'step "preflight agent-runtime foreign UC access before runtime-owned UC mutations"'
     )
     first_runtime_use = text.index(
-        'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
     dual_authority = text.index(
         'step "prove dual-authority agent-runtime UC boundary before cutover"'
@@ -1727,7 +1732,8 @@ def test_deploy_dev_requires_explicit_admin_rbac_and_mints_distinct_app_bearers(
     assert "mint_m2m_token MIP_BEARER_TOKEN" in script
     assert "mint_m2m_token MIP_ADMIN_BEARER_TOKEN" in script
     assert (
-        "Normal, operator2, admin, release-probe, verifier, and agent-runtime M2M client IDs "
+        "Normal, operator2, admin, release-probe, verifier, agent-runtime, and agent-proxy "
+        "M2M client IDs "
         "must be pairwise distinct." in text
     )
     assert "os.environ[name].strip().casefold()" in text
@@ -1994,7 +2000,7 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     assert "DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}" in workflow
 
 
-def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> None:
+def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -2006,7 +2012,7 @@ def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> N
         assert secret in script
     runtime_block = script[
         script.index(
-            'step "provision Supervisor and Gateway under the dedicated agent-runtime'
+            'step "provision the managed Supervisor under the dedicated agent-runtime'
         ) : script.index("AI_GATEWAY_GRANTS_READY=1")
     ]
     assert "run_as_m2m_identity" in runtime_block
@@ -2044,6 +2050,30 @@ def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> N
     assert script.index("FINAL_APP_PROVEN=1") < retire
     assert "tools.databricks.verify_agent_runtime_identity_boundary" in runtime_block
     assert runtime_block.count("tools.databricks.audit_global_m2m_access") >= 2
+    gateway_provision = runtime_block.index(
+        'step "provision the governed outer Gateway under agent-runtime authority"'
+    )
+    proxy_reaudit = runtime_block.index(
+        'step "re-audit the Supervisor proxy caller after Gateway provisioning"'
+    )
+    proxy_uc_audit = runtime_block.index(
+        'step "prove dual-authority agent-proxy Unity Catalog boundary"'
+    )
+    proxy_identity_boundary = runtime_block.index(
+        'step "prove agent-proxy effective negative authorization boundary before cutover"'
+    )
+    assert gateway_provision < proxy_reaudit < proxy_uc_audit < proxy_identity_boundary
+    assert (
+        "tools.databricks.verify_agent_proxy_uc_boundary_dual_authority"
+        in runtime_block[proxy_reaudit:proxy_uc_audit + 500]
+    )
+    assert (
+        "tools.databricks.verify_agent_proxy_identity_boundary"
+        in runtime_block[proxy_identity_boundary:proxy_identity_boundary + 1200]
+    )
+    proxy_uc_block = runtime_block[proxy_uc_audit : proxy_uc_audit + 700]
+    assert "run_with_account_identity" in proxy_uc_block
+    assert "run_with_agent_proxy_credentials" in proxy_uc_block
     assert "--expected-serving-permission CAN_MANAGE" in runtime_block
     assert "--expected-serving-permission CAN_QUERY" in runtime_block
     assert '--genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"' in runtime_block
@@ -2053,6 +2083,36 @@ def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> N
         'step "re-audit final agent-runtime global access after blue retirement"'
     )
     assert retire < final_audit
+    final_proxy_audit = script.index(
+        'step "re-audit final Supervisor proxy caller access after blue retirement"'
+    )
+    final_proxy_uc_audit = script.index(
+        'step "re-prove final dual-authority agent-proxy Unity Catalog boundary"'
+    )
+    final_proxy_identity_boundary = script.index(
+        'step "re-prove final agent-proxy effective negative boundary after blue retirement"'
+    )
+    proxy_secret_cleanup = script.index(
+        'step "remove retired Supervisor proxy OAuth credentials and secret versions"'
+    )
+    assert (
+        final_audit
+        < final_proxy_audit
+        < final_proxy_uc_audit
+        < final_proxy_identity_boundary
+        < proxy_secret_cleanup
+    )
+    assert (
+        "tools.databricks.verify_agent_proxy_uc_boundary_dual_authority"
+        in script[final_proxy_audit:proxy_secret_cleanup]
+    )
+    assert (
+        "tools.databricks.verify_agent_proxy_identity_boundary"
+        in script[final_proxy_identity_boundary:proxy_secret_cleanup]
+    )
+    cleanup_block = script[final_proxy_identity_boundary:proxy_secret_cleanup + 700]
+    assert "--cleanup-signed-blue" in cleanup_block
+    assert "--signed-blue-credential-id" in cleanup_block
     assert script.count("tools.databricks.audit_global_m2m_access") >= 4
     for function in ("fn_build_cohort", "fn_segment_counts", "fn_lead_queue_url"):
         assert (
@@ -2068,7 +2128,7 @@ def test_deploy_uses_fifth_isolated_identity_for_agent_resource_ownership() -> N
         'step "re-audit dedicated agent-runtime isolation before resource ownership"'
     )
     resource_provision = script.index(
-        'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
     assert isolation_audit < resource_provision
     isolation_block = script[isolation_audit:resource_provision]
@@ -2443,8 +2503,67 @@ def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY" in script
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS" in script
     assert (
+        "dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY"
+        in script
+    )
+    assert (
         'export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$verifier_historical_keys"' in script
     )
+
+
+def test_agent_proxy_credential_is_atomic_and_reproved_after_cleanup() -> None:
+    workflow = DEPLOY_DEV.read_text(encoding="utf-8")
+    nightly = NIGHTLY.read_text(encoding="utf-8")
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    assert (
+        "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE: "
+        "${{ secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE }}"
+    ) in workflow
+    assert "secrets.DATABRICKS_AGENT_PROXY_CLIENT_SECRET" not in workflow
+    for legacy_secret in (
+        "secrets.DATABRICKS_AGENT_PROXY_CLIENT_ID",
+        "secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_ID",
+    ):
+        assert legacy_secret not in workflow
+        assert legacy_secret not in nightly
+    assert workflow.count("secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE") == 2
+    assert nightly.count("secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE") == 2
+    assert (
+        workflow.count(
+            "python -m tools.databricks.agent_proxy_credential_bundle public-fields"
+        )
+        == 1
+    )
+    assert (
+        nightly.count(
+            "python -m tools.databricks.agent_proxy_credential_bundle public-fields"
+        )
+        == 2
+    )
+    assert "tools.databricks.agent_proxy_credential_bundle all-fields" in script
+    live_resolution = script[
+        script.index('if [[ "$DRY_RUN" -eq 1 ]]; then', script.index("for _M2M_NAME in"))
+        : script.index('_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"')
+    ]
+    assert 'DATABRICKS_AGENT_PROXY_CLIENT_ID=""' in live_resolution
+    assert 'DATABRICKS_AGENT_PROXY_CREDENTIAL_ID=""' in live_resolution
+    assert 'DATABRICKS_AGENT_PROXY_CLIENT_SECRET=""' in live_resolution
+    assert "--merge-out-env" in script
+    cleanup = script.index("--cleanup-signed-blue")
+    post_cleanup = script.index(
+        "prove exact green Gateway inference after proxy credential retirement",
+        cleanup,
+    )
+    assert 'MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""' in script
+    assert "APP_SIGNED_BLUE_AVAILABLE" in script[cleanup - 1800:cleanup]
+    assert "--signed-blue-credential-id" in script[cleanup - 1800:cleanup]
+    assert (
+        'MIP_AGENT_PROXY_SECRET_SCOPE" != "${MIP_APP_NAME}-agent-proxy"'
+        in script
+    )
+    assert "tools.verify_app_agent_green_path" in script[post_cleanup:]
+    assert "tools.databricks.verify_hosted_agent_tool_execution" in script[post_cleanup:]
 
 
 def test_expired_lease_recovery_uses_durable_signed_lease_root() -> None:
@@ -2700,7 +2819,7 @@ def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
         source_lease - 800,
     )
     gateway_step = script.index(
-        'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
     gateway_app = script.index('--app-name "$_GRANTS_APP_NAME"', gateway_step)
     gateway_lease = script.index(
@@ -2993,6 +3112,11 @@ def test_lakebase_sync_access_is_target_bound_and_converged_around_provisioning(
         "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
         "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
         "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
+        "GRANT USE CATALOG ON CATALOG ${_GRANTS_CATALOG} TO `${DATABRICKS_AGENT_PROXY_CLIENT_ID}`",
+        "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.gold TO `${DATABRICKS_AGENT_PROXY_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_build_cohort TO `${DATABRICKS_AGENT_PROXY_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_segment_counts TO `${DATABRICKS_AGENT_PROXY_CLIENT_ID}`",
+        "GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.fn_lead_queue_url TO `${DATABRICKS_AGENT_PROXY_CLIENT_ID}`",
         "GRANT USE SCHEMA ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
         "GRANT CREATE MODEL ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
         "GRANT CREATE TABLE ON SCHEMA ${_GRANTS_CATALOG}.audit TO `${DATABRICKS_AGENT_RUNTIME_CLIENT_ID}`",
@@ -3057,7 +3181,7 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     bootstrap = _shell_function("initialize_uc_targets_and_reconcile_function_grants")
     refresh_helper = _shell_function("refresh_gold_and_reconcile_function_grants")
     runtime_provision = (
-        'step "provision Supervisor and Gateway under the dedicated agent-runtime identity"'
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
     initial_proof = script.index("REVIEWED_FUNCTION_GRANTS_PROVEN=0")
     lakebase_migration = script.index("databricks bundle run mip_lakebase_migrate")
@@ -3073,7 +3197,8 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     assert script.count("\nrefresh_gold_and_reconcile_function_grants\n") == 1
     invocation = script.index("\nrefresh_gold_and_reconcile_function_grants\n")
     assert invocation < script.index(runtime_provision)
-    assert '"$APP_SP_CLIENT_ID" "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in helper
+    assert '"$APP_SP_CLIENT_ID" \\\n    "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \\\n' in helper
+    assert '"$DATABRICKS_AGENT_PROXY_CLIENT_ID"; do' in helper
     assert "fn_build_cohort fn_segment_counts fn_lead_queue_url" in helper
     assert (
         '"GRANT EXECUTE ON FUNCTION ${_GRANTS_CATALOG}.gold.${_function_name} '
@@ -3083,6 +3208,7 @@ def test_reviewed_function_execute_grants_are_reconciled_after_gold_refresh() ->
     assert (
         '  if ! run "$PYTHON" -m tools.databricks.verify_reviewed_function_execute_grants ' "\\\n"
     ) in helper
+    assert '--agent-proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"' in helper
     assert (
         '  run_job_with_retry "$@" || _job_rc=$?\n'
         '  step "reconcile and prove reviewed function EXECUTE grants after governed job"\n'
@@ -3111,6 +3237,7 @@ def test_function_reconciliation_attempts_all_grants_after_one_fails(tmp_path: P
 set -u
 APP_SP_CLIENT_ID=app-client
 DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
 _GRANTS_CATALOG=mip
 PYTHON=python3
 RED=""
@@ -3136,7 +3263,7 @@ printf 'rc:%s proven:%s\n' "$rc" "$REVIEWED_FUNCTION_GRANTS_PROVEN"
     assert result.returncode == 0, result.stderr
     assert result.stdout == "rc:4 proven:0\n"
     entries = calls.read_text(encoding="utf-8").splitlines()
-    assert len([entry for entry in entries if entry.startswith("grant:")]) == 6
+    assert len([entry for entry in entries if entry.startswith("grant:")]) == 9
     assert len([entry for entry in entries if entry.startswith("postflight:")]) == 1
 
 
@@ -3148,6 +3275,7 @@ def test_function_reconciliation_requires_effective_postflight(tmp_path: Path) -
 set -u
 APP_SP_CLIENT_ID=app-client
 DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
 _GRANTS_CATALOG=mip
 PYTHON=python3
 RED=""
@@ -3170,6 +3298,9 @@ printf 'rc:%s proven:%s\n' "$rc" "$REVIEWED_FUNCTION_GRANTS_PROVEN"
     assert result.returncode == 0, result.stderr
     assert result.stdout == "rc:4 proven:0\n"
     assert calls.read_text(encoding="utf-8").splitlines() == [
+        "grant",
+        "grant",
+        "grant",
         "grant",
         "grant",
         "grant",
@@ -3796,6 +3927,7 @@ def test_deploy_workflow_identity_check_inherits_only_public_client_ids() -> Non
         "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
         "DATABRICKS_VERIFIER_CLIENT_ID",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        "DATABRICKS_AGENT_PROXY_CLIENT_ID",
         "DATABRICKS_ACCOUNT_CLIENT_ID",
     ):
         assert client_id in workflow[python_pos:python_end]
@@ -3825,6 +3957,10 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_RELEASE_PROBE_CLIENT_ID": "release-probe",
         "DATABRICKS_VERIFIER_CLIENT_ID": "verifier",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID": "runtime",
+        "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE": (
+            '{"client_id":"agent-proxy","client_secret":"proxy-secret",'
+            '"credential_id":"agent-proxy-credential","version":1}'
+        ),
         "DATABRICKS_ACCOUNT_HOST": "https://accounts.example",
         "DATABRICKS_ACCOUNT_ID": "account-id",
         "DATABRICKS_ACCOUNT_CLIENT_ID": "account-client",
@@ -3832,7 +3968,7 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
     }
     result = subprocess.run(
         ["bash", "-c", _workflow_run_block(DEPLOY_DEV, "Configure Databricks dev credentials")],
-        cwd=tmp_path,
+        cwd=REPO,
         env={
             "PATH": f"{bin_dir}:/usr/bin:/bin",
             "HOME": str(home),
@@ -3853,9 +3989,11 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_RELEASE_PROBE_CLIENT_ID",
         "DATABRICKS_VERIFIER_CLIENT_ID",
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        "DATABRICKS_AGENT_PROXY_CLIENT_ID",
         "DATABRICKS_ACCOUNT_CLIENT_ID",
     ):
-        assert child[client_id] == required[client_id]
+        expected = "agent-proxy" if client_id == "DATABRICKS_AGENT_PROXY_CLIENT_ID" else required[client_id]
+        assert child[client_id] == expected
     for secret in (
         "DATABRICKS_TOKEN",
         "DATABRICKS_ACCOUNT_CLIENT_SECRET",
@@ -3864,6 +4002,7 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "MIP_GENIE_ACTION_SECRET_PREVIOUS",
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY",
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY",
+        "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE",
     ):
         assert secret not in child
 
@@ -4008,6 +4147,26 @@ def test_deploy_dev_wires_optional_approved_uc_owner_contract() -> None:
     assert script.index("APP_FAIL_CLOSED_ARMED=0", bundle_index) > script.index(
         'deploy_app_snapshot "deploy Databricks App snapshot with Agent Evaluation proof"'
     )
+
+
+def test_active_app_binding_hash_includes_complete_proxy_credential_binding() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = script.index('AGENT_RUNTIME_BINDING_SHA256="$($PYTHON -')
+    end = script.index("\nPYEOF", start)
+    block = script[start:end]
+
+    for shell_value in (
+        '"$MIP_AGENT_PROXY_CLIENT_ID"',
+        '"$MIP_AGENT_PROXY_CREDENTIAL_ID"',
+        '"$MIP_AGENT_PROXY_SECRET_REFERENCE"',
+    ):
+        assert shell_value in block
+    for argument in (
+        "proxy_caller_application_id=sys.argv[8]",
+        "proxy_caller_credential_id=sys.argv[9]",
+        "proxy_caller_secret_reference=sys.argv[10]",
+    ):
+        assert argument in block
 
 
 def test_playwright_job_wires_genie_id_into_runtime_contract_export() -> None:

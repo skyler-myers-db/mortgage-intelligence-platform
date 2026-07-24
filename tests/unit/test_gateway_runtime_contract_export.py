@@ -35,6 +35,9 @@ from tools.databricks.provision_gateway_responses_agent import (
 _SUPERVISOR_ID = "supervisor-123"
 _SUPERVISOR_ENDPOINT_ID = "supervisor-endpoint-id"
 _UPSTREAM = "mas-supervisor-endpoint"
+_PROXY_CLIENT_ID = "proxy-client"
+_PROXY_CREDENTIAL_ID = "proxy-credential"
+_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 _MODEL_VERIFY_KEY = derive_gateway_proof_verify_key(
     base64.urlsafe_b64encode(b"e" * 32).decode("ascii").rstrip("=")
 )
@@ -97,6 +100,9 @@ def _resource_hash() -> str:
         inference_schema="audit",
         inference_table_prefix="mip_agent_gateway_growth_agent",
         attestation_verify_key=_MODEL_VERIFY_KEY,
+        proxy_caller_application_id=_PROXY_CLIENT_ID,
+        proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
     )
 
 
@@ -119,6 +125,26 @@ def _experiment_name() -> str:
         base_experiment_name=DEFAULT_GATEWAY_AGENT_EXPERIMENT,
         contract_hash=_resource_hash(),
         runtime_application_id="runtime-client",
+    )
+
+
+def _resolve_contract(client: object, **kwargs: object) -> dict[str, str]:
+    return export_contract.resolve_contract(
+        client,
+        proxy_caller_application_id=_PROXY_CLIENT_ID,
+        proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
+        **kwargs,
+    )
+
+
+def _resolve_exact_resource_proof(client: object, **kwargs: object):
+    return export_contract.resolve_exact_resource_proof(
+        client,
+        proxy_caller_application_id=_PROXY_CLIENT_ID,
+        proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
+        **kwargs,
     )
 
 
@@ -170,6 +196,9 @@ def _endpoint_details(
                         "MIP_UPSTREAM_SUPERVISOR_ID": _SUPERVISOR_ID,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
                         "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
+                        "MIP_UPSTREAM_PROXY_CLIENT_ID": _PROXY_CLIENT_ID,
+                        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": _PROXY_CREDENTIAL_ID,
+                        "MIP_UPSTREAM_PROXY_CLIENT_SECRET": _PROXY_SECRET_REFERENCE,
                         "MIP_SUPERVISOR_CATALOG": "mip",
                         "MIP_SUPERVISOR_GENIE_SPACE_ID": "space-123",
                         "MIP_SUPERVISOR_CONTRACT_SHA256": export_contract.supervisor_contract_hash(
@@ -216,10 +245,27 @@ class _ApiClient:
         self.supervisors = supervisors
         self.experiment_acl = experiment_acl
 
-    def do(self, method: str, path: str) -> object:
+    def do(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: dict[str, object] | None = None,
+    ) -> object:
         assert method == "GET"
         if path == "/api/2.1/supervisor-agents":
+            assert query == {"page_size": 100}
             return {"supervisor_agents": self.supervisors}
+        if path.startswith("/api/2.1/supervisor-agents/"):
+            assert query is None
+            supervisor_id = path.rsplit("/", 1)[-1]
+            matches = [
+                row
+                for row in self.supervisors
+                if row.get("supervisor_agent_id") == supervisor_id
+            ]
+            return matches[0] if len(matches) == 1 else {}
+        assert query is None
         assert path == "/api/2.0/permissions/experiments/experiment-7"
         return self.experiment_acl
 
@@ -335,7 +381,7 @@ def _bound_workspace(
     target = workspace or _workspace(details=_endpoint_details())
     registry = model_registry or _model_registry()
     experiments = tracking_client or _tracking_client()
-    proof = export_contract.resolve_exact_resource_proof(
+    proof = _resolve_exact_resource_proof(
         target,
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -359,7 +405,7 @@ def _bound_workspace(
 
 
 def test_resolve_contract_exports_exact_source_bound_runtime() -> None:
-    contract = export_contract.resolve_contract(
+    contract = _resolve_contract(
         _bound_workspace(),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -377,12 +423,18 @@ def test_resolve_contract_exports_exact_source_bound_runtime() -> None:
         model_name=_model_name(),
         model_version=7,
         inference_table=_inference_table(),
+        proxy_caller_application_id=_PROXY_CLIENT_ID,
+        proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
     )
     expected = {
         "MIP_AGENT_SERVING_ENDPOINT": DEFAULT_GATEWAY_ENDPOINT,
         "MIP_AGENT_SUPERVISOR_ENDPOINT": _UPSTREAM,
         "MIP_AGENT_SUPERVISOR_ID": _SUPERVISOR_ID,
         "MIP_AGENT_RUNTIME_CLIENT_ID": "runtime-client",
+        "MIP_AGENT_PROXY_CLIENT_ID": _PROXY_CLIENT_ID,
+        "MIP_AGENT_PROXY_CREDENTIAL_ID": _PROXY_CREDENTIAL_ID,
+        "MIP_AGENT_PROXY_SECRET_REFERENCE": _PROXY_SECRET_REFERENCE,
         "MIP_AI_GATEWAY_ENDPOINT": DEFAULT_GATEWAY_ENDPOINT,
         "MIP_AI_GATEWAY_INFERENCE_TABLE": _inference_table(),
         "MIP_AI_GATEWAY_AGENT_MODEL": _model_name(),
@@ -404,7 +456,7 @@ def test_resolve_contract_exports_exact_source_bound_runtime() -> None:
 
 
 def test_exact_resource_proof_binds_experiment_model_endpoint_and_stored_digest() -> None:
-    proof = export_contract.resolve_exact_resource_proof(
+    proof = _resolve_exact_resource_proof(
         _workspace(),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -423,7 +475,7 @@ def test_exact_resource_proof_binds_experiment_model_endpoint_and_stored_digest(
     assert len(proof.contract["gateway_experiment_acl_sha256"]) == 64
     assert proof.digest == gateway_exact_resource_digest(proof.contract)
     assert (
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -445,7 +497,7 @@ def test_stored_proof_survives_only_the_reviewed_replacement_to_canonical_rename
         "endpoint_name": _UPSTREAM,
         "creator": "runtime-client",
     }
-    proof = export_contract.resolve_exact_resource_proof(
+    proof = _resolve_exact_resource_proof(
         _workspace(supervisors=[replacement]),
         supervisor_name="Mortgage Growth Agent",
         supervisor_id=_SUPERVISOR_ID,
@@ -458,7 +510,7 @@ def test_stored_proof_survives_only_the_reviewed_replacement_to_canonical_rename
     expected = {**proof.contract, "resource_digest": proof.digest}
     canonical = {**replacement, "display_name": "Mortgage Growth Agent"}
 
-    restored = export_contract.resolve_exact_resource_proof(
+    restored = _resolve_exact_resource_proof(
         _workspace(supervisors=[canonical]),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -472,7 +524,7 @@ def test_stored_proof_survives_only_the_reviewed_replacement_to_canonical_rename
 
     rogue = {**replacement, "display_name": "Unreviewed renamed Supervisor"}
     with pytest.raises(RuntimeError, match="stored Supervisor immutable identity drifted"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(supervisors=[rogue]),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -485,7 +537,7 @@ def test_stored_proof_survives_only_the_reviewed_replacement_to_canonical_rename
 
 
 def test_exact_resource_proof_rejects_stored_experiment_id_drift() -> None:
-    proof = export_contract.resolve_exact_resource_proof(
+    proof = _resolve_exact_resource_proof(
         _workspace(),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -496,7 +548,7 @@ def test_exact_resource_proof_rejects_stored_experiment_id_drift() -> None:
     )
     drifted = {**proof.contract, "gateway_experiment_id": "different-experiment"}
     with pytest.raises(RuntimeError, match="stored rollback contract"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -513,7 +565,7 @@ def test_exact_resource_proof_rejects_stored_experiment_id_drift() -> None:
 
 def test_exact_resource_proof_requires_runtime_experiment_grant() -> None:
     with pytest.raises(RuntimeError, match="exact runtime CAN_MANAGE"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(experiment_acl=_experiment_acl(include_runtime=False)),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -526,7 +578,7 @@ def test_exact_resource_proof_requires_runtime_experiment_grant() -> None:
 
 def test_exact_resource_proof_rejects_direct_runtime_experiment_grant() -> None:
     with pytest.raises(RuntimeError, match="home directory"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(experiment_acl=_experiment_acl(runtime_inherited=False)),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -545,7 +597,7 @@ def test_exact_resource_proof_rejects_wrong_runtime_home_inheritance() -> None:
     ]
 
     with pytest.raises(RuntimeError, match="home directory"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(experiment_acl=acl),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -565,7 +617,7 @@ def test_exact_resource_proof_rejects_runtime_home_identity_drift() -> None:
     )
 
     with pytest.raises(RuntimeError, match="home directory identity"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             workspace,
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -606,7 +658,7 @@ def test_exact_resource_proof_rejects_invalid_runtime_home_status(
     workspace.workspace.get_status = lambda _path: status
 
     with pytest.raises(RuntimeError, match=message):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             workspace,
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -622,7 +674,7 @@ def test_exact_resource_proof_rejects_missing_runtime_home_status_api() -> None:
     del workspace.workspace
 
     with pytest.raises(RuntimeError, match="could not resolve the Gateway runtime home"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             workspace,
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -655,7 +707,7 @@ def test_exact_resource_proof_rejects_other_experiment_principal(
     unexpected: dict[str, object],
 ) -> None:
     with pytest.raises(RuntimeError, match="unexpected principal"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(experiment_acl=_experiment_acl(unexpected)),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -667,7 +719,7 @@ def test_exact_resource_proof_rejects_other_experiment_principal(
 
 
 def test_exact_resource_proof_rejects_stored_experiment_acl_drift() -> None:
-    proof = export_contract.resolve_exact_resource_proof(
+    proof = _resolve_exact_resource_proof(
         _workspace(),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -678,7 +730,7 @@ def test_exact_resource_proof_rejects_stored_experiment_acl_drift() -> None:
     )
 
     with pytest.raises(RuntimeError, match="stored rollback contract"):
-        export_contract.resolve_exact_resource_proof(
+        _resolve_exact_resource_proof(
             _workspace(experiment_acl=_experiment_acl(admins_inherited=False)),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -693,7 +745,7 @@ def test_exact_resource_proof_rejects_stored_experiment_acl_drift() -> None:
 def test_stored_proof_revalidates_historical_resource_after_local_source_changes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    proof = export_contract.resolve_exact_resource_proof(
+    proof = _resolve_exact_resource_proof(
         _workspace(),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -704,7 +756,7 @@ def test_stored_proof_revalidates_historical_resource_after_local_source_changes
     )
     monkeypatch.setattr(export_contract, "gateway_proxy_source_hash", lambda **_kwargs: "b" * 64)
 
-    restored = export_contract.resolve_exact_resource_proof(
+    restored = _resolve_exact_resource_proof(
         _workspace(),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -720,7 +772,7 @@ def test_stored_proof_revalidates_historical_resource_after_local_source_changes
 
 def test_export_rejects_experiment_name_id_aliasing() -> None:
     with pytest.raises(RuntimeError, match="experiment name/ID binding drifted"):
-        export_contract.resolve_contract(
+        _resolve_contract(
             _workspace(),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -733,7 +785,7 @@ def test_export_rejects_experiment_name_id_aliasing() -> None:
 
 def test_export_rejects_deleted_experiment() -> None:
     with pytest.raises(RuntimeError, match="experiment is not active"):
-        export_contract.resolve_contract(
+        _resolve_contract(
             _workspace(),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -752,7 +804,7 @@ def test_export_filters_human_canonical_after_config_before_runtime_green() -> N
     green.id = "green-endpoint-id"
     green_name = f"{DEFAULT_GATEWAY_ENDPOINT}-{_resource_hash()[:12]}"
 
-    contract = export_contract.resolve_contract(
+    contract = _resolve_contract(
         _bound_workspace(_workspace(details={DEFAULT_GATEWAY_ENDPOINT: human, green_name: green})),
         supervisor_name="Mortgage Growth Agent",
         catalog="mip",
@@ -767,7 +819,7 @@ def test_export_filters_human_canonical_after_config_before_runtime_green() -> N
 
 def test_resolve_contract_rejects_rogue_served_model_version_before_export() -> None:
     with pytest.raises(RuntimeError, match="Model version tags do not bind"):
-        export_contract.resolve_contract(
+        _resolve_contract(
             _workspace(),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -790,7 +842,7 @@ def test_resolve_contract_requires_exactly_one_named_supervisor(count: int) -> N
     ]
 
     with pytest.raises(RuntimeError, match=f"found {count}"):
-        export_contract.resolve_contract(
+        _resolve_contract(
             _workspace(supervisors=supervisors),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -798,6 +850,97 @@ def test_resolve_contract_requires_exactly_one_named_supervisor(count: int) -> N
             runtime_application_id="runtime-client",
             tracking_client=_tracking_client(),
         )
+
+
+def test_named_supervisor_discovery_follows_all_pages() -> None:
+    workspace = _workspace()
+    inventory_calls: list[dict[str, object]] = []
+    fallback = workspace.api_client
+
+    class _PagedApi:
+        def do(
+            self,
+            method: str,
+            path: str,
+            *,
+            query: dict[str, object] | None = None,
+        ) -> object:
+            if path != "/api/2.1/supervisor-agents":
+                return fallback.do(method, path, query=query)
+            assert query is not None
+            inventory_calls.append(query)
+            if "page_token" not in query:
+                return {
+                    "supervisor_agents": [
+                        {
+                            "display_name": "Other Agent",
+                            "supervisor_agent_id": "other-supervisor",
+                            "endpoint_name": "other-endpoint",
+                            "creator": "runtime-client",
+                        }
+                    ],
+                    "next_page_token": "page-2",
+                }
+            assert query["page_token"] == "page-2"
+            return {
+                "supervisor_agents": [
+                    {
+                        "display_name": "Mortgage Growth Agent",
+                        "supervisor_agent_id": _SUPERVISOR_ID,
+                        "endpoint_name": _UPSTREAM,
+                        "creator": "runtime-client",
+                    }
+                ]
+            }
+
+    workspace.api_client = _PagedApi()
+    proof = _resolve_exact_resource_proof(
+        workspace,
+        supervisor_name="Mortgage Growth Agent",
+        catalog="mip",
+        genie_space_id="space-123",
+        runtime_application_id="runtime-client",
+        model_registry=_model_registry(),
+        tracking_client=_tracking_client(),
+    )
+
+    assert proof.contract["supervisor_id"] == _SUPERVISOR_ID
+    assert inventory_calls == [
+        {"page_size": 100},
+        {"page_size": 100, "page_token": "page-2"},
+    ]
+
+
+@pytest.mark.parametrize("failure", ["cycle", "duplicate"])
+def test_supervisor_inventory_rejects_unsafe_pagination(failure: str) -> None:
+    class _UnsafeApi:
+        def do(
+            self,
+            _method: str,
+            _path: str,
+            *,
+            query: dict[str, object],
+        ) -> object:
+            if "page_token" not in query:
+                return {
+                    "supervisor_agents": [
+                        {"supervisor_agent_id": "supervisor-1"}
+                    ],
+                    "next_page_token": "page-2",
+                }
+            return {
+                "supervisor_agents": [
+                    {
+                        "supervisor_agent_id": (
+                            "supervisor-1" if failure == "duplicate" else "supervisor-2"
+                        )
+                    }
+                ],
+                "next_page_token": "page-2" if failure == "cycle" else "",
+            }
+
+    with pytest.raises(RuntimeError, match="duplicate|cycled"):
+        export_contract._supervisors(SimpleNamespace(api_client=_UnsafeApi()))
 
 
 @pytest.mark.parametrize(
@@ -814,7 +957,7 @@ def test_resolve_contract_rejects_gateway_binding_drift(
     message: str,
 ) -> None:
     with pytest.raises(RuntimeError, match=message):
-        export_contract.resolve_contract(
+        _resolve_contract(
             _workspace(details=details),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
@@ -838,16 +981,19 @@ def test_export_main_appends_exact_contract_to_github_env(
     )
     monkeypatch.setenv("GENIE_SPACE_ID", "space-123")
     monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "runtime-client")
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_ID", _PROXY_CLIENT_ID)
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CREDENTIAL_ID", _PROXY_CREDENTIAL_ID)
+    monkeypatch.setenv("MIP_AGENT_PROXY_SECRET_REFERENCE", _PROXY_SECRET_REFERENCE)
 
     assert export_contract.main(["--github-env", str(github_env)]) == 0
 
     rows = github_env.read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 17
+    assert len(rows) == 20
     assert f"MIP_AGENT_SERVING_ENDPOINT={DEFAULT_GATEWAY_ENDPOINT}" in rows
     assert f"MIP_AGENT_SUPERVISOR_ID={_SUPERVISOR_ID}" in rows
     assert f"MIP_AGENT_SUPERVISOR_ENDPOINT_ID={_SUPERVISOR_ENDPOINT_ID}" in rows
     assert "MIP_AI_GATEWAY_AGENT_MODEL_VERSION=7" in rows
-    assert not any("SECRET" in row or "TOKEN" in row for row in rows)
+    assert not any("CLIENT_SECRET=" in row or "TOKEN=" in row for row in rows)
 
 
 def test_export_main_shell_env_survives_source_and_signature_verification(
@@ -855,6 +1001,10 @@ def test_export_main_shell_env_survives_source_and_signature_verification(
     tmp_path,
 ) -> None:
     shell_env = tmp_path / "gateway-runtime.env"
+    shell_env.write_text(
+        "MIP_AGENT_SERVING_ENDPOINT=stale-endpoint\nUNRELATED_VALUE=preserved\n",
+        encoding="utf-8",
+    )
     monkeypatch.setattr(export_contract, "WorkspaceClient", lambda: _bound_workspace())
     monkeypatch.setattr(
         export_contract,
@@ -863,6 +1013,9 @@ def test_export_main_shell_env_survives_source_and_signature_verification(
     )
     monkeypatch.setenv("GENIE_SPACE_ID", "space-123")
     monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "runtime-client")
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_ID", _PROXY_CLIENT_ID)
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CREDENTIAL_ID", _PROXY_CREDENTIAL_ID)
+    monkeypatch.setenv("MIP_AGENT_PROXY_SECRET_REFERENCE", _PROXY_SECRET_REFERENCE)
 
     assert export_contract.main(["--shell-env", str(shell_env)]) == 0
 
@@ -888,6 +1041,10 @@ def test_export_main_shell_env_survives_source_and_signature_verification(
     contract = verified_gateway_runtime_resource_environment(sourced)
     assert contract["gateway_endpoint"] == DEFAULT_GATEWAY_ENDPOINT
     assert contract["supervisor_id"] == _SUPERVISOR_ID
+    rows = shell_env.read_text(encoding="utf-8").splitlines()
+    keys = [row.split("=", 1)[0] for row in rows]
+    assert len(keys) == len(set(keys))
+    assert "UNRELATED_VALUE=preserved" in rows
 
 
 _DEPLOYMENT_LEASE_ID = "11111111-1111-4111-8111-111111111111"

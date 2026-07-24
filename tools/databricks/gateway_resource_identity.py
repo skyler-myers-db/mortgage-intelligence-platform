@@ -21,6 +21,9 @@ class GatewayAgentDeployment:
     supervisor_endpoint_id: str
     upstream_endpoint: str
     runtime_application_id: str
+    proxy_caller_application_id: str
+    proxy_caller_credential_id: str
+    proxy_caller_secret_reference: str
     model_name: str
     model_version: int
     model_source: str

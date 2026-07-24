@@ -5,7 +5,51 @@ from types import SimpleNamespace
 import pytest
 from databricks.sdk.errors import PermissionDenied
 
-from tools.databricks.verify_verifier_identity_boundary import verify_boundary
+from tools.databricks import verify_verifier_identity_boundary as boundary
+
+verify_boundary = boundary.verify_boundary
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "retry after 403 seconds",
+        "job 401 is still running",
+        "request token 1403 expired",
+    ),
+)
+def test_verifier_boundary_rejects_incidental_status_numbers(message: str) -> None:
+    with pytest.raises(RuntimeError, match="inconclusive"):
+        boundary._expect_denied(
+            "verifier denial",
+            lambda: (_ for _ in ()).throw(RuntimeError(message)),
+        )
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        {"status_code": 403},
+        {"error_code": "PERMISSION_DENIED"},
+        SimpleNamespace(response=SimpleNamespace(status_code=403)),
+    ),
+)
+def test_verifier_boundary_accepts_structured_denial_evidence(error: object) -> None:
+    assert boundary._is_denied(error)
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        {"status_code": 401},
+        {"http_status_code": "401"},
+        {"error_code": "UNAUTHENTICATED"},
+        {"code": "UNAUTHORIZED"},
+        SimpleNamespace(response=SimpleNamespace(status_code=401)),
+    ),
+)
+def test_verifier_boundary_rejects_authentication_failure(error: object) -> None:
+    assert not boundary._is_denied(error)
 
 
 def _sql_response(state: str, *, rows: list[list[object]] | None = None, error: str = ""):
@@ -265,12 +309,34 @@ def test_effective_boundary_accepts_targets_and_all_expected_denials() -> None:
     _verify()
 
 
+def test_rejects_app_authentication_failure() -> None:
+    with pytest.raises(RuntimeError, match="App HTTP denial probe unexpectedly returned"):
+        _verify(http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=401))
+
+
 def test_rejects_account_admin_api_access() -> None:
     account = SimpleNamespace(
         service_principals=SimpleNamespace(list=lambda **_kwargs: iter([object()]))
     )
     with pytest.raises(RuntimeError, match="account administrator.*unexpectedly succeeded"):
         _verify(account=account)
+
+
+class _AuthenticationFailure(RuntimeError):
+    status_code = 401
+
+
+def test_rejects_expired_control_plane_authentication() -> None:
+    account = SimpleNamespace(
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: (_ for _ in ()).throw(
+                _AuthenticationFailure("token expired")
+            )
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="inconclusive"):
+        _verify(account=account, http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=401))
 
 
 def test_rejects_metastore_admin_get_access() -> None:

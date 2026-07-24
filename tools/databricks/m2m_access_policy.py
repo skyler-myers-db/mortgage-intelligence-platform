@@ -250,6 +250,7 @@ def assert_agent_runtime_infrastructure_isolation(
     instance_name: str,
     application_id: str,
     effective_group_names: set[str],
+    identity_role: str = "agent_runtime",
 ) -> None:
     """Reject Lakebase roles on every visible instance and SQL access."""
 
@@ -258,7 +259,7 @@ def assert_agent_runtime_infrastructure_isolation(
         client,
         application_id=application_id,
         allowed_instance_names=set(),
-        identity_role="agent_runtime",
+        identity_role=identity_role,
     )
 
     from tools.databricks.warehouse_acl import assert_no_warehouse_access

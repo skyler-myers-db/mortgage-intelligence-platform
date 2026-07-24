@@ -7,6 +7,8 @@ import os
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
@@ -18,8 +20,11 @@ from backend.agents.gateway_contract import (  # noqa: E402
     DEFAULT_GATEWAY_ENDPOINT,
     LEGACY_GATEWAY_ENDPOINT,
 )
+from databricks.sdk.errors import NotFound, ResourceDoesNotExist  # noqa: E402
 from tools.databricks import m2m_access_policy as _access_policy  # noqa: E402
+from tools.databricks import m2m_oauth_cli as _cli_helpers  # noqa: E402
 from tools.databricks import m2m_oauth_config as _config_helpers  # noqa: E402
+from tools.databricks import m2m_oauth_credential_delivery as _credential_delivery  # noqa: E402
 from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
 from tools.databricks.m2m_identity_contract import (  # noqa: E402
     DEFAULT_ADMIN_GROUP,
@@ -114,22 +119,26 @@ def _validate_gh_repo(gh_repo: str | None, *, bind_secret_sink: bool = False) ->
 
 
 def _find_existing_sp(client: Any, display_name: str) -> Any | None:
-    """Return the first SP whose displayName matches exactly, else None.
+    """Return the unique exact display-name match, else None.
 
     SCIM ``filter=displayName eq 'X'`` is the idiomatic lookup. We iterate
     the generator in case the workspace has SPs with similar prefixes and
     the server is flexible about matching; only an exact ``display_name``
-    match is accepted.
+    match is accepted. Duplicate reserved-name identities are ambiguous and
+    must never receive a newly minted credential.
     """
     filter_expr = f"displayName eq '{display_name}'"
     try:
         candidates = list(client.service_principals.list(filter=filter_expr))
     except Exception as exc:  # noqa: BLE001 — SDK raises a grab-bag of types
         raise _wrap_admin_error(exc, step="list service_principals") from exc
-    for sp in candidates:
-        if getattr(sp, "display_name", None) == display_name:
-            return sp
-    return None
+    exact = [sp for sp in candidates if getattr(sp, "display_name", None) == display_name]
+    if len(exact) > 1:
+        raise SystemExit(
+            f"Multiple service principals use reserved display name {display_name!r}; "
+            "refusing ambiguous credential or permission provisioning"
+        )
+    return exact[0] if exact else None
 
 
 def _create_sp(client: Any, display_name: str) -> Any:
@@ -142,6 +151,73 @@ def _create_sp(client: Any, display_name: str) -> Any:
         )
     except Exception as exc:  # noqa: BLE001
         raise _wrap_admin_error(exc, step="create service_principal") from exc
+
+
+def _delete_failed_pre_app_service_principal(
+    client: Any,
+    *,
+    sp_id: str | None,
+    sp_name: str,
+) -> None:
+    target_id = str(sp_id or "").strip()
+    if not target_id:
+        appeared = _find_existing_sp(client, sp_name)
+        inventory = "one exact reserved-name identity" if appeared is not None else "no identity"
+        raise RuntimeError(
+            "ambiguous service-principal create returned no immutable SCIM id; "
+            f"post-error inventory found {inventory}, which cannot be safely deleted"
+        )
+    client.service_principals.delete(target_id)
+    try:
+        survivor = client.service_principals.get(target_id)
+    except (NotFound, ResourceDoesNotExist):
+        survivor = None
+    if survivor is not None:
+        raise RuntimeError("deleted bootstrap service principal ID is still present")
+    if _find_existing_sp(client, sp_name) is not None:
+        raise RuntimeError("reserved bootstrap service-principal name is still present")
+
+
+@dataclass
+class _PreAppCleanupState:
+    client: Any | None = None
+    sp_name: str = ""
+    sp_id: str | None = None
+    armed: bool = False
+
+    def arm(self, *, client: Any, sp_name: str) -> None:
+        self.client = client
+        self.sp_name = sp_name
+        self.armed = True
+
+
+def _compensate_pre_app_creation(function: Any) -> Any:
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> ProvisionResult:
+        if "_pre_app_cleanup" in kwargs:
+            raise TypeError("pre-App cleanup state is internal")
+        state = _PreAppCleanupState()
+        try:
+            result = function(*args, _pre_app_cleanup=state, **kwargs)
+        except BaseException:
+            if state.armed:
+                try:
+                    _delete_failed_pre_app_service_principal(
+                        state.client,
+                        sp_id=state.sp_id,
+                        sp_name=state.sp_name,
+                    )
+                except BaseException as cleanup_error:
+                    raise RuntimeError(
+                        "pre-App identity provisioning failed and the newly created "
+                        "service principal could not be removed and proven absent; "
+                        "manual security reconciliation is required"
+                    ) from cleanup_error
+            raise
+        state.armed = False
+        return result
+
+    return wrapped
 
 
 def _ensure_lakebase_service_principal_role(
@@ -245,6 +321,7 @@ def _mint_oauth_secret(client: Any, sp_id: str) -> Any:
 # ---------------------------------------------------------------------------
 
 
+@_compensate_pre_app_creation
 def provision(
     *,
     sp_name: str,
@@ -264,10 +341,12 @@ def provision(
     client_id_secret_name: str,
     client_secret_secret_name: str,
     app_url_secret_name: str | None,
+    credential_id_secret_name: str | None = None,
     identity_role: IdentityRole = "normal",
     client_factory: Any | None = None,
     revoke_gateway_endpoints: tuple[str, ...] = (),
     pre_app_bootstrap: bool = False,
+    _pre_app_cleanup: _PreAppCleanupState | None = None,
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
 
@@ -306,6 +385,7 @@ def provision(
             client_id_secret_name=client_id_secret_name,
             client_secret_secret_name=client_secret_secret_name,
             app_url_secret_name=app_url_secret_name,
+            credential_id_secret_name=credential_id_secret_name,
         )
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
@@ -338,6 +418,7 @@ def provision(
         client_id_secret_name,
         client_secret_secret_name,
         app_url_secret_name,
+        credential_id_secret_name,
     ):
         if name is not None and not _GH_SECRET_NAME_RE.fullmatch(name):
             raise SystemExit(f"Invalid GitHub Actions secret name: {name!r}")
@@ -365,20 +446,38 @@ def provision(
                 f"Service principal {sp_name!r} was not found; refusing to create a new "
                 "identity because --expected-application-id was supplied"
             )
+        if pre_app_bootstrap:
+            assert _pre_app_cleanup is not None
+            _pre_app_cleanup.arm(client=client, sp_name=sp_name)
         sp = _create_sp(client, sp_name)
+        if pre_app_bootstrap:
+            _pre_app_cleanup.sp_id = str(getattr(sp, "id", "") or "").strip() or None
+            exact = _find_existing_sp(client, sp_name)
+            if (
+                exact is None
+                or not _pre_app_cleanup.sp_id
+                or str(getattr(exact, "id", "") or "").strip()
+                != _pre_app_cleanup.sp_id
+            ):
+                raise RuntimeError(
+                    "new pre-App service principal did not converge to one exact "
+                    "reserved-name immutable identity"
+                )
         created_sp = True
         _diag(f"created SP id={sp.id} application_id={sp.application_id}")
     else:
         _diag(f"reusing existing SP id={sp.id} application_id={sp.application_id}")
+    if pre_app_bootstrap and not created_sp:
+        raise SystemExit(
+            "--pre-app-bootstrap is creation-only and refuses every existing service "
+            "principal. Use the normal identity flow with --expected-application-id "
+            "for a reviewed rotation, or explicitly remove a failed bootstrap identity "
+            "before retrying."
+        )
     if expected_application_id and sp.application_id != expected_application_id:
         raise SystemExit(
             f"Service principal {sp_name!r} application id does not match the "
             "configured client id; refusing to grant the wrong identity."
-        )
-    if pre_app_bootstrap and not created_sp and not rotate:
-        raise SystemExit(
-            "--pre-app-bootstrap found an existing service principal; pass --rotate "
-            "to mint and deliver a new one-shot credential"
         )
     effective_groups: dict[str, str] = _resolve_effective_groups(client, sp_id=sp.id)
     if identity_role != "admin":
@@ -398,6 +497,7 @@ def provision(
         "release_probe",
         "verifier",
         "agent_runtime",
+        "agent_proxy",
     }:
         _assert_no_app_permission(
             client,
@@ -407,12 +507,13 @@ def provision(
             effective_group_names=set(effective_groups.values()),
             identity_role=identity_role,
         )
-    if not pre_app_bootstrap and identity_role == "agent_runtime":
+    if not pre_app_bootstrap and identity_role in {"agent_runtime", "agent_proxy"}:
         _access_policy.assert_agent_runtime_infrastructure_isolation(
             client,
             instance_name=DEFAULT_LAKEBASE_INSTANCE,
             application_id=sp.application_id,
             effective_group_names=set(effective_groups.values()),
+            identity_role=identity_role,
         )
     if not pre_app_bootstrap and identity_role == "verifier":
         _access_policy.assert_lakebase_role_scope(
@@ -469,6 +570,7 @@ def provision(
                 "release_probe",
                 "verifier",
                 "agent_runtime",
+                "agent_proxy",
             }:
                 # Group repair can change effective App access after the first
                 # isolation preflight. Re-read every App ACL against the
@@ -482,6 +584,36 @@ def provision(
                     effective_group_names=set(effective_groups.values()),
                     identity_role=identity_role,
                 )
+
+    if pre_app_bootstrap:
+        # This mode publishes a usable credential before any reviewed App or
+        # data-resource grant exists. Prove the final direct+nested group graph
+        # is still credential-only immediately before minting.
+        _assert_no_app_permission(
+            client,
+            app_name="",
+            sp_application_id=sp.application_id,
+            sp_display_name=sp.display_name,
+            effective_group_names=set(effective_groups.values()),
+            identity_role=identity_role,
+        )
+        _access_policy.assert_agent_runtime_infrastructure_isolation(
+            client,
+            instance_name="",
+            application_id=sp.application_id,
+            effective_group_names=set(effective_groups.values()),
+            identity_role=identity_role,
+        )
+        from tools.databricks.serving_endpoint_acl import (
+            audit_global_no_serving_endpoint_access,
+        )
+
+        audit_global_no_serving_endpoint_access(
+            client,
+            service_principal=sp.application_id,
+            service_principal_id=sp.id,
+            effective_group_names=set(effective_groups.values()),
+        )
 
     if not pre_app_bootstrap and identity_role in {"normal", "operator2", "admin"}:
         _access_policy.assert_no_app_manager_permission(
@@ -543,15 +675,22 @@ def provision(
     # New identities and explicit rotations mint only when the caller enabled
     # the secure GitHub sink. --no-mint-secret supports idempotent grant repair.
     secret_value: str | None = None
+    credential_id: str | None = None
     client_id = sp.application_id
     should_mint = mint_secret and (created_sp or rotate)
     if should_mint:
         resp = _mint_oauth_secret(client, sp.id)
         secret_value = getattr(resp, "secret", None)
+        credential_id = str(getattr(resp, "id", "") or "").strip() or None
         if not secret_value:
             raise SystemExit(
                 "mint returned no .secret value; SDK contract violation. "
                 f"Response fields: {list(resp.__dict__.keys()) if hasattr(resp, '__dict__') else 'unknown'}"
+            )
+        if not credential_id:
+            raise SystemExit(
+                "mint returned no immutable credential id; refusing a credential "
+                "that cannot be revoked after sink failure"
             )
     elif mint_secret:
         _diag(
@@ -564,11 +703,26 @@ def provision(
     wrote_secrets = False
     if secret_value is not None:
         assert gh_repo is not None  # validated before any SDK mutation
-        _set_gh_secret(gh_repo, client_secret_secret_name, secret_value)
-        _set_gh_secret(gh_repo, client_id_secret_name, client_id)
-        if app_url_secret_name and not pre_app_bootstrap:
-            assert resolved_app_url is not None  # resolved before any identity mutation
-            _set_gh_secret(gh_repo, app_url_secret_name, resolved_app_url)
+        assert credential_id is not None
+        _credential_delivery.deliver_oauth_credential(
+            writer=_set_gh_secret,
+            revoker=lambda **kwargs: _credential_delivery.revoke_oauth_secret(
+                client,
+                sp_id=sp.id,
+                error_factory=_wrap_admin_error,
+                **kwargs,
+            ),
+            gh_repo=gh_repo,
+            client_id_secret_name=client_id_secret_name,
+            client_id=client_id,
+            client_secret_secret_name=client_secret_secret_name,
+            client_secret=secret_value,
+            credential_id=credential_id,
+            credential_id_secret_name=credential_id_secret_name,
+            app_url_secret_name=(app_url_secret_name if not pre_app_bootstrap else None),
+            app_url=resolved_app_url,
+            atomic_credential_bundle=identity_role == "agent_proxy",
+        )
         wrote_secrets = True
         secret_value = None
 
@@ -587,6 +741,7 @@ def provision(
         warehouse_id=warehouse_id,
         granted_warehouse_can_use=granted_warehouse_can_use,
         client_id=client_id,
+        credential_id=credential_id,
         secret_minted=should_mint,
         secret_written_to_gh=wrote_secrets,
         gh_repo=gh_repo,
@@ -594,168 +749,7 @@ def provision(
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
-        prog="provision_m2m_oauth",
-        description=(
-            "Create or converge an operator, admin, release-probe, verifier, or "
-            "agent-runtime M2M identity without printing one-shot OAuth secrets."
-        ),
-    )
-    parser.add_argument(
-        "--identity-role",
-        choices=tuple(IDENTITY_DEFAULTS),
-        default="normal",
-        help="Identity contract to provision (default: normal operator).",
-    )
-    parser.add_argument(
-        "--pre-app-bootstrap",
-        action="store_true",
-        help=(
-            "Before the App exists, create or resolve only the role-bound service "
-            "principal, optional reviewed admin group membership, and role-owned "
-            "GitHub OAuth credential sinks. Forbids all App and data-resource access."
-        ),
-    )
-    parser.add_argument(
-        "--sp-name",
-        default=None,
-        help="Role-specific reserved service-principal name; overrides must match it exactly.",
-    )
-    parser.add_argument(
-        "--expected-application-id",
-        default=None,
-        help="Fail closed unless the resolved SP has this OAuth application/client id.",
-    )
-    parser.add_argument(
-        "--app-name",
-        default=None,
-        help=(
-            "Deployed App name to grant CAN_USE on "
-            f"(default: resolved from {DATABRICKS_YML.name})."
-        ),
-    )
-    parser.add_argument(
-        "--app-url",
-        default=None,
-        help="Deployed App URL written as MIP_APP_URL GitHub secret.",
-    )
-    parser.add_argument(
-        "--grant-can-use",
-        dest="grant_can_use",
-        action="store_true",
-        default=None,
-        help="Grant CAN_USE on the App to the SP.",
-    )
-    parser.add_argument(
-        "--no-grant-can-use",
-        dest="grant_can_use",
-        action="store_false",
-        help="Skip the CAN_USE grant.",
-    )
-    parser.add_argument(
-        "--group-name",
-        default=None,
-        help=(
-            "Role-reserved group (admin default: "
-            f"{DEFAULT_ADMIN_GROUP}; release_probe also uses that group; "
-            "normal/operator2/verifier/agent_runtime: none)."
-        ),
-    )
-    parser.add_argument(
-        "--create-group",
-        action="store_true",
-        help=(
-            "Create the configured role group if absent. Without this explicit "
-            "flag, a missing group fails closed."
-        ),
-    )
-    parser.add_argument(
-        "--lakebase-instance",
-        default=None,
-        help=(
-            "Provision an OAuth role on this Lakebase instance "
-            f"(verifier default: {DEFAULT_LAKEBASE_INSTANCE})."
-        ),
-    )
-    parser.add_argument(
-        "--gateway-endpoint",
-        default=None,
-        help="Serving endpoint on which the verifier receives CAN_QUERY.",
-    )
-    parser.add_argument(
-        "--revoke-gateway-endpoint",
-        action="append",
-        default=[],
-        help=(
-            "Obsolete endpoint on which this identity must retain no effective "
-            "query access; repeat for migrations."
-        ),
-    )
-    parser.add_argument(
-        "--warehouse-id",
-        default=None,
-        help="SQL warehouse on which the verifier receives CAN_USE.",
-    )
-    parser.add_argument(
-        "--gh-repo",
-        default=None,
-        help=(
-            "GitHub repo owner/name; defaults to `git remote get-url origin`. "
-            "Secret minting binds it to that origin or MIP_M2M_GITHUB_REPOSITORY."
-        ),
-    )
-    parser.add_argument(
-        "--set-gh-secrets",
-        action="store_true",
-        help=(
-            "Write client_id / client_secret / MIP_APP_URL to the GitHub repo's "
-            "Actions secrets via the `gh` CLI. Requires `gh auth login`."
-        ),
-    )
-    parser.add_argument(
-        "--client-id-secret-name",
-        default=None,
-        help="Role-owned GitHub client-id sink; overrides must match it exactly.",
-    )
-    parser.add_argument(
-        "--client-secret-secret-name",
-        default=None,
-        help="Role-owned GitHub client-secret sink; overrides must match it exactly.",
-    )
-    parser.add_argument(
-        "--app-url-secret-name",
-        default=None,
-        help="Role-owned app-URL sink; only the normal role owns MIP_APP_URL.",
-    )
-    parser.add_argument(
-        "--no-app-url-secret",
-        action="store_true",
-        help=(
-            "Explicitly retain no app-URL sink for operator2/admin/verifier/agent_runtime; "
-            "invalid for normal."
-        ),
-    )
-    parser.add_argument(
-        "--no-mint-secret",
-        dest="mint_secret",
-        action="store_false",
-        default=True,
-        help="Converge grants/membership without minting or rotating an OAuth secret.",
-    )
-    parser.add_argument(
-        "--rotate",
-        action="store_true",
-        help=(
-            "If the SP already exists, mint a fresh OAuth secret. Old secret "
-            "stays valid until revoked in the Accounts Console."
-        ),
-    )
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Resolve defaults and validate the argument set; no SDK calls.",
-    )
-    return parser
+    return _cli_helpers.build_parser()
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -801,6 +795,7 @@ def main(argv: list[str] | None = None) -> int:
     client_id_secret_name = args.client_id_secret_name or defaults.client_id_secret_name
     client_secret_secret_name = args.client_secret_secret_name or defaults.client_secret_secret_name
     app_url_secret_name = args.app_url_secret_name or defaults.app_url_secret_name
+    credential_id_secret_name = args.credential_id_secret_name or defaults.credential_id_secret_name
     if args.no_app_url_secret:
         app_url_secret_name = None
     try:
@@ -817,6 +812,7 @@ def main(argv: list[str] | None = None) -> int:
             client_id_secret_name=client_id_secret_name,
             client_secret_secret_name=client_secret_secret_name,
             app_url_secret_name=app_url_secret_name,
+            credential_id_secret_name=credential_id_secret_name,
         )
     except ValueError as exc:
         parser.error(str(exc))
@@ -873,6 +869,7 @@ def main(argv: list[str] | None = None) -> int:
             client_id_secret_name=client_id_secret_name,
             client_secret_secret_name=client_secret_secret_name,
             app_url_secret_name=app_url_secret_name,
+            credential_id_secret_name=credential_id_secret_name,
             identity_role=role,
             revoke_gateway_endpoints=tuple(args.revoke_gateway_endpoint),
             pre_app_bootstrap=args.pre_app_bootstrap,

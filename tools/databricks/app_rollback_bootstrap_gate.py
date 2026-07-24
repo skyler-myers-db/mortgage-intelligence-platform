@@ -7,7 +7,14 @@ import argparse
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
-from tools.databricks.app_rollback_record_contract import _record_key, _secret_value
+from tools.databricks.app_rollback_record_contract import (
+    _legacy_record_key,
+    _record_key,
+    _secret_value,
+)
+from tools.databricks.app_rollback_secret_scope import (
+    assert_owned_app_rollback_scope,
+)
 
 
 def assert_rollback_record_absent(
@@ -18,7 +25,15 @@ def assert_rollback_record_absent(
 ) -> None:
     """Prove the one-time rebase has not already established durable trust."""
 
-    if _secret_value(workspace, scope=scope, key=_record_key(app_name)) is not None:
+    assert_owned_app_rollback_scope(
+        workspace,
+        app_name=app_name,
+        scope=scope,
+    )
+    if any(
+        _secret_value(workspace, scope=scope, key=key) is not None
+        for key in (_record_key(app_name), _legacy_record_key(app_name))
+    ):
         raise RuntimeError(
             "a server-owned last-good App rollback record already exists; "
             "refusing the one-time unsigned rebase"

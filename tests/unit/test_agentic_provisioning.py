@@ -10,15 +10,127 @@ from databricks.sdk.service.database import (
     SyncedTableSpec,
 )
 
-from tools.databricks import provision_agentic_resources
+from tools.databricks import export_gateway_runtime_contract, provision_agentic_resources
+from tools.databricks.agentic_env_file import merge_agentic_env_values
 from tools.databricks.provision_agentic_resources import (
     ProvisionedResources,
     SupervisorAgentBinding,
 )
 
+_PROXY_CLIENT_ID = "proxy-client"
+_PROXY_CREDENTIAL_ID = "proxy-credential"
+_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+_PROXY_ARGS = [
+    "--proxy-caller-application-id",
+    _PROXY_CLIENT_ID,
+    "--proxy-caller-credential-id",
+    _PROXY_CREDENTIAL_ID,
+    "--proxy-caller-secret-reference",
+    _PROXY_SECRET_REFERENCE,
+]
+
 
 def _assert_single_writer() -> None:
     return None
+
+
+def test_split_provisioning_merge_preserves_replaced_supervisor_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    path = tmp_path / "agentic.env"
+    supervisor = ProvisionedResources(
+        lakebase_sync_catalog="sync",
+        lakebase_sync_schema="app",
+        lakebase_sync_tables=("source_readiness",),
+        agent_supervisor_id="green-supervisor",
+        agent_supervisor_name="Mortgage Growth Agent",
+        agent_serving_endpoint="green-supervisor-endpoint",
+        agent_supervisor_endpoint="green-supervisor-endpoint",
+        replaced_supervisor_id="blue-supervisor",
+        replaced_supervisor_endpoint="blue-supervisor-endpoint",
+        replaced_supervisor_creator="runtime-client",
+        replaced_supervisor_create_time="2026-07-20T00:00:00Z",
+        agent_runtime_application_id="runtime-client",
+    )
+    gateway = ProvisionedResources(
+        lakebase_sync_catalog="sync",
+        lakebase_sync_schema="app",
+        lakebase_sync_tables=("source_readiness",),
+        agent_supervisor_id="green-supervisor",
+        agent_supervisor_name="Mortgage Growth Agent",
+        agent_serving_endpoint="green-gateway",
+        agent_supervisor_endpoint="green-supervisor-endpoint",
+        ai_gateway_endpoint="green-gateway",
+        ai_gateway_inference_table="mip.audit.green_inference",
+        ai_gateway_agent_model="mip.audit.proxy",
+        ai_gateway_agent_model_version=7,
+        agent_runtime_application_id="runtime-client",
+        agent_proxy_application_id=_PROXY_CLIENT_ID,
+        agent_proxy_credential_id=_PROXY_CREDENTIAL_ID,
+        agent_proxy_secret_reference=_PROXY_SECRET_REFERENCE,
+    )
+
+    provision_agentic_resources.write_agentic_env(path, supervisor)
+    merge_agentic_env_values(
+        path,
+        {"MIP_AGENT_PROXY_SECRET_REFERENCE": _PROXY_SECRET_REFERENCE},
+    )
+    provision_agentic_resources.write_agentic_env(path, gateway, merge=True)
+    monkeypatch.setattr(
+        export_gateway_runtime_contract,
+        "WorkspaceClient",
+        lambda: object(),
+    )
+    monkeypatch.setattr(
+        export_gateway_runtime_contract,
+        "MlflowClient",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        export_gateway_runtime_contract,
+        "resolve_contract",
+        lambda *_args, **_kwargs: {
+            "MIP_AGENT_SERVING_ENDPOINT": "verified-gateway",
+            "MIP_AGENT_SUPERVISOR_ID": "green-supervisor",
+            "MIP_AGENT_PROXY_SECRET_REFERENCE": _PROXY_SECRET_REFERENCE,
+        },
+    )
+    assert (
+        export_gateway_runtime_contract.main(
+            [
+                "--shell-env",
+                str(path),
+                "--genie-space-id",
+                "space-123",
+                "--runtime-application-id",
+                "runtime-client",
+                "--proxy-caller-application-id",
+                _PROXY_CLIENT_ID,
+                "--proxy-caller-credential-id",
+                _PROXY_CREDENTIAL_ID,
+                "--proxy-caller-secret-reference",
+                _PROXY_SECRET_REFERENCE,
+            ]
+        )
+        == 0
+    )
+
+    lines = path.read_text(encoding="utf-8").splitlines()
+    keys = [line.split("=", 1)[0] for line in lines]
+    assert len(keys) == len(set(keys))
+    assert sum(line.startswith("MIP_AGENT_PROXY_SECRET_REFERENCE=") for line in lines) == 1
+    values = dict(
+        line.split("=", 1)
+        for line in lines
+    )
+    assert values["MIP_AGENT_SERVING_ENDPOINT"] == "verified-gateway"
+    assert values["MIP_REPLACED_AGENT_SUPERVISOR_ID"] == "blue-supervisor"
+    assert (
+        values["MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"]
+        == "blue-supervisor-endpoint"
+    )
+    assert values["MIP_REPLACED_AGENT_SUPERVISOR_CREATOR"] == "runtime-client"
 
 
 @pytest.mark.parametrize("canonical_present", [True, False])
@@ -800,6 +912,7 @@ def test_main_defaults_ai_gateway_to_dedicated_endpoint(monkeypatch, tmp_path) -
                 "lease-123",
                 "--deployment-source-git-sha",
                 "f" * 40,
+                *_PROXY_ARGS,
                 "--out-env",
                 str(out_env),
             ]
@@ -820,6 +933,9 @@ def test_main_defaults_ai_gateway_to_dedicated_endpoint(monkeypatch, tmp_path) -
             "inference_table_prefix": "mip_agent_gateway_growth_agent",
             "genie_space_id": "space-123",
             "expected_creator_application_id": "runtime",
+            "proxy_caller_application_id": _PROXY_CLIENT_ID,
+            "proxy_caller_credential_id": _PROXY_CREDENTIAL_ID,
+            "proxy_caller_secret_reference": _PROXY_SECRET_REFERENCE,
             "deployment_app_name": "mip-app",
             "deployment_lease_id": "lease-123",
             "deployment_source_git_sha": "f" * 40,
@@ -979,6 +1095,7 @@ def test_main_reasserts_lease_after_gateway_wait_before_binding(
                 "lease-123",
                 "--deployment-source-git-sha",
                 "f" * 40,
+                *_PROXY_ARGS,
                 "--out-env",
                 str(tmp_path / "agentic.env"),
             ]
@@ -1084,5 +1201,6 @@ def test_main_rejects_gateway_equal_to_supervisor_before_proxy_mutation(monkeypa
                 "lease-123",
                 "--deployment-source-git-sha",
                 "f" * 40,
+                *_PROXY_ARGS,
             ]
         )

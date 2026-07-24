@@ -20,30 +20,16 @@ from typing import Any
 import requests
 
 from databricks.sdk import AccountClient, WorkspaceClient
-from databricks.sdk.errors import PermissionDenied
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
+from tools.databricks.authorization_denial import is_authorization_denied
 
 _RELATION_RE = re.compile(
     r"^(?P<catalog>[A-Za-z_][A-Za-z0-9_]*)\."
     r"(?P<schema>[A-Za-z_][A-Za-z0-9_]*)\."
     r"(?P<table>[A-Za-z_][A-Za-z0-9_]*)$"
 )
-_DENIAL_MARKERS = (
-    "403",
-    "forbidden",
-    "permission_denied",
-    "permission denied",
-    "not authorized",
-    "not authorised",
-    "does not have permission",
-    "insufficient privileges",
-)
-
-
 def _is_denied(exc: BaseException) -> bool:
-    return isinstance(exc, PermissionDenied) or any(
-        marker in str(exc).casefold() for marker in _DENIAL_MARKERS
-    )
+    return is_authorization_denied(exc)
 
 
 def _expect_denied(label: str, operation: Callable[[], object]) -> None:
@@ -481,7 +467,7 @@ def _verify_app_http_denial(
         allow_redirects=False,
         timeout=30,
     )
-    if response.status_code not in {401, 403}:
+    if response.status_code != 403:
         raise RuntimeError(
             "verifier Databricks App HTTP denial probe unexpectedly returned "
             f"status={response.status_code}"

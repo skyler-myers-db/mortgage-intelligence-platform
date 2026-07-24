@@ -7,6 +7,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
+from tools.databricks.agent_proxy_credential_bundle import (
+    AGENT_PROXY_CREDENTIAL_BUNDLE_SECRET,
+    parse_agent_proxy_credential_bundle,
+)
+
 DEFAULT_ADMIN_GROUP = "mip-admin"
 DEFAULT_LAKEBASE_INSTANCE = "mip-app-state"
 
@@ -17,6 +22,7 @@ IdentityRole = Literal[
     "release_probe",
     "verifier",
     "agent_runtime",
+    "agent_proxy",
 ]
 
 
@@ -25,6 +31,7 @@ class IdentityDefaults:
     sp_name: str
     client_id_secret_name: str
     client_secret_secret_name: str
+    credential_id_secret_name: str | None
     app_url_secret_name: str | None
     group_name: str | None
     grant_can_use: bool
@@ -36,6 +43,7 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         sp_name="mip-nightly-ci-sp",
         client_id_secret_name="DATABRICKS_CLIENT_ID",
         client_secret_secret_name="DATABRICKS_CLIENT_SECRET",
+        credential_id_secret_name=None,
         app_url_secret_name="MIP_APP_URL",
         group_name=None,
         grant_can_use=True,
@@ -45,6 +53,7 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         sp_name="mip-nightly-operator2-ci-sp",
         client_id_secret_name="DATABRICKS_OPERATOR2_CLIENT_ID",
         client_secret_secret_name="DATABRICKS_OPERATOR2_CLIENT_SECRET",
+        credential_id_secret_name=None,
         app_url_secret_name=None,
         group_name=None,
         grant_can_use=True,
@@ -54,6 +63,7 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         sp_name="mip-nightly-admin-ci-sp",
         client_id_secret_name="DATABRICKS_ADMIN_CLIENT_ID",
         client_secret_secret_name="DATABRICKS_ADMIN_CLIENT_SECRET",
+        credential_id_secret_name=None,
         app_url_secret_name=None,
         group_name=DEFAULT_ADMIN_GROUP,
         grant_can_use=True,
@@ -63,6 +73,7 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         sp_name="mip-release-probe-ci-sp",
         client_id_secret_name="DATABRICKS_RELEASE_PROBE_CLIENT_ID",
         client_secret_secret_name="DATABRICKS_RELEASE_PROBE_CLIENT_SECRET",
+        credential_id_secret_name=None,
         app_url_secret_name=None,
         group_name=DEFAULT_ADMIN_GROUP,
         grant_can_use=False,
@@ -72,6 +83,7 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         sp_name="mip-ai-gateway-verifier-ci-sp",
         client_id_secret_name="DATABRICKS_VERIFIER_CLIENT_ID",
         client_secret_secret_name="DATABRICKS_VERIFIER_CLIENT_SECRET",
+        credential_id_secret_name=None,
         app_url_secret_name=None,
         group_name=None,
         grant_can_use=False,
@@ -81,6 +93,17 @@ IDENTITY_DEFAULTS: dict[IdentityRole, IdentityDefaults] = {
         sp_name="mip-agent-runtime-ci-sp",
         client_id_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
         client_secret_secret_name="DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+        credential_id_secret_name=None,
+        app_url_secret_name=None,
+        group_name=None,
+        grant_can_use=False,
+        lakebase_instance=None,
+    ),
+    "agent_proxy": IdentityDefaults(
+        sp_name="mip-agent-supervisor-proxy-ci-sp",
+        client_id_secret_name=AGENT_PROXY_CREDENTIAL_BUNDLE_SECRET,
+        client_secret_secret_name=AGENT_PROXY_CREDENTIAL_BUNDLE_SECRET,
+        credential_id_secret_name=None,
         app_url_secret_name=None,
         group_name=None,
         grant_can_use=False,
@@ -93,7 +116,15 @@ def configured_identity_client_ids() -> dict[IdentityRole, str]:
     """Return non-empty role-owned client IDs from the provisioning environment."""
     configured: dict[IdentityRole, str] = {}
     for role, defaults in IDENTITY_DEFAULTS.items():
-        client_id = os.environ.get(defaults.client_id_secret_name, "").strip()
+        if role == "agent_proxy":
+            raw_bundle = os.environ.get(AGENT_PROXY_CREDENTIAL_BUNDLE_SECRET, "")
+            client_id = (
+                parse_agent_proxy_credential_bundle(raw_bundle).client_id
+                if raw_bundle
+                else ""
+            )
+        else:
+            client_id = os.environ.get(defaults.client_id_secret_name, "").strip()
         if client_id:
             configured[role] = client_id
     return configured
@@ -107,6 +138,7 @@ def validate_identity_role_binding(
     client_id_secret_name: str,
     client_secret_secret_name: str,
     app_url_secret_name: str | None,
+    credential_id_secret_name: str | None = None,
     configured_client_ids: Mapping[IdentityRole, str] | None = None,
 ) -> str | None:
     """Bind one role to its reserved principal, client ID, and secret sinks."""
@@ -120,11 +152,13 @@ def validate_identity_role_binding(
         defaults.client_id_secret_name,
         defaults.client_secret_secret_name,
         defaults.app_url_secret_name,
+        defaults.credential_id_secret_name,
     )
     actual_sinks = (
         client_id_secret_name,
         client_secret_secret_name,
         app_url_secret_name,
+        credential_id_secret_name,
     )
     if actual_sinks != expected_sinks:
         raise ValueError(
@@ -168,7 +202,16 @@ def validate_app_access_contract(
 ) -> None:
     """Reject isolated-role App access before any external side effect."""
 
-    if identity_role in {"release_probe", "verifier", "agent_runtime"} and grant_can_use:
+    if (
+        identity_role
+        in {
+            "release_probe",
+            "verifier",
+            "agent_runtime",
+            "agent_proxy",
+        }
+        and grant_can_use
+    ):
         raise ValueError(
             f"--identity-role {identity_role} forbids Databricks App CAN_USE; "
             "remove --grant-can-use before provisioning"
@@ -189,6 +232,7 @@ def validate_provisioning_contract(
     client_id_secret_name: str,
     client_secret_secret_name: str,
     app_url_secret_name: str | None,
+    credential_id_secret_name: str | None = None,
 ) -> str | None:
     """Validate complete role ownership before SDK, subprocess, or mutation paths."""
 
@@ -219,6 +263,7 @@ def validate_provisioning_contract(
         client_id_secret_name=client_id_secret_name,
         client_secret_secret_name=client_secret_secret_name,
         app_url_secret_name=app_url_secret_name,
+        credential_id_secret_name=credential_id_secret_name,
     )
 
 
@@ -240,6 +285,7 @@ class ProvisionResult:
     warehouse_id: str | None
     granted_warehouse_can_use: bool
     client_id: str
+    credential_id: str | None
     secret_minted: bool
     secret_written_to_gh: bool
     gh_repo: str | None

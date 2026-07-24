@@ -14,6 +14,35 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 from mlflow import MlflowClient
 
 try:
+    from backend.agents.gateway_provider_shape import (
+        field as _field,
+    )
+    from backend.agents.gateway_provider_shape import (
+        legacy_served_model_matches as _legacy_served_model_matches,
+    )
+    from backend.agents.gateway_provider_shape import (
+        provider_bool_matches,
+        route_targets_served_entity,
+    )
+    from backend.agents.gateway_provider_shape import (
+        usage_tracking_is_disabled as _usage_tracking_is_disabled,
+    )
+except ModuleNotFoundError:  # MLflow may place backend/ directly on sys.path.
+    from agents.gateway_provider_shape import (  # type: ignore[no-redef]
+        field as _field,
+    )
+    from agents.gateway_provider_shape import (  # type: ignore[no-redef]
+        legacy_served_model_matches as _legacy_served_model_matches,
+    )
+    from agents.gateway_provider_shape import (  # type: ignore[no-redef]
+        provider_bool_matches,
+        route_targets_served_entity,
+    )
+    from agents.gateway_provider_shape import (  # type: ignore[no-redef]
+        usage_tracking_is_disabled as _usage_tracking_is_disabled,
+    )
+
+try:
     from backend.agents.gateway_contract import (
         GATEWAY_BURST_SCALING_ENABLED,
         GATEWAY_ENDPOINT_DESCRIPTION,
@@ -70,14 +99,6 @@ except ModuleNotFoundError:  # MLflow may place backend/ directly on sys.path.
 
 _IMMUTABLE_MODEL_SOURCE = re.compile(r"models:/m-[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _MODEL_CONTRACT_FIELDS = GATEWAY_MODEL_CONTRACT_FIELDS
-
-
-def _field(value: object, name: str) -> Any:
-    if isinstance(value, Mapping):
-        return value.get(name)
-    return getattr(value, name, None)
-
-
 def _text(value: object) -> str:
     return str(_field(value, "value") or value or "").strip()
 
@@ -193,6 +214,7 @@ def _assert_endpoint_contract(
     *,
     contract: Mapping[str, str],
     environment: Mapping[str, str],
+    supervisor_endpoint_details: object | None = None,
 ) -> None:
     if (
         contract["supervisor_endpoint_creator"] != contract["runtime_application_id"]
@@ -204,11 +226,17 @@ def _assert_endpoint_contract(
         or contract["gateway_endpoint_deprecated_rate_limits"] != "[]"
     ):
         raise RuntimeError("Gateway signed endpoint policy contract is invalid")
-    supervisor = workspace.serving_endpoints.get(contract["supervisor_endpoint"])
+    supervisor = supervisor_endpoint_details
+    if supervisor is None:
+        supervisor = workspace.serving_endpoints.get(contract["supervisor_endpoint"])
     if (
         str(_field(supervisor, "id") or "").strip() != contract["supervisor_endpoint_id"]
+        or str(_field(supervisor, "name") or "").strip() != contract["supervisor_endpoint"]
         or str(_field(supervisor, "creator") or "").strip()
         != contract["supervisor_endpoint_creator"]
+        or _text(_field(supervisor, "task")).lower() != "agent/v1/responses"
+        or _field(supervisor, "pending_config") is not None
+        or _text(_field(_field(supervisor, "state"), "ready")).upper() != "READY"
     ):
         raise RuntimeError("managed Supervisor immutable endpoint contract drifted")
     details = workspace.serving_endpoints.get(contract["gateway_endpoint"])
@@ -232,13 +260,18 @@ def _assert_endpoint_contract(
     ):
         raise RuntimeError("Gateway endpoint policy contract drifted")
     config = _field(details, "config")
-    if _field(config, "auto_capture_config") is not None or (_field(config, "served_models") or []):
+    if _field(config, "auto_capture_config") is not None:
         raise RuntimeError("Gateway served entity contract drifted")
     entities = _field(config, "served_entities") or []
     routes = _field(_field(config, "traffic_config"), "routes") or []
     if len(entities) != 1 or len(routes) != 1:
         raise RuntimeError("Gateway served entity contract drifted")
     entity = entities[0]
+    legacy_models = _field(config, "served_models") or []
+    if len(legacy_models) > 1 or (
+        legacy_models and not _legacy_served_model_matches(legacy_models[0], entity)
+    ):
+        raise RuntimeError("Gateway served entity contract drifted")
     version = contract["gateway_model_version"]
     served_name = f"mip-growth-supervisor-proxy-{version}"
     bound_environment = {
@@ -251,6 +284,9 @@ def _assert_endpoint_contract(
         "MIP_UPSTREAM_SUPERVISOR_ID": contract["supervisor_id"],
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": contract["supervisor_endpoint"],
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": contract["runtime_application_id"],
+        "MIP_UPSTREAM_PROXY_CLIENT_ID": contract["proxy_caller_application_id"],
+        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": contract["proxy_caller_credential_id"],
+        "MIP_UPSTREAM_PROXY_CLIENT_SECRET": contract["proxy_caller_secret_reference"],
         "MIP_SUPERVISOR_CATALOG": contract["catalog"],
         "MIP_SUPERVISOR_GENIE_SPACE_ID": contract["genie_space_id"],
         "MIP_SUPERVISOR_CONTRACT_SHA256": contract["supervisor_contract_sha256"],
@@ -265,8 +301,11 @@ def _assert_endpoint_contract(
         or str(_field(entity, "workload_size") or "") != GATEWAY_WORKLOAD_SIZE
         or _text(_field(entity, "workload_type")).upper() != GATEWAY_WORKLOAD_TYPE
         or _field(entity, "scale_to_zero_enabled") is not GATEWAY_SCALE_TO_ZERO_ENABLED
-        or _field(entity, "burst_scaling_enabled") is not GATEWAY_BURST_SCALING_ENABLED
-        or str(_field(routes[0], "served_entity_name") or "") != served_name
+        or not provider_bool_matches(
+            _field(entity, "burst_scaling_enabled"),
+            GATEWAY_BURST_SCALING_ENABLED,
+        )
+        or not route_targets_served_entity(routes[0], served_name)
         or _field(routes[0], "traffic_percentage") != GATEWAY_TRAFFIC_PERCENTAGE
     ):
         raise RuntimeError("Gateway served proxy configuration contract drifted")
@@ -291,7 +330,7 @@ def _assert_endpoint_contract(
         or _field(gateway, "fallback_config") is not None
         or _field(gateway, "guardrails") is not None
         or (_field(gateway, "rate_limits") or [])
-        or _field(gateway, "usage_tracking_config") is not None
+        or not _usage_tracking_is_disabled(_field(gateway, "usage_tracking_config"))
     ):
         raise RuntimeError("Gateway inference-table contract drifted")
 
@@ -302,15 +341,19 @@ def assert_live_gateway_runtime_resources(
     environment: Mapping[str, str],
     model_registry: Any | None = None,
     tracking_client: Any | None = None,
+    supervisor_metadata: Mapping[str, Any] | None = None,
+    supervisor_endpoint_details: object | None = None,
 ) -> dict[str, str]:
     """Authenticate expected facts and re-prove every mutable live resource."""
 
     contract = verified_gateway_runtime_resource_environment(environment)
     runtime_id = contract["runtime_application_id"]
-    metadata = workspace.api_client.do(
-        "GET",
-        f"/api/2.1/supervisor-agents/{quote(contract['supervisor_id'], safe='')}",
-    )
+    metadata = supervisor_metadata
+    if metadata is None:
+        metadata = workspace.api_client.do(
+            "GET",
+            f"/api/2.1/supervisor-agents/{quote(contract['supervisor_id'], safe='')}",
+        )
     if not isinstance(metadata, Mapping) or (
         str(metadata.get("supervisor_agent_id") or "").strip() != contract["supervisor_id"]
         or str(metadata.get("endpoint_name") or "").strip() != contract["supervisor_endpoint"]
@@ -329,7 +372,12 @@ def assert_live_gateway_runtime_resources(
         catalog=contract["catalog"],
     ):
         raise RuntimeError("managed Supervisor canonical contract drifted")
-    _assert_endpoint_contract(workspace, contract=contract, environment=environment)
+    _assert_endpoint_contract(
+        workspace,
+        contract=contract,
+        environment=environment,
+        supervisor_endpoint_details=supervisor_endpoint_details,
+    )
     source_hash = gateway_proxy_source_hash(
         upstream_endpoint=contract["supervisor_endpoint"],
         catalog=contract["catalog"],
@@ -350,6 +398,9 @@ def assert_live_gateway_runtime_resources(
         attestation_verify_key=str(
             environment.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") or ""
         ),
+        proxy_caller_application_id=contract["proxy_caller_application_id"],
+        proxy_caller_credential_id=contract["proxy_caller_credential_id"],
+        proxy_caller_secret_reference=contract["proxy_caller_secret_reference"],
     )
     if resource_hash != contract["gateway_resource_hash"]:
         raise RuntimeError("Gateway resource allocation contract drifted")

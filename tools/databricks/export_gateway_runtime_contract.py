@@ -7,13 +7,13 @@ import argparse
 import hashlib
 import json
 import os
-import shlex
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
+from urllib.parse import quote
 
 REPO = Path(__file__).resolve().parents[2]
 if str(REPO) not in sys.path:
@@ -33,6 +33,7 @@ from backend.agents.gateway_contract import (  # noqa: E402
 )
 from databricks.sdk import WorkspaceClient  # noqa: E402
 from tools.databricks.agent_runtime_access import assert_runtime_creator  # noqa: E402
+from tools.databricks.agentic_env_file import merge_agentic_env_values  # noqa: E402
 from tools.databricks.experiment_acl_contract import (  # noqa: E402
     resolve_exact_experiment_acl,
 )
@@ -70,9 +71,51 @@ class ExactGatewayRuntimeProof:
 
 
 def _supervisors(client: Any) -> list[Mapping[str, Any]]:
-    response = client.api_client.do("GET", "/api/2.1/supervisor-agents")
-    rows = response if isinstance(response, list) else response.get("supervisor_agents", [])
-    return [row for row in rows if isinstance(row, Mapping)]
+    rows: list[Mapping[str, Any]] = []
+    ids: set[str] = set()
+    page_token: str | None = None
+    seen_tokens: set[str] = set()
+    while True:
+        query = {"page_size": 100}
+        if page_token:
+            query["page_token"] = page_token
+        response = client.api_client.do(
+            "GET",
+            "/api/2.1/supervisor-agents",
+            query=query,
+        )
+        if not isinstance(response, Mapping):
+            raise RuntimeError("Supervisor inventory is malformed")
+        page = response.get("supervisor_agents", [])
+        if not isinstance(page, list):
+            raise RuntimeError("Supervisor inventory is malformed")
+        for row in page:
+            if not isinstance(row, Mapping):
+                raise RuntimeError("Supervisor inventory is malformed")
+            supervisor_id = str(row.get("supervisor_agent_id") or "").strip()
+            if not supervisor_id or supervisor_id in ids:
+                raise RuntimeError("Supervisor inventory has a duplicate or missing identity")
+            ids.add(supervisor_id)
+            rows.append(row)
+        raw_next = response.get("next_page_token")
+        if raw_next is None or raw_next == "":
+            return rows
+        if not isinstance(raw_next, str) or not raw_next.strip():
+            raise RuntimeError("Supervisor inventory page token is malformed")
+        page_token = raw_next.strip()
+        if page_token in seen_tokens:
+            raise RuntimeError("Supervisor inventory pagination cycled")
+        seen_tokens.add(page_token)
+
+
+def _supervisor_by_id(client: Any, supervisor_id: str) -> Mapping[str, Any]:
+    response = client.api_client.do(
+        "GET",
+        f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}",
+    )
+    if not isinstance(response, Mapping):
+        raise RuntimeError("Supervisor metadata is malformed")
+    return response
 
 
 def _enum_text(value: Any) -> str:
@@ -86,6 +129,9 @@ def resolve_exact_resource_proof(
     catalog: str,
     genie_space_id: str,
     runtime_application_id: str,
+    proxy_caller_application_id: str | None = None,
+    proxy_caller_credential_id: str | None = None,
+    proxy_caller_secret_reference: str | None = None,
     supervisor_id: str | None = None,
     gateway_endpoint: str | None = None,
     gateway_model_family_name: str | None = None,
@@ -136,6 +182,9 @@ def resolve_exact_resource_proof(
             "gateway_source_hash",
             "genie_space_id",
             "runtime_application_id",
+            "proxy_caller_application_id",
+            "proxy_caller_credential_id",
+            "proxy_caller_secret_reference",
             "supervisor_display_name",
             "supervisor_canonical_name",
             "supervisor_contract_json",
@@ -158,29 +207,43 @@ def resolve_exact_resource_proof(
             "genie_space_id": genie_space_id,
             "runtime_application_id": runtime_application_id,
             "supervisor_canonical_name": supervisor_name,
+            **(
+                {"proxy_caller_application_id": proxy_caller_application_id}
+                if proxy_caller_application_id
+                else {}
+            ),
+            **(
+                {"proxy_caller_credential_id": proxy_caller_credential_id}
+                if proxy_caller_credential_id
+                else {}
+            ),
+            **(
+                {"proxy_caller_secret_reference": proxy_caller_secret_reference}
+                if proxy_caller_secret_reference
+                else {}
+            ),
         }
         if any(stored.get(key) != value for key, value in requested.items()):
             raise RuntimeError("stored Gateway rollback contract scope drifted")
         if gateway_endpoint and gateway_endpoint != stored.get("gateway_endpoint"):
             raise RuntimeError("stored Gateway rollback endpoint does not match the request")
-    supervisors = _supervisors(client)
-    if stored is None and supervisor_id:
-        matches = [
-            row
-            for row in supervisors
-            if str(row.get("supervisor_agent_id") or "").strip() == supervisor_id
-        ]
-    elif stored is None:
+    immutable_supervisor_id = (
+        stored["supervisor_id"] if stored is not None else supervisor_id
+    )
+    if immutable_supervisor_id:
+        direct = _supervisor_by_id(client, immutable_supervisor_id)
+        matches = (
+            [direct]
+            if str(direct.get("supervisor_agent_id") or "").strip()
+            == immutable_supervisor_id
+            else []
+        )
+    else:
+        supervisors = _supervisors(client)
         matches = [
             row
             for row in supervisors
             if str(row.get("display_name") or "").strip() == supervisor_name
-        ]
-    else:
-        matches = [
-            row
-            for row in supervisors
-            if str(row.get("supervisor_agent_id") or "").strip() == stored["supervisor_id"]
         ]
     if len(matches) != 1:
         raise RuntimeError(
@@ -245,6 +308,29 @@ def resolve_exact_resource_proof(
     upstream_endpoint_id = str(getattr(upstream_details, "id", "") or "").strip()
     if not upstream_endpoint_id:
         raise RuntimeError("managed Supervisor endpoint has no immutable ID")
+    resolved_proxy_application_id = (
+        stored["proxy_caller_application_id"]
+        if stored is not None
+        else str(proxy_caller_application_id or "").strip()
+    )
+    resolved_proxy_credential_id = (
+        stored["proxy_caller_credential_id"]
+        if stored is not None
+        else str(proxy_caller_credential_id or "").strip()
+    )
+    resolved_proxy_secret_reference = (
+        stored["proxy_caller_secret_reference"]
+        if stored is not None
+        else str(proxy_caller_secret_reference or "").strip()
+    )
+    if not all(
+        (
+            resolved_proxy_application_id,
+            resolved_proxy_credential_id,
+            resolved_proxy_secret_reference,
+        )
+    ):
+        raise RuntimeError("Gateway Supervisor proxy credential binding is required")
 
     source_hash = (
         stored["gateway_source_hash"]
@@ -292,6 +378,9 @@ def resolve_exact_resource_proof(
             inference_schema=inference_schema,
             inference_table_prefix=inference_table_prefix,
             attestation_verify_key=os.environ.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", ""),
+            proxy_caller_application_id=resolved_proxy_application_id,
+            proxy_caller_credential_id=resolved_proxy_credential_id,
+            proxy_caller_secret_reference=resolved_proxy_secret_reference,
         )
     )
     expected_model_name = (
@@ -400,6 +489,9 @@ def resolve_exact_resource_proof(
             supervisor_endpoint_id=upstream_endpoint_id,
             upstream_endpoint=upstream,
             runtime_application_id=runtime_application_id,
+            proxy_caller_application_id=resolved_proxy_application_id,
+            proxy_caller_credential_id=resolved_proxy_credential_id,
+            proxy_caller_secret_reference=resolved_proxy_secret_reference,
             model_name=expected_model_name,
             model_version=model_version,
             model_source=model_source,
@@ -415,6 +507,9 @@ def resolve_exact_resource_proof(
             catalog=catalog,
             genie_space_id=genie_space_id,
         )
+        if getattr(details, "pending_config", None) is not None:
+            failures.append(RuntimeError("Gateway endpoint has a pending config update"))
+            continue
         # A retained human-owned canonical endpoint is irrelevant when its
         # model/config does not match the expected green contract.  Filter it
         # before applying the runtime-ownership gate so a valid versioned green
@@ -506,6 +601,9 @@ def resolve_exact_resource_proof(
         "gateway_experiment_owner": experiment_owner,
         "gateway_inference_table_family": inference_family,
         "gateway_inference_table": deployment.inference_table,
+        "proxy_caller_application_id": deployment.proxy_caller_application_id,
+        "proxy_caller_credential_id": deployment.proxy_caller_credential_id,
+        "proxy_caller_secret_reference": deployment.proxy_caller_secret_reference,
     }
     digest = gateway_exact_resource_digest(proof_contract)
     if require_resource_binding:
@@ -537,6 +635,9 @@ def resolve_contract(
     catalog: str,
     genie_space_id: str,
     runtime_application_id: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
     supervisor_id: str | None = None,
     gateway_endpoint: str | None = None,
     gateway_model_family_name: str | None = None,
@@ -553,6 +654,9 @@ def resolve_contract(
         catalog=catalog,
         genie_space_id=genie_space_id,
         runtime_application_id=runtime_application_id,
+        proxy_caller_application_id=proxy_caller_application_id,
+        proxy_caller_credential_id=proxy_caller_credential_id,
+        proxy_caller_secret_reference=proxy_caller_secret_reference,
         supervisor_id=supervisor_id,
         gateway_endpoint=gateway_endpoint,
         gateway_model_family_name=gateway_model_family_name,
@@ -571,6 +675,9 @@ def resolve_contract(
         model_name=facts["gateway_model_name"],
         model_version=int(facts["gateway_model_version"]),
         inference_table=facts["gateway_inference_table"],
+        proxy_caller_application_id=facts["proxy_caller_application_id"],
+        proxy_caller_credential_id=facts["proxy_caller_credential_id"],
+        proxy_caller_secret_reference=facts["proxy_caller_secret_reference"],
     )
     binding_environment = gateway_runtime_resource_binding_environment(
         client.serving_endpoints.get(facts["gateway_endpoint"])
@@ -581,6 +688,9 @@ def resolve_contract(
         "MIP_AGENT_SUPERVISOR_ENDPOINT_ID": facts["supervisor_endpoint_id"],
         "MIP_AGENT_SUPERVISOR_ID": facts["supervisor_id"],
         "MIP_AGENT_RUNTIME_CLIENT_ID": runtime_application_id,
+        "MIP_AGENT_PROXY_CLIENT_ID": facts["proxy_caller_application_id"],
+        "MIP_AGENT_PROXY_CREDENTIAL_ID": facts["proxy_caller_credential_id"],
+        "MIP_AGENT_PROXY_SECRET_REFERENCE": facts["proxy_caller_secret_reference"],
         "MIP_AI_GATEWAY_ENDPOINT": facts["gateway_endpoint"],
         "MIP_AI_GATEWAY_INFERENCE_TABLE": facts["gateway_inference_table"],
         "MIP_AI_GATEWAY_AGENT_MODEL": facts["gateway_model_name"],
@@ -605,7 +715,7 @@ def main(argv: list[str] | None = None) -> int:
     output.add_argument(
         "--shell-env",
         type=Path,
-        help="Append POSIX-shell-quoted rows safe to source from deploy.sh.",
+        help="Strictly merge POSIX-shell-quoted rows safe to source from deploy.sh.",
     )
     parser.add_argument("--supervisor-name", default="Mortgage Growth Agent")
     parser.add_argument("--supervisor-id")
@@ -628,17 +738,38 @@ def main(argv: list[str] | None = None) -> int:
         "--runtime-application-id",
         default=os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", ""),
     )
+    parser.add_argument(
+        "--proxy-caller-application-id",
+        default=os.environ.get("DATABRICKS_AGENT_PROXY_CLIENT_ID", ""),
+    )
+    parser.add_argument(
+        "--proxy-caller-credential-id",
+        default=os.environ.get("DATABRICKS_AGENT_PROXY_CREDENTIAL_ID", ""),
+    )
+    parser.add_argument(
+        "--proxy-caller-secret-reference",
+        default=os.environ.get("MIP_AGENT_PROXY_SECRET_REFERENCE", ""),
+    )
     args = parser.parse_args(argv)
     if not args.genie_space_id:
         parser.error("--genie-space-id or GENIE_SPACE_ID is required")
     if not args.runtime_application_id:
         parser.error("--runtime-application-id or DATABRICKS_AGENT_RUNTIME_CLIENT_ID is required")
+    if not (
+        args.proxy_caller_application_id
+        and args.proxy_caller_credential_id
+        and args.proxy_caller_secret_reference
+    ):
+        parser.error("complete Supervisor proxy caller binding is required")
     contract = resolve_contract(
         WorkspaceClient(),
         supervisor_name=args.supervisor_name,
         catalog=args.catalog,
         genie_space_id=args.genie_space_id,
         runtime_application_id=args.runtime_application_id,
+        proxy_caller_application_id=args.proxy_caller_application_id,
+        proxy_caller_credential_id=args.proxy_caller_credential_id,
+        proxy_caller_secret_reference=args.proxy_caller_secret_reference,
         supervisor_id=args.supervisor_id,
         gateway_endpoint=args.gateway_endpoint,
         gateway_model_family_name=args.gateway_model_family,
@@ -652,10 +783,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     output_path = args.github_env or args.shell_env
     assert output_path is not None
-    with output_path.open("a", encoding="utf-8") as handle:
-        for key, value in contract.items():
-            encoded = value if args.github_env is not None else shlex.quote(value)
-            handle.write(f"{key}={encoded}\n")
+    if args.github_env is not None:
+        with output_path.open("a", encoding="utf-8") as handle:
+            for key, value in contract.items():
+                handle.write(f"{key}={value}\n")
+    else:
+        if not output_path.exists():
+            output_path.touch()
+        merge_agentic_env_values(output_path, contract)
     print(
         "[gateway-contract] exported source-bound endpoint, model version, "
         "Supervisor, inference table, and binding digest"

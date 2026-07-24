@@ -31,6 +31,9 @@ GENIE_SPACE_ID = "01f-runtime-genie"
 MODEL_FAMILY = "mip.audit.mortgage_growth_supervisor_proxy"
 TABLE_PREFIX = "mip_agent_gateway_growth_agent"
 UPSTREAM = "mip-mortgage-growth-supervisor-0123456789ab"
+PROXY_CLIENT_ID = "proxy-client"
+PROXY_CREDENTIAL_ID = "proxy-credential"
+PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 SIGNING_KEY = base64.urlsafe_b64encode(b"u" * 32).decode("ascii").rstrip("=")
 VERIFY_KEY = derive_gateway_proof_verify_key(SIGNING_KEY)
 PREVIOUS_SIGNING_KEY = base64.urlsafe_b64encode(b"v" * 32).decode("ascii").rstrip("=")
@@ -75,6 +78,9 @@ def _contract(
         inference_schema="audit",
         inference_table_prefix=TABLE_PREFIX,
         attestation_verify_key=verify_key,
+        proxy_caller_application_id=PROXY_CLIENT_ID,
+        proxy_caller_credential_id=PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
     )
     suffix = contract_hash[:12]
     return (
@@ -691,9 +697,7 @@ def _add_runtime_managed_online_catalog(
 
     original_function_list = workspace.functions.list
     workspace.functions.list = lambda selected, schema, **kwargs: (
-        iter([])
-        if selected == catalog
-        else original_function_list(selected, schema, **kwargs)
+        iter([]) if selected == catalog else original_function_list(selected, schema, **kwargs)
     )
 
     original_table_list = workspace.tables.list
@@ -713,9 +717,7 @@ def _add_runtime_managed_online_catalog(
 
     original_volume_list = workspace.volumes.list
     workspace.volumes.list = lambda selected, schema, **kwargs: (
-        iter([])
-        if selected == catalog
-        else original_volume_list(selected, schema, **kwargs)
+        iter([]) if selected == catalog else original_volume_list(selected, schema, **kwargs)
     )
 
 
@@ -739,6 +741,9 @@ def _verify(
         gateway_experiment_base=experiment,
         genie_space_id=GENIE_SPACE_ID,
         inference_table_prefix=TABLE_PREFIX,
+        proxy_caller_application_id=PROXY_CLIENT_ID,
+        proxy_caller_credential_id=PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
         model_registry=model_registry or _ModelRegistry(registry_tags or {model: _provenance()}),
         foreign_control_plane_proof=foreign_control_plane_proof,
     )
@@ -976,9 +981,7 @@ def test_effective_runtime_uc_boundary_rejects_empty_owned_artifact_assignment()
     def return_empty_assignment(*args: Any, **kwargs: Any) -> object:
         if args[:2] == ("table", table_full_name):
             return SimpleNamespace(
-                privilege_assignments=[
-                    SimpleNamespace(principal=APPLICATION_ID, privileges=[])
-                ],
+                privilege_assignments=[SimpleNamespace(principal=APPLICATION_ID, privileges=[])],
                 next_page_token=None,
             )
         return original(*args, **kwargs)
@@ -1809,9 +1812,7 @@ def test_effective_runtime_uc_boundary_allows_source_proven_historical_model() -
     )
 
 
-def test_effective_runtime_uc_boundary_rejects_historical_model_catalog_tuple_drift() -> (
-    None
-):
+def test_effective_runtime_uc_boundary_rejects_historical_model_catalog_tuple_drift() -> None:
     historical, _table, _source_hash = _contract(source_hash="b" * 64)
     workspace = _workspace(
         extra_models=[SimpleNamespace(full_name=historical, owner=APPLICATION_ID)],

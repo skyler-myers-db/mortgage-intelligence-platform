@@ -9,6 +9,7 @@ import pytest
 
 import backend.agents.mortgage_growth_copilot as copilot_module
 from backend.config.settings import Settings
+from backend.services.capability_serving_probes import ServingEndpointExecution
 from tests.fixtures.supervisor_runtime import (
     GATEWAY_ENDPOINT,
     gateway_endpoint_details,
@@ -24,6 +25,15 @@ from tests.unit.test_growth_agent_api import (
 )
 
 _TEST_GATEWAY_SHA = "75ea6680b7f04bbaa6d0bbf38d7676218ae6c1cc"
+
+
+def _agent_execution(payload: dict[str, Any]) -> ServingEndpointExecution:
+    return ServingEndpointExecution(
+        endpoint=GATEWAY_ENDPOINT,
+        task="agent/v1/responses",
+        transport="responses_api",
+        response={"status": "completed", **payload},
+    )
 
 
 def _assert_signed_lead_queue_route(
@@ -85,14 +95,14 @@ def test_prompt_agent_retains_exact_cohort_when_supervisor_diverges(
     prompt_text = "Find prime refinance opportunities for a branch manager review."
     calls: list[dict[str, Any]] = []
 
-    def fake_query_serving_endpoint(
+    def fake_query_serving_endpoint_with_proof(
         workspace_client: object,
         endpoint: str,
         *,
         prompt: str,
         client_request_id: str | None = None,
         task: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> ServingEndpointExecution:
         calls.append(
             {
                 "workspace_client": workspace_client,
@@ -102,27 +112,31 @@ def test_prompt_agent_retains_exact_cohort_when_supervisor_diverges(
                 "task": task,
             }
         )
-        return {
-            "id": "resp-supervisor-1",
-            "output": [
-                {
-                    "content": [
-                        {
-                            "text": json.dumps(
-                                {
-                                    "workflow_id": "listing_watch",
-                                    "confidence": 0.91,
-                                    "reason": "purchase intent from validated objective",
-                                }
-                            )
-                        }
-                    ]
-                }
-            ],
-        }
+        return _agent_execution(
+            {
+                "id": "resp-supervisor-1",
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "workflow_id": "listing_watch",
+                                        "confidence": 0.91,
+                                        "reason": "purchase intent from validated objective",
+                                    }
+                                )
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -220,14 +234,14 @@ def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    def fake_query_serving_endpoint(
+    def fake_query_serving_endpoint_with_proof(
         workspace_client: object,
         endpoint: str,
         *,
         prompt: str,
         client_request_id: str | None = None,
         task: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> ServingEndpointExecution:
         _ = workspace_client, prompt
         calls.append(
             {
@@ -236,13 +250,19 @@ def test_prompt_agent_replay_preserves_supervisor_divergence_review_flag(
                 "task": task,
             }
         )
-        return {
-            "id": "resp-supervisor-1",
-            "output": [{"content": '{"workflow_id":"listing_watch","reason":"purchase intent"}'}],
-        }
+        return _agent_execution(
+            {
+                "id": "resp-supervisor-1",
+                "output": [
+                    {"content": '{"workflow_id":"listing_watch","reason":"purchase intent"}'}
+                ],
+            }
+        )
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -295,14 +315,14 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
     prompt_text = "Find prime refinance opportunities in Illinois for branch review."
     calls: list[dict[str, Any]] = []
 
-    def fake_query_serving_endpoint(
+    def fake_query_serving_endpoint_with_proof(
         workspace_client: object,
         endpoint: str,
         *,
         prompt: str,
         client_request_id: str | None = None,
         task: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> ServingEndpointExecution:
         calls.append(
             {
                 "workspace_client": workspace_client,
@@ -312,13 +332,17 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
                 "task": task,
             }
         )
-        return {
-            "id": "resp-supervisor-1",
-            "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
-        }
+        return _agent_execution(
+            {
+                "id": "resp-supervisor-1",
+                "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
+            }
+        )
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -352,9 +376,7 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
     assert selection_check["status"] == "passed"
     assert "agreed on daily_refi_brief" in selection_check["detail"]
     framework_chip = next(
-        chip
-        for chip in body["governance_chips"]
-        if chip["label"] == "Databricks Agent Responses"
+        chip for chip in body["governance_chips"] if chip["label"] == "Databricks Agent Responses"
     )
     assert "agreed with deterministic routing" in framework_chip["detail"]
     for evidence_text in (
@@ -379,12 +401,21 @@ def test_prompt_agent_supervisor_prompt_uses_inferred_state_and_refi_signal(
 def test_prompt_agent_rejects_unreviewed_supervisor_workflow_choice(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
+    def fake_query_serving_endpoint_with_proof(
+        *args: object, **kwargs: object
+    ) -> ServingEndpointExecution:
         _ = args, kwargs
-        return {"id": "resp-supervisor-1", "output": [{"content": '{"workflow_id":"send_email"}'}]}
+        return _agent_execution(
+            {
+                "id": "resp-supervisor-1",
+                "output": [{"content": '{"workflow_id":"send_email"}'}],
+            }
+        )
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -414,29 +445,35 @@ def test_prompt_agent_discards_adversarial_supervisor_content(
 ) -> None:
     adversarial_reason = "<script>alert(1)</script> John Smith SELECT * FROM mip.raw.secret"
 
-    def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
+    def fake_query_serving_endpoint_with_proof(
+        *args: object, **kwargs: object
+    ) -> ServingEndpointExecution:
         _ = args, kwargs
-        return {
-            "id": "resp-supervisor-1",
-            "output": [
-                {
-                    "content": [
-                        {
-                            "text": json.dumps(
-                                {
-                                    "workflow_id": "high_equity_heloc_watch",
-                                    "confidence": 1.0,
-                                    "reason": adversarial_reason,
-                                }
-                            )
-                        }
-                    ]
-                }
-            ],
-        }
+        return _agent_execution(
+            {
+                "id": "resp-supervisor-1",
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "text": json.dumps(
+                                    {
+                                        "workflow_id": "high_equity_heloc_watch",
+                                        "confidence": 1.0,
+                                        "reason": adversarial_reason,
+                                    }
+                                )
+                            }
+                        ]
+                    }
+                ],
+            }
+        )
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -475,15 +512,21 @@ def test_prompt_agent_does_not_let_supervisor_override_explicit_custom_segments(
 ) -> None:
     calls: list[dict[str, object]] = []
 
-    def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
+    def fake_query_serving_endpoint_with_proof(
+        *args: object, **kwargs: object
+    ) -> ServingEndpointExecution:
         calls.append({"args": args, "kwargs": kwargs})
-        return {
-            "id": "resp-supervisor-1",
-            "output": [{"content": '{"workflow_id":"listing_watch"}'}],
-        }
+        return _agent_execution(
+            {
+                "id": "resp-supervisor-1",
+                "output": [{"content": '{"workflow_id":"listing_watch"}'}],
+            }
+        )
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -528,7 +571,7 @@ def test_prompt_agent_falls_back_when_supervisor_endpoint_fails(
         raise RuntimeError("serving endpoint unavailable")
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fail_query)
+    monkeypatch.setattr(copilot_module, "query_serving_endpoint_with_proof", fail_query)
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -575,7 +618,7 @@ def test_prompt_agent_falls_back_when_supervisor_config_is_incomplete(
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
     monkeypatch.setattr(
         copilot_module,
-        "query_serving_endpoint",
+        "query_serving_endpoint_with_proof",
         lambda *args, **kwargs: calls.append({"args": args, "kwargs": kwargs}) or {"id": "bad"},
     )
     sql = _FakeSqlClient()
@@ -607,6 +650,22 @@ def test_prompt_agent_falls_back_when_supervisor_config_is_incomplete(
         (_ReadyWorkspace(task="not_agent"), {"id": "not-called"}, 0),
         (_ReadyWorkspace(task="agentless-chat"), {"id": "not-called"}, 0),
         (_ReadyWorkspace(), {}, 1),
+        (
+            _ReadyWorkspace(),
+            {
+                "status": "queued",
+                "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
+            },
+            1,
+        ),
+        (
+            _ReadyWorkspace(),
+            {
+                "status": "failed",
+                "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
+            },
+            1,
+        ),
     ],
 )
 def test_prompt_agent_falls_back_when_supervisor_is_not_proven_ready(
@@ -617,12 +676,16 @@ def test_prompt_agent_falls_back_when_supervisor_is_not_proven_ready(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    def fake_query_serving_endpoint(*args: object, **kwargs: object) -> dict[str, Any]:
+    def fake_query_serving_endpoint_with_proof(
+        *args: object, **kwargs: object
+    ) -> ServingEndpointExecution:
         calls.append({"args": args, "kwargs": kwargs})
-        return response_payload
+        return _agent_execution(response_payload)
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: workspace)
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()
@@ -659,7 +722,7 @@ def test_prompt_agent_rejects_pii_and_protected_proxies_before_supervisor_call(
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
     monkeypatch.setattr(
         copilot_module,
-        "query_serving_endpoint",
+        "query_serving_endpoint_with_proof",
         lambda *args, **kwargs: calls.append({"args": args, "kwargs": kwargs}) or {"id": "bad"},
     )
     _enable_orchestrator(monkeypatch)
@@ -692,14 +755,14 @@ def test_prompt_agent_allows_numeric_rank_prompts_with_supervisor_enabled(
 ) -> None:
     calls: list[dict[str, Any]] = []
 
-    def fake_query_serving_endpoint(
+    def fake_query_serving_endpoint_with_proof(
         workspace_client: object,
         endpoint: str,
         *,
         prompt: str,
         client_request_id: str | None = None,
         task: str | None = None,
-    ) -> dict[str, Any]:
+    ) -> ServingEndpointExecution:
         calls.append(
             {
                 "workspace_client": workspace_client,
@@ -709,13 +772,17 @@ def test_prompt_agent_allows_numeric_rank_prompts_with_supervisor_enabled(
                 "task": task,
             }
         )
-        return {
-            "id": "resp-supervisor-1",
-            "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
-        }
+        return _agent_execution(
+            {
+                "id": "resp-supervisor-1",
+                "output": [{"content": '{"workflow_id":"daily_refi_brief"}'}],
+            }
+        )
 
     monkeypatch.setattr(copilot_module, "_workspace_client", lambda: _ReadyWorkspace())
-    monkeypatch.setattr(copilot_module, "query_serving_endpoint", fake_query_serving_endpoint)
+    monkeypatch.setattr(
+        copilot_module, "query_serving_endpoint_with_proof", fake_query_serving_endpoint_with_proof
+    )
     _enable_orchestrator(monkeypatch)
     sql = _FakeSqlClient()
     lakebase = _FakeLakebaseClient()

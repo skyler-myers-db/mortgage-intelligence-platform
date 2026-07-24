@@ -77,11 +77,31 @@ def build_parser(*, default_sync_tables: tuple[str, ...]) -> argparse.ArgumentPa
         "--supervisor-name",
         default=os.environ.get("MIP_AGENT_SUPERVISOR_NAME", "Mortgage Growth Agent"),
     )
+    parser.add_argument(
+        "--supervisor-id",
+        default=os.environ.get("MIP_AGENT_SUPERVISOR_ID", ""),
+    )
+    parser.add_argument(
+        "--supervisor-endpoint",
+        default=os.environ.get("MIP_AGENT_SUPERVISOR_ENDPOINT", ""),
+    )
     parser.add_argument("--app-name", default=os.environ.get("MIP_APP_NAME", "mip-app"))
     parser.add_argument("--genie-space-id", default=os.environ.get("GENIE_SPACE_ID", ""))
     parser.add_argument(
         "--expected-runtime-application-id",
         default=os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", ""),
+    )
+    parser.add_argument(
+        "--proxy-caller-application-id",
+        default=os.environ.get("DATABRICKS_AGENT_PROXY_CLIENT_ID", ""),
+    )
+    parser.add_argument(
+        "--proxy-caller-credential-id",
+        default=os.environ.get("DATABRICKS_AGENT_PROXY_CREDENTIAL_ID", ""),
+    )
+    parser.add_argument(
+        "--proxy-caller-secret-reference",
+        default=os.environ.get("MIP_AGENT_PROXY_SECRET_REFERENCE", ""),
     )
     parser.add_argument(
         "--deployment-lease-id",
@@ -97,4 +117,12 @@ def build_parser(*, default_sync_tables: tuple[str, ...]) -> argparse.ArgumentPa
     parser.add_argument("--skip-app-permissions", action="store_true")
     parser.add_argument("--timeout-s", type=int, default=900)
     parser.add_argument("--out-env", type=Path)
+    parser.add_argument(
+        "--merge-out-env",
+        action="store_true",
+        help=(
+            "Merge this provisioning phase into an existing strict env file, "
+            "preserving replacement metadata emitted by an earlier phase."
+        ),
+    )
     return parser

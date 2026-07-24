@@ -335,6 +335,13 @@ def _assert_green_path(
     model_attestation_verify_key = str(
         environment.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY") or ""
     ).strip()
+    proxy_caller_application_id = str(environment.get("MIP_UPSTREAM_PROXY_CLIENT_ID") or "").strip()
+    proxy_caller_credential_id = str(
+        environment.get("MIP_UPSTREAM_PROXY_CREDENTIAL_ID") or ""
+    ).strip()
+    proxy_caller_secret_reference = str(
+        environment.get("MIP_UPSTREAM_PROXY_CLIENT_SECRET") or ""
+    ).strip()
     source_hash = gateway_agent_source_hash(
         upstream_endpoint=replacement_endpoint,
         catalog=catalog,
@@ -350,6 +357,9 @@ def _assert_green_path(
         inference_schema=inference_schema,
         inference_table_prefix=inference_table_prefix,
         attestation_verify_key=model_attestation_verify_key,
+        proxy_caller_application_id=proxy_caller_application_id,
+        proxy_caller_credential_id=proxy_caller_credential_id,
+        proxy_caller_secret_reference=proxy_caller_secret_reference,
     )
     expected_model = gateway_agent_model_name(
         base_model_name=model_family,
@@ -412,6 +422,9 @@ def _assert_green_path(
             supervisor_endpoint_id=replacement_endpoint_id,
             upstream_endpoint=replacement_endpoint,
             runtime_application_id=runtime_application_id,
+            proxy_caller_application_id=proxy_caller_application_id,
+            proxy_caller_credential_id=proxy_caller_credential_id,
+            proxy_caller_secret_reference=proxy_caller_secret_reference,
             model_name=gateway_model,
             model_version=gateway_model_version,
             model_source=model_source,

@@ -21,6 +21,7 @@ from backend.agents.gateway_contract import (
 )
 from backend.agents.supervisor_contract import supervisor_contract_hash
 from backend.config.settings import Settings
+from backend.services import supervisor_runtime as supervisor_runtime_module
 from backend.services.supervisor_runtime import verify_supervisor_runtime
 from tests.fixtures.gateway_runtime_resources import (
     gateway_runtime_contract_for_scope,
@@ -30,6 +31,9 @@ from tests.fixtures.gateway_runtime_resources import (
 _UPSTREAM = "managed-supervisor-endpoint"
 _MODEL = "mip.audit.mortgage_growth_supervisor_proxy"
 _TABLE = "mip.audit.mip_agent_gateway_growth_agent"
+_PROXY_CLIENT_ID = "proxy-client"
+_PROXY_CREDENTIAL_ID = "proxy-credential"
+_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 
 
 def _settings(**overrides: object) -> Settings:
@@ -48,6 +52,9 @@ def _settings(**overrides: object) -> Settings:
         "mip_ai_gateway_experiment_id": "experiment-7",
         "mip_ai_gateway_experiment_name": "/Users/runtime-client/proxy",
         "mip_ai_gateway_agent_model_source": "models:/m-reviewed-proxy",
+        "mip_agent_proxy_client_id": _PROXY_CLIENT_ID,
+        "mip_agent_proxy_credential_id": _PROXY_CREDENTIAL_ID,
+        "mip_agent_proxy_secret_reference": _PROXY_SECRET_REFERENCE,
     }
     values.update(overrides)
     binding_values = (
@@ -69,6 +76,9 @@ def _settings(**overrides: object) -> Settings:
                 model_name=str(binding_values[4]),
                 model_version=int(str(binding_values[5])),
                 inference_table=str(binding_values[6]),
+                proxy_caller_application_id=str(values["mip_agent_proxy_client_id"]),
+                proxy_caller_credential_id=str(values["mip_agent_proxy_credential_id"]),
+                proxy_caller_secret_reference=str(values["mip_agent_proxy_secret_reference"]),
             )
         else:
             values["mip_expected_agent_gateway_binding_sha256"] = "b" * 64
@@ -124,6 +134,15 @@ def _resource_environment() -> dict[str, str]:
     }
 
 
+def test_app_resource_environment_preserves_bounded_previous_model_key() -> None:
+    previous_key = "previous-model-attestation-key"
+    environment = supervisor_runtime_module._resource_environment(
+        _settings(mip_gateway_model_attestation_previous_verify_key=previous_key)
+    )
+
+    assert environment["MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY"] == previous_key
+
+
 class _ApiClient:
     def do(self, method: str, path: str) -> dict[str, str]:
         assert method == "GET"
@@ -157,10 +176,7 @@ class _ServingEndpoints:
 
     def get(self, endpoint: str) -> object:
         if endpoint == _UPSTREAM:
-            return SimpleNamespace(
-                id=self.supervisor_endpoint_id,
-                creator="runtime-client",
-            )
+            raise AssertionError("App-safe verification must not query the private Supervisor")
         assert endpoint == "mip-growth-agent-gateway"
         return SimpleNamespace(
             id=self.endpoint_id,
@@ -180,6 +196,9 @@ class _ServingEndpoints:
                             "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-1",
                             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": self.upstream,
                             "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
+                            "MIP_UPSTREAM_PROXY_CLIENT_ID": _PROXY_CLIENT_ID,
+                            "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": _PROXY_CREDENTIAL_ID,
+                            "MIP_UPSTREAM_PROXY_CLIENT_SECRET": _PROXY_SECRET_REFERENCE,
                             "MIP_SUPERVISOR_CATALOG": "mip",
                             "MIP_SUPERVISOR_GENIE_SPACE_ID": "space-123",
                             "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(
@@ -253,6 +272,36 @@ def test_runtime_verifies_managed_identity_and_gateway_product_endpoint_separate
     assert runtime.supervisor_endpoint == _UPSTREAM
     assert runtime.model_name == _MODEL
     assert runtime.task == "agent/v1/responses"
+
+
+def test_app_runtime_accepts_exact_provider_normalized_gateway_shape() -> None:
+    class _ProviderNormalizedEndpoints(_ServingEndpoints):
+        def get(self, endpoint: str) -> object:
+            details = super().get(endpoint)
+            entity = details.config.served_entities[0]
+            entity.burst_scaling_enabled = None
+            details.config.served_models = [
+                SimpleNamespace(
+                    model_name=entity.entity_name,
+                    model_version=entity.entity_version,
+                    name=entity.name,
+                    environment_vars=dict(entity.environment_vars),
+                    workload_size=entity.workload_size,
+                    workload_type=entity.workload_type,
+                    scale_to_zero_enabled=entity.scale_to_zero_enabled,
+                )
+            ]
+            details.config.traffic_config.routes[0].served_model_name = entity.name
+            details.ai_gateway.usage_tracking_config = SimpleNamespace(enabled=False)
+            return details
+
+    runtime, reason = verify_supervisor_runtime(
+        SimpleNamespace(serving_endpoints=_ProviderNormalizedEndpoints()),
+        _settings(),
+    )
+
+    assert reason is None
+    assert runtime is not None
 
 
 def test_app_runtime_does_not_query_private_gateway_resources(

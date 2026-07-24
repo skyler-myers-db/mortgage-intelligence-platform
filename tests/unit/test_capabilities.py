@@ -64,6 +64,9 @@ _TEST_SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("
 _TEST_VERIFY_KEY = derive_gateway_proof_verify_key(_TEST_SIGNING_KEY)
 _TEST_GATEWAY_ENDPOINT_ID = "gateway-endpoint-id"
 _TEST_SUPERVISOR_ENDPOINT_ID = "supervisor-endpoint-id"
+_TEST_PROXY_CLIENT_ID = "proxy-client"
+_TEST_PROXY_CREDENTIAL_ID = "proxy-credential"
+_TEST_PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 
 
 @pytest.fixture(autouse=True)
@@ -91,6 +94,9 @@ def _settings(**overrides: object) -> Settings:
         "mip_agent_supervisor_id": "supervisor-1",
         "mip_agent_gateway_model_version": 7,
         "mip_agent_runtime_client_id": "runtime-client",
+        "mip_agent_proxy_client_id": _TEST_PROXY_CLIENT_ID,
+        "mip_agent_proxy_credential_id": _TEST_PROXY_CREDENTIAL_ID,
+        "mip_agent_proxy_secret_reference": _TEST_PROXY_SECRET_REFERENCE,
         "mip_default_catalog": "mip",
         "mip_ai_gateway_inference_table": "mip_app_state.mip_sync.mip_agent_inference",
         "mip_ai_gateway_experiment_id": "experiment-7",
@@ -117,6 +123,9 @@ def _settings(**overrides: object) -> Settings:
         base.get("mip_agent_gateway_model", "mip.audit.mortgage_growth_supervisor_proxy"),
         base.get("mip_agent_gateway_model_version"),
         base.get("mip_ai_gateway_inference_table"),
+        base.get("mip_agent_proxy_client_id"),
+        base.get("mip_agent_proxy_credential_id"),
+        base.get("mip_agent_proxy_secret_reference"),
     )
     if all(binding_values):
         base["mip_expected_agent_gateway_binding_sha256"] = gateway_runtime_binding_hash(
@@ -127,6 +136,9 @@ def _settings(**overrides: object) -> Settings:
             model_name=str(binding_values[4]),
             model_version=int(str(binding_values[5])),
             inference_table=str(binding_values[6]),
+            proxy_caller_application_id=str(binding_values[7]),
+            proxy_caller_credential_id=str(binding_values[8]),
+            proxy_caller_secret_reference=str(binding_values[9]),
         )
     base["mip_expected_agent_gateway_resource_contract_json"] = json.dumps(
         {
@@ -146,6 +158,9 @@ def _settings(**overrides: object) -> Settings:
             "gateway_experiment_name": base.get("mip_ai_gateway_experiment_name"),
             "gateway_experiment_id": base.get("mip_ai_gateway_experiment_id"),
             "gateway_inference_table": base.get("mip_ai_gateway_inference_table"),
+            "proxy_caller_application_id": base.get("mip_agent_proxy_client_id"),
+            "proxy_caller_credential_id": base.get("mip_agent_proxy_credential_id"),
+            "proxy_caller_secret_reference": base.get("mip_agent_proxy_secret_reference"),
         }
     )
     return Settings(**base)
@@ -549,6 +564,9 @@ class _FakeServingEndpoints:
                             "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-1",
                             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream,
                             "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
+                            "MIP_UPSTREAM_PROXY_CLIENT_ID": _TEST_PROXY_CLIENT_ID,
+                            "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": _TEST_PROXY_CREDENTIAL_ID,
+                            "MIP_UPSTREAM_PROXY_CLIENT_SECRET": _TEST_PROXY_SECRET_REFERENCE,
                             "MIP_SUPERVISOR_CATALOG": "mip",
                             "MIP_SUPERVISOR_GENIE_SPACE_ID": "space-abc",
                             "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(
@@ -1068,38 +1086,28 @@ def test_agent_orchestrator_live_probe_requires_endpoint_query() -> None:
     assert body["model"] == "mip-growth-agent-gateway"
 
 
-@pytest.mark.parametrize(
-    ("identity_field", "reason"),
-    (
-        ("gateway_endpoint_id", "gateway_endpoint_id_mismatch"),
-        ("supervisor_endpoint_id", "supervisor_endpoint_id_mismatch"),
-    ),
-)
-def test_agent_orchestrator_rejects_live_endpoint_identity_replacement(
-    identity_field: str,
-    reason: str,
-) -> None:
-    workspace = _FakeWorkspaceClient(**{identity_field: "replaced-endpoint-id"})
+def test_agent_orchestrator_rejects_live_gateway_endpoint_identity_replacement() -> None:
+    workspace = _FakeWorkspaceClient(gateway_endpoint_id="replaced-endpoint-id")
     statuses = collect_live_capability_statuses(
         settings=_settings(mip_agent_orchestrator=True),
         workspace_client=workspace,
     )
 
     assert statuses["agent_orchestrator"].available is False
-    assert reason in statuses["agent_orchestrator"].detail
+    assert "gateway_endpoint_id_mismatch" in statuses["agent_orchestrator"].detail
     assert _gateway_probe_requests(workspace) == []
 
 
-def test_agent_orchestrator_rejects_supervisor_endpoint_creator_mismatch() -> None:
+def test_agent_orchestrator_does_not_read_private_supervisor_endpoint_creator() -> None:
     workspace = _FakeWorkspaceClient(supervisor_endpoint_creator="attacker-client")
     statuses = collect_live_capability_statuses(
         settings=_settings(mip_agent_orchestrator=True),
         workspace_client=workspace,
     )
 
-    assert statuses["agent_orchestrator"].available is False
-    assert "supervisor_endpoint_creator_mismatch" in statuses["agent_orchestrator"].detail
-    assert _gateway_probe_requests(workspace) == []
+    assert statuses["agent_orchestrator"].available is True
+    assert len(workspace.api_client.requests) == 1
+    assert workspace.api_client.requests[0][:2] == ("POST", "/serving-endpoints/responses")
 
 
 def test_agent_orchestrator_does_not_require_runtime_private_supervisor_metadata() -> None:

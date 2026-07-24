@@ -36,6 +36,13 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+# Pytest must be hermetic even when a developer has a deployment-ready
+# ``.env.local`` in the checkout.  Explicit process environment variables are
+# still available to opt-in live integration tests, but repository-local
+# deployment credentials and APP_ENV must never change ordinary unit-test
+# authorization or cause live infrastructure calls during the default suite.
+os.environ["MIP_DISABLE_DOTENV"] = "1"
+
 # MLflow tracing can flush after an individual test fixture has torn down. Pin
 # the entire pytest process to an isolated tracking/registry database before
 # importing the application so asynchronous exporters can never fall back to

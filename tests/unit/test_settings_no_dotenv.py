@@ -37,10 +37,14 @@ def test_isolated_process_cannot_rehydrate_hostile_dotenv_secrets(tmp_path: Path
             sys.executable,
             "-c",
             (
-                "from backend.config.settings import settings; "
+                "from backend.config.settings import Settings, settings; "
                 "assert settings.salesforce_client_secret is None; "
                 "assert settings.mip_genie_action_secret_current is None; "
-                "assert settings.mip_lender_name == 'Summit Mortgage'"
+                "assert settings.mip_lender_name == 'Summit Mortgage'; "
+                "direct = Settings(); "
+                "assert direct.salesforce_client_secret is None; "
+                "assert direct.mip_genie_action_secret_current is None; "
+                "assert direct.mip_lender_name == 'Summit Mortgage'"
             ),
         ],
         cwd=tmp_path,

@@ -16,8 +16,15 @@ from backend.agents.gateway_contract import (
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import app_deployment_health as deployment_health
 from tools.databricks import app_deployment_rollback as rollback
+from tools.databricks import app_deployment_rollback_inputs as rollback_inputs
+from tools.databricks import app_rollback_record_contract as rollback_contract
 from tools.databricks.app_health_contract import ActiveAppDeploymentPin
 from tools.databricks.app_rollback_resource_contract import reviewed_app_resource_contract
+from tools.databricks.gateway_legacy_rollback import (
+    LEGACY_GATEWAY_RESOURCE_FIELDS,
+    legacy_gateway_resource_digest,
+    validated_legacy_gateway_resources,
+)
 from tools.databricks.supervisor_agent_contract import (
     canonical_supervisor_contract_json,
     supervisor_contract_hash,
@@ -34,11 +41,17 @@ TREATMENT_ARGS = {
     "treatment_catalog": "mip",
 }
 GENIE_SPACE_ID = "genie-space-id"
+PROXY_CLIENT_ID = "proxy-client"
+PROXY_CREDENTIAL_ID = "proxy-credential"
+PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 RESOURCE_CONTRACT = {
     "proof_version": GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
     "catalog": "mip",
     "genie_space_id": GENIE_SPACE_ID,
     "runtime_application_id": "runtime-client",
+    "proxy_caller_application_id": PROXY_CLIENT_ID,
+    "proxy_caller_credential_id": PROXY_CREDENTIAL_ID,
+    "proxy_caller_secret_reference": PROXY_SECRET_REFERENCE,
     "supervisor_display_name": "Mortgage Growth Agent",
     "supervisor_canonical_name": "Mortgage Growth Agent",
     "supervisor_contract_json": canonical_supervisor_contract_json(
@@ -95,6 +108,11 @@ def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rollback, "assert_deployment_lease_held", lambda *_a, **_kw: {})
     monkeypatch.setattr(rollback, "revoke_direct_permissions", lambda *_a, **_kw: True)
     monkeypatch.setattr(
+        rollback_contract,
+        "assert_owned_app_rollback_scope",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
         rollback,
         "converge_campaign_treatment_access",
         lambda **_kwargs: True,
@@ -122,6 +140,9 @@ def _payload(*, git_sha: str = GIT_SHA) -> dict[str, object]:
         "MIP_AGENT_SUPERVISOR_ENDPOINT": "supervisor-endpoint",
         "MIP_AGENT_SUPERVISOR_NAME": "Mortgage Growth Agent",
         "MIP_AGENT_RUNTIME_CLIENT_ID": "runtime-client",
+        "MIP_AGENT_PROXY_CLIENT_ID": PROXY_CLIENT_ID,
+        "MIP_AGENT_PROXY_CREDENTIAL_ID": PROXY_CREDENTIAL_ID,
+        "MIP_AGENT_PROXY_SECRET_REFERENCE": PROXY_SECRET_REFERENCE,
         "MIP_AI_GATEWAY_ENDPOINT": "green-gateway",
         "MIP_AI_GATEWAY_AGENT_MODEL": "mip.audit.proxy",
         "MIP_AI_GATEWAY_AGENT_MODEL_VERSION": "7",
@@ -153,6 +174,9 @@ def _binding() -> str:
         model_name="mip.audit.proxy",
         model_version=7,
         inference_table="mip.audit.inference",
+        proxy_caller_application_id=PROXY_CLIENT_ID,
+        proxy_caller_credential_id=PROXY_CREDENTIAL_ID,
+        proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
     )
 
 
@@ -187,6 +211,9 @@ class _Secrets:
 
     def put_secret(self, *, scope: str, key: str, string_value: str) -> None:
         self.values[(scope, key)] = string_value
+
+    def delete_secret(self, scope: str, key: str) -> None:
+        self.values.pop((scope, key), None)
 
 
 class _Apps:
@@ -387,9 +414,192 @@ def test_verified_signed_last_good_contract_is_read_only(
     assert contract.deployment_lease_id == LEASE_ID
     assert contract.git_sha == GIT_SHA
     assert contract.gateway_binding_sha256 == _binding()
+    assert contract.active_proxy_credential_id == PROXY_CREDENTIAL_ID
+    assert contract.pending_proxy_credential_retirement_ids == ()
     assert workspace.secrets.values == before
     assert workspace.apps.resource_updates == resource_updates
     assert workspace.apps.started == starts
+
+
+def test_proxy_retirement_derives_only_from_prior_signed_identity() -> None:
+    previous = {
+        "version": rollback.RECORD_VERSION,
+        "gateway_resources": {
+            "proxy_caller_application_id": PROXY_CLIENT_ID,
+            "proxy_caller_credential_id": "blue",
+        },
+        "pending_proxy_credential_retirement_ids": ("older",),
+    }
+    candidate = {
+        "proxy_caller_application_id": PROXY_CLIENT_ID,
+        "proxy_caller_credential_id": "green",
+    }
+
+    assert rollback._capture_proxy_retirement_ids(
+        previous,
+        candidate_gateway_resources=candidate,
+    ) == ("blue", "older")
+
+    with pytest.raises(RuntimeError, match="proxy identity changed"):
+        rollback._capture_proxy_retirement_ids(
+            previous,
+            candidate_gateway_resources={
+                **candidate,
+                "proxy_caller_application_id": "different-proxy",
+            },
+        )
+
+
+def test_signed_proxy_retirement_journal_survives_process_loss_and_completes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    active_binding = _binding()
+    monkeypatch.setattr(
+        rollback,
+        "_health",
+        lambda *_a, **_kw: (GIT_SHA, active_binding, LEASE_ID),
+    )
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+
+    green_credential_id = "green-credential"
+    green_secret_reference = (
+        "{{secrets/mip-agent-proxy/"
+        f"oauth-client-secret-{green_credential_id}}}}}"
+    )
+    green_contract = {
+        **RESOURCE_CONTRACT,
+        "proxy_caller_credential_id": green_credential_id,
+        "proxy_caller_secret_reference": green_secret_reference,
+    }
+    green_digest = gateway_exact_resource_digest(green_contract)
+    active_binding = gateway_runtime_binding_hash(
+        endpoint="green-gateway",
+        supervisor_id="supervisor-id",
+        upstream_endpoint="supervisor-endpoint",
+        runtime_application_id="runtime-client",
+        model_name="mip.audit.proxy",
+        model_version=7,
+        inference_table="mip.audit.inference",
+        proxy_caller_application_id=PROXY_CLIENT_ID,
+        proxy_caller_credential_id=green_credential_id,
+        proxy_caller_secret_reference=green_secret_reference,
+    )
+    green_payload = json.loads(json.dumps(_payload()))
+    green_values = {
+        "MIP_AGENT_PROXY_CREDENTIAL_ID": green_credential_id,
+        "MIP_AGENT_PROXY_SECRET_REFERENCE": green_secret_reference,
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": green_digest,
+    }
+    for item in green_payload["env_vars"]:
+        if item["name"] in green_values:
+            item["value"] = green_values[item["name"]]
+    green_deployment = _deployment(
+        "deployment-green",
+        artifact="/Workspace/Users/app-id/src/deployment-green",
+    )
+    green_deployment.update_time = "2026-07-17T00:01:00Z"
+    workspace.apps.deployments.append(green_deployment)
+    workspace.apps.active_deployment = green_deployment
+    monkeypatch.setattr(
+        rollback,
+        "resolve_exact_resource_proof",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            contract=green_contract,
+            digest=green_digest,
+        ),
+    )
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=green_payload,
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=active_binding,
+        **CAPTURE_ARGS,
+    )
+
+    # Simulate a fresh process: recover authority only from the signed record.
+    recovered = rollback.verified_signed_last_good_contract(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+    )
+    assert recovered.active_proxy_credential_id == green_credential_id
+    assert recovered.pending_proxy_credential_retirement_ids == (
+        PROXY_CREDENTIAL_ID,
+    )
+
+    provider_checks: list[str] = []
+    rollback.complete_proxy_credential_retirement(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        proxy_application_id=PROXY_CLIENT_ID,
+        retained_credential_id=green_credential_id,
+        retired_credential_ids=(PROXY_CREDENTIAL_ID,),
+        assert_provider_cleanup=lambda: provider_checks.append("exact"),
+    )
+
+    completed = rollback.verified_signed_last_good_contract(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+    )
+    assert provider_checks == ["exact"]
+    assert completed.pending_proxy_credential_retirement_ids == ()
+
+
+def test_proxy_retirement_rejects_wrong_application_before_provider_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(
+        rollback,
+        "_health",
+        lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID),
+    )
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    provider_checked = False
+
+    def provider_check() -> None:
+        nonlocal provider_checked
+        provider_checked = True
+
+    with pytest.raises(RuntimeError, match="proxy application"):
+        rollback.complete_proxy_credential_retirement(
+            workspace,
+            app_name=APP_NAME,
+            scope="mip",
+            proxy_application_id="wrong-proxy",
+            retained_credential_id=PROXY_CREDENTIAL_ID,
+            retired_credential_ids=(),
+            assert_provider_cleanup=provider_check,
+        )
+
+    assert provider_checked is False
 
 
 def test_capture_rejects_payload_that_does_not_bind_observed_gateway(
@@ -493,7 +703,7 @@ def test_reviewed_resources_file_accepts_exact_source_free_payload(tmp_path) -> 
         encoding="utf-8",
     )
 
-    assert rollback._reviewed_resources_file(str(payload)) == APP_RESOURCES
+    assert rollback_inputs.reviewed_resources_file(str(payload)) == APP_RESOURCES
 
 
 def test_payload_resource_proof_preserves_custom_resource_families(
@@ -516,7 +726,127 @@ def test_payload_resource_proof_preserves_custom_resource_families(
     assert observed["gateway_model_family_name"] == "customer_mip.audit.proxy_family"
     assert observed["gateway_experiment_base_name"] == "customer-gateway-proxy"
     assert observed["gateway_table_prefix"] == "customer_gateway_inference"
+    assert observed["proxy_caller_application_id"] == PROXY_CLIENT_ID
+    assert observed["proxy_caller_credential_id"] == PROXY_CREDENTIAL_ID
+    assert observed["proxy_caller_secret_reference"] == PROXY_SECRET_REFERENCE
     assert observed["require_resource_binding"] is True
+
+
+@pytest.mark.parametrize(
+    "missing",
+    (
+        "MIP_AGENT_PROXY_CLIENT_ID",
+        "MIP_AGENT_PROXY_CREDENTIAL_ID",
+        "MIP_AGENT_PROXY_SECRET_REFERENCE",
+    ),
+)
+def test_payload_resource_proof_requires_complete_proxy_binding(missing: str) -> None:
+    payload = _payload()
+    payload["env_vars"] = [
+        item
+        for item in payload["env_vars"]
+        if isinstance(item, dict) and item.get("name") != missing
+    ]
+
+    with pytest.raises(RuntimeError, match="lacks its exact Gateway resource contract"):
+        rollback._payload_resource_proof(
+            _workspace(),
+            payload=payload,
+            genie_space_id=GENIE_SPACE_ID,
+        )
+
+
+def _legacy_gateway_resources() -> dict[str, str]:
+    contract = {
+        field: f"legacy-{field}"
+        for field in LEGACY_GATEWAY_RESOURCE_FIELDS
+    }
+    contract["proof_version"] = GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    return {
+        **contract,
+        "resource_digest": legacy_gateway_resource_digest(contract),
+    }
+
+
+def test_load_falls_back_to_genuinely_signed_v5_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    record = _record(workspace)
+    del workspace.secrets.values[("mip", rollback._record_key(APP_NAME))]
+    record["version"] = 5
+    record["gateway_resources"] = _legacy_gateway_resources()
+    rollback._save_legacy_record(workspace, scope="mip", record=record)
+
+    loaded = rollback._load_record(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        expected_lakebase_instance="mip-app-state",
+    )
+
+    assert loaded["version"] == 5
+    assert loaded["gateway_resources"] == _legacy_gateway_resources()
+
+
+def test_v6_capture_deletes_legacy_key_only_after_durable_readback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    record = _record(workspace)
+    record["version"] = 5
+    record["gateway_resources"] = _legacy_gateway_resources()
+    rollback._save_legacy_record(workspace, scope="mip", record=record)
+    legacy_key = ("mip", f"app-last-good-v5-{APP_NAME}")
+    assert legacy_key in workspace.secrets.values
+
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+
+    assert legacy_key not in workspace.secrets.values
+    assert ("mip", rollback._record_key(APP_NAME)) in workspace.secrets.values
+
+
+def test_legacy_gateway_contract_rejects_current_proxy_fields() -> None:
+    resources = _legacy_gateway_resources()
+    resources["proxy_caller_application_id"] = PROXY_CLIENT_ID
+    resources["resource_digest"] = "a" * 64
+
+    with pytest.raises(RuntimeError, match="legacy App rollback Gateway resource"):
+        validated_legacy_gateway_resources(resources)
 
 
 def test_capture_rejects_candidate_served_resource_binding_drift(
@@ -1197,7 +1527,7 @@ def test_capture_rejects_ambiguous_server_secret_write(
     def inconsistent_get(scope: str, key: str) -> object:
         nonlocal reads
         reads += 1
-        if reads == 1:
+        if reads == 3:
             return SimpleNamespace(value=base64.b64encode(b"different").decode())
         return original_get(scope, key)
 

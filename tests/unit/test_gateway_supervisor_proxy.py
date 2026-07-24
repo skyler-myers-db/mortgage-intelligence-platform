@@ -20,19 +20,39 @@ from backend.agents.supervisor_contract import (
 )
 
 _ASSERT_LIVE_RUNTIME_CONTRACT = proxy_module._assert_live_runtime_contract
+_SUPERVISOR_WORKSPACE = proxy_module._supervisor_workspace
 
 
 @pytest.fixture(autouse=True)
 def _runtime_contract_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         proxy_module,
-        "assert_live_gateway_runtime_resources",
-        lambda *_args, **_kwargs: {},
+        "verified_gateway_runtime_resource_environment",
+        lambda _environment: {
+            "supervisor_id": "supervisor-id",
+            "supervisor_endpoint": "managed-supervisor",
+            "runtime_application_id": "runtime-client",
+            "proxy_caller_application_id": "proxy-client",
+            "proxy_caller_credential_id": "proxy-credential",
+            "catalog": "mip",
+            "genie_space_id": "space-123",
+            "supervisor_contract_sha256": supervisor_contract_hash(
+                genie_space_id="space-123",
+                catalog="mip",
+            ),
+        },
     )
     monkeypatch.setattr(
         proxy_module,
         "_assert_live_runtime_contract",
-        lambda _workspace: proxy_module._required_env("MIP_UPSTREAM_SUPERVISOR_ENDPOINT"),
+        lambda _supervisor_workspace: proxy_module._required_env(
+            "MIP_UPSTREAM_SUPERVISOR_ENDPOINT"
+        ),
+    )
+    monkeypatch.setattr(
+        proxy_module,
+        "_supervisor_workspace",
+        lambda: proxy_module.WorkspaceClient(),
     )
 
 
@@ -120,6 +140,8 @@ def _set_contract_env(monkeypatch: pytest.MonkeyPatch) -> None:
         "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-id",
         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": "managed-supervisor",
         "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
+        "MIP_UPSTREAM_PROXY_CLIENT_ID": "proxy-client",
+        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": "proxy-credential",
         "MIP_SUPERVISOR_CATALOG": "mip",
         "MIP_SUPERVISOR_GENIE_SPACE_ID": "space-123",
         "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(
@@ -139,20 +161,59 @@ def test_runtime_contract_reproves_supervisor_tools_and_uc_function_bodies(
     assert _ASSERT_LIVE_RUNTIME_CONTRACT(_contract_workspace()) == "managed-supervisor"
 
 
-def test_runtime_contract_reproves_signed_exact_resources_on_every_call(
+def test_runtime_contract_authenticates_signed_exact_binding_on_every_call(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_contract_env(monkeypatch)
     calls: list[object] = []
     monkeypatch.setattr(
         proxy_module,
-        "assert_live_gateway_runtime_resources",
-        lambda workspace, **_kwargs: calls.append(workspace) or {},
+        "verified_gateway_runtime_resource_environment",
+        lambda environment: calls.append(environment)
+        or {
+            "supervisor_id": "supervisor-id",
+            "supervisor_endpoint": "managed-supervisor",
+            "runtime_application_id": "runtime-client",
+            "proxy_caller_application_id": "proxy-client",
+            "proxy_caller_credential_id": "proxy-credential",
+            "catalog": "mip",
+            "genie_space_id": "space-123",
+            "supervisor_contract_sha256": supervisor_contract_hash(
+                genie_space_id="space-123",
+                catalog="mip",
+            ),
+        },
     )
 
-    workspace = _contract_workspace()
-    assert _ASSERT_LIVE_RUNTIME_CONTRACT(workspace) == "managed-supervisor"
-    assert calls == [workspace]
+    supervisor_workspace = _contract_workspace()
+    assert _ASSERT_LIVE_RUNTIME_CONTRACT(supervisor_workspace) == "managed-supervisor"
+    assert calls == [proxy_module.os.environ]
+
+
+def test_runtime_contract_rejects_signed_proxy_binding_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _set_contract_env(monkeypatch)
+    monkeypatch.setattr(
+        proxy_module,
+        "verified_gateway_runtime_resource_environment",
+        lambda _environment: {
+            "supervisor_id": "supervisor-id",
+            "supervisor_endpoint": "managed-supervisor",
+            "runtime_application_id": "runtime-client",
+            "proxy_caller_application_id": "different-proxy",
+            "proxy_caller_credential_id": "proxy-credential",
+            "catalog": "mip",
+            "genie_space_id": "space-123",
+            "supervisor_contract_sha256": supervisor_contract_hash(
+                genie_space_id="space-123",
+                catalog="mip",
+            ),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="signed Gateway-to-Supervisor binding drifted"):
+        _ASSERT_LIVE_RUNTIME_CONTRACT(_contract_workspace())
 
 
 def test_runtime_contract_rejects_supervisor_tool_drift(
@@ -161,7 +222,9 @@ def test_runtime_contract_rejects_supervisor_tool_drift(
     _set_contract_env(monkeypatch)
 
     with pytest.raises(RuntimeError, match="definition/tools contract drifted"):
-        _ASSERT_LIVE_RUNTIME_CONTRACT(_contract_workspace(tool_override={"description": "mutated"}))
+        _ASSERT_LIVE_RUNTIME_CONTRACT(
+            _contract_workspace(tool_override={"description": "mutated"}),
+        )
 
 
 def test_runtime_contract_rejects_uc_function_body_drift(
@@ -180,6 +243,48 @@ def test_runtime_contract_rejects_uc_function_body_drift(
     workspace.functions.get = drifted_get
     with pytest.raises(RuntimeError, match="function body drifted"):
         _ASSERT_LIVE_RUNTIME_CONTRACT(workspace)
+
+
+def test_supervisor_workspace_uses_only_the_dedicated_proxy_credential(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[dict[str, str]] = []
+    expected = SimpleNamespace(api_client=object())
+
+    def workspace_client(**kwargs: str) -> object:
+        calls.append(kwargs)
+        return expected
+
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_ID", "proxy-client")
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CREDENTIAL_ID", "proxy-credential")
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_SECRET", "proxy-secret-value")
+    monkeypatch.setenv("MIP_UPSTREAM_SUPERVISOR_CREATOR", "runtime-client")
+    monkeypatch.setattr(proxy_module, "WorkspaceClient", workspace_client)
+
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.example")
+    assert _SUPERVISOR_WORKSPACE() is expected
+    assert calls == [
+        {
+            "host": "https://workspace.example",
+            "client_id": "proxy-client",
+            "client_secret": "proxy-secret-value",
+            "auth_type": "oauth-m2m",
+        }
+    ]
+
+
+@pytest.mark.parametrize("proxy_client_id", ("runtime-client", "RUNTIME-CLIENT"))
+def test_supervisor_workspace_rejects_runtime_owner_reuse(
+    monkeypatch: pytest.MonkeyPatch,
+    proxy_client_id: str,
+) -> None:
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_ID", proxy_client_id)
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CREDENTIAL_ID", "proxy-credential")
+    monkeypatch.setenv("MIP_UPSTREAM_PROXY_CLIENT_SECRET", "proxy-secret-value")
+    monkeypatch.setenv("MIP_UPSTREAM_SUPERVISOR_CREATOR", "runtime-client")
+
+    with pytest.raises(RuntimeError, match="must not be the runtime owner"):
+        _SUPERVISOR_WORKSPACE()
 
 
 def test_proxy_delegates_the_same_responses_input_to_managed_supervisor(

@@ -2,9 +2,8 @@
 
 The managed Supervisor endpoint cannot currently accept per-endpoint Unity AI
 Gateway configuration. This custom Agent Model endpoint is the governed product
-door: AI Gateway logs the outer Responses request, while automatic Model Serving
-authentication delegates the same bounded input to the reviewed managed
-Supervisor endpoint declared as an MLflow model resource.
+door: AI Gateway logs the outer Responses request, while a dedicated OAuth
+identity delegates the same bounded input to the reviewed managed Supervisor.
 """
 
 from __future__ import annotations
@@ -23,8 +22,8 @@ from mlflow.pyfunc import ResponsesAgent
 from mlflow.types.responses import ResponsesAgentRequest, ResponsesAgentResponse
 
 try:
-    from backend.agents.gateway_live_resource_contract import (
-        assert_live_gateway_runtime_resources,
+    from backend.agents.gateway_contract import (
+        verified_gateway_runtime_resource_environment,
     )
     from backend.agents.reviewed_uc_function_contract import assert_reviewed_function_set
     from backend.agents.supervisor_contract import (
@@ -32,8 +31,8 @@ try:
         supervisor_contract_hash,
     )
 except ModuleNotFoundError:  # MLflow code_path places backend/ directly on sys.path.
-    from agents.gateway_live_resource_contract import (  # type: ignore[no-redef]
-        assert_live_gateway_runtime_resources,
+    from agents.gateway_contract import (  # type: ignore[no-redef]
+        verified_gateway_runtime_resource_environment,
     )
     from agents.reviewed_uc_function_contract import (  # type: ignore[no-redef]
         assert_reviewed_function_set,
@@ -67,7 +66,27 @@ def _payload_rows(payload: object, key: str) -> list[Mapping[str, Any]]:
     return list(rows)
 
 
-def _assert_live_runtime_contract(workspace: WorkspaceClient) -> str:
+def _supervisor_workspace() -> WorkspaceClient:
+    """Build the least-privilege caller used only for the private Supervisor."""
+
+    proxy_client_id = _required_env("MIP_UPSTREAM_PROXY_CLIENT_ID")
+    _required_env("MIP_UPSTREAM_PROXY_CREDENTIAL_ID")
+    proxy_client_secret = _required_env("MIP_UPSTREAM_PROXY_CLIENT_SECRET")
+    runtime_id = _required_env("MIP_UPSTREAM_SUPERVISOR_CREATOR")
+    if proxy_client_id.casefold() == runtime_id.casefold():
+        raise RuntimeError("Supervisor proxy caller must not be the runtime owner")
+    host = _required_env("DATABRICKS_HOST")
+    return WorkspaceClient(
+        host=host,
+        client_id=proxy_client_id,
+        client_secret=proxy_client_secret,
+        auth_type="oauth-m2m",
+    )
+
+
+def _assert_live_runtime_contract(
+    supervisor_workspace: WorkspaceClient,
+) -> str:
     """Re-prove the Supervisor and UC tool definitions before every inference."""
 
     supervisor_id = _required_env("MIP_UPSTREAM_SUPERVISOR_ID")
@@ -81,9 +100,22 @@ def _assert_live_runtime_contract(workspace: WorkspaceClient) -> str:
         catalog=catalog,
     ):
         raise RuntimeError("managed Supervisor configured contract digest is invalid")
+    signed = verified_gateway_runtime_resource_environment(os.environ)
+    expected_binding = {
+        "supervisor_id": supervisor_id,
+        "supervisor_endpoint": upstream,
+        "runtime_application_id": runtime_id,
+        "proxy_caller_application_id": _required_env("MIP_UPSTREAM_PROXY_CLIENT_ID"),
+        "proxy_caller_credential_id": _required_env("MIP_UPSTREAM_PROXY_CREDENTIAL_ID"),
+        "catalog": catalog,
+        "genie_space_id": genie_space_id,
+        "supervisor_contract_sha256": expected_hash,
+    }
+    if any(signed.get(name) != value for name, value in expected_binding.items()):
+        raise RuntimeError("signed Gateway-to-Supervisor binding drifted")
 
     encoded_id = quote(supervisor_id, safe="")
-    api = workspace.api_client
+    api = supervisor_workspace.api_client
     details = api.do("GET", f"/api/2.1/supervisor-agents/{encoded_id}")
     if not isinstance(details, Mapping):
         raise RuntimeError("managed Supervisor definition contract is invalid")
@@ -122,11 +154,7 @@ def _assert_live_runtime_contract(workspace: WorkspaceClient) -> str:
     expected["tools"] = sorted(expected["tools"], key=lambda row: row["tool_id"])
     if actual != expected:
         raise RuntimeError("managed Supervisor definition/tools contract drifted")
-    assert_reviewed_function_set(workspace, catalog=catalog)
-    assert_live_gateway_runtime_resources(
-        workspace,
-        environment=os.environ,
-    )
+    assert_reviewed_function_set(supervisor_workspace, catalog=catalog)
     return upstream
 
 
@@ -161,7 +189,9 @@ def _decode_upstream_response(raw: object) -> Mapping[str, Any]:
                     message = str(event.get("message") or event.get("error") or "").strip()
                     code = str(event.get("error_code") or "UPSTREAM_ERROR").strip()
                     if message:
-                        safe_code = code if _UPSTREAM_ERROR_CODE.fullmatch(code) else "UPSTREAM_ERROR"
+                        safe_code = (
+                            code if _UPSTREAM_ERROR_CODE.fullmatch(code) else "UPSTREAM_ERROR"
+                        )
                         raise RuntimeError(f"managed Supervisor request failed ({safe_code})")
             raise RuntimeError("managed Supervisor returned an unexpected streaming payload")
         finally:
@@ -181,8 +211,8 @@ class MortgageGrowthSupervisorProxy(ResponsesAgent):
     def predict(  # type: ignore[override]
         self, request: ResponsesAgentRequest
     ) -> ResponsesAgentResponse:
-        workspace = WorkspaceClient()
-        upstream = _assert_live_runtime_contract(workspace)
+        supervisor_workspace = _supervisor_workspace()
+        upstream = _assert_live_runtime_contract(supervisor_workspace)
         body: dict[str, Any] = {
             "model": upstream,
             "input": [item.model_dump(mode="json", exclude_none=True) for item in request.input],
@@ -198,7 +228,7 @@ class MortgageGrowthSupervisorProxy(ResponsesAgent):
             and databricks_options.get("return_trace") is True
         ):
             body["databricks_options"] = {"return_trace": True}
-        raw_response = workspace.api_client.do(
+        raw_response = supervisor_workspace.api_client.do(
             "POST",
             "/serving-endpoints/responses",
             body=body,

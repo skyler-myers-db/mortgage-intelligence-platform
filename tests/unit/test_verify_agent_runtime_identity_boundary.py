@@ -59,7 +59,8 @@ def test_runtime_boundary_rejects_successful_warehouse_query() -> None:
         )
 
 
-def test_runtime_boundary_rejects_app_http_access() -> None:
+@pytest.mark.parametrize("status_code", (200, 401))
+def test_runtime_boundary_rejects_app_http_non_denial(status_code: int) -> None:
     with pytest.raises(RuntimeError, match="App denial probe unexpectedly returned"):
         boundary.verify_boundary(
             _workspace(),
@@ -68,5 +69,79 @@ def test_runtime_boundary_rejects_app_http_access() -> None:
             app_url="https://mip-app.example",
             protected_service_principal_id="app-scim-id",
             warehouse_id="warehouse-id",
-            http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=200),
+            http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=status_code),
+        )
+
+
+@pytest.mark.parametrize(
+    "message",
+    (
+        "retry after 403 seconds",
+        "job 401 is still running",
+        "request token 1403 expired",
+    ),
+)
+def test_runtime_boundary_rejects_incidental_status_numbers(message: str) -> None:
+    with pytest.raises(RuntimeError, match="inconclusive"):
+        boundary._expect_denied(
+            "runtime denial",
+            lambda: (_ for _ in ()).throw(RuntimeError(message)),
+        )
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        {"status_code": 403},
+        {"error_code": "PERMISSION_DENIED"},
+        SimpleNamespace(response=SimpleNamespace(status_code=403)),
+    ),
+)
+def test_runtime_boundary_accepts_structured_denial_evidence(error: object) -> None:
+    assert boundary._is_denied(error)
+
+
+@pytest.mark.parametrize(
+    "error",
+    (
+        "retry after 403 seconds",
+        "job 401 is still running",
+        "request token 1403 expired",
+        {"status_code": 401},
+        {"http_status_code": "401"},
+        {"error_code": "UNAUTHENTICATED"},
+        {"code": "UNAUTHORIZED"},
+        SimpleNamespace(response=SimpleNamespace(status_code=401)),
+    ),
+)
+def test_runtime_warehouse_rejects_non_authorization_evidence(error: object) -> None:
+    with pytest.raises(RuntimeError, match="inconclusive"):
+        boundary._verify_warehouse_denial(
+            _workspace(sql_error=error),
+            warehouse_id="warehouse-id",
+        )
+
+
+class _AuthenticationFailure(RuntimeError):
+    status_code = 401
+
+
+def test_runtime_boundary_rejects_expired_control_plane_authentication() -> None:
+    workspace = _workspace(sql_error={"status_code": 401})
+    workspace.apps.get_permissions = lambda _name: (_ for _ in ()).throw(
+        _AuthenticationFailure("token expired")
+    )
+    workspace.service_principal_secrets_proxy.list = lambda *_args, **_kwargs: (
+        _ for _ in ()
+    ).throw(_AuthenticationFailure("token expired"))
+
+    with pytest.raises(RuntimeError, match="inconclusive"):
+        boundary.verify_boundary(
+            workspace,
+            expected_application_id="runtime-client",
+            app_name="mip-app",
+            app_url="https://mip-app.example",
+            protected_service_principal_id="app-scim-id",
+            warehouse_id="warehouse-id",
+            http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=401),
         )

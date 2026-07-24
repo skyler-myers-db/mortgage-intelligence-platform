@@ -90,6 +90,7 @@ GATEWAY_PROXY_TRANSITIVE_SOURCES = (
     GATEWAY_PROXY_SOURCE,
     Path(__file__),
     Path(__file__).with_name("gateway_live_resource_contract.py"),
+    Path(__file__).with_name("gateway_provider_shape.py"),
     Path(__file__).with_name("reviewed_uc_function_contract.py"),
     Path(__file__).with_name("supervisor_contract.py"),
     Path(__file__).parents[1] / "services" / "ai_gateway_proof_attestation.py",
@@ -144,6 +145,9 @@ _GATEWAY_RUNTIME_RESOURCE_FIELDS = frozenset(
         "gateway_experiment_owner",
         "gateway_inference_table_family",
         "gateway_inference_table",
+        "proxy_caller_application_id",
+        "proxy_caller_credential_id",
+        "proxy_caller_secret_reference",
     }
 )
 _UC_IDENTIFIER = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_-]*\Z")
@@ -273,6 +277,9 @@ def gateway_resource_allocation_hash(
     inference_schema: str,
     inference_table_prefix: str,
     attestation_verify_key: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
     environment: Mapping[str, str] = GATEWAY_STATIC_ENV,
     workload_size: str = GATEWAY_WORKLOAD_SIZE,
     workload_type: str = GATEWAY_WORKLOAD_TYPE,
@@ -292,6 +299,22 @@ def gateway_resource_allocation_hash(
     verify_key = attestation_verify_key.strip()
     if not verify_key:
         raise ValueError("Gateway model attestation verification key is required")
+    proxy_identity = proxy_caller_application_id.strip()
+    proxy_credential = proxy_caller_credential_id.strip()
+    proxy_secret = proxy_caller_secret_reference.strip()
+    proxy_secret_match = re.fullmatch(
+        r"\{\{secrets/[A-Za-z0-9._-]{1,128}/"
+        r"oauth-client-secret-(?P<credential>[A-Za-z0-9._-]{1,128})\}\}",
+        proxy_secret,
+    )
+    if (
+        not proxy_identity
+        or proxy_identity.casefold() == runtime_identity.casefold()
+        or not proxy_credential
+        or proxy_secret_match is None
+        or proxy_secret_match.group("credential") != proxy_credential
+    ):
+        raise ValueError("Gateway Supervisor proxy credential binding is invalid")
 
     contract = {
         "source_hash": source_hash,
@@ -303,6 +326,9 @@ def gateway_resource_allocation_hash(
         "inference_schema": inference_schema,
         "inference_table_prefix": inference_table_prefix,
         "attestation_verify_key": verify_key,
+        "proxy_caller_application_id": proxy_identity,
+        "proxy_caller_credential_id": proxy_credential,
+        "proxy_caller_secret_reference": proxy_secret,
         "environment": dict(environment),
         "workload_size": workload_size,
         "workload_type": workload_type,
@@ -333,6 +359,9 @@ def gateway_runtime_binding_hash(
     model_name: str,
     model_version: int,
     inference_table: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
 ) -> str:
     """Return a non-secret digest for deployed-App/runtime contract parity."""
 
@@ -345,6 +374,9 @@ def gateway_runtime_binding_hash(
             model_name,
             str(model_version),
             inference_table,
+            proxy_caller_application_id,
+            proxy_caller_credential_id,
+            proxy_caller_secret_reference,
         ]
     ).encode("utf-8")
     return hashlib.sha256(canonical).hexdigest()

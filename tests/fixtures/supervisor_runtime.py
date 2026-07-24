@@ -46,6 +46,11 @@ GENIE_SPACE_ID = "space-123"
 EXPERIMENT_ID = "experiment-7"
 EXPERIMENT_NAME = "/Users/runtime-client/proxy"
 MODEL_SOURCE = "models:/m-reviewed-proxy"
+PROXY_CLIENT_ID = "proxy-client"
+PROXY_CREDENTIAL_ID = "proxy-credential"
+PROXY_SECRET_REFERENCE = (
+    "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
+)
 
 
 def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
@@ -61,6 +66,9 @@ def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
     experiment_name = str(values["mip_ai_gateway_experiment_name"])
     experiment_id = str(values["mip_ai_gateway_experiment_id"])
     model_source = str(values["mip_ai_gateway_agent_model_source"])
+    proxy_client_id = str(values["mip_agent_proxy_client_id"])
+    proxy_credential_id = str(values["mip_agent_proxy_credential_id"])
+    proxy_secret_reference = str(values["mip_agent_proxy_secret_reference"])
     signing_key = base64.urlsafe_b64encode(b"u" * 32).decode("ascii").rstrip("=")
     verify_key = derive_gateway_proof_verify_key(signing_key)
     source_hash = gateway_proxy_source_hash(
@@ -107,6 +115,9 @@ def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
             inference_schema=inference_table.split(".", 2)[1],
             inference_table_prefix=inference_table.split(".", 2)[2],
             attestation_verify_key=verify_key,
+            proxy_caller_application_id=proxy_client_id,
+            proxy_caller_credential_id=proxy_credential_id,
+            proxy_caller_secret_reference=proxy_secret_reference,
         ),
         "gateway_model_family": model_name,
         "gateway_model_name": model_name,
@@ -123,6 +134,9 @@ def _signed_resource_environment(values: dict[str, object]) -> dict[str, str]:
         "gateway_experiment_owner": runtime_id,
         "gateway_inference_table_family": inference_table,
         "gateway_inference_table": inference_table,
+        "proxy_caller_application_id": proxy_client_id,
+        "proxy_caller_credential_id": proxy_credential_id,
+        "proxy_caller_secret_reference": proxy_secret_reference,
     }
     contract_json = canonical_gateway_runtime_resource_contract(contract)
     signature = Ed25519PrivateKey.from_private_bytes(b"u" * 32).sign(
@@ -159,9 +173,15 @@ def runtime_settings(**overrides: object) -> Settings:
             model_name=DEFAULT_GATEWAY_AGENT_MODEL,
             model_version=MODEL_VERSION,
             inference_table=INFERENCE_TABLE,
+            proxy_caller_application_id=PROXY_CLIENT_ID,
+            proxy_caller_credential_id=PROXY_CREDENTIAL_ID,
+            proxy_caller_secret_reference=PROXY_SECRET_REFERENCE,
         ),
         "genie_space_id": GENIE_SPACE_ID,
         "mip_agent_runtime_client_id": "runtime-client",
+        "mip_agent_proxy_client_id": PROXY_CLIENT_ID,
+        "mip_agent_proxy_credential_id": PROXY_CREDENTIAL_ID,
+        "mip_agent_proxy_secret_reference": PROXY_SECRET_REFERENCE,
         "mip_default_catalog": "mip",
     }
     values.update(overrides)
@@ -237,11 +257,17 @@ def gateway_endpoint_details(
                                 "mip_ai_gateway_experiment_name": EXPERIMENT_NAME,
                                 "mip_ai_gateway_experiment_id": EXPERIMENT_ID,
                                 "mip_ai_gateway_agent_model_source": MODEL_SOURCE,
+                                "mip_agent_proxy_client_id": PROXY_CLIENT_ID,
+                                "mip_agent_proxy_credential_id": PROXY_CREDENTIAL_ID,
+                                "mip_agent_proxy_secret_reference": PROXY_SECRET_REFERENCE,
                             }
                         ),
                         "MIP_UPSTREAM_SUPERVISOR_ID": SUPERVISOR_ID,
                         "MIP_UPSTREAM_SUPERVISOR_ENDPOINT": upstream_endpoint,
                         "MIP_UPSTREAM_SUPERVISOR_CREATOR": "runtime-client",
+                        "MIP_UPSTREAM_PROXY_CLIENT_ID": PROXY_CLIENT_ID,
+                        "MIP_UPSTREAM_PROXY_CREDENTIAL_ID": PROXY_CREDENTIAL_ID,
+                        "MIP_UPSTREAM_PROXY_CLIENT_SECRET": PROXY_SECRET_REFERENCE,
                         "MIP_SUPERVISOR_CATALOG": "mip",
                         "MIP_SUPERVISOR_GENIE_SPACE_ID": GENIE_SPACE_ID,
                         "MIP_SUPERVISOR_CONTRACT_SHA256": supervisor_contract_hash(

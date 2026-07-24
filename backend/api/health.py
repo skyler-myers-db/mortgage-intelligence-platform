@@ -74,6 +74,9 @@ def _agent_gateway_binding_sha256() -> str | None:
     model_name = settings.mip_agent_gateway_model.strip()
     model_version = settings.mip_agent_gateway_model_version
     inference_table = (settings.mip_ai_gateway_inference_table or "").strip()
+    proxy_application_id = (settings.mip_agent_proxy_client_id or "").strip()
+    proxy_credential_id = (settings.mip_agent_proxy_credential_id or "").strip()
+    proxy_secret_reference = (settings.mip_agent_proxy_secret_reference or "").strip()
     if (
         not endpoint
         or not supervisor_id
@@ -82,6 +85,9 @@ def _agent_gateway_binding_sha256() -> str | None:
         or not model_name
         or model_version is None
         or not inference_table
+        or not proxy_application_id
+        or not proxy_credential_id
+        or not proxy_secret_reference
     ):
         return None
     return gateway_runtime_binding_hash(
@@ -92,6 +98,9 @@ def _agent_gateway_binding_sha256() -> str | None:
         model_name=model_name,
         model_version=model_version,
         inference_table=inference_table,
+        proxy_caller_application_id=proxy_application_id,
+        proxy_caller_credential_id=proxy_credential_id,
+        proxy_caller_secret_reference=proxy_secret_reference,
     )
 
 

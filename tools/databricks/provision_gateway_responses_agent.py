@@ -8,11 +8,6 @@ from typing import Any
 
 import mlflow
 from mlflow import MlflowClient
-from mlflow.models.resources import (
-    DatabricksFunction,
-    DatabricksGenieSpace,
-    DatabricksServingEndpoint,
-)
 
 from backend.agents.gateway_contract import (
     GATEWAY_BURST_SCALING_ENABLED,
@@ -124,6 +119,9 @@ def gateway_resource_hash(
     inference_schema: str,
     inference_table_prefix: str,
     attestation_verify_key: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
 ) -> str:
     """Bind every mutable deployment input used to allocate green resources."""
 
@@ -137,6 +135,9 @@ def gateway_resource_hash(
         inference_schema=inference_schema,
         inference_table_prefix=inference_table_prefix,
         attestation_verify_key=attestation_verify_key,
+        proxy_caller_application_id=proxy_caller_application_id,
+        proxy_caller_credential_id=proxy_caller_credential_id,
+        proxy_caller_secret_reference=proxy_caller_secret_reference,
         environment=_STATIC_ENV,
         workload_size=_WORKLOAD_SIZE,
         workload_type=_WORKLOAD_TYPE.value,
@@ -193,32 +194,11 @@ def _start_mlflow_run() -> Any:
     return mlflow.start_run()
 
 
-def _log_responses_model(*, upstream_endpoint: str, catalog: str, genie_space_id: str) -> Any:
+def _log_responses_model() -> Any:
     return _MLFLOW_LOG_MODEL(
         name="mortgage_growth_supervisor_proxy",
         python_model=str(AGENT_SOURCE),
-        resources=[
-            DatabricksServingEndpoint(
-                endpoint_name=upstream_endpoint,
-                on_behalf_of_user=False,
-            ),
-            DatabricksFunction(
-                function_name=f"{catalog}.gold.fn_build_cohort",
-                on_behalf_of_user=False,
-            ),
-            DatabricksFunction(
-                function_name=f"{catalog}.gold.fn_segment_counts",
-                on_behalf_of_user=False,
-            ),
-            DatabricksFunction(
-                function_name=f"{catalog}.gold.fn_lead_queue_url",
-                on_behalf_of_user=False,
-            ),
-            DatabricksGenieSpace(
-                genie_space_id=genie_space_id,
-                on_behalf_of_user=False,
-            ),
-        ],
+        resources=[],
         input_example={
             "input": [
                 {
@@ -236,15 +216,11 @@ def _log_responses_model(*, upstream_endpoint: str, catalog: str, genie_space_id
     )
 
 
-def _log_gateway_model(*, upstream_endpoint: str, catalog: str, genie_space_id: str) -> Any:
+def _log_gateway_model() -> Any:
     """Log code-from-model without invoking resources that do not exist yet."""
 
     with responses_agent_packaging_validation(), _start_mlflow_run():
-        return _log_responses_model(
-            upstream_endpoint=upstream_endpoint,
-            catalog=catalog,
-            genie_space_id=genie_space_id,
-        )
+        return _log_responses_model()
 
 
 def _verified_model_version_tags(
@@ -326,6 +302,9 @@ def gateway_endpoint_configuration_matches(
         supervisor_id=deployment.supervisor_id,
         upstream_endpoint=deployment.upstream_endpoint,
         runtime_application_id=deployment.runtime_application_id,
+        proxy_caller_application_id=deployment.proxy_caller_application_id,
+        proxy_caller_credential_id=deployment.proxy_caller_credential_id,
+        proxy_caller_secret_reference=deployment.proxy_caller_secret_reference,
         catalog=deployment.catalog,
         genie_space_id=deployment.genie_space_id,
         model_name=deployment.model_name,
@@ -373,6 +352,9 @@ def verify_gateway_responses_agent(
         inference_schema=deployment.inference_table.split(".", 2)[1],
         inference_table_prefix=deployment.inference_table_prefix,
         attestation_verify_key=deployment.model_attestation_verify_key,
+        proxy_caller_application_id=deployment.proxy_caller_application_id,
+        proxy_caller_credential_id=deployment.proxy_caller_credential_id,
+        proxy_caller_secret_reference=deployment.proxy_caller_secret_reference,
     )
     expected_model_name = gateway_agent_model_name(
         base_model_name=deployment.model_family,
@@ -447,6 +429,9 @@ def verify_gateway_responses_agent(
         supervisor_id=deployment.supervisor_id,
         upstream_endpoint=deployment.upstream_endpoint,
         runtime_application_id=deployment.runtime_application_id,
+        proxy_caller_application_id=deployment.proxy_caller_application_id,
+        proxy_caller_credential_id=deployment.proxy_caller_credential_id,
+        proxy_caller_secret_reference=deployment.proxy_caller_secret_reference,
         catalog=deployment.catalog,
         genie_space_id=deployment.genie_space_id,
         model_name=deployment.model_name,
@@ -515,6 +500,9 @@ def ensure_gateway_responses_agent(
     inference_table_prefix: str,
     genie_space_id: str,
     expected_creator_application_id: str,
+    proxy_caller_application_id: str,
+    proxy_caller_credential_id: str,
+    proxy_caller_secret_reference: str,
     deployment_app_name: str | None = None,
     deployment_lease_id: str | None = None,
     deployment_source_git_sha: str | None = None,
@@ -565,6 +553,9 @@ def ensure_gateway_responses_agent(
         inference_schema=inference_schema,
         inference_table_prefix=inference_table_prefix,
         attestation_verify_key=attestation_verify_key,
+        proxy_caller_application_id=proxy_caller_application_id,
+        proxy_caller_credential_id=proxy_caller_credential_id,
+        proxy_caller_secret_reference=proxy_caller_secret_reference,
     )
     versioned_table_prefix = gateway_inference_table_prefix(
         base_prefix=inference_table_prefix,
@@ -644,11 +635,7 @@ def ensure_gateway_responses_agent(
             )
             print(f"[agentic] logging Gateway Supervisor proxy: {versioned_model_name}")
             lease_check()
-            logged = _log_gateway_model(
-                upstream_endpoint=upstream_endpoint,
-                catalog=inference_catalog,
-                genie_space_id=genie_space_id,
-            )
+            logged = _log_gateway_model()
             model_source = str(getattr(logged, "model_uri", "") or "").strip()
             if not model_source:
                 raise RuntimeError("logged Gateway model has no immutable model URI")
@@ -786,6 +773,9 @@ def ensure_gateway_responses_agent(
         supervisor_id=supervisor_id,
         upstream_endpoint=upstream_endpoint,
         runtime_application_id=expected_creator_application_id,
+        proxy_caller_application_id=proxy_caller_application_id,
+        proxy_caller_credential_id=proxy_caller_credential_id,
+        proxy_caller_secret_reference=proxy_caller_secret_reference,
         catalog=inference_catalog,
         genie_space_id=genie_space_id,
         model_name=versioned_model_name,
@@ -882,6 +872,9 @@ def ensure_gateway_responses_agent(
         supervisor_endpoint_id=supervisor_endpoint_id,
         upstream_endpoint=upstream_endpoint,
         runtime_application_id=expected_creator_application_id,
+        proxy_caller_application_id=proxy_caller_application_id,
+        proxy_caller_credential_id=proxy_caller_credential_id,
+        proxy_caller_secret_reference=proxy_caller_secret_reference,
         model_name=versioned_model_name,
         model_version=model_version,
         model_source=model_source,

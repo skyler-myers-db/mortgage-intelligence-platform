@@ -17,8 +17,7 @@ from backend.config.settings import Settings, get_settings
 from backend.schemas.growth_agent import GrowthAgentPromptRunRequest, GrowthAgentWorkflowId
 from backend.services.ai_gateway_proof_ledger import normalize_gateway_sha
 from backend.services.capability_serving_probes import (
-    query_serving_endpoint,
-    serving_response_has_payload,
+    query_serving_endpoint_with_proof,
 )
 from backend.services.growth_agent_workflows import (
     CUSTOM_WORKFLOW_ID,
@@ -82,7 +81,9 @@ class GrowthAgentCopilotEvidence:
             "serving_endpoint": self.serving_endpoint,
             "serving_task": self.serving_task,
         }
-        payload.update({key: value for key, value in optional.items() if value not in (None, [], "")})
+        payload.update(
+            {key: value for key, value in optional.items() if value not in (None, [], "")}
+        )
         return payload
 
 
@@ -141,8 +142,10 @@ def _agent_framework_plan(
             return None
         endpoint = runtime.endpoint
         task = runtime.task
-        gateway_client_request_id = _gateway_client_request_id(payload, settings=settings, endpoint=endpoint)
-        response = query_serving_endpoint(
+        gateway_client_request_id = _gateway_client_request_id(
+            payload, settings=settings, endpoint=endpoint
+        )
+        execution = query_serving_endpoint_with_proof(
             workspace_client,
             endpoint,
             task=task,
@@ -154,8 +157,9 @@ def _agent_framework_plan(
             client_request_id=gateway_client_request_id
             or f"mip-growth-agent-{_prompt_hash(payload.prompt)[:20]}",
         )
-        if not serving_response_has_payload(response):
+        if not execution.proves_agent_response:
             return None
+        response = execution.response
         decision = _supervisor_decision_from_response(response)
         selected = WORKFLOWS.get(decision.workflow_id) if decision is not None else None
         if selected is None:
@@ -264,7 +268,10 @@ def _objective_signal_summary(payload: GrowthAgentPromptRunRequest) -> str:
     q = payload.prompt.lower()
     signals: list[str] = []
     signal_terms: tuple[tuple[str, tuple[str, ...]], ...] = (
-        ("refinance economics", ("refi", "refinance", "rate spread", "economic incentive", "prime")),
+        (
+            "refinance economics",
+            ("refi", "refinance", "rate spread", "economic incentive", "prime"),
+        ),
         ("listed purchase", ("listed", "listing", "for sale", "purchase")),
         ("HELOC or high equity", ("heloc", "home equity", "equity line", "cash out", "cash-out")),
         ("investor or owner link", ("investor", "multi property", "multi-property", "owner link")),
@@ -272,7 +279,10 @@ def _objective_signal_summary(payload: GrowthAgentPromptRunRequest) -> str:
         ("borrower dossier", ("dossier", "borrower story", "customer 360", "borrower 360")),
         ("branch capacity", ("capacity", "aging", "stale approved", "loan officer")),
         ("source freshness", ("source", "fresh", "readiness", "stale data", "data ops", "refresh")),
-        ("custom segment workflow", ("custom", "cohort", "segment", "segments", "both", "intersection")),
+        (
+            "custom segment workflow",
+            ("custom", "cohort", "segment", "segments", "both", "intersection"),
+        ),
     )
     for label, terms in signal_terms:
         if any(term in q for term in terms):
@@ -345,7 +355,9 @@ def _extract_response_text(value: Any) -> str:
 def _parse_json_object(text: str) -> dict[str, Any] | None:
     candidate = text.strip()
     if candidate.startswith("```"):
-        candidate = "\n".join(line for line in candidate.splitlines() if not line.strip().startswith("```")).strip()
+        candidate = "\n".join(
+            line for line in candidate.splitlines() if not line.strip().startswith("```")
+        ).strip()
     try:
         value = json.loads(candidate)
     except json.JSONDecodeError:

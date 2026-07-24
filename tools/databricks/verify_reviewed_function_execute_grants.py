@@ -66,16 +66,16 @@ def verify_reviewed_function_execute_grants(
     workspace: Any,
     *,
     catalog: str,
-    principals: tuple[str, str],
+    principals: tuple[str, ...],
 ) -> None:
-    """Require one direct EXECUTE privilege for both production consumers."""
+    """Require one direct EXECUTE privilege for every production consumer."""
 
     if not _IDENTIFIER_RE.fullmatch(catalog):
         raise ValueError(f"invalid catalog identifier: {catalog!r}")
-    if any(not principal.strip() for principal in principals):
-        raise ValueError("both application IDs are required")
-    if principals[0] == principals[1]:
-        raise ValueError("App and agent-runtime application IDs must be distinct")
+    if len(principals) < 2 or any(not principal.strip() for principal in principals):
+        raise ValueError("at least two application IDs are required")
+    if len(set(principals)) != len(principals):
+        raise ValueError("function consumer application IDs must be distinct")
 
     expected = {"EXECUTE": {("", "")}}
     for principal in principals:
@@ -98,13 +98,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--catalog", required=True)
     parser.add_argument("--app-application-id", required=True)
     parser.add_argument("--agent-runtime-application-id", required=True)
+    parser.add_argument("--agent-proxy-application-id", required=True)
     args = parser.parse_args(argv)
     verify_reviewed_function_execute_grants(
         deployment_workspace_client(),
         catalog=args.catalog,
-        principals=(args.app_application_id, args.agent_runtime_application_id),
+        principals=(
+            args.app_application_id,
+            args.agent_runtime_application_id,
+            args.agent_proxy_application_id,
+        ),
     )
-    print("[function-grants] verified six exact effective direct EXECUTE grants")
+    print("[function-grants] verified nine exact effective direct EXECUTE grants")
     return 0
 
 
