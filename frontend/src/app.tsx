@@ -1,6 +1,6 @@
 import { Suspense, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { Navigate, Route, Routes, useLocation } from 'react-router';
 import { AppShell } from './components/layout/AppShell';
 import { RouteNav } from './components/layout/RouteNav';
 import { Skeleton } from './components/ui/Skeleton';

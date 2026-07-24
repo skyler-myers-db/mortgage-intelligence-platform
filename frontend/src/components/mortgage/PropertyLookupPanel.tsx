@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { ApiError, api } from '../../lib/api';
 import type { PropertyLoanLookupResponse } from '../../types';
 import { segmentName } from '../../lib/segmentMetadata';

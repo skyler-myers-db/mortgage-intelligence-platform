@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactElement, ReactNode } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useLocation } from 'react-router-dom';
+import { useLocation } from 'react-router';
 import { useApp, type Accent, type Density, type Theme } from '../components/AppContext';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';

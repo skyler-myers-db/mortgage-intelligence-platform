@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { api, type LeadsPageResult, type SegmentFilterMode } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type { LeadSummary, SegmentCode, SegmentSummary } from '../types';

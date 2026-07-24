@@ -1,5 +1,5 @@
 import type { ChangeEvent } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { Icon } from '../components/Icon';
 import { Button, EvidenceChip } from '../components/Primitives';
 import { drawerForAsset } from '../lib/drawerSources';

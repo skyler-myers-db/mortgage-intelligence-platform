@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { ApiError, api } from '../../lib/api';
 import type { GenieActionSuggestion, GenieAnswer as GenieAnswerShape } from '../../types';

@@ -3,7 +3,7 @@
 'use no memo';
 
 import { useMemo } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router';
 import { Icon } from '../components/Icon';
 import { PageShell } from '../components/layout/PageShell';
 import { FilterSelect } from '../components/ui/FilterSelect';

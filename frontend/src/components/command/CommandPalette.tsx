@@ -6,7 +6,7 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { api } from '../../lib/api';

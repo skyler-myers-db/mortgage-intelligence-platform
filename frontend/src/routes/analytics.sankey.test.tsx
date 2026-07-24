@@ -117,8 +117,8 @@ describe('buildFunnelSankeyModel (pure geometry)', () => {
 });
 
 const navigate = vi.fn();
-vi.mock('react-router-dom', async (orig) => {
-  const actual = await orig<typeof import('react-router-dom')>();
+vi.mock('react-router', async (orig) => {
+  const actual = await orig<typeof import('react-router')>();
   return { ...actual, useNavigate: () => navigate };
 });
 

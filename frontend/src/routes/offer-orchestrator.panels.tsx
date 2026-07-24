@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, OfferRecommendation } from '../types';
 import { BorrowerTruthFlags } from '../components/mortgage/BorrowerTruthFlags';

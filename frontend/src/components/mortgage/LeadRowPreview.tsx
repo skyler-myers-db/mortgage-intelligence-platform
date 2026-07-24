@@ -1,5 +1,5 @@
 import type { CSSProperties } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import type { LeadSummary } from '../../types';
 import { DRAWER_SOURCES } from '../../lib/drawerSources';
 import { offerDisplayLabel, offerRationale, offerShortDescription } from '../../lib/offerLanguage';

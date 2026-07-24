@@ -1,5 +1,5 @@
 import { useCallback, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useApp } from '../components/AppContext';
 import { Icon } from '../components/Icon';
 import { Button } from '../components/Primitives';

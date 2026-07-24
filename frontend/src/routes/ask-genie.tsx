@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate } from 'react-router';
 import { ApiError, api } from '../lib/api';
 import { useWarmingUpRetry } from '../lib/useWarmingUpRetry';
 import type {

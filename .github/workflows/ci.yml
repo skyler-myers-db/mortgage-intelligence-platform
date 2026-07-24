@@ -22,8 +22,8 @@ concurrency:
 env:
   # Mirror of pyproject.toml requires-python pin. Bump both in lockstep.
   PYTHON_VERSION: '3.11'
-  # frontend/package.json doesn't pin an engines.node; keep Node 22 LTS to
-  # match the local Vite + Playwright dev posture.
+  # frontend/package.json requires Node >=22.22; follow the current Node 22
+  # LTS line so CI receives patch updates while satisfying that floor.
   NODE_VERSION: '22'
   # Placeholder BUNDLE_VARs so `databricks bundle validate` can resolve
   # variable references without any real workspace secrets. The nightly

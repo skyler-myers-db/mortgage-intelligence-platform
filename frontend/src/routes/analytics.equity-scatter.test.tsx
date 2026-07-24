@@ -3,7 +3,7 @@
 import { act } from 'react';
 import { createRoot } from 'react-dom/client';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { MemoryRouter } from 'react-router-dom';
+import { MemoryRouter } from 'react-router';
 import { describe, expect, it } from 'vitest';
 // @ts-expect-error Frontend app types intentionally exclude Node globals; this
 // unit test reads the design-system CSS text under Vitest only.

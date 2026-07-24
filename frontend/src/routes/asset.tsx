@@ -1,4 +1,4 @@
-import { Link, useParams } from 'react-router-dom';
+import { Link, useParams } from 'react-router';
 import { useQuery } from '@tanstack/react-query';
 import { PageShell } from '../components/layout/PageShell';
 import { Chip } from '../components/Primitives';

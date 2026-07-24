@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Navigate, useParams } from 'react-router-dom';
+import { Navigate, useParams } from 'react-router';
 import { api, ApiError, isAbortError, isWarmingUpError, dependencyLabel } from '../lib/api';
 import type { WarmingUpState } from '../lib/useWarmingUpRetry';
 import type { Borrower360 as Borrower360Type, BorrowerLifecycle, OfferRecommendation } from '../types';

@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useInfiniteQuery } from '@tanstack/react-query';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { useApp, type Accent, type Density, type Theme } from '../AppContext';
 import { Icon, type IconName } from '../Icon';
 import { Chip } from '../Primitives';

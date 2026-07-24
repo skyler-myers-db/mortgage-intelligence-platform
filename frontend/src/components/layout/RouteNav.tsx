@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { NavLink } from 'react-router-dom';
+import { NavLink } from 'react-router';
 import { Icon, type IconName } from '../Icon';
 import { useApp } from '../AppContext';
 import { api } from '../../lib/api';

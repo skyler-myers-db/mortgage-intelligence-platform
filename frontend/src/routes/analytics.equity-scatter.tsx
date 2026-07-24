@@ -10,7 +10,7 @@ import {
   type KeyboardEvent,
   type ReactNode,
 } from 'react';
-import { Link } from 'react-router-dom';
+import { Link } from 'react-router';
 import { EvidenceChip } from '../components/Primitives';
 import { api, type AnalyticsQueryOptions } from '../lib/api';
 import { DRAWER_SOURCES } from '../lib/drawerSources';

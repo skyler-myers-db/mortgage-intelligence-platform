@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router';
 import { useApp } from '../AppContext';
 import { Icon } from '../Icon';
 import { useHealth } from '../HealthProvider';
