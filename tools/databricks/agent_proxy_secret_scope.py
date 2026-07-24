@@ -8,6 +8,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from databricks.sdk.service.workspace import AclPermission
+
 MARKER_KEY = "mip-agent-proxy-scope-binding-v1"
 MARKER_VERSION = 1
 _APP_NAME_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
@@ -223,7 +225,7 @@ def ensure_owned_agent_proxy_scope(
             workspace.secrets.put_acl(
                 scope=binding.scope,
                 principal="admins",
-                permission="MANAGE",
+                permission=AclPermission.MANAGE,
             )
         workspace.secrets.put_secret(
             scope=binding.scope,
@@ -257,7 +259,7 @@ def ensure_owned_agent_proxy_scope(
         workspace.secrets.put_acl(
             scope=binding.scope,
             principal=binding.runtime_application_id,
-            permission="READ",
+            permission=AclPermission.READ,
         )
     final_acl = _scope_acls(workspace, scope=binding.scope)
     final_keys = _scope_keys(workspace, scope=binding.scope)

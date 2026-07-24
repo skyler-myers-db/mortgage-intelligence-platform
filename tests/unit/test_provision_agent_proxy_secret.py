@@ -5,6 +5,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+from databricks.sdk.service.workspace import AclPermission
 
 from tools.databricks.agent_proxy_secret_scope import MARKER_KEY, validated_scope_binding
 from tools.databricks.provision_agent_proxy_secret import (
@@ -46,8 +47,15 @@ class _Secrets:
             for principal, permission in sorted(self.acls[scope].items())
         ]
 
-    def put_acl(self, *, scope: str, principal: str, permission: str) -> None:
-        self.acls[scope][principal] = permission
+    def put_acl(
+        self,
+        *,
+        scope: str,
+        principal: str,
+        permission: AclPermission,
+    ) -> None:
+        assert isinstance(permission, AclPermission)
+        self.acls[scope][principal] = permission.value
 
     def delete_acl(self, scope: str, principal: str) -> None:
         self.deleted_acls.append((scope, principal))

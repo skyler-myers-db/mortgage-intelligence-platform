@@ -5,6 +5,7 @@ from copy import deepcopy
 from types import SimpleNamespace
 
 import pytest
+from databricks.sdk.service.workspace import AclPermission
 
 from tools.databricks import app_rollback_secret_scope as rollback_scope
 from tools.databricks.app_rollback_secret_scope import (
@@ -39,8 +40,15 @@ class _Secrets:
             for principal, permission in sorted(self.acls[scope].items())
         ]
 
-    def put_acl(self, *, scope: str, principal: str, permission: str) -> None:
-        self.acls[scope][principal] = permission
+    def put_acl(
+        self,
+        *,
+        scope: str,
+        principal: str,
+        permission: AclPermission,
+    ) -> None:
+        assert isinstance(permission, AclPermission)
+        self.acls[scope][principal] = permission.value
 
     def put_secret(self, *, scope: str, key: str, string_value: str) -> None:
         self.keys[scope][key] = string_value

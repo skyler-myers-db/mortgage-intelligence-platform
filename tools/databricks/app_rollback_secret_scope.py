@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from databricks.sdk import WorkspaceClient
+from databricks.sdk.service.workspace import AclPermission
 
 MARKER_KEY = "mip-app-rollback-scope-binding-v1"
 MARKER_VERSION = 1
@@ -302,7 +303,7 @@ def ensure_owned_app_rollback_scope(
         workspace.secrets.put_acl(
             scope=expected_scope,
             principal="admins",
-            permission="MANAGE",
+            permission=AclPermission.MANAGE,
         )
     workspace.secrets.put_secret(
         scope=expected_scope,
