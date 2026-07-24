@@ -100,7 +100,10 @@ def _workspace(
         current_user=SimpleNamespace(
             me=lambda: SimpleNamespace(application_id=PROXY_ID, user_name=PROXY_ID)
         ),
-        config=SimpleNamespace(authenticate=lambda: {"Authorization": "Bearer proxy"}),
+        config=SimpleNamespace(
+            host="https://workspace.cloud.databricks.com",
+            authenticate=lambda: {"Authorization": "Bearer proxy"},
+        ),
         apps=SimpleNamespace(
             get_permissions=(lambda *_args: object()) if app_admin_succeeds else _denied
         ),
@@ -135,12 +138,69 @@ def _account(*, admin_succeeds: bool = False) -> object:
     return SimpleNamespace(service_principals=SimpleNamespace(list=operation))
 
 
+def _admin_workspace() -> object:
+    permission = SimpleNamespace(permission_level="CAN_MANAGE", inherited=True)
+    return SimpleNamespace(
+        apps=SimpleNamespace(
+            get=lambda _name: SimpleNamespace(
+                id="app-id",
+                name="mip-app",
+                url="https://mip-app.databricksapps.com",
+                service_principal_client_id="app-client",
+                service_principal_id="app-scim",
+                compute_status=SimpleNamespace(state="STOPPED"),
+                active_deployment=SimpleNamespace(deployment_id="active"),
+                pending_deployment=None,
+            ),
+            get_permissions=lambda _name: SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        service_principal_name=None,
+                        group_name="admins",
+                        user_name=None,
+                        all_permissions=[permission],
+                    )
+                ]
+            ),
+        ),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: iter(
+                (
+                    SimpleNamespace(
+                        id="proxy-scim",
+                        application_id=PROXY_ID,
+                        display_name="mip-agent-supervisor-proxy-ci-sp",
+                    ),
+                )
+            )
+        ),
+    )
+
+
 def _verify(
     workspace: object,
     *,
     account: object | None = None,
     app_status: int = 403,
+    unrelated_app_status: int = 403,
+    admin_workspace: object | None = None,
+    allow_stopped_app_401: bool = False,
 ) -> None:
+    def http_get(url: str, **_kwargs: object) -> object:
+        if url.endswith("/api/2.0/preview/scim/v2/Me"):
+            return SimpleNamespace(
+                status_code=200,
+                json=lambda: {
+                    "id": "proxy-scim",
+                    "userName": PROXY_ID,
+                },
+            )
+        if "/api/2.0/permissions/apps/" in url:
+            return SimpleNamespace(status_code=403)
+        if url.startswith("https://unrelated-app."):
+            return SimpleNamespace(status_code=unrelated_app_status)
+        return SimpleNamespace(status_code=app_status)
+
     verify_boundary(
         workspace=workspace,
         account=account or _account(),
@@ -150,7 +210,9 @@ def _verify(
         warehouse_id=TARGET_WAREHOUSE,
         supervisor_id=TARGET_SUPERVISOR,
         genie_space_id=TARGET_GENIE,
-        http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=app_status),
+        admin_workspace=admin_workspace,
+        allow_stopped_app_401=allow_stopped_app_401,
+        http_get=http_get,
     )
 
 
@@ -204,9 +266,37 @@ def test_proxy_boundary_rejects_effective_app_use() -> None:
         _verify(_workspace(), app_status=200)
 
 
-def test_proxy_boundary_rejects_app_authentication_failure() -> None:
-    with pytest.raises(RuntimeError, match="App denial"):
+def test_proxy_boundary_rejects_uncorroborated_provider_401() -> None:
+    with pytest.raises(RuntimeError, match="uncorroborated status=401"):
         _verify(_workspace(), app_status=401)
+
+
+def test_proxy_boundary_accepts_target_stopped_401_with_admin_attestation() -> None:
+    _verify(
+        _workspace(),
+        app_status=401,
+        admin_workspace=_admin_workspace(),
+        allow_stopped_app_401=True,
+    )
+
+
+def test_proxy_boundary_keeps_unrelated_apps_403_only() -> None:
+    with pytest.raises(RuntimeError, match="uncorroborated status=401"):
+        _verify(
+            _workspace(),
+            app_status=401,
+            unrelated_app_status=401,
+            admin_workspace=_admin_workspace(),
+            allow_stopped_app_401=True,
+        )
+
+
+def test_proxy_boundary_requires_admin_authority_for_stopped_401_mode() -> None:
+    with pytest.raises(RuntimeError, match="attestation authority is absent"):
+        _verify(
+            _workspace(),
+            allow_stopped_app_401=True,
+        )
 
 
 def test_proxy_boundary_rejects_not_found_as_account_authorization_proof() -> None:

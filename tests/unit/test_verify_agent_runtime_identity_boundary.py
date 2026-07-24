@@ -16,7 +16,10 @@ def _workspace(*, sql_state: str = "FAILED", sql_error: object = "PERMISSION_DEN
                 display_name="mip-agent-runtime-ci-sp",
             )
         ),
-        config=SimpleNamespace(authenticate=lambda: {"Authorization": "Bearer runtime"}),
+        config=SimpleNamespace(
+            host="https://workspace.cloud.databricks.com",
+            authenticate=lambda: {"Authorization": "Bearer runtime"},
+        ),
         apps=SimpleNamespace(
             get_permissions=lambda _name: (_ for _ in ()).throw(PermissionDenied("denied"))
         ),
@@ -34,15 +37,30 @@ def _workspace(*, sql_state: str = "FAILED", sql_error: object = "PERMISSION_DEN
     )
 
 
+def _http_get(app_status: int, *, identity_status: int = 200):
+    def get(url: str, **_kwargs: object) -> object:
+        if url.endswith("/api/2.0/preview/scim/v2/Me"):
+            return SimpleNamespace(
+                status_code=identity_status,
+                json=lambda: {
+                    "id": "runtime-scim",
+                    "userName": "runtime-client",
+                },
+            )
+        return SimpleNamespace(status_code=app_status)
+
+    return get
+
+
 def test_runtime_boundary_proves_app_admin_and_warehouse_denials() -> None:
     boundary.verify_boundary(
         _workspace(),
         expected_application_id="runtime-client",
         app_name="mip-app",
-        app_url="https://mip-app.example",
+        app_url="https://mip-app.databricksapps.com",
         protected_service_principal_id="app-scim-id",
         warehouse_id="warehouse-id",
-        http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=403),
+        http_get=_http_get(403),
     )
 
 
@@ -52,24 +70,50 @@ def test_runtime_boundary_rejects_successful_warehouse_query() -> None:
             _workspace(sql_state="SUCCEEDED", sql_error=None),
             expected_application_id="runtime-client",
             app_name="mip-app",
-            app_url="https://mip-app.example",
+            app_url="https://mip-app.databricksapps.com",
             protected_service_principal_id="app-scim-id",
             warehouse_id="warehouse-id",
-            http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=403),
+            http_get=_http_get(403),
         )
 
 
-@pytest.mark.parametrize("status_code", (200, 401))
+def test_runtime_boundary_rejects_provider_401_without_stopped_attestation() -> None:
+    with pytest.raises(RuntimeError, match="uncorroborated status=401"):
+        boundary.verify_boundary(
+            _workspace(),
+            expected_application_id="runtime-client",
+            app_name="mip-app",
+            app_url="https://mip-app.databricksapps.com",
+            protected_service_principal_id="app-scim-id",
+            warehouse_id="warehouse-id",
+            http_get=_http_get(401),
+        )
+
+
+@pytest.mark.parametrize("status_code", (200, 404))
 def test_runtime_boundary_rejects_app_http_non_denial(status_code: int) -> None:
     with pytest.raises(RuntimeError, match="App denial probe unexpectedly returned"):
         boundary.verify_boundary(
             _workspace(),
             expected_application_id="runtime-client",
             app_name="mip-app",
-            app_url="https://mip-app.example",
+            app_url="https://mip-app.databricksapps.com",
             protected_service_principal_id="app-scim-id",
             warehouse_id="warehouse-id",
-            http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=status_code),
+            http_get=_http_get(status_code),
+        )
+
+
+def test_runtime_boundary_rejects_bare_401_without_exact_bearer_identity() -> None:
+    with pytest.raises(RuntimeError, match="preflight identity proof"):
+        boundary.verify_boundary(
+            _workspace(),
+            expected_application_id="runtime-client",
+            app_name="mip-app",
+            app_url="https://mip-app.databricksapps.com",
+            protected_service_principal_id="app-scim-id",
+            warehouse_id="warehouse-id",
+            http_get=_http_get(401, identity_status=401),
         )
 
 
@@ -140,7 +184,7 @@ def test_runtime_boundary_rejects_expired_control_plane_authentication() -> None
             workspace,
             expected_application_id="runtime-client",
             app_name="mip-app",
-            app_url="https://mip-app.example",
+            app_url="https://mip-app.databricksapps.com",
             protected_service_principal_id="app-scim-id",
             warehouse_id="warehouse-id",
             http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=401),

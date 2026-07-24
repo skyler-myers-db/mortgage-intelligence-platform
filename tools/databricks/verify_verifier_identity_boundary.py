@@ -21,6 +21,9 @@ import requests
 
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
+from tools.databricks.authenticated_app_denial import (
+    verify_authenticated_app_denial,
+)
 from tools.databricks.authorization_denial import is_authorization_denied
 
 _RELATION_RE = re.compile(
@@ -457,21 +460,17 @@ def _verify_exact_uc_table_scope(
 def _verify_app_http_denial(
     workspace: Any,
     *,
+    expected_application_id: str,
     app_url: str,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
-    headers = dict(workspace.config.authenticate())
-    response = http_get(
-        f"{app_url.rstrip('/')}/api/v1/health",
-        headers=headers,
-        allow_redirects=False,
-        timeout=30,
+    verify_authenticated_app_denial(
+        workspace,
+        expected_application_id=expected_application_id,
+        app_url=app_url,
+        label="verifier Databricks App HTTP denial probe",
+        http_get=http_get,
     )
-    if response.status_code != 403:
-        raise RuntimeError(
-            "verifier Databricks App HTTP denial probe unexpectedly returned "
-            f"status={response.status_code}"
-        )
 
 
 def verify_boundary(
@@ -516,6 +515,7 @@ def verify_boundary(
     )
     _verify_app_http_denial(
         workspace,
+        expected_application_id=expected_application_id,
         app_url=app_url,
         http_get=http_get,
     )

@@ -3677,7 +3677,8 @@ run_with_account_identity \
   --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
   --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
   --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
-  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+  --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+  --allow-stopped-app-401
 if ! revoke_agent_runtime_bootstrap_grants; then
   echo "${RED}[deploy] temporary agent-runtime schema privileges remain; refusing deployment.${RST}" >&2
   exit 1

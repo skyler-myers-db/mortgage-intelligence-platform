@@ -12,6 +12,9 @@ import requests
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks.agent_runtime_access import assert_current_runtime_identity
+from tools.databricks.authenticated_app_denial import (
+    verify_authenticated_app_denial,
+)
 from tools.databricks.authorization_denial import is_authorization_denied
 
 
@@ -32,20 +35,17 @@ def _expect_denied(label: str, operation: Callable[[], object]) -> None:
 def _verify_app_http_denial(
     workspace: Any,
     *,
+    expected_application_id: str,
     app_url: str,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
-    response = http_get(
-        f"{app_url.rstrip('/')}/api/v1/health",
-        headers=dict(workspace.config.authenticate()),
-        allow_redirects=False,
-        timeout=30,
+    verify_authenticated_app_denial(
+        workspace,
+        expected_application_id=expected_application_id,
+        app_url=app_url,
+        label="agent-runtime Databricks App denial probe",
+        http_get=http_get,
     )
-    if response.status_code != 403:
-        raise RuntimeError(
-            "agent-runtime Databricks App denial probe unexpectedly returned "
-            f"status={response.status_code}"
-        )
 
 
 def _verify_warehouse_denial(workspace: Any, *, warehouse_id: str) -> None:
@@ -92,7 +92,12 @@ def verify_boundary(
         "workspace App permission-administration probe",
         lambda: workspace.apps.get_permissions(app_name),
     )
-    _verify_app_http_denial(workspace, app_url=app_url, http_get=http_get)
+    _verify_app_http_denial(
+        workspace,
+        expected_application_id=expected_application_id,
+        app_url=app_url,
+        http_get=http_get,
+    )
     protected_id = protected_service_principal_id.strip()
     if not protected_id:
         raise RuntimeError("protected App service-principal immutable id is required")

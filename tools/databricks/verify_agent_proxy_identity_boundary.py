@@ -17,6 +17,9 @@ from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks.agent_proxy_access import _supervisor_agents
 from tools.databricks.agent_runtime_access import _genie_spaces
+from tools.databricks.authenticated_app_denial import (
+    verify_authenticated_app_denial,
+)
 from tools.databricks.authorization_denial import is_authorization_denied
 
 _AMBIENT_AUTH_KEYS = (
@@ -194,20 +197,23 @@ def collect_admin_inventory(
 def _verify_app_denial(
     workspace: Any,
     *,
+    expected_application_id: str,
     app_url: str,
     http_get: Callable[..., Any],
+    admin_workspace: Any | None = None,
+    app_name: str | None = None,
+    allow_stopped_app_401: bool = False,
 ) -> None:
-    response = http_get(
-        f"{app_url}/api/v1/health",
-        headers=dict(workspace.config.authenticate()),
-        allow_redirects=False,
-        timeout=30,
+    verify_authenticated_app_denial(
+        workspace,
+        expected_application_id=expected_application_id,
+        app_url=app_url,
+        label="agent-proxy Databricks App denial",
+        http_get=http_get,
+        admin_workspace=admin_workspace,
+        app_name=app_name,
+        allow_stopped_app_401=allow_stopped_app_401,
     )
-    if response.status_code != 403:
-        raise RuntimeError(
-            "agent-proxy Databricks App denial unexpectedly returned "
-            f"status={response.status_code}"
-        )
 
 
 def _verify_warehouse_denial(workspace: Any, *, warehouse_id: str) -> None:
@@ -248,6 +254,8 @@ def verify_boundary(
     warehouse_id: str,
     supervisor_id: str,
     genie_space_id: str,
+    admin_workspace: Any | None = None,
+    allow_stopped_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     """Run positive target and exhaustive negative probes under proxy OAuth."""
@@ -259,6 +267,8 @@ def verify_boundary(
     }
     if expected_application_id not in authenticated:
         raise RuntimeError("authenticated agent-proxy identity does not match its application id")
+    if allow_stopped_app_401 and admin_workspace is None:
+        raise RuntimeError("admin stopped-App attestation authority is absent")
     _expect_denied(
         "account administrator service-principal listing probe",
         lambda: list(account.service_principals.list(count=1)),
@@ -271,8 +281,21 @@ def verify_boundary(
             f"workspace App permission-administration probe {candidate_app}",
             partial(workspace.apps.get_permissions, candidate_app),
         )
-    for candidate_url in inventory.app_urls:
-        _verify_app_denial(workspace, app_url=candidate_url, http_get=http_get)
+    for candidate_app, candidate_url in zip(
+        inventory.app_names,
+        inventory.app_urls,
+        strict=True,
+    ):
+        is_target = candidate_app == app_name
+        _verify_app_denial(
+            workspace,
+            expected_application_id=expected_application_id,
+            app_url=candidate_url,
+            http_get=http_get,
+            admin_workspace=admin_workspace if is_target else None,
+            app_name=candidate_app if is_target else None,
+            allow_stopped_app_401=allow_stopped_app_401 and is_target,
+        )
     _expect_denied(
         "metastore administrator GET probe",
         lambda: workspace.metastores.get(inventory.metastore_id),
@@ -372,6 +395,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--warehouse-id", required=True)
     parser.add_argument("--supervisor-id", required=True)
     parser.add_argument("--genie-space-id", required=True)
+    parser.add_argument(
+        "--allow-stopped-app-401",
+        action="store_true",
+        help="Accept target-App 401 only with a stable stopped/quarantined admin attestation.",
+    )
     return parser
 
 
@@ -408,6 +436,8 @@ def main(argv: list[str] | None = None) -> int:
         warehouse_id=args.warehouse_id,
         supervisor_id=args.supervisor_id,
         genie_space_id=args.genie_space_id,
+        admin_workspace=admin_workspace,
+        allow_stopped_app_401=args.allow_stopped_app_401,
     )
     print("agent-proxy effective authorization boundary: PASS")
     return 0

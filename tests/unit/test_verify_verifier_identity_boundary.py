@@ -284,8 +284,26 @@ def _workspace(
             extra_access=warehouse_extra_access,
             target_admin=warehouse_target_admin,
         ),
-        config=SimpleNamespace(authenticate=lambda: {"Authorization": "Bearer redacted"}),
+        config=SimpleNamespace(
+            host="https://workspace.cloud.databricks.com",
+            authenticate=lambda: {"Authorization": "Bearer redacted"},
+        ),
     )
+
+
+def _http_get(app_status: int, *, identity_status: int = 200):
+    def get(url: str, **_kwargs: object) -> object:
+        if url.endswith("/api/2.0/preview/scim/v2/Me"):
+            return SimpleNamespace(
+                status_code=identity_status,
+                json=lambda: {
+                    "id": "verifier-scim-id",
+                    "userName": "verifier-client-id",
+                },
+            )
+        return SimpleNamespace(status_code=app_status)
+
+    return get
 
 
 def _verify(**overrides: object) -> None:
@@ -294,12 +312,12 @@ def _verify(**overrides: object) -> None:
         "account": SimpleNamespace(service_principals=_DeniedAccountPrincipals()),
         "expected_application_id": "verifier-client-id",
         "app_name": "mip-app",
-        "app_url": "https://mip-app.example",
+        "app_url": "https://mip-app.databricksapps.com",
         "protected_service_principal_id": "protected-scim-id",
         "warehouse_id": "target-warehouse",
         "relation_prefix": "mip.audit.mip_agent_gateway_growth_agent",
         "endpoint": "outer",
-        "http_get": lambda *_args, **_kwargs: SimpleNamespace(status_code=403),
+        "http_get": _http_get(403),
     }
     kwargs.update(overrides)
     verify_boundary(**kwargs)
@@ -309,9 +327,14 @@ def test_effective_boundary_accepts_targets_and_all_expected_denials() -> None:
     _verify()
 
 
-def test_rejects_app_authentication_failure() -> None:
-    with pytest.raises(RuntimeError, match="App HTTP denial probe unexpectedly returned"):
-        _verify(http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=401))
+def test_rejects_provider_401_without_stopped_attestation() -> None:
+    with pytest.raises(RuntimeError, match="uncorroborated status=401"):
+        _verify(http_get=_http_get(401))
+
+
+def test_rejects_bare_401_without_exact_bearer_identity() -> None:
+    with pytest.raises(RuntimeError, match="preflight identity proof"):
+        _verify(http_get=_http_get(401, identity_status=401))
 
 
 def test_rejects_account_admin_api_access() -> None:
@@ -495,7 +518,7 @@ def test_rejects_target_warehouse_permission_administration() -> None:
 
 def test_rejects_actual_app_http_access() -> None:
     with pytest.raises(RuntimeError, match="App HTTP denial probe.*status=200"):
-        _verify(http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=200))
+        _verify(http_get=_http_get(200))
 
 
 def test_rejects_workspace_app_permission_administration() -> None:
