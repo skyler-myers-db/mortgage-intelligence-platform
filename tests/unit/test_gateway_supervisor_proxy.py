@@ -14,10 +14,7 @@ from backend.agents.reviewed_uc_function_contract import (
     ReviewedFunctionSpec,
     sql_body_sha256,
 )
-from backend.agents.supervisor_contract import (
-    supervisor_contract_document,
-    supervisor_contract_hash,
-)
+from backend.agents.supervisor_contract import supervisor_contract_hash
 
 _ASSERT_LIVE_RUNTIME_CONTRACT = proxy_module._assert_live_runtime_contract
 _SUPERVISOR_WORKSPACE = proxy_module._supervisor_workspace
@@ -45,7 +42,7 @@ def _runtime_contract_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         proxy_module,
         "_assert_live_runtime_contract",
-        lambda _supervisor_workspace: proxy_module._required_env(
+        lambda: proxy_module._required_env(
             "MIP_UPSTREAM_SUPERVISOR_ENDPOINT"
         ),
     )
@@ -103,38 +100,6 @@ def test_reviewed_function_body_hash_is_catalog_portable() -> None:
     assert sql_body_sha256(custom_definition, catalog="acme_mip") == spec.body_sha256
 
 
-def _contract_workspace(*, tool_override: dict[str, object] | None = None) -> object:
-    contract = supervisor_contract_document(genie_space_id="space-123", catalog="mip")
-    tools = [dict(tool) for tool in contract["tools"]]
-    if tool_override:
-        tools[0].update(tool_override)
-
-    class _ContractApi:
-        def do(self, method: str, path: str) -> object:
-            assert method == "GET"
-            if path == "/api/2.1/supervisor-agents/supervisor-id":
-                return {
-                    "supervisor_agent_id": "supervisor-id",
-                    "endpoint_name": "managed-supervisor",
-                    "creator": "runtime-client",
-                    "description": contract["description"],
-                    "instructions": contract["instructions"],
-                }
-            if path.endswith("/tools"):
-                return {"tools": tools}
-            if path.endswith("/examples"):
-                return {"examples": []}
-            raise AssertionError(path)
-
-    function_rows = {spec.leaf_name: _function_details(spec) for spec in REVIEWED_FUNCTIONS}
-    return SimpleNamespace(
-        api_client=_ContractApi(),
-        functions=SimpleNamespace(
-            get=lambda name: function_rows[name.rsplit(".", 1)[-1]],
-        ),
-    )
-
-
 def _set_contract_env(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {
         "MIP_UPSTREAM_SUPERVISOR_ID": "supervisor-id",
@@ -153,12 +118,12 @@ def _set_contract_env(monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(name, value)
 
 
-def test_runtime_contract_reproves_supervisor_tools_and_uc_function_bodies(
+def test_runtime_contract_authenticates_deployment_signed_exact_binding(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_contract_env(monkeypatch)
 
-    assert _ASSERT_LIVE_RUNTIME_CONTRACT(_contract_workspace()) == "managed-supervisor"
+    assert _ASSERT_LIVE_RUNTIME_CONTRACT() == "managed-supervisor"
 
 
 def test_runtime_contract_authenticates_signed_exact_binding_on_every_call(
@@ -185,8 +150,7 @@ def test_runtime_contract_authenticates_signed_exact_binding_on_every_call(
         },
     )
 
-    supervisor_workspace = _contract_workspace()
-    assert _ASSERT_LIVE_RUNTIME_CONTRACT(supervisor_workspace) == "managed-supervisor"
+    assert _ASSERT_LIVE_RUNTIME_CONTRACT() == "managed-supervisor"
     assert calls == [proxy_module.os.environ]
 
 
@@ -213,36 +177,17 @@ def test_runtime_contract_rejects_signed_proxy_binding_drift(
     )
 
     with pytest.raises(RuntimeError, match="signed Gateway-to-Supervisor binding drifted"):
-        _ASSERT_LIVE_RUNTIME_CONTRACT(_contract_workspace())
+        _ASSERT_LIVE_RUNTIME_CONTRACT()
 
 
-def test_runtime_contract_rejects_supervisor_tool_drift(
+def test_runtime_contract_rejects_source_contract_digest_drift(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _set_contract_env(monkeypatch)
+    monkeypatch.setenv("MIP_SUPERVISOR_CONTRACT_SHA256", "0" * 64)
 
-    with pytest.raises(RuntimeError, match="definition/tools contract drifted"):
-        _ASSERT_LIVE_RUNTIME_CONTRACT(
-            _contract_workspace(tool_override={"description": "mutated"}),
-        )
-
-
-def test_runtime_contract_rejects_uc_function_body_drift(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    _set_contract_env(monkeypatch)
-    workspace = _contract_workspace()
-    original_get = workspace.functions.get
-
-    def drifted_get(name: str) -> object:
-        details = original_get(name)
-        if name.endswith("fn_build_cohort"):
-            details.routine_definition = "RETURN 0"
-        return details
-
-    workspace.functions.get = drifted_get
-    with pytest.raises(RuntimeError, match="function body drifted"):
-        _ASSERT_LIVE_RUNTIME_CONTRACT(workspace)
+    with pytest.raises(RuntimeError, match="configured contract digest is invalid"):
+        _ASSERT_LIVE_RUNTIME_CONTRACT()
 
 
 def test_supervisor_workspace_uses_only_the_dedicated_proxy_credential(
@@ -352,6 +297,35 @@ def test_proxy_fails_closed_on_invalid_upstream_response(
     )
 
     with pytest.raises(RuntimeError, match="managed Supervisor returned"):
+        _predict({"input": [{"role": "user", "content": "x"}]})
+
+
+@pytest.mark.parametrize("status", (None, "failed", "in_progress", "incomplete"))
+def test_proxy_rejects_nonterminal_or_missing_upstream_status(
+    monkeypatch: pytest.MonkeyPatch,
+    status: str | None,
+) -> None:
+    response: dict[str, object] = {
+        "output": [
+            {
+                "type": "message",
+                "id": "msg-1",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "ready"}],
+            }
+        ]
+    }
+    if status is not None:
+        response["status"] = status
+    monkeypatch.setenv("MIP_UPSTREAM_SUPERVISOR_ENDPOINT", "managed-supervisor")
+    monkeypatch.setattr(
+        proxy_module,
+        "WorkspaceClient",
+        lambda: type("Workspace", (), {"api_client": _ApiClient(response)})(),
+    )
+
+    with pytest.raises(RuntimeError, match="non-terminal response"):
         _predict({"input": [{"role": "user", "content": "x"}]})
 
 

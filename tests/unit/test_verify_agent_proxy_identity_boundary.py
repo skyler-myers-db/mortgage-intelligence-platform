@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from types import SimpleNamespace
+from urllib.parse import unquote
 
 import pytest
 from databricks.sdk.errors import PermissionDenied, ResourceDoesNotExist
@@ -12,7 +14,9 @@ from tools.databricks.verify_agent_proxy_identity_boundary import (
     AgentProxyBoundaryInventory,
     _expect_denied,
     _is_denied,
+    _verify_target_supervisor_query,
     _verify_warehouse_denial,
+    collect_admin_inventory,
     verify_boundary,
 )
 
@@ -42,6 +46,8 @@ def _proxy_main_args(
         TARGET_WAREHOUSE,
         "--supervisor-id",
         TARGET_SUPERVISOR,
+        "--supervisor-endpoint",
+        "gateway",
         "--genie-space-id",
         TARGET_GENIE,
         "--allow-attested-app-401",
@@ -167,12 +173,67 @@ def _denied(*_args: object, **_kwargs: object) -> object:
 
 
 class _SupervisorApi:
-    def __init__(self, *, expose_non_target: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        expose_target: bool = False,
+        expose_non_target: bool = False,
+        target_query_succeeds: bool = True,
+        target_query_has_payload: bool = True,
+        target_query_failures: int = 0,
+        target_query_error: BaseException | None = None,
+        target_query_response: object | None = None,
+    ) -> None:
+        self.expose_target = expose_target
         self.expose_non_target = expose_non_target
+        self.target_query_succeeds = target_query_succeeds
+        self.target_query_has_payload = target_query_has_payload
+        self.target_query_failures = target_query_failures
+        self.target_query_error = target_query_error
+        self.target_query_response = target_query_response
+        self.target_query_calls = 0
+        self.paths: list[str] = []
 
-    def do(self, _method: str, path: str) -> object:
-        identifier = path.rsplit("/", 1)[-1]
-        if identifier == TARGET_SUPERVISOR or self.expose_non_target:
+    def do(
+        self,
+        method: str,
+        path: str,
+        *,
+        body: dict[str, object] | None = None,
+    ) -> object:
+        self.paths.append(path)
+        if method == "POST" and path == "/serving-endpoints/responses":
+            self.target_query_calls += 1
+            if self.target_query_calls <= self.target_query_failures:
+                raise self.target_query_error or TimeoutError("scaling from zero")
+            if not self.target_query_succeeds:
+                return _denied()
+            assert body is not None
+            assert body["model"] == "gateway"
+            if self.target_query_response is not None:
+                return self.target_query_response
+            return {
+                "id": "response-target",
+                "model": "gateway",
+                "status": "completed",
+                "output": (
+                    [
+                        {
+                            "type": "message",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "ready"}],
+                        }
+                    ]
+                    if self.target_query_has_payload
+                    else []
+                ),
+            }
+        assert method == "GET"
+        identifier = unquote(path.rsplit("/", 1)[-1])
+        if identifier == TARGET_SUPERVISOR and self.expose_target:
+            return {"supervisor_agent_id": identifier}
+        if identifier != TARGET_SUPERVISOR and self.expose_non_target:
             return {"supervisor_agent_id": identifier}
         return _denied()
 
@@ -225,9 +286,87 @@ def _inventory() -> AgentProxyBoundaryInventory:
     )
 
 
+def _admin_inventory_workspace(*, supervisor_endpoint: str = "gateway") -> object:
+    return SimpleNamespace(
+        apps=SimpleNamespace(
+            list=lambda: iter((SimpleNamespace(name="mip-app"),)),
+            get=lambda _name: SimpleNamespace(
+                url="https://mip-app.databricksapps.com"
+            ),
+        ),
+        metastores=SimpleNamespace(
+            current=lambda: SimpleNamespace(metastore_id="metastore-id")
+        ),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: iter((SimpleNamespace(id="proxy-scim"),))
+        ),
+        secrets=SimpleNamespace(
+            list_scopes=lambda: iter((SimpleNamespace(name="proxy-scope"),))
+        ),
+        database=SimpleNamespace(
+            list_database_instances=lambda: iter(
+                (SimpleNamespace(name="lakebase-target"),)
+            )
+        ),
+        warehouses=SimpleNamespace(
+            list=lambda: iter((SimpleNamespace(id=TARGET_WAREHOUSE),))
+        ),
+        api_client=SimpleNamespace(
+            do=lambda *_args, **_kwargs: {
+                "supervisor_agent_id": TARGET_SUPERVISOR,
+                "endpoint_name": supervisor_endpoint,
+            }
+        ),
+        serving_endpoints=SimpleNamespace(
+            list=lambda: iter((SimpleNamespace(name="gateway"),))
+        ),
+    )
+
+
+def test_admin_inventory_binds_target_supervisor_id_to_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(boundary, "_supervisor_agents", lambda _workspace: {TARGET_SUPERVISOR: ""})
+    monkeypatch.setattr(boundary, "_genie_spaces", lambda _workspace: {TARGET_GENIE: ""})
+
+    inventory = collect_admin_inventory(
+        _admin_inventory_workspace(),
+        app_name="mip-app",
+        app_url="https://mip-app.databricksapps.com",
+        lakebase_instance="lakebase-target",
+        warehouse_id=TARGET_WAREHOUSE,
+        supervisor_id=TARGET_SUPERVISOR,
+        supervisor_endpoint="gateway",
+        genie_space_id=TARGET_GENIE,
+    )
+
+    assert inventory.supervisor_ids == (TARGET_SUPERVISOR,)
+    assert inventory.serving_endpoint_names == ("gateway",)
+
+
+def test_admin_inventory_rejects_supervisor_id_endpoint_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(boundary, "_supervisor_agents", lambda _workspace: {TARGET_SUPERVISOR: ""})
+    monkeypatch.setattr(boundary, "_genie_spaces", lambda _workspace: {TARGET_GENIE: ""})
+
+    with pytest.raises(RuntimeError, match="ID and endpoint binding drifted"):
+        collect_admin_inventory(
+            _admin_inventory_workspace(supervisor_endpoint="different-endpoint"),
+            app_name="mip-app",
+            app_url="https://mip-app.databricksapps.com",
+            lakebase_instance="lakebase-target",
+            warehouse_id=TARGET_WAREHOUSE,
+            supervisor_id=TARGET_SUPERVISOR,
+            supervisor_endpoint="gateway",
+            genie_space_id=TARGET_GENIE,
+        )
+
+
 def _workspace(
     *,
     app_admin_succeeds: bool = False,
+    expose_target_supervisor: bool = False,
     expose_non_target_supervisor: bool = False,
     expose_non_target_genie: bool = False,
     lakebase_succeeds: bool = False,
@@ -237,6 +376,9 @@ def _workspace(
     warehouse_metadata_succeeds: bool = False,
     secret_listing_succeeds: bool = False,
     secret_scope_succeeds: bool = False,
+    target_supervisor_query_succeeds: bool = True,
+    target_supervisor_query_has_payload: bool = True,
+    target_supervisor_query_response: object | None = None,
 ) -> object:
     secret_list = (lambda *_args, **_kwargs: iter(())) if secret_listing_succeeds else _denied
     return SimpleNamespace(
@@ -268,7 +410,13 @@ def _workspace(
             get=(lambda *_args: object()) if warehouse_metadata_succeeds else _denied
         ),
         statement_execution=_Statements(succeeds=warehouse_succeeds),
-        api_client=_SupervisorApi(expose_non_target=expose_non_target_supervisor),
+        api_client=_SupervisorApi(
+            expose_target=expose_target_supervisor,
+            expose_non_target=expose_non_target_supervisor,
+            target_query_succeeds=target_supervisor_query_succeeds,
+            target_query_has_payload=target_supervisor_query_has_payload,
+            target_query_response=target_supervisor_query_response,
+        ),
         genie=_Genie(expose_non_target=expose_non_target_genie),
         serving_endpoints=SimpleNamespace(
             get=(lambda *_args: object()) if serving_metadata_succeeds else _denied
@@ -328,6 +476,7 @@ def _verify(
     unrelated_app_status: int = 403,
     admin_workspace: object | None = None,
     allow_attested_app_401: bool = False,
+    inventory: AgentProxyBoundaryInventory | None = None,
 ) -> None:
     def http_get(url: str, **_kwargs: object) -> object:
         if url.endswith("/api/2.0/preview/scim/v2/Me"):
@@ -347,11 +496,12 @@ def _verify(
     verify_boundary(
         workspace=workspace,
         account=account or _account(),
-        inventory=_inventory(),
+        inventory=inventory or _inventory(),
         expected_application_id=PROXY_ID,
         app_name="mip-app",
         warehouse_id=TARGET_WAREHOUSE,
         supervisor_id=TARGET_SUPERVISOR,
+        supervisor_endpoint="gateway",
         genie_space_id=TARGET_GENIE,
         admin_workspace=admin_workspace,
         allow_attested_app_401=allow_attested_app_401,
@@ -359,13 +509,144 @@ def _verify(
     )
 
 
-def test_proxy_boundary_proves_target_only_supervisor_and_genie_access() -> None:
+def test_proxy_boundary_proves_target_query_while_denying_definition_metadata() -> None:
     _verify(_workspace())
 
 
+def test_proxy_boundary_rejects_target_supervisor_definition_access() -> None:
+    with pytest.raises(RuntimeError, match="Supervisor definition metadata"):
+        _verify(_workspace(expose_target_supervisor=True))
+
+
 def test_proxy_boundary_rejects_hidden_non_target_supervisor_access() -> None:
-    with pytest.raises(RuntimeError, match="non-target Supervisor"):
+    with pytest.raises(RuntimeError, match="Supervisor definition metadata"):
         _verify(_workspace(expose_non_target_supervisor=True))
+
+
+def test_proxy_boundary_url_encodes_opaque_supervisor_ids() -> None:
+    workspace = _workspace()
+    opaque_id = "supervisor/other"
+    inventory = replace(
+        _inventory(),
+        supervisor_ids=(TARGET_SUPERVISOR, opaque_id),
+    )
+
+    _verify(workspace, inventory=inventory)
+
+    assert (
+        "/api/2.1/supervisor-agents/supervisor%2Fother"
+        in workspace.api_client.paths
+    )
+
+
+def test_proxy_boundary_rejects_failed_target_supervisor_query() -> None:
+    with pytest.raises(RuntimeError, match="target Supervisor query was inconclusive"):
+        _verify(_workspace(target_supervisor_query_succeeds=False))
+
+
+def test_proxy_boundary_rejects_empty_target_supervisor_response() -> None:
+    with pytest.raises(RuntimeError, match="exact terminal Agent Responses payload"):
+        _verify(_workspace(target_supervisor_query_has_payload=False))
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        {"id": "response-target", "model": "gateway", "status": "completed", "output": ["ready"]},
+        {
+            "id": "response-target",
+            "model": "gateway",
+            "status": "completed",
+            "output": [{"message": "ready"}],
+        },
+        {
+            "id": "response-target",
+            "model": "other-endpoint",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+        {
+            "id": "response-target",
+            "model": "gateway",
+            "status": "failed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+        {
+            "id": "response-target",
+            "model": "gateway",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+        {
+            "model": "gateway",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+        {"contents": object()},
+    ),
+)
+def test_proxy_boundary_rejects_malformed_target_supervisor_response(
+    response: object,
+) -> None:
+    with pytest.raises(RuntimeError, match="exact terminal Agent Responses payload"):
+        _verify(_workspace(target_supervisor_query_response=response))
+
+
+def test_target_supervisor_query_waits_through_cold_start() -> None:
+    api = _SupervisorApi(
+        target_query_failures=1,
+        target_query_error=TimeoutError("scaling from zero"),
+    )
+    workspace = SimpleNamespace(api_client=api)
+
+    _verify_target_supervisor_query(
+        workspace,
+        supervisor_endpoint="gateway",
+        sleep=lambda _seconds: None,
+    )
+
+    assert api.target_query_calls == 3
+
+
+def test_target_supervisor_query_does_not_retry_non_cold_error() -> None:
+    api = _SupervisorApi(target_query_succeeds=False)
+    workspace = SimpleNamespace(api_client=api)
+
+    with pytest.raises(RuntimeError, match="target Supervisor query was inconclusive"):
+        _verify_target_supervisor_query(
+            workspace,
+            supervisor_endpoint="gateway",
+            sleep=lambda _seconds: None,
+        )
+
+    assert api.target_query_calls == 1
 
 
 def test_proxy_boundary_rejects_effective_warehouse_execution() -> None:

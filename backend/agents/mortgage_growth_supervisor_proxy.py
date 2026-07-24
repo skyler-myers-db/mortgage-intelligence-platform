@@ -13,7 +13,6 @@ import os
 import re
 from collections.abc import Mapping
 from typing import Any
-from urllib.parse import quote
 from uuid import uuid4
 
 from databricks.sdk import WorkspaceClient
@@ -25,20 +24,14 @@ try:
     from backend.agents.gateway_contract import (
         verified_gateway_runtime_resource_environment,
     )
-    from backend.agents.reviewed_uc_function_contract import assert_reviewed_function_set
     from backend.agents.supervisor_contract import (
-        supervisor_contract_document,
         supervisor_contract_hash,
     )
 except ModuleNotFoundError:  # MLflow code_path places backend/ directly on sys.path.
     from agents.gateway_contract import (  # type: ignore[no-redef]
         verified_gateway_runtime_resource_environment,
     )
-    from agents.reviewed_uc_function_contract import (  # type: ignore[no-redef]
-        assert_reviewed_function_set,
-    )
     from agents.supervisor_contract import (  # type: ignore[no-redef]
-        supervisor_contract_document,
         supervisor_contract_hash,
     )
 
@@ -50,20 +43,6 @@ def _required_env(name: str) -> str:
     if not value:
         raise RuntimeError(f"{name} is required")
     return value
-
-
-def _payload_rows(payload: object, key: str) -> list[Mapping[str, Any]]:
-    if isinstance(payload, list):
-        rows = payload
-    elif isinstance(payload, Mapping):
-        if payload.get("next_page_token"):
-            raise RuntimeError(f"managed Supervisor {key} contract is unexpectedly paginated")
-        rows = payload.get(key, [])
-    else:
-        raise RuntimeError(f"managed Supervisor {key} contract is invalid")
-    if not isinstance(rows, list) or not all(isinstance(row, Mapping) for row in rows):
-        raise RuntimeError(f"managed Supervisor {key} contract is invalid")
-    return list(rows)
 
 
 def _supervisor_workspace() -> WorkspaceClient:
@@ -84,11 +63,14 @@ def _supervisor_workspace() -> WorkspaceClient:
     )
 
 
-def _assert_live_runtime_contract(
-    supervisor_workspace: WorkspaceClient,
-) -> str:
-    """Re-prove the Supervisor and UC tool definitions before every inference."""
+def _assert_live_runtime_contract() -> str:
+    """Authenticate the deployment-signed, exact Gateway-to-Supervisor binding."""
 
+    # CAN_QUERY is deliberately unable to read the Supervisor definition.
+    # Provisioning verifies the exact definition, tools, functions, creator,
+    # and endpoint under the separated runtime authority, then signs this
+    # immutable binding. The hosted proxy verifies that signature on every
+    # request and uses its query-only identity solely for inference.
     supervisor_id = _required_env("MIP_UPSTREAM_SUPERVISOR_ID")
     upstream = _required_env("MIP_UPSTREAM_SUPERVISOR_ENDPOINT")
     runtime_id = _required_env("MIP_UPSTREAM_SUPERVISOR_CREATOR")
@@ -113,48 +95,6 @@ def _assert_live_runtime_contract(
     }
     if any(signed.get(name) != value for name, value in expected_binding.items()):
         raise RuntimeError("signed Gateway-to-Supervisor binding drifted")
-
-    encoded_id = quote(supervisor_id, safe="")
-    api = supervisor_workspace.api_client
-    details = api.do("GET", f"/api/2.1/supervisor-agents/{encoded_id}")
-    if not isinstance(details, Mapping):
-        raise RuntimeError("managed Supervisor definition contract is invalid")
-    if str(details.get("supervisor_agent_id") or "").strip() != supervisor_id:
-        raise RuntimeError("managed Supervisor immutable identity drifted")
-    if str(details.get("endpoint_name") or "").strip() != upstream:
-        raise RuntimeError("managed Supervisor endpoint binding drifted")
-    if str(details.get("creator") or "").strip() != runtime_id:
-        raise RuntimeError("managed Supervisor creator drifted")
-
-    parent = f"supervisor-agents/{encoded_id}"
-    tools = _payload_rows(api.do("GET", f"/api/2.1/{parent}/tools"), "tools")
-    examples = _payload_rows(api.do("GET", f"/api/2.1/{parent}/examples"), "examples")
-    expected = supervisor_contract_document(
-        genie_space_id=genie_space_id,
-        catalog=catalog,
-    )
-    actual_tools: list[dict[str, Any]] = []
-    for tool in tools:
-        tool_type = str(tool.get("tool_type") or "")
-        resource = tool.get(tool_type)
-        actual_tools.append(
-            {
-                "tool_id": str(tool.get("tool_id") or ""),
-                "tool_type": tool_type,
-                "description": str(tool.get("description") or ""),
-                tool_type: resource,
-            }
-        )
-    actual = {
-        "description": details.get("description"),
-        "instructions": details.get("instructions"),
-        "tools": sorted(actual_tools, key=lambda row: row["tool_id"]),
-        "examples": [dict(row) for row in examples],
-    }
-    expected["tools"] = sorted(expected["tools"], key=lambda row: row["tool_id"])
-    if actual != expected:
-        raise RuntimeError("managed Supervisor definition/tools contract drifted")
-    assert_reviewed_function_set(supervisor_workspace, catalog=catalog)
     return upstream
 
 
@@ -211,8 +151,8 @@ class MortgageGrowthSupervisorProxy(ResponsesAgent):
     def predict(  # type: ignore[override]
         self, request: ResponsesAgentRequest
     ) -> ResponsesAgentResponse:
+        upstream = _assert_live_runtime_contract()
         supervisor_workspace = _supervisor_workspace()
-        upstream = _assert_live_runtime_contract(supervisor_workspace)
         body: dict[str, Any] = {
             "model": upstream,
             "input": [item.model_dump(mode="json", exclude_none=True) for item in request.input],
@@ -235,6 +175,11 @@ class MortgageGrowthSupervisorProxy(ResponsesAgent):
             raw=True,
         )
         response = _decode_upstream_response(raw_response)
+        status = str(
+            getattr(response.get("status"), "value", response.get("status")) or ""
+        ).strip()
+        if status.casefold() != "completed":
+            raise RuntimeError("managed Supervisor returned a non-terminal response")
         output = response.get("output")
         if not isinstance(output, list) or not output:
             raise RuntimeError("managed Supervisor returned no Responses output")
@@ -245,7 +190,7 @@ class MortgageGrowthSupervisorProxy(ResponsesAgent):
             if key in allowed and key != "custom_outputs"
         }
         payload["output"] = output
-        payload["status"] = str(response.get("status") or "completed")
+        payload["status"] = "completed"
         payload["model"] = str(response.get("model") or upstream)
         databricks_output = response.get("databricks_output")
         platform_trace = (

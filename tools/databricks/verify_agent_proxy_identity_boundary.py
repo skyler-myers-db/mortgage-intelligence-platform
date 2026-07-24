@@ -4,18 +4,26 @@
 from __future__ import annotations
 
 import argparse
+import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
+from uuid import uuid4
 
 import requests
 
+from backend.services.capability_serving_probes import (
+    query_serving_endpoint_with_proof,
+)
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks.agent_proxy_access import _supervisor_agents
 from tools.databricks.agent_runtime_access import _genie_spaces
+from tools.databricks.ai_gateway_tool_trace import (
+    warm_endpoint_with_cold_start_patience,
+)
 from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
 )
@@ -26,6 +34,10 @@ from tools.databricks.m2m_workspace_auth import (
 )
 
 _MAX_INVENTORY = 1000
+_TARGET_QUERY_PROMPT = (
+    "Confirm that the governed Mortgage Growth Agent is ready for a "
+    "human-review-only workflow. Do not call tools or include borrower data."
+)
 
 
 def _text(value: object, name: str) -> str:
@@ -111,6 +123,7 @@ def collect_admin_inventory(
     lakebase_instance: str,
     warehouse_id: str,
     supervisor_id: str,
+    supervisor_endpoint: str,
     genie_space_id: str,
 ) -> AgentProxyBoundaryInventory:
     """Capture an admin-complete immutable inventory before binding proxy auth."""
@@ -157,6 +170,15 @@ def collect_admin_inventory(
         _supervisor_agents(workspace),
         label="Supervisor",
     )
+    target_supervisor = workspace.api_client.do(
+        "GET",
+        f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}",
+    )
+    if (
+        _text(target_supervisor, "supervisor_agent_id") != supervisor_id
+        or _text(target_supervisor, "endpoint_name") != supervisor_endpoint
+    ):
+        raise RuntimeError("configured Supervisor ID and endpoint binding drifted")
     genie_space_ids = _bounded_unique(
         _genie_spaces(workspace),
         label="Genie",
@@ -169,6 +191,7 @@ def collect_admin_inventory(
         (lakebase_instance, lakebase_instances, "Lakebase instance"),
         (warehouse_id, warehouse_ids, "warehouse"),
         (supervisor_id, supervisor_ids, "Supervisor"),
+        (supervisor_endpoint, serving_endpoint_names, "Supervisor endpoint"),
         (genie_space_id, genie_space_ids, "Genie space"),
     )
     for expected, inventory, label in expected_members:
@@ -239,6 +262,95 @@ def _verify_warehouse_denial(workspace: Any, *, warehouse_id: str) -> None:
     raise RuntimeError(f"agent-proxy warehouse denial was inconclusive: state={state or 'UNKNOWN'}")
 
 
+def _response_mapping(response: object) -> dict[str, Any] | None:
+    if isinstance(response, dict):
+        return response
+    for method in ("as_dict", "to_dict"):
+        converter = getattr(response, method, None)
+        if callable(converter):
+            try:
+                value = converter()
+            except Exception:  # noqa: BLE001 - exact validation below fails closed
+                return None
+            return value if isinstance(value, dict) else None
+    return None
+
+
+def _is_exact_target_supervisor_response(
+    response: object,
+    *,
+    supervisor_endpoint: str,
+) -> bool:
+    value = _response_mapping(response)
+    if value is None:
+        return False
+    if not str(value.get("id") or "").strip():
+        return False
+    if str(value.get("model") or "").strip() != supervisor_endpoint:
+        return False
+    if str(value.get("status") or "").strip().casefold() != "completed":
+        return False
+    output = value.get("output")
+    if not isinstance(output, list) or not output:
+        return False
+    for item in output:
+        if (
+            not isinstance(item, dict)
+            or item.get("type") != "message"
+            or item.get("role") != "assistant"
+            or str(item.get("status") or "").strip().casefold() != "completed"
+        ):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list) or not content:
+            continue
+        if any(
+            isinstance(part, dict)
+            and part.get("type") == "output_text"
+            and bool(str(part.get("text") or "").strip())
+            for part in content
+        ):
+            return True
+    return False
+
+
+def _verify_target_supervisor_query(
+    workspace: Any,
+    *,
+    supervisor_endpoint: str,
+    sleep: Callable[[float], object] = time.sleep,
+) -> None:
+    try:
+        warm_endpoint_with_cold_start_patience(
+            workspace,
+            supervisor_endpoint,
+            task="agent_v1_responses",
+            prompt=_TARGET_QUERY_PROMPT,
+            sleep=sleep,
+        )
+        execution = query_serving_endpoint_with_proof(
+            workspace,
+            supervisor_endpoint,
+            task="agent_v1_responses",
+            prompt=_TARGET_QUERY_PROMPT,
+            client_request_id=f"mip-agent-proxy-boundary-{uuid4().hex}",
+            max_tokens=64,
+        )
+    except Exception as exc:  # noqa: BLE001 - positive provider proof must be exact
+        raise RuntimeError(
+            "agent-proxy target Supervisor query was inconclusive: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if not _is_exact_target_supervisor_response(
+        execution.response,
+        supervisor_endpoint=supervisor_endpoint,
+    ):
+        raise RuntimeError(
+            "agent-proxy target Supervisor query did not return the exact "
+            "terminal Agent Responses payload"
+        )
+
+
 def verify_boundary(
     *,
     workspace: Any,
@@ -248,6 +360,7 @@ def verify_boundary(
     app_name: str,
     warehouse_id: str,
     supervisor_id: str,
+    supervisor_endpoint: str,
     genie_space_id: str,
     admin_workspace: Any | None = None,
     allow_attested_app_401: bool = False,
@@ -330,21 +443,26 @@ def verify_boundary(
         )
     _verify_warehouse_denial(workspace, warehouse_id=warehouse_id)
 
-    target_supervisor = workspace.api_client.do(
-        "GET",
-        f"/api/2.1/supervisor-agents/{supervisor_id}",
-    )
-    if _text(target_supervisor, "supervisor_agent_id") != supervisor_id:
-        raise RuntimeError("agent-proxy target Supervisor identity drifted")
+    # Databricks CAN_QUERY intentionally permits inference but does not permit
+    # viewing the Agent definition. The separated admin inventory above binds
+    # the immutable ID to its endpoint; this identity proves the supported
+    # positive query path and denial of every definition read.
+    if supervisor_id not in inventory.supervisor_ids:
+        raise RuntimeError("target Supervisor is absent from admin inventory")
     for candidate in inventory.supervisor_ids:
-        if candidate != supervisor_id:
-            _expect_denied(
-                f"non-target Supervisor {candidate}",
-                lambda candidate=candidate: workspace.api_client.do(
-                    "GET",
-                    f"/api/2.1/supervisor-agents/{candidate}",
-                ),
-            )
+        _expect_denied(
+            f"Supervisor definition metadata {candidate}",
+            lambda candidate=candidate: workspace.api_client.do(
+                "GET",
+                f"/api/2.1/supervisor-agents/{quote(candidate, safe='')}",
+            ),
+        )
+    if supervisor_endpoint not in inventory.serving_endpoint_names:
+        raise RuntimeError("target Supervisor endpoint is absent from admin inventory")
+    _verify_target_supervisor_query(
+        workspace,
+        supervisor_endpoint=supervisor_endpoint,
+    )
 
     target_genie = workspace.genie.get_space(genie_space_id)
     if _text(target_genie, "space_id") != genie_space_id:
@@ -372,6 +490,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--lakebase-instance", required=True)
     parser.add_argument("--warehouse-id", required=True)
     parser.add_argument("--supervisor-id", required=True)
+    parser.add_argument("--supervisor-endpoint", required=True)
     parser.add_argument("--genie-space-id", required=True)
     parser.add_argument(
         "--allow-attested-app-401",
@@ -402,6 +521,7 @@ def main(argv: list[str] | None = None) -> int:
         lakebase_instance=args.lakebase_instance,
         warehouse_id=args.warehouse_id,
         supervisor_id=args.supervisor_id,
+        supervisor_endpoint=args.supervisor_endpoint,
         genie_space_id=args.genie_space_id,
     )
     proxy_workspace = WorkspaceClient()
@@ -420,6 +540,7 @@ def main(argv: list[str] | None = None) -> int:
         app_name=args.app_name,
         warehouse_id=args.warehouse_id,
         supervisor_id=args.supervisor_id,
+        supervisor_endpoint=args.supervisor_endpoint,
         genie_space_id=args.genie_space_id,
         admin_workspace=admin_workspace,
         allow_attested_app_401=args.allow_attested_app_401,

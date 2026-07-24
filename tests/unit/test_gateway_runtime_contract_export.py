@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import subprocess
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +19,11 @@ from backend.agents.gateway_contract import (
     gateway_runtime_resource_environment,
     sign_gateway_runtime_resource_contract,
     verified_gateway_runtime_resource_environment,
+)
+from backend.agents.reviewed_uc_function_contract import (
+    REVIEWED_FUNCTIONS,
+    ReviewedFunctionSpec,
+    assert_reviewed_function_set,
 )
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools import verify_deployed_app_contract as deployed_contract
@@ -160,6 +166,11 @@ def _exact_supervisor_contract_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         export_contract,
         "assert_exact_supervisor_contract",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        export_contract,
+        "assert_reviewed_function_set",
         lambda *_args, **_kwargs: None,
     )
 
@@ -319,6 +330,49 @@ def _workspace(
             get=lambda _name: SimpleNamespace(owner="runtime-client")
         ),
     )
+
+
+def _reviewed_function_details(
+    spec: ReviewedFunctionSpec,
+    *,
+    definition: str | None = None,
+) -> object:
+    if definition is None:
+        text = (Path("sql/uc_functions") / f"{spec.leaf_name}.sql").read_text(
+            encoding="utf-8"
+        )
+        definition = text[text.rindex("\nRETURN ") + 1 :]
+    return SimpleNamespace(
+        full_name=f"mip.gold.{spec.leaf_name}",
+        comment=spec.comment,
+        is_deterministic=spec.deterministic,
+        data_type=spec.return_type,
+        input_params=SimpleNamespace(
+            parameters=[
+                SimpleNamespace(name=name, type_text=type_text, position=position)
+                for position, (name, type_text) in enumerate(spec.input_params)
+            ]
+        ),
+        routine_definition=definition,
+    )
+
+
+def _workspace_with_reviewed_functions(
+    *,
+    drifted_leaf: str | None = None,
+) -> object:
+    workspace = _workspace()
+    functions = {
+        spec.leaf_name: _reviewed_function_details(
+            spec,
+            definition="RETURN 0" if spec.leaf_name == drifted_leaf else None,
+        )
+        for spec in REVIEWED_FUNCTIONS
+    }
+    workspace.functions = SimpleNamespace(
+        get=lambda name: functions[name.rsplit(".", 1)[-1]]
+    )
+    return workspace
 
 
 def _model_registry(*, source_hash: str | None = None, upstream: str = _UPSTREAM) -> object:
@@ -487,6 +541,42 @@ def test_exact_resource_proof_binds_experiment_model_endpoint_and_stored_digest(
         ).digest
         == proof.digest
     )
+
+
+@pytest.mark.parametrize("retained_contract", (False, True))
+def test_exact_resource_proof_rejects_reviewed_function_body_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    retained_contract: bool,
+) -> None:
+    monkeypatch.setattr(
+        export_contract,
+        "assert_reviewed_function_set",
+        assert_reviewed_function_set,
+    )
+    expected: dict[str, str] | None = None
+    if retained_contract:
+        clean = _resolve_exact_resource_proof(
+            _workspace_with_reviewed_functions(),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+        expected = {**clean.contract, "resource_digest": clean.digest}
+
+    with pytest.raises(RuntimeError, match="reviewed UC function body drifted"):
+        _resolve_exact_resource_proof(
+            _workspace_with_reviewed_functions(drifted_leaf="fn_build_cohort"),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            expected=expected,
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
 
 
 def test_stored_proof_survives_only_the_reviewed_replacement_to_canonical_rename() -> None:

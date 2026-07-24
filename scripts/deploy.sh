@@ -3685,7 +3685,7 @@ _AGENT_PROXY_BOUNDARY_APP_URL="${MIP_APP_URL:-}"
 if [[ "$DRY_RUN" -eq 1 && -z "$_AGENT_PROXY_BOUNDARY_APP_URL" ]]; then
   _AGENT_PROXY_BOUNDARY_APP_URL="https://dry-run.databricksapps.com"
 fi
-step "prove agent-proxy effective negative authorization boundary before cutover"
+step "prove agent-proxy target query and negative authorization boundary before cutover"
 run_with_account_identity \
   run_with_agent_proxy_credentials \
     "$PYTHON" -m tools.databricks.verify_agent_proxy_identity_boundary \
@@ -3697,6 +3697,7 @@ run_with_account_identity \
   --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
   --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
   --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+  --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
   --allow-attested-app-401
 if ! revoke_agent_runtime_bootstrap_grants; then
@@ -4270,7 +4271,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
     --expected-inventory-principal "$DEPLOY_INVENTORY_PRINCIPAL" \
     --catalog "${MIP_DEFAULT_CATALOG:-mip}"
-  step "re-prove final agent-proxy effective negative boundary after blue retirement"
+  step "re-prove final agent-proxy target query and negative boundary after blue retirement"
   run_with_account_identity \
     run_with_agent_proxy_credentials \
       "$PYTHON" -m tools.databricks.verify_agent_proxy_identity_boundary \
@@ -4282,6 +4283,7 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
     --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
+    --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --allow-attested-app-401
   AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS=()

@@ -31,6 +31,9 @@ from backend.agents.gateway_contract import (  # noqa: E402
     gateway_proxy_source_hash,
     gateway_runtime_binding_hash,
 )
+from backend.agents.reviewed_uc_function_contract import (  # noqa: E402
+    assert_reviewed_function_set,
+)
 from databricks.sdk import WorkspaceClient  # noqa: E402
 from tools.databricks.agent_runtime_access import assert_runtime_creator  # noqa: E402
 from tools.databricks.agentic_env_file import merge_agentic_env_values  # noqa: E402
@@ -299,6 +302,7 @@ def resolve_exact_resource_proof(
         catalog=catalog,
         expected_contract=expected_supervisor_contract,
     )
+    assert_reviewed_function_set(client, catalog=catalog)
     upstream_details = client.serving_endpoints.get(upstream)
     assert_runtime_creator(
         getattr(upstream_details, "creator", None),
