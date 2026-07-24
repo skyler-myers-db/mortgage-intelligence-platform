@@ -186,10 +186,35 @@ test.describe('route performance and layout canaries', () => {
   test('Admin route meets the load and layout budget with the admin bearer', async ({ page }) => {
     test.skip(!ADMIN_BEARER, 'Requires MIP_ADMIN_BEARER_TOKEN for Admin route performance coverage.');
     await page.setExtraHTTPHeaders({ Authorization: `Bearer ${ADMIN_BEARER}` });
+    const dataEstateResponse = page.waitForResponse(
+      (response) => (
+        response.request().method() === 'GET'
+        && normalizedApiPath(response.url()) === '/api/data-estate'
+        && response.status() === 200
+      ),
+      { timeout: 30_000 },
+    );
     await page.goto('/admin-config');
+    const dataEstate = await dataEstateResponse;
+    const dataEstateBody = await dataEstate.json() as {
+      lanes?: Array<{ id?: unknown }>;
+      proof_assets?: unknown;
+    };
+    expect(
+      dataEstateBody.lanes?.map((lane) => lane.id),
+      'GET /api/v1/data-estate governed lane contract',
+    ).toEqual(['first_party', 'cotality', 'databricks', 'entrada']);
+    expect(
+      Array.isArray(dataEstateBody.proof_assets) && dataEstateBody.proof_assets.length > 0,
+      'GET /api/v1/data-estate proof assets',
+    ).toBe(true);
     await expect(
       page.getByRole('heading', { name: 'Rules, data sources, and audit' }),
     ).toBeVisible({ timeout: 30_000 });
+    await expect(
+      page.locator('.data-estate:not([aria-busy]) .data-estate__lane-proof').first(),
+    ).toBeVisible({ timeout: 30_000 });
+    await expect(page.getByText('Data-estate proof unavailable')).toHaveCount(0);
     expect(await routeLoadMs(page), 'Admin route load budget').toBeLessThanOrEqual(4_000);
     await assertNoHorizontalOverflow(page, 'Admin');
     await assertNoObviousTextOverlap(page, 'Admin');
@@ -205,20 +230,17 @@ test.describe('route performance and layout canaries', () => {
     }
   });
 
-  test('QueryClient keeps hot Home reads cached during Home -> Segments -> Home', async ({ page }) => {
+  test('QueryClient keeps the hot Home preview cached during Home -> Segments -> Home', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByText(/Who should we contact, why now, and with what offer/i).first()).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('.kpi:not(.is-loading) .kpi__value').first()).toBeVisible({
-      timeout: 10_000,
-    });
-    await expect(page.locator('.data-estate:not([aria-busy]) .data-estate__lane-proof').first()).toBeVisible({
       timeout: 10_000,
     });
 
     const hotReads: string[] = [];
     page.on('request', (request) => {
       const path = normalizedApiPath(request.url());
-      if (path === '/api/portfolio/preview' || path === '/api/data-estate') {
+      if (path === '/api/portfolio/preview') {
         hotReads.push(`${request.method()} ${path}`);
       }
     });
@@ -229,7 +251,7 @@ test.describe('route performance and layout canaries', () => {
     await page.getByRole('link', { name: /^Home$/i }).click();
     await expect(page.getByText(/Who should we contact, why now, and with what offer/i).first()).toBeVisible({ timeout: 10_000 });
 
-    expect(hotReads, 'Home preview/data-estate should remain in QueryClient stale window').toEqual([]);
+    expect(hotReads, 'Home preview should remain in the QueryClient stale window').toEqual([]);
   });
 
   test('config options fetch is shared by shell and route-level consumers', async ({ page }) => {
