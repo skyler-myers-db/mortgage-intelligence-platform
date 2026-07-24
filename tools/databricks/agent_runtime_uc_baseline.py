@@ -282,6 +282,7 @@ _SYSTEM_AI_MODELS = frozenset(
         "system.ai.databricks-claude-opus-4-6",
         "system.ai.databricks-claude-opus-4-7",
         "system.ai.databricks-claude-opus-4-8",
+        "system.ai.databricks-claude-opus-5",
         "system.ai.databricks-claude-sonnet-4",
         "system.ai.databricks-claude-sonnet-4-5",
         "system.ai.databricks-claude-sonnet-4-6",

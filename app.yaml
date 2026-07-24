@@ -1,10 +1,10 @@
 # Databricks App runtime entrypoint for Module 0.
 #
 # Command: uvicorn (via backend.runtime) honouring DATABRICKS_APP_PORT.
-# Build:   the Apps build step runs `npm --prefix frontend ci && npm --prefix
-#          frontend run build` (declared at the `build` key below) so the
-#          React bundle lands at `frontend/dist/` and the FastAPI SPA
-#          fallback at `backend/main.py` serves it at `/`.
+# Build:   `scripts/deploy.sh` builds the React bundle under the audited CI
+#          Node version before bundle sync. The uploaded App source deliberately
+#          has no root npm manifest or runtime build command; FastAPI serves the
+#          prebuilt `frontend/dist/` bundle at `/`.
 # Env:     workspace identity + resource bindings (see databricks.yml
 #          `resources.apps.mip_app.resources`) are surfaced here as env
 #          vars. Backend reads them via backend/config/settings.py +
@@ -17,8 +17,6 @@ command:
   - python
   - -m
   - backend.runtime  # invokes uvicorn.run("backend.main:app", ...)
-
-build: npm --prefix frontend ci && npm --prefix frontend run build
 
 env:
   - name: APP_ENV

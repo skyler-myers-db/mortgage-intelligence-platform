@@ -3391,6 +3391,10 @@ deploy_app_snapshot() {
   APP_DEPLOY_PAYLOAD="$(mktemp -t mip-app-deploy.XXXXXX.json)"
   emit_app_deploy_payload "$APP_DEPLOY_PAYLOAD" "$APP_SOURCE_PATH" "$APP_GIT_SHA"
   assert_expected_app_identity "$APP_NAME"
+  run "$PYTHON" -m tools.databricks.converge_static_app_source \
+    --source-code-path "$APP_SOURCE_PATH" \
+    --expected-principal "$APP_CURRENT_USER" \
+    --expected-target "$TARGET"
   run databricks apps deploy "$APP_NAME" --json "@$APP_DEPLOY_PAYLOAD" --timeout 20m
   assert_expected_app_identity "$APP_NAME"
   if [[ -n "${APP_LAST_DEPLOY_PAYLOAD:-}" ]]; then

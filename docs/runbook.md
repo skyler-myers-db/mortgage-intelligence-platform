@@ -71,13 +71,43 @@ psql "host=$LAKEBASE_HOST user=$LAKEBASE_USER dbname=$LAKEBASE_DATABASE sslmode=
   -c "SELECT 1"
 ```
 
-If the Lakebase instance itself is stopped, bounce it:
+If the Lakebase instance or App is stopped, recover it only through the
+governed deployment workflow. That workflow keeps the App stopped while it
+reconciles the exact Lakebase roles, runs the migration and grant postflight,
+and activates source only after those checks pass:
 
 ```bash
-# The deployed job must already be bound to the reviewed
-# ai_gateway_verifier_client_id bundle variable by scripts/deploy.sh.
-databricks bundle run mip_lakebase_migrate -t dev
+BRANCH="$(git branch --show-current)"
+# Routine recovery of a signed last-good App leaves this false. Set it to true
+# only for an approved legacy or failed pre-capture App expected to have no
+# signed record; the workflow re-proves that absence before any rebase mutation.
+REBASE_UNVERIFIED_APP=false
+RUN_URL="$(gh workflow run deploy-dev.yml --ref "$BRANCH" \
+  -f skip_silver=true \
+  -f skip_smoke=false \
+  -f rebase_unverified_app="$REBASE_UNVERIFIED_APP" \
+  -f remediate_foreign_catalog_bindings=false)"
+# Fail closed unless this gh version returned exactly the created Actions URL.
+if [[ "$RUN_URL" =~ ^https://github\.com/[^/]+/[^/]+/actions/runs/([0-9]+)$ ]]; then
+  RUN_ID="${BASH_REMATCH[1]}"
+else
+  echo "workflow dispatch did not return an exact run URL" >&2
+  exit 1
+fi
+gh run watch "$RUN_ID" --exit-status
 ```
+
+The GitHub workflow above is dev-only. Do not transpose it to a customer or
+production workspace: production recovery requires its separately reviewed
+environment contract and change-controlled `scripts/deploy.sh -t prod`
+invocation. A failed pre-capture rebase remains unsigned and therefore requires
+`REBASE_UNVERIFIED_APP=true` again on its next explicitly approved recovery;
+once a signed last-good record exists, the exceptional path refuses to run.
+
+Do not run `mip_lakebase_migrate` by itself after an App snapshot has ever been
+activated. A standalone migration can race live requests and trip the Lakebase
+circuit breaker; `scripts/deploy.sh` is the command of record for the required
+stop → migrate/grant → activate ordering.
 
 ### 1.3 Genie cold / first ask returns `source: "degraded"`
 

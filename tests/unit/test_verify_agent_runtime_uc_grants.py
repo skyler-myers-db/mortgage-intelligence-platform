@@ -2342,6 +2342,7 @@ def test_effective_runtime_uc_boundary_rejects_new_or_reowned_system_model() -> 
 @pytest.mark.parametrize(
     "full_name",
     [
+        "system.ai.databricks-claude-opus-5",
         "system.ai.databricks-gemini-3-5-flash-lite",
         "system.ai.databricks-gemini-3-6-flash",
     ],

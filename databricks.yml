@@ -53,6 +53,14 @@ sync:
   include:
     - frontend/dist/**
     - sql/_rendered/**
+  # The frontend is built before bundle deployment and served as static files
+  # by FastAPI. Databricks Apps currently provides Node 22.16, while the
+  # audited React Router release requires Node 22.22 for package installation.
+  # Keep the repository-level npm wrapper out of the uploaded App source so
+  # the managed runtime consumes only the already-validated static build.
+  exclude:
+    - /package.json
+    - /package-lock.json
 
 targets:
   dev:
