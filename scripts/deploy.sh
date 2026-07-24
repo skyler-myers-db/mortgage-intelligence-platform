@@ -865,10 +865,19 @@ refresh_first_install_journal_status() {
     rm -f "$status_env"
     return 1
   fi
-  FIRST_INSTALL_JOURNAL_STATUS="$(sed -n 's/^MIP_FIRST_INSTALL_JOURNAL_STATUS=//p' "$status_env")"
-  FIRST_INSTALL_APP_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_ID=//p' "$status_env")"
-  FIRST_INSTALL_APP_CLIENT_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_CLIENT_ID=//p' "$status_env")"
-  FIRST_INSTALL_APP_SCIM_ID="$(sed -n 's/^MIP_FIRST_INSTALL_APP_SCIM_ID=//p' "$status_env")"
+  unset MIP_FIRST_INSTALL_JOURNAL_STATUS MIP_FIRST_INSTALL_APP_ID
+  unset MIP_FIRST_INSTALL_APP_CLIENT_ID MIP_FIRST_INSTALL_APP_SCIM_ID
+  # The producer emits shell-escaped assignments so empty values are written
+  # as ''. Source the owner-only temporary file to decode those assignments;
+  # raw line slicing would mistake the quoting syntax for a real identity.
+  # shellcheck disable=SC1090
+  . "$status_env"
+  FIRST_INSTALL_JOURNAL_STATUS="${MIP_FIRST_INSTALL_JOURNAL_STATUS-}"
+  FIRST_INSTALL_APP_ID="${MIP_FIRST_INSTALL_APP_ID-}"
+  FIRST_INSTALL_APP_CLIENT_ID="${MIP_FIRST_INSTALL_APP_CLIENT_ID-}"
+  FIRST_INSTALL_APP_SCIM_ID="${MIP_FIRST_INSTALL_APP_SCIM_ID-}"
+  unset MIP_FIRST_INSTALL_JOURNAL_STATUS MIP_FIRST_INSTALL_APP_ID
+  unset MIP_FIRST_INSTALL_APP_CLIENT_ID MIP_FIRST_INSTALL_APP_SCIM_ID
   rm -f "$status_env"
   if [[ ( "$FIRST_INSTALL_JOURNAL_STATUS" == "recover" || \
           "$FIRST_INSTALL_JOURNAL_STATUS" == "orphan_claimed" ) ]] && \

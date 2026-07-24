@@ -2343,6 +2343,58 @@ def test_failed_first_install_uses_signed_journal_for_exact_cleanup() -> None:
     assert script.index("cleanup_failed_first_install_app", trap) < capture
 
 
+def test_first_install_status_decodes_shell_quoted_empty_identity(
+    tmp_path: Path,
+) -> None:
+    fake_python = tmp_path / "first-install-empty-status.sh"
+    fake_python.write_text(
+        """#!/usr/bin/env bash
+while (( $# )); do
+  if [[ "$1" == --out-env && $# -ge 2 ]]; then
+    out_env="$2"
+    break
+  fi
+  shift
+done
+{
+  printf '%s\n' MIP_FIRST_INSTALL_JOURNAL_STATUS=absent
+  printf '%s\n' "MIP_FIRST_INSTALL_APP_ID=''"
+  printf '%s\n' "MIP_FIRST_INSTALL_APP_CLIENT_ID=''"
+  printf '%s\n' "MIP_FIRST_INSTALL_APP_SCIM_ID=''"
+} > "$out_env"
+""",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "first-install-empty-status-harness.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -euo pipefail
+PYTHON={shlex.quote(str(fake_python))}
+APP_FAIL_CLOSED_NAME=mip-app
+MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
+SOURCE_GIT_SHA={'a' * 40}
+APP_ROLLBACK_SECRET_SCOPE=mip-app-rollback
+MIP_LAKEBASE_INSTANCE=mip-lakebase
+run_with_proof_signing_authority() {{ "$@"; }}
+{_first_install_cleanup_block()}
+refresh_first_install_journal_status
+printf '%s|%s|%s|%s\n' \
+  "$FIRST_INSTALL_JOURNAL_STATUS" "$FIRST_INSTALL_APP_ID" \
+  "$FIRST_INSTALL_APP_CLIENT_ID" "$FIRST_INSTALL_APP_SCIM_ID"
+""",
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["bash", str(harness)],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout == "absent|||\n"
+
+
 def test_first_install_bind_arms_ambiguous_cleanup_before_remote_mutation() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
     create = script.index('run_json_to_file "$APP_CREATE_RESULT" databricks apps create')
