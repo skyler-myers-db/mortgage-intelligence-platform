@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
 from databricks.sdk.errors import PermissionDenied, ResourceDoesNotExist
+from databricks.sdk.service.apps import ComputeState
 
+from tools.databricks import verify_agent_proxy_identity_boundary as boundary
 from tools.databricks.verify_agent_proxy_identity_boundary import (
     AgentProxyBoundaryInventory,
     _expect_denied,
@@ -17,6 +20,146 @@ PROXY_ID = "proxy-client"
 TARGET_WAREHOUSE = "warehouse-target"
 TARGET_SUPERVISOR = "supervisor-target"
 TARGET_GENIE = "genie-target"
+
+
+def _proxy_main_args(
+    account_host: str = "https://accounts.cloud.databricks.com",
+) -> list[str]:
+    return [
+        "--expected-application-id",
+        PROXY_ID,
+        "--account-host",
+        account_host,
+        "--account-id",
+        "account-id",
+        "--app-name",
+        "mip-app",
+        "--app-url",
+        "https://mip-app.databricksapps.com",
+        "--lakebase-instance",
+        "lakebase-target",
+        "--warehouse-id",
+        TARGET_WAREHOUSE,
+        "--supervisor-id",
+        TARGET_SUPERVISOR,
+        "--genie-space-id",
+        TARGET_GENIE,
+        "--allow-attested-app-401",
+    ]
+
+
+@pytest.mark.parametrize(
+    "account_host",
+    (
+        "https://accounts.cloud.databricks.com.evil.example",
+        "https://accounts.cloud.databricks.com/path",
+    ),
+)
+def test_proxy_main_rejects_account_origin_before_constructing_clients(
+    monkeypatch: pytest.MonkeyPatch,
+    account_host: str,
+) -> None:
+    monkeypatch.setattr(
+        boundary,
+        "WorkspaceClient",
+        lambda: pytest.fail("workspace client constructed before host validation"),
+    )
+
+    with pytest.raises(RuntimeError, match="reviewed Databricks account origin"):
+        boundary.main(_proxy_main_args(account_host))
+
+
+def test_proxy_main_rejects_workspace_origin_before_admin_inventory(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_ID", PROXY_ID)
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_SECRET", "proxy-secret")
+    monkeypatch.setattr(
+        boundary,
+        "WorkspaceClient",
+        lambda: SimpleNamespace(
+            config=SimpleNamespace(host="https://attacker.invalid")
+        ),
+    )
+    monkeypatch.setattr(
+        boundary,
+        "collect_admin_inventory",
+        lambda *_args, **_kwargs: pytest.fail(
+            "admin inventory called before workspace host validation"
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="reviewed HTTPS Databricks origin"):
+        boundary.main(_proxy_main_args())
+
+
+def test_main_scrubs_deployer_aliases_before_exact_proxy_clients(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.cloud.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "pat")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "admin-token")
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv(
+        "MIP_DEPLOYER_DATABRICKS_HOST",
+        "https://workspace.cloud.databricks.com",
+    )
+    monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_TOKEN", "deployer-token")
+    monkeypatch.setenv("MIP_DEPLOYER_DATABRICKS_PROFILE", "DEFAULT")
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_ID", PROXY_ID)
+    monkeypatch.setenv("DATABRICKS_AGENT_PROXY_CLIENT_SECRET", "proxy-secret")
+    auth_at_construction: list[tuple[str, str, str, str]] = []
+    clients: list[object] = []
+
+    def workspace_client() -> object:
+        auth_at_construction.append(
+            (
+                os.environ.get("DATABRICKS_AUTH_TYPE", ""),
+                os.environ.get("DATABRICKS_TOKEN", ""),
+                os.environ.get("DATABRICKS_CLIENT_ID", ""),
+                os.environ.get("MIP_DEPLOYER_DATABRICKS_TOKEN", ""),
+            )
+        )
+        client = SimpleNamespace(
+            config=SimpleNamespace(host="https://workspace.cloud.databricks.com")
+        )
+        clients.append(client)
+        return client
+
+    account_args: dict[str, object] = {}
+    account = object()
+
+    def account_client(**kwargs: object) -> object:
+        account_args.update(kwargs)
+        return account
+
+    observed: dict[str, object] = {}
+
+    def verify(**kwargs: object) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
+    monkeypatch.setattr(boundary, "AccountClient", account_client)
+    monkeypatch.setattr(boundary, "collect_admin_inventory", lambda *_args, **_kwargs: _inventory())
+    monkeypatch.setattr(boundary, "verify_boundary", verify)
+
+    assert boundary.main(_proxy_main_args()) == 0
+
+    assert auth_at_construction == [
+        ("pat", "admin-token", "", "deployer-token"),
+        ("oauth-m2m", "", PROXY_ID, ""),
+    ]
+    assert account_args["host"] == "https://accounts.cloud.databricks.com"
+    assert account_args["client_id"] == PROXY_ID
+    assert account_args["client_secret"] == "proxy-secret"
+    assert observed["workspace"] is clients[1]
+    assert observed["account"] is account
+    assert observed["admin_workspace"] is clients[0]
+    assert observed["allow_attested_app_401"] is True
+    assert "DATABRICKS_AGENT_PROXY_CLIENT_SECRET" not in os.environ
+    assert "MIP_DEPLOYER_DATABRICKS_HOST" not in os.environ
+    assert "MIP_DEPLOYER_DATABRICKS_PROFILE" not in os.environ
 
 
 def _denied(*_args: object, **_kwargs: object) -> object:
@@ -138,7 +281,7 @@ def _account(*, admin_succeeds: bool = False) -> object:
     return SimpleNamespace(service_principals=SimpleNamespace(list=operation))
 
 
-def _admin_workspace() -> object:
+def _admin_workspace(*, state: object = ComputeState.STOPPED) -> object:
     permission = SimpleNamespace(permission_level="CAN_MANAGE", inherited=True)
     return SimpleNamespace(
         apps=SimpleNamespace(
@@ -148,7 +291,7 @@ def _admin_workspace() -> object:
                 url="https://mip-app.databricksapps.com",
                 service_principal_client_id="app-client",
                 service_principal_id="app-scim",
-                compute_status=SimpleNamespace(state="STOPPED"),
+                compute_status=SimpleNamespace(state=state),
                 active_deployment=SimpleNamespace(deployment_id="active"),
                 pending_deployment=None,
             ),
@@ -184,7 +327,7 @@ def _verify(
     app_status: int = 403,
     unrelated_app_status: int = 403,
     admin_workspace: object | None = None,
-    allow_stopped_app_401: bool = False,
+    allow_attested_app_401: bool = False,
 ) -> None:
     def http_get(url: str, **_kwargs: object) -> object:
         if url.endswith("/api/2.0/preview/scim/v2/Me"):
@@ -211,7 +354,7 @@ def _verify(
         supervisor_id=TARGET_SUPERVISOR,
         genie_space_id=TARGET_GENIE,
         admin_workspace=admin_workspace,
-        allow_stopped_app_401=allow_stopped_app_401,
+        allow_attested_app_401=allow_attested_app_401,
         http_get=http_get,
     )
 
@@ -271,12 +414,15 @@ def test_proxy_boundary_rejects_uncorroborated_provider_401() -> None:
         _verify(_workspace(), app_status=401)
 
 
-def test_proxy_boundary_accepts_target_stopped_401_with_admin_attestation() -> None:
+@pytest.mark.parametrize("state", (ComputeState.ACTIVE, ComputeState.STOPPED))
+def test_proxy_boundary_accepts_target_401_with_admin_attestation(
+    state: object,
+) -> None:
     _verify(
         _workspace(),
         app_status=401,
-        admin_workspace=_admin_workspace(),
-        allow_stopped_app_401=True,
+        admin_workspace=_admin_workspace(state=state),
+        allow_attested_app_401=True,
     )
 
 
@@ -287,15 +433,15 @@ def test_proxy_boundary_keeps_unrelated_apps_403_only() -> None:
             app_status=401,
             unrelated_app_status=401,
             admin_workspace=_admin_workspace(),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
-def test_proxy_boundary_requires_admin_authority_for_stopped_401_mode() -> None:
+def test_proxy_boundary_requires_admin_authority_for_attested_401_mode() -> None:
     with pytest.raises(RuntimeError, match="attestation authority is absent"):
         _verify(
             _workspace(),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 

@@ -1,11 +1,95 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
 from databricks.sdk.errors import PermissionDenied
+from databricks.sdk.service.apps import ComputeState
 
 from tools.databricks import verify_agent_runtime_identity_boundary as boundary
+
+
+def _runtime_main_args(*, include_attested_mode: bool = True) -> list[str]:
+    args = [
+        "--expected-application-id",
+        "runtime-client",
+        "--app-name",
+        "mip-app",
+        "--app-url",
+        "https://mip-app.databricksapps.com",
+        "--protected-service-principal-id",
+        "app-scim",
+        "--warehouse-id",
+        "warehouse-id",
+    ]
+    if include_attested_mode:
+        args.append("--allow-attested-app-401")
+    return args
+
+
+def test_runtime_main_rejects_non_attested_mode_before_constructing_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_DISCOVERY_URL", "https://attacker.invalid")
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "runtime-client")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "runtime-secret")
+    monkeypatch.setattr(
+        boundary,
+        "WorkspaceClient",
+        lambda: pytest.fail("workspace client constructed in unsafe mode"),
+    )
+
+    with pytest.raises(RuntimeError, match="dual-authority App attestation mode"):
+        boundary.main(_runtime_main_args(include_attested_mode=False))
+
+
+def test_main_captures_admin_then_binds_exact_runtime_m2m(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.cloud.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "pat")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "admin-token")
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", "runtime-client")
+    monkeypatch.setenv("DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET", "runtime-secret")
+    auth_at_construction: list[tuple[str, str, str]] = []
+    clients: list[object] = []
+
+    def workspace_client() -> object:
+        auth_at_construction.append(
+            (
+                os.environ.get("DATABRICKS_AUTH_TYPE", ""),
+                os.environ.get("DATABRICKS_TOKEN", ""),
+                os.environ.get("DATABRICKS_CLIENT_ID", ""),
+            )
+        )
+        client = SimpleNamespace(
+            config=SimpleNamespace(host="https://workspace.cloud.databricks.com")
+        )
+        clients.append(client)
+        return client
+
+    observed: dict[str, object] = {}
+
+    def verify(workspace: object, **kwargs: object) -> None:
+        observed["workspace"] = workspace
+        observed.update(kwargs)
+
+    monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
+    monkeypatch.setattr(boundary, "verify_boundary", verify)
+
+    assert boundary.main(_runtime_main_args()) == 0
+
+    assert auth_at_construction == [
+        ("pat", "admin-token", ""),
+        ("oauth-m2m", "", "runtime-client"),
+    ]
+    assert observed["workspace"] is clients[1]
+    assert observed["admin_workspace"] is clients[0]
+    assert observed["allow_attested_app_401"] is True
+    assert "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET" not in os.environ
 
 
 def _workspace(*, sql_state: str = "FAILED", sql_error: object = "PERMISSION_DENIED") -> object:
@@ -47,9 +131,54 @@ def _http_get(app_status: int, *, identity_status: int = 200):
                     "userName": "runtime-client",
                 },
             )
+        if "/api/2.0/permissions/apps/" in url:
+            return SimpleNamespace(status_code=403)
         return SimpleNamespace(status_code=app_status)
 
     return get
+
+
+def _admin_workspace() -> object:
+    return SimpleNamespace(
+        apps=SimpleNamespace(
+            get=lambda _name: SimpleNamespace(
+                id="app-id",
+                name="mip-app",
+                url="https://mip-app.databricksapps.com",
+                service_principal_client_id="app-client",
+                service_principal_id="app-scim",
+                compute_status=SimpleNamespace(state=ComputeState.ACTIVE),
+                active_deployment=SimpleNamespace(deployment_id="active"),
+                pending_deployment=None,
+            ),
+            get_permissions=lambda _name: SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        service_principal_name=None,
+                        group_name="release-probes",
+                        user_name=None,
+                        all_permissions=[
+                            SimpleNamespace(
+                                permission_level="CAN_USE",
+                                inherited=False,
+                            )
+                        ],
+                    )
+                ]
+            ),
+        ),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: iter(
+                (
+                    SimpleNamespace(
+                        id="runtime-scim",
+                        application_id="runtime-client",
+                        display_name="mip-agent-runtime-ci-sp",
+                    ),
+                )
+            )
+        ),
+    )
 
 
 def test_runtime_boundary_proves_app_admin_and_warehouse_denials() -> None:
@@ -77,7 +206,7 @@ def test_runtime_boundary_rejects_successful_warehouse_query() -> None:
         )
 
 
-def test_runtime_boundary_rejects_provider_401_without_stopped_attestation() -> None:
+def test_runtime_boundary_rejects_provider_401_without_admin_attestation() -> None:
     with pytest.raises(RuntimeError, match="uncorroborated status=401"):
         boundary.verify_boundary(
             _workspace(),
@@ -88,6 +217,20 @@ def test_runtime_boundary_rejects_provider_401_without_stopped_attestation() -> 
             warehouse_id="warehouse-id",
             http_get=_http_get(401),
         )
+
+
+def test_runtime_boundary_accepts_active_401_with_admin_attestation() -> None:
+    boundary.verify_boundary(
+        _workspace(),
+        expected_application_id="runtime-client",
+        app_name="mip-app",
+        app_url="https://mip-app.databricksapps.com",
+        protected_service_principal_id="app-scim-id",
+        warehouse_id="warehouse-id",
+        admin_workspace=_admin_workspace(),
+        allow_attested_app_401=True,
+        http_get=_http_get(401),
+    )
 
 
 @pytest.mark.parametrize("status_code", (200, 404))

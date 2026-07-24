@@ -630,14 +630,28 @@ def test_verifier_boundary_uses_its_own_identity_and_precedes_exact_proof() -> N
 
     assert boundary_pos < proof_pos
     assert "-m tools.databricks.verify_verifier_identity_boundary" in block
-    assert "DATABRICKS_AUTH_TYPE: oauth-m2m" in block
-    assert "secrets.DATABRICKS_VERIFIER_CLIENT_ID" in block
-    assert "secrets.DATABRICKS_VERIFIER_CLIENT_SECRET" in block
+    assert "DATABRICKS_AUTH_TYPE: pat" in block
+    assert "DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}" in block
+    assert (
+        "DATABRICKS_VERIFIER_CLIENT_ID: "
+        "${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}" in block
+    )
+    assert (
+        "DATABRICKS_VERIFIER_CLIENT_SECRET: "
+        "${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}" in block
+    )
+    assert "DATABRICKS_CLIENT_ID:" not in block
+    assert "DATABRICKS_CLIENT_SECRET:" not in block
+    assert (
+        '--expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in block
+    )
+    assert '--expected-application-id "$DATABRICKS_CLIENT_ID"' not in block
     assert "secrets.DATABRICKS_ACCOUNT_ID" in block
-    assert "unset DATABRICKS_TOKEN" in block
+    assert "unset DATABRICKS_TOKEN" not in block
     assert "--protected-service-principal-id" in block
     assert "--forbidden-relation" not in block
     assert "--obsolete-endpoint" not in block
+    assert "--allow-attested-app-401" in block
     assert "Missing required verifier-boundary input" in block
 
 

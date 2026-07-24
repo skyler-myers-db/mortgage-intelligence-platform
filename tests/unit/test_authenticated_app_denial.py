@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from databricks.sdk.service.apps import ComputeState
 
 from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
@@ -78,7 +79,7 @@ def _acl_entry(
 
 def _app(
     *,
-    state: str = "STOPPED",
+    state: object = ComputeState.STOPPED,
     name: str = APP_NAME,
     url: str = APP_URL,
     app_id: str = "app-id",
@@ -212,7 +213,7 @@ def _verify(
     workspace: object | None = None,
     http_get: Callable[..., Any] | None = None,
     admin_workspace: object | None = None,
-    allow_stopped_app_401: bool = False,
+    allow_attested_app_401: bool = False,
     app_url: str = APP_URL,
 ) -> object:
     exact_workspace = workspace or _workspace()
@@ -226,7 +227,7 @@ def _verify(
         http_get=http_get,
         admin_workspace=admin_workspace,
         app_name=APP_NAME if admin_workspace is not None else None,
-        allow_stopped_app_401=allow_stopped_app_401,
+        allow_attested_app_401=allow_attested_app_401,
     )
     return exact_workspace
 
@@ -241,13 +242,14 @@ def test_accepts_403_bracketed_by_one_exact_bearer() -> None:
     assert seen_headers[0] == {"Authorization": "Bearer exact-token"}
 
 
-def test_accepts_stopped_target_401_with_stable_admin_attestation() -> None:
+@pytest.mark.parametrize("state", (ComputeState.ACTIVE, ComputeState.STOPPED))
+def test_accepts_target_401_with_stable_admin_attestation(state: object) -> None:
     http_get, seen_headers = _http_probe(app_status=401)
     workspace = _verify(
         app_status=401,
         http_get=http_get,
-        admin_workspace=_admin_workspace(),
-        allow_stopped_app_401=True,
+        admin_workspace=_admin_workspace(apps=(_app(state=state),)),
+        allow_attested_app_401=True,
     )
 
     assert workspace.config.authenticate_calls == 1
@@ -261,12 +263,12 @@ def test_rejects_401_without_explicit_admin_attestation() -> None:
 
 
 @pytest.mark.parametrize("state", ("RUNNING", "STARTING", "STOPPING", "UNKNOWN"))
-def test_rejects_401_unless_admin_state_is_exactly_stopped(state: str) -> None:
+def test_rejects_401_for_transitional_or_unknown_app_state(state: str) -> None:
     with pytest.raises(RuntimeError, match="attestation does not match"):
         _verify(
             app_status=401,
             admin_workspace=_admin_workspace(apps=(_app(state=state),)),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
@@ -277,7 +279,55 @@ def test_rejects_401_with_pending_deployment() -> None:
             admin_workspace=_admin_workspace(
                 apps=(_app(pending_deployment_id="pending"),)
             ),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
+        )
+
+
+def test_rejects_active_401_without_an_active_deployment() -> None:
+    with pytest.raises(RuntimeError, match="attestation does not match"):
+        _verify(
+            app_status=401,
+            admin_workspace=_admin_workspace(
+                apps=(_app(state="ACTIVE", active_deployment_id=""),)
+            ),
+            allow_attested_app_401=True,
+        )
+
+
+def test_active_401_allows_other_principals_to_have_can_use() -> None:
+    _verify(
+        app_status=401,
+        admin_workspace=_admin_workspace(
+            apps=(_app(state="ACTIVE"),),
+            acls=(
+                (
+                    _acl_entry(
+                        group_name="release-probes",
+                        levels=(_permission("CAN_USE"),),
+                    ),
+                ),
+            ),
+        ),
+        allow_attested_app_401=True,
+    )
+
+
+def test_active_401_rejects_direct_target_permission() -> None:
+    with pytest.raises(RuntimeError, match="direct App access"):
+        _verify(
+            app_status=401,
+            admin_workspace=_admin_workspace(
+                apps=(_app(state="ACTIVE"),),
+                acls=(
+                    (
+                        _acl_entry(
+                            service_principal_name=IDENTITY,
+                            levels=(_permission("CAN_USE"),),
+                        ),
+                    ),
+                ),
+            ),
+            allow_attested_app_401=True,
         )
 
 
@@ -309,7 +359,7 @@ def test_rejects_direct_or_global_can_use_authority(entry: object) -> None:
         _verify(
             app_status=401,
             admin_workspace=_admin_workspace(acls=((entry,),)),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
@@ -326,7 +376,7 @@ def test_rejects_401_without_same_bearer_permission_admin_403(
             app_status=401,
             http_get=http_get,
             admin_workspace=_admin_workspace(),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
@@ -429,7 +479,7 @@ def test_rejects_malformed_or_unknown_acl_entries(entry: object) -> None:
         _verify(
             app_status=401,
             admin_workspace=_admin_workspace(acls=((entry,),)),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
@@ -439,14 +489,14 @@ def test_rejects_duplicate_acl_principals() -> None:
         _verify(
             app_status=401,
             admin_workspace=_admin_workspace(acls=((duplicate, duplicate),)),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
 @pytest.mark.parametrize(
     "apps",
     (
-        (_app(), _app(state="RUNNING")),
+        (_app(), _app(state="ACTIVE")),
         (_app(), _app(url="https://other.databricksapps.com")),
         (_app(), _app(app_id="changed-app-id")),
         (_app(), _app(app_client_id="changed-app-client")),
@@ -460,7 +510,7 @@ def test_rejects_admin_app_snapshot_drift(apps: tuple[object, ...]) -> None:
         _verify(
             app_status=401,
             admin_workspace=_admin_workspace(apps=apps),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
@@ -471,7 +521,7 @@ def test_rejects_admin_acl_snapshot_drift() -> None:
         _verify(
             app_status=401,
             admin_workspace=_admin_workspace(acls=(first, second)),
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )
 
 
@@ -498,5 +548,5 @@ def test_rejects_target_identity_snapshot_drift() -> None:
         _verify(
             app_status=401,
             admin_workspace=admin,
-            allow_stopped_app_401=True,
+            allow_attested_app_401=True,
         )

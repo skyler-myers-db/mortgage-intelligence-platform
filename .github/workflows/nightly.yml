@@ -276,20 +276,21 @@ jobs:
           done
       - name: Prove the verifier's effective authorization boundary
         # Workspace SCIM is not authoritative under automatic identity
-        # management. Exercise read-only positive and negative probes with the
-        # verifier's own OAuth credentials, including the account control plane,
-        # App proxy, secret-management API, UC, endpoints, and every warehouse.
+        # management. Capture the admin PAT only for the independent App
+        # attestation, then scrub it before exercising read-only positive and
+        # negative probes with the verifier's own OAuth credentials.
         env:
-          DATABRICKS_AUTH_TYPE: oauth-m2m
-          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
-          DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
+          DATABRICKS_AUTH_TYPE: pat
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_VERIFIER_CLIENT_ID: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_ID }}
+          DATABRICKS_VERIFIER_CLIENT_SECRET: ${{ secrets.DATABRICKS_VERIFIER_CLIENT_SECRET }}
           DATABRICKS_ACCOUNT_HOST: ${{ secrets.DATABRICKS_ACCOUNT_HOST || 'https://accounts.cloud.databricks.com' }}
           DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}
         run: |
           set -euo pipefail
-          unset DATABRICKS_TOKEN
           missing=""
-          for v in DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET \
+          for v in DATABRICKS_TOKEN \
+                   DATABRICKS_VERIFIER_CLIENT_ID DATABRICKS_VERIFIER_CLIENT_SECRET \
                    DATABRICKS_ACCOUNT_HOST DATABRICKS_ACCOUNT_ID \
                    DATABRICKS_WAREHOUSE_ID MIP_AI_GATEWAY_ENDPOINT \
                    MIP_AI_GATEWAY_INFERENCE_TABLE MIP_DEPLOYED_APP_URL \
@@ -303,7 +304,7 @@ jobs:
             exit 1
           fi
           python -m tools.databricks.verify_verifier_identity_boundary \
-            --expected-application-id "$DATABRICKS_CLIENT_ID" \
+            --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
             --account-host "$DATABRICKS_ACCOUNT_HOST" \
             --account-id "$DATABRICKS_ACCOUNT_ID" \
             --app-name "${MIP_APP_NAME:-mip-app}" \
@@ -311,7 +312,8 @@ jobs:
             --protected-service-principal-id "$MIP_APP_SERVICE_PRINCIPAL_ID" \
             --warehouse-id "$DATABRICKS_WAREHOUSE_ID" \
             --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
-            --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+            --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+            --allow-attested-app-401
       - name: Read independent agent tool expectation
         env:
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

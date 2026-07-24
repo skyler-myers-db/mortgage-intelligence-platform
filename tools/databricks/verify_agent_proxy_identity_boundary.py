@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import os
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
@@ -21,15 +20,11 @@ from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
 )
 from tools.databricks.authorization_denial import is_authorization_denied
-
-_AMBIENT_AUTH_KEYS = (
-    "DATABRICKS_ACCOUNT_CLIENT_ID",
-    "DATABRICKS_ACCOUNT_CLIENT_SECRET",
-    "DATABRICKS_CONFIG_PROFILE",
-    "DATABRICKS_PASSWORD",
-    "DATABRICKS_TOKEN",
-    "DATABRICKS_USERNAME",
+from tools.databricks.m2m_workspace_auth import (
+    bind_exact_workspace_m2m_auth,
+    reviewed_databricks_account_origin,
 )
+
 _MAX_INVENTORY = 1000
 
 
@@ -202,7 +197,7 @@ def _verify_app_denial(
     http_get: Callable[..., Any],
     admin_workspace: Any | None = None,
     app_name: str | None = None,
-    allow_stopped_app_401: bool = False,
+    allow_attested_app_401: bool = False,
 ) -> None:
     verify_authenticated_app_denial(
         workspace,
@@ -212,7 +207,7 @@ def _verify_app_denial(
         http_get=http_get,
         admin_workspace=admin_workspace,
         app_name=app_name,
-        allow_stopped_app_401=allow_stopped_app_401,
+        allow_attested_app_401=allow_attested_app_401,
     )
 
 
@@ -255,7 +250,7 @@ def verify_boundary(
     supervisor_id: str,
     genie_space_id: str,
     admin_workspace: Any | None = None,
-    allow_stopped_app_401: bool = False,
+    allow_attested_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     """Run positive target and exhaustive negative probes under proxy OAuth."""
@@ -267,8 +262,8 @@ def verify_boundary(
     }
     if expected_application_id not in authenticated:
         raise RuntimeError("authenticated agent-proxy identity does not match its application id")
-    if allow_stopped_app_401 and admin_workspace is None:
-        raise RuntimeError("admin stopped-App attestation authority is absent")
+    if allow_attested_app_401 and admin_workspace is None:
+        raise RuntimeError("admin App attestation authority is absent")
     _expect_denied(
         "account administrator service-principal listing probe",
         lambda: list(account.service_principals.list(count=1)),
@@ -294,7 +289,7 @@ def verify_boundary(
             http_get=http_get,
             admin_workspace=admin_workspace if is_target else None,
             app_name=candidate_app if is_target else None,
-            allow_stopped_app_401=allow_stopped_app_401 and is_target,
+            allow_attested_app_401=allow_attested_app_401 and is_target,
         )
     _expect_denied(
         "metastore administrator GET probe",
@@ -367,23 +362,6 @@ def verify_boundary(
         )
 
 
-def _bind_proxy_auth(*, admin_workspace: Any, application_id: str) -> tuple[str, str]:
-    configured_id = os.environ.get("DATABRICKS_AGENT_PROXY_CLIENT_ID", "").strip()
-    secret = os.environ.get("DATABRICKS_AGENT_PROXY_CLIENT_SECRET", "").strip()
-    host = _text(getattr(admin_workspace, "config", None), "host")
-    if configured_id != application_id.strip() or not secret or not host:
-        raise RuntimeError("agent-proxy identity verifier lacks its exact OAuth credential or host")
-    for key in _AMBIENT_AUTH_KEYS:
-        os.environ.pop(key, None)
-    os.environ.pop("DATABRICKS_AGENT_PROXY_CLIENT_SECRET", None)
-    os.environ["DATABRICKS_HOST"] = host
-    os.environ["DATABRICKS_AUTH_TYPE"] = "oauth-m2m"
-    os.environ["DATABRICKS_CLIENT_ID"] = configured_id
-    os.environ["DATABRICKS_CLIENT_SECRET"] = secret
-    os.environ["MIP_DISABLE_DOTENV"] = "1"
-    return configured_id, secret
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-application-id", required=True)
@@ -396,16 +374,27 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--supervisor-id", required=True)
     parser.add_argument("--genie-space-id", required=True)
     parser.add_argument(
-        "--allow-stopped-app-401",
+        "--allow-attested-app-401",
         action="store_true",
-        help="Accept target-App 401 only with a stable stopped/quarantined admin attestation.",
+        help="Accept target-App 401 only with a stable independent admin attestation.",
     )
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    account_host = reviewed_databricks_account_origin(
+        args.account_host,
+        label="agent-proxy account host",
+    )
     admin_workspace = WorkspaceClient()
+    client_id, client_secret = bind_exact_workspace_m2m_auth(
+        admin_workspace=admin_workspace,
+        expected_application_id=args.expected_application_id,
+        client_id_env="DATABRICKS_AGENT_PROXY_CLIENT_ID",
+        client_secret_env="DATABRICKS_AGENT_PROXY_CLIENT_SECRET",
+        label="agent-proxy",
+    )
     inventory = collect_admin_inventory(
         admin_workspace,
         app_name=args.app_name,
@@ -415,13 +404,9 @@ def main(argv: list[str] | None = None) -> int:
         supervisor_id=args.supervisor_id,
         genie_space_id=args.genie_space_id,
     )
-    client_id, client_secret = _bind_proxy_auth(
-        admin_workspace=admin_workspace,
-        application_id=args.expected_application_id,
-    )
     proxy_workspace = WorkspaceClient()
     proxy_account = AccountClient(
-        host=args.account_host,
+        host=account_host,
         account_id=args.account_id,
         client_id=client_id,
         client_secret=client_secret,
@@ -437,7 +422,7 @@ def main(argv: list[str] | None = None) -> int:
         supervisor_id=args.supervisor_id,
         genie_space_id=args.genie_space_id,
         admin_workspace=admin_workspace,
-        allow_stopped_app_401=args.allow_stopped_app_401,
+        allow_attested_app_401=args.allow_attested_app_401,
     )
     print("agent-proxy effective authorization boundary: PASS")
     return 0

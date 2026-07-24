@@ -1,13 +1,141 @@
 from __future__ import annotations
 
+import os
 from types import SimpleNamespace
 
 import pytest
 from databricks.sdk.errors import PermissionDenied
+from databricks.sdk.service.apps import ComputeState
 
 from tools.databricks import verify_verifier_identity_boundary as boundary
 
 verify_boundary = boundary.verify_boundary
+
+
+def _verifier_main_args(
+    account_host: str = "https://accounts.cloud.databricks.com",
+    *,
+    include_attested_mode: bool = True,
+) -> list[str]:
+    args = [
+        "--expected-application-id",
+        "verifier-client-id",
+        "--account-host",
+        account_host,
+        "--account-id",
+        "account-id",
+        "--app-name",
+        "mip-app",
+        "--app-url",
+        "https://mip-app.databricksapps.com",
+        "--protected-service-principal-id",
+        "app-scim",
+        "--warehouse-id",
+        "warehouse-id",
+        "--relation-prefix",
+        "mip.audit.gateway",
+        "--endpoint",
+        "gateway",
+    ]
+    if include_attested_mode:
+        args.append("--allow-attested-app-401")
+    return args
+
+
+@pytest.mark.parametrize(
+    "account_host",
+    (
+        "https://user@accounts.cloud.databricks.com",
+        "https://accounts.cloud.databricks.com:443",
+    ),
+)
+def test_verifier_main_rejects_account_origin_before_constructing_clients(
+    monkeypatch: pytest.MonkeyPatch,
+    account_host: str,
+) -> None:
+    monkeypatch.setattr(
+        boundary,
+        "WorkspaceClient",
+        lambda: pytest.fail("workspace client constructed before host validation"),
+    )
+
+    with pytest.raises(RuntimeError, match="reviewed Databricks account origin"):
+        boundary.main(_verifier_main_args(account_host))
+
+
+def test_verifier_main_rejects_non_attested_mode_before_constructing_client(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_DISCOVERY_URL", "https://attacker.invalid")
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "verifier-client-id")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "verifier-secret")
+    monkeypatch.setattr(
+        boundary,
+        "WorkspaceClient",
+        lambda: pytest.fail("workspace client constructed in unsafe mode"),
+    )
+
+    with pytest.raises(RuntimeError, match="dual-authority App attestation mode"):
+        boundary.main(_verifier_main_args(include_attested_mode=False))
+
+
+def test_main_captures_admin_then_binds_exact_verifier_m2m(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", "https://workspace.cloud.databricks.com")
+    monkeypatch.setenv("DATABRICKS_AUTH_TYPE", "pat")
+    monkeypatch.setenv("DATABRICKS_TOKEN", "admin-token")
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
+    monkeypatch.setenv("DATABRICKS_VERIFIER_CLIENT_ID", "verifier-client-id")
+    monkeypatch.setenv("DATABRICKS_VERIFIER_CLIENT_SECRET", "verifier-secret")
+    auth_at_construction: list[tuple[str, str, str]] = []
+    clients: list[object] = []
+
+    def workspace_client() -> object:
+        auth_at_construction.append(
+            (
+                os.environ.get("DATABRICKS_AUTH_TYPE", ""),
+                os.environ.get("DATABRICKS_TOKEN", ""),
+                os.environ.get("DATABRICKS_CLIENT_ID", ""),
+            )
+        )
+        client = SimpleNamespace(
+            config=SimpleNamespace(host="https://workspace.cloud.databricks.com")
+        )
+        clients.append(client)
+        return client
+
+    account_args: dict[str, object] = {}
+    account = object()
+
+    def account_client(**kwargs: object) -> object:
+        account_args.update(kwargs)
+        return account
+
+    observed: dict[str, object] = {}
+
+    def verify(**kwargs: object) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
+    monkeypatch.setattr(boundary, "AccountClient", account_client)
+    monkeypatch.setattr(boundary, "verify_boundary", verify)
+
+    assert boundary.main(_verifier_main_args()) == 0
+
+    assert auth_at_construction == [
+        ("pat", "admin-token", ""),
+        ("oauth-m2m", "", "verifier-client-id"),
+    ]
+    assert account_args["host"] == "https://accounts.cloud.databricks.com"
+    assert account_args["client_id"] == "verifier-client-id"
+    assert account_args["client_secret"] == "verifier-secret"
+    assert observed["workspace"] is clients[1]
+    assert observed["account"] is account
+    assert observed["admin_workspace"] is clients[0]
+    assert observed["allow_attested_app_401"] is True
+    assert "DATABRICKS_VERIFIER_CLIENT_SECRET" not in os.environ
 
 
 @pytest.mark.parametrize(
@@ -301,9 +429,54 @@ def _http_get(app_status: int, *, identity_status: int = 200):
                     "userName": "verifier-client-id",
                 },
             )
+        if "/api/2.0/permissions/apps/" in url:
+            return SimpleNamespace(status_code=403)
         return SimpleNamespace(status_code=app_status)
 
     return get
+
+
+def _admin_workspace() -> object:
+    return SimpleNamespace(
+        apps=SimpleNamespace(
+            get=lambda _name: SimpleNamespace(
+                id="app-id",
+                name="mip-app",
+                url="https://mip-app.databricksapps.com",
+                service_principal_client_id="app-client",
+                service_principal_id="app-scim",
+                compute_status=SimpleNamespace(state=ComputeState.ACTIVE),
+                active_deployment=SimpleNamespace(deployment_id="active"),
+                pending_deployment=None,
+            ),
+            get_permissions=lambda _name: SimpleNamespace(
+                access_control_list=[
+                    SimpleNamespace(
+                        service_principal_name=None,
+                        group_name="release-probes",
+                        user_name=None,
+                        all_permissions=[
+                            SimpleNamespace(
+                                permission_level="CAN_USE",
+                                inherited=False,
+                            )
+                        ],
+                    )
+                ]
+            ),
+        ),
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: iter(
+                (
+                    SimpleNamespace(
+                        id="verifier-scim-id",
+                        application_id="verifier-client-id",
+                        display_name="mip-ai-gateway-verifier-ci-sp",
+                    ),
+                )
+            )
+        ),
+    )
 
 
 def _verify(**overrides: object) -> None:
@@ -327,9 +500,17 @@ def test_effective_boundary_accepts_targets_and_all_expected_denials() -> None:
     _verify()
 
 
-def test_rejects_provider_401_without_stopped_attestation() -> None:
+def test_rejects_provider_401_without_admin_attestation() -> None:
     with pytest.raises(RuntimeError, match="uncorroborated status=401"):
         _verify(http_get=_http_get(401))
+
+
+def test_accepts_active_401_with_admin_attestation() -> None:
+    _verify(
+        http_get=_http_get(401),
+        admin_workspace=_admin_workspace(),
+        allow_attested_app_401=True,
+    )
 
 
 def test_rejects_bare_401_without_exact_bearer_identity() -> None:

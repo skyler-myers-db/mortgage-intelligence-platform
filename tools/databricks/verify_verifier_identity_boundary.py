@@ -11,7 +11,6 @@ permissions.
 from __future__ import annotations
 
 import argparse
-import os
 import re
 from collections.abc import Callable
 from functools import partial
@@ -25,6 +24,10 @@ from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
 )
 from tools.databricks.authorization_denial import is_authorization_denied
+from tools.databricks.m2m_workspace_auth import (
+    bind_exact_workspace_m2m_auth,
+    reviewed_databricks_account_origin,
+)
 
 _RELATION_RE = re.compile(
     r"^(?P<catalog>[A-Za-z_][A-Za-z0-9_]*)\."
@@ -462,6 +465,9 @@ def _verify_app_http_denial(
     *,
     expected_application_id: str,
     app_url: str,
+    admin_workspace: Any | None = None,
+    app_name: str | None = None,
+    allow_attested_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     verify_authenticated_app_denial(
@@ -470,6 +476,9 @@ def _verify_app_http_denial(
         app_url=app_url,
         label="verifier Databricks App HTTP denial probe",
         http_get=http_get,
+        admin_workspace=admin_workspace,
+        app_name=app_name,
+        allow_attested_app_401=allow_attested_app_401,
     )
 
 
@@ -484,6 +493,8 @@ def verify_boundary(
     warehouse_id: str,
     relation_prefix: str,
     endpoint: str,
+    admin_workspace: Any | None = None,
+    allow_attested_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     """Run read-only positive and negative probes under verifier credentials."""
@@ -517,6 +528,9 @@ def verify_boundary(
         workspace,
         expected_application_id=expected_application_id,
         app_url=app_url,
+        admin_workspace=admin_workspace,
+        app_name=app_name if admin_workspace is not None else None,
+        allow_attested_app_401=allow_attested_app_401,
         http_get=http_get,
     )
 
@@ -622,18 +636,31 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--warehouse-id", required=True)
     parser.add_argument("--relation-prefix", required=True)
     parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--allow-attested-app-401", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    client_id = os.environ.get("DATABRICKS_CLIENT_ID", "").strip()
-    client_secret = os.environ.get("DATABRICKS_CLIENT_SECRET", "").strip()
-    if not client_id or not client_secret:
-        raise RuntimeError("verifier DATABRICKS_CLIENT_ID/SECRET are required")
+    account_host = reviewed_databricks_account_origin(
+        args.account_host,
+        label="verifier account host",
+    )
+    if not args.allow_attested_app_401:
+        raise RuntimeError(
+            "verifier CLI requires the dual-authority App attestation mode"
+        )
+    admin_workspace = WorkspaceClient()
+    client_id, client_secret = bind_exact_workspace_m2m_auth(
+        admin_workspace=admin_workspace,
+        expected_application_id=args.expected_application_id,
+        client_id_env="DATABRICKS_VERIFIER_CLIENT_ID",
+        client_secret_env="DATABRICKS_VERIFIER_CLIENT_SECRET",
+        label="verifier",
+    )
     workspace = WorkspaceClient()
     account = AccountClient(
-        host=args.account_host,
+        host=account_host,
         account_id=args.account_id,
         client_id=client_id,
         client_secret=client_secret,
@@ -649,6 +676,8 @@ def main(argv: list[str] | None = None) -> int:
         warehouse_id=args.warehouse_id,
         relation_prefix=args.relation_prefix,
         endpoint=args.endpoint,
+        admin_workspace=admin_workspace,
+        allow_attested_app_401=True,
     )
     print("verifier effective authorization boundary: PASS")
     return 0

@@ -204,7 +204,7 @@ def _admin_snapshot(
     )
 
 
-def _assert_stopped_401_attestation(
+def _assert_401_attestation(
     snapshot: AdminAppSnapshot,
     *,
     identity: BearerIdentity,
@@ -212,12 +212,16 @@ def _assert_stopped_401_attestation(
     label: str,
 ) -> None:
     if (
-        snapshot.compute_state != "STOPPED"
+        snapshot.compute_state not in {"ACTIVE", "STOPPED"}
         or snapshot.pending_deployment_id
+        or (
+            snapshot.compute_state == "ACTIVE"
+            and not snapshot.active_deployment_id
+        )
         or identity.scim_id != snapshot.target_scim_id
         or identity.application_id != expected_application_id
     ):
-        raise RuntimeError(f"{label} stopped-App 401 attestation does not match")
+        raise RuntimeError(f"{label} App 401 attestation does not match")
     target_names = {
         expected_application_id,
         snapshot.target_scim_id,
@@ -225,13 +229,16 @@ def _assert_stopped_401_attestation(
     }
     for kind, principal, levels in snapshot.acl:
         permission_levels = {item[0] for item in levels}
-        if "CAN_USE" in permission_levels:
+        if (
+            snapshot.compute_state == "STOPPED"
+            and "CAN_USE" in permission_levels
+        ):
             raise RuntimeError(
                 f"{label} stopped-App 401 attestation found a global CAN_USE grant"
             )
         if kind == "service_principal" and principal in target_names:
             raise RuntimeError(
-                f"{label} stopped-App 401 attestation found direct App access"
+                f"{label} App 401 attestation found direct App access"
             )
 
 
@@ -244,9 +251,9 @@ def verify_authenticated_app_denial(
     http_get: Callable[..., Any] = requests.get,
     admin_workspace: Any | None = None,
     app_name: str | None = None,
-    allow_stopped_app_401: bool = False,
+    allow_attested_app_401: bool = False,
 ) -> None:
-    """Prove App denial; 401 requires a stopped/quarantined admin attestation."""
+    """Prove App denial; 401 requires a stable, independent admin attestation."""
 
     expected = expected_application_id.strip()
     host = _https_origin(
@@ -270,12 +277,12 @@ def verify_authenticated_app_denial(
     ):
         raise RuntimeError(f"{label} lacks an exact workspace OAuth bearer binding")
     attested_app_name = str(app_name or "").strip()
-    if allow_stopped_app_401 and (
+    if allow_attested_app_401 and (
         admin_workspace is None
         or admin_workspace is workspace
         or not attested_app_name
     ):
-        raise RuntimeError(f"{label} stopped-App 401 attestation authority is absent")
+        raise RuntimeError(f"{label} App 401 attestation authority is absent")
 
     before_snapshot = (
         _admin_snapshot(
@@ -285,7 +292,7 @@ def verify_authenticated_app_denial(
             expected_application_id=expected,
             label=label,
         )
-        if allow_stopped_app_401
+        if allow_attested_app_401
         else None
     )
     identity_url = f"{host}/api/2.0/preview/scim/v2/Me"
@@ -311,7 +318,7 @@ def verify_authenticated_app_denial(
     status = getattr(response, "status_code", None)
     if status not in {401, 403}:
         raise RuntimeError(f"{label} unexpectedly returned status={status or 'UNKNOWN'}")
-    if status == 401 and not allow_stopped_app_401:
+    if status == 401 and not allow_attested_app_401:
         raise RuntimeError(f"{label} returned uncorroborated status=401")
     if status == 401:
         permission_url = (
@@ -325,7 +332,7 @@ def verify_authenticated_app_denial(
         )
         if getattr(permission_response, "status_code", None) != 403:
             raise RuntimeError(
-                f"{label} stopped-App permission-administration denial returned "
+                f"{label} App permission-administration denial returned "
                 f"status={getattr(permission_response, 'status_code', 'UNKNOWN')}"
             )
 
@@ -352,7 +359,7 @@ def verify_authenticated_app_denial(
         )
         if after_snapshot != before_snapshot:
             raise RuntimeError(f"{label} admin App identity, state, or ACL drifted")
-        _assert_stopped_401_attestation(
+        _assert_401_attestation(
             after_snapshot,
             identity=after_identity,
             expected_application_id=expected,

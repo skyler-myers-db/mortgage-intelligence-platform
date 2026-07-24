@@ -16,6 +16,7 @@ from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
 )
 from tools.databricks.authorization_denial import is_authorization_denied
+from tools.databricks.m2m_workspace_auth import bind_exact_workspace_m2m_auth
 
 
 def _is_denied(value: object) -> bool:
@@ -37,6 +38,9 @@ def _verify_app_http_denial(
     *,
     expected_application_id: str,
     app_url: str,
+    admin_workspace: Any | None = None,
+    app_name: str | None = None,
+    allow_attested_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     verify_authenticated_app_denial(
@@ -45,6 +49,9 @@ def _verify_app_http_denial(
         app_url=app_url,
         label="agent-runtime Databricks App denial probe",
         http_get=http_get,
+        admin_workspace=admin_workspace,
+        app_name=app_name,
+        allow_attested_app_401=allow_attested_app_401,
     )
 
 
@@ -83,6 +90,8 @@ def verify_boundary(
     app_url: str,
     protected_service_principal_id: str,
     warehouse_id: str,
+    admin_workspace: Any | None = None,
+    allow_attested_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     """Prove runtime identity plus App, admin, and warehouse denials."""
@@ -97,6 +106,9 @@ def verify_boundary(
         expected_application_id=expected_application_id,
         app_url=app_url,
         http_get=http_get,
+        admin_workspace=admin_workspace,
+        app_name=app_name if admin_workspace is not None else None,
+        allow_attested_app_401=allow_attested_app_401,
     )
     protected_id = protected_service_principal_id.strip()
     if not protected_id:
@@ -120,7 +132,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--app-url", required=True)
     parser.add_argument("--protected-service-principal-id", required=True)
     parser.add_argument("--warehouse-id", required=True)
+    parser.add_argument("--allow-attested-app-401", action="store_true")
     args = parser.parse_args(argv)
+    if not args.allow_attested_app_401:
+        raise RuntimeError(
+            "agent-runtime CLI requires the dual-authority App attestation mode"
+        )
+    admin_workspace = WorkspaceClient()
+    bind_exact_workspace_m2m_auth(
+        admin_workspace=admin_workspace,
+        expected_application_id=args.expected_application_id,
+        client_id_env="DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        client_secret_env="DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET",
+        label="agent-runtime",
+    )
     verify_boundary(
         WorkspaceClient(),
         expected_application_id=args.expected_application_id,
@@ -128,6 +153,8 @@ def main(argv: list[str] | None = None) -> int:
         app_url=args.app_url,
         protected_service_principal_id=args.protected_service_principal_id,
         warehouse_id=args.warehouse_id,
+        admin_workspace=admin_workspace,
+        allow_attested_app_401=True,
     )
     print("agent-runtime effective negative authorization boundary: PASS")
     return 0

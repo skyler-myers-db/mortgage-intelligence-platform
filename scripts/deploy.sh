@@ -1483,6 +1483,26 @@ run_with_agent_runtime_credentials() {
   )
 }
 
+run_with_verifier_credentials() {
+  local client_id="${DATABRICKS_VERIFIER_CLIENT_ID:-}"
+  local client_secret="${DATABRICKS_VERIFIER_CLIENT_SECRET:-}"
+  if [[ "$DRY_RUN" -eq 1 ]]; then
+    run "$@"
+    return
+  fi
+  if [[ -z "$client_id" || -z "$client_secret" ]]; then
+    echo "${RED}[deploy] exact verifier credentials are missing for dual-authority audit.${RST}" >&2
+    return 2
+  fi
+  # Preserve deployer auth only for the bounded admin attestation. The verifier
+  # replaces ambient auth before any target-identity probe.
+  (
+    export DATABRICKS_VERIFIER_CLIENT_ID="$client_id"
+    export DATABRICKS_VERIFIER_CLIENT_SECRET="$client_secret"
+    run "$@"
+  )
+}
+
 run_with_agent_proxy_credentials() {
   local client_id="${DATABRICKS_AGENT_PROXY_CLIENT_ID:-}"
   local client_secret="${DATABRICKS_AGENT_PROXY_CLIENT_SECRET:-}"
@@ -3678,7 +3698,7 @@ run_with_account_identity \
   --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
   --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
-  --allow-stopped-app-401
+  --allow-attested-app-401
 if ! revoke_agent_runtime_bootstrap_grants; then
   echo "${RED}[deploy] temporary agent-runtime schema privileges remain; refusing deployment.${RST}" >&2
   exit 1
@@ -3915,16 +3935,14 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     mint_m2m_token MIP_BEARER_TOKEN DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET
     deploy_app_snapshot "activate App snapshot on the runtime-owned Gateway before retirement"
     step "prove agent-runtime negative authorization boundary before positive App probes"
-    run_as_m2m_identity \
-      agent-runtime \
-      DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
-      DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+    run_with_agent_runtime_credentials \
       "$PYTHON" -m tools.databricks.verify_agent_runtime_identity_boundary \
       --expected-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
       --app-name "$_GRANTS_APP_NAME" \
       --app-url "${MIP_APP_URL:?deployed app URL is required}" \
       --protected-service-principal-id "$APP_SP_SCIM_ID" \
-      --warehouse-id "$_GRANTS_WAREHOUSE_ID"
+      --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
+      --allow-attested-app-401
     if [[ "$APP_ACCESS_QUARANTINED" -eq 1 ]]; then
       step "grant only the dedicated release probe temporary candidate access"
       # shellcheck disable=SC2031  # Parent-shell normal client ID is unchanged by mint subshells.
@@ -4045,10 +4063,7 @@ PYEOF
         --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
         --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
         --lakebase-database "$LAKEBASE_DATABASE"
-      run_as_m2m_identity \
-        verifier \
-        DATABRICKS_VERIFIER_CLIENT_ID \
-        DATABRICKS_VERIFIER_CLIENT_SECRET \
+      run_with_verifier_credentials \
         "$PYTHON" -m tools.databricks.verify_verifier_identity_boundary \
         --expected-application-id "$DATABRICKS_VERIFIER_CLIENT_ID" \
         --account-host "$DATABRICKS_ACCOUNT_HOST" \
@@ -4058,7 +4073,8 @@ PYEOF
         --protected-service-principal-id "$APP_SP_SCIM_ID" \
         --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
         --relation-prefix "$MIP_AI_GATEWAY_INFERENCE_TABLE" \
-        --endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+        --endpoint "$MIP_AI_GATEWAY_ENDPOINT" \
+        --allow-attested-app-401
       step "verify AI Gateway exact inference-row proof with dedicated verifier identity"
       AI_GATEWAY_PROOF_ARGS=(
         -m
@@ -4266,7 +4282,8 @@ if [[ "$DRY_RUN" -eq 0 && "$FINAL_APP_PROVEN" -eq 1 ]]; then
     --lakebase-instance "$MIP_LAKEBASE_INSTANCE" \
     --warehouse-id "$_GRANTS_WAREHOUSE_ID" \
     --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
-    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}"
+    --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
+    --allow-attested-app-401
   AGENT_PROXY_SIGNED_BLUE_RETIRE_ARGS=()
   if [[ "$APP_SIGNED_BLUE_AVAILABLE" -eq 1 && \
         -n "$MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS" ]]; then

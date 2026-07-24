@@ -2077,7 +2077,7 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
             proxy_identity_boundary,
         )
     ]
-    assert "--allow-stopped-app-401" in pre_cutover_proxy_block
+    assert "--allow-attested-app-401" in pre_cutover_proxy_block
     proxy_uc_block = runtime_block[proxy_uc_audit : proxy_uc_audit + 700]
     assert "run_with_account_identity" in proxy_uc_block
     assert "run_with_agent_proxy_credentials" in proxy_uc_block
@@ -2118,10 +2118,43 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
         in script[final_proxy_identity_boundary:proxy_secret_cleanup]
     )
     assert (
-        "--allow-stopped-app-401"
-        not in script[final_proxy_identity_boundary:proxy_secret_cleanup]
+        "--allow-attested-app-401"
+        in script[final_proxy_identity_boundary:proxy_secret_cleanup]
     )
-    assert script.count("--allow-stopped-app-401") == 1
+    assert script.count("--allow-attested-app-401") == 4
+    assert "--allow-stopped-app-401" not in script
+    runtime_identity_boundary = runtime_block.index(
+        "tools.databricks.verify_agent_runtime_identity_boundary"
+    )
+    runtime_identity_block = runtime_block[
+        runtime_block.rfind(
+            "run_with_agent_runtime_credentials",
+            0,
+            runtime_identity_boundary,
+        )
+        : runtime_block.index(
+            'step "grant only the dedicated release probe temporary candidate access"',
+            runtime_identity_boundary,
+        )
+    ]
+    assert "run_with_agent_runtime_credentials" in runtime_identity_block
+    assert "--allow-attested-app-401" in runtime_identity_block
+    verifier_identity_boundary = script.index(
+        "tools.databricks.verify_verifier_identity_boundary"
+    )
+    verifier_identity_block = script[
+        script.rfind(
+            "run_with_verifier_credentials",
+            0,
+            verifier_identity_boundary,
+        )
+        : script.index(
+            'step "verify AI Gateway exact inference-row proof with dedicated verifier identity"',
+            verifier_identity_boundary,
+        )
+    ]
+    assert "run_with_verifier_credentials" in verifier_identity_block
+    assert "--allow-attested-app-401" in verifier_identity_block
     cleanup_block = script[final_proxy_identity_boundary:proxy_secret_cleanup + 700]
     assert "--cleanup-signed-blue" in cleanup_block
     assert "--signed-blue-credential-id" in cleanup_block
