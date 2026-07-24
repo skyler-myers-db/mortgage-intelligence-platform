@@ -5,6 +5,10 @@ from __future__ import annotations
 import shlex
 from dataclasses import dataclass
 
+from backend.agents.reviewed_uc_function_contract import (
+    authenticated_reviewed_function_owner,
+)
+
 
 @dataclass(frozen=True)
 class SupervisorAgentBinding:
@@ -17,6 +21,26 @@ class SupervisorAgentBinding:
     replaced_supervisor_endpoint: str | None = None
     replaced_supervisor_creator: str | None = None
     replaced_supervisor_create_time: str | None = None
+
+
+def resolve_reviewed_function_owner(
+    workspace: object,
+    catalog: str,
+    configured_owner: object,
+    capture_authenticated_owner: bool,
+) -> str:
+    owner = str(configured_owner or "").strip()
+    if not capture_authenticated_owner:
+        return owner
+    authenticated_owner = authenticated_reviewed_function_owner(
+        workspace,
+        catalog=catalog,
+    )
+    if owner and owner != authenticated_owner:
+        raise RuntimeError(
+            "configured reviewed-function owner differs from the authenticated deployer"
+        )
+    return authenticated_owner
 
 
 @dataclass(frozen=True)

@@ -37,6 +37,9 @@ from tools.databricks.app_proxy_retirement_journal import (
 from tools.databricks.app_rollback_gateway_binding import (
     payload_gateway_binding as _payload_gateway_binding,
 )
+from tools.databricks.app_rollback_gateway_proof import (
+    resolve_stored_gateway_resource_proof,
+)
 from tools.databricks.app_rollback_record_builder import (
     build_app_rollback_record as _record_from,
 )
@@ -48,7 +51,6 @@ from tools.databricks.app_rollback_record_contract import (
     _save_legacy_record,
     _save_record,
     _text,
-    _validated_gateway_resources,
     _validated_payload,
 )
 from tools.databricks.app_rollback_record_contract import (
@@ -72,7 +74,6 @@ from tools.databricks.export_gateway_runtime_contract import (
 )
 from tools.databricks.gateway_legacy_rollback import (
     assert_live_legacy_gateway_resources,
-    validated_legacy_gateway_resources,
 )
 from tools.databricks.lakebase_instance_contract import resolve_lakebase_instance_aliases
 from tools.databricks.serving_endpoint_acl import (
@@ -275,68 +276,14 @@ def _stored_resource_proof(
     record: dict[str, Any],
     candidate_reviewed_function_owner: str | None = None,
 ) -> ExactGatewayRuntimeProof:
-    if record.get("version", RECORD_VERSION) == LEGACY_RECORD_VERSION:
-        if candidate_reviewed_function_owner is not None:
-            raise RuntimeError(
-                "legacy App rollback proof cannot use candidate function-owner authority"
-            )
-        legacy = validated_legacy_gateway_resources(record.get("gateway_resources"))
-        verified = assert_live_legacy_gateway_resources(
-            workspace,
-            expected=legacy,
-        )
-        reviewed_function_owner = authenticated_reviewed_function_owner(
-            workspace,
-            catalog=legacy["catalog"],
-        )
-        assert_reviewed_function_set(
-            workspace,
-            catalog=legacy["catalog"],
-            expected_owner=reviewed_function_owner,
-            allow_legacy_segment_determinism=True,
-        )
-        return ExactGatewayRuntimeProof(
-            contract={key: value for key, value in verified.items() if key != "resource_digest"},
-            digest=verified["resource_digest"],
-        )
-    resources = _validated_gateway_resources(record.get("gateway_resources"))
-    reviewed_function_owner = candidate_reviewed_function_owner or ""
-    legacy_reviewed_function_contract = False
-    if candidate_reviewed_function_owner is not None:
-        authenticated_owner = authenticated_reviewed_function_owner(
-            workspace,
-            catalog=resources["catalog"],
-        )
-        if candidate_reviewed_function_owner != authenticated_owner:
-            raise RuntimeError(
-                "candidate reviewed-function owner is not the authenticated deployer"
-            )
-        reviewed_function_owner = authenticated_owner
-    else:
-        payload = _validated_payload(record.get("payload"))
-        payload_environment = _env_map(payload)
-        reviewed_function_owner = payload_environment.get(
-            "MIP_REVIEWED_FUNCTION_OWNER",
-            "",
-        )
-        legacy_reviewed_function_contract = not reviewed_function_owner
-    if legacy_reviewed_function_contract:
-        reviewed_function_owner = authenticated_reviewed_function_owner(
-            workspace,
-            catalog=resources["catalog"],
-        )
-    return resolve_exact_resource_proof(
+    return resolve_stored_gateway_resource_proof(
         workspace,
-        supervisor_name=resources["supervisor_canonical_name"],
-        catalog=resources["catalog"],
-        genie_space_id=resources["genie_space_id"],
-        runtime_application_id=resources["runtime_application_id"],
-        reviewed_function_owner=reviewed_function_owner,
-        supervisor_id=resources["supervisor_id"],
-        gateway_endpoint=resources["gateway_endpoint"],
-        expected=resources,
-        require_resource_binding=True,
-        allow_legacy_reviewed_function_contract=legacy_reviewed_function_contract,
+        record=record,
+        candidate_reviewed_function_owner=candidate_reviewed_function_owner,
+        authenticate_owner=authenticated_reviewed_function_owner,
+        assert_function_set=assert_reviewed_function_set,
+        assert_legacy_resources=assert_live_legacy_gateway_resources,
+        resolve_exact_resource_proof=resolve_exact_resource_proof,
     )
 
 

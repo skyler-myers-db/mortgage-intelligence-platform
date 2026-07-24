@@ -19,9 +19,6 @@ from backend.agents.gateway_contract import (  # noqa: E402
     DEFAULT_GATEWAY_ENDPOINT,
     LEGACY_GATEWAY_ENDPOINT,
 )
-from backend.agents.reviewed_uc_function_contract import (  # noqa: E402
-    authenticated_reviewed_function_owner,
-)
 from databricks.sdk import WorkspaceClient  # noqa: E402
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist  # noqa: E402
 from databricks.sdk.service.database import (  # noqa: E402
@@ -40,6 +37,7 @@ from tools.databricks.agentic_provisioning_cli import build_parser  # noqa: E402
 from tools.databricks.agentic_resource_contract import (  # noqa: E402
     ProvisionedResources,
     SupervisorAgentBinding,
+    resolve_reviewed_function_owner,
 )
 from tools.databricks.gateway_runtime_resource_binding import (  # noqa: E402
     bind_gateway_runtime_resource_contract,
@@ -678,17 +676,10 @@ def main(argv: list[str] | None = None) -> int:
         default_sync_tables=tuple(row[0] for row in DEFAULT_SYNC_TABLES)
     ).parse_args(argv)
     workspace = WorkspaceClient()
-    reviewed_function_owner = str(args.reviewed_function_owner or "").strip()
-    if args.capture_reviewed_function_owner:
-        authenticated_owner = authenticated_reviewed_function_owner(
-            workspace,
-            catalog=args.catalog,
-        )
-        if reviewed_function_owner and reviewed_function_owner != authenticated_owner:
-            raise RuntimeError(
-                "configured reviewed-function owner differs from the authenticated deployer"
-            )
-        reviewed_function_owner = authenticated_owner
+    reviewed_function_owner = resolve_reviewed_function_owner(
+        workspace, args.catalog, args.reviewed_function_owner,
+        args.capture_reviewed_function_owner,
+    )
     tables = tuple(
         name for raw_name in args.lakebase_sync_tables.split(",") if (name := raw_name.strip())
     )

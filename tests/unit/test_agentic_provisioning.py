@@ -10,7 +10,11 @@ from databricks.sdk.service.database import (
     SyncedTableSpec,
 )
 
-from tools.databricks import export_gateway_runtime_contract, provision_agentic_resources
+from tools.databricks import (
+    agentic_resource_contract,
+    export_gateway_runtime_contract,
+    provision_agentic_resources,
+)
 from tools.databricks.agentic_env_file import merge_agentic_env_values
 from tools.databricks.provision_agentic_resources import (
     ProvisionedResources,
@@ -43,7 +47,7 @@ def test_capture_reviewed_function_owner_exports_authenticated_deployer(
     out_env = tmp_path / "agentic.env"
     monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", object)
     monkeypatch.setattr(
-        provision_agentic_resources,
+        agentic_resource_contract,
         "authenticated_reviewed_function_owner",
         lambda _workspace, *, catalog: (
             "reviewed-owner" if catalog == "mip" else pytest.fail("wrong catalog")
@@ -73,7 +77,7 @@ def test_capture_reviewed_function_owner_rejects_configured_identity_drift(
 ) -> None:
     monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", object)
     monkeypatch.setattr(
-        provision_agentic_resources,
+        agentic_resource_contract,
         "authenticated_reviewed_function_owner",
         lambda _workspace, *, catalog: "reviewed-owner",
     )
