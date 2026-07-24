@@ -79,7 +79,7 @@ def _supervisors(client: Any) -> list[Mapping[str, Any]]:
     page_token: str | None = None
     seen_tokens: set[str] = set()
     while True:
-        query = {"page_size": 100}
+        query: dict[str, Any] = {"page_size": 100}
         if page_token:
             query["page_token"] = page_token
         response = client.api_client.do(
@@ -132,6 +132,7 @@ def resolve_exact_resource_proof(
     catalog: str,
     genie_space_id: str,
     runtime_application_id: str,
+    reviewed_function_owner: str | None = None,
     proxy_caller_application_id: str | None = None,
     proxy_caller_credential_id: str | None = None,
     proxy_caller_secret_reference: str | None = None,
@@ -144,6 +145,7 @@ def resolve_exact_resource_proof(
     model_registry: Any | None = None,
     tracking_client: Any | None = None,
     require_resource_binding: bool = False,
+    allow_legacy_reviewed_function_contract: bool = False,
 ) -> ExactGatewayRuntimeProof:
     """Re-read and authenticate every live fact needed for a safe rollback."""
 
@@ -152,6 +154,10 @@ def resolve_exact_resource_proof(
         registry_uri="databricks-uc",
     )
     experiments = tracking_client or MlflowClient(tracking_uri="databricks")
+    if type(allow_legacy_reviewed_function_contract) is not bool or (
+        allow_legacy_reviewed_function_contract and expected is None
+    ):
+        raise RuntimeError("legacy reviewed-function compatibility scope is invalid")
     stored: dict[str, str] | None = None
     if expected is not None:
         if any(
@@ -230,6 +236,17 @@ def resolve_exact_resource_proof(
             raise RuntimeError("stored Gateway rollback contract scope drifted")
         if gateway_endpoint and gateway_endpoint != stored.get("gateway_endpoint"):
             raise RuntimeError("stored Gateway rollback endpoint does not match the request")
+    resolved_reviewed_function_owner = str(reviewed_function_owner or "")
+    if (
+        not resolved_reviewed_function_owner
+        or resolved_reviewed_function_owner
+        != resolved_reviewed_function_owner.strip()
+        or (
+            reviewed_function_owner is not None
+            and reviewed_function_owner != resolved_reviewed_function_owner
+        )
+    ):
+        raise RuntimeError("reviewed-function owner binding is invalid")
     immutable_supervisor_id = (
         stored["supervisor_id"] if stored is not None else supervisor_id
     )
@@ -302,7 +319,12 @@ def resolve_exact_resource_proof(
         catalog=catalog,
         expected_contract=expected_supervisor_contract,
     )
-    assert_reviewed_function_set(client, catalog=catalog)
+    assert_reviewed_function_set(
+        client,
+        catalog=catalog,
+        expected_owner=resolved_reviewed_function_owner,
+        allow_legacy_segment_determinism=allow_legacy_reviewed_function_contract,
+    )
     upstream_details = client.serving_endpoints.get(upstream)
     assert_runtime_creator(
         getattr(upstream_details, "creator", None),
@@ -639,6 +661,7 @@ def resolve_contract(
     catalog: str,
     genie_space_id: str,
     runtime_application_id: str,
+    reviewed_function_owner: str,
     proxy_caller_application_id: str,
     proxy_caller_credential_id: str,
     proxy_caller_secret_reference: str,
@@ -658,6 +681,7 @@ def resolve_contract(
         catalog=catalog,
         genie_space_id=genie_space_id,
         runtime_application_id=runtime_application_id,
+        reviewed_function_owner=reviewed_function_owner,
         proxy_caller_application_id=proxy_caller_application_id,
         proxy_caller_credential_id=proxy_caller_credential_id,
         proxy_caller_secret_reference=proxy_caller_secret_reference,
@@ -692,6 +716,7 @@ def resolve_contract(
         "MIP_AGENT_SUPERVISOR_ENDPOINT_ID": facts["supervisor_endpoint_id"],
         "MIP_AGENT_SUPERVISOR_ID": facts["supervisor_id"],
         "MIP_AGENT_RUNTIME_CLIENT_ID": runtime_application_id,
+        "MIP_REVIEWED_FUNCTION_OWNER": reviewed_function_owner,
         "MIP_AGENT_PROXY_CLIENT_ID": facts["proxy_caller_application_id"],
         "MIP_AGENT_PROXY_CREDENTIAL_ID": facts["proxy_caller_credential_id"],
         "MIP_AGENT_PROXY_SECRET_REFERENCE": facts["proxy_caller_secret_reference"],
@@ -743,6 +768,10 @@ def main(argv: list[str] | None = None) -> int:
         default=os.environ.get("DATABRICKS_AGENT_RUNTIME_CLIENT_ID", ""),
     )
     parser.add_argument(
+        "--reviewed-function-owner",
+        default=os.environ.get("MIP_REVIEWED_FUNCTION_OWNER", ""),
+    )
+    parser.add_argument(
         "--proxy-caller-application-id",
         default=os.environ.get("DATABRICKS_AGENT_PROXY_CLIENT_ID", ""),
     )
@@ -759,6 +788,10 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--genie-space-id or GENIE_SPACE_ID is required")
     if not args.runtime_application_id:
         parser.error("--runtime-application-id or DATABRICKS_AGENT_RUNTIME_CLIENT_ID is required")
+    if not args.reviewed_function_owner:
+        parser.error(
+            "--reviewed-function-owner or MIP_REVIEWED_FUNCTION_OWNER is required"
+        )
     if not (
         args.proxy_caller_application_id
         and args.proxy_caller_credential_id
@@ -771,6 +804,7 @@ def main(argv: list[str] | None = None) -> int:
         catalog=args.catalog,
         genie_space_id=args.genie_space_id,
         runtime_application_id=args.runtime_application_id,
+        reviewed_function_owner=args.reviewed_function_owner,
         proxy_caller_application_id=args.proxy_caller_application_id,
         proxy_caller_credential_id=args.proxy_caller_credential_id,
         proxy_caller_secret_reference=args.proxy_caller_secret_reference,

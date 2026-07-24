@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import base64
+import json
 import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from databricks.sdk.service.catalog import ColumnTypeName
 
 from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_AGENT_EXPERIMENT,
@@ -23,7 +25,9 @@ from backend.agents.gateway_contract import (
 from backend.agents.reviewed_uc_function_contract import (
     REVIEWED_FUNCTIONS,
     ReviewedFunctionSpec,
+    assert_reviewed_function,
     assert_reviewed_function_set,
+    authenticated_reviewed_function_owner,
 )
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools import verify_deployed_app_contract as deployed_contract
@@ -140,6 +144,7 @@ def _resolve_contract(client: object, **kwargs: object) -> dict[str, str]:
         proxy_caller_application_id=_PROXY_CLIENT_ID,
         proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
         proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
+        reviewed_function_owner="reviewed-owner",
         **kwargs,
     )
 
@@ -150,6 +155,7 @@ def _resolve_exact_resource_proof(client: object, **kwargs: object):
         proxy_caller_application_id=_PROXY_CLIENT_ID,
         proxy_caller_credential_id=_PROXY_CREDENTIAL_ID,
         proxy_caller_secret_reference=_PROXY_SECRET_REFERENCE,
+        reviewed_function_owner="reviewed-owner",
         **kwargs,
     )
 
@@ -163,6 +169,7 @@ def _exact_supervisor_contract_stub(monkeypatch: pytest.MonkeyPatch) -> None:
         derive_gateway_proof_verify_key(signing_key),
     )
     monkeypatch.setenv("MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING", "1")
+    monkeypatch.setenv("MIP_REVIEWED_FUNCTION_OWNER", "reviewed-owner")
     monkeypatch.setattr(
         export_contract,
         "assert_exact_supervisor_contract",
@@ -344,12 +351,53 @@ def _reviewed_function_details(
         definition = text[text.rindex("\nRETURN ") + 1 :]
     return SimpleNamespace(
         full_name=f"mip.gold.{spec.leaf_name}",
+        owner="reviewed-owner",
+        catalog_name="mip",
+        schema_name="gold",
+        name=spec.leaf_name,
+        specific_name=spec.leaf_name,
         comment=spec.comment,
         is_deterministic=spec.deterministic,
-        data_type=spec.return_type,
+        parameter_style="S",
+        routine_body="SQL",
+        security_type="DEFINER",
+        sql_data_access=spec.sql_data_access,
+        data_type=(
+            ColumnTypeName.LONG
+            if spec.return_type == "BIGINT"
+            else ColumnTypeName(spec.return_type)
+        ),
+        full_data_type=spec.return_type,
         input_params=SimpleNamespace(
             parameters=[
-                SimpleNamespace(name=name, type_text=type_text, position=position)
+                SimpleNamespace(
+                    name=name,
+                    parameter_type="PARAM",
+                    position=position,
+                    type_json=json.dumps(
+                        {
+                            "name": name,
+                            "type": (
+                                {
+                                    "type": "array",
+                                    "elementType": "string",
+                                    "containsNull": True,
+                                }
+                                if type_text == "ARRAY<STRING>"
+                                else "string"
+                            ),
+                            "nullable": True,
+                            "metadata": {},
+                        },
+                        separators=(",", ":"),
+                    ),
+                    type_name=(
+                        "ARRAY" if type_text == "ARRAY<STRING>" else "STRING"
+                    ),
+                    type_precision=0,
+                    type_scale=0,
+                    type_text=type_text,
+                )
                 for position, (name, type_text) in enumerate(spec.input_params)
             ]
         ),
@@ -360,6 +408,13 @@ def _reviewed_function_details(
 def _workspace_with_reviewed_functions(
     *,
     drifted_leaf: str | None = None,
+    drifted_return_leaf: str | None = None,
+    missing_determinism_leaf: str | None = None,
+    malformed_position_leaf: str | None = None,
+    defaulted_parameter_leaf: str | None = None,
+    malformed_type_json_leaf: str | None = None,
+    drifted_owner_leaf: str | None = None,
+    drifted_sql_path_leaf: str | None = None,
 ) -> object:
     workspace = _workspace()
     functions = {
@@ -369,10 +424,384 @@ def _workspace_with_reviewed_functions(
         )
         for spec in REVIEWED_FUNCTIONS
     }
+    if drifted_return_leaf is not None:
+        functions[drifted_return_leaf].full_data_type = "STRING"
+    if missing_determinism_leaf is not None:
+        functions[missing_determinism_leaf].is_deterministic = None
+    if malformed_position_leaf is not None:
+        functions[malformed_position_leaf].input_params.parameters[0].position = None
+    if defaulted_parameter_leaf is not None:
+        functions[
+            defaulted_parameter_leaf
+        ].input_params.parameters[0].parameter_default = "ARRAY('itm')"
+    if malformed_type_json_leaf is not None:
+        functions[
+            malformed_type_json_leaf
+        ].input_params.parameters[0].type_json = (
+            '{"name":"segment_codes","type":{"type":"array",'
+            '"elementType":"string","containsNull":1},"nullable":true,'
+            '"metadata":{}}'
+        )
+    if drifted_owner_leaf is not None:
+        functions[drifted_owner_leaf].owner = "unreviewed-owner"
+    if drifted_sql_path_leaf is not None:
+        functions[drifted_sql_path_leaf].sql_path = (
+            "unreviewed_catalog.unreviewed_schema"
+        )
     workspace.functions = SimpleNamespace(
         get=lambda name: functions[name.rsplit(".", 1)[-1]]
     )
     return workspace
+
+
+def test_reviewed_function_contract_accepts_live_sdk_bigint_shape() -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+
+    assert_reviewed_function(
+        _reviewed_function_details(spec),
+        catalog="mip",
+        spec=spec,
+        expected_owner="reviewed-owner",
+    )
+
+
+def test_reviewed_function_contract_rejects_owner_drift() -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    details.owner = "unreviewed-owner"
+
+    with pytest.raises(RuntimeError, match="reviewed UC function owner drifted"):
+        assert_reviewed_function(
+            details,
+            catalog="mip",
+            spec=spec,
+            expected_owner="reviewed-owner",
+        )
+
+
+@pytest.mark.parametrize(
+    "identity",
+    (
+        SimpleNamespace(user_name="reviewed-owner"),
+        SimpleNamespace(application_id="reviewed-owner"),
+    ),
+)
+def test_authenticated_deployer_resolves_exact_reviewed_function_owner(
+    identity: object,
+) -> None:
+    functions = {
+        spec.leaf_name: _reviewed_function_details(spec)
+        for spec in REVIEWED_FUNCTIONS
+    }
+    workspace = SimpleNamespace(
+        functions=SimpleNamespace(
+            get=lambda name: functions[name.rsplit(".", 1)[-1]]
+        ),
+        current_user=SimpleNamespace(me=lambda: identity),
+    )
+
+    assert (
+        authenticated_reviewed_function_owner(workspace, catalog="mip")
+        == "reviewed-owner"
+    )
+
+
+@pytest.mark.parametrize("drift", ("identity", "function"))
+def test_authenticated_deployer_rejects_reviewed_function_owner_drift(
+    drift: str,
+) -> None:
+    functions = {
+        spec.leaf_name: _reviewed_function_details(spec)
+        for spec in REVIEWED_FUNCTIONS
+    }
+    identity = SimpleNamespace(user_name="reviewed-owner")
+    if drift == "identity":
+        identity.user_name = "unreviewed-owner"
+    else:
+        functions["fn_build_cohort"].owner = "unreviewed-owner"
+    workspace = SimpleNamespace(
+        functions=SimpleNamespace(
+            get=lambda name: functions[name.rsplit(".", 1)[-1]]
+        ),
+        current_user=SimpleNamespace(me=lambda: identity),
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="not owned by the authenticated deployer",
+    ):
+        authenticated_reviewed_function_owner(workspace, catalog="mip")
+
+
+@pytest.mark.parametrize("spec_index", (0, 1))
+@pytest.mark.parametrize("extra_wrappers", (1, 2))
+def test_reviewed_function_contract_accepts_provider_outer_body_wrapper(
+    spec_index: int,
+    extra_wrappers: int,
+) -> None:
+    spec = REVIEWED_FUNCTIONS[spec_index]
+    details = _reviewed_function_details(spec)
+    expression = (
+        details.routine_definition.removeprefix("RETURN ").strip().removesuffix(";").strip()
+    )
+    for _ in range(extra_wrappers):
+        expression = f"({expression})"
+    details.routine_definition = expression
+
+    assert_reviewed_function(
+        details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+    )
+
+
+def test_reviewed_function_contract_rejects_trailing_predicate_after_wrapper() -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    expression = (
+        details.routine_definition.removeprefix("RETURN ").strip().removesuffix(";").strip()
+    )
+    details.routine_definition = f"({expression}) OR TRUE"
+
+    with pytest.raises(RuntimeError, match="reviewed UC function body drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+def test_reviewed_function_contract_rejects_outer_wrapper_on_non_select_body() -> None:
+    spec = REVIEWED_FUNCTIONS[2]
+    details = _reviewed_function_details(spec)
+    expression = (
+        details.routine_definition.removeprefix("RETURN ").strip().removesuffix(";").strip()
+    )
+    details.routine_definition = f"({expression})"
+
+    with pytest.raises(RuntimeError, match="reviewed UC function body drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+def test_reviewed_function_contract_rejects_missing_exact_full_return_type() -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    details.full_data_type = None
+
+    with pytest.raises(RuntimeError, match="reviewed UC function return type drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+@pytest.mark.parametrize(
+    ("data_type", "full_data_type"),
+    (
+        (ColumnTypeName.LONG, "LONG"),
+        ("BIGINT", "BIGINT"),
+        (ColumnTypeName.LONG, "BIG INT"),
+        (ColumnTypeName.LONG, " BIGINT"),
+        (None, "BIGINT"),
+        (ColumnTypeName.LONG, ""),
+    ),
+)
+def test_reviewed_function_contract_rejects_noncanonical_bigint_metadata(
+    data_type: object,
+    full_data_type: str,
+) -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    details.data_type = data_type
+    details.full_data_type = full_data_type
+
+    with pytest.raises(RuntimeError, match="reviewed UC function return type drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+def test_reviewed_function_contract_rejects_inconsistent_sdk_return_metadata() -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    details.data_type = ColumnTypeName.STRING
+
+    with pytest.raises(RuntimeError, match="reviewed UC function return type drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+@pytest.mark.parametrize("spec", REVIEWED_FUNCTIONS)
+@pytest.mark.parametrize("value", (None, "", 0, 1, "false", "true"))
+def test_reviewed_function_contract_rejects_non_boolean_determinism(
+    spec: ReviewedFunctionSpec,
+    value: object,
+) -> None:
+    details = _reviewed_function_details(spec)
+    details.is_deterministic = value
+
+    with pytest.raises(RuntimeError, match="reviewed UC function determinism drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+def test_legacy_reviewed_function_compatibility_is_segment_determinism_only() -> None:
+    segment_spec = next(
+        spec for spec in REVIEWED_FUNCTIONS if spec.leaf_name == "fn_segment_counts"
+    )
+    segment_details = _reviewed_function_details(segment_spec)
+    segment_details.is_deterministic = True
+
+    with pytest.raises(RuntimeError, match="reviewed UC function determinism drifted"):
+        assert_reviewed_function(
+            segment_details,
+            catalog="mip",
+            spec=segment_spec,
+            expected_owner="reviewed-owner",
+        )
+
+    assert_reviewed_function(
+        segment_details,
+        catalog="mip",
+        spec=segment_spec,
+        expected_owner="reviewed-owner",
+        allow_legacy_segment_determinism=True,
+    )
+
+    segment_details.is_deterministic = 1
+    with pytest.raises(RuntimeError, match="reviewed UC function determinism drifted"):
+        assert_reviewed_function(
+            segment_details,
+            catalog="mip",
+            spec=segment_spec,
+            expected_owner="reviewed-owner",
+            allow_legacy_segment_determinism=True,
+        )
+
+    cohort_spec = next(
+        spec for spec in REVIEWED_FUNCTIONS if spec.leaf_name == "fn_build_cohort"
+    )
+    cohort_details = _reviewed_function_details(cohort_spec)
+    cohort_details.is_deterministic = False
+    with pytest.raises(RuntimeError, match="reviewed UC function determinism drifted"):
+        assert_reviewed_function(
+            cohort_details,
+            catalog="mip",
+            spec=cohort_spec,
+            expected_owner="reviewed-owner",
+            allow_legacy_segment_determinism=True,
+        )
+
+
+@pytest.mark.parametrize("position", (None, False, "0", 0.0))
+def test_reviewed_function_contract_rejects_non_integer_parameter_position(
+    position: object,
+) -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    details.input_params.parameters[0].position = position
+
+    with pytest.raises(RuntimeError, match="reviewed UC function parameters drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+@pytest.mark.parametrize(
+    "parameter_default",
+    ("", "NULL", "'all'", "ARRAY('itm')", 0, False),
+)
+def test_reviewed_function_contract_rejects_parameter_defaults(
+    parameter_default: object,
+) -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    details.input_params.parameters[0].parameter_default = parameter_default
+
+    with pytest.raises(RuntimeError, match="reviewed UC function parameters drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("parameter_type", "COLUMN"),
+        ("name", "segment_codes "),
+        ("type_text", "ARRAY <STRING>"),
+        ("parameter_mode", "IN"),
+        ("comment", "Use an unreviewed default cohort"),
+        ("type_interval_type", "DAY"),
+        ("type_name", "STRING"),
+        ("type_precision", None),
+        ("type_scale", False),
+        ("type_json", '{"name":"segment_codes","type":"string"}'),
+        (
+            "type_json",
+            '{"name":"attacker","name":"segment_codes","type":"string"}',
+        ),
+        (
+            "type_json",
+            '{"name":"segment_codes","type":{"type":"array",'
+            '"elementType":"string","containsNull":1},"nullable":true,'
+            '"metadata":{}}',
+        ),
+        (
+            "type_json",
+            '{"name":"segment_codes","type":{"type":"array",'
+            '"elementType":"string","containsNull":true},"nullable":1,'
+            '"metadata":{}}',
+        ),
+    ),
+)
+def test_reviewed_function_contract_rejects_parameter_metadata_drift(
+    field: str,
+    value: object,
+) -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    setattr(details.input_params.parameters[0], field, value)
+
+    with pytest.raises(RuntimeError, match="reviewed UC function parameters drifted"):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("catalog_name", "other", "identity drifted"),
+        ("full_name", "mip.gold.fn_build_cohort ", "identity drifted"),
+        ("comment", f"{REVIEWED_FUNCTIONS[0].comment} ", "comment drifted"),
+        ("schema_name", "other", "identity drifted"),
+        ("name", "other", "identity drifted"),
+        ("specific_name", "other", "identity drifted"),
+        ("parameter_style", None, "execution metadata drifted"),
+        ("routine_body", "EXTERNAL", "execution metadata drifted"),
+        ("security_type", "INVOKER", "execution metadata drifted"),
+        ("security_type", " DEFINER", "execution metadata drifted"),
+        ("sql_data_access", "MODIFIES_SQL_DATA", "execution metadata drifted"),
+        ("external_language", "PYTHON", "execution metadata drifted"),
+        ("external_name", "unsafe.handler", "execution metadata drifted"),
+        ("is_null_call", True, "execution metadata drifted"),
+        ("return_params", SimpleNamespace(), "execution metadata drifted"),
+        ("sql_path", "unreviewed_catalog.unreviewed_schema", "execution metadata drifted"),
+    ),
+)
+def test_reviewed_function_contract_rejects_execution_metadata_drift(
+    field: str,
+    value: object,
+    message: str,
+) -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _reviewed_function_details(spec)
+    setattr(details, field, value)
+
+    with pytest.raises(RuntimeError, match=message):
+        assert_reviewed_function(
+            details, catalog="mip", spec=spec, expected_owner="reviewed-owner"
+        )
 
 
 def _model_registry(*, source_hash: str | None = None, upstream: str = _UPSTREAM) -> object:
@@ -543,6 +972,60 @@ def test_exact_resource_proof_binds_experiment_model_endpoint_and_stored_digest(
     )
 
 
+def test_legacy_reviewed_function_compatibility_requires_a_stored_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="legacy reviewed-function compatibility scope is invalid",
+    ):
+        _resolve_exact_resource_proof(
+            _workspace(),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+            allow_legacy_reviewed_function_contract=True,
+        )
+
+    proof = _resolve_exact_resource_proof(
+        _workspace(),
+        supervisor_name="Mortgage Growth Agent",
+        catalog="mip",
+        genie_space_id="space-123",
+        runtime_application_id="runtime-client",
+        model_registry=_model_registry(),
+        tracking_client=_tracking_client(),
+    )
+    observed: dict[str, object] = {}
+
+    def _assert_reviewed(*_args: object, **kwargs: object) -> None:
+        observed.update(kwargs)
+
+    monkeypatch.setattr(
+        export_contract,
+        "assert_reviewed_function_set",
+        _assert_reviewed,
+    )
+    restored = _resolve_exact_resource_proof(
+        _workspace(),
+        supervisor_name="Mortgage Growth Agent",
+        catalog="mip",
+        genie_space_id="space-123",
+        runtime_application_id="runtime-client",
+        expected={**proof.contract, "resource_digest": proof.digest},
+        model_registry=_model_registry(),
+        tracking_client=_tracking_client(),
+        allow_legacy_reviewed_function_contract=True,
+    )
+
+    assert restored.digest == proof.digest
+    assert observed["expected_owner"] == "reviewed-owner"
+    assert observed["allow_legacy_segment_determinism"] is True
+
+
 @pytest.mark.parametrize("retained_contract", (False, True))
 def test_exact_resource_proof_rejects_reviewed_function_body_drift(
     monkeypatch: pytest.MonkeyPatch,
@@ -569,6 +1052,111 @@ def test_exact_resource_proof_rejects_reviewed_function_body_drift(
     with pytest.raises(RuntimeError, match="reviewed UC function body drifted"):
         _resolve_exact_resource_proof(
             _workspace_with_reviewed_functions(drifted_leaf="fn_build_cohort"),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            expected=expected,
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+
+
+@pytest.mark.parametrize("retained_contract", (False, True))
+def test_exact_resource_proof_rejects_reviewed_function_return_type_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    retained_contract: bool,
+) -> None:
+    monkeypatch.setattr(
+        export_contract,
+        "assert_reviewed_function_set",
+        assert_reviewed_function_set,
+    )
+    expected: dict[str, str] | None = None
+    if retained_contract:
+        clean = _resolve_exact_resource_proof(
+            _workspace_with_reviewed_functions(),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+        expected = {**clean.contract, "resource_digest": clean.digest}
+
+    with pytest.raises(RuntimeError, match="reviewed UC function return type drifted"):
+        _resolve_exact_resource_proof(
+            _workspace_with_reviewed_functions(
+                drifted_return_leaf="fn_build_cohort"
+            ),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            expected=expected,
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+
+
+@pytest.mark.parametrize("retained_contract", (False, True))
+@pytest.mark.parametrize(
+    ("workspace_kwargs", "message"),
+    (
+        (
+            {"missing_determinism_leaf": "fn_segment_counts"},
+            "reviewed UC function determinism drifted",
+        ),
+        (
+            {"malformed_position_leaf": "fn_build_cohort"},
+            "reviewed UC function parameters drifted",
+        ),
+        (
+            {"defaulted_parameter_leaf": "fn_build_cohort"},
+            "reviewed UC function parameters drifted",
+        ),
+        (
+            {"malformed_type_json_leaf": "fn_build_cohort"},
+            "reviewed UC function parameters drifted",
+        ),
+        (
+            {"drifted_owner_leaf": "fn_build_cohort"},
+            "reviewed UC function owner drifted",
+        ),
+        (
+            {"drifted_sql_path_leaf": "fn_build_cohort"},
+            "reviewed UC function execution metadata drifted",
+        ),
+    ),
+)
+def test_exact_resource_proof_rejects_incomplete_reviewed_function_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    retained_contract: bool,
+    workspace_kwargs: dict[str, str],
+    message: str,
+) -> None:
+    monkeypatch.setattr(
+        export_contract,
+        "assert_reviewed_function_set",
+        assert_reviewed_function_set,
+    )
+    expected: dict[str, str] | None = None
+    if retained_contract:
+        clean = _resolve_exact_resource_proof(
+            _workspace_with_reviewed_functions(),
+            supervisor_name="Mortgage Growth Agent",
+            catalog="mip",
+            genie_space_id="space-123",
+            runtime_application_id="runtime-client",
+            model_registry=_model_registry(),
+            tracking_client=_tracking_client(),
+        )
+        expected = {**clean.contract, "resource_digest": clean.digest}
+
+    with pytest.raises(RuntimeError, match=message):
+        _resolve_exact_resource_proof(
+            _workspace_with_reviewed_functions(**workspace_kwargs),
             supervisor_name="Mortgage Growth Agent",
             catalog="mip",
             genie_space_id="space-123",
@@ -1078,7 +1666,7 @@ def test_export_main_appends_exact_contract_to_github_env(
     assert export_contract.main(["--github-env", str(github_env)]) == 0
 
     rows = github_env.read_text(encoding="utf-8").splitlines()
-    assert len(rows) == 20
+    assert len(rows) == 21
     assert f"MIP_AGENT_SERVING_ENDPOINT={DEFAULT_GATEWAY_ENDPOINT}" in rows
     assert f"MIP_AGENT_SUPERVISOR_ID={_SUPERVISOR_ID}" in rows
     assert f"MIP_AGENT_SUPERVISOR_ENDPOINT_ID={_SUPERVISOR_ENDPOINT_ID}" in rows

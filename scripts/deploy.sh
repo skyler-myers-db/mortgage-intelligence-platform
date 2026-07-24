@@ -3568,8 +3568,18 @@ run "$PYTHON" -m tools.databricks.provision_agentic_resources \
   --lakebase-sync-tables "$DEPLOYMENT_SYNC_TABLES" \
   --database-instance "$MIP_LAKEBASE_INSTANCE" \
   --logical-database "$LAKEBASE_DATABASE" \
+  --capture-reviewed-function-owner \
   --skip-supervisor \
-  --skip-gateway
+  --skip-gateway \
+  --out-env "$AGENTIC_ENV_FILE"
+if [[ "$DRY_RUN" -eq 0 ]]; then
+  set -a
+  # shellcheck disable=SC1090
+  . "$AGENTIC_ENV_FILE"
+  set +a
+else
+  MIP_REVIEWED_FUNCTION_OWNER="dry-run-reviewed-function-owner"
+fi
 step "converge exact app read-only access to proven Lakebase synced tables"
 run "$PYTHON" -m tools.databricks.converge_app_lakebase_sync_access \
   --mode runtime \
@@ -3599,6 +3609,7 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
   --expected-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --reviewed-function-owner "$MIP_REVIEWED_FUNCTION_OWNER" \
   --deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID" \
   --deployment-source-git-sha "$SOURCE_GIT_SHA" \
   --gateway-endpoint "${MIP_APP_ROLLBACK_GATEWAY_ENDPOINT:-mip-growth-agent-gateway}" \
@@ -3650,6 +3661,7 @@ MIP_ALLOW_RUNTIME_MODEL_ATTESTATION_SIGNING=1 run_as_m2m_identity \
   --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
   --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
   --expected-runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+  --reviewed-function-owner "$MIP_REVIEWED_FUNCTION_OWNER" \
   --supervisor-id "${MIP_AGENT_SUPERVISOR_ID:-dry-run-supervisor}" \
   --supervisor-endpoint "${MIP_AGENT_SUPERVISOR_ENDPOINT:-dry-run-supervisor-endpoint}" \
   --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
@@ -3735,6 +3747,7 @@ if [[ "$DRY_RUN" -eq 0 ]]; then
     --catalog "${MIP_DEFAULT_CATALOG:-mip}" \
     --genie-space-id "${GENIE_SPACE_ID:-$(< genie/space_id.txt)}" \
     --runtime-application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID" \
+    --reviewed-function-owner "$MIP_REVIEWED_FUNCTION_OWNER" \
     --proxy-caller-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID" \
     --proxy-caller-credential-id "$DATABRICKS_AGENT_PROXY_CREDENTIAL_ID" \
     --proxy-caller-secret-reference "$MIP_AGENT_PROXY_SECRET_REFERENCE"

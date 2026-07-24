@@ -14,6 +14,10 @@ from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_ENDPOINT,
     LEGACY_GATEWAY_ENDPOINT,
 )
+from backend.agents.reviewed_uc_function_contract import (
+    assert_reviewed_function_set,
+    authenticated_reviewed_function_owner,
+)
 from databricks.sdk.service.apps import AppDeployment
 from tools.databricks.app_deployment_health import health as _health
 from tools.databricks.app_deployment_lease import assert_held as assert_deployment_lease_held
@@ -217,6 +221,7 @@ def _payload_resource_proof(
         "MIP_DEFAULT_CATALOG",
         "MIP_AGENT_SUPERVISOR_NAME",
         "MIP_AGENT_RUNTIME_CLIENT_ID",
+        "MIP_REVIEWED_FUNCTION_OWNER",
         "MIP_AGENT_PROXY_CLIENT_ID",
         "MIP_AGENT_PROXY_CREDENTIAL_ID",
         "MIP_AGENT_PROXY_SECRET_REFERENCE",
@@ -237,6 +242,7 @@ def _payload_resource_proof(
         catalog=env["MIP_DEFAULT_CATALOG"],
         genie_space_id=genie_space_id,
         runtime_application_id=env["MIP_AGENT_RUNTIME_CLIENT_ID"],
+        reviewed_function_owner=env["MIP_REVIEWED_FUNCTION_OWNER"],
         proxy_caller_application_id=env["MIP_AGENT_PROXY_CLIENT_ID"],
         proxy_caller_credential_id=env["MIP_AGENT_PROXY_CREDENTIAL_ID"],
         proxy_caller_secret_reference=env["MIP_AGENT_PROXY_SECRET_REFERENCE"],
@@ -267,28 +273,70 @@ def _stored_resource_proof(
     workspace: Any,
     *,
     record: dict[str, Any],
+    candidate_reviewed_function_owner: str | None = None,
 ) -> ExactGatewayRuntimeProof:
     if record.get("version", RECORD_VERSION) == LEGACY_RECORD_VERSION:
+        if candidate_reviewed_function_owner is not None:
+            raise RuntimeError(
+                "legacy App rollback proof cannot use candidate function-owner authority"
+            )
         legacy = validated_legacy_gateway_resources(record.get("gateway_resources"))
         verified = assert_live_legacy_gateway_resources(
             workspace,
             expected=legacy,
+        )
+        reviewed_function_owner = authenticated_reviewed_function_owner(
+            workspace,
+            catalog=legacy["catalog"],
+        )
+        assert_reviewed_function_set(
+            workspace,
+            catalog=legacy["catalog"],
+            expected_owner=reviewed_function_owner,
+            allow_legacy_segment_determinism=True,
         )
         return ExactGatewayRuntimeProof(
             contract={key: value for key, value in verified.items() if key != "resource_digest"},
             digest=verified["resource_digest"],
         )
     resources = _validated_gateway_resources(record.get("gateway_resources"))
+    reviewed_function_owner = candidate_reviewed_function_owner or ""
+    legacy_reviewed_function_contract = False
+    if candidate_reviewed_function_owner is not None:
+        authenticated_owner = authenticated_reviewed_function_owner(
+            workspace,
+            catalog=resources["catalog"],
+        )
+        if candidate_reviewed_function_owner != authenticated_owner:
+            raise RuntimeError(
+                "candidate reviewed-function owner is not the authenticated deployer"
+            )
+        reviewed_function_owner = authenticated_owner
+    else:
+        payload = _validated_payload(record.get("payload"))
+        payload_environment = _env_map(payload)
+        reviewed_function_owner = payload_environment.get(
+            "MIP_REVIEWED_FUNCTION_OWNER",
+            "",
+        )
+        legacy_reviewed_function_contract = not reviewed_function_owner
+    if legacy_reviewed_function_contract:
+        reviewed_function_owner = authenticated_reviewed_function_owner(
+            workspace,
+            catalog=resources["catalog"],
+        )
     return resolve_exact_resource_proof(
         workspace,
         supervisor_name=resources["supervisor_canonical_name"],
         catalog=resources["catalog"],
         genie_space_id=resources["genie_space_id"],
         runtime_application_id=resources["runtime_application_id"],
+        reviewed_function_owner=reviewed_function_owner,
         supervisor_id=resources["supervisor_id"],
         gateway_endpoint=resources["gateway_endpoint"],
         expected=resources,
         require_resource_binding=True,
+        allow_legacy_reviewed_function_contract=legacy_reviewed_function_contract,
     )
 
 
@@ -653,6 +701,9 @@ def capture_current(
     _stored_resource_proof(
         workspace,
         record={"gateway_resources": gateway_resources},
+        candidate_reviewed_function_owner=_env_map(candidate)[
+            "MIP_REVIEWED_FUNCTION_OWNER"
+        ],
     )
     if _active_deployment_id(workspace, app_name=app_name) != _text(
         getattr(latest, "deployment_id", None)

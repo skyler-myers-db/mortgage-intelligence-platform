@@ -21,6 +21,8 @@ _PROXY_CLIENT_ID = "proxy-client"
 _PROXY_CREDENTIAL_ID = "proxy-credential"
 _PROXY_SECRET_REFERENCE = "{{secrets/mip-agent-proxy/oauth-client-secret-proxy-credential}}"
 _PROXY_ARGS = [
+    "--reviewed-function-owner",
+    "reviewed-owner",
     "--proxy-caller-application-id",
     _PROXY_CLIENT_ID,
     "--proxy-caller-credential-id",
@@ -32,6 +34,64 @@ _PROXY_ARGS = [
 
 def _assert_single_writer() -> None:
     return None
+
+
+def test_capture_reviewed_function_owner_exports_authenticated_deployer(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    out_env = tmp_path / "agentic.env"
+    monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", object)
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "authenticated_reviewed_function_owner",
+        lambda _workspace, *, catalog: (
+            "reviewed-owner" if catalog == "mip" else pytest.fail("wrong catalog")
+        ),
+    )
+
+    assert (
+        provision_agentic_resources.main(
+            [
+                "--skip-sync",
+                "--skip-supervisor",
+                "--skip-gateway",
+                "--capture-reviewed-function-owner",
+                "--out-env",
+                str(out_env),
+            ]
+        )
+        == 0
+    )
+    assert "MIP_REVIEWED_FUNCTION_OWNER=reviewed-owner" in out_env.read_text(
+        encoding="utf-8"
+    ).splitlines()
+
+
+def test_capture_reviewed_function_owner_rejects_configured_identity_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(provision_agentic_resources, "WorkspaceClient", object)
+    monkeypatch.setattr(
+        provision_agentic_resources,
+        "authenticated_reviewed_function_owner",
+        lambda _workspace, *, catalog: "reviewed-owner",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="differs from the authenticated deployer",
+    ):
+        provision_agentic_resources.main(
+            [
+                "--skip-sync",
+                "--skip-supervisor",
+                "--skip-gateway",
+                "--capture-reviewed-function-owner",
+                "--reviewed-function-owner",
+                "unreviewed-owner",
+            ]
+        )
 
 
 def test_split_provisioning_merge_preserves_replaced_supervisor_metadata(
@@ -52,6 +112,7 @@ def test_split_provisioning_merge_preserves_replaced_supervisor_metadata(
         replaced_supervisor_creator="runtime-client",
         replaced_supervisor_create_time="2026-07-20T00:00:00Z",
         agent_runtime_application_id="runtime-client",
+        reviewed_function_owner="reviewed-owner",
     )
     gateway = ProvisionedResources(
         lakebase_sync_catalog="sync",
@@ -69,6 +130,7 @@ def test_split_provisioning_merge_preserves_replaced_supervisor_metadata(
         agent_proxy_application_id=_PROXY_CLIENT_ID,
         agent_proxy_credential_id=_PROXY_CREDENTIAL_ID,
         agent_proxy_secret_reference=_PROXY_SECRET_REFERENCE,
+        reviewed_function_owner="reviewed-owner",
     )
 
     provision_agentic_resources.write_agentic_env(path, supervisor)
@@ -103,8 +165,10 @@ def test_split_provisioning_merge_preserves_replaced_supervisor_metadata(
                 str(path),
                 "--genie-space-id",
                 "space-123",
-                "--runtime-application-id",
-                "runtime-client",
+                    "--runtime-application-id",
+                    "runtime-client",
+                    "--reviewed-function-owner",
+                    "reviewed-owner",
                 "--proxy-caller-application-id",
                 _PROXY_CLIENT_ID,
                 "--proxy-caller-credential-id",

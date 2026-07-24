@@ -16,6 +16,7 @@ Pins the single-interface enforcement gate:
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
@@ -26,6 +27,7 @@ from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
+from backend.agents.reviewed_uc_function_contract import REVIEWED_FUNCTIONS
 from backend.main import app
 from backend.schemas.activation import ActivationDestination
 from backend.services.activation_state import get_activation_state_store
@@ -167,6 +169,16 @@ def test_fn_segment_counts_gate_matches_python_predicate() -> None:
     conventions."""
     fn_text = (REPO_ROOT / "sql/uc_functions/fn_segment_counts.sql").read_text()
     assert _normalize_sql(eligible_sql_predicate("b")) in _normalize_sql(fn_text)
+    declaration = re.sub(r"--[^\n]*", "", fn_text)
+    assert re.search(
+        r"\bRETURNS\s+BIGINT\s+NOT\s+DETERMINISTIC\s+COMMENT\b",
+        declaration,
+        flags=re.IGNORECASE,
+    )
+    segment_spec = next(
+        spec for spec in REVIEWED_FUNCTIONS if spec.leaf_name == "fn_segment_counts"
+    )
+    assert segment_spec.deterministic is False
 
 
 def test_stale_true_marketing_eligible_rows_are_still_blocked() -> None:

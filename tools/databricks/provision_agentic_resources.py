@@ -19,6 +19,9 @@ from backend.agents.gateway_contract import (  # noqa: E402
     DEFAULT_GATEWAY_ENDPOINT,
     LEGACY_GATEWAY_ENDPOINT,
 )
+from backend.agents.reviewed_uc_function_contract import (  # noqa: E402
+    authenticated_reviewed_function_owner,
+)
 from databricks.sdk import WorkspaceClient  # noqa: E402
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist  # noqa: E402
 from databricks.sdk.service.database import (  # noqa: E402
@@ -675,6 +678,17 @@ def main(argv: list[str] | None = None) -> int:
         default_sync_tables=tuple(row[0] for row in DEFAULT_SYNC_TABLES)
     ).parse_args(argv)
     workspace = WorkspaceClient()
+    reviewed_function_owner = str(args.reviewed_function_owner or "").strip()
+    if args.capture_reviewed_function_owner:
+        authenticated_owner = authenticated_reviewed_function_owner(
+            workspace,
+            catalog=args.catalog,
+        )
+        if reviewed_function_owner and reviewed_function_owner != authenticated_owner:
+            raise RuntimeError(
+                "configured reviewed-function owner differs from the authenticated deployer"
+            )
+        reviewed_function_owner = authenticated_owner
     tables = tuple(
         name for raw_name in args.lakebase_sync_tables.split(",") if (name := raw_name.strip())
     )
@@ -692,6 +706,8 @@ def main(argv: list[str] | None = None) -> int:
             source_git_sha=args.deployment_source_git_sha,
         )
         lease_check()
+    if not args.skip_gateway and not reviewed_function_owner:
+        raise RuntimeError("reviewed-function owner proof is required for Gateway provisioning")
     if not args.skip_sync:
         assert lease_check is not None
         tables = ensure_synced_tables(
@@ -811,6 +827,7 @@ def main(argv: list[str] | None = None) -> int:
             workspace,
             gateway_deployment,
             supervisor_name=args.supervisor_name,
+            reviewed_function_owner=reviewed_function_owner,
             assert_single_writer=lease_check,
         )
         verify_gateway_responses_agent(
@@ -878,6 +895,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_proxy_application_id=args.proxy_caller_application_id or None,
         agent_proxy_credential_id=args.proxy_caller_credential_id or None,
         agent_proxy_secret_reference=args.proxy_caller_secret_reference or None,
+        reviewed_function_owner=reviewed_function_owner or None,
     )
     for line in resources.env_lines():
         print(line)

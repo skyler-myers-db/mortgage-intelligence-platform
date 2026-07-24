@@ -88,6 +88,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     monkeypatch.setenv("MIP_AI_GATEWAY_AGENT_MODEL_FAMILY", "acme_mip.audit.proxy_family")
     monkeypatch.setenv("MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE", "acme-gateway-proxy")
     monkeypatch.setenv("MIP_AI_GATEWAY_TABLE_PREFIX", "acme_gateway_inference")
+    monkeypatch.setenv("MIP_REVIEWED_FUNCTION_OWNER", "deployer@example.com")
     monkeypatch.setenv("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON", '{"v":"1"}')
     monkeypatch.setenv("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256", "a" * 64)
     monkeypatch.setenv("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE", "signed-public-proof")
@@ -142,6 +143,7 @@ def test_app_deploy_payload_preserves_resource_bindings_and_safe_runtime_config(
     assert env["MIP_AI_GATEWAY_AGENT_MODEL_FAMILY"]["value"] == ("acme_mip.audit.proxy_family")
     assert env["MIP_AI_GATEWAY_AGENT_EXPERIMENT_BASE"]["value"] == "acme-gateway-proxy"
     assert env["MIP_AI_GATEWAY_TABLE_PREFIX"]["value"] == "acme_gateway_inference"
+    assert env["MIP_REVIEWED_FUNCTION_OWNER"]["value"] == "deployer@example.com"
     assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"]["value"] == '{"v":"1"}'
     assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"]["value"] == "a" * 64
     assert env["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE"]["value"] == ("signed-public-proof")

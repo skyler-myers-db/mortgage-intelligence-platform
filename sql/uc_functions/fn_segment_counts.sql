@@ -10,7 +10,7 @@
 -- eligibility predicate and must stay equivalent (modulo whitespace) with
 -- backend/services/eligibility.py::eligible_sql_predicate("b").
 -- tests/unit/test_contact_eligibility.py pins the lockstep. The function
--- is no longer declared DETERMINISTIC because the frequency-cap guard
+-- is explicitly declared NOT DETERMINISTIC because the frequency-cap guard
 -- reads CURRENT_TIMESTAMP().
 CREATE OR REPLACE FUNCTION mip.gold.fn_segment_counts(
   segment_codes ARRAY<STRING>,
@@ -18,6 +18,7 @@ CREATE OR REPLACE FUNCTION mip.gold.fn_segment_counts(
   states        ARRAY<STRING>
 )
 RETURNS BIGINT
+NOT DETERMINISTIC
 COMMENT 'Reviewed Mortgage Growth Agent actionability tool. Counts DISTINCT clip from gold.borrower_360 after the full contact-eligibility gate (marketing eligibility, opt-in consent, suppression, do-not-contact, frequency cap). Read-only.'
 RETURN (
   SELECT COUNT(DISTINCT b.clip)

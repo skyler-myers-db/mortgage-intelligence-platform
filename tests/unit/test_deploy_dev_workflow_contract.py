@@ -3601,8 +3601,11 @@ def test_deployer_sync_provision_command_is_exact_and_cannot_skip_sync() -> None
         "$MIP_LAKEBASE_INSTANCE",
         "--logical-database",
         "$LAKEBASE_DATABASE",
+        "--capture-reviewed-function-owner",
         "--skip-supervisor",
         "--skip-gateway",
+        "--out-env",
+        "$AGENTIC_ENV_FILE",
     ]
     assert "--skip-sync" not in tokens
 

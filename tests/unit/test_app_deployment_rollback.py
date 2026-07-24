@@ -125,6 +125,16 @@ def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
             digest=RESOURCE_DIGEST,
         ),
     )
+    monkeypatch.setattr(
+        rollback,
+        "authenticated_reviewed_function_owner",
+        lambda *_args, **_kwargs: "reviewed-owner",
+    )
+    monkeypatch.setattr(
+        rollback,
+        "assert_reviewed_function_set",
+        lambda *_args, **_kwargs: None,
+    )
 
 
 def _payload(*, git_sha: str = GIT_SHA) -> dict[str, object]:
@@ -140,6 +150,7 @@ def _payload(*, git_sha: str = GIT_SHA) -> dict[str, object]:
         "MIP_AGENT_SUPERVISOR_ENDPOINT": "supervisor-endpoint",
         "MIP_AGENT_SUPERVISOR_NAME": "Mortgage Growth Agent",
         "MIP_AGENT_RUNTIME_CLIENT_ID": "runtime-client",
+        "MIP_REVIEWED_FUNCTION_OWNER": "reviewed-owner",
         "MIP_AGENT_PROXY_CLIENT_ID": PROXY_CLIENT_ID,
         "MIP_AGENT_PROXY_CREDENTIAL_ID": PROXY_CREDENTIAL_ID,
         "MIP_AGENT_PROXY_SECRET_REFERENCE": PROXY_SECRET_REFERENCE,
@@ -163,6 +174,12 @@ def _payload(*, git_sha: str = GIT_SHA) -> dict[str, object]:
             *({"name": name, "value": value} for name, value in values.items()),
         ],
     }
+
+
+def _immutable_payload(*, git_sha: str = GIT_SHA) -> dict[str, object]:
+    payload = _payload(git_sha=git_sha)
+    payload["source_code_path"] = ARTIFACT
+    return payload
 
 
 def _binding() -> str:
@@ -648,6 +665,40 @@ def test_capture_rejects_unreviewed_app_resource_binding(
         )
 
 
+def test_capture_rejects_live_matching_owner_that_is_not_authenticated_deployer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(
+        rollback,
+        "_health",
+        lambda *_args, **_kwargs: (GIT_SHA, _binding(), LEASE_ID),
+    )
+    monkeypatch.setattr(
+        rollback,
+        "authenticated_reviewed_function_owner",
+        lambda *_args, **_kwargs: "different-authenticated-owner",
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="candidate reviewed-function owner is not the authenticated deployer",
+    ):
+        rollback.capture_current(
+            workspace,
+            app_name=APP_NAME,
+            scope="mip",
+            payload=_payload(),
+            base_url="https://mip.example",
+            bearer_token="token",
+            expected_git_sha=GIT_SHA,
+            expected_gateway_binding=_binding(),
+            **CAPTURE_ARGS,
+        )
+
+    assert ("mip", rollback._record_key(APP_NAME)) not in workspace.secrets.values
+
+
 def test_reviewed_app_resource_contract_resolves_bundle_resource_references() -> None:
     summary = {
         "resources": {
@@ -729,6 +780,7 @@ def test_payload_resource_proof_preserves_custom_resource_families(
     assert observed["proxy_caller_application_id"] == PROXY_CLIENT_ID
     assert observed["proxy_caller_credential_id"] == PROXY_CREDENTIAL_ID
     assert observed["proxy_caller_secret_reference"] == PROXY_SECRET_REFERENCE
+    assert observed["reviewed_function_owner"] == "reviewed-owner"
     assert observed["require_resource_binding"] is True
 
 
@@ -756,6 +808,90 @@ def test_payload_resource_proof_requires_complete_proxy_binding(missing: str) ->
         )
 
 
+def test_stored_v6_proof_uses_signed_reviewed_function_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, object] = {}
+
+    def _resolve(*_args: object, **kwargs: object) -> object:
+        observed.update(kwargs)
+        return SimpleNamespace(contract=RESOURCE_CONTRACT, digest=RESOURCE_DIGEST)
+
+    monkeypatch.setattr(rollback, "resolve_exact_resource_proof", _resolve)
+    monkeypatch.setattr(
+        rollback,
+        "authenticated_reviewed_function_owner",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("current signed records must not derive owner authority")
+        ),
+    )
+
+    rollback._stored_resource_proof(
+        _workspace(),
+        record={
+            "version": rollback.RECORD_VERSION,
+            "payload": _immutable_payload(),
+            "gateway_resources": {
+                **RESOURCE_CONTRACT,
+                "resource_digest": RESOURCE_DIGEST,
+            },
+        },
+    )
+
+    assert observed["reviewed_function_owner"] == "reviewed-owner"
+    assert observed["allow_legacy_reviewed_function_contract"] is False
+
+
+def test_stored_v6_proof_authenticates_bounded_pre_owner_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = _immutable_payload()
+    payload["env_vars"] = [
+        item
+        for item in payload["env_vars"]
+        if isinstance(item, dict)
+        and item.get("name") != "MIP_REVIEWED_FUNCTION_OWNER"
+    ]
+    authenticated: dict[str, object] = {}
+    observed: dict[str, object] = {}
+
+    def _owner(workspace: object, *, catalog: str) -> str:
+        authenticated.update(workspace=workspace, catalog=catalog)
+        return "reviewed-owner"
+
+    def _resolve(*_args: object, **kwargs: object) -> object:
+        observed.update(kwargs)
+        return SimpleNamespace(contract=RESOURCE_CONTRACT, digest=RESOURCE_DIGEST)
+
+    workspace = _workspace()
+    monkeypatch.setattr(
+        rollback,
+        "authenticated_reviewed_function_owner",
+        _owner,
+    )
+    monkeypatch.setattr(rollback, "resolve_exact_resource_proof", _resolve)
+
+    rollback._stored_resource_proof(
+        workspace,
+        record={
+            "version": rollback.RECORD_VERSION,
+            "payload": payload,
+            "gateway_resources": {
+                **RESOURCE_CONTRACT,
+                "resource_digest": RESOURCE_DIGEST,
+            },
+        },
+    )
+
+    assert authenticated == {"workspace": workspace, "catalog": "mip"}
+    assert observed["reviewed_function_owner"] == "reviewed-owner"
+    assert observed["expected"] == {
+        **RESOURCE_CONTRACT,
+        "resource_digest": RESOURCE_DIGEST,
+    }
+    assert observed["allow_legacy_reviewed_function_contract"] is True
+
+
 def _legacy_gateway_resources() -> dict[str, str]:
     contract = {
         field: f"legacy-{field}"
@@ -766,6 +902,88 @@ def _legacy_gateway_resources() -> dict[str, str]:
         **contract,
         "resource_digest": legacy_gateway_resource_digest(contract),
     }
+
+
+def test_v5_stored_proof_requires_authenticated_reviewed_function_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    observed: dict[str, object] = {}
+
+    def _owner(owner_workspace: object, *, catalog: str) -> str:
+        observed.update(owner_workspace=owner_workspace, owner_catalog=catalog)
+        return "reviewed-owner"
+
+    def _assert_functions(function_workspace: object, **kwargs: object) -> None:
+        observed.update(function_workspace=function_workspace, **kwargs)
+
+    monkeypatch.setattr(rollback, "authenticated_reviewed_function_owner", _owner)
+    monkeypatch.setattr(rollback, "assert_reviewed_function_set", _assert_functions)
+    monkeypatch.setattr(
+        rollback,
+        "assert_live_legacy_gateway_resources",
+        lambda *_args, **_kwargs: _legacy_gateway_resources(),
+    )
+
+    rollback._stored_resource_proof(
+        workspace,
+        record={
+            "version": rollback.LEGACY_RECORD_VERSION,
+            "gateway_resources": _legacy_gateway_resources(),
+        },
+    )
+
+    assert observed == {
+        "owner_workspace": workspace,
+        "owner_catalog": "legacy-catalog",
+        "function_workspace": workspace,
+        "catalog": "legacy-catalog",
+        "expected_owner": "reviewed-owner",
+        "allow_legacy_segment_determinism": True,
+    }
+
+
+@pytest.mark.parametrize(
+    ("failure_source", "message"),
+    (
+        ("owner", "not owned by authenticated deployer"),
+        ("function", "reviewed UC function owner drifted"),
+        ("function", "reviewed UC function body drifted"),
+        ("function", "reviewed UC function execution metadata drifted"),
+        ("function", "reviewed UC function determinism drifted"),
+    ),
+)
+def test_v5_stored_proof_rejects_reviewed_function_governance_drift(
+    monkeypatch: pytest.MonkeyPatch,
+    failure_source: str,
+    message: str,
+) -> None:
+    monkeypatch.setattr(
+        rollback,
+        "assert_live_legacy_gateway_resources",
+        lambda *_args, **_kwargs: _legacy_gateway_resources(),
+    )
+    if failure_source == "owner":
+        monkeypatch.setattr(
+            rollback,
+            "authenticated_reviewed_function_owner",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(message)),
+        )
+    else:
+        monkeypatch.setattr(
+            rollback,
+            "assert_reviewed_function_set",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError(message)),
+        )
+
+    with pytest.raises(RuntimeError, match=message):
+        rollback._stored_resource_proof(
+            _workspace(),
+            record={
+                "version": rollback.LEGACY_RECORD_VERSION,
+                "gateway_resources": _legacy_gateway_resources(),
+            },
+        )
 
 
 def test_load_falls_back_to_genuinely_signed_v5_record(

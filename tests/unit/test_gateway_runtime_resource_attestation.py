@@ -591,6 +591,7 @@ def test_served_binding_preserves_previous_model_attestation_key(
         workspace,
         deployment,
         supervisor_name="Mortgage Growth Agent",
+        reviewed_function_owner="reviewed-owner",
         assert_single_writer=lambda: None,
     )
 

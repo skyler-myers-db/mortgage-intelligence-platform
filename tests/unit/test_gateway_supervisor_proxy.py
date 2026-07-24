@@ -92,12 +92,114 @@ def _function_details(spec: ReviewedFunctionSpec) -> object:
     )
 
 
-def test_reviewed_function_body_hash_is_catalog_portable() -> None:
-    spec = REVIEWED_FUNCTIONS[0]
+@pytest.mark.parametrize("spec", REVIEWED_FUNCTIONS)
+def test_reviewed_function_body_hash_is_catalog_portable(
+    spec: ReviewedFunctionSpec,
+) -> None:
     details = _function_details(spec)
     custom_definition = details.routine_definition.replace("mip.", "acme_mip.")
 
     assert sql_body_sha256(custom_definition, catalog="acme_mip") == spec.body_sha256
+    if "mip." in details.routine_definition:
+        assert (
+            sql_body_sha256(details.routine_definition, catalog="acme_mip")
+            != spec.body_sha256
+        )
+    else:
+        # This function body is intentionally catalog-independent; its full
+        # function namespace is verified separately by the metadata contract.
+        assert custom_definition == details.routine_definition
+
+
+def test_reviewed_function_body_hash_preserves_delimited_identifier_boundaries() -> None:
+    spec = REVIEWED_FUNCTIONS[0]
+    details = _function_details(spec)
+    drifted = details.routine_definition.replace(
+        "mip.gold.borrower_360",
+        "`mip.gold.borrower_360`",
+    )
+
+    assert sql_body_sha256(drifted) != spec.body_sha256
+
+
+def test_reviewed_function_body_hash_preserves_word_token_boundaries() -> None:
+    assert sql_body_sha256("RETURN (SELECT x OR y)") != sql_body_sha256(
+        "RETURN (SELECT xory)"
+    )
+
+
+def test_reviewed_function_body_hash_does_not_rewrite_catalog_inside_literal() -> None:
+    assert sql_body_sha256(
+        "RETURN 'acme_mip.gold.borrower_360'",
+        catalog="acme_mip",
+    ) != sql_body_sha256("RETURN 'mip.gold.borrower_360'")
+
+
+def test_reviewed_function_body_hash_rejects_unterminated_delimited_identifier() -> None:
+    with pytest.raises(RuntimeError, match="unterminated delimited identifier"):
+        sql_body_sha256("RETURN (SELECT * FROM `mip.gold.borrower_360)")
+
+
+@pytest.mark.parametrize(
+    "definition",
+    (
+        "RETURN (SELECT 1-- hidden drift\n+ 2)",
+        "RETURN (SELECT 1 /* hidden drift */ + 2)",
+    ),
+)
+def test_reviewed_function_body_hash_rejects_comments(definition: str) -> None:
+    with pytest.raises(RuntimeError, match="comments are unsupported"):
+        sql_body_sha256(definition)
+
+
+def test_reviewed_function_body_hash_rejects_double_quoted_strings() -> None:
+    with pytest.raises(RuntimeError, match="double-quoted strings are unsupported"):
+        sql_body_sha256('RETURN "ABC"')
+
+
+@pytest.mark.parametrize(
+    "definition",
+    (
+        "\u00a0RETURN 1",
+        "RETURN\u00a01",
+        "RETURN 1\u00a0",
+        "RETURN (\u00a0SELECT 1)",
+        "RETURN (SELECT 1\u00a0)",
+        "RETURN suppreßion_reason",
+        "RETURN 1\u00a0+ 2",
+    ),
+)
+def test_reviewed_function_body_hash_rejects_non_ascii_sql(definition: str) -> None:
+    with pytest.raises(RuntimeError, match="unsupported non-ASCII SQL"):
+        sql_body_sha256(definition)
+
+
+def test_reviewed_function_body_hash_preserves_supported_quoted_content() -> None:
+    assert sql_body_sha256("RETURN '-- café'") != sql_body_sha256(
+        "RETURN '-- cafe'"
+    )
+    assert sql_body_sha256("RETURN `/* café */`") != sql_body_sha256(
+        "RETURN `/* cafe */`"
+    )
+
+
+@pytest.mark.parametrize(
+    "catalog",
+    (
+        "",
+        "mip.gold",
+        "mip-staging",
+        " mip",
+        "mip ",
+        "\u00a0mip",
+        "mip\u00a0",
+    ),
+)
+def test_reviewed_function_body_hash_rejects_ungoverned_catalog(
+    catalog: str,
+) -> None:
+    with pytest.raises(RuntimeError, match="not a governed identifier"):
+        sql_body_sha256("RETURN 1", catalog=catalog)
 
 
 def _set_contract_env(monkeypatch: pytest.MonkeyPatch) -> None:

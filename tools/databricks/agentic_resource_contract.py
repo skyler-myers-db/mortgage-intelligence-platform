@@ -45,6 +45,7 @@ class ProvisionedResources:
     agent_proxy_application_id: str | None = None
     agent_proxy_credential_id: str | None = None
     agent_proxy_secret_reference: str | None = None
+    reviewed_function_owner: str | None = None
 
     def env_lines(self) -> list[str]:
         """Render shell-safe, sourceable assignments without losing explicit names."""
@@ -58,6 +59,13 @@ class ProvisionedResources:
             assignment("MIP_LAKEBASE_SYNC_SCHEMA", self.lakebase_sync_schema),
             assignment("MIP_LAKEBASE_SYNC_TABLES", ",".join(self.lakebase_sync_tables)),
         ]
+        if self.reviewed_function_owner:
+            rows.append(
+                assignment(
+                    "MIP_REVIEWED_FUNCTION_OWNER",
+                    self.reviewed_function_owner,
+                )
+            )
         if self.agent_supervisor_id and self.agent_serving_endpoint:
             rows.extend(
                 [

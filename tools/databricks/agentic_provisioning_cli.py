@@ -111,6 +111,11 @@ def build_parser(*, default_sync_tables: tuple[str, ...]) -> argparse.ArgumentPa
         "--deployment-source-git-sha",
         default=os.environ.get("MIP_GIT_SHA", ""),
     )
+    parser.add_argument(
+        "--reviewed-function-owner",
+        default=os.environ.get("MIP_REVIEWED_FUNCTION_OWNER", ""),
+    )
+    parser.add_argument("--capture-reviewed-function-owner", action="store_true")
     parser.add_argument("--skip-sync", action="store_true")
     parser.add_argument("--skip-gateway", action="store_true")
     parser.add_argument("--skip-supervisor", action="store_true")
