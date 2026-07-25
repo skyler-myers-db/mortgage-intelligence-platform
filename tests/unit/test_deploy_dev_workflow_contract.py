@@ -4411,7 +4411,7 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
     secret_binding = (
         "MIP_AI_GATEWAY_PROOF_SIGNING_KEY: " "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
     )
-    assert workflow.count(secret_binding) == 2
+    assert workflow.count(secret_binding) == 3
     assert (
         workflow.count(
             "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: "
@@ -6610,7 +6610,7 @@ def test_current_cutover_journal_retry_deduplicates_signed_blue_and_rejects_coll
     harness.write_text(
         f"""#!/usr/bin/env bash
 set -eu
-PYTHON={shlex.quote(str(REPO / ".venv" / "bin" / "python"))}
+PYTHON={shlex.quote(sys.executable)}
 RED=""
 RST=""
 STALE_CUTOVER_JOURNAL_PENDING=0
@@ -6717,3 +6717,74 @@ def test_completed_redeploy_supervisor_command_pins_proxy_identity_explicitly() 
     proxy_flag = tokens.index("--proxy-caller-application-id")
     assert tokens[proxy_flag + 1] == "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
     assert "--skip-gateway" in tokens
+
+
+def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() -> None:
+    workflow = yaml.load(DEPLOY_DEV.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    workflow_inputs = workflow["on"]["workflow_dispatch"]["inputs"]
+    repair_input = workflow_inputs["repair_normal_credential"]
+    assert repair_input["type"] == "boolean"
+    assert repair_input["default"] == "false"
+    break_glass_input = workflow_inputs[
+        "acknowledge_single_maintainer_break_glass"
+    ]
+    assert break_glass_input["type"] == "boolean"
+    assert break_glass_input["default"] == "false"
+
+    steps = workflow["jobs"]["deploy"]["steps"]
+    refusal_job = workflow["jobs"]["refuse-unacknowledged"]
+    deploy_job = workflow["jobs"]["deploy"]
+    assert refusal_job["if"] == (
+        "${{ !inputs.acknowledge_single_maintainer_break_glass }}"
+    )
+    refusal_steps = refusal_job["steps"]
+    assert len(refusal_steps) == 1
+    assert refusal_steps[0]["name"] == (
+        "Refuse an unacknowledged single-maintainer deployment"
+    )
+    assert "exit 1" in refusal_steps[0]["run"]
+    assert deploy_job["if"] == (
+        "${{ inputs.acknowledge_single_maintainer_break_glass }}"
+    )
+    repair_steps = [
+        step for step in steps if step.get("name") == "Repair normal operator OAuth credential"
+    ]
+    deploy_steps = [
+        step for step in steps if step.get("name") == "Deploy dev Databricks App"
+    ]
+    assert len(repair_steps) == 1
+    assert len(deploy_steps) == 1
+    repair = repair_steps[0]
+    assert repair["if"] == "${{ inputs.repair_normal_credential }}"
+    assert repair["env"] == {
+        "DATABRICKS_AUTH_TYPE": "pat",
+        "DATABRICKS_HOST": "${{ secrets.DATABRICKS_HOST }}",
+        "DATABRICKS_TOKEN": "${{ secrets.DATABRICKS_TOKEN }}",
+        "DATABRICKS_CLIENT_ID": "${{ secrets.DATABRICKS_CLIENT_ID }}",
+        "GH_TOKEN": "${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}",
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": (
+            "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
+        ),
+        "MIP_APP_NAME": "${{ vars.MIP_APP_NAME || 'mip-app' }}",
+        "MIP_DEPLOYMENT_SOURCE_GIT_SHA": "${{ github.sha }}",
+        "MIP_M2M_GITHUB_REPOSITORY": "${{ github.repository }}",
+    }
+    assert deploy_steps[0]["if"] == "${{ !inputs.repair_normal_credential }}"
+    assert _continued_command_tokens(
+        repair["run"], "tools.databricks.provision_m2m_oauth"
+    ) == [
+        "python",
+        "-m",
+        "tools.databricks.provision_m2m_oauth",
+        "--identity-role",
+        "normal",
+        "--expected-application-id",
+        "$DATABRICKS_CLIENT_ID",
+        "--app-name",
+        "$MIP_APP_NAME",
+        "--no-grant-can-use",
+        "--gh-repo",
+        "$GITHUB_REPOSITORY",
+        "--rotate",
+        "--set-gh-secrets",
+    ]

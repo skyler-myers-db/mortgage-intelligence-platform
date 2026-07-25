@@ -22,15 +22,24 @@ only because the refresh jobs, Genie prompts, and browser matrix burn real
 customer/workspace compute. It fails loudly: live jobs check their own required
 secrets and exit non-zero instead of silently skipping release gates.
 
-The dev deploy workflow (`deploy-dev.yml`) is also manual-only. It builds the
-current ref, creates an ephemeral `.env.local` containing only non-secret app
-configuration, passes runtime secrets to the provisioning step through the
-process environment, seeds a temporary `DEFAULT` Databricks CLI profile, runs
-`scripts/deploy.sh -t dev --no-confirm`, and keeps the deployed app smoke test enabled unless the
-operator explicitly selects `skip_smoke`. Run it before live validation when
-the code under review changes app, bundle, job, SQL, or frontend behavior. The
-workflow shares a single non-cancelling concurrency lane (`mip-dev-live-state`)
-with live validation because
+The dev deploy workflow (`deploy-dev.yml`) is also manual-only. This repository
+currently has one maintainer, so its required environment review cannot provide
+separation of duties. Every dispatch must explicitly set
+`acknowledge_single_maintainer_break_glass=true`, and the same maintainer must
+approve the protected `dev` environment while recording the governing PR or
+issue in the approval comment. This is an audited self-approval exception, not
+independent review. The environment must restrict deployment to the reviewed
+branch and forbid administrator bypass. The original workflow run stays bound
+to the `workflow_dispatch` SHA; it is not re-dispatched through a moving branch
+reference. After approval, that run builds the reviewed commit, creates an
+ephemeral `.env.local` containing only non-secret app configuration, passes
+runtime secrets to the provisioning step through the process environment,
+seeds a temporary `DEFAULT` Databricks CLI profile, runs
+`scripts/deploy.sh -t dev --no-confirm`, and keeps the deployed app smoke test
+enabled unless the operator explicitly selects `skip_smoke`. Run it before live
+validation when the code under review changes app, bundle, job, SQL, or frontend
+behavior. The workflow shares a single non-cancelling concurrency lane
+(`mip-dev-live-state`) with live validation because
 parallel deploys overlap expensive refresh jobs and app promotion.
 
 The live mutation gate encodes the GitHub run and attempt into a reviewed,
@@ -45,6 +54,22 @@ The `rebase_unverified_app` input is a one-time adoption control, defaulting to
 false. Select it only when the existing dev App predates the signed server-owned
 rollback record; that run stops the unverified App and must prove/capture a new
 green contract before service resumes. Routine roll-forwards leave it false.
+
+The `repair_normal_credential` input is a bounded recovery control, also
+defaulting to false. Use it only when `DATABRICKS_CLIENT_SECRET` is absent or
+known invalid. Before dispatch, temporarily set the `dev` environment secret
+`MIP_GITHUB_CREDENTIAL_SINK_TOKEN` to a single-repository, short-expiry
+fine-grained token with only Actions Secrets write access. The `dev` environment
+must require review, forbid administrator bypass, and restrict deployment to the
+reviewed recovery branch. Because this repository currently has no second
+maintainer, dispatch and environment approval must follow the explicit audited
+self-approval exception above. The recovery run does not deploy or change App
+access: it acquires the signed App lease, creates one replacement
+normal-operator credential, confirms the GitHub sink repeatedly, and retires
+the prior credential. Revoke the temporary token at GitHub immediately after
+the recovery run succeeds (deleting only its environment-secret copy is not
+sufficient), then dispatch a normal deploy with
+`repair_normal_credential=false`.
 
 Despite its legacy filename, `deploy-prod.yml` does not deploy or authenticate
 to a production workspace. It is an explicit scaffold-only placeholder. The

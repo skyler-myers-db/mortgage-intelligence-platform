@@ -18,6 +18,14 @@ on:
         description: "One-time reviewed isolation of foreign catalogs from the MIP workspace"
         type: boolean
         default: false
+      repair_normal_credential:
+        description: "Recovery only: rotate the missing normal-operator OAuth secret into GitHub"
+        type: boolean
+        default: false
+      acknowledge_single_maintainer_break_glass:
+        description: "Required: acknowledge audited self-approval because this repository has one maintainer"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +37,17 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  refuse-unacknowledged:
+    if: ${{ !inputs.acknowledge_single_maintainer_break_glass }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Refuse an unacknowledged single-maintainer deployment
+        run: |
+          set -euo pipefail
+          echo "::error::Dev deployment requires explicit single-maintainer break-glass acknowledgement."
+          exit 1
   deploy:
+    if: ${{ inputs.acknowledge_single_maintainer_break_glass }}
     runs-on: ubuntu-latest
     # A first install may perform two serial one-use role convergences. Each
     # deliberately waits through a captured 65-minute OAuth/database lease
@@ -228,7 +246,42 @@ jobs:
             fi
           } > .env.local
           chmod 600 .env.local
+      - name: Repair normal operator OAuth credential
+        if: ${{ inputs.repair_normal_credential }}
+        env:
+          DATABRICKS_AUTH_TYPE: pat
+          DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+          DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_TOKEN }}
+          DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+          GH_TOKEN: ${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}
+          MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
+          MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
+          MIP_DEPLOYMENT_SOURCE_GIT_SHA: ${{ github.sha }}
+          MIP_M2M_GITHUB_REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          missing=""
+          for v in DATABRICKS_HOST DATABRICKS_TOKEN DATABRICKS_CLIENT_ID \
+                   GH_TOKEN MIP_AI_GATEWAY_PROOF_SIGNING_KEY MIP_APP_NAME \
+                   MIP_DEPLOYMENT_SOURCE_GIT_SHA MIP_M2M_GITHUB_REPOSITORY; do
+            if [ -z "${!v}" ]; then
+              missing="$missing $v"
+            fi
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Missing required credential-repair input(s):$missing"
+            exit 1
+          fi
+          python -m tools.databricks.provision_m2m_oauth \
+            --identity-role normal \
+            --expected-application-id "$DATABRICKS_CLIENT_ID" \
+            --app-name "$MIP_APP_NAME" \
+            --no-grant-can-use \
+            --gh-repo "$GITHUB_REPOSITORY" \
+            --rotate \
+            --set-gh-secrets
       - name: Deploy dev Databricks App
+        if: ${{ !inputs.repair_normal_credential }}
         env:
           DATABRICKS_AUTH_TYPE: pat
           DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}

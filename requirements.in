@@ -18,10 +18,11 @@ mlflow>=3.1.3,<4
 boto3==1.43.50
 cryptography==48.0.1  # security floor for GHSA-537c-gmf6-5ccf via google-auth
 # Security floors for GHSA-2f96-g7mh-g2hx, GHSA-v396-v7q4-x2qj,
-# GHSA-956x-8gvw-wg5v, GHSA-8ppf-4f7h-5ppj, and GHSA-hm4w-wwcw-mr6r.
+# GHSA-956x-8gvw-wg5v, GHSA-8ppf-4f7h-5ppj, GHSA-hm4w-wwcw-mr6r,
+# and GHSA-94p4-4cq8-9g67.
 # MLflow and google-auth pull these transitively; pin the reviewed fixes so a
 # lock refresh cannot silently restore the vulnerable releases.
-gitpython>=3.1.51,<4
+gitpython>=3.1.55,<4
 pyasn1>=0.6.4,<1
 # Security floor for PYSEC-2026-175/PYSEC-2026-177/PYSEC-2026-178/PYSEC-2026-179.
 # databricks-sql-connector depends on PyJWT; keep the transitive pin explicit
