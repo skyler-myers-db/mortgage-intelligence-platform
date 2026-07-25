@@ -23,6 +23,12 @@ REPO = Path(__file__).resolve().parents[2]
 DEPLOY_DEV = REPO / ".github" / "workflows" / "deploy-dev.yml"
 NIGHTLY = REPO / ".github" / "workflows" / "nightly.yml"
 DEPLOY_SCRIPT = REPO / "scripts" / "deploy.sh"
+DEPLOY_LIB_SCRIPTS = (
+    REPO / "scripts" / "lib" / "deploy_agent_proxy_lifecycle.sh",
+    REPO / "scripts" / "lib" / "deploy_verifier_gateway_lifecycle.sh",
+    REPO / "scripts" / "lib" / "deploy_cutover_journal_lifecycle.sh",
+    REPO / "scripts" / "lib" / "deploy_supervisor_creation_lifecycle.sh",
+)
 BUNDLE_CONFIG = REPO / "databricks.yml"
 
 
@@ -187,11 +193,35 @@ def _continued_command_tokens(block: str, command_fragment: str) -> list[str]:
     return shlex.split(" ".join(command_lines))
 
 
-def _shell_function(name: str) -> str:
+def _deploy_contract_text() -> str:
+    """Return deploy.sh with reviewed sourced libraries expanded in place."""
+
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    for source in DEPLOY_LIB_SCRIPTS:
+        source_line = f'. "$REPO_ROOT/scripts/lib/{source.name}"'
+        assert script.count(source_line) == 1
+        script = script.replace(source_line, source.read_text(encoding="utf-8"))
+    return script
+
+
+def _shell_function(name: str) -> str:
+    script = _deploy_contract_text()
     start = script.index(f"{name}() {{")
     end = script.index("\n}\n", start) + len("\n}\n")
     return script[start:end]
+
+
+def _write_deploy_fixture(path: Path, text: str) -> None:
+    """Copy the command-of-record and every required sourced lifecycle library."""
+
+    path.write_text(text, encoding="utf-8")
+    lib_dir = path.parent / "lib"
+    lib_dir.mkdir(exist_ok=True)
+    for source in DEPLOY_LIB_SCRIPTS:
+        (lib_dir / source.name).write_text(
+            source.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
 
 
 def test_sql_contract_scanner_rejects_commented_ddl_without_corrupting_literals() -> None:
@@ -225,7 +255,7 @@ def _install_environment_recorder(tmp_path: Path) -> tuple[Path, Path]:
         "#!/usr/bin/env bash\n"
         "if [[ \"${1:-}\" == '-m' && "
         "\"${2:-}\" == 'tools.databricks.agent_proxy_credential_bundle' ]]; then\n"
-        f"  exec {shlex.quote(sys.executable)} \"$@\"\n"
+        f'  exec {shlex.quote(sys.executable)} "$@"\n'
         "fi\n"
         "{\n"
         "  echo '=== child ==='\n"
@@ -267,7 +297,7 @@ def _first_install_cleanup_block() -> str:
 
 
 def _app_failure_compensation_block() -> str:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_contract_text()
     start = text.index("converge_app_treatment_access() {")
     end = text.index("quiesce_app_treatment_after_failed_stop() {", start)
     return text[start:end]
@@ -577,9 +607,13 @@ def _run_deploy_lease_cleanup_harness(
     tmp_path: Path,
     *,
     original_rc: int,
+    credential_quarantined: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], Path]:
     release_log = tmp_path / f"lease-release-{original_rc}.log"
     harness = tmp_path / f"lease-release-{original_rc}.sh"
+    quarantine_marker = tmp_path / f"credential-quarantine-{original_rc}.marker"
+    if credential_quarantined:
+        quarantine_marker.write_text("retain lease\n", encoding="utf-8")
     harness.write_text(
         f"""#!/usr/bin/env bash
 set -u
@@ -590,6 +624,7 @@ AGENTIC_ENV_FILE=""
 AGENT_EVAL_ENV_FILE=""
 APP_DEPLOYMENT_LEASE_ID=lease-id
 APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+OAUTH_CREDENTIAL_QUARANTINE_FILE={shlex.quote(str(quarantine_marker))}
 _GRANTS_APP_NAME=mip-app
 RED=""
 YLW=""
@@ -638,7 +673,7 @@ def _run_app_failure_compensation_harness(
     fake_python.write_text(
         "#!/usr/bin/env bash\n"
         f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
-        f'if [[ "$*" == *app_deployment_rollback* ]]; then exit {rollback_result}; fi\n'
+        f'if [[ "$*" == *"app_deployment_rollback restore"* ]]; then exit {rollback_result}; fi\n'
         f'if [[ "$*" == *converge_app_release_access* ]]; then exit {release_acl_result}; fi\n'
         'if [[ "$*" == *"app_first_install_journal status"* ]]; then\n'
         '  out_env=""\n'
@@ -681,6 +716,17 @@ APP_EXPECTED_IDENTITY_ARGS=()
 APP_UPGRADE_STATE={shlex.quote(state)}
 APP_ROLLBACK_SECRET_SCOPE=mip
 APP_SIGNED_BLUE_AVAILABLE=1
+AGENT_PROXY_ACCESS_MUTATED=0
+MIP_APP_ROLLBACK_RECORD_VERSION=6
+MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
+MIP_APP_ROLLBACK_DEPLOYMENT_ID=blue-deployment
+MIP_APP_ROLLBACK_SUPERVISOR_ID=blue-supervisor
+MIP_APP_ROLLBACK_SUPERVISOR_CREATOR=runtime-client
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT=blue-supervisor-endpoint
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID=blue-supervisor-endpoint-id
+MIP_APP_ROLLBACK_RUNTIME_APPLICATION_ID=runtime-client
+MIP_APP_ROLLBACK_GENIE_SPACE_ID=genie-space
+MIP_APP_ROLLBACK_PROXY_APPLICATION_ID=proxy-client
 TREATMENT_RUNTIME_QUIESCED={0 if state in {"blue_active", "green_verified", "green_treatment_pending_capture"} else 1}
 APP_SP_CLIENT_ID={shlex.quote(app_principal)}
 _EXISTING_APP_SP_CLIENT_ID={shlex.quote(app_principal)}
@@ -702,6 +748,14 @@ _GRANTS_WAREHOUSE_ID=warehouse-id
 _GRANTS_CATALOG=mip
 MIP_APP_URL=https://mip.example
 MIP_BEARER_TOKEN=token
+GENIE_SPACE_ID=genie-space
+DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
+DATABRICKS_AGENT_PROXY_CLIENT_SECRET=proxy-secret
+DATABRICKS_AGENT_PROXY_CREDENTIAL_ID=proxy-credential
+DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+DATABRICKS_ACCOUNT_HOST=https://accounts.cloud.databricks.com
+DATABRICKS_ACCOUNT_ID=account-id
+DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
 PYTHON={shlex.quote(str(fake_python))}
 RED=""
 YLW=""
@@ -710,6 +764,7 @@ RST=""
 run_with_account_identity() {{ "$@"; }}
 run_with_proof_signing_authority() {{ "$@"; }}
 run_with_lakebase_bootstrap_authority() {{ "$@"; }}
+run_with_agent_proxy_credentials() {{ "$@"; }}
 mint_m2m_token() {{ printf 'mint %s\n' "$*" >> {shlex.quote(str(calls))}; }}
 {_first_install_cleanup_block()}
 {_app_failure_compensation_block()}
@@ -944,7 +999,7 @@ def _commit_deploy_fixture(repo: Path) -> None:
     )
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
     subprocess.run(
-        ["git", "add", "scripts/deploy.sh", ".gitignore"],
+        ["git", "add", "scripts", ".gitignore"],
         cwd=repo,
         check=True,
     )
@@ -975,15 +1030,102 @@ def test_deploy_dev_runs_real_deploy_script_manual_only() -> None:
     assert "Run databricks bundle validate/deploy here" not in text
 
 
-def test_deploy_script_shell_is_syntactically_valid() -> None:
+@pytest.mark.parametrize("path", (DEPLOY_SCRIPT, *DEPLOY_LIB_SCRIPTS))
+def test_deploy_shell_sources_are_syntactically_valid(path: Path) -> None:
     result = subprocess.run(
-        ["bash", "-n", str(DEPLOY_SCRIPT)],
+        ["bash", "-n", str(path)],
         text=True,
         capture_output=True,
         check=False,
     )
 
     assert result.returncode == 0, result.stderr
+
+
+def test_deploy_sources_reviewed_lifecycle_libraries_without_option_or_trap_drift() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    source_lines = [f'. "$REPO_ROOT/scripts/lib/{path.name}"' for path in DEPLOY_LIB_SCRIPTS]
+
+    assert [line for line in script.splitlines() if line in source_lines] == source_lines
+    exact_source_gate = script.index("\nverify_exact_deploy_source\n")
+    assert all(exact_source_gate < script.index(line) for line in source_lines)
+    for path in DEPLOY_LIB_SCRIPTS:
+        text = path.read_text(encoding="utf-8")
+        assert "\nset " not in text
+        assert "\ntrap " not in text
+        assert "\nexit " not in text
+
+
+def test_supervisor_creation_lifecycle_recovers_before_cleanup_and_separates_authority() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    recovery = script.index("\nrun recover_pending_supervisor_creation\n")
+    stale_retirement = script.index('\nif [[ "$STALE_CUTOVER_JOURNAL_PENDING" -eq 1 ]]', recovery)
+    historical_cleanup = script.index(
+        "tools.databricks.reconcile_historical_agent_endpoints cleanup",
+        stale_retirement,
+    )
+    retry_acl = script.index("\nrun reconcile_retry_supervisor_app_acl\n", historical_cleanup)
+    planned_creation = script.index(
+        "\nrun create_planned_supervisor_if_needed\n",
+        retry_acl,
+    )
+    ordinary_provisioning = script.index(
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"',
+        planned_creation,
+    )
+    handoff_clearance = script.index(
+        "\nrun finalize_supervisor_creation_handoff\n",
+        ordinary_provisioning,
+    )
+    env_import = script.index(
+        '\nif [[ "$DRY_RUN" -eq 0 ]]; then',
+        handoff_clearance,
+    )
+
+    assert recovery < stale_retirement < historical_cleanup < retry_acl
+    assert retry_acl < planned_creation < ordinary_provisioning
+    assert ordinary_provisioning < handoff_clearance < env_import
+
+    creation = _shell_function("create_planned_supervisor_if_needed")
+    finalize_blue = creation.index("supervisor_creation_runtime finalize-signed-blue")
+    plan = creation.index("supervisor_creation_control plan-prepare")
+    create = creation.index("supervisor_creation_runtime create")
+    claim = creation.index("supervisor_creation_control claim-result")
+    complete = creation.index("supervisor_creation_runtime complete")
+    verification = creation.index("supervisor_creation_control verify-complete")
+    assert finalize_blue < plan < create < claim < complete < verification
+    assert "supervisor_creation_control complete" not in creation
+    assert creation.count("run_as_m2m_identity") == 3
+    assert creation.count("run_with_proof_signing_authority") == 3
+    assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY" not in creation
+
+    recovery_helper = _shell_function("recover_pending_supervisor_creation")
+    adoption = recovery_helper.index("supervisor_creation_control adopt")
+    classification = recovery_helper.index("supervisor_creation_control classify-policy")
+    runtime_completion = recovery_helper.index("supervisor_creation_runtime complete")
+    assert adoption < classification < runtime_completion
+    assert 'historical)\n      step "defer the revoked historical Supervisor tuple' in (
+        recovery_helper
+    )
+    assert (
+        recovery_helper.index("historical)")
+        < recovery_helper.index("return 0", recovery_helper.index("historical)"))
+        < runtime_completion
+    )
+    for runtime_mutation in (creation, recovery_helper):
+        assert "--canonical-name" in runtime_mutation
+        assert "--genie-space-id" in runtime_mutation
+        assert "--catalog" in runtime_mutation
+
+    finalizer = _shell_function("finalize_supervisor_creation_handoff")
+    assert "supervisor_creation_control complete" in finalizer
+    assert finalizer.count("run_with_proof_signing_authority") == 1
+    for helper in (
+        _shell_function("recover_pending_supervisor_creation"),
+        creation,
+        finalizer,
+    ):
+        assert '[[ "$DRY_RUN" -eq 0 ]] || return 0' in helper
 
 
 def test_runtime_bootstrap_grant_cleanup_deactivates_after_exact_readback(
@@ -1398,7 +1540,7 @@ def test_dynamic_app_identity_separation_is_casefolded_before_recovery(
 
 
 def test_deploy_binds_deployer_auth_and_keeps_normal_app_oauth_shell_scoped() -> None:
-    text = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    text = _deploy_contract_text()
 
     bind_call = text.index("\nbind_deployment_workspace_auth\n")
     m2m_resolution = text.index("for _M2M_NAME in")
@@ -1433,8 +1575,29 @@ def test_deploy_binds_deployer_auth_and_keeps_normal_app_oauth_shell_scoped() ->
             while block[-1].rstrip().endswith("\\"):
                 block.append(audit_lines[index + len(block)])
         audit_invocations.append("\n".join(block))
-    assert len(audit_invocations) == 7
+    assert len(audit_invocations) == 10
     assert all("--expected-inventory-principal" in block for block in audit_invocations)
+    direct_audit = '"$PYTHON" -m tools.databricks.audit_global_m2m_access'
+    assert len(
+        re.findall(
+            r"run_with_account_identity run_with_proof_signing_authority \\\n"
+            r'\s+"\$PYTHON" -m tools\.databricks\.audit_global_m2m_access',
+            text,
+        )
+    ) == 5
+    assert text.count(direct_audit) == 5
+    for args_name in (
+        "captured_audit_args",
+        "app_audit_args",
+        "RUNTIME_GLOBAL_ACCESS_ARGS",
+        "VERIFIER_GLOBAL_ACCESS_ARGS",
+        "APP_GLOBAL_ACCESS_ARGS",
+    ):
+        assert re.search(
+            r"run_with_account_identity run_with_proof_signing_authority "
+            rf'\\\n\s+"\$PYTHON" "\$\{{{args_name}\[@\]\}}"',
+            text,
+        )
     m2m_block = text[text.index("run_as_m2m_identity() {") : text.index("# Step 0: preflight")]
     assert "env -i" not in m2m_block
     assert "compgen -e" in m2m_block
@@ -1448,6 +1611,49 @@ def test_deploy_binds_deployer_auth_and_keeps_normal_app_oauth_shell_scoped() ->
     ):
         helper_text = (REPO / "tools" / "databricks" / helper).read_text(encoding="utf-8")
         assert "deployment_workspace_client()" in helper_text
+
+
+def test_signed_blue_cutover_pins_survive_bounded_agent_runtime_environment(
+    tmp_path: Path,
+) -> None:
+    observed = tmp_path / "cutover-pin-env.log"
+    probe = tmp_path / "cutover-pin-probe.sh"
+    probe.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n%s\\n' \"$MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON\" "
+        f'"$MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON" > {shlex.quote(str(observed))}\n',
+        encoding="utf-8",
+    )
+    probe.chmod(0o755)
+    harness = tmp_path / "cutover-pin-harness.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+DIM=""
+RST=""
+MIP_DATABRICKS_WORKSPACE_HOST=https://workspace.example
+DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET=runtime-secret
+{_shell_function("run_as_m2m_identity")}
+MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON='{{"name":"blue-gateway"}}' \
+MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON='{{"supervisor_id":"blue-supervisor"}}' \
+  run_as_m2m_identity \
+    agent-runtime \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_ID \
+    DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET \
+    {shlex.quote(str(probe))}
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert observed.read_text(encoding="utf-8").splitlines() == [
+        '{"name":"blue-gateway"}',
+        '{"supervisor_id":"blue-supervisor"}',
+    ]
 
 
 def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
@@ -1464,18 +1670,21 @@ def test_deploy_requires_control_plane_and_runtime_uc_boundary_proofs() -> None:
     first_runtime_use = text.index(
         'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
     )
+    historical_reconciliation = text.index(
+        'step "capture the verifier immutable identity before retirement admission"'
+    )
     dual_authority = text.index(
         'step "prove dual-authority agent-runtime UC boundary before cutover"'
     )
     cutover = text.index(
         'step "prepare runtime-owned Gateway access while preserving the live old Supervisor"'
     )
-    preflight_block = text[preflight:first_runtime_use]
+    preflight_block = text[preflight:historical_reconciliation]
     dual_block = text[dual_authority:cutover]
 
     early_block = text[early_preflight:first_lakebase_runtime_use]
     assert early_preflight < first_lakebase_runtime_use < preflight
-    assert preflight < first_runtime_use < dual_authority < cutover
+    assert preflight < historical_reconciliation < first_runtime_use < dual_authority < cutover
     assert "-m tools.databricks.audit_agent_runtime_foreign_uc_access" in early_block
     assert '--application-id "$DATABRICKS_AGENT_RUNTIME_CLIENT_ID"' in early_block
     assert "--allow-missing-mip-catalog" in early_block
@@ -1995,14 +2204,16 @@ def test_deploy_uses_dedicated_verifier_for_gateway_proof_writes() -> None:
     )
     proof = script.index('step "verify AI Gateway exact inference-row proof')
     assert boundary < proof
-    assert "-m tools.databricks.verify_verifier_identity_boundary" in script[boundary:proof]
-    assert '--protected-service-principal-id "$APP_SP_SCIM_ID"' in script[boundary:proof]
+    assert "prove_exact_verifier_boundary" in script[boundary:proof]
+    verifier_boundary_helper = _shell_function("prove_exact_verifier_boundary")
+    assert "-m tools.databricks.verify_verifier_identity_boundary" in verifier_boundary_helper
+    assert '--protected-service-principal-id "$APP_SP_SCIM_ID"' in verifier_boundary_helper
     assert "DATABRICKS_ACCOUNT_ID: ${{ secrets.DATABRICKS_ACCOUNT_ID }}" in workflow
 
 
 def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
     workflow = DEPLOY_DEV.read_text(encoding="utf-8")
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_contract_text()
 
     for secret in (
         "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
@@ -2065,11 +2276,11 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
     assert gateway_provision < proxy_reaudit < proxy_uc_audit < proxy_identity_boundary
     assert (
         "tools.databricks.verify_agent_proxy_uc_boundary_dual_authority"
-        in runtime_block[proxy_reaudit:proxy_uc_audit + 500]
+        in runtime_block[proxy_reaudit : proxy_uc_audit + 500]
     )
     assert (
         "tools.databricks.verify_agent_proxy_identity_boundary"
-        in runtime_block[proxy_identity_boundary:proxy_identity_boundary + 1200]
+        in runtime_block[proxy_identity_boundary : proxy_identity_boundary + 1200]
     )
     pre_cutover_proxy_block = runtime_block[
         proxy_identity_boundary : runtime_block.index(
@@ -2118,15 +2329,9 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
         "tools.databricks.verify_agent_proxy_identity_boundary"
         in script[final_proxy_identity_boundary:proxy_secret_cleanup]
     )
-    assert (
-        "--allow-attested-app-401"
-        in script[final_proxy_identity_boundary:proxy_secret_cleanup]
-    )
-    assert (
-        "--supervisor-endpoint"
-        in script[final_proxy_identity_boundary:proxy_secret_cleanup]
-    )
-    assert script.count("--allow-attested-app-401") == 4
+    assert "--allow-attested-app-401" in script[final_proxy_identity_boundary:proxy_secret_cleanup]
+    assert "--supervisor-endpoint" in script[final_proxy_identity_boundary:proxy_secret_cleanup]
+    assert script.count("--allow-attested-app-401") == 5
     assert "--allow-stopped-app-401" not in script
     runtime_identity_boundary = runtime_block.index(
         "tools.databricks.verify_agent_runtime_identity_boundary"
@@ -2136,31 +2341,17 @@ def test_deploy_uses_isolated_identity_for_agent_resource_ownership() -> None:
             "run_with_agent_runtime_credentials",
             0,
             runtime_identity_boundary,
-        )
-        : runtime_block.index(
+        ) : runtime_block.index(
             'step "grant only the dedicated release probe temporary candidate access"',
             runtime_identity_boundary,
         )
     ]
     assert "run_with_agent_runtime_credentials" in runtime_identity_block
     assert "--allow-attested-app-401" in runtime_identity_block
-    verifier_identity_boundary = script.index(
-        "tools.databricks.verify_verifier_identity_boundary"
-    )
-    verifier_identity_block = script[
-        script.rfind(
-            "run_with_verifier_credentials",
-            0,
-            verifier_identity_boundary,
-        )
-        : script.index(
-            'step "verify AI Gateway exact inference-row proof with dedicated verifier identity"',
-            verifier_identity_boundary,
-        )
-    ]
+    verifier_identity_block = _shell_function("prove_exact_verifier_boundary")
     assert "run_with_verifier_credentials" in verifier_identity_block
     assert "--allow-attested-app-401" in verifier_identity_block
-    cleanup_block = script[final_proxy_identity_boundary:proxy_secret_cleanup + 700]
+    cleanup_block = script[final_proxy_identity_boundary : proxy_secret_cleanup + 700]
     assert "--cleanup-signed-blue" in cleanup_block
     assert "--signed-blue-credential-id" in cleanup_block
     assert script.count("tools.databricks.audit_global_m2m_access") >= 4
@@ -2481,6 +2672,63 @@ def test_signed_capture_retirement_failure_preserves_captured_app_in_exit_trap(
     assert "bundle_env deployment unbind" not in calls
 
 
+def test_captured_cleanup_failure_stops_app_and_retains_lease(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "captured-cleanup-failure.log"
+    fake_python = tmp_path / "captured-cleanup-failure-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "captured-cleanup-failure.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+APP_FAIL_CLOSED_ARMED=1
+APP_FAIL_CLOSED_NAME=mip-app
+APP_UPGRADE_STATE=green_captured_cleanup_pending
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+APP_DEPLOYMENT_LEASE_ID=lease-id
+_GRANTS_APP_NAME=mip-app
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+FIRST_INSTALL_APP_CREATED=0
+LAKEBASE_RUNTIME_ACCESS_PROVEN=1
+REVIEWED_FUNCTION_GRANTS_PROVEN=1
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+YLW=""
+RST=""
+converge_green_only_app_access() {{ return 1; }}
+stop_and_quiesce_unproven_app() {{
+  printf 'stopped-and-quiesced\\n' >> {shlex.quote(str(calls))}
+  return 0
+}}
+quiesce_app_treatment_after_failed_stop() {{ return 0; }}
+cleanup_failed_first_install_app() {{ return 0; }}
+compensate_preactivation_app_acl() {{ return 0; }}
+compensate_agent_proxy_access() {{ return 0; }}
+compensate_verifier_gateway_access() {{ return 0; }}
+revoke_agent_runtime_bootstrap_grants() {{ return 0; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+{_shell_function("stop_app_after_failed_deploy")}
+{_deploy_exit_trap_block()}
+false
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 90
+    assert "retaining the signed deployment lease" in result.stderr
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert observed == ["stopped-and-quiesced"]
+    assert all("app_deployment_lease release" not in call for call in observed)
+
+
 def test_exact_unsigned_first_install_cleanup_converges_through_signed_helper(
     tmp_path: Path,
 ) -> None:
@@ -2604,10 +2852,7 @@ def test_local_deploy_loads_complete_proof_verification_key_registry() -> None:
 
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY" in script
     assert "dotenv_value MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS" in script
-    assert (
-        "dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY"
-        in script
-    )
+    assert "dotenv_value MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY" in script
     assert (
         'export MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS="$verifier_historical_keys"' in script
     )
@@ -2632,38 +2877,36 @@ def test_agent_proxy_credential_is_atomic_and_reproved_after_cleanup() -> None:
     assert workflow.count("secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE") == 2
     assert nightly.count("secrets.DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE") == 2
     assert (
-        workflow.count(
-            "python -m tools.databricks.agent_proxy_credential_bundle public-fields"
-        )
+        workflow.count("python -m tools.databricks.agent_proxy_credential_bundle public-fields")
         == 1
     )
     assert (
-        nightly.count(
-            "python -m tools.databricks.agent_proxy_credential_bundle public-fields"
-        )
-        == 2
+        nightly.count("python -m tools.databricks.agent_proxy_credential_bundle public-fields") == 2
     )
     assert "tools.databricks.agent_proxy_credential_bundle all-fields" in script
     live_resolution = script[
-        script.index('if [[ "$DRY_RUN" -eq 1 ]]; then', script.index("for _M2M_NAME in"))
-        : script.index('_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"')
+        script.index(
+            'if [[ "$DRY_RUN" -eq 1 ]]; then', script.index("for _M2M_NAME in")
+        ) : script.index('_GRANTS_APP_NAME="${MIP_APP_NAME:-mip-app}"')
     ]
     assert 'DATABRICKS_AGENT_PROXY_CLIENT_ID=""' in live_resolution
     assert 'DATABRICKS_AGENT_PROXY_CREDENTIAL_ID=""' in live_resolution
     assert 'DATABRICKS_AGENT_PROXY_CLIENT_SECRET=""' in live_resolution
     assert "--merge-out-env" in script
-    cleanup = script.index("--cleanup-signed-blue")
+    cleanup = script.index(
+        "--cleanup-signed-blue",
+        script.index(
+            'step "remove retired Supervisor proxy OAuth credentials and secret versions"'
+        ),
+    )
     post_cleanup = script.index(
         "prove exact green Gateway inference after proxy credential retirement",
         cleanup,
     )
     assert 'MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=""' in script
-    assert "APP_SIGNED_BLUE_AVAILABLE" in script[cleanup - 1800:cleanup]
-    assert "--signed-blue-credential-id" in script[cleanup - 1800:cleanup]
-    assert (
-        'MIP_AGENT_PROXY_SECRET_SCOPE" != "${MIP_APP_NAME}-agent-proxy"'
-        in script
-    )
+    assert "APP_SIGNED_BLUE_AVAILABLE" in script[cleanup - 1800 : cleanup]
+    assert "--signed-blue-credential-id" in script[cleanup - 1800 : cleanup]
+    assert 'MIP_AGENT_PROXY_SECRET_SCOPE" != "${MIP_APP_NAME}-agent-proxy"' in script
     assert "tools.verify_app_agent_green_path" in script[post_cleanup:]
     assert "tools.databricks.verify_hosted_agent_tool_execution" in script[post_cleanup:]
 
@@ -2934,14 +3177,12 @@ def test_acquired_deployment_lease_id_is_wired_into_exit_cleanup() -> None:
 
 
 def test_every_mutating_agent_cutover_command_is_bound_to_exact_deployment_lease() -> None:
-    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    script = _deploy_contract_text()
+    captured_acl = _shell_function("converge_captured_app_gateway_acl")
+    assert "app_deployment_lease.held_assertion" in captured_acl
+    assert '"$MIP_APP_DEPLOYMENT_LEASE_ID"' in captured_acl
+    assert '"$SOURCE_GIT_SHA"' in captured_acl
     segments = [
-        script[
-            script.index("cutover_agent_runtime_supervisor converge-app-acl") : script.index(
-                "tools.databricks.audit_global_m2m_access",
-                script.index("cutover_agent_runtime_supervisor converge-app-acl"),
-            )
-        ],
         script[
             script.index("refresh-journal-attestation") : script.index(
                 'if [[ -s "$CUTOVER_JOURNAL_ENV_FILE" ]]',
@@ -2977,7 +3218,360 @@ def test_every_mutating_agent_cutover_command_is_bound_to_exact_deployment_lease
         assert '--deployment-lease-id "$MIP_APP_DEPLOYMENT_LEASE_ID"' in segment
         assert '--deployment-source-git-sha "$SOURCE_GIT_SHA"' in segment
 
-    assert script.count("cutover_agent_runtime_supervisor export-journal") == 2
+    assert script.count("cutover_agent_runtime_supervisor export-journal") == 4
+
+
+def test_every_cutover_journal_clear_proves_all_endpoint_group_principals() -> None:
+    script = _deploy_contract_text()
+    fragment = "tools.databricks.cutover_agent_runtime_supervisor clear-journal"
+    starts = [match.start() for match in re.finditer(fragment, script)]
+
+    assert len(starts) == 3
+    for start in starts:
+        tokens = _continued_command_tokens(script[start : start + 1200], fragment)
+        expected = {
+            "--app-application-id": "$APP_SP_CLIENT_ID",
+            "--app-scim-id": "$APP_SP_SCIM_ID",
+            "--verifier-application-id": "$DATABRICKS_VERIFIER_CLIENT_ID",
+            "--verifier-scim-id": "$MIP_VERIFIER_SCIM_ID",
+            "--proxy-application-id": "$DATABRICKS_AGENT_PROXY_CLIENT_ID",
+        }
+        for flag, value in expected.items():
+            assert tokens.count(flag) == 1
+            assert tokens[tokens.index(flag) + 1] == value
+
+
+def test_normal_cutover_journal_clear_follows_every_final_boundary() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    retirement = script.index(
+        'step "retire pinned blue runtime resources only after every green release gate"'
+    )
+    proxy_cleanup = script.index(
+        'step "remove retired Supervisor proxy OAuth credentials and secret versions"',
+        retirement,
+    )
+    runtime_audit = script.index(
+        'step "re-audit final agent-runtime global access after blue retirement"',
+        retirement,
+    )
+    verifier_audit = script.index(
+        'step "re-audit final verifier global access after blue retirement"',
+        retirement,
+    )
+    app_audit = script.index(
+        'step "re-audit final App global serving access after blue retirement"',
+        retirement,
+    )
+    clear = script.index(
+        'step "clear the authenticated cutover journal after every final boundary proof"',
+        retirement,
+    )
+
+    assert runtime_audit < proxy_cleanup < verifier_audit < app_audit < clear
+
+
+def test_captured_cleanup_resumes_exact_signed_retirement_and_defers_journal_clear(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "captured-retirement-resume.log"
+    fake_python = tmp_path / "captured-retirement-resume-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "captured-retirement-resume.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+APP_UPGRADE_STATE=green_captured_cleanup_pending
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+RST=""
+_GRANTS_APP_NAME=mip-app
+MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
+SOURCE_GIT_SHA={'a' * 40}
+MIP_DEFAULT_CATALOG=mip
+GENIE_SPACE_ID=space-id
+DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET=runtime-secret
+DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
+DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_VERIFIER_SCIM_ID=verifier-scim
+MIP_AGENT_SUPERVISOR_ID=green-supervisor-id
+MIP_AGENT_SUPERVISOR_ENDPOINT=green-supervisor
+AGENT_RUNTIME_GREEN_ARGS=(--replacement-id green-supervisor-id --replacement-endpoint green-supervisor)
+refresh_captured_cutover_journal() {{
+  MIP_REPLACED_AGENT_SUPERVISOR_ID=old-supervisor-id
+  MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT=old-supervisor
+  MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID=old-supervisor-endpoint-id
+  MIP_REPLACED_AGENT_SUPERVISOR_CREATOR=runtime-client
+  MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME=2026-07-20T00:00:00Z
+  MIP_REPLACED_AGENT_GATEWAY_ENDPOINT=old-gateway
+  MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID=old-gateway-id
+  MIP_REPLACED_AGENT_GATEWAY_CREATOR=runtime-client
+  MIP_REPLACED_AGENT_GATEWAY_DELETE_ALLOWED=1
+}}
+run_as_m2m_identity() {{ shift 3; "$@"; }}
+{_shell_function("resume_captured_runtime_retirement")}
+resume_captured_runtime_retirement
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert len(observed) == 2
+    assert "cutover_agent_runtime_supervisor retire" in observed[0]
+    assert "--old-id old-supervisor-id" in observed[0]
+    assert "--old-endpoint-id old-supervisor-endpoint-id" in observed[0]
+    assert "--old-gateway-endpoint old-gateway" in observed[0]
+    assert "--old-gateway-endpoint-id old-gateway-id" in observed[0]
+    assert "--old-gateway-delete-allowed" in observed[0]
+    assert "cutover_agent_runtime_supervisor finalize" in observed[1]
+    assert all("clear-journal" not in line for line in observed)
+
+
+def test_partial_retirement_failure_reproves_survivors_and_keeps_journal(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "partial-retirement-reproof.log"
+    harness = tmp_path / "partial-retirement-reproof.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+APP_UPGRADE_STATE=green_captured_cleanup_pending
+CAPTURED_RUNTIME_RETIREMENT_COMPLETE=0
+CAPTURED_APP_BOUNDARY_PROVEN=1
+CAPTURED_PROXY_BOUNDARY_PROVEN=1
+CAPTURED_VERIFIER_BOUNDARY_PROVEN=1
+resume_captured_runtime_retirement() {{
+  printf 'retire-failed\\n' >> {shlex.quote(str(calls))}
+  return 1
+}}
+converge_green_only_app_access() {{
+  CAPTURED_APP_BOUNDARY_PROVEN=1
+  printf 'app-survivors-proved\\n' >> {shlex.quote(str(calls))}
+}}
+compensate_agent_proxy_access() {{
+  CAPTURED_PROXY_BOUNDARY_PROVEN=1
+  printf 'proxy-survivors-proved\\n' >> {shlex.quote(str(calls))}
+}}
+compensate_verifier_gateway_access() {{
+  CAPTURED_VERIFIER_BOUNDARY_PROVEN=1
+  printf 'verifier-survivors-proved\\n' >> {shlex.quote(str(calls))}
+}}
+{_shell_function("complete_captured_runtime_retirement_journal")}
+complete_captured_runtime_retirement_journal
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == [
+        "retire-failed",
+        "app-survivors-proved",
+        "proxy-survivors-proved",
+        "verifier-survivors-proved",
+    ]
+
+
+def test_captured_retirement_clear_is_last_after_cleanup_and_reproof(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "captured-clear-last.log"
+    fake_python = tmp_path / "captured-clear-last-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf 'python %s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "captured-clear-last.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+APP_UPGRADE_STATE=green_captured_cleanup_pending
+CAPTURED_RUNTIME_RETIREMENT_COMPLETE=0
+CAPTURED_APP_BOUNDARY_PROVEN=1
+CAPTURED_PROXY_BOUNDARY_PROVEN=1
+CAPTURED_VERIFIER_BOUNDARY_PROVEN=1
+AGENT_PROXY_ACCESS_MUTATED=1
+VERIFIER_GATEWAY_CUTOVER_MUTATED=1
+MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS=old-credential
+MIP_AGENT_PROXY_SECRET_SCOPE=proxy-scope
+APP_ROLLBACK_SECRET_SCOPE=rollback-scope
+_GRANTS_APP_NAME=mip-app
+DATABRICKS_AGENT_RUNTIME_CLIENT_ID=runtime-client
+DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET=runtime-secret
+APP_SP_CLIENT_ID=app-client
+APP_SP_SCIM_ID=app-scim-id
+DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+MIP_VERIFIER_SCIM_ID=verifier-scim-id
+DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
+MIP_APP_DEPLOYMENT_LEASE_ID=lease-id
+SOURCE_GIT_SHA={'a' * 40}
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+RST=""
+resume_captured_runtime_retirement() {{
+  CAPTURED_RUNTIME_RETIREMENT_COMPLETE=1
+  printf 'retire-finalize\\n' >> {shlex.quote(str(calls))}
+}}
+converge_green_only_app_access() {{
+  CAPTURED_APP_BOUNDARY_PROVEN=1
+  printf 'app-proof\\n' >> {shlex.quote(str(calls))}
+}}
+compensate_agent_proxy_access() {{
+  CAPTURED_PROXY_BOUNDARY_PROVEN=1
+  printf 'proxy-proof\\n' >> {shlex.quote(str(calls))}
+}}
+compensate_verifier_gateway_access() {{
+  CAPTURED_VERIFIER_BOUNDARY_PROVEN=1
+  printf 'verifier-proof\\n' >> {shlex.quote(str(calls))}
+}}
+run_with_proof_signing_authority() {{ "$@"; }}
+run_with_agent_proxy_binding() {{ "$@"; }}
+run_as_m2m_identity() {{ shift 3; "$@"; }}
+{_shell_function("complete_captured_runtime_retirement_journal")}
+complete_captured_runtime_retirement_journal
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert observed[:4] == [
+        "retire-finalize",
+        "app-proof",
+        "proxy-proof",
+        "verifier-proof",
+    ]
+    assert "provision_agent_proxy_secret" in observed[4]
+    assert observed[5] == "proxy-proof"
+    assert "cutover_agent_runtime_supervisor clear-journal" in observed[6]
+
+
+@pytest.mark.parametrize(
+    ("absent_endpoint", "expected_gateway", "expected_supervisor"),
+    [
+        ("old-gateway", "0", "1"),
+        ("old-supervisor", "1", "0"),
+    ],
+)
+def test_captured_journal_classifies_partial_old_resource_retirement(
+    tmp_path: Path,
+    absent_endpoint: str,
+    expected_gateway: str,
+    expected_supervisor: str,
+) -> None:
+    harness = tmp_path / f"partial-retirement-{absent_endpoint}.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+refresh_captured_cutover_journal() {{
+  MIP_REPLACED_AGENT_GATEWAY_ENDPOINT=old-gateway
+  MIP_REPLACED_AGENT_GATEWAY_ENDPOINT_ID=old-gateway-id
+  MIP_REPLACED_AGENT_GATEWAY_CREATOR=runtime-client
+  MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT=old-supervisor
+  MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID=old-supervisor-id
+  MIP_REPLACED_AGENT_SUPERVISOR_CREATOR=runtime-client
+}}
+pinned_serving_endpoint_status() {{
+  [[ "$1" == {shlex.quote(absent_endpoint)} ]] && return 3
+  return 0
+}}
+{_shell_function("load_captured_live_old_resources")}
+load_captured_live_old_resources
+printf '%s %s\\n' "$CAPTURED_OLD_GATEWAY_LIVE" "$CAPTURED_OLD_SUPERVISOR_LIVE"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == f"{expected_gateway} {expected_supervisor}"
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected_status"),
+    [("none", 0), ("direct", 0), ("mixed", 0), ("managed", 1)],
+)
+def test_journaled_old_supervisor_app_access_modes_are_fail_closed(
+    tmp_path: Path,
+    mode: str,
+    expected_status: int,
+) -> None:
+    harness = tmp_path / f"old-supervisor-app-{mode}.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+OLD_SUPERVISOR_APP_ACCESS_MODE=none
+MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT=journaled-supervisor
+MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID=journaled-supervisor-id
+MIP_REPLACED_AGENT_SUPERVISOR_CREATOR=runtime-client
+APP_SP_CLIENT_ID=app-client
+RED=""
+RST=""
+pinned_serving_endpoint_status() {{
+  [[ "$1" == journaled-supervisor && "$2" == journaled-supervisor-id ]]
+}}
+pinned_query_access_mode() {{
+  [[ "$2" == journaled-supervisor ]] || return 1
+  printf '%s\\n' {shlex.quote(mode)}
+}}
+{_shell_function("classify_journaled_old_supervisor_app_access")}
+classify_journaled_old_supervisor_app_access
+status=$?
+printf 'status=%s mode=%s\\n' "$status" "$OLD_SUPERVISOR_APP_ACCESS_MODE"
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == expected_status
+    assert result.stdout.strip() == f"status={expected_status} mode={mode}"
+
+
+def test_only_authenticated_old_supervisor_app_pin_is_reviewed_during_activation() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    classifier = _shell_function("classify_journaled_old_supervisor_app_access")
+    assert "MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT" in classifier
+    assert "pinned_serving_endpoint_status" in classifier
+    assert "pinned_query_access_mode" in classifier
+    reconcile = _shell_function("reconcile_retry_supervisor_app_acl")
+    assert "is_blue" in reconcile
+    assert 'if mode == "managed":' in reconcile
+    assert '"${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"' in reconcile
+    assert "display_name=supervisor_name" in reconcile
+    activation = script[
+        script.index("APP_GLOBAL_ACCESS_ARGS=(") : script.index(
+            'step "audit App access across every visible serving resource during cutover"'
+        )
+    ]
+    assert '"$OLD_SUPERVISOR_APP_ACCESS_MODE" == "direct"' in activation
+    assert '"$OLD_SUPERVISOR_APP_ACCESS_MODE" == "mixed"' in activation
+    assert '--serving-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"' in activation
+    assert (
+        '--legacy-pinned-serving-endpoint "$MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT"' in activation
+    )
+
+
+def test_configured_supervisor_name_reaches_historical_cleanup() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    cleanup = script[
+        script.index("tools.databricks.reconcile_historical_agent_endpoints cleanup") :
+    ]
+
+    assert '--supervisor-name "${MIP_AGENT_SUPERVISOR_NAME:-Mortgage Growth Agent}"' in cleanup
 
 
 def test_fresh_deploy_creates_governed_uc_tables_before_table_grants() -> None:
@@ -3610,6 +4204,37 @@ def test_deployer_sync_provision_command_is_exact_and_cannot_skip_sync() -> None
     assert "--skip-sync" not in tokens
 
 
+def test_agentic_rotation_and_retirement_pass_exact_managed_group_identities() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    supervisor_start = script.index(
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
+    )
+    supervisor_end = script.index(
+        'step "grant and globally audit the dedicated Supervisor proxy caller"',
+        supervisor_start,
+    )
+    supervisor = script[supervisor_start:supervisor_end]
+    assert '--approved-query-application-id "$APP_SP_CLIENT_ID"' in supervisor
+
+    gateway_start = script.index(
+        'step "provision the governed outer Gateway under agent-runtime authority"'
+    )
+    gateway_end = script.index(
+        'step "re-audit the Supervisor proxy caller after Gateway provisioning"',
+        gateway_start,
+    )
+    gateway = script[gateway_start:gateway_end]
+    assert '--approved-query-application-id "$APP_SP_CLIENT_ID"' in gateway
+    assert '--approved-query-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in gateway
+
+    retire_start = script.index("AGENT_RUNTIME_RETIRE_ARGS=(")
+    retire_end = script.index("\n  )", retire_start)
+    retire = script[retire_start:retire_end]
+    assert '--verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in retire
+    assert '--verifier-scim-id "$MIP_VERIFIER_SCIM_ID"' in retire
+    assert '--proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"' in retire
+
+
 def test_pipeline_namespace_bootstrap_is_leased_and_precedes_bundle_apply() -> None:
     script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
 
@@ -3643,11 +4268,11 @@ def test_first_install_dry_run_executes_no_databricks_operations(
 ) -> None:
     checkout = tmp_path / "checkout"
     subprocess.run(
-        ["git", "clone", "--quiet", "--local", str(REPO), str(checkout)],
+        ["git", "clone", "--quiet", "--shared", str(REPO), str(checkout)],
         check=True,
     )
     deploy_copy = checkout / "scripts" / "deploy.sh"
-    deploy_copy.write_text(DEPLOY_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, DEPLOY_SCRIPT.read_text(encoding="utf-8"))
     payload_copy = checkout / "tools" / "databricks" / "app_deploy_payload.py"
     payload_copy.write_text(
         (REPO / "tools" / "databricks" / "app_deploy_payload.py").read_text(encoding="utf-8"),
@@ -3670,6 +4295,7 @@ def test_first_install_dry_run_executes_no_databricks_operations(
             "git",
             "add",
             "scripts/deploy.sh",
+            "scripts/lib",
             "backend/schemas/lender_identity.py",
             "tools/databricks/app_deploy_payload.py",
             "tools/databricks/lakebase_instance_contract.py",
@@ -4097,7 +4723,11 @@ def test_deploy_workflow_executes_identity_check_without_secret_inheritance(
         "DATABRICKS_AGENT_PROXY_CLIENT_ID",
         "DATABRICKS_ACCOUNT_CLIENT_ID",
     ):
-        expected = "agent-proxy" if client_id == "DATABRICKS_AGENT_PROXY_CLIENT_ID" else required[client_id]
+        expected = (
+            "agent-proxy"
+            if client_id == "DATABRICKS_AGENT_PROXY_CLIENT_ID"
+            else required[client_id]
+        )
         assert child[client_id] == expected
     for secret in (
         "DATABRICKS_TOKEN",
@@ -4336,6 +4966,125 @@ def test_deploy_exit_trap_releases_exact_lease_on_success_and_failure(
     assert release_log.read_text(encoding="utf-8") == (
         "python3 -m tools.databricks.app_deployment_lease release "
         "--app-name mip-app --lease-id lease-id\n"
+    )
+
+
+def test_oauth_credential_quarantine_retains_borrowed_deployment_lease(
+    tmp_path: Path,
+) -> None:
+    result, release_log = _run_deploy_lease_cleanup_harness(
+        tmp_path,
+        original_rc=7,
+        credential_quarantined=True,
+    )
+
+    assert result.returncode == 90
+    assert not release_log.exists()
+    assert "OAuth credential cleanup is unproven" in result.stderr
+    assert "retaining the signed deployment lease" in result.stderr
+
+
+def test_deploy_exports_exact_source_and_quarantine_marker_under_signed_lease() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    source_assignment = script.index('MIP_DEPLOYMENT_SOURCE_GIT_SHA="$SOURCE_GIT_SHA"')
+    source_export = script.index("export MIP_DEPLOYMENT_SOURCE_GIT_SHA")
+    lease_acquire = script.index("tools.databricks.app_deployment_lease acquire")
+    lease_assignment = script.index(
+        'APP_DEPLOYMENT_LEASE_ID="${MIP_APP_DEPLOYMENT_LEASE_ID:'
+    )
+    marker_assignment = script.index(
+        'OAUTH_CREDENTIAL_QUARANTINE_FILE="$(',
+        lease_assignment,
+    )
+    marker_export = script.index(
+        'export MIP_OAUTH_CREDENTIAL_QUARANTINE_FILE='
+        '"$OAUTH_CREDENTIAL_QUARANTINE_FILE"',
+        marker_assignment,
+    )
+    trap = _shell_function("restore_rendered_sql_fail_closed")
+
+    assert source_assignment < source_export < lease_acquire
+    assert lease_acquire < lease_assignment < marker_assignment < marker_export
+    assert trap.index(' -s "$OAUTH_CREDENTIAL_QUARANTINE_FILE"') < trap.index(
+        "tools.databricks.app_deployment_lease release"
+    )
+
+
+def test_oauth_credential_recovery_is_explicit_complete_and_lease_bound() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    for name in (
+        "MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH",
+        "MIP_OAUTH_CREDENTIAL_RECOVERY_PRINCIPAL_ID",
+        "MIP_OAUTH_CREDENTIAL_RECOVERY_AUTHORITY_IDENTITY",
+        "MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API",
+    ):
+        assert name in script
+    assert (
+        'if [[ "$_OAUTH_RECOVERY_VALUE_COUNT" -ne 0 && \\\n'
+        '      "$_OAUTH_RECOVERY_VALUE_COUNT" -ne 4 ]]'
+    ) in script
+    start = script.index(
+        'step "recover the explicitly confirmed interrupted OAuth credential intent"'
+    )
+    end = script.index(
+        'step "prove or create the deterministic owned App rollback secret scope"',
+        start,
+    )
+    recovery = script[start:end]
+    assert (
+        "run_with_account_identity run_with_proof_signing_authority"
+        in recovery
+    )
+    assert "tools.databricks.oauth_credential_recovery_cli recover" in recovery
+    assert recovery.index("--intent-path") < recovery.index(
+        "--confirm-principal-id"
+    )
+    assert recovery.index("--confirm-principal-id") < recovery.index(
+        "--confirm-authority-identity"
+    )
+    assert recovery.index("--confirm-authority-identity") < recovery.index(
+        "--confirm-provider-api"
+    )
+
+
+def test_oauth_orphan_lease_recovery_is_complete_exclusive_and_lease_bound() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+
+    for name in (
+        "MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID",
+        "MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID",
+    ):
+        assert name in script
+    assert (
+        'if [[ "$_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT" -ne 0 && \\\n'
+        '      "$_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT" -ne 2 ]]'
+    ) in script
+    assert (
+        'if [[ "$_OAUTH_RECOVERY_VALUE_COUNT" -ne 0 && \\\n'
+        '      "$_OAUTH_ORPHAN_RECOVERY_VALUE_COUNT" -ne 0 ]]'
+    ) in script
+    lease_acquire = script.index("tools.databricks.app_deployment_lease acquire")
+    lease_heartbeat = script.index(
+        "tools.databricks.app_deployment_lease heartbeat",
+        lease_acquire,
+    )
+    start = script.index(
+        'step "recover the explicitly confirmed orphan OAuth credential lease"'
+    )
+    end = script.index(
+        'step "recover the explicitly confirmed interrupted OAuth credential intent"',
+        start,
+    )
+    recovery = script[start:end]
+    assert lease_acquire < lease_heartbeat < start
+    assert "run_with_proof_signing_authority" in recovery
+    assert (
+        "tools.databricks.oauth_credential_recovery_cli "
+        "\\\n      recover-orphan-lease"
+    ) in recovery
+    assert recovery.index("--confirm-lease-id") < recovery.index(
+        "--confirm-recovery-root-lease-id"
     )
 
 
@@ -4592,7 +5341,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_prod_target(tmp_path: P
     script_dir.mkdir(parents=True)
     bin_dir.mkdir()
     deploy_copy = script_dir / "deploy.sh"
-    deploy_copy.write_text(text, encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, text)
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
         "DATABRICKS_HOST=https://example.cloud.databricks.com\n" "DATABRICKS_WAREHOUSE_ID=abc123\n",
@@ -4638,7 +5387,7 @@ def test_deploy_script_rejects_placeholder_current_action_secret_for_sandbox(
     script_dir.mkdir(parents=True)
     bin_dir.mkdir()
     deploy_copy = script_dir / "deploy.sh"
-    deploy_copy.write_text(text, encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, text)
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
         "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
@@ -4687,7 +5436,7 @@ def test_deploy_script_requires_cotality_mask_secret_for_customer_runtime_env(
     script_dir.mkdir(parents=True)
     bin_dir.mkdir()
     deploy_copy = script_dir / "deploy.sh"
-    deploy_copy.write_text(text, encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, text)
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
         "DATABRICKS_HOST=https://example.cloud.databricks.com\n" "DATABRICKS_WAREHOUSE_ID=abc123\n",
@@ -4731,7 +5480,7 @@ def test_deploy_script_rejects_legacy_genie_secret_as_mask_secret(tmp_path: Path
     script_dir.mkdir(parents=True)
     bin_dir.mkdir()
     deploy_copy = script_dir / "deploy.sh"
-    deploy_copy.write_text(text, encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, text)
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
         "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
@@ -4776,7 +5525,7 @@ def test_deploy_script_rejects_placeholder_cotality_mask_secret(tmp_path: Path) 
     script_dir.mkdir(parents=True)
     bin_dir.mkdir()
     deploy_copy = script_dir / "deploy.sh"
-    deploy_copy.write_text(text, encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, text)
     deploy_copy.chmod(0o755)
     (repo / ".env.local").write_text(
         "DATABRICKS_HOST=https://example.cloud.databricks.com\n"
@@ -4822,7 +5571,7 @@ def test_exact_source_gate_allows_standard_ignored_artifacts(tmp_path: Path) -> 
     script_dir = repo / "scripts"
     script_dir.mkdir(parents=True)
     deploy_copy = script_dir / "deploy.sh"
-    deploy_copy.write_text(text, encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, text)
     deploy_copy.chmod(0o755)
     _commit_deploy_fixture(repo)
     (repo / ".env.local").write_text("local-only=true\n", encoding="utf-8")
@@ -4891,7 +5640,7 @@ def test_exact_source_gate_rejects_dirty_uploaded_source(
     script_dir = repo / "scripts"
     script_dir.mkdir(parents=True)
     deploy_copy = script_dir / "deploy.sh"
-    deploy_copy.write_text(DEPLOY_SCRIPT.read_text(encoding="utf-8"), encoding="utf-8")
+    _write_deploy_fixture(deploy_copy, DEPLOY_SCRIPT.read_text(encoding="utf-8"))
     deploy_copy.chmod(0o755)
     _commit_deploy_fixture(repo)
     expected_path = "scripts/deploy.sh" if dirty_kind == "tracked" else "unreviewed.py"
@@ -4924,3 +5673,1047 @@ def test_deploy_timeout_covers_two_serial_auth_expiry_fences_with_margin() -> No
     )
 
     assert timeout_seconds >= serialized_admission_seconds + 60 * 60
+
+
+def test_agent_proxy_acl_lifecycle_is_bound_and_compensated_before_lease_release() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    first_proxy_step = script.index(
+        'step "grant and globally audit the dedicated Supervisor proxy caller"'
+    )
+    first_mutation = script.index("run converge_agent_proxy_boundary", first_proxy_step)
+    proxy_compensation_armed = script.index("AGENT_PROXY_ACCESS_MUTATED=1", first_proxy_step)
+    assert proxy_compensation_armed < first_mutation
+    lease_acquired = script.index('APP_DEPLOYMENT_LEASE_ID="${MIP_APP_DEPLOYMENT_LEASE_ID:')
+    app_inventory = script.index('_EXISTING_APPS_JSON="$(databricks apps list -o json)"')
+    signed_blue_proof = script.index(
+        'step "prove or reconcile the signed last-good App before non-App mutations"'
+    )
+    assert (
+        lease_acquired
+        < app_inventory
+        < signed_blue_proof
+        < proxy_compensation_armed
+        < first_mutation
+    )
+    assert "AGENT_PROXY_ACCESS_MUTATED=1" not in script[lease_acquired:proxy_compensation_armed]
+    helper = _shell_function("converge_agent_proxy_boundary")
+    for required in (
+        "--supervisor-endpoint",
+        "--supervisor-endpoint-id",
+        "DATABRICKS_AGENT_RUNTIME_CLIENT_ID",
+        "DEPLOY_INVENTORY_PRINCIPAL",
+    ):
+        assert required in helper
+
+    reaudit = script[
+        script.index(
+            'step "re-audit the Supervisor proxy caller after Gateway provisioning"'
+        ) : script.index('step "prove dual-authority agent-proxy Unity Catalog boundary"')
+    ]
+    assert "run converge_agent_proxy_boundary" in reaudit
+    assert "\n  audit \\" in reaudit
+
+    restore = _shell_function("restore_signed_blue_while_quiesced")
+    rollback = restore.index("tools.databricks.app_deployment_rollback restore")
+    assert restore.index("converge_signed_blue_agent_proxy_boundary") < rollback
+    assert restore.index("prove_exact_agent_proxy_boundary") < rollback
+    proof = _shell_function("prove_exact_agent_proxy_boundary")
+    assert "--target-query-only" not in proof
+    assert "--allow-attested-app-401" in proof
+    assert "run_with_account_identity" in proof
+    assert "run_with_agent_proxy_credentials" in proof
+
+    compensation = _shell_function("compensate_agent_proxy_access")
+    assert "deny_all_agent_proxy_access" in compensation
+    assert "converge_signed_blue_agent_proxy_boundary" in compensation
+    assert "prove_exact_agent_proxy_boundary" in compensation
+    assert "MIP_AGENT_SUPERVISOR_ENDPOINT" in compensation
+    signed_blue = _shell_function("converge_signed_blue_agent_proxy_boundary")
+    assert "--legacy-pinned-supervisor-endpoint" in signed_blue
+    assert "MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT" in signed_blue
+    preserve = script[
+        script.index("AGENT_PROXY_PRESERVE_ARGS=()") : script.index(
+            'step "grant and globally audit the dedicated Supervisor proxy caller"'
+        )
+    ]
+    assert "--legacy-pinned-supervisor-endpoint" in preserve
+    assert "MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT" in preserve
+    first_access = script[
+        script.index(
+            'step "grant and globally audit the dedicated Supervisor proxy caller"'
+        ) : script.index(
+            'step "provision the credential-versioned Supervisor proxy secret reference"'
+        )
+    ]
+    assert '"${AGENT_PROXY_ACCESS_PRESERVE_ARGS[@]}"' in first_access
+    credential_boundary_start = script.index(
+        'step "prove agent-proxy target query and negative authorization boundary before cutover"'
+    )
+    credential_boundary = script[
+        credential_boundary_start : script.index(
+            "if ! revoke_agent_runtime_bootstrap_grants",
+            credential_boundary_start,
+        )
+    ]
+    assert '"${AGENT_PROXY_PRESERVE_ARGS[@]}"' in credential_boundary
+    assert "AGENT_PROXY_ACCESS_PRESERVE_ARGS" not in credential_boundary
+    deny_all = _shell_function("deny_all_agent_proxy_access")
+    assert "tools.databricks.agent_proxy_access" in deny_all
+    assert "tools.databricks.verify_agent_proxy_identity_boundary" in deny_all
+    assert "--customer-resource-denial" in deny_all
+    assert "--account-id" in deny_all
+    assert "run_with_agent_proxy_credentials" in deny_all
+
+    trap = _shell_function("restore_rendered_sql_fail_closed")
+    assert trap.index("compensate_agent_proxy_access") < trap.index(
+        "tools.databricks.app_deployment_lease release"
+    )
+
+
+def test_pre_inventory_failure_cannot_deny_proxy_while_live_app_remains(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "pre-inventory-compensation.log"
+    harness = tmp_path / "pre-inventory-compensation.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+APP_DEPLOYMENT_LEASE_ID=""
+_GRANTS_APP_NAME=mip-app
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+AGENT_PROXY_ACCESS_MUTATED=0
+APP_UPGRADE_STATE=first_install
+stop_app_after_failed_deploy() {{
+  printf 'live-app-remains\\n' >> {shlex.quote(str(calls))}
+  return 0
+}}
+cleanup_failed_first_install_app() {{ return 0; }}
+compensate_verifier_gateway_access() {{ return 0; }}
+revoke_agent_runtime_bootstrap_grants() {{ return 0; }}
+deny_all_agent_proxy_access() {{
+  printf 'deny-all\\n' >> {shlex.quote(str(calls))}
+  return 0
+}}
+{_shell_function("compensate_agent_proxy_access")}
+{_deploy_exit_trap_block()}
+false
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 1, result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == ["live-app-remains"]
+
+
+def test_signed_blue_gateway_is_preserved_and_audited_only_during_cutover() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    verifier_cutover = script[
+        script.index(
+            'step "converge dedicated verifier access to the green Gateway before cutover"'
+        ) : script.index(
+            'step "audit App access across every visible serving resource during cutover"'
+        )
+    ]
+    assert '--preserve-gateway-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"' in (verifier_cutover)
+    assert '--preserve-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"' in (verifier_cutover)
+    assert "VERIFIER_GLOBAL_ACCESS_ARGS" in verifier_cutover
+    assert '--serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"' in verifier_cutover
+    assert '--serving-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"' in verifier_cutover
+    assert (
+        verifier_cutover.count(
+            '--legacy-pinned-serving-endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"'
+        )
+        == 2
+    )
+
+    final_verifier = script[
+        script.index(
+            'step "re-audit final verifier global access after blue retirement"'
+        ) : script.index('step "re-audit final App global serving access after blue retirement"')
+    ]
+    final_app = script[
+        script.index(
+            'step "re-audit final App global serving access after blue retirement"'
+        ) : script.index(
+            "# Persist only after retirement/finalization.",
+        )
+    ]
+    for final_audit in (final_verifier, final_app):
+        assert '--serving-endpoint "$MIP_AI_GATEWAY_ENDPOINT"' in final_audit
+        assert "MIP_APP_ROLLBACK_GATEWAY_ENDPOINT" not in final_audit
+        assert "--legacy-pinned-serving-endpoint" not in final_audit
+
+
+def test_verifier_gateway_cutover_is_identity_pinned_and_compensated() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    cutover = script[
+        script.index(
+            'step "capture the verifier immutable identity before retirement admission"'
+        ) : script.index(
+            'step "audit agent-runtime access across every visible Genie and serving resource"'
+        )
+    ]
+    capture_function = _shell_function("capture_verifier_identity")
+    assert "converge_verifier_gateway_access capture" in capture_function
+    capture = cutover.index("run capture_verifier_identity")
+    prepare = cutover.index("cutover_agent_runtime_supervisor prepare")
+    armed = cutover.index("VERIFIER_GATEWAY_CUTOVER_MUTATED=1")
+    grant = cutover.index("tools.databricks.provision_m2m_oauth")
+    assert capture < prepare < armed < grant
+    assert '--verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in cutover
+    assert '--verifier-scim-id "$MIP_VERIFIER_SCIM_ID"' in cutover
+    assert "--expected-inventory-principal" in cutover
+    assert "MIP_VERIFIER_SCIM_ID" in cutover
+
+    compensation = _shell_function("compensate_verifier_gateway_access")
+    assert "converge_verifier_gateway_access revoke-managed" in compensation
+    assert '--expected-scim-id "$MIP_VERIFIER_SCIM_ID"' in compensation
+    assert "--forbid-customer-serving" in compensation
+    assert "--customer-resource-denial" in compensation
+    assert "prove_exact_verifier_boundary" in compensation
+    assert "MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX" in compensation
+    assert compensation.index("revoke-managed") < compensation.index(
+        "VERIFIER_GATEWAY_CUTOVER_MUTATED=0"
+    )
+    capture = script.index('capture_last_good_app "${AGENT_RUNTIME_BINDING_SHA256:-}"')
+    final_audit = script.index(
+        'step "re-audit final verifier global access after blue retirement"', capture
+    )
+    assert "VERIFIER_GATEWAY_CUTOVER_MUTATED=0" not in script[capture:final_audit]
+
+    trap = _shell_function("restore_rendered_sql_fail_closed")
+    assert trap.index("compensate_verifier_gateway_access") < trap.index(
+        "tools.databricks.app_deployment_lease release"
+    )
+
+
+def test_failed_verifier_gateway_compensation_retains_signed_lease(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "failed-verifier-compensation.log"
+    fake_python = tmp_path / "failed-verifier-compensation-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "failed-verifier-compensation.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+APP_DEPLOYMENT_LEASE_ID=lease-id
+_GRANTS_APP_NAME=mip-app
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+VERIFIER_GATEWAY_CUTOVER_MUTATED=1
+MIP_VERIFIER_SCIM_ID=verifier-scim-id
+MIP_AI_GATEWAY_ENDPOINT=green-gateway
+MIP_APP_ROLLBACK_GATEWAY_ENDPOINT=blue-gateway
+MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=mip.audit.blue_gateway
+APP_SIGNED_BLUE_AVAILABLE=1
+DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+DATABRICKS_ACCOUNT_ID=account-id
+DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+RST=""
+stop_app_after_failed_deploy() {{ return 0; }}
+cleanup_failed_first_install_app() {{ return 0; }}
+compensate_agent_proxy_access() {{ return 0; }}
+prove_exact_verifier_boundary() {{
+  printf 'credential-proof %s\\n' "$1" >> {shlex.quote(str(calls))}
+  return 1
+}}
+revoke_agent_runtime_bootstrap_grants() {{ return 0; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+run_with_account_identity() {{ "$@"; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+{_shell_function("compensate_verifier_gateway_access")}
+{_deploy_exit_trap_block()}
+false
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 90
+    assert "retaining the signed deployment lease" in result.stderr
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert any("revoke-managed" in call for call in observed)
+    assert any("--legacy-pinned-serving-endpoint" in call for call in observed)
+    assert observed[-1] == "credential-proof blue-gateway"
+    assert all("app_deployment_lease release" not in call for call in observed)
+
+
+@pytest.mark.parametrize(("credential_result", "expected_flag"), [(0, "1"), (1, "1")])
+def test_captured_green_verifier_compensation_preserves_and_reproves_green(
+    tmp_path: Path,
+    credential_result: int,
+    expected_flag: str,
+) -> None:
+    calls = tmp_path / f"captured-green-verifier-{credential_result}.log"
+    fake_python = tmp_path / f"captured-green-verifier-{credential_result}-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / f"captured-green-verifier-{credential_result}.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+APP_UPGRADE_STATE=green_captured_cleanup_pending
+VERIFIER_GATEWAY_CUTOVER_MUTATED=1
+MIP_VERIFIER_SCIM_ID=verifier-scim-id
+MIP_AI_GATEWAY_ENDPOINT=green-gateway
+MIP_AI_GATEWAY_INFERENCE_TABLE=mip.audit.green_gateway_payload
+MIP_APP_ROLLBACK_GATEWAY_ENDPOINT=green-gateway
+MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=mip.audit.green_gateway
+APP_SIGNED_BLUE_AVAILABLE=1
+DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+DATABRICKS_ACCOUNT_ID=account-id
+DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+RST=""
+prove_exact_verifier_boundary() {{
+  printf 'credential-proof %s %s\\n' "$1" "$2" >> {shlex.quote(str(calls))}
+  return {credential_result}
+}}
+load_captured_live_old_resources() {{
+  CAPTURED_OLD_GATEWAY_LIVE=0
+  CAPTURED_OLD_SUPERVISOR_LIVE=0
+}}
+run_with_account_identity() {{ "$@"; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+{_shell_function("compensate_verifier_gateway_access")}
+compensate_verifier_gateway_access
+status=$?
+printf 'status=%s flag=%s\\n' "$status" "$VERIFIER_GATEWAY_CUTOVER_MUTATED"
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == credential_result
+    assert result.stdout.strip() == f"status={credential_result} flag={expected_flag}"
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert len(observed) == 2
+    assert "audit_global_m2m_access" in observed[0]
+    assert "--serving-endpoint green-gateway" in observed[0]
+    assert "--legacy-pinned-serving-endpoint" not in observed[0]
+    assert "revoke-managed" not in observed[0]
+    assert observed[1] == ("credential-proof green-gateway mip.audit.green_gateway")
+
+
+def test_captured_green_verifier_compensation_rejects_stale_signed_binding(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "captured-green-stale-binding.log"
+    harness = tmp_path / "captured-green-stale-binding.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+APP_UPGRADE_STATE=green_captured_cleanup_pending
+VERIFIER_GATEWAY_CUTOVER_MUTATED=1
+MIP_VERIFIER_SCIM_ID=verifier-scim-id
+MIP_AI_GATEWAY_ENDPOINT=green-gateway
+MIP_AI_GATEWAY_INFERENCE_TABLE=mip.audit.green_gateway_payload
+MIP_APP_ROLLBACK_GATEWAY_ENDPOINT=green-gateway
+MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX=mip.audit.stale_blue_gateway
+APP_SIGNED_BLUE_AVAILABLE=1
+DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+DATABRICKS_ACCOUNT_ID=account-id
+DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
+PYTHON=true
+RED=""
+RST=""
+prove_exact_verifier_boundary() {{
+  printf 'unexpected-proof\\n' >> {shlex.quote(str(calls))}
+}}
+load_captured_live_old_resources() {{
+  CAPTURED_OLD_GATEWAY_LIVE=0
+  CAPTURED_OLD_SUPERVISOR_LIVE=0
+}}
+{_shell_function("compensate_verifier_gateway_access")}
+compensate_verifier_gateway_access
+status=$?
+printf 'status=%s flag=%s\\n' "$status" "$VERIFIER_GATEWAY_CUTOVER_MUTATED"
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 1
+    assert result.stdout.strip() == "status=1 flag=1"
+    assert "lacks its exact signed Gateway binding" in result.stderr
+    assert not calls.exists()
+
+
+@pytest.mark.parametrize(("credential_result", "expected_flag"), [(0, "0"), (1, "1")])
+def test_first_install_verifier_compensation_clears_only_after_credential_denial(
+    tmp_path: Path,
+    credential_result: int,
+    expected_flag: str,
+) -> None:
+    calls = tmp_path / f"first-install-verifier-{credential_result}.log"
+    fake_python = tmp_path / f"first-install-verifier-{credential_result}-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / f"first-install-verifier-{credential_result}.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+VERIFIER_GATEWAY_CUTOVER_MUTATED=1
+MIP_VERIFIER_SCIM_ID=verifier-scim-id
+MIP_AI_GATEWAY_ENDPOINT=green-gateway
+APP_SIGNED_BLUE_AVAILABLE=0
+DATABRICKS_VERIFIER_CLIENT_ID=verifier-client
+DATABRICKS_ACCOUNT_ID=account-id
+DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+RST=""
+run_with_verifier_credentials() {{
+  printf 'credential %s\\n' "$*" >> {shlex.quote(str(calls))}
+  return {credential_result}
+}}
+run_with_account_identity() {{ "$@"; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+{_shell_function("compensate_verifier_gateway_access")}
+compensate_verifier_gateway_access
+status=$?
+printf 'status=%s flag=%s\\n' "$status" "$VERIFIER_GATEWAY_CUTOVER_MUTATED"
+exit "$status"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == credential_result
+    assert result.stdout.strip() == (f"status={credential_result} flag={expected_flag}")
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert "revoke-managed" in observed[0]
+    assert "--forbid-customer-serving" in observed[1]
+    assert "--customer-resource-denial" in observed[2]
+
+
+@pytest.mark.parametrize(
+    ("state", "signed_blue", "expected"),
+    [
+        ("first_install", 0, "deny"),
+        ("unverified_existing", 0, "deny"),
+        ("blue_quiesced", 1, "blue"),
+        ("green_activating_quiesced", 1, "blue"),
+        ("green_verified", 1, "green"),
+        ("green_captured_cleanup_pending", 1, "green"),
+    ],
+)
+def test_early_proxy_compensation_uses_durable_release_state(
+    tmp_path: Path,
+    state: str,
+    signed_blue: int,
+    expected: str,
+) -> None:
+    calls = tmp_path / f"proxy-compensation-{state}.log"
+    harness = tmp_path / f"proxy-compensation-{state}.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+AGENT_PROXY_ACCESS_MUTATED=1
+APP_UPGRADE_STATE={shlex.quote(state)}
+APP_SIGNED_BLUE_AVAILABLE={signed_blue}
+MIP_AGENT_SUPERVISOR_ID=green-id
+MIP_AGENT_SUPERVISOR_ENDPOINT=green-endpoint
+MIP_AGENT_SUPERVISOR_ENDPOINT_ID=green-endpoint-id
+MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
+MIP_APP_ROLLBACK_SUPERVISOR_ID=blue-id
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT=blue-endpoint
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID=blue-endpoint-id
+refresh_signed_blue_binding() {{ printf 'refresh\\n' >> {shlex.quote(str(calls))}; }}
+converge_signed_blue_agent_proxy_boundary() {{ printf 'blue\\n' >> {shlex.quote(str(calls))}; }}
+deny_all_agent_proxy_access() {{ printf 'deny\\n' >> {shlex.quote(str(calls))}; }}
+converge_agent_proxy_boundary() {{ printf 'green\\n' >> {shlex.quote(str(calls))}; }}
+prove_exact_agent_proxy_boundary() {{ printf 'proof %s\\n' "$1" >> {shlex.quote(str(calls))}; }}
+load_captured_live_old_resources() {{
+  CAPTURED_OLD_GATEWAY_LIVE=0
+  CAPTURED_OLD_SUPERVISOR_LIVE=0
+}}
+{_shell_function("compensate_agent_proxy_access")}
+compensate_agent_proxy_access
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    if expected == "deny":
+        assert lines == ["deny"]
+    elif expected == "blue":
+        assert lines == ["refresh", "blue", "proof blue-id"]
+    else:
+        assert lines == ["green", "proof green-id"]
+
+
+@pytest.mark.parametrize(
+    ("old_mode", "expected_boundary", "expected_preserve"),
+    [
+        ("none", "converge", False),
+        ("managed", "converge", False),
+        ("direct", "audit", True),
+        ("mixed", "audit", True),
+    ],
+)
+def test_captured_proxy_partial_retirement_never_regrants_old(
+    tmp_path: Path,
+    old_mode: str,
+    expected_boundary: str,
+    expected_preserve: bool,
+) -> None:
+    calls = tmp_path / f"captured-proxy-{old_mode}.log"
+    harness = tmp_path / f"captured-proxy-{old_mode}.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+AGENT_PROXY_ACCESS_MUTATED=1
+APP_UPGRADE_STATE=green_captured_cleanup_pending
+CAPTURED_PROXY_BOUNDARY_PROVEN=0
+DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
+MIP_AGENT_SUPERVISOR_ID=green-id
+MIP_AGENT_SUPERVISOR_ENDPOINT=green-endpoint
+MIP_AGENT_SUPERVISOR_ENDPOINT_ID=green-endpoint-id
+load_captured_live_old_resources() {{
+  CAPTURED_OLD_GATEWAY_LIVE=0
+  CAPTURED_OLD_SUPERVISOR_LIVE=1
+  MIP_REPLACED_AGENT_SUPERVISOR_ID=old-id
+  MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT=old-endpoint
+  MIP_REPLACED_AGENT_SUPERVISOR_ENDPOINT_ID=old-endpoint-id
+}}
+pinned_query_access_mode() {{ printf '%s\\n' {shlex.quote(old_mode)}; }}
+converge_agent_proxy_boundary() {{
+  printf 'boundary %s\\n' "$*" >> {shlex.quote(str(calls))}
+}}
+prove_exact_agent_proxy_boundary() {{
+  printf 'proof %s\\n' "$*" >> {shlex.quote(str(calls))}
+}}
+{_shell_function("compensate_agent_proxy_access")}
+compensate_agent_proxy_access
+printf 'proven=%s mutated=%s\\n' \
+  "$CAPTURED_PROXY_BOUNDARY_PROVEN" "$AGENT_PROXY_ACCESS_MUTATED"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "proven=1 mutated=1"
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert f"boundary {expected_boundary} green-id green-endpoint green-endpoint-id" in observed[0]
+    if expected_preserve:
+        assert "--preserve-supervisor-id old-id" in observed[0]
+        assert "--preserve-supervisor-id old-id" in observed[1]
+        assert "--legacy-pinned-supervisor-endpoint old-endpoint" in observed[0]
+        assert "--legacy-pinned-supervisor-endpoint" not in observed[1]
+    else:
+        assert "old-id" not in observed[0]
+        assert "old-id" not in observed[1]
+
+
+@pytest.mark.parametrize(("admin_result", "credential_result"), [(1, 0), (0, 1)])
+def test_deny_all_runs_admin_and_proxy_credential_proofs_even_after_failure(
+    tmp_path: Path,
+    admin_result: int,
+    credential_result: int,
+) -> None:
+    calls = tmp_path / "dual-authority-denial.log"
+    fake_python = tmp_path / "dual-authority-denial-python.sh"
+    fake_python.write_text(
+        "#!/usr/bin/env bash\n"
+        f"printf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n"
+        f'if [[ "$*" == *agent_proxy_access* ]]; then exit {admin_result}; fi\n'
+        f'if [[ "$*" == *verify_agent_proxy_identity_boundary* ]]; then exit {credential_result}; fi\n'
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "dual-authority-denial.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+PYTHON={shlex.quote(str(fake_python))}
+DATABRICKS_AGENT_PROXY_CLIENT_ID=proxy-client
+DATABRICKS_ACCOUNT_ID=account-id
+DEPLOY_INVENTORY_PRINCIPAL=admin@example.com
+run_with_account_identity() {{ "$@"; }}
+run_with_agent_proxy_credentials() {{ "$@"; }}
+{_shell_function("deny_all_agent_proxy_access")}
+deny_all_agent_proxy_access
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 1
+    lines = calls.read_text(encoding="utf-8").splitlines()
+    assert len(lines) == 2
+    assert "agent_proxy_access" in lines[0]
+    assert "--customer-resource-denial" in lines[1]
+
+
+def test_dry_run_exit_trap_never_mutates_agent_proxy_acl(tmp_path: Path) -> None:
+    calls = tmp_path / "dry-run-proxy.log"
+    harness = tmp_path / "dry-run-proxy-trap.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=1
+AGENT_PROXY_ACCESS_MUTATED=1
+APP_UPGRADE_STATE=first_install
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+APP_DEPLOYMENT_LEASE_ID=lease-id
+_GRANTS_APP_NAME=mip-app
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+stop_app_after_failed_deploy() {{ return 0; }}
+cleanup_failed_first_install_app() {{ return 0; }}
+revoke_agent_runtime_bootstrap_grants() {{ return 0; }}
+deny_all_agent_proxy_access() {{ printf 'deny\\n' >> {shlex.quote(str(calls))}; }}
+converge_signed_blue_agent_proxy_boundary() {{ printf 'blue\\n' >> {shlex.quote(str(calls))}; }}
+converge_agent_proxy_boundary() {{ printf 'green\\n' >> {shlex.quote(str(calls))}; }}
+{_shell_function("compensate_agent_proxy_access")}
+{_deploy_exit_trap_block()}
+false
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 1
+    assert not calls.exists()
+
+
+def test_failed_proxy_compensation_retains_signed_deployment_lease(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "failed-compensation.log"
+    fake_python = tmp_path / "failed-compensation-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "failed-compensation-trap.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+APP_DEPLOYMENT_LEASE_HEARTBEAT_PID=""
+APP_DEPLOYMENT_LEASE_ID=lease-id
+_GRANTS_APP_NAME=mip-app
+RESTORE_RENDERED_SQL_FAIL_CLOSED=0
+AGENT_PROXY_ACCESS_MUTATED=1
+APP_UPGRADE_STATE=green_verified
+APP_SIGNED_BLUE_AVAILABLE=1
+MIP_AGENT_SUPERVISOR_ID=green-id
+MIP_AGENT_SUPERVISOR_ENDPOINT=green-endpoint
+MIP_AGENT_SUPERVISOR_ENDPOINT_ID=green-endpoint-id
+PYTHON={shlex.quote(str(fake_python))}
+RED=""
+RST=""
+stop_app_after_failed_deploy() {{ return 0; }}
+cleanup_failed_first_install_app() {{ return 0; }}
+converge_agent_proxy_boundary() {{ printf 'admin-converge\\n' >> {shlex.quote(str(calls))}; }}
+prove_exact_agent_proxy_boundary() {{
+  printf 'credential-proof\\n' >> {shlex.quote(str(calls))}
+  return 1
+}}
+deny_all_agent_proxy_access() {{ return 0; }}
+refresh_signed_blue_binding() {{ return 0; }}
+converge_signed_blue_agent_proxy_boundary() {{ return 0; }}
+revoke_agent_runtime_bootstrap_grants() {{ return 0; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+{_shell_function("compensate_agent_proxy_access")}
+{_deploy_exit_trap_block()}
+false
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 90
+    assert "retaining the signed deployment lease" in result.stderr
+    observed = calls.read_text(encoding="utf-8").splitlines()
+    assert observed == ["admin-converge", "credential-proof"]
+
+
+def test_legacy_v5_signed_blue_denies_new_proxy_instead_of_requiring_proxy_binding(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "legacy-blue.log"
+    harness = tmp_path / "legacy-blue.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+MIP_APP_ROLLBACK_PROXY_MODE=legacy-proxyless
+MIP_APP_ROLLBACK_RECORD_VERSION=5
+MIP_APP_ROLLBACK_DEPLOYMENT_ID=legacy-deployment
+RED=""
+RST=""
+deny_all_agent_proxy_access() {{ printf 'deny-all\\n' >> {shlex.quote(str(calls))}; }}
+converge_agent_proxy_boundary() {{ printf 'exact-proxy\\n' >> {shlex.quote(str(calls))}; }}
+{_shell_function("converge_signed_blue_agent_proxy_boundary")}
+converge_signed_blue_agent_proxy_boundary
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert calls.read_text(encoding="utf-8").splitlines() == ["deny-all"]
+
+
+def test_signed_blue_restore_refreshes_durable_binding_before_acl_and_restore(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "refresh-binding.log"
+    fake_python = tmp_path / "refresh-binding-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "refresh-binding.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+APP_SIGNED_BLUE_AVAILABLE=1
+LAKEBASE_RUNTIME_ACCESS_PROVEN=1
+APP_FAIL_CLOSED_NAME=mip-app
+APP_ROLLBACK_SECRET_SCOPE=mip
+MIP_APP_URL=https://mip.example
+MIP_BEARER_TOKEN=token
+_GRANTS_WAREHOUSE_ID=warehouse
+_GRANTS_CATALOG=mip
+MIP_AI_GATEWAY_ENDPOINT=green-gateway
+MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
+MIP_APP_ROLLBACK_DEPLOYMENT_ID=blue-deployment
+PYTHON={shlex.quote(str(fake_python))}
+refresh_signed_blue_binding() {{
+  MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
+  MIP_APP_ROLLBACK_DEPLOYMENT_ID=green-deployment
+  MIP_APP_ROLLBACK_SUPERVISOR_ID=blue-id
+  MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT=blue-endpoint
+  MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID=blue-endpoint-id
+}}
+converge_signed_blue_agent_proxy_boundary() {{
+  printf 'converge %s\\n' "$MIP_APP_ROLLBACK_DEPLOYMENT_ID" >> {shlex.quote(str(calls))}
+}}
+prove_exact_agent_proxy_boundary() {{
+  printf 'prove %s %s\\n' "$MIP_APP_ROLLBACK_DEPLOYMENT_ID" "$1" >> {shlex.quote(str(calls))}
+}}
+run_with_account_identity() {{ "$@"; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+converge_runtime_app_release_access() {{ return 0; }}
+converge_app_treatment_access() {{ return 0; }}
+{_shell_function("restore_signed_blue_while_quiesced")}
+restore_signed_blue_while_quiesced
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    observed = calls.read_text(encoding="utf-8")
+    assert observed.index("converge green-deployment") < observed.index(
+        "app_deployment_rollback restore"
+    )
+    assert "prove green-deployment" in observed
+    assert "--expected-rollback-deployment-id green-deployment" in observed
+
+
+def test_preactivation_app_acl_journal_compensates_gateway_and_supervisor(
+    tmp_path: Path,
+) -> None:
+    calls = tmp_path / "preactivation-app-acl.log"
+    fake_python = tmp_path / "preactivation-app-acl-python.sh"
+    fake_python.write_text(
+        f"#!/usr/bin/env bash\nprintf '%s\\n' \"$*\" >> {shlex.quote(str(calls))}\n",
+        encoding="utf-8",
+    )
+    fake_python.chmod(0o755)
+    harness = tmp_path / "preactivation-app-acl.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -u
+DRY_RUN=0
+APP_UPGRADE_STATE=blue_active
+APP_SIGNED_BLUE_AVAILABLE=1
+LAKEBASE_RUNTIME_ACCESS_PROVEN=1
+PREACTIVATION_APP_ACL_MUTATED=0
+PREACTIVATION_APP_REVOKE_ENDPOINTS=()
+APP_FAIL_CLOSED_NAME=mip-app
+APP_ROLLBACK_SECRET_SCOPE=mip
+MIP_APP_URL=https://mip.example
+MIP_BEARER_TOKEN=token
+_GRANTS_WAREHOUSE_ID=warehouse
+_GRANTS_CATALOG=mip
+MIP_APP_ROLLBACK_GATEWAY_ENDPOINT=blue-gateway
+MIP_APP_ROLLBACK_SUPERVISOR_ID=blue-supervisor-id
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT=blue-supervisor
+MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID=blue-supervisor-endpoint-id
+MIP_APP_ROLLBACK_DEPLOYMENT_ID=blue-deployment
+MIP_APP_ROLLBACK_PROXY_MODE=exact-proxy
+MIP_AI_GATEWAY_ENDPOINT=green-gateway
+MIP_AGENT_SUPERVISOR_ENDPOINT=green-supervisor
+PYTHON={shlex.quote(str(fake_python))}
+refresh_signed_blue_binding() {{ :; }}
+converge_signed_blue_agent_proxy_boundary() {{ :; }}
+prove_exact_agent_proxy_boundary() {{ :; }}
+run_with_account_identity() {{ "$@"; }}
+run_with_proof_signing_authority() {{ "$@"; }}
+converge_runtime_app_release_access() {{ :; }}
+converge_app_treatment_access() {{ :; }}
+{_shell_function("journal_preactivation_app_acl_endpoint")}
+{_shell_function("restore_signed_blue_while_quiesced")}
+journal_preactivation_app_acl_endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+journal_preactivation_app_acl_endpoint "$MIP_AGENT_SUPERVISOR_ENDPOINT"
+journal_preactivation_app_acl_endpoint "$MIP_AI_GATEWAY_ENDPOINT"
+journal_preactivation_app_acl_endpoint "$MIP_APP_ROLLBACK_GATEWAY_ENDPOINT"
+restore_signed_blue_while_quiesced
+printf 'flag=%s count=%s\\n' "$PREACTIVATION_APP_ACL_MUTATED" \
+  "${{#PREACTIVATION_APP_REVOKE_ENDPOINTS[@]}}"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(["bash", str(harness)], text=True, capture_output=True, check=False)
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "flag=0 count=0"
+    rollback = calls.read_text(encoding="utf-8")
+    assert rollback.count("--revoke-endpoint green-gateway") == 1
+    assert rollback.count("--revoke-endpoint green-supervisor") == 1
+    assert "--revoke-endpoint blue-gateway" not in rollback
+    assert "--revoke-endpoint blue-supervisor" not in rollback
+
+
+def test_historical_runtime_cleanup_precedes_green_provisioning_and_preserves_signed_blue() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    stale_resume = script.index(
+        'step "resume exact stale runtime retirement under the signed-blue boundary"'
+    )
+    cleanup = script.index("-m tools.databricks.reconcile_historical_agent_endpoints cleanup")
+    supervisor = script.index(
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
+    )
+    gateway = script.index(
+        'step "provision the governed outer Gateway under agent-runtime authority"'
+    )
+
+    assert stale_resume < cleanup < supervisor < gateway
+    stale_resume_block = script[stale_resume:cleanup]
+    assert "-m tools.databricks.cutover_agent_runtime_supervisor" in stale_resume_block
+    assert "resume-stale-journal" in stale_resume_block
+    assert "MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON" in stale_resume_block
+    assert "MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON" in stale_resume_block
+    assert '--app-application-id "$APP_SP_CLIENT_ID"' in stale_resume_block
+    supervisor_block = script[supervisor:gateway]
+    assert (
+        "MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON=" '"${MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON:-}"'
+    ) in supervisor_block
+    assert '--verifier-application-id "$DATABRICKS_VERIFIER_CLIENT_ID"' in (stale_resume_block)
+    assert '--verifier-scim-id "$MIP_VERIFIER_SCIM_ID"' in stale_resume_block
+    assert '--proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"' in (stale_resume_block)
+    cleanup_block = script[cleanup:supervisor]
+    assert '--preserve-gateway-json "$MIP_APP_ROLLBACK_GATEWAY_PIN_JSON"' in script
+    assert '--preserve-supervisor-json "$MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON"' in script
+    assert '--app-scim-id "$APP_SP_SCIM_ID"' in cleanup_block
+    assert '--verifier-scim-id "$MIP_VERIFIER_SCIM_ID"' in cleanup_block
+    assert '--proxy-application-id "$DATABRICKS_AGENT_PROXY_CLIENT_ID"' in cleanup_block
+    assert '--rollback-scope "$APP_ROLLBACK_SECRET_SCOPE"' in cleanup_block
+    assert "capture_verifier_identity" in script[:cleanup]
+    assert "-m tools.databricks.cutover_agent_runtime_supervisor export-journal" in script[:cleanup]
+    historical_journal = script[script.rindex("run_as_m2m_identity", 0, cleanup) : cleanup]
+    assert "DATABRICKS_AGENT_RUNTIME_CLIENT_ID" in historical_journal
+    assert "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET" in historical_journal
+    assert "merge_historical_cutover_journal_preservation" in historical_journal
+    assert "STALE_CUTOVER_JOURNAL_PENDING=1" in _shell_function(
+        "merge_historical_cutover_journal_preservation"
+    )
+    assert '--preserve-gateway-json "$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"' in (historical_journal)
+    assert '--preserve-supervisor-json "$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"' in (
+        historical_journal
+    )
+    assert "--preserve-gateway-name" not in cleanup_block
+    assert "--preserve-supervisor-id" not in cleanup_block
+    stale_clear = script.index(
+        'step "prove historical retirement and clear only the stale signed cutover journal"',
+        cleanup,
+    )
+    supervisor = script.index(
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
+    )
+    assert cleanup < stale_clear < supervisor
+    stale_clear_block = script[stale_clear:supervisor]
+    assert "MIP_CUTOVER_SIGNED_BLUE_GATEWAY_PIN_JSON" in stale_clear_block
+    assert "MIP_CUTOVER_SIGNED_BLUE_SUPERVISOR_PIN_JSON" in stale_clear_block
+    assert "DATABRICKS_AGENT_RUNTIME_CLIENT_ID" in stale_clear_block
+    assert "DATABRICKS_AGENT_RUNTIME_CLIENT_SECRET" in stale_clear_block
+    assert "-m tools.databricks.cutover_agent_runtime_supervisor clear-journal" in stale_clear_block
+
+
+def test_current_cutover_journal_retry_deduplicates_signed_blue_and_rejects_collisions(
+    tmp_path: Path,
+) -> None:
+    blue_gateway = {
+        "name": "blue-gateway",
+        "endpoint_id": "blue-gateway-id",
+        "creator": "runtime-client",
+    }
+    blue_supervisor = {
+        "supervisor_id": "blue-supervisor-id",
+        "endpoint": "blue-supervisor",
+        "endpoint_id": "blue-supervisor-endpoint-id",
+        "creator": "runtime-client",
+    }
+    current_gateway = dict(blue_gateway)
+    current_supervisor = dict(blue_supervisor)
+    gateway_json = json.dumps(blue_gateway, separators=(",", ":"))
+    supervisor_json = json.dumps(blue_supervisor, separators=(",", ":"))
+    harness = tmp_path / "current-cutover-journal.sh"
+    harness.write_text(
+        f"""#!/usr/bin/env bash
+set -eu
+PYTHON={shlex.quote(str(REPO / ".venv" / "bin" / "python"))}
+RED=""
+RST=""
+STALE_CUTOVER_JOURNAL_PENDING=0
+MIP_APP_ROLLBACK_GATEWAY_PIN_JSON={shlex.quote(gateway_json)}
+MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON={shlex.quote(supervisor_json)}
+MIP_REPLACED_AGENT_GATEWAY_PIN_JSON={shlex.quote(json.dumps(current_gateway))}
+MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON={shlex.quote(json.dumps(current_supervisor))}
+HISTORICAL_ENDPOINT_PRESERVE_ARGS=(
+  --preserve-gateway-json "$MIP_APP_ROLLBACK_GATEWAY_PIN_JSON"
+  --preserve-supervisor-json "$MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON"
+)
+{_shell_function("plan_historical_cutover_journal_preservation")}
+{_shell_function("merge_historical_cutover_journal_preservation")}
+merge_historical_cutover_journal_preservation
+printf '%s\\n' "${{HISTORICAL_ENDPOINT_PRESERVE_ARGS[@]}}"
+""",
+        encoding="utf-8",
+    )
+
+    result = subprocess.run(
+        ["bash", str(harness)],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.splitlines() == [
+        "--preserve-gateway-json",
+        gateway_json,
+        "--preserve-supervisor-json",
+        supervisor_json,
+    ]
+
+    historical_supervisor = {
+        "supervisor_id": "historical-supervisor-id",
+        "endpoint": "historical-supervisor",
+        "endpoint_id": "historical-supervisor-endpoint-id",
+        "creator": "runtime-client",
+    }
+    historical_supervisor_json = json.dumps(historical_supervisor)
+    mixed_harness = tmp_path / "mixed-current-cutover-journal.sh"
+    mixed_harness.write_text(
+        harness.read_text(encoding="utf-8").replace(
+            shlex.quote(json.dumps(current_supervisor)),
+            shlex.quote(historical_supervisor_json),
+        ),
+        encoding="utf-8",
+    )
+    mixed = subprocess.run(
+        ["bash", str(mixed_harness)],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert mixed.returncode == 0, mixed.stderr
+    assert mixed.stdout.splitlines() == [
+        "--preserve-gateway-json",
+        gateway_json,
+        "--preserve-supervisor-json",
+        supervisor_json,
+        "--preserve-supervisor-json",
+        historical_supervisor_json,
+    ]
+
+    colliding_gateway = {**current_gateway, "endpoint_id": "reused-name-new-id"}
+    collision_harness = tmp_path / "colliding-cutover-journal.sh"
+    collision_harness.write_text(
+        harness.read_text(encoding="utf-8").replace(
+            shlex.quote(json.dumps(current_gateway)),
+            shlex.quote(json.dumps(colliding_gateway)),
+        ),
+        encoding="utf-8",
+    )
+    collision = subprocess.run(
+        ["bash", str(collision_harness)],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert collision.returncode != 0
+    assert "collides with the signed-blue Gateway name or immutable endpoint ID" in (
+        collision.stderr
+    )
+
+
+def test_completed_redeploy_supervisor_command_pins_proxy_identity_explicitly() -> None:
+    script = DEPLOY_SCRIPT.read_text(encoding="utf-8")
+    start = script.index(
+        'step "provision the managed Supervisor under the dedicated agent-runtime identity"'
+    )
+    end = script.index(
+        'step "grant and globally audit the dedicated Supervisor proxy caller"', start
+    )
+    tokens = _continued_command_tokens(
+        script[start:end], "tools.databricks.provision_agentic_resources"
+    )
+
+    proxy_flag = tokens.index("--proxy-caller-application-id")
+    assert tokens[proxy_flag + 1] == "$DATABRICKS_AGENT_PROXY_CLIENT_ID"
+    assert "--skip-gateway" in tokens

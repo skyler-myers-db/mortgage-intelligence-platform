@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Prove the agent-proxy effective boundary with its own OAuth credential."""
 
 from __future__ import annotations
@@ -14,15 +13,13 @@ from uuid import uuid4
 
 import requests
 
-from backend.services.capability_serving_probes import (
-    query_serving_endpoint_with_proof,
-)
+from backend.services.capability_serving_probes import query_serving_endpoint_with_proof
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
 from tools.databricks.agent_proxy_access import _supervisor_agents
 from tools.databricks.agent_runtime_access import _genie_spaces
-from tools.databricks.ai_gateway_tool_trace import (
-    warm_endpoint_with_cold_start_patience,
+from tools.databricks.audit_global_m2m_access import (
+    assert_workspace_admin_inventory_identity,
 )
 from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
@@ -31,6 +28,18 @@ from tools.databricks.authorization_denial import is_authorization_denied
 from tools.databricks.m2m_workspace_auth import (
     bind_exact_workspace_m2m_auth,
     reviewed_databricks_account_origin,
+)
+from tools.databricks.serving_endpoint_acl import is_platform_foundation_endpoint
+from tools.databricks.serving_query_authorization_convergence import (
+    is_exact_target_supervisor_response,
+    query_serving_endpoint_after_authorization,
+    wait_for_reviewed_query_group_projections,
+)
+from tools.databricks.serving_query_group_access import (
+    MANAGED_QUERY_GROUP_EXTERNAL_ID_PREFIX,
+    MANAGED_QUERY_GROUP_PREFIX,
+    managed_query_group_external_id,
+    managed_query_group_name,
 )
 
 _MAX_INVENTORY = 1000
@@ -46,10 +55,7 @@ def _text(value: object, name: str) -> str:
 
 
 def _is_denied(exc: BaseException, *, allow_hidden_resource: bool = True) -> bool:
-    return is_authorization_denied(
-        exc,
-        allow_hidden_resource=allow_hidden_resource,
-    )
+    return is_authorization_denied(exc, allow_hidden_resource=allow_hidden_resource)
 
 
 def _warehouse_error_is_denial(error: object) -> bool:
@@ -71,10 +77,37 @@ def _expect_denied(
     raise RuntimeError(f"{label} unexpectedly succeeded")
 
 
-def _bounded_unique(values: Iterable[str], *, label: str) -> tuple[str, ...]:
+def _verify_foundation_metadata_or_denied(workspace: Any, endpoint_name: str) -> None:
+    try:
+        details = workspace.serving_endpoints.get(endpoint_name)
+    except Exception as exc:  # noqa: BLE001 - classify provider authorization
+        if _is_denied(exc):
+            return
+        raise RuntimeError(
+            f"foundation endpoint metadata {endpoint_name} was inconclusive: "
+            f"{type(exc).__name__}: {exc}"
+        ) from exc
+    if not is_platform_foundation_endpoint(details):
+        raise RuntimeError(
+            f"non-reviewed endpoint {endpoint_name!r} was visible but is not a "
+            "Databricks system.ai foundation endpoint"
+        )
+
+
+def _list_service_principal_secrets(workspace: Any, principal_id: str) -> list[object]:
+    return list(workspace.service_principal_secrets_proxy.list(principal_id, page_size=1))
+
+
+def _list_scope_secrets(workspace: Any, scope_name: str) -> list[object]:
+    return list(workspace.secrets.list_secrets(scope=scope_name))
+
+
+def _bounded_unique(
+    values: Iterable[str], *, label: str, allow_empty: bool = False
+) -> tuple[str, ...]:
     result = tuple(values)
     if (
-        not result
+        (not result and not allow_empty)
         or len(result) > _MAX_INVENTORY
         or any(not value for value in result)
         or len(result) != len(set(result))
@@ -113,6 +146,89 @@ class AgentProxyBoundaryInventory:
     supervisor_ids: tuple[str, ...]
     genie_space_ids: tuple[str, ...]
     serving_endpoint_names: tuple[str, ...]
+    foundation_endpoint_names: tuple[str, ...]
+    managed_query_group_ids: tuple[str, ...]
+    reviewed_supervisor_bindings: tuple[tuple[str, str, str], ...]
+    reviewed_query_group_bindings: tuple[tuple[str, str, str, str], ...]
+
+
+@dataclass(frozen=True)
+class AgentProxyCustomerResourceDenialInventory:
+    supervisor_ids: tuple[str, ...]
+    genie_space_ids: tuple[str, ...]
+    serving_endpoints: tuple[tuple[str, str, str, bool], ...]
+    managed_query_group_ids: tuple[str, ...]
+
+
+def _managed_query_group_ids(workspace: Any) -> tuple[str, ...]:
+    return _bounded_unique(
+        (
+            _text(group, "id")
+            for group in workspace.groups.list(attributes="id,displayName")
+            if _text(group, "display_name").startswith(MANAGED_QUERY_GROUP_PREFIX)
+        ),
+        label="managed serving-query group",
+        allow_empty=True,
+    )
+
+
+def _managed_query_group_inventory(workspace: Any) -> tuple[tuple[str, str, str], ...]:
+    groups = tuple(
+        (
+            _text(group, "id"),
+            _text(group, "display_name"),
+            _text(group, "external_id"),
+        )
+        for group in workspace.groups.list(
+            attributes="id,displayName,externalId"
+        )
+        if _text(group, "display_name").startswith(MANAGED_QUERY_GROUP_PREFIX)
+    )
+    ids = tuple(group_id.casefold() for group_id, _name, _external_id in groups)
+    names = tuple(name.casefold() for _group_id, name, _external_id in groups)
+    if (
+        len(groups) > _MAX_INVENTORY
+        or any(
+            not group_id
+            or not name
+            or not external_id.startswith(MANAGED_QUERY_GROUP_EXTERNAL_ID_PREFIX)
+            for group_id, name, external_id in groups
+        )
+        or len(ids) != len(set(ids))
+        or len(names) != len(set(names))
+    ):
+        raise RuntimeError("managed serving-query group inventory is ambiguous")
+    return tuple(sorted(groups))
+
+
+def collect_admin_customer_resource_denial_inventory(workspace: Any) -> AgentProxyCustomerResourceDenialInventory:
+    """Capture customer agent resources plus classified foundation metadata."""
+    supervisor_ids = _bounded_unique(
+        _supervisor_agents(workspace), label="Supervisor", allow_empty=True
+    )
+    genie_space_ids = _bounded_unique(_genie_spaces(workspace), label="Genie", allow_empty=True)
+    endpoint_names = _bounded_unique(
+        (_text(item, "name") for item in workspace.serving_endpoints.list()),
+        label="serving-endpoint",
+        allow_empty=True,
+    )
+    endpoints: list[tuple[str, str, str, bool]] = []
+    for name in endpoint_names:
+        details = workspace.serving_endpoints.get(name)
+        foundation = is_platform_foundation_endpoint(details)
+        endpoint_id = _text(details, "id")
+        task = _text(details, "task")
+        if not foundation and (_text(details, "name") != name or not endpoint_id or not task):
+            raise RuntimeError(
+                f"non-foundation serving endpoint {name!r} lacks identity or query protocol"
+            )
+        endpoints.append((name, endpoint_id, task, foundation))
+    return AgentProxyCustomerResourceDenialInventory(
+        supervisor_ids=supervisor_ids,
+        genie_space_ids=genie_space_ids,
+        serving_endpoints=tuple(endpoints),
+        managed_query_group_ids=_managed_query_group_ids(workspace),
+    )
 
 
 def collect_admin_inventory(
@@ -124,17 +240,17 @@ def collect_admin_inventory(
     warehouse_id: str,
     supervisor_id: str,
     supervisor_endpoint: str,
+    supervisor_endpoint_id: str,
     genie_space_id: str,
+    expected_application_id: str,
+    preserved_supervisor_bindings: tuple[tuple[str, str, str], ...] = (),
 ) -> AgentProxyBoundaryInventory:
     """Capture an admin-complete immutable inventory before binding proxy auth."""
-
     app_names = _bounded_unique(
-        (_text(item, "name") for item in workspace.apps.list()),
-        label="App",
+        (_text(item, "name") for item in workspace.apps.list()), label="App"
     )
     app_urls = tuple(
-        _validated_app_url(_text(workspace.apps.get(name), "url"))
-        for name in app_names
+        _validated_app_url(_text(workspace.apps.get(name), "url")) for name in app_names
     )
     if len(app_urls) != len(set(app_urls)):
         raise RuntimeError("App URL inventory is duplicated")
@@ -155,44 +271,102 @@ def collect_admin_inventory(
         label="service-principal",
     )
     secret_scope_names = _bounded_unique(
-        (_text(item, "name") for item in workspace.secrets.list_scopes()),
-        label="secret-scope",
+        (_text(item, "name") for item in workspace.secrets.list_scopes()), label="secret-scope"
     )
     lakebase_instances = _bounded_unique(
         (_text(item, "name") for item in workspace.database.list_database_instances()),
         label="Lakebase",
     )
     warehouse_ids = _bounded_unique(
-        (_text(item, "id") for item in workspace.warehouses.list()),
-        label="warehouse",
+        (_text(item, "id") for item in workspace.warehouses.list()), label="warehouse"
     )
-    supervisor_ids = _bounded_unique(
-        _supervisor_agents(workspace),
-        label="Supervisor",
-    )
-    target_supervisor = workspace.api_client.do(
-        "GET",
-        f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}",
+    supervisor_ids = _bounded_unique(_supervisor_agents(workspace), label="Supervisor")
+    requested_bindings = (
+        (
+            supervisor_id.strip(),
+            supervisor_endpoint.strip(),
+            supervisor_endpoint_id.strip(),
+        ),
+        *(
+            (candidate_id.strip(), endpoint.strip(), endpoint_id.strip())
+            for candidate_id, endpoint, endpoint_id in preserved_supervisor_bindings
+        ),
     )
     if (
-        _text(target_supervisor, "supervisor_agent_id") != supervisor_id
-        or _text(target_supervisor, "endpoint_name") != supervisor_endpoint
+        any(
+            not candidate_id or not endpoint or not endpoint_id
+            for candidate_id, endpoint, endpoint_id in requested_bindings
+        )
+        or len({candidate_id for candidate_id, _endpoint, _endpoint_id in requested_bindings})
+        != len(requested_bindings)
+        or len({endpoint for _candidate_id, endpoint, _endpoint_id in requested_bindings})
+        != len(requested_bindings)
+        or len({endpoint_id for _id, _endpoint, endpoint_id in requested_bindings})
+        != len(requested_bindings)
     ):
-        raise RuntimeError("configured Supervisor ID and endpoint binding drifted")
-    genie_space_ids = _bounded_unique(
-        _genie_spaces(workspace),
-        label="Genie",
-    )
+        raise RuntimeError("reviewed Supervisor bindings are empty or duplicated")
+    reviewed_bindings: list[tuple[str, str, str]] = []
+    for candidate_id, endpoint_name, expected_endpoint_id in requested_bindings:
+        target_supervisor = workspace.api_client.do(
+            "GET",
+            f"/api/2.1/supervisor-agents/{quote(candidate_id, safe='')}",
+        )
+        if (
+            _text(target_supervisor, "supervisor_agent_id") != candidate_id
+            or _text(target_supervisor, "endpoint_name") != endpoint_name
+        ):
+            raise RuntimeError("configured Supervisor ID and endpoint binding drifted")
+        endpoint = workspace.serving_endpoints.get(endpoint_name)
+        endpoint_id = _text(endpoint, "id")
+        if _text(endpoint, "name") != endpoint_name or endpoint_id != expected_endpoint_id:
+            raise RuntimeError("configured Supervisor endpoint identity drifted")
+        reviewed_bindings.append((candidate_id, endpoint_name, endpoint_id))
+    managed_groups = _managed_query_group_inventory(workspace)
+    reviewed_query_groups: list[tuple[str, str, str, str]] = []
+    for _candidate_id, _endpoint_name, endpoint_id in reviewed_bindings:
+        expected_name = managed_query_group_name(
+            endpoint_id=endpoint_id,
+            application_id=expected_application_id,
+        )
+        expected_external_id = managed_query_group_external_id(
+            endpoint_id=endpoint_id,
+            application_id=expected_application_id,
+        )
+        matches = tuple(
+            group
+            for group in managed_groups
+            if group[1] == expected_name and group[2] == expected_external_id
+        )
+        if len(matches) != 1:
+            raise RuntimeError(
+                "reviewed managed serving-query group contract drifted"
+            )
+        group_id, group_name, external_id = matches[0]
+        reviewed_query_groups.append(
+            (endpoint_id, group_name, group_id, external_id)
+        )
+    genie_space_ids = _bounded_unique(_genie_spaces(workspace), label="Genie")
     serving_endpoint_names = _bounded_unique(
         (_text(item, "name") for item in workspace.serving_endpoints.list()),
         label="serving-endpoint",
     )
-    expected_members = (
+    foundation_endpoint_names = tuple(
+        name
+        for name in serving_endpoint_names
+        if is_platform_foundation_endpoint(workspace.serving_endpoints.get(name))
+    )
+    expected_members: tuple[tuple[str, tuple[str, ...], str], ...] = (
         (lakebase_instance, lakebase_instances, "Lakebase instance"),
         (warehouse_id, warehouse_ids, "warehouse"),
-        (supervisor_id, supervisor_ids, "Supervisor"),
-        (supervisor_endpoint, serving_endpoint_names, "Supervisor endpoint"),
         (genie_space_id, genie_space_ids, "Genie space"),
+    )
+    expected_members += tuple(
+        (candidate_id, supervisor_ids, "Supervisor")
+        for candidate_id, _endpoint, _endpoint_id in reviewed_bindings
+    )
+    expected_members += tuple(
+        (endpoint, serving_endpoint_names, "Supervisor endpoint")
+        for _candidate_id, endpoint, _endpoint_id in reviewed_bindings
     )
     for expected, inventory, label in expected_members:
         if expected not in inventory:
@@ -209,6 +383,10 @@ def collect_admin_inventory(
         supervisor_ids=supervisor_ids,
         genie_space_ids=genie_space_ids,
         serving_endpoint_names=serving_endpoint_names,
+        foundation_endpoint_names=foundation_endpoint_names,
+        managed_query_group_ids=tuple(group[0] for group in managed_groups),
+        reviewed_supervisor_bindings=tuple(reviewed_bindings),
+        reviewed_query_group_bindings=tuple(reviewed_query_groups),
     )
 
 
@@ -262,92 +440,208 @@ def _verify_warehouse_denial(workspace: Any, *, warehouse_id: str) -> None:
     raise RuntimeError(f"agent-proxy warehouse denial was inconclusive: state={state or 'UNKNOWN'}")
 
 
-def _response_mapping(response: object) -> dict[str, Any] | None:
-    if isinstance(response, dict):
-        return response
-    for method in ("as_dict", "to_dict"):
-        converter = getattr(response, method, None)
-        if callable(converter):
-            try:
-                value = converter()
-            except Exception:  # noqa: BLE001 - exact validation below fails closed
-                return None
-            return value if isinstance(value, dict) else None
-    return None
-
-
-def _is_exact_target_supervisor_response(
-    response: object,
-    *,
-    supervisor_endpoint: str,
-) -> bool:
-    value = _response_mapping(response)
-    if value is None:
-        return False
-    if not str(value.get("id") or "").strip():
-        return False
-    if str(value.get("model") or "").strip() != supervisor_endpoint:
-        return False
-    if str(value.get("status") or "").strip().casefold() != "completed":
-        return False
-    output = value.get("output")
-    if not isinstance(output, list) or not output:
-        return False
-    for item in output:
-        if (
-            not isinstance(item, dict)
-            or item.get("type") != "message"
-            or item.get("role") != "assistant"
-            or str(item.get("status") or "").strip().casefold() != "completed"
-        ):
-            continue
-        content = item.get("content")
-        if not isinstance(content, list) or not content:
-            continue
-        if any(
-            isinstance(part, dict)
-            and part.get("type") == "output_text"
-            and bool(str(part.get("text") or "").strip())
-            for part in content
-        ):
-            return True
-    return False
-
-
 def _verify_target_supervisor_query(
     workspace: Any,
     *,
     supervisor_endpoint: str,
     sleep: Callable[[float], object] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
 ) -> None:
     try:
-        warm_endpoint_with_cold_start_patience(
+        execution = query_serving_endpoint_after_authorization(
             workspace,
-            supervisor_endpoint,
-            task="agent_v1_responses",
+            supervisor_endpoint=supervisor_endpoint,
             prompt=_TARGET_QUERY_PROMPT,
             sleep=sleep,
-        )
-        execution = query_serving_endpoint_with_proof(
-            workspace,
-            supervisor_endpoint,
-            task="agent_v1_responses",
-            prompt=_TARGET_QUERY_PROMPT,
-            client_request_id=f"mip-agent-proxy-boundary-{uuid4().hex}",
-            max_tokens=64,
+            clock=clock,
         )
     except Exception as exc:  # noqa: BLE001 - positive provider proof must be exact
         raise RuntimeError(
-            "agent-proxy target Supervisor query was inconclusive: "
-            f"{type(exc).__name__}: {exc}"
+            "agent-proxy target Supervisor query was inconclusive: " f"{type(exc).__name__}: {exc}"
         ) from exc
-    if not _is_exact_target_supervisor_response(
-        execution.response,
+    if not is_exact_target_supervisor_response(
+        execution,
         supervisor_endpoint=supervisor_endpoint,
     ):
         raise RuntimeError(
             "agent-proxy target Supervisor query did not return the exact "
             "terminal Agent Responses payload"
+        )
+
+
+def _verify_managed_group_denial(
+    workspace: Any, *, account_id: str, group_ids: tuple[str, ...]
+) -> None:
+    for group_id in group_ids:
+        _expect_denied(
+            f"managed serving-query group administration {group_id}",
+            partial(
+                workspace.account_access_control_proxy.get_rule_set,
+                f"accounts/{account_id}/groups/{group_id}/ruleSets/default",
+                "",
+            ),
+        )
+
+
+def verify_target_query_boundary(
+    *,
+    workspace: Any,
+    inventory: AgentProxyBoundaryInventory,
+    expected_application_id: str,
+    account_id: str,
+    supervisor_id: str,
+    supervisor_endpoint: str,
+    supervisor_endpoint_id: str,
+    genie_space_id: str,
+    preserved_supervisor_bindings: tuple[tuple[str, str, str], ...] = (),
+    sleep: Callable[[float], object] = time.sleep,
+    clock: Callable[[], float] = time.monotonic,
+) -> None:
+    """Prove only the exact reviewed Supervisor query paths under proxy OAuth."""
+    me = workspace.current_user.me()
+    authenticated = {
+        value for value in (_text(me, "application_id"), _text(me, "user_name")) if value
+    }
+    if authenticated != {expected_application_id}:
+        raise RuntimeError("authenticated agent-proxy identity does not match its application id")
+    _verify_managed_group_denial(
+        workspace, account_id=account_id, group_ids=inventory.managed_query_group_ids
+    )
+    requested_bindings = (
+        (supervisor_id, supervisor_endpoint, supervisor_endpoint_id),
+        *preserved_supervisor_bindings,
+    )
+    if requested_bindings != inventory.reviewed_supervisor_bindings:
+        raise RuntimeError("reviewed Supervisor bindings drifted from admin inventory")
+    wait_for_reviewed_query_group_projections(
+        workspace,
+        expected_application_id=expected_application_id,
+        reviewed_bindings=requested_bindings,
+        reviewed_group_bindings=inventory.reviewed_query_group_bindings,
+        sleep=sleep,
+        clock=clock,
+    )
+    for candidate in inventory.supervisor_ids:
+        _expect_denied(
+            f"Supervisor definition metadata {candidate}",
+            partial(
+                workspace.api_client.do,
+                "GET",
+                f"/api/2.1/supervisor-agents/{quote(candidate, safe='')}",
+            ),
+        )
+    reviewed_endpoint_ids = {
+        endpoint: endpoint_id
+        for _candidate_id, endpoint, endpoint_id in inventory.reviewed_supervisor_bindings
+    }
+    for endpoint in inventory.serving_endpoint_names:
+        if endpoint in reviewed_endpoint_ids:
+            details = workspace.serving_endpoints.get(endpoint)
+            if (
+                _text(details, "name") != endpoint
+                or _text(details, "id") != reviewed_endpoint_ids[endpoint]
+            ):
+                raise RuntimeError("reviewed serving endpoint metadata drifted")
+            _expect_denied(
+                f"target serving endpoint permission administration {endpoint}",
+                partial(
+                    workspace.serving_endpoints.get_permissions,
+                    reviewed_endpoint_ids[endpoint],
+                ),
+            )
+        elif endpoint in inventory.foundation_endpoint_names:
+            _verify_foundation_metadata_or_denied(workspace, endpoint)
+        else:
+            _expect_denied(
+                f"non-target serving endpoint metadata {endpoint}",
+                partial(workspace.serving_endpoints.get, endpoint),
+            )
+    for _candidate_id, endpoint, _endpoint_id in inventory.reviewed_supervisor_bindings:
+        _verify_target_supervisor_query(
+            workspace,
+            supervisor_endpoint=endpoint,
+            sleep=sleep,
+            clock=clock,
+        )
+    _expect_denied(
+        f"target Genie permission administration {genie_space_id}",
+        lambda: workspace.api_client.do(
+            "GET",
+            f"/api/2.0/permissions/genie/{quote(genie_space_id, safe='')}",
+        ),
+    )
+    target_genie = workspace.genie.get_space(genie_space_id)
+    if _text(target_genie, "space_id") != genie_space_id:
+        raise RuntimeError("agent-proxy target Genie identity drifted")
+    for candidate in inventory.genie_space_ids:
+        if candidate != genie_space_id:
+            _expect_denied(
+                f"non-target Genie space {candidate}", partial(workspace.genie.get_space, candidate)
+            )
+
+
+def verify_customer_resource_denial_boundary(
+    *,
+    workspace: Any,
+    inventory: AgentProxyCustomerResourceDenialInventory,
+    expected_application_id: str,
+    account_id: str,
+) -> None:
+    """Prove no customer capability; foundation invocation is not asserted."""
+    me = workspace.current_user.me()
+    authenticated = {
+        value for value in (_text(me, "application_id"), _text(me, "user_name")) if value
+    }
+    if authenticated != {expected_application_id}:
+        raise RuntimeError("authenticated agent-proxy identity does not match its application id")
+    _verify_managed_group_denial(
+        workspace, account_id=account_id, group_ids=inventory.managed_query_group_ids
+    )
+    for supervisor_id in inventory.supervisor_ids:
+        _expect_denied(
+            f"Supervisor definition metadata {supervisor_id}",
+            partial(
+                workspace.api_client.do,
+                "GET",
+                f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}",
+            ),
+        )
+    for endpoint_name, endpoint_id, task, foundation in inventory.serving_endpoints:
+        if foundation:
+            _verify_foundation_metadata_or_denied(workspace, endpoint_name)
+            continue
+        _expect_denied(
+            f"serving endpoint metadata {endpoint_name}",
+            partial(workspace.serving_endpoints.get, endpoint_name),
+        )
+        _expect_denied(
+            f"serving endpoint permission administration {endpoint_name}",
+            partial(workspace.serving_endpoints.get_permissions, endpoint_id),
+        )
+        _expect_denied(
+            f"serving endpoint query capability {endpoint_name}",
+            partial(
+                query_serving_endpoint_with_proof,
+                workspace,
+                endpoint_name,
+                task=task or None,
+                prompt=_TARGET_QUERY_PROMPT,
+                client_request_id=f"mip-agent-proxy-denial-{uuid4().hex}",
+                max_tokens=16,
+            ),
+        )
+    for space_id in inventory.genie_space_ids:
+        _expect_denied(
+            f"Genie space metadata {space_id}",
+            partial(workspace.genie.get_space, space_id),
+        )
+        _expect_denied(
+            f"Genie permission administration {space_id}",
+            partial(
+                workspace.api_client.do,
+                "GET",
+                f"/api/2.0/permissions/genie/{quote(space_id, safe='')}",
+            ),
         )
 
 
@@ -357,23 +651,24 @@ def verify_boundary(
     account: Any,
     inventory: AgentProxyBoundaryInventory,
     expected_application_id: str,
+    account_id: str,
     app_name: str,
     warehouse_id: str,
     supervisor_id: str,
     supervisor_endpoint: str,
+    supervisor_endpoint_id: str,
     genie_space_id: str,
+    preserved_supervisor_bindings: tuple[tuple[str, str, str], ...] = (),
     admin_workspace: Any | None = None,
     allow_attested_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
 ) -> None:
     """Run positive target and exhaustive negative probes under proxy OAuth."""
-
     me = workspace.current_user.me()
     authenticated = {
-        _text(me, "application_id"),
-        _text(me, "user_name"),
+        value for value in (_text(me, "application_id"), _text(me, "user_name")) if value
     }
-    if expected_application_id not in authenticated:
+    if authenticated != {expected_application_id}:
         raise RuntimeError("authenticated agent-proxy identity does not match its application id")
     if allow_attested_app_401 and admin_workspace is None:
         raise RuntimeError("admin App attestation authority is absent")
@@ -411,13 +706,8 @@ def verify_boundary(
     for principal_id in inventory.service_principal_ids:
         _expect_denied(
             f"service-principal secret listing {principal_id}",
-            lambda principal_id=principal_id: list(
-                workspace.service_principal_secrets_proxy.list(
-                    principal_id,
-                    page_size=1,
-                )
-            ),
-    )
+            partial(_list_service_principal_secrets, workspace, principal_id),
+        )
     for instance_name in inventory.lakebase_instances:
         _expect_denied(
             f"Lakebase role inventory {instance_name}",
@@ -432,9 +722,7 @@ def verify_boundary(
     for scope_name in inventory.secret_scope_names:
         _expect_denied(
             f"secret-scope key inventory {scope_name}",
-            lambda scope_name=scope_name: list(
-                workspace.secrets.list_secrets(scope=scope_name)
-            ),
+            partial(_list_scope_secrets, workspace, scope_name),
         )
     for candidate in inventory.warehouse_ids:
         _expect_denied(
@@ -443,55 +731,38 @@ def verify_boundary(
         )
     _verify_warehouse_denial(workspace, warehouse_id=warehouse_id)
 
-    # Databricks CAN_QUERY intentionally permits inference but does not permit
-    # viewing the Agent definition. The separated admin inventory above binds
-    # the immutable ID to its endpoint; this identity proves the supported
-    # positive query path and denial of every definition read.
-    if supervisor_id not in inventory.supervisor_ids:
-        raise RuntimeError("target Supervisor is absent from admin inventory")
-    for candidate in inventory.supervisor_ids:
-        _expect_denied(
-            f"Supervisor definition metadata {candidate}",
-            lambda candidate=candidate: workspace.api_client.do(
-                "GET",
-                f"/api/2.1/supervisor-agents/{quote(candidate, safe='')}",
-            ),
-        )
-    if supervisor_endpoint not in inventory.serving_endpoint_names:
-        raise RuntimeError("target Supervisor endpoint is absent from admin inventory")
-    _verify_target_supervisor_query(
-        workspace,
+    verify_target_query_boundary(
+        workspace=workspace,
+        inventory=inventory,
+        expected_application_id=expected_application_id,
+        account_id=account_id,
+        supervisor_id=supervisor_id,
         supervisor_endpoint=supervisor_endpoint,
+        supervisor_endpoint_id=supervisor_endpoint_id,
+        genie_space_id=genie_space_id,
+        preserved_supervisor_bindings=preserved_supervisor_bindings,
     )
-
-    target_genie = workspace.genie.get_space(genie_space_id)
-    if _text(target_genie, "space_id") != genie_space_id:
-        raise RuntimeError("agent-proxy target Genie identity drifted")
-    for candidate in inventory.genie_space_ids:
-        if candidate != genie_space_id:
-            _expect_denied(
-                f"non-target Genie space {candidate}",
-                partial(workspace.genie.get_space, candidate),
-            )
-    for endpoint in inventory.serving_endpoint_names:
-        _expect_denied(
-            f"serving endpoint metadata {endpoint}",
-            partial(workspace.serving_endpoints.get, endpoint),
-        )
 
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-application-id", required=True)
-    parser.add_argument("--account-host", required=True)
-    parser.add_argument("--account-id", required=True)
-    parser.add_argument("--app-name", required=True)
-    parser.add_argument("--app-url", required=True)
-    parser.add_argument("--lakebase-instance", required=True)
-    parser.add_argument("--warehouse-id", required=True)
-    parser.add_argument("--supervisor-id", required=True)
-    parser.add_argument("--supervisor-endpoint", required=True)
-    parser.add_argument("--genie-space-id", required=True)
+    parser.add_argument("--expected-inventory-principal")
+    parser.add_argument("--account-host")
+    parser.add_argument("--account-id")
+    parser.add_argument("--app-name")
+    parser.add_argument("--app-url")
+    parser.add_argument("--lakebase-instance")
+    parser.add_argument("--warehouse-id")
+    parser.add_argument("--supervisor-id")
+    parser.add_argument("--supervisor-endpoint")
+    parser.add_argument("--supervisor-endpoint-id")
+    parser.add_argument("--preserve-supervisor-id")
+    parser.add_argument("--preserve-supervisor-endpoint")
+    parser.add_argument("--preserve-supervisor-endpoint-id")
+    parser.add_argument("--genie-space-id")
+    parser.add_argument("--target-query-only", action="store_true")
+    parser.add_argument("--customer-resource-denial", action="store_true")
     parser.add_argument(
         "--allow-attested-app-401",
         action="store_true",
@@ -502,11 +773,56 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    account_host = reviewed_databricks_account_origin(
-        args.account_host,
-        label="agent-proxy account host",
+    denial_mode = args.customer_resource_denial
+    if denial_mode and args.target_query_only:
+        raise SystemExit("--customer-resource-denial conflicts with --target-query-only")
+    if denial_mode and not args.expected_inventory_principal:
+        raise SystemExit("--customer-resource-denial requires --expected-inventory-principal")
+    if denial_mode and not args.account_id:
+        raise SystemExit("--customer-resource-denial requires --account-id")
+    required = (
+        "account_host",
+        "account_id",
+        "app_name",
+        "app_url",
+        "lakebase_instance",
+        "warehouse_id",
+        "supervisor_id",
+        "supervisor_endpoint",
+        "supervisor_endpoint_id",
+        "genie_space_id",
+    )
+    missing = [name for name in required if not getattr(args, name)]
+    if missing and not denial_mode:
+        raise SystemExit(
+            "positive boundary mode requires: "
+            + ", ".join(f"--{name.replace('_', '-')}" for name in missing)
+        )
+    preserve_values = (
+        str(args.preserve_supervisor_id or "").strip(),
+        str(args.preserve_supervisor_endpoint or "").strip(),
+        str(args.preserve_supervisor_endpoint_id or "").strip(),
+    )
+    if len({bool(value) for value in preserve_values}) != 1:
+        raise SystemExit(
+            "--preserve-supervisor-id, --preserve-supervisor-endpoint, and "
+            "--preserve-supervisor-endpoint-id are required together"
+        )
+    preserved_bindings = (preserve_values,) if preserve_values[0] else ()
+    account_host = (
+        reviewed_databricks_account_origin(
+            args.account_host,
+            label="agent-proxy account host",
+        )
+        if not denial_mode
+        else ""
     )
     admin_workspace = WorkspaceClient()
+    if denial_mode:
+        assert_workspace_admin_inventory_identity(
+            admin_workspace,
+            expected_principal=args.expected_inventory_principal,
+        )
     client_id, client_secret = bind_exact_workspace_m2m_auth(
         admin_workspace=admin_workspace,
         expected_application_id=args.expected_application_id,
@@ -514,40 +830,69 @@ def main(argv: list[str] | None = None) -> int:
         client_secret_env="DATABRICKS_AGENT_PROXY_CLIENT_SECRET",
         label="agent-proxy",
     )
-    inventory = collect_admin_inventory(
-        admin_workspace,
-        app_name=args.app_name,
-        app_url=args.app_url,
-        lakebase_instance=args.lakebase_instance,
-        warehouse_id=args.warehouse_id,
-        supervisor_id=args.supervisor_id,
-        supervisor_endpoint=args.supervisor_endpoint,
-        genie_space_id=args.genie_space_id,
-    )
     proxy_workspace = WorkspaceClient()
-    proxy_account = AccountClient(
-        host=account_host,
-        account_id=args.account_id,
-        client_id=client_id,
-        client_secret=client_secret,
-        auth_type="oauth-m2m",
-    )
-    verify_boundary(
-        workspace=proxy_workspace,
-        account=proxy_account,
-        inventory=inventory,
-        expected_application_id=args.expected_application_id,
-        app_name=args.app_name,
-        warehouse_id=args.warehouse_id,
-        supervisor_id=args.supervisor_id,
-        supervisor_endpoint=args.supervisor_endpoint,
-        genie_space_id=args.genie_space_id,
-        admin_workspace=admin_workspace,
-        allow_attested_app_401=args.allow_attested_app_401,
-    )
-    print("agent-proxy effective authorization boundary: PASS")
+    if denial_mode:
+        verify_customer_resource_denial_boundary(
+            workspace=proxy_workspace,
+            inventory=collect_admin_customer_resource_denial_inventory(admin_workspace),
+            expected_application_id=args.expected_application_id,
+            account_id=args.account_id,
+        )
+    else:
+        inventory = collect_admin_inventory(
+            admin_workspace,
+            app_name=args.app_name,
+            app_url=args.app_url,
+            lakebase_instance=args.lakebase_instance,
+            warehouse_id=args.warehouse_id,
+            supervisor_id=args.supervisor_id,
+            supervisor_endpoint=args.supervisor_endpoint,
+            supervisor_endpoint_id=args.supervisor_endpoint_id,
+            genie_space_id=args.genie_space_id,
+            expected_application_id=args.expected_application_id,
+            preserved_supervisor_bindings=preserved_bindings,
+        )
+        if args.target_query_only:
+            verify_target_query_boundary(
+                workspace=proxy_workspace,
+                inventory=inventory,
+                expected_application_id=args.expected_application_id,
+                account_id=args.account_id,
+                supervisor_id=args.supervisor_id,
+                supervisor_endpoint=args.supervisor_endpoint,
+                supervisor_endpoint_id=args.supervisor_endpoint_id,
+                genie_space_id=args.genie_space_id,
+                preserved_supervisor_bindings=preserved_bindings,
+            )
+        else:
+            proxy_account = AccountClient(
+                host=account_host,
+                account_id=args.account_id,
+                client_id=client_id,
+                client_secret=client_secret,
+                auth_type="oauth-m2m",
+            )
+            verify_boundary(
+                workspace=proxy_workspace,
+                account=proxy_account,
+                inventory=inventory,
+                expected_application_id=args.expected_application_id,
+                account_id=args.account_id,
+                app_name=args.app_name,
+                warehouse_id=args.warehouse_id,
+                supervisor_id=args.supervisor_id,
+                supervisor_endpoint=args.supervisor_endpoint,
+                supervisor_endpoint_id=args.supervisor_endpoint_id,
+                genie_space_id=args.genie_space_id,
+                preserved_supervisor_bindings=preserved_bindings,
+                admin_workspace=admin_workspace,
+                allow_attested_app_401=args.allow_attested_app_401,
+            )
+    if denial_mode:
+        print("agent-proxy authorization boundary: PASS (customer-created serving/agent resources denied; foundation invocation not asserted)")
+    else:
+        print("agent-proxy effective authorization boundary: PASS")
     return 0
-
 
 if __name__ == "__main__":
     raise SystemExit(main())

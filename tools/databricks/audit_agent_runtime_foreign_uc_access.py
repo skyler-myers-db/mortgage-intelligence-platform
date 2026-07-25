@@ -31,6 +31,9 @@ from tools.databricks.audit_global_m2m_access import (
     assert_workspace_admin_inventory_identity,
 )
 from tools.databricks.converge_campaign_treatment_access import target_identity_groups_probe
+from tools.databricks.oauth_credential_boundary import (
+    held_deployment_credential_assertion,
+)
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     TargetServicePrincipal,
@@ -47,6 +50,7 @@ from tools.databricks.workspace_system_group_evidence import (
 _DATABRICKS_INTERNAL_CATALOG = "__databricks_internal"
 _PLATFORM_CATALOGS = frozenset({_DATABRICKS_INTERNAL_CATALOG, "samples", "system"})
 _ACCOUNT_USERS_GROUP = "account users"
+_DEFAULT_TARGET_GROUPS_PROBE = target_identity_groups_probe
 
 
 def _exact_owner(item: object, *, context: str) -> str:
@@ -572,6 +576,7 @@ def audit_foreign_uc_access(
     account_factory: Callable[[], Any] = account_client_from_env,
     group_membership_probe: Callable[[Any, str, str, str, str], bool] | None = None,
     target_groups_probe: Callable[..., dict[str, str]] = target_identity_groups_probe,
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> ControlPlaneForeignCatalogProof:
     """Prove zero target-principal access on every ordinary foreign catalog."""
 
@@ -605,13 +610,22 @@ def audit_foreign_uc_access(
     workspace_host = _text(getattr(getattr(workspace, "config", None), "host", None))
     if not workspace_host:
         raise RuntimeError("UC control-plane audit found no workspace host")
+    probe_kwargs: dict[str, object] = {
+        "expected_workspace_scim_id": workspace_target.scim_id,
+        "workspace_host": workspace_host,
+    }
+    if target_groups_probe is _DEFAULT_TARGET_GROUPS_PROBE:
+        credential_lease = (
+            assert_single_writer
+            or held_deployment_credential_assertion(workspace)
+        )
+        probe_kwargs["assert_single_writer"] = credential_lease
     effective_target_groups = _normalized_target_groups(
         target_groups_probe(
             account,
             account_target_scim_id,
             principal,
-            expected_workspace_scim_id=workspace_target.scim_id,
-            workspace_host=workspace_host,
+            **probe_kwargs,
         )
     )
     account_effective_groups, implicit_system_groups = _account_group_evidence(

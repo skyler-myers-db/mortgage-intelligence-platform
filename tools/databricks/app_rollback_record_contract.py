@@ -308,6 +308,13 @@ def _validated_record(
         raise RuntimeError("App rollback contract lacks immutable deployment identity")
     if binding is not None and (not isinstance(binding, str) or len(binding) != 64):
         raise RuntimeError("App rollback Gateway binding is invalid")
+    immutable_gateway_identity = (
+        str(gateway_resources.get("gateway_endpoint") or "").strip(),
+        str(gateway_resources.get("gateway_endpoint_id") or "").strip(),
+        str(gateway_resources.get("gateway_endpoint_creator") or "").strip(),
+    )
+    if not all(immutable_gateway_identity):
+        raise RuntimeError("App rollback contract lacks immutable Gateway identity")
     return {
         **value,
         "payload": payload,

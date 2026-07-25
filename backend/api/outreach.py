@@ -81,6 +81,7 @@ from backend.services.lakebase_bootstrap import (
     ensure_approval_idempotency_column,
 )
 from backend.services.outreach_copy import _safe_offer_code
+from backend.services.outreach_decision_ordering import BORROWER_DECISION_LOCK
 from backend.services.outreach_intelligence import (
     GovernedCampaignVariant,
     compose_intelligent_outreach,
@@ -107,12 +108,12 @@ _APPROVAL_INSERT = """
 INSERT INTO mip_app.approvals (
     approval_id, campaign_id, variant_name, channel, borrower_id, offer_code, action,
     actor_email, rationale, request_id, assigned_to_email, follow_up_at,
-    decision_intent, decision_payload_hash
+    decision_intent, decision_payload_hash, decided_at
 ) VALUES (
     %(approval_id)s, %(campaign_id)s, %(variant_name)s, %(channel)s,
     %(borrower_id)s, %(offer_code)s, %(action)s,
     %(actor_email)s, %(rationale)s, %(request_id)s, %(assigned_to_email)s, %(follow_up_at)s,
-    %(decision_intent)s, %(decision_payload_hash)s
+    %(decision_intent)s, %(decision_payload_hash)s, clock_timestamp()
 )
 ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 """
@@ -122,12 +123,12 @@ _APPROVAL_INSERT_RETURNING = """
 INSERT INTO mip_app.approvals (
     approval_id, campaign_id, variant_name, channel, borrower_id, offer_code, action,
     actor_email, rationale, request_id, assigned_to_email, follow_up_at,
-    decision_intent, decision_payload_hash
+    decision_intent, decision_payload_hash, decided_at
 ) VALUES (
     %(approval_id)s, %(campaign_id)s, %(variant_name)s, %(channel)s,
     %(borrower_id)s, %(offer_code)s, %(action)s,
     %(actor_email)s, %(rationale)s, %(request_id)s, %(assigned_to_email)s, %(follow_up_at)s,
-    %(decision_intent)s, %(decision_payload_hash)s
+    %(decision_intent)s, %(decision_payload_hash)s, clock_timestamp()
 )
 ON CONFLICT (request_id) WHERE request_id IS NOT NULL DO NOTHING
 RETURNING approval_id
@@ -946,6 +947,10 @@ def _commit_outreach_decision_atomic(
     """Write approval + audit in one Lakebase transaction."""
     try:
         with lakebase.transaction() as conn:
+            conn.execute(
+                BORROWER_DECISION_LOCK,
+                {"borrower_id": borrower_id},
+            )
             row = conn.execute(
                 _APPROVAL_INSERT_RETURNING,
                 {

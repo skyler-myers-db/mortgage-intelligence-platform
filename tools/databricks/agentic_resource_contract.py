@@ -54,6 +54,7 @@ class ProvisionedResources:
     agent_supervisor_name: str | None = None
     agent_serving_endpoint: str | None = None
     agent_supervisor_endpoint: str | None = None
+    agent_supervisor_endpoint_id: str | None = None
     ai_gateway_endpoint: str | None = None
     ai_gateway_inference_table: str | None = None
     ai_gateway_agent_model: str | None = None
@@ -116,6 +117,10 @@ class ProvisionedResources:
                     assignment(
                         "MIP_AGENT_SUPERVISOR_ENDPOINT",
                         self.agent_supervisor_endpoint or self.agent_serving_endpoint,
+                    ),
+                    assignment(
+                        "MIP_AGENT_SUPERVISOR_ENDPOINT_ID",
+                        self.agent_supervisor_endpoint_id or "",
                     ),
                 ]
             )

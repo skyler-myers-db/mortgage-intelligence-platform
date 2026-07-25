@@ -8,6 +8,12 @@ from typing import Any
 
 import pytest
 from databricks.sdk.errors import BadRequest, NotFound
+from databricks.sdk.service.serving import (
+    ServingEndpointAccessControlResponse,
+    ServingEndpointPermission,
+    ServingEndpointPermissionLevel,
+    ServingEndpointPermissions,
+)
 from mlflow.exceptions import RestException
 
 import backend.agents.gateway_contract as gateway_contract
@@ -24,6 +30,10 @@ from tools.databricks.provision_gateway_responses_agent import (
     GatewayAgentDeployment,
     gateway_agent_source_hash,
     verify_gateway_responses_agent,
+)
+from tools.databricks.serving_query_group_access import (
+    managed_query_group_external_id,
+    managed_query_group_name,
 )
 
 _CATALOG = "mip"
@@ -578,6 +588,7 @@ class _ServingEndpoints:
         *,
         supervisor_endpoint_id: str = _SUPERVISOR_ENDPOINT_ID,
         supervisor_endpoint_creator: str = _RUNTIME_APPLICATION_ID,
+        permissions_by_endpoint_id: dict[str, object] | None = None,
     ) -> None:
         self.details = details
         self.supervisor_endpoint_id = supervisor_endpoint_id
@@ -588,6 +599,7 @@ class _ServingEndpoints:
         self.patches: list[dict[str, Any]] = []
         self.events: list[str] = []
         self.rate_limit_puts: list[dict[str, Any]] = []
+        self.permissions_by_endpoint_id = permissions_by_endpoint_id or {}
 
     def get(self, endpoint: str) -> object:
         if endpoint == "managed-supervisor":
@@ -607,6 +619,12 @@ class _ServingEndpoints:
         if isinstance(self.details, dict):
             return [SimpleNamespace(name=name) for name in self.details]
         return []
+
+    def get_permissions(self, endpoint_id: str) -> object:
+        return self.permissions_by_endpoint_id.get(
+            endpoint_id,
+            SimpleNamespace(access_control_list=[]),
+        )
 
     def create(self, **kwargs: Any) -> None:
         self.created.append(kwargs)
@@ -884,7 +902,11 @@ def _reconcile_recovery(
     )
 
 
-def _ensure_gateway(workspace: object) -> GatewayAgentDeployment:
+def _ensure_gateway(
+    workspace: object,
+    *,
+    approved_query_application_ids: tuple[str, ...] = (),
+) -> GatewayAgentDeployment:
     return ensure_gateway_responses_agent(
         workspace,
         endpoint="mip-growth-agent-gateway",
@@ -898,6 +920,7 @@ def _ensure_gateway(workspace: object) -> GatewayAgentDeployment:
         inference_table_prefix="mip_agent_gateway_growth_agent",
         genie_space_id=_GENIE_SPACE_ID,
         expected_creator_application_id=_RUNTIME_APPLICATION_ID,
+        approved_query_application_ids=approved_query_application_ids,
     )
 
 
@@ -953,6 +976,7 @@ def _exact_endpoint_details(
         contract_hash=contract_hash,
     )
     return SimpleNamespace(
+        id="mip-growth-agent-gateway-id",
         creator=runtime_application_id,
         description=gateway._ENDPOINT_DESCRIPTION,
         route_optimized=False,
@@ -3397,7 +3421,9 @@ def test_ensure_gateway_agent_creates_versioned_green_without_mutating_live_drif
     )
 
     assert deployment.model_version == 5
-    assert deployment.endpoint == f"mip-growth-agent-gateway-{_resource_hash(source_hash)[:12]}"
+    assert deployment.endpoint == (
+        f"mip-growth-agent-gateway-{_resource_hash(source_hash)[:12]}-mq1"
+    )
     assert len(serving.created) == 1
     assert serving.created[0]["name"] == deployment.endpoint
     assert serving.updated == []
@@ -3531,7 +3557,9 @@ def test_key_rotation_allocates_current_green_without_mutating_previous_blue(
 
     assert deployment.model_attestation_verify_key == _MODEL_VERIFY_KEY
     assert deployment.model_name != blue_name
-    assert deployment.endpoint == f"mip-growth-agent-gateway-{deployment.resource_hash[:12]}"
+    assert deployment.endpoint == (
+        f"mip-growth-agent-gateway-{deployment.resource_hash[:12]}-mq1"
+    )
     created_environment = serving.created[0]["config"].served_entities[0].environment_vars
     assert "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY" not in created_environment
     assert serving.updated == []
@@ -3625,7 +3653,7 @@ def _assert_identity_rotation_allocates_distinct_green(
     assert deployment.model_name != blue_entity.entity_name
     assert deployment.experiment_name != old_experiment
     assert deployment.inference_table != old_table
-    assert deployment.endpoint == f"mip-growth-agent-gateway-{expected_hash[:12]}"
+    assert deployment.endpoint == f"mip-growth-agent-gateway-{expected_hash[:12]}-mq1"
     assert len(serving.created) == 1
     assert serving.created[0]["name"] == deployment.endpoint
     assert serving.updated == []
@@ -3746,6 +3774,219 @@ def test_ensure_gateway_agent_reuses_exact_live_endpoint_without_mutation(monkey
     assert serving.updated == []
     assert serving.gateway_updates == []
     assert serving.patches == []
+
+
+def test_completed_redeploy_reuses_gateway_with_exact_app_and_verifier_groups(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    client = _Client(
+        [
+            SimpleNamespace(
+                version="5",
+                source="models:/m-reviewed",
+                tags={
+                    gateway.SOURCE_HASH_TAG: source_hash,
+                    gateway.UPSTREAM_TAG: "managed-supervisor",
+                },
+            )
+        ]
+    )
+    _patch_mlflow(monkeypatch, client=client)
+    endpoint = _exact_endpoint_details(source_hash=source_hash)
+    applications = ("app-client", "verifier-client")
+    permissions = ServingEndpointPermissions(
+        access_control_list=[
+            ServingEndpointAccessControlResponse(
+                service_principal_name=_RUNTIME_APPLICATION_ID,
+                all_permissions=[
+                    ServingEndpointPermission(
+                        inherited=False,
+                        permission_level=ServingEndpointPermissionLevel.CAN_MANAGE,
+                    )
+                ],
+            ),
+            *[
+                ServingEndpointAccessControlResponse(
+                    group_name=managed_query_group_name(
+                        endpoint_id=endpoint.id,
+                        application_id=application_id,
+                    ),
+                    all_permissions=[
+                        ServingEndpointPermission(
+                            inherited=False,
+                            permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
+                        )
+                    ],
+                )
+                for application_id in applications
+            ],
+        ]
+    )
+    serving = _ServingEndpoints(
+        endpoint,
+        permissions_by_endpoint_id={endpoint.id: permissions},
+    )
+    groups = {
+        application_id: SimpleNamespace(
+            id=f"group-{application_id}",
+            display_name=managed_query_group_name(
+                endpoint_id=endpoint.id,
+                application_id=application_id,
+            ),
+            external_id=managed_query_group_external_id(
+                endpoint_id=endpoint.id,
+                application_id=application_id,
+            ),
+            members=[SimpleNamespace(value=f"{application_id}-scim")],
+        )
+        for application_id in applications
+    }
+    principals = {
+        application_id: SimpleNamespace(
+            id=f"{application_id}-scim",
+            application_id=application_id,
+        )
+        for application_id in applications
+    }
+    workspace = _runtime_workspace(serving)
+    workspace.groups = SimpleNamespace(
+        list=lambda **kwargs: [
+            group
+            for group in groups.values()
+            if group.display_name
+            == kwargs["filter"].removeprefix("displayName eq '").removesuffix("'")
+        ],
+        get=lambda group_id: next(group for group in groups.values() if group.id == group_id),
+    )
+    workspace.service_principals = SimpleNamespace(
+        list=lambda **_kwargs: list(principals.values()),
+    )
+
+    deployment = _ensure_gateway(
+        workspace,
+        approved_query_application_ids=applications,
+    )
+
+    assert deployment.endpoint == "mip-growth-agent-gateway"
+    assert serving.created == []
+
+
+def test_exact_head_direct_query_gateway_rotates_without_mutating_restorable_blue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    client = _Client(
+        [
+            SimpleNamespace(
+                version="5",
+                source="models:/m-reviewed",
+                tags={
+                    gateway.SOURCE_HASH_TAG: source_hash,
+                    gateway.UPSTREAM_TAG: "managed-supervisor",
+                },
+            )
+        ]
+    )
+    _patch_mlflow(monkeypatch, client=client)
+    blue = _exact_endpoint_details(source_hash=source_hash)
+    direct_acl = ServingEndpointPermissions(
+        access_control_list=[
+            ServingEndpointAccessControlResponse(
+                service_principal_name=_RUNTIME_APPLICATION_ID,
+                all_permissions=[
+                    ServingEndpointPermission(
+                        inherited=False,
+                        permission_level=ServingEndpointPermissionLevel.CAN_MANAGE,
+                    )
+                ],
+            ),
+            ServingEndpointAccessControlResponse(
+                service_principal_name="app-sp",
+                all_permissions=[
+                    ServingEndpointPermission(
+                        inherited=False,
+                        permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
+                    )
+                ],
+            )
+        ]
+    )
+    serving = _ServingEndpoints(
+        blue,
+        permissions_by_endpoint_id={blue.id: direct_acl},
+    )
+
+    deployment = _ensure_gateway(_runtime_workspace(serving))
+
+    assert deployment.endpoint == (
+        f"mip-growth-agent-gateway-{deployment.resource_hash[:12]}-mq1"
+    )
+    assert serving.created[0]["name"] == deployment.endpoint
+    assert serving.get("mip-growth-agent-gateway") is blue
+    assert serving.get_permissions(blue.id) is direct_acl
+    assert {
+        entry.service_principal_name for entry in direct_acl.access_control_list or []
+    } == {_RUNTIME_APPLICATION_ID, "app-sp"}
+    assert serving.updated == []
+    assert serving.gateway_updates == []
+    assert serving.patches == []
+    assert serving.events == []
+
+
+def test_exact_gateway_with_only_runtime_manager_remains_reusable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_hash = gateway_agent_source_hash(
+        upstream_endpoint="managed-supervisor",
+        catalog=_CATALOG,
+        genie_space_id=_GENIE_SPACE_ID,
+    )
+    client = _Client(
+        [
+            SimpleNamespace(
+                version="5",
+                source="models:/m-reviewed",
+                tags={
+                    gateway.SOURCE_HASH_TAG: source_hash,
+                    gateway.UPSTREAM_TAG: "managed-supervisor",
+                },
+            )
+        ]
+    )
+    _patch_mlflow(monkeypatch, client=client)
+    endpoint = _exact_endpoint_details(source_hash=source_hash)
+    permissions = ServingEndpointPermissions(
+        access_control_list=[
+            ServingEndpointAccessControlResponse(
+                service_principal_name=_RUNTIME_APPLICATION_ID,
+                all_permissions=[
+                    ServingEndpointPermission(
+                        inherited=False,
+                        permission_level=ServingEndpointPermissionLevel.CAN_MANAGE,
+                    )
+                ],
+            )
+        ]
+    )
+    serving = _ServingEndpoints(
+        endpoint,
+        permissions_by_endpoint_id={endpoint.id: permissions},
+    )
+
+    deployment = _ensure_gateway(_runtime_workspace(serving))
+
+    assert deployment.endpoint == "mip-growth-agent-gateway"
+    assert serving.created == []
+    assert serving.get_permissions(endpoint.id) is permissions
 
 
 @pytest.mark.parametrize(
@@ -3986,7 +4227,7 @@ def test_ensure_gateway_agent_rejects_drifted_immutable_green_candidate(monkeypa
         ]
     )
     _patch_mlflow(monkeypatch, client=client)
-    candidate = f"mip-growth-agent-gateway-{_resource_hash(source_hash)[:12]}"
+    candidate = f"mip-growth-agent-gateway-{_resource_hash(source_hash)[:12]}-mq1"
     drifted = SimpleNamespace(
         creator=_RUNTIME_APPLICATION_ID,
         pending_config=None,

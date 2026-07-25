@@ -58,15 +58,32 @@ three secrets to the GitHub repo — runs from a single Python tool:
 #      GitHub secrets via stdin.
 #   3. The reviewed `origin` remote names the GitHub repository that will
 #      receive each role-owned client ID and one-shot client secret.
+#   4. Export MIP_AI_GATEWAY_PROOF_SIGNING_KEY and its derived
+#      MIP_AI_GATEWAY_PROOF_VERIFY_KEY. Credential creation holds its outer
+#      signed App deployment lease and a separate fixed global
+#      mip-oauth-credential-mutations lease, so alternate App names cannot
+#      overlap bootstrap, rotation, audit, or temporary identity probes.
+#   5. Run every standalone bootstrap/rotation from a clean tracked and
+#      untracked worktree. If MIP_DEPLOYMENT_SOURCE_GIT_SHA is set, it must
+#      equal HEAD. Deploy-owned mutations instead require the explicit source
+#      SHA already bound to their borrowed signed outer lease.
 
+# Bootstrap the isolated agent-runtime identity first. It is the only
+# service-principal reader retained on the shared signed-lease root and is the
+# delegated lease writer for every later credential mutation.
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
-    --identity-role normal \
+    --identity-role agent_runtime \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
 
 # Repeat for the other six separated workspace identities. Group creation is
 # explicit and reviewed only for the admin role.
+python tools/databricks/provision_m2m_oauth.py \
+    --pre-app-bootstrap \
+    --identity-role normal \
+    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
+    --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
     --identity-role operator2 \
@@ -90,11 +107,6 @@ python tools/databricks/provision_m2m_oauth.py \
     --set-gh-secrets
 python tools/databricks/provision_m2m_oauth.py \
     --pre-app-bootstrap \
-    --identity-role agent_runtime \
-    --gh-repo skyler-myers-db/mortgage-intelligence-platform \
-    --set-gh-secrets
-python tools/databricks/provision_m2m_oauth.py \
-    --pre-app-bootstrap \
     --identity-role agent_proxy \
     --gh-repo skyler-myers-db/mortgage-intelligence-platform \
     --set-gh-secrets
@@ -105,9 +117,29 @@ What this runs (in order, all via `databricks-sdk`):
 1. Resolve or create only the reserved role-bound service principal. The admin
    command also creates/joins only `mip-admin` because `--create-group` is
    explicit.
-2. `w.service_principal_secrets_proxy.create(service_principal_id=...)`
-   — mints a one-shot OAuth client_secret. The secret is returned in
-   the response's `.secret` field and cannot be retrieved later.
+2. Acquire the fixed global credential-mutation lease before reading the
+   provider inventory. Write and read back a signed immutable intent containing
+   the exact provider authority, principal, sink descriptor, global lease
+   generation, and prior credential IDs; then call
+   `w.service_principal_secrets_proxy.create(service_principal_id=...)`.
+   A signed observation containing the returned credential ID is durable before
+   the one-shot secret is exposed. Commit-timeout ambiguity is reconciled under
+   the same operation; cleanup is accepted only after a complete repeated-read
+   window proves the prior state. An operation-bound signed quarantine blocks
+   all later credential baselines across every App name until a terminal
+   resolution proves exact provider inventory and sink disposition. Lease
+   expiry and record deletion are not recovery.
+   Recovery is available only through the signed-intent deploy mode documented
+   in `docs/runbook.md`: the operator must independently confirm the principal,
+   application identity, and provider API. A fresh resolver process can take
+   over only the intent's expired global recovery root, revoke only its durable
+   observation or sole attributable delta, delete only the armed GitHub secret
+   names and prove repeated absence, and append a signed terminal record
+   containing both the original operation lease and resolver lease lineages. It
+   leaves a zero-delta unobserved intent quarantined because a bounded inventory
+   read cannot prove that a delayed provider create will never commit and the
+   current provider exposes no durable non-commit evidence; it never
+   reconstructs or re-delivers a secret.
 3. `gh secret set ... --repo ... <stdin>` writes each role's credential
    material via stdin so it never appears in argv/ps. For the agent-proxy role,
    the only write is one
@@ -115,7 +147,11 @@ What this runs (in order, all via `databricks-sdk`):
    its client ID, immutable credential ID, and one-shot secret. Live consumers
    derive all three values solely from that canonical bundle. If the bundle
    write fails, the newly minted credential is revoked, its absence is re-read,
-   and the prior bundle remains usable before the tool returns.
+   and every armed GitHub secret name is deleted with repeated absence proof
+   before the operation resolves. Because GitHub secrets are write-only, this
+   fail-closed invalidation may also remove a prior bundle even when the failed
+   request did not commit. Treat the sink as unavailable and retry the reviewed
+   rotation; do not assume the prior bundle remains usable.
 
 This mode performs no App, Lakebase, Gateway, or warehouse grant and does not
 write `MIP_APP_URL` before an App exists. Pre-App bootstrap is creation-only:
@@ -158,7 +194,11 @@ Flags of note:
 | `--dry-run`             | off                                              | Resolve defaults and validate arguments without touching the workspace.                           |
 
 Rotation (replaces the "Rotation cadence" section below when you use
-the SDK path): re-run with `--rotate --set-gh-secrets`. For agent-proxy,
+the SDK path): use normal mode with the role's canonical
+`--expected-application-id`, `--rotate`, and `--set-gh-secrets`; never combine
+`--rotate` with creation-only `--pre-app-bootstrap`. For every role except
+agent-proxy, a durable sink acknowledgement is followed by immediate retirement
+of every prior credential and an exact one-credential postflight. For agent-proxy,
 the old credential remains usable during blue/green overlap; the signed deploy
 then revokes only the explicitly signed-blue OAuth credential IDs and removes
 their matching Databricks secret-key versions after blue retirement. Final
@@ -405,16 +445,16 @@ artifact alongside the warehouse/Lakebase/Genie drill evidence.
   a future feature needs broader access (e.g. SQL warehouse reads), add
   a second purpose-built SP rather than widening this one.
 - The AI Gateway verifier SP is separate from the app-access SP. It may
-  receive only its scoped Lakebase role, serving-endpoint `CAN QUERY`, and
-  SQL-warehouse `CAN USE`; it must have no direct, inherited, or effective
-  app permission and no direct or nested membership in `mip-admin` or an
-  app-authorized group.
+  receive only its scoped Lakebase role, endpoint-bound managed-group
+  `CAN QUERY`, and SQL-warehouse `CAN USE`; it must have no direct,
+  unrelated-group, inherited, or effective app permission and no direct or
+  nested membership in `mip-admin` or an app-authorized group.
 - The managed-Supervisor proxy SP is separate from the runtime owner and every
-  app-facing identity. It receives one Supervisor `CAN_QUERY`, one Genie
-  `CAN_RUN`, and direct execution of the three reviewed UC functions. Global
-  postflights require no App, Lakebase, warehouse, serving-endpoint, foreign
-  catalog, table, volume, model, ownership, inherited, or fourth-function
-  authority.
+  app-facing identity. It receives one endpoint-bound, sole-member
+  managed-group `CAN_QUERY`, one direct Genie `CAN_RUN`, and direct execution
+  of the three reviewed UC functions. Global postflights require no App,
+  Lakebase, warehouse, unrelated serving-endpoint or group, foreign catalog,
+  table, volume, model, ownership, inherited, or fourth-function authority.
 - `--identity-role verifier --grant-can-use` is an invalid request. Both the
   CLI (including `--dry-run`) and direct `provision()` calls reject it before
   creating a workspace client, mutating Lakebase/serving/warehouse/App

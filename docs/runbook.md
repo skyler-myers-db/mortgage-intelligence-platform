@@ -276,7 +276,14 @@ idempotent command.
 
 ```bash
 # 0. One-time credentials before the App exists. The GitHub sink must match origin.
+# Export MIP_AI_GATEWAY_PROOF_SIGNING_KEY and its derived
+# MIP_AI_GATEWAY_PROOF_VERIFY_KEY first. Bootstrap holds the outer signed App
+# lease and the fixed global mip-oauth-credential-mutations lease. These
+# standalone commands refuse tracked or untracked changes and require any
+# configured MIP_DEPLOYMENT_SOURCE_GIT_SHA to equal HEAD.
 GH_REPO=skyler-myers-db/mortgage-intelligence-platform
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role agent_runtime --set-gh-secrets --gh-repo "$GH_REPO"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
   --identity-role normal --set-gh-secrets --gh-repo "$GH_REPO"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
@@ -284,12 +291,48 @@ python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
   --identity-role admin --create-group --set-gh-secrets --gh-repo "$GH_REPO"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
+  --identity-role release_probe --set-gh-secrets --gh-repo "$GH_REPO"
+python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
   --identity-role verifier --set-gh-secrets --gh-repo "$GH_REPO"
 python tools/databricks/provision_m2m_oauth.py --pre-app-bootstrap \
-  --identity-role agent_runtime --set-gh-secrets --gh-repo "$GH_REPO"
+  --identity-role agent_proxy --set-gh-secrets --gh-repo "$GH_REPO"
 
-# Existing reserved SP with an unavailable credential: repeat only that role
-# with --rotate. Never reuse a client ID across roles.
+# Pre-App bootstrap is creation-only. If a failed bootstrap was fully
+# compensated, prove and remove the credentialless principal before repeating
+# bootstrap; never add --rotate to a bootstrap command. After the App exists,
+# rotate in normal mode with the role's exact --expected-application-id,
+# --rotate, and --set-gh-secrets. Never reuse a client ID across roles.
+# A signed intent is durable before provider create; observation and sink
+# records are durable before the one-shot secret is returned or written.
+# A durable oauth-credential-quarantine record blocks every App namespace until
+# an administrator runs the exact signed-intent recovery under governance
+# review. Never remove that record or wait for lease expiry merely to make
+# bootstrap proceed.
+python -m tools.databricks.oauth_credential_recovery_cli inspect \
+  --intent-path "$INTENT_PATH"
+# Confirm the displayed principal, authority identity, and provider API against
+# the reviewed deployment inventory. Then export all four values and rerun the
+# normal deploy; partial recovery configuration fails preflight.
+export MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH="$INTENT_PATH"
+export MIP_OAUTH_CREDENTIAL_RECOVERY_PRINCIPAL_ID="<confirmed-scim-id>"
+export MIP_OAUTH_CREDENTIAL_RECOVERY_AUTHORITY_IDENTITY="<confirmed-client-id>"
+export MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API="<confirmed-provider-api>"
+./scripts/deploy.sh -t dev
+# A zero-delta unobserved intent remains quarantined because a bounded read
+# cannot prove that a delayed provider create will never commit. The current
+# provider exposes no durable non-commit evidence. Recovery also refuses
+# multiple deltas, missing prior credentials, any delete exception, or any
+# mismatch. It never reconstructs or re-delivers a one-shot secret.
+# If the global mutation lease exists but no intent was committed, inspect and
+# explicitly recover only that signed orphan coordinate. The recovery
+# subcommand requires a live signed outer deployment lease, so do not invoke it
+# directly after the failed process exits. Export both reviewed coordinates and
+# rerun deploy; deploy acquires the new outer lease before recovering the
+# orphan. Do not combine this with the four intent-recovery variables above.
+python -m tools.databricks.oauth_credential_recovery_cli inspect-orphan-lease
+export MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID="<reviewed-lease-id>"
+export MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID="<reviewed-recovery-root-id>"
+./scripts/deploy.sh -t dev
 
 # 1. Separately create/store DATABRICKS_ACCOUNT_ID plus the distinct
 #    DATABRICKS_ACCOUNT_CLIENT_ID/SECRET account-SCIM pair.

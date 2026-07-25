@@ -7,7 +7,7 @@ import json
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -39,6 +39,13 @@ from tools.databricks.agentic_resource_contract import (  # noqa: E402
     SupervisorAgentBinding,
     resolve_reviewed_function_owner,
 )
+from tools.databricks.agentic_supervisor_endpoint import (  # noqa: E402
+    exact_supervisor_endpoint_id,
+    plan_supervisor_agent,
+    supervisor_agent_binding,
+    supervisor_candidates,
+    supervisor_endpoint_requires_managed_query_rotation,
+)
 from tools.databricks.gateway_runtime_resource_binding import (  # noqa: E402
     bind_gateway_runtime_resource_contract,
 )
@@ -50,18 +57,19 @@ from tools.databricks.serving_endpoint_acl import (  # noqa: E402
     grant_direct_can_query,
     revoke_direct_permissions,
 )
-from tools.databricks.supervisor_agent_contract import (  # noqa: E402
-    RUNTIME_REPLACEMENT_SUFFIX,
-    SUPERVISOR_DESCRIPTION,
-    SUPERVISOR_INSTRUCTIONS,
-    SupervisorContractDrift,
-    supervisor_replacement_name,
+from tools.databricks.signed_blue_supervisor_recovery import (  # noqa: E402
+    recover_interrupted_signed_blue_finalization,
+    signed_blue_supervisor_pin_from_env,
 )
+from tools.databricks.supervisor_agent_contract import SupervisorContractDrift  # noqa: E402
 from tools.databricks.supervisor_agent_contract import (  # noqa: E402
     supervisor_tool_specs as _supervisor_tool_specs,
 )
 from tools.databricks.supervisor_contract_verification import (  # noqa: E402
     assert_exact_supervisor_contract as _assert_exact_supervisor_contract,
+)
+from tools.databricks.supervisor_creation_runtime import (  # noqa: E402
+    assert_unique_live_supervisor_binding,
 )
 
 SyncTableDefinition: TypeAlias = tuple[str, str, tuple[str, ...]]
@@ -373,85 +381,92 @@ def _supervisor_agents() -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-def _matching_supervisor(
-    display_name: str, *, agents: list[dict[str, Any]] | None = None
-) -> dict[str, Any] | None:
-    rows = _supervisor_agents() if agents is None else agents
-    matches = [row for row in rows if row.get("display_name") == display_name]
-    if len(matches) > 1:
-        raise RuntimeError(
-            f"multiple Supervisor agents use reserved display name {display_name!r}; "
-            "manual governance review is required"
-        )
-    return matches[0] if matches else None
+def _rename_supervisor_agent(supervisor_id: str, name: str) -> None:
+    _run_no_json(
+        [
+            "supervisor-agents",
+            "update-supervisor-agent",
+            f"supervisor-agents/{supervisor_id}",
+            "display_name",
+            name,
+        ]
+    )
 
 
 def ensure_supervisor_agent(
+    workspace: WorkspaceClient,
     *,
     display_name: str,
     genie_space_id: str,
     catalog: str,
     expected_creator_application_id: str,
+    expected_query_application_id: str | None = None,
+    approved_query_application_ids: tuple[str, ...] = (),
+    signed_blue_supervisor_pin: Mapping[str, object] | None = None,
     assert_single_writer: Callable[[], None],
 ) -> SupervisorAgentBinding:
-    agents = _supervisor_agents()
-    canonical = _matching_supervisor(display_name, agents=agents)
-    replacement_name = supervisor_replacement_name(
-        display_name,
+    candidates = supervisor_candidates(
+        _supervisor_agents(),
+        display_name=display_name,
         genie_space_id=genie_space_id,
         catalog=catalog,
     )
-    replacement = _matching_supervisor(replacement_name, agents=agents)
-    legacy_replacement = _matching_supervisor(
-        f"{display_name}{RUNTIME_REPLACEMENT_SUFFIX}",
-        agents=agents,
+    candidates = recover_interrupted_signed_blue_finalization(
+        workspace,
+        candidates,
+        signed_blue_pin=signed_blue_supervisor_pin,
+        display_name=display_name,
+        genie_space_id=genie_space_id,
+        catalog=catalog,
+        runtime_application_id=expected_creator_application_id,
+        managed_query_application_id=expected_query_application_id,
+        additional_managed_query_application_ids=approved_query_application_ids,
+        assert_contract=assert_exact_supervisor_contract,
+        assert_single_writer=assert_single_writer,
+        list_agents=_supervisor_agents,
+        rename_agent=_rename_supervisor_agent,
     )
-    if replacement is not None and legacy_replacement is not None:
-        raise RuntimeError(
-            "contract-hashed and legacy runtime Supervisor replacements coexist; "
-            "manual governance cleanup is required before selecting either candidate"
+    plan = plan_supervisor_agent(
+        workspace,
+        candidates,
+        display_name=display_name,
+        genie_space_id=genie_space_id,
+        catalog=catalog,
+        runtime_application_id=expected_creator_application_id,
+        managed_query_application_id=expected_query_application_id,
+        additional_managed_query_application_ids=approved_query_application_ids,
+        assert_contract=assert_exact_supervisor_contract,
+    )
+    replacement_name = plan.target_name
+    replaced = plan.replaced
+    agent = plan.candidate
+
+    if plan.exact_canonical is not None:
+        canonical = plan.exact_canonical
+        endpoint = str(canonical.get("endpoint_name") or "")
+        supervisor_id = str(canonical["supervisor_agent_id"])
+        assert_unique_live_supervisor_binding(
+            workspace,
+            supervisor_id=supervisor_id,
+            display_name=display_name,
+            endpoint=endpoint,
+            runtime_application_id=expected_creator_application_id,
         )
-    replaced: dict[str, Any] | None = None
-    agent: dict[str, Any] | None = None
-    if canonical is not None:
-        try:
-            assert_runtime_creator(
-                canonical.get("creator"),
-                application_id=expected_creator_application_id,
-                resource=f"Supervisor agent {display_name}",
-            )
-        except RuntimeError:
-            replaced = canonical
-            agent = replacement
-        else:
-            try:
-                assert_exact_supervisor_contract(
-                    str(canonical["supervisor_agent_id"]),
-                    genie_space_id=genie_space_id,
-                    catalog=catalog,
-                )
-            except SupervisorContractDrift:
-                replaced = canonical
-                agent = replacement
-            else:
-                if replacement is not None or legacy_replacement is not None:
-                    raise RuntimeError(
-                        "a replacement Supervisor remains beside an exact canonical contract"
-                    )
-                print(
-                    f"[agentic] canonical supervisor already exact: {display_name} "
-                    f"({canonical['supervisor_agent_id']})"
-                )
-                return SupervisorAgentBinding(
-                    supervisor_id=str(canonical["supervisor_agent_id"]),
-                    display_name=display_name,
-                    endpoint=str(canonical.get("endpoint_name") or ""),
-                )
-    elif replacement is not None:
-        agent = replacement
-    elif legacy_replacement is not None:
-        agent = legacy_replacement
-        replacement_name = f"{display_name}{RUNTIME_REPLACEMENT_SUFFIX}"
+        print(f"[agentic] canonical supervisor already exact: {display_name} " f"({supervisor_id})")
+        return supervisor_agent_binding(
+            supervisor_id=supervisor_id,
+            display_name=display_name,
+            endpoint=endpoint,
+        )
+
+    def requires_query_rotation(endpoint: str) -> bool:
+        return supervisor_endpoint_requires_managed_query_rotation(
+            workspace,
+            endpoint_name=endpoint,
+            runtime_application_id=expected_creator_application_id,
+            managed_query_application_id=expected_query_application_id,
+            additional_managed_query_application_ids=approved_query_application_ids,
+        )
 
     if agent is not None:
         assert_runtime_creator(
@@ -465,88 +480,36 @@ def ensure_supervisor_agent(
                 supervisor_id,
                 genie_space_id=genie_space_id,
                 catalog=catalog,
+                expected_display_name=replacement_name,
             )
         except SupervisorContractDrift as exc:
             raise RuntimeError(
                 "immutable green Supervisor candidate drifted; refusing in-place repair"
             ) from exc
         endpoint = str(agent.get("endpoint_name") or "")
-        print(f"[agentic] exact supervisor candidate exists: {replacement_name} ({supervisor_id})")
-        return SupervisorAgentBinding(
+        if requires_query_rotation(endpoint):
+            raise RuntimeError(
+                "immutable green Supervisor candidate retains legacy query access; "
+                "refusing in-place repair"
+            )
+        assert_unique_live_supervisor_binding(
+            workspace,
             supervisor_id=supervisor_id,
             display_name=replacement_name,
             endpoint=endpoint,
-            replaced_supervisor_id=(
-                str(replaced.get("supervisor_agent_id") or "") if replaced else None
-            ),
-            replaced_supervisor_endpoint=(
-                str(replaced.get("endpoint_name") or "") if replaced else None
-            ),
-            replaced_supervisor_creator=(str(replaced.get("creator") or "") if replaced else None),
-            replaced_supervisor_create_time=(
-                str(replaced.get("create_time") or "") if replaced else None
-            ),
+            runtime_application_id=expected_creator_application_id,
+        )
+        print(f"[agentic] exact supervisor candidate exists: {replacement_name} ({supervisor_id})")
+        return supervisor_agent_binding(
+            supervisor_id=supervisor_id,
+            display_name=replacement_name,
+            endpoint=endpoint,
+            replaced=replaced,
         )
 
-    target_display_name = replacement_name if replaced is not None else display_name
-    print(f"[agentic] creating supervisor agent: {target_display_name}")
-    assert_single_writer()
-    created = _run(
-        ["supervisor-agents", "create-supervisor-agent"],
-        input_json={
-            "display_name": target_display_name,
-            "description": SUPERVISOR_DESCRIPTION,
-            "instructions": SUPERVISOR_INSTRUCTIONS,
-        },
-    )
-    if not isinstance(created, dict):
-        raise RuntimeError("Supervisor create returned an invalid payload")
-    supervisor_id = str(created.get("supervisor_agent_id") or "").strip()
-    if not supervisor_id:
-        raise RuntimeError("Supervisor create did not return a resource ID")
-    _ensure_supervisor_tools(
-        supervisor_id,
-        genie_space_id=genie_space_id,
-        catalog=catalog,
-        assert_single_writer=assert_single_writer,
-    )
-    endpoint = created.get("endpoint_name") or ""
-    if not endpoint:
-        refreshed = _run(
-            ["supervisor-agents", "get-supervisor-agent", f"supervisor-agents/{supervisor_id}"]
-        )
-        if not isinstance(refreshed, dict):
-            raise RuntimeError("Supervisor endpoint lookup returned an invalid payload")
-        endpoint = refreshed.get("endpoint_name") or ""
-    refreshed = _run(
-        ["supervisor-agents", "get-supervisor-agent", f"supervisor-agents/{supervisor_id}"]
-    )
-    if not isinstance(refreshed, dict):
-        raise RuntimeError("Supervisor postflight returned an invalid payload")
-    assert_runtime_creator(
-        refreshed.get("creator"),
-        application_id=expected_creator_application_id,
-        resource=f"Supervisor agent {target_display_name}",
-    )
-    assert_exact_supervisor_contract(
-        supervisor_id,
-        genie_space_id=genie_space_id,
-        catalog=catalog,
-    )
-    return SupervisorAgentBinding(
-        supervisor_id=supervisor_id,
-        display_name=target_display_name,
-        endpoint=endpoint,
-        replaced_supervisor_id=(
-            str(replaced.get("supervisor_agent_id") or "") if replaced else None
-        ),
-        replaced_supervisor_endpoint=(
-            str(replaced.get("endpoint_name") or "") if replaced else None
-        ),
-        replaced_supervisor_creator=(str(replaced.get("creator") or "") if replaced else None),
-        replaced_supervisor_create_time=(
-            str(replaced.get("create_time") or "") if replaced else None
-        ),
+    raise RuntimeError(
+        "Supervisor creation requires the signed prepare/create/claim/complete "
+        f"workflow for deterministic target {replacement_name!r}"
     )
 
 
@@ -597,6 +560,7 @@ def assert_exact_supervisor_contract(
     genie_space_id: str,
     catalog: str,
     expected_contract: dict[str, Any] | None = None,
+    expected_display_name: str | None = None,
 ) -> None:
     """Re-read immutable definition, exact tools, and zero examples."""
     _assert_exact_supervisor_contract(
@@ -606,6 +570,7 @@ def assert_exact_supervisor_contract(
         run=_run,
         exact_tools=_exact_supervisor_tools,
         expected_contract=expected_contract,
+        expected_display_name=expected_display_name,
     )
 
 
@@ -677,7 +642,9 @@ def main(argv: list[str] | None = None) -> int:
     ).parse_args(argv)
     workspace = WorkspaceClient()
     reviewed_function_owner = resolve_reviewed_function_owner(
-        workspace, args.catalog, args.reviewed_function_owner,
+        workspace,
+        args.catalog,
+        args.reviewed_function_owner,
         args.capture_reviewed_function_owner,
     )
     tables = tuple(
@@ -716,6 +683,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     supervisor_id: str | None = None
     supervisor_endpoint: str | None = None
+    supervisor_endpoint_id: str | None = None
     supervisor_binding: SupervisorAgentBinding | None = None
     if not args.skip_supervisor:
         if not args.genie_space_id:
@@ -732,22 +700,34 @@ def main(argv: list[str] | None = None) -> int:
         assert lease_check is not None
         lease_check()
         supervisor_binding = ensure_supervisor_agent(
+            workspace,
             display_name=args.supervisor_name,
             genie_space_id=args.genie_space_id,
             catalog=args.catalog,
             expected_creator_application_id=args.expected_runtime_application_id,
+            expected_query_application_id=args.proxy_caller_application_id,
+            approved_query_application_ids=tuple(args.approved_query_application_id),
+            signed_blue_supervisor_pin=signed_blue_supervisor_pin_from_env(),
             assert_single_writer=lease_check,
         )
         supervisor_id = supervisor_binding.supervisor_id
         supervisor_endpoint = supervisor_binding.endpoint
         if supervisor_endpoint:
             _wait_serving_endpoint_ready(supervisor_endpoint, timeout=f"{args.timeout_s}s")
-            endpoint_details = workspace.serving_endpoints.get(supervisor_endpoint)
-            assert_runtime_creator(
-                getattr(endpoint_details, "creator", None),
-                application_id=args.expected_runtime_application_id,
-                resource=f"managed Supervisor endpoint {supervisor_endpoint}",
+            supervisor_endpoint_id = exact_supervisor_endpoint_id(
+                workspace,
+                endpoint_name=supervisor_endpoint,
+                runtime_application_id=args.expected_runtime_application_id,
             )
+            handoff_endpoint_id = assert_unique_live_supervisor_binding(
+                workspace,
+                supervisor_id=supervisor_binding.supervisor_id,
+                display_name=supervisor_binding.display_name,
+                endpoint=supervisor_endpoint,
+                runtime_application_id=args.expected_runtime_application_id,
+            )
+            if handoff_endpoint_id != supervisor_endpoint_id:
+                raise RuntimeError("Supervisor binding endpoint identity changed before export")
     elif not args.skip_gateway:
         supervisor_id = args.supervisor_id.strip()
         supervisor_endpoint = args.supervisor_endpoint.strip()
@@ -760,11 +740,10 @@ def main(argv: list[str] | None = None) -> int:
             genie_space_id=args.genie_space_id,
             catalog=args.catalog,
         )
-        endpoint_details = workspace.serving_endpoints.get(supervisor_endpoint)
-        assert_runtime_creator(
-            getattr(endpoint_details, "creator", None),
-            application_id=args.expected_runtime_application_id,
-            resource=f"managed Supervisor endpoint {supervisor_endpoint}",
+        supervisor_endpoint_id = exact_supervisor_endpoint_id(
+            workspace,
+            endpoint_name=supervisor_endpoint,
+            runtime_application_id=args.expected_runtime_application_id,
         )
     gateway_endpoint: str | None = None
     gateway_table: str | None = None
@@ -807,6 +786,7 @@ def main(argv: list[str] | None = None) -> int:
             proxy_caller_application_id=args.proxy_caller_application_id,
             proxy_caller_credential_id=args.proxy_caller_credential_id,
             proxy_caller_secret_reference=args.proxy_caller_secret_reference,
+            approved_query_application_ids=tuple(args.approved_query_application_id),
             deployment_app_name=args.app_name,
             deployment_lease_id=args.deployment_lease_id,
             deployment_source_git_sha=args.deployment_source_git_sha,
@@ -851,6 +831,7 @@ def main(argv: list[str] | None = None) -> int:
         agent_supervisor_name=args.supervisor_name if supervisor_id else None,
         agent_serving_endpoint=gateway_endpoint or supervisor_endpoint,
         agent_supervisor_endpoint=supervisor_endpoint,
+        agent_supervisor_endpoint_id=supervisor_endpoint_id,
         ai_gateway_endpoint=gateway_endpoint,
         ai_gateway_inference_table=gateway_table,
         ai_gateway_agent_model=gateway_model,

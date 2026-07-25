@@ -5,6 +5,10 @@ from types import SimpleNamespace
 import pytest
 from databricks.sdk.errors import NotFound, PermissionDenied
 
+from tests.fixtures.oauth_credential_session import (
+    install_in_memory_credential_mutation_session,
+)
+from tools.databricks import oauth_credential_creation
 from tools.databricks.converge_campaign_treatment_access import (
     _effective_privileges,
     target_group_membership_probe,
@@ -14,6 +18,19 @@ from tools.databricks.converge_campaign_treatment_access import (
     converge_campaign_treatment_access as _converge_campaign_treatment_access,
 )
 from tools.databricks.uc_owner_policy import account_client_from_env
+
+
+@pytest.fixture(autouse=True)
+def _disable_credential_inventory_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        oauth_credential_creation,
+        "_STABILITY_INTERVAL_SECONDS",
+        0,
+    )
+    install_in_memory_credential_mutation_session(
+        monkeypatch,
+        oauth_credential_creation,
+    )
 
 
 class _UcObjects:
@@ -152,6 +169,7 @@ def converge_campaign_treatment_access(**kwargs: object) -> bool:
     if "account_factory" not in kwargs:
         workspace = kwargs["workspace"]
         kwargs["account_factory"] = lambda: _mirrored_account(workspace)
+    kwargs.setdefault("assert_single_writer", lambda: None)
     return _converge_campaign_treatment_access(**kwargs)  # type: ignore[arg-type]
 
 
@@ -325,6 +343,42 @@ def _account_factory(*, owner_group: str, target_is_member: bool) -> object:
             target_member_id="account-sp-id",
         ),
     )
+
+
+class _ProbeSecrets:
+    def __init__(
+        self,
+        *,
+        deleted: list[tuple[str, str]] | None = None,
+        delete_error: BaseException | None = None,
+        commit_then_error: BaseException | None = None,
+    ) -> None:
+        self.live: set[str] = set()
+        self.deleted = deleted if deleted is not None else []
+        self.delete_error = delete_error
+        self.commit_then_error = commit_then_error
+
+    def list(self, _sp_id: str) -> object:
+        return (
+            SimpleNamespace(id=credential_id)
+            for credential_id in sorted(self.live)
+        )
+
+    def create(self, _sp_id: str, *, lifetime: str) -> object:
+        assert lifetime == "300s"
+        self.live.add("temporary-secret-id")
+        if self.commit_then_error is not None:
+            raise self.commit_then_error
+        return SimpleNamespace(
+            id="temporary-secret-id",
+            secret="temporary-value",
+        )
+
+    def delete(self, sp_id: str, secret_id: str) -> None:
+        if self.delete_error is not None:
+            raise self.delete_error
+        self.live.remove(secret_id)
+        self.deleted.append((sp_id, secret_id))
 
 
 def test_account_client_uses_dedicated_oauth_without_workspace_env(
@@ -856,12 +910,13 @@ def test_rejects_inactive_target_account_principal_before_owner_proof() -> None:
 def test_target_group_probe_uses_short_lived_secret_and_deletes_it() -> None:
     secret_calls: list[tuple[object, ...]] = []
 
-    class Secrets:
+    class Secrets(_ProbeSecrets):
         def create(self, sp_id: str, *, lifetime: str) -> object:
             secret_calls.append(("create", sp_id, lifetime))
-            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
+            return super().create(sp_id, lifetime=lifetime)
 
         def delete(self, sp_id: str, secret_id: str) -> None:
+            super().delete(sp_id, secret_id)
             secret_calls.append(("delete", sp_id, secret_id))
 
     workspace_kwargs: dict[str, object] = {}
@@ -889,6 +944,7 @@ def test_target_group_probe_uses_short_lived_secret_and_deletes_it() -> None:
         "Customer's Governance",
         expected_workspace_scim_id="account-sp-id",
         workspace_host="https://workspace.example.invalid",
+        assert_single_writer=lambda: None,
         workspace_factory=workspace_factory,  # type: ignore[arg-type]
     )
     assert secret_calls == [
@@ -912,16 +968,33 @@ def test_target_group_probe_uses_short_lived_secret_and_deletes_it() -> None:
     ]
 
 
+def test_target_group_probe_commit_then_timeout_revokes_discovered_secret() -> None:
+    deleted: list[tuple[str, str]] = []
+    secrets = _ProbeSecrets(
+        deleted=deleted,
+        commit_then_error=TimeoutError("response lost after provider commit"),
+    )
+    account = SimpleNamespace(service_principal_secrets=secrets)
+
+    with pytest.raises(TimeoutError, match="response lost"):
+        target_identity_groups_probe(
+            account,  # type: ignore[arg-type]
+            "account-sp-id",
+            "app-client",
+            expected_workspace_scim_id="account-sp-id",
+            workspace_host="https://workspace.example.invalid",
+            assert_single_writer=lambda: None,
+            workspace_factory=lambda **_: pytest.fail(
+                "workspace constructed after ambiguous credential create"
+            ),  # type: ignore[arg-type]
+        )
+
+    assert secrets.live == set()
+    assert deleted == [("account-sp-id", "temporary-secret-id")]
+
+
 def test_target_group_probe_recognizes_effective_group_by_immutable_id() -> None:
-    class Secrets:
-        def create(self, _sp_id: str, *, lifetime: str) -> object:
-            assert lifetime == "300s"
-            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
-
-        def delete(self, _sp_id: str, _secret_id: str) -> None:
-            return None
-
-    account = SimpleNamespace(service_principal_secrets=Secrets())
+    account = SimpleNamespace(service_principal_secrets=_ProbeSecrets())
     workspace = SimpleNamespace(
         api_client=SimpleNamespace(
             do=lambda *_args, **_kwargs: {
@@ -940,22 +1013,16 @@ def test_target_group_probe_recognizes_effective_group_by_immutable_id() -> None
         "mip owners",
         expected_workspace_scim_id="account-sp-id",
         workspace_host="https://workspace.example.invalid",
+        assert_single_writer=lambda: None,
         workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
     )
 
 
 def test_target_identity_groups_probe_returns_complete_frozen_snapshot() -> None:
     deleted: list[tuple[str, str]] = []
-
-    class Secrets:
-        def create(self, _sp_id: str, *, lifetime: str) -> object:
-            assert lifetime == "300s"
-            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
-
-        def delete(self, sp_id: str, secret_id: str) -> None:
-            deleted.append((sp_id, secret_id))
-
-    account = SimpleNamespace(service_principal_secrets=Secrets())
+    account = SimpleNamespace(
+        service_principal_secrets=_ProbeSecrets(deleted=deleted)
+    )
     identity = {
         "id": "workspace-sp-id",
         "userName": "app-client",
@@ -971,6 +1038,7 @@ def test_target_identity_groups_probe_returns_complete_frozen_snapshot() -> None
         "app-client",
         expected_workspace_scim_id="workspace-sp-id",
         workspace_host="https://workspace.example.invalid",
+        assert_single_writer=lambda: None,
         workspace_factory=lambda **_: SimpleNamespace(
             api_client=SimpleNamespace(do=lambda *_args, **_kwargs: identity)
         ),  # type: ignore[arg-type]
@@ -983,16 +1051,9 @@ def test_target_identity_groups_probe_returns_complete_frozen_snapshot() -> None
 
 def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
     deleted: list[tuple[str, str]] = []
-
-    class Secrets:
-        def create(self, _sp_id: str, *, lifetime: str) -> object:
-            assert lifetime == "300s"
-            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
-
-        def delete(self, sp_id: str, secret_id: str) -> None:
-            deleted.append((sp_id, secret_id))
-
-    account = SimpleNamespace(service_principal_secrets=Secrets())
+    account = SimpleNamespace(
+        service_principal_secrets=_ProbeSecrets(deleted=deleted)
+    )
     workspace = SimpleNamespace(
         api_client=SimpleNamespace(
             do=lambda *_args, **_kwargs: {
@@ -1011,6 +1072,7 @@ def test_target_group_probe_fails_closed_when_groups_are_omitted() -> None:
             "mip owners",
             expected_workspace_scim_id="account-sp-id",
             workspace_host="https://workspace.example.invalid",
+            assert_single_writer=lambda: None,
             workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
         )
 
@@ -1140,16 +1202,9 @@ def test_target_group_probe_rejects_mismatched_or_malformed_identity_evidence(
     identity: dict[str, object], error: str
 ) -> None:
     deleted: list[tuple[str, str]] = []
-
-    class Secrets:
-        def create(self, _sp_id: str, *, lifetime: str) -> object:
-            assert lifetime == "300s"
-            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
-
-        def delete(self, sp_id: str, secret_id: str) -> None:
-            deleted.append((sp_id, secret_id))
-
-    account = SimpleNamespace(service_principal_secrets=Secrets())
+    account = SimpleNamespace(
+        service_principal_secrets=_ProbeSecrets(deleted=deleted)
+    )
     workspace = SimpleNamespace(api_client=SimpleNamespace(do=lambda *_args, **_kwargs: identity))
 
     with pytest.raises(RuntimeError, match=error):
@@ -1161,6 +1216,7 @@ def test_target_group_probe_rejects_mismatched_or_malformed_identity_evidence(
             "mip owners",
             expected_workspace_scim_id="account-sp-id",
             workspace_host="https://workspace.example.invalid",
+            assert_single_writer=lambda: None,
             workspace_factory=lambda **_: workspace,  # type: ignore[arg-type]
         )
 
@@ -1168,17 +1224,14 @@ def test_target_group_probe_rejects_mismatched_or_malformed_identity_evidence(
 
 
 def test_target_group_probe_fails_closed_when_secret_cleanup_fails() -> None:
-    class Secrets:
-        def create(self, sp_id: str, *, lifetime: str) -> object:
-            return SimpleNamespace(id="temporary-secret-id", secret="temporary-value")
-
-        def delete(self, sp_id: str, secret_id: str) -> None:
-            raise RuntimeError("delete denied")
-
     identity = {"id": "account-sp-id", "userName": "app-client", "groups": []}
-    account = SimpleNamespace(service_principal_secrets=Secrets())
+    account = SimpleNamespace(
+        service_principal_secrets=_ProbeSecrets(
+            delete_error=RuntimeError("delete denied")
+        )
+    )
 
-    with pytest.raises(RuntimeError, match="cleanup could not be proven"):
+    with pytest.raises(RuntimeError, match="delete result is ambiguous"):
         target_group_membership_probe(
             account,  # type: ignore[arg-type]
             "account-sp-id",
@@ -1187,6 +1240,7 @@ def test_target_group_probe_fails_closed_when_secret_cleanup_fails() -> None:
             "customer-platform-governance",
             expected_workspace_scim_id="account-sp-id",
             workspace_host="https://workspace.example.invalid",
+            assert_single_writer=lambda: None,
             workspace_factory=lambda **_: SimpleNamespace(
                 api_client=SimpleNamespace(do=lambda *_args, **_kwargs: identity)
             ),  # type: ignore[arg-type]

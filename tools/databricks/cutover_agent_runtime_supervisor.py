@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
+import json
 import shlex
-import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -11,21 +11,31 @@ from typing import Any
 from mlflow import MlflowClient
 
 from databricks.sdk import WorkspaceClient
-from databricks.sdk.errors import NotFound, ResourceDoesNotExist
 from tools.databricks import app_deployment_lease
 from tools.databricks.agent_runtime_access import (
     assert_current_runtime_identity,
     assert_runtime_creator,
 )
 from tools.databricks.agent_runtime_cutover_cli import build_parser
+from tools.databricks.agentic_supervisor_endpoint import (
+    managed_query_supervisor_replacement_name,
+)
+from tools.databricks.app_gateway_access_mode import (
+    app_service_principal_identity,
+    assert_pinned_access_retirement_authority,
+    revoke_managed_app_access,
+)
+from tools.databricks.cutover_journal_clearance import clear_journal
 from tools.databricks.cutover_journal_store import (
     assert_retirement_journal,
-    clear_cutover_journal_exact,
     persist_cutover_journal,
     refresh_cutover_journal_attestation,
 )
 from tools.databricks.cutover_journal_store import (
     read_cutover_journal as _read_journal,
+)
+from tools.databricks.cutover_supervisor_inventory import (
+    supervisor_by_id_direct as _supervisor_by_id_direct,
 )
 from tools.databricks.provision_agentic_resources import (
     _converge_app_gateway_permissions,
@@ -42,10 +52,18 @@ from tools.databricks.provision_gateway_responses_agent import (
     gateway_resource_hash,
     verify_gateway_responses_agent,
 )
-from tools.databricks.serving_endpoint_acl import revoke_direct_permissions
+from tools.databricks.retired_serving_query_groups import (
+    delete_pinned_gateway,
+    exact_service_principal_scim_id,
+    retire_endpoint_query_groups,
+    retire_pinned_supervisor,
+)
 from tools.databricks.supervisor_agent_contract import (
     RUNTIME_REPLACEMENT_SUFFIX,
     supervisor_replacement_name,
+)
+from tools.databricks.supervisor_creation_runtime import (
+    assert_unique_live_supervisor_binding,
 )
 
 
@@ -60,16 +78,13 @@ def _agent_by_id(supervisor_id: str) -> dict[str, Any] | None:
     return matches[0] if matches else None
 
 
-def _app_principal(workspace: Any, app_name: str) -> str:
-    app = workspace.apps.get(app_name)
-    principal = str(
-        getattr(app, "service_principal_client_id", None)
-        or (app.get("service_principal_client_id") if isinstance(app, dict) else "")
-        or ""
-    ).strip()
-    if not principal:
-        raise RuntimeError(f"app service principal not found for {app_name!r}")
-    return principal
+def _retirement_supervisor_by_id(
+    workspace: Any,
+    supervisor_id: str,
+) -> dict[str, Any] | None:
+    """Resolve destructive retirement state through the immutable GET API."""
+
+    return _supervisor_by_id_direct(workspace, supervisor_id)
 
 
 def _endpoint_identity(workspace: Any, endpoint: str) -> tuple[str, str]:
@@ -173,6 +188,16 @@ def export_journal(
     rows: list[tuple[str, str]] = []
     if journal is not None:
         if journal.get("old_id"):
+            supervisor_pin = json.dumps(
+                {
+                    "supervisor_id": journal["old_id"],
+                    "endpoint": journal["old_endpoint"],
+                    "endpoint_id": journal["old_endpoint_id"],
+                    "creator": journal["old_creator"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
             rows.extend(
                 [
                     ("MIP_REPLACED_AGENT_SUPERVISOR_ID", journal["old_id"]),
@@ -186,9 +211,19 @@ def export_journal(
                         "MIP_REPLACED_AGENT_SUPERVISOR_CREATE_TIME",
                         journal["old_create_time"],
                     ),
+                    ("MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON", supervisor_pin),
                 ]
             )
         if journal.get("old_gateway_endpoint"):
+            gateway_pin = json.dumps(
+                {
+                    "name": journal["old_gateway_endpoint"],
+                    "endpoint_id": journal["old_gateway_endpoint_id"],
+                    "creator": journal["old_gateway_creator"],
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            )
             rows.extend(
                 [
                     ("MIP_REPLACED_AGENT_GATEWAY_ENDPOINT", journal["old_gateway_endpoint"]),
@@ -201,28 +236,12 @@ def export_journal(
                         "MIP_REPLACED_AGENT_GATEWAY_DELETE_ALLOWED",
                         journal["old_gateway_delete_allowed"],
                     ),
+                    ("MIP_REPLACED_AGENT_GATEWAY_PIN_JSON", gateway_pin),
                 ]
             )
     out_env.write_text(
         "".join(f"{key}={shlex.quote(value)}\n" for key, value in rows),
         encoding="utf-8",
-    )
-
-
-def clear_journal(
-    workspace: Any,
-    *,
-    runtime_application_id: str,
-    assert_single_writer: Callable[[], None],
-) -> None:
-    assert_current_runtime_identity(
-        workspace,
-        application_id=runtime_application_id,
-    )
-    clear_cutover_journal_exact(
-        workspace,
-        runtime_application_id=runtime_application_id,
-        assert_single_writer=assert_single_writer,
     )
 
 
@@ -279,6 +298,11 @@ def _assert_green_path(
         canonical_name,
         f"{canonical_name}{RUNTIME_REPLACEMENT_SUFFIX}",
         supervisor_replacement_name(
+            canonical_name,
+            genie_space_id=genie_space_id,
+            catalog=catalog,
+        ),
+        managed_query_supervisor_replacement_name(
             canonical_name,
             genie_space_id=genie_space_id,
             catalog=catalog,
@@ -450,6 +474,8 @@ def prepare(
     workspace: Any,
     *,
     app_name: str,
+    verifier_application_id: str,
+    verifier_scim_id: str,
     assert_single_writer: Callable[[], None],
     preserve_endpoint: tuple[str, ...] = (),
     **green: Any,
@@ -457,6 +483,23 @@ def prepare(
     """Prove green and grant only its outer endpoint while old stays live."""
 
     _assert_green_path(workspace, assert_single_writer=assert_single_writer, **green)
+    app_client_id, app_scim_id = app_service_principal_identity(workspace, app_name=app_name)
+    assert_pinned_access_retirement_authority(
+        workspace,
+        journal=_read_journal(workspace, runtime_application_id=green["runtime_application_id"]),
+        canonical_name=green["canonical_name"],
+        green_gateway_endpoint=green["gateway_endpoint"],
+        runtime_application_id=green["runtime_application_id"],
+        app_client_id=app_client_id,
+        app_scim_id=app_scim_id,
+        verifier_application_id=verifier_application_id,
+        verifier_scim_id=verifier_scim_id,
+        agent_by_id=lambda supervisor_id: _retirement_supervisor_by_id(
+            workspace,
+            supervisor_id,
+        ),
+        preserve_endpoints=preserve_endpoint,
+    )
     _converge_app_gateway_permissions(
         workspace,
         gateway_endpoint=green["gateway_endpoint"],
@@ -477,50 +520,30 @@ def _delete_pinned_gateway(
     green_endpoint: str,
     runtime_application_id: str,
     app_principal: str,
+    app_principal_id: str,
+    verifier_application_id: str | None = None,
+    verifier_scim_id: str | None = None,
     timeout_s: int,
     assert_single_writer: Callable[[], None],
 ) -> None:
-    values = (endpoint, endpoint_id, creator)
-    if not any(values):
-        return
-    if not all(values):
-        raise RuntimeError("old Gateway cutover requires its complete pinned identity")
-    assert endpoint is not None and endpoint_id is not None and creator is not None
-    if endpoint == green_endpoint:
-        raise RuntimeError("old Gateway endpoint equals green; refusing destructive cutover")
-    if delete_allowed:
-        assert_runtime_creator(
-            creator,
-            application_id=runtime_application_id,
-            resource=f"pinned old Gateway endpoint {endpoint}",
-        )
-    try:
-        actual = _endpoint_identity(workspace, endpoint)
-    except (NotFound, ResourceDoesNotExist):
-        return
-    if actual != (endpoint_id, creator):
-        raise RuntimeError("old Gateway endpoint changed; refusing destructive cutover")
-    assert_single_writer()
-    revoke_direct_permissions(
+    delete_pinned_gateway(
         workspace,
-        endpoint_name=endpoint,
-        service_principal=app_principal,
-        missing_ok=True,
+        endpoint=endpoint,
+        endpoint_id=endpoint_id,
+        creator=creator,
+        delete_allowed=delete_allowed,
+        green_endpoint=green_endpoint,
+        runtime_application_id=runtime_application_id,
+        app_principal=app_principal,
+        app_principal_id=app_principal_id,
+        verifier_application_id=verifier_application_id,
+        verifier_scim_id=verifier_scim_id,
+        timeout_s=timeout_s,
+        assert_single_writer=assert_single_writer,
+        endpoint_identity=_endpoint_identity,
+        revoke_app_access=revoke_managed_app_access,
+        retire_query_groups=retire_endpoint_query_groups,
     )
-    if _endpoint_identity(workspace, endpoint) != (endpoint_id, creator):
-        raise RuntimeError("old Gateway endpoint changed while revoking its App access")
-    if not delete_allowed:
-        return
-    assert_single_writer()
-    workspace.serving_endpoints.delete(endpoint)
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            workspace.serving_endpoints.get(endpoint)
-        except (NotFound, ResourceDoesNotExist):
-            return
-        time.sleep(5)
-    raise TimeoutError("old Gateway endpoint remained after governed cleanup")
 
 
 def retire(
@@ -541,6 +564,9 @@ def retire(
     old_gateway_endpoint_id: str | None = None,
     old_gateway_creator: str | None = None,
     old_gateway_delete_allowed: bool = False,
+    verifier_application_id: str | None = None,
+    verifier_scim_id: str | None = None,
+    proxy_application_id: str | None = None,
     timeout_s: int,
     gateway_model: str,
     gateway_model_version: int,
@@ -600,7 +626,23 @@ def retire(
         genie_space_id=genie_space_id,
         runtime_application_id=runtime_application_id,
     )
-    app_principal = _app_principal(workspace, app_name)
+    app_principal, app_principal_id = app_service_principal_identity(workspace, app_name=app_name)
+    cleanup_enabled = bool(verifier_application_id or verifier_scim_id or proxy_application_id)
+    if cleanup_enabled and not all(
+        [verifier_application_id, verifier_scim_id, proxy_application_id]
+    ):
+        raise ValueError(
+            "verifier application/SCIM and proxy application IDs are all required "
+            "for endpoint-bound group retirement"
+        )
+    proxy_scim_id = (
+        exact_service_principal_scim_id(
+            workspace,
+            application_id=str(proxy_application_id),
+        )
+        if cleanup_enabled
+        else None
+    )
     _delete_pinned_gateway(
         workspace,
         endpoint=old_gateway_endpoint,
@@ -610,92 +652,36 @@ def retire(
         green_endpoint=gateway_endpoint,
         runtime_application_id=runtime_application_id,
         app_principal=app_principal,
+        app_principal_id=app_principal_id,
+        verifier_application_id=verifier_application_id,
+        verifier_scim_id=verifier_scim_id,
         timeout_s=timeout_s,
         assert_single_writer=assert_single_writer,
     )
-    if not old_id:
-        return
-    if not all([old_endpoint, old_endpoint_id, old_creator, old_create_time]):
-        raise RuntimeError("old Supervisor cutover requires its complete pinned identity")
-    assert old_endpoint is not None
-    assert old_endpoint_id is not None
-    assert old_creator is not None
-    assert old_create_time is not None
-    try:
-        actual_endpoint_id, actual_endpoint_creator = _endpoint_identity(
+    retire_pinned_supervisor(
+        workspace,
+        canonical_name=canonical_name,
+        old_id=old_id,
+        old_endpoint=old_endpoint,
+        old_endpoint_id=old_endpoint_id,
+        old_creator=old_creator,
+        old_create_time=old_create_time,
+        app_principal=app_principal,
+        app_principal_id=app_principal_id,
+        proxy_application_id=proxy_application_id,
+        proxy_scim_id=proxy_scim_id,
+        cleanup_enabled=cleanup_enabled,
+        timeout_s=timeout_s,
+        assert_single_writer=assert_single_writer,
+        agent_by_id=lambda supervisor_id: _retirement_supervisor_by_id(
             workspace,
-            old_endpoint,
-        )
-    except (NotFound, ResourceDoesNotExist) as exc:
-        if _agent_by_id(old_id) is not None:
-            raise RuntimeError("old Supervisor still exists without its pinned endpoint") from exc
-        return
-    if (actual_endpoint_id, actual_endpoint_creator) != (old_endpoint_id, old_creator):
-        raise RuntimeError("old managed endpoint changed; refusing destructive cutover")
-    old = _agent_by_id(old_id)
-    if old is not None:
-        pinned = (
-            str(old.get("display_name") or ""),
-            str(old.get("endpoint_name") or ""),
-            str(old.get("creator") or ""),
-            str(old.get("create_time") or ""),
-        )
-        if pinned != (canonical_name, old_endpoint, old_creator, old_create_time):
-            raise RuntimeError(
-                "old Supervisor changed after provisioning; refusing destructive cutover"
-            )
-
-        assert_single_writer()
-        revoke_direct_permissions(
-            workspace,
-            endpoint_name=old_endpoint,
-            service_principal=app_principal,
-            missing_ok=False,
-        )
-        if _endpoint_identity(workspace, old_endpoint) != (old_endpoint_id, old_creator):
-            raise RuntimeError("old managed endpoint changed while revoking its App bypass")
-        if _agent_by_id(old_id) != old:
-            raise RuntimeError("old Supervisor changed while revoking its App bypass")
-        assert_single_writer()
-        _run_no_json(
-            [
-                "supervisor-agents",
-                "delete-supervisor-agent",
-                f"supervisor-agents/{old_id}",
-            ]
-        )
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            if _agent_by_id(old_id) is None:
-                break
-            time.sleep(5)
-        else:
-            raise TimeoutError("old Supervisor was not deleted after the governed cutover")
-    else:
-        assert_single_writer()
-        revoke_direct_permissions(
-            workspace,
-            endpoint_name=old_endpoint,
-            service_principal=app_principal,
-            missing_ok=True,
-        )
-
-    try:
-        orphan_identity = _endpoint_identity(workspace, old_endpoint)
-    except (NotFound, ResourceDoesNotExist):
-        return
-    if orphan_identity != (old_endpoint_id, old_creator):
-        raise RuntimeError("old managed endpoint identity changed; refusing orphan cleanup")
-    assert_single_writer()
-    workspace.serving_endpoints.delete(old_endpoint)
-    deadline = time.monotonic() + timeout_s
-    while time.monotonic() < deadline:
-        try:
-            workspace.serving_endpoints.get(old_endpoint)
-        except (NotFound, ResourceDoesNotExist):
-            return
-        time.sleep(5)
-    raise TimeoutError("old managed Supervisor endpoint remained after explicit cleanup")
+            supervisor_id,
+        ),
+        endpoint_identity=_endpoint_identity,
+        revoke_app_access=revoke_managed_app_access,
+        delete_agent=_run_no_json,
+        retire_query_groups=retire_endpoint_query_groups,
+    )
 
 
 def finalize(
@@ -736,27 +722,48 @@ def finalize(
     )
     if replacement.get("display_name") != canonical_name:
         assert_single_writer()
-        _run_no_json(
-            [
-                "supervisor-agents",
-                "update-supervisor-agent",
-                f"supervisor-agents/{replacement_id}",
-                "display_name",
-                canonical_name,
-            ]
-        )
-    final = _agent_by_id(replacement_id)
-    if final is None or final.get("display_name") != canonical_name:
-        raise RuntimeError("Supervisor canonical-name finalization failed")
-    assert_runtime_creator(
-        final.get("creator"),
-        application_id=runtime_application_id,
-        resource="canonical Supervisor agent",
+        try:
+            _run_no_json(
+                [
+                    "supervisor-agents",
+                    "update-supervisor-agent",
+                    f"supervisor-agents/{replacement_id}",
+                    "display_name",
+                    canonical_name,
+                ]
+            )
+        except Exception:  # noqa: BLE001 - resolve ambiguous provider commit
+            try:
+                assert_unique_live_supervisor_binding(
+                    workspace,
+                    supervisor_id=replacement_id,
+                    display_name=canonical_name,
+                    endpoint=replacement_endpoint,
+                    runtime_application_id=runtime_application_id,
+                )
+            except Exception as read_error:  # noqa: BLE001
+                raise RuntimeError(
+                    "Supervisor canonical-name rename state is ambiguous"
+                ) from read_error
+    assert_unique_live_supervisor_binding(
+        workspace,
+        supervisor_id=replacement_id,
+        display_name=canonical_name,
+        endpoint=replacement_endpoint,
+        runtime_application_id=runtime_application_id,
     )
     assert_exact_supervisor_contract(
         replacement_id,
         genie_space_id=genie_space_id,
         catalog=catalog,
+        expected_display_name=canonical_name,
+    )
+    assert_unique_live_supervisor_binding(
+        workspace,
+        supervisor_id=replacement_id,
+        display_name=canonical_name,
+        endpoint=replacement_endpoint,
+        runtime_application_id=runtime_application_id,
     )
 
 
@@ -806,8 +813,18 @@ def main(argv: list[str] | None = None) -> int:
         clear_journal(
             workspace,
             runtime_application_id=args.runtime_application_id,
+            app_application_id=args.app_application_id,
+            app_scim_id=args.app_scim_id,
+            verifier_application_id=args.verifier_application_id,
+            verifier_scim_id=args.verifier_scim_id,
+            proxy_application_id=args.proxy_application_id,
             assert_single_writer=lease_check,
         )
+        return 0
+    if args.command == "resume-stale-journal":
+        from tools.databricks.cutover_stale_journal_recovery import resume_stale_journal_from_args
+
+        resume_stale_journal_from_args(workspace, args, lease_check)
         return 0
     if args.command == "converge-app-acl":
         assert lease_check is not None
@@ -844,7 +861,11 @@ def main(argv: list[str] | None = None) -> int:
             "preserve_endpoint": tuple(args.preserve_endpoint),
         }
         if args.command == "prepare":
-            prepare(**green)
+            prepare(
+                **green,
+                verifier_application_id=args.verifier_application_id,
+                verifier_scim_id=args.verifier_scim_id,
+            )
         else:
             retire(
                 **green,
@@ -857,6 +878,9 @@ def main(argv: list[str] | None = None) -> int:
                 old_gateway_endpoint_id=args.old_gateway_endpoint_id,
                 old_gateway_creator=args.old_gateway_creator,
                 old_gateway_delete_allowed=args.old_gateway_delete_allowed,
+                verifier_application_id=args.verifier_application_id,
+                verifier_scim_id=args.verifier_scim_id,
+                proxy_application_id=args.proxy_application_id,
                 timeout_s=args.timeout_s,
             )
     else:

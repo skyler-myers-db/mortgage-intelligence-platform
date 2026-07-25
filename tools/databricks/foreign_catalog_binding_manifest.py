@@ -32,6 +32,9 @@ from tools.databricks.foreign_catalog_binding_catalog import (
     snapshot,
     state_kind,
 )
+from tools.databricks.oauth_credential_boundary import (
+    held_deployment_credential_assertion,
+)
 from tools.databricks.uc_target_identity import (
     account_target_identity,
     workspace_target_identity,
@@ -43,6 +46,7 @@ from tools.databricks.workspace_system_group_evidence import (
 MANIFEST_VERSION = 4
 LEGACY_MANIFEST_VERSION = 3
 MANIFEST_TTL = timedelta(minutes=30)
+_DEFAULT_TARGET_GROUPS_PROBE = target_identity_groups_probe
 MINIMUM_CHANGE_WINDOW = timedelta(minutes=5)
 ATTESTATION_FIELDS = {
     "attestation_alg",
@@ -167,6 +171,7 @@ def boundary_evidence(
     expected_account_client_id: str,
     approved_workspace_ids: set[str],
     target_groups_probe: Callable[..., dict[str, str]] = target_identity_groups_probe,
+    assert_single_writer: Callable[[], None] | None = None,
 ) -> dict[str, object]:
     app_identity = stopped_app_identity(workspace, app_name)
     metastore_id, workspace_id = _assert_metastore_owner_inventory_identity(
@@ -189,13 +194,25 @@ def boundary_evidence(
     workspace_host = _text(getattr(getattr(workspace, "config", None), "host", None))
     if not workspace_host:
         raise RuntimeError("UC remediation found no workspace host")
+    probe_kwargs: dict[str, object] = {
+        "expected_workspace_scim_id": workspace_runtime.scim_id,
+        "workspace_host": workspace_host,
+    }
+    if target_groups_probe is _DEFAULT_TARGET_GROUPS_PROBE:
+        credential_lease = (
+            assert_single_writer
+            or held_deployment_credential_assertion(
+                workspace,
+                app_name=app_name,
+            )
+        )
+        probe_kwargs["assert_single_writer"] = credential_lease
     effective_target_groups = _normalized_target_groups(
         target_groups_probe(
             account,
             runtime_scim_id,
             application_id,
-            expected_workspace_scim_id=workspace_runtime.scim_id,
-            workspace_host=workspace_host,
+            **probe_kwargs,
         )
     )
     account_effective_groups, implicit_system_groups = _account_group_evidence(
@@ -819,8 +836,14 @@ def reauthorize_manifest(
         str(original["runtime_identity"]["application_id"]).casefold()
         == application_id.casefold()
     )
-    original_runtime = original["runtime_identity"]
-    current_runtime = boundary["runtime_identity"]
+    original_runtime = cast(
+        dict[str, object],
+        original["runtime_identity"],
+    )
+    current_runtime = cast(
+        dict[str, object],
+        boundary["runtime_identity"],
+    )
     same_runtime_boundary = (
         current_runtime["account_scim_id"] == original_runtime["scim_id"]
         and current_runtime["account_display_name"] == original_runtime["display_name"]

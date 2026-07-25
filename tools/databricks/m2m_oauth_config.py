@@ -70,8 +70,16 @@ def infer_gh_repo(
         ).stdout.strip()
     except (OSError, subprocess.CalledProcessError):
         return None
-    repo_url = r"github\.com[:/](?P<owner>[^/\s]+)/(?P<repo>[^/\s]+?)(?:\.git)?(?:/|\s|$)"
-    match = re.search(repo_url, out)
+    repo_url = re.compile(
+        r"^(?:"
+        r"(?:https?|ssh|git)://(?:[^/@\s]+@)?github\.com/"
+        r"|(?:[^@/\s]+@)?github\.com:"
+        r")"
+        r"(?P<owner>[A-Za-z0-9_.-]+)/"
+        r"(?P<repo>[A-Za-z0-9_.-]+?)(?:\.git)?/?$",
+        re.IGNORECASE,
+    )
+    match = repo_url.fullmatch(out)
     if not match:
         return None
     return f"{match.group('owner')}/{match.group('repo')}"

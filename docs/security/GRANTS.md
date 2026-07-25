@@ -52,10 +52,15 @@ inference tables Databricks creates for that endpoint. It has no App, Lakebase,
 warehouse, admin-group, campaign, borrower-table, or unrelated audit-table
 access.
 The agent proxy is a distinct non-owner caller. It has no App, Lakebase,
-warehouse, serving-endpoint ACL, model, experiment, table, volume, or ownership
-authority. It receives direct `CAN_QUERY` on one managed Supervisor, direct
+warehouse, direct serving-endpoint ACL, model, experiment, table, volume, or
+ownership authority. It receives `CAN_QUERY` on one managed Supervisor only
+through an endpoint-bound managed group whose sole member is the proxy, direct
 `CAN_RUN` on one Genie space, and direct `EXECUTE` on exactly the three reviewed
 UC functions.
+Deployment waits for the proxy credential's own SCIM group projection and
+retries only bounded `PermissionDenied` propagation. Membership removal is the
+atomic query-authority revocation boundary; the empty managed group is then
+retired.
 Deployment proves that negative claim globally: runtime-credentialed UC checks
 walk every effective catalog child, while an exact principal-pinned workspace
 admin enumerates all Apps, Lakebase instances, Genie spaces, and
@@ -64,10 +69,11 @@ customer-created serving endpoints. ID-less, creator-less Databricks
 inventory rather than treated as customer serving ACLs. Runtime
 may hold exact direct `CAN_MANAGE` only on its reviewed green endpoints (and a
 pinned runtime-owned blue endpoint during cutover) plus exact direct `CAN_RUN`
-on the reviewed Genie space; verifier may hold exact direct `CAN_QUERY` only on
-the reviewed Gateway; agent proxy may hold the exact Supervisor/Genie/function
-boundary above. Any unrelated, inherited, group-derived, or broader
-access fails closed, and the endpoint audits repeat after blue retirement.
+on the reviewed Genie space. Verifier, agent proxy, and any other query-only
+identity may hold `CAN_QUERY` only through its endpoint-bound, sole-member
+managed group; the immutable group ID, name, external ID, endpoint ID, and
+member are re-proven. Any unrelated group-derived, inherited, or broader access
+fails closed, and the endpoint audits repeat after blue retirement.
 The App authenticates the deployer-signed exact resource envelope and inspects
 only the outer Gateway it can query; it never receives direct Supervisor,
 registered-model, or experiment permissions. The served proxy declares no

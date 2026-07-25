@@ -76,6 +76,30 @@ def test_lakebase_manifest_is_ready_only_after_fenced_finalize() -> None:
     assert "OLD.treatment_state <> 'building'" in LAKEBASE_SCHEMA
     assert "ready campaign treatment manifest is immutable" in LAKEBASE_SCHEMA
     assert "treatment_materialization_id" in LAKEBASE_SCHEMA
+    assert "campaigns_active_requires_ready_treatment_chk" in LAKEBASE_SCHEMA
+    assert "CHECK (status <> 'active' OR treatment_state = 'ready')" in LAKEBASE_SCHEMA
+    assert "WHERE status = 'active'" in LAKEBASE_SCHEMA
+    assert "AND treatment_state <> 'ready'" in LAKEBASE_SCHEMA
+    assert '"cancelled_reason":"campaign_treatment_reproof_required"' in LAKEBASE_SCHEMA
+    assert "WHERE campaign_id IS NOT NULL" in LAKEBASE_SCHEMA
+    assert "AND status IN ('dry_run','staged','failed')" in LAKEBASE_SCHEMA
+    assert (
+        "WHERE version = '2026_07_25_campaign_activation_delivery_reproof'"
+        in LAKEBASE_SCHEMA
+    )
+    assert (
+        "'2026_07_25_campaign_activation_delivery_reproof',"
+        in LAKEBASE_SCHEMA
+    )
+    assert "ranked_activation_business_keys" in LAKEBASE_SCHEMA
+    assert "ranked.business_key_rank > 1" in LAKEBASE_SCHEMA
+    assert "CASE WHEN status = 'delivered' THEN 0 ELSE 1 END" in LAKEBASE_SCHEMA
+    assert "WHEN 'staged' THEN" not in LAKEBASE_SCHEMA
+    assert "WHERE status IN ('dry_run','staged','failed','delivered')" in (
+        LAKEBASE_SCHEMA
+    )
+    assert "'archived'" in SEED
+    assert "status = EXCLUDED.status" in SEED
     assert "WHERE campaigns.treatment_state = 'legacy_unbound'" in SEED
 
 

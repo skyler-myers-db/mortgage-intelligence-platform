@@ -234,7 +234,7 @@ def test_global_genie_audit_accepts_only_reviewed_space() -> None:
     )
 
 
-def test_global_genie_audit_rejects_other_space_group_laundering() -> None:
+def test_global_genie_audit_rejects_hidden_parent_without_managed_groups() -> None:
     genie = SimpleNamespace(
         list_spaces=lambda **_kwargs: SimpleNamespace(
             spaces=[
@@ -261,7 +261,7 @@ def test_global_genie_audit_rejects_other_space_group_laundering() -> None:
         return {
             "access_control_list": [
                 {
-                    "group_name": "all-genie-users",
+                    "group_name": "hidden-account-parent",
                     "all_permissions": [
                         {"permission_level": "CAN_RUN", "inherited": False}
                     ],
@@ -269,7 +269,10 @@ def test_global_genie_audit_rejects_other_space_group_laundering() -> None:
             ]
         }
 
-    with pytest.raises(RuntimeError, match=r"through group\(s\): all-genie-users"):
+    with pytest.raises(
+        RuntimeError,
+        match=r"through group\(s\): hidden-account-parent",
+    ):
         access.audit_global_genie_access(
             SimpleNamespace(
                 genie=genie,
@@ -277,5 +280,5 @@ def test_global_genie_audit_rejects_other_space_group_laundering() -> None:
             ),
             reviewed_genie_space_id="reviewed-space",
             application_id="runtime-client",
-            effective_group_names={"all-genie-users"},
+            effective_group_names={"hidden-account-parent"},
         )

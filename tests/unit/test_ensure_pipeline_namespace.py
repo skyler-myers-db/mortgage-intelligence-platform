@@ -5,10 +5,20 @@ from types import SimpleNamespace
 import pytest
 from databricks.sdk.errors import PermissionDenied, ResourceAlreadyExists, ResourceDoesNotExist
 
+from tools.databricks import oauth_credential_creation
 from tools.databricks.converge_campaign_treatment_access import (
     target_group_membership_probe,
 )
 from tools.databricks.ensure_pipeline_namespace import ensure_pipeline_namespace
+
+
+@pytest.fixture(autouse=True)
+def _disable_credential_inventory_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        oauth_credential_creation,
+        "_STABILITY_INTERVAL_SECONDS",
+        0,
+    )
 
 
 def _catalog(
@@ -168,7 +178,8 @@ def _ensure(
     group_membership_probe: object | None = None,
 ) -> tuple[bool, bool]:
     kwargs: dict[str, object] = {
-        "account_factory": account_factory or (lambda: _mirrored_account(workspace))
+        "account_factory": account_factory or (lambda: _mirrored_account(workspace)),
+        "assert_single_writer": lambda: None,
     }
     if group_membership_probe is not None:
         kwargs["group_membership_probe"] = group_membership_probe
@@ -526,7 +537,9 @@ def test_inconclusive_identity_group_proof_precedes_namespace_mutation() -> None
             application_id,
             group_id,
             group_name,
+            expected_workspace_scim_id=account_sp_id,
             workspace_host="https://workspace.example",
+            assert_single_writer=lambda: None,
             workspace_factory=lambda **_: SimpleNamespace(
                 api_client=SimpleNamespace(
                     do=lambda *_args, **_kwargs: (_ for _ in ()).throw(PermissionDenied("denied"))

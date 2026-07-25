@@ -365,19 +365,20 @@ class ApprovedOwnerPolicy:
                 raise RuntimeError("Account SCIM hydrated group id is not canonical")
             if hydrated_id != group_id:
                 raise RuntimeError("Account SCIM hydrated group id mismatch")
-            raw_account_name = getattr(account_group, "display_name", None)
+            hydrated_account_name = getattr(account_group, "display_name", None)
             expected_name = self._expected_group_names.get(group_id, "")
             if (
-                not isinstance(raw_account_name, str)
-                or not raw_account_name
-                or raw_account_name != raw_account_name.strip()
+                not isinstance(hydrated_account_name, str)
+                or not hydrated_account_name
+                or hydrated_account_name != hydrated_account_name.strip()
                 or not expected_name
-                or raw_account_name != expected_name
+                or hydrated_account_name != expected_name
             ):
                 raise RuntimeError(
                     f"Account SCIM group {group_id!r} has no exact display name"
                 )
-            self._account_group_names[group_id] = raw_account_name
+            self._account_group_names[group_id] = hydrated_account_name
+            raw_account_name = hydrated_account_name
         if self.group_membership_probe is None or self._account_client is None:
             raise RuntimeError(
                 "Credential-backed target identity membership proof is required "

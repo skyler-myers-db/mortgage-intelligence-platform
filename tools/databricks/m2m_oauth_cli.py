@@ -109,6 +109,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--preserve-gateway-endpoint",
+        action="append",
+        default=[],
+        help=(
+            "Signed-blue Gateway whose existing verifier access must remain unchanged "
+            "during a green cutover; repeat only for immutable rollback resources."
+        ),
+    )
+    parser.add_argument(
         "--warehouse-id",
         default=None,
         help="SQL warehouse on which the verifier receives CAN_USE.",

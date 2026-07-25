@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import sys
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, call, patch
@@ -27,12 +28,17 @@ from databricks.sdk.service.sql import (
     WarehousePermissions,
 )
 
+from tools.databricks import oauth_credential_creation
 from tools.databricks.agent_proxy_credential_bundle import (
     canonical_agent_proxy_credential_bundle,
     parse_agent_proxy_credential_bundle,
 )
 from tools.databricks.agent_proxy_credential_bundle import (
     main as agent_proxy_bundle_main,
+)
+from tools.databricks.serving_query_group_access import (
+    managed_query_group_external_id,
+    managed_query_group_name,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -55,8 +61,111 @@ _mint_spec.loader.exec_module(mint)  # type: ignore[union-attr]
 _CANONICAL_GH_REPO = pmo.CANONICAL_GH_REPO
 
 
+class _CredentialIntent:
+    def __init__(
+        self,
+        *,
+        session: _CredentialSession,
+        before_ids: frozenset[str],
+    ) -> None:
+        self.session = session
+        self.before_ids = before_ids
+        self.principal_id = session.principal_id
+        self.fence = session.fence
+        self.sink_path = ""
+        self.observed_credential_id = ""
+        self.retirement_mode = session.retirement_mode
+
+    def __call__(self) -> None:
+        self.session()
+
+    def quarantine(self, error: BaseException) -> None:
+        recorder = getattr(self.fence, "quarantine", None)
+        if callable(recorder):
+            recorder(error)
+
+    def observe(
+        self,
+        *,
+        credential_id: str,
+        observed_ids: frozenset[str],
+    ) -> None:
+        assert observed_ids == self.before_ids | {credential_id}
+        self.observed_credential_id = credential_id
+
+    def arm_sink(self, **_kwargs: object) -> None:
+        self.sink_path = "test-sink-attempt"
+
+    def acknowledge_delivery(
+        self,
+        *,
+        acknowledged_ids: frozenset[str],
+    ) -> None:
+        assert acknowledged_ids == self.before_ids | {self.observed_credential_id}
+
+    def resolve(self, **_kwargs: object) -> None:
+        self.session.released = True
+
+
+class _CredentialSession:
+    def __init__(
+        self,
+        fence: object,
+        *,
+        principal_id: str,
+        retirement_mode: str,
+    ) -> None:
+        self.fence = fence
+        self.principal_id = principal_id
+        self.retirement_mode = retirement_mode
+        self.released = False
+
+    def __call__(self) -> None:
+        if not self.released:
+            self.fence()  # type: ignore[operator]
+
+    def quarantine(self, error: BaseException) -> None:
+        recorder = getattr(self.fence, "quarantine", None)
+        if callable(recorder):
+            recorder(error)
+
+    def persist_intent(
+        self,
+        *,
+        before_ids: frozenset[str],
+    ) -> _CredentialIntent:
+        return _CredentialIntent(session=self, before_ids=before_ids)
+
+    def abort_before_intent(self) -> None:
+        self.released = True
+
+
 @pytest.fixture(autouse=True)
 def _clear_role_client_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        pmo._credential_mutation,
+        "credential_source_git_sha",
+        lambda _repo_root: "a" * 40,
+    )
+    monkeypatch.setattr(
+        oauth_credential_creation,
+        "_STABILITY_INTERVAL_SECONDS",
+        0,
+    )
+    monkeypatch.setattr(
+        oauth_credential_creation,
+        "begin_credential_mutation_session",
+        lambda fence, *, label, principal_id, context: _CredentialSession(
+            fence,
+            principal_id=principal_id,
+            retirement_mode=context.retirement_mode,
+        ),
+    )
+    monkeypatch.setattr(
+        pmo,
+        "_confirm_gh_secrets",
+        lambda _repo, _names: None,
+    )
     for defaults in pmo.IDENTITY_DEFAULTS.values():
         monkeypatch.delenv(defaults.client_id_secret_name, raising=False)
 
@@ -82,6 +191,7 @@ def _make_client(
     lakebase_roles: list[SimpleNamespace] | None = None,
     mint_secret_value: str = "dose_fake_secret_value",
     resource_access: bool = True,
+    managed_serving_access: bool = False,
 ) -> MagicMock:
     client = MagicMock(name="WorkspaceClient")
     state = {"deleted": False}
@@ -109,10 +219,25 @@ def _make_client(
         id="secret-id-xyz",
         secret=mint_secret_value,
     )
-    group_values = groups or []
-    client.groups.list.side_effect = lambda **_kwargs: iter(group_values)
-    groups_by_id = {str(group.id): group for group in group_values if getattr(group, "id", None)}
-    client.groups.get.side_effect = lambda group_id: groups_by_id[str(group_id)]
+    credentials: dict[str, object] = {}
+
+    def create_credential(**_kwargs: object) -> object:
+        response = client.service_principal_secrets_proxy.create.return_value
+        credential_id = str(getattr(response, "id", "") or "")
+        if credential_id:
+            credentials[credential_id] = response
+        return response
+
+    def list_credentials(_sp_id: str) -> object:
+        return iter(credentials.values())
+
+    def delete_credential(_sp_id: str, credential_id: str) -> None:
+        credentials.pop(credential_id, None)
+
+    client.service_principal_secrets_proxy.create.side_effect = create_credential
+    client.service_principal_secrets_proxy.list.side_effect = list_credentials
+    client.service_principal_secrets_proxy.delete.side_effect = delete_credential
+    group_values = list(groups or [])
     client.database.list_database_instances.return_value = iter(
         [SimpleNamespace(name="mip-app-state")]
     )
@@ -131,11 +256,109 @@ def _make_client(
         or getattr(create_returns, "application_id", None)
         or "app-id-abc"
     )
-    client.serving_endpoints.get_permissions.return_value = ServingEndpointPermissions(
-        access_control_list=(
-            [
+    endpoint_sp_id = str(
+        getattr(existing_sp, "id", None) or getattr(create_returns, "id", None) or "1234"
+    )
+    endpoint_group_name = managed_query_group_name(
+        endpoint_id="mip-gateway-endpoint-id",
+        application_id=endpoint_principal,
+    )
+    if resource_access and managed_serving_access:
+        group_values.append(
+            SimpleNamespace(
+                id="mip-gateway-query-group-id",
+                display_name=endpoint_group_name,
+                external_id=managed_query_group_external_id(
+                    endpoint_id="mip-gateway-endpoint-id",
+                    application_id=endpoint_principal,
+                ),
+                members=[SimpleNamespace(value=endpoint_sp_id)],
+            )
+        )
+    groups_by_id = {str(group.id): group for group in group_values if getattr(group, "id", None)}
+
+    def list_groups(**kwargs: object):
+        filter_value = str(kwargs.get("filter") or "")
+        if not filter_value:
+            return iter(group_values)
+        expected_name = filter_value.removeprefix("displayName eq '").removesuffix("'")
+        return iter(
+            group for group in group_values if group.display_name == expected_name
+        )
+
+    def create_group(*, display_name: str, external_id: str | None = None) -> object:
+        group = SimpleNamespace(
+            id=f"created-group-{len(group_values) + 1}",
+            display_name=display_name,
+            external_id=external_id,
+            members=[],
+        )
+        group_values.append(group)
+        groups_by_id[group.id] = group
+        return group
+
+    def patch_group(*, id: str, operations: list[object], **_kwargs: object) -> None:
+        group = groups_by_id[id]
+        operation = operations[0]
+        operation_value = getattr(operation, "value", None)
+        operation_path = getattr(operation, "path", None)
+        op = str(getattr(getattr(operation, "op", None), "value", getattr(operation, "op", "")))
+        if op == "add":
+            for item in operation_value["members"]:
+                group.members.append(SimpleNamespace(value=item["value"]))
+        elif op == "remove":
+            member_id = str(operation_path).split('"')[1]
+            group.members = [
+                member for member in group.members if member.value != member_id
+            ]
+        else:
+            raise AssertionError(f"unexpected group patch {op!r}")
+
+    client.groups.list.side_effect = list_groups
+    client.groups.get.side_effect = lambda group_id: groups_by_id[str(group_id)]
+    if managed_serving_access:
+        client.groups.create.side_effect = create_group
+        client.groups.patch.side_effect = patch_group
+    endpoint_acl = (
+        [
+            ServingEndpointAccessControlResponse(
+                group_name=endpoint_group_name,
+                all_permissions=[
+                    ServingEndpointPermission(
+                        inherited=False,
+                        permission_level=ServingEndpointPermissionLevel.CAN_QUERY,
+                    )
+                ],
+            )
+        ]
+        if resource_access and managed_serving_access
+        else []
+    )
+    client.serving_endpoints.get_permissions.side_effect = lambda _endpoint_id: (
+        ServingEndpointPermissions(access_control_list=list(endpoint_acl))
+    )
+
+    def update_endpoint_permissions(
+        _endpoint_id: str,
+        *,
+        access_control_list: list[object],
+    ) -> None:
+        for request in access_control_list:
+            group_name = getattr(request, "group_name", None)
+            principal_name = getattr(request, "service_principal_name", None)
+            endpoint_acl[:] = [
+                entry
+                for entry in endpoint_acl
+                if (
+                    getattr(entry, "group_name", None) != group_name
+                    if group_name
+                    else getattr(entry, "service_principal_name", None) != principal_name
+                )
+            ]
+            endpoint_acl.append(
                 ServingEndpointAccessControlResponse(
-                    service_principal_name=endpoint_principal,
+                    group_name=group_name,
+                    service_principal_name=principal_name,
                     all_permissions=[
                         ServingEndpointPermission(
                             inherited=False,
@@ -143,11 +366,9 @@ def _make_client(
                         )
                     ],
                 )
-            ]
-            if resource_access
-            else []
-        )
-    )
+            )
+
+    client.serving_endpoints.update_permissions.side_effect = update_endpoint_permissions
     client.apps.list.return_value = iter([SimpleNamespace(name="mip-app")])
     client.apps.get.return_value = SimpleNamespace(
         url="https://mip-app-live.aws.databricksapps.com"
@@ -204,6 +425,24 @@ def test_infer_gh_repo_preserves_dotted_repository_names(
         assert pmo._infer_gh_repo() == expected
 
 
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://evilgithub.com/acme-bank/mortgage.intelligence-platform.git",
+        "https://notgithub.com/github.com/acme-bank/mortgage.intelligence-platform.git",
+        "git@github.com.evil:acme-bank/mortgage.intelligence-platform.git",
+        "https://github.com/acme-bank/mortgage.intelligence-platform/tree/main",
+    ],
+)
+def test_infer_gh_repo_rejects_non_github_or_non_repository_origins(origin: str) -> None:
+    with patch.object(
+        pmo.subprocess,
+        "run",
+        return_value=SimpleNamespace(stdout=origin),
+    ):
+        assert pmo._infer_gh_repo() is None
+
+
 def test_reserved_service_principal_name_must_resolve_uniquely() -> None:
     client = MagicMock()
     client.service_principals.list.return_value = iter(
@@ -215,6 +454,158 @@ def test_reserved_service_principal_name_must_resolve_uniquely() -> None:
 
     with pytest.raises(SystemExit, match="Multiple service principals"):
         pmo._find_existing_sp(client, "mip-nightly-ci-sp")
+
+
+@pytest.mark.parametrize(
+    "identity_role",
+    ("normal", "operator2", "admin", "release_probe", "verifier", "agent_proxy"),
+)
+def test_credential_lease_writer_is_always_reserved_agent_runtime(
+    identity_role: str,
+) -> None:
+    client = MagicMock()
+    runtime = _sp(
+        pmo.IDENTITY_DEFAULTS["agent_runtime"].sp_name,
+        application_id="runtime-writer-application-id",
+    )
+    client.service_principals.list.return_value = iter([runtime])
+
+    writer = pmo._credential_mutation.credential_lease_writer_application_id(
+        client,
+        target=_sp(application_id="target-application-id"),
+        identity_role=identity_role,
+        find_existing_sp=pmo._find_existing_sp,
+    )
+
+    assert writer == "runtime-writer-application-id"
+
+
+@pytest.mark.parametrize(
+    ("identity_role", "expected"),
+    (
+        ("normal", "immediate"),
+        ("operator2", "immediate"),
+        ("admin", "immediate"),
+        ("release_probe", "immediate"),
+        ("verifier", "immediate"),
+        ("agent_runtime", "immediate"),
+        ("agent_proxy", "signed_app_cutover"),
+    ),
+)
+def test_identity_role_owns_exact_credential_retirement_mode(
+    identity_role: pmo.IdentityRole,
+    expected: str,
+) -> None:
+    assert (
+        pmo._credential_mutation.credential_retirement_mode(identity_role)
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("identity_role", "expected_live"),
+    (
+        ("normal", {"green"}),
+        ("agent_proxy", {"signed-blue", "green"}),
+    ),
+)
+def test_delivered_rotation_applies_role_owned_retirement_policy(
+    identity_role: pmo.IdentityRole,
+    expected_live: set[str],
+) -> None:
+    live = {"signed-blue"}
+    deleted: list[str] = []
+    writes: list[str] = []
+
+    def create(**_kwargs: object) -> object:
+        live.add("green")
+        return SimpleNamespace(id="green", secret="one-shot")
+
+    def delete(_sp_id: str, credential_id: str) -> None:
+        live.remove(credential_id)
+        deleted.append(credential_id)
+
+    credentials = SimpleNamespace(
+        list=lambda _sp_id: (
+            SimpleNamespace(id=value) for value in sorted(live)
+        ),
+        create=create,
+        delete=delete,
+    )
+    client = SimpleNamespace(service_principal_secrets_proxy=credentials)
+
+    result = pmo._credential_mutation.mint_and_deliver_oauth_credential(
+        client=client,
+        sp_id="proxy-scim-id",
+        client_id="proxy-application-id",
+        identity_role=identity_role,
+        app_name="mip-app",
+        writer_application_id="runtime-writer",
+        source_git_sha="a" * 40,
+        boundary_factory=lambda *_args, **_kwargs: nullcontext(
+            lambda: None
+        ),
+        secret_writer=lambda _repo, name, _value: writes.append(name),
+        sink_acknowledger=lambda *_args: None,
+        secret_invalidator=lambda *_args: pytest.fail(
+            "successful sink must not be invalidated"
+        ),
+        diagnostic=lambda _message: None,
+        error_factory=lambda error, **_kwargs: error,
+        gh_repo=_CANONICAL_GH_REPO,
+        client_id_secret_name=(
+            "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE"
+            if identity_role == "agent_proxy"
+            else "DATABRICKS_CLIENT_ID"
+        ),
+        client_secret_secret_name=(
+            "DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE"
+            if identity_role == "agent_proxy"
+            else "DATABRICKS_CLIENT_SECRET"
+        ),
+        credential_id_secret_name=None,
+        app_url_secret_name=None,
+        app_url=None,
+        atomic_credential_bundle=identity_role == "agent_proxy",
+    )
+
+    assert result == "green"
+    assert live == expected_live
+    assert deleted == (
+        [] if identity_role == "agent_proxy" else ["signed-blue"]
+    )
+    assert writes
+
+
+def test_agent_runtime_credential_lease_uses_its_own_reserved_identity() -> None:
+    client = MagicMock()
+    runtime = _sp(
+        pmo.IDENTITY_DEFAULTS["agent_runtime"].sp_name,
+        application_id="runtime-writer-application-id",
+    )
+
+    writer = pmo._credential_mutation.credential_lease_writer_application_id(
+        client,
+        target=runtime,
+        identity_role="agent_runtime",
+        find_existing_sp=pmo._find_existing_sp,
+    )
+
+    assert writer == "runtime-writer-application-id"
+    client.service_principals.list.assert_not_called()
+
+
+def test_credential_mint_fails_before_boundary_when_runtime_writer_is_absent() -> None:
+    client = MagicMock()
+    client.service_principals.list.return_value = iter([])
+
+    with pytest.raises(SystemExit, match="Bootstrap the agent_runtime identity first"):
+        pmo._credential_mutation.credential_lease_writer_application_id(
+            client,
+            target=_sp(application_id="target-application-id"),
+            identity_role="normal",
+            find_existing_sp=pmo._find_existing_sp,
+        )
 
 
 def test_app_name_resolution_prefers_reviewed_deployment_environment(
@@ -256,6 +647,10 @@ def _provision(client: MagicMock, **overrides: object):
         "app_url_secret_name": "MIP_APP_URL",
         "identity_role": "normal",
         "client_factory": lambda: client,
+        "credential_boundary_factory": (
+            lambda *_args, **_kwargs: nullcontext(lambda: None)
+        ),
+        "credential_writer_application_id": "deployment-writer-client",
     }
     kwargs.update(overrides)
     role_defaults = pmo.IDENTITY_DEFAULTS[kwargs["identity_role"]]
@@ -271,6 +666,33 @@ def _provision(client: MagicMock, **overrides: object):
         kwargs["credential_id_secret_name"] = role_defaults.credential_id_secret_name
     with patch.object(pmo, "_gh_available", return_value=True):
         return pmo.provision(**kwargs)
+
+
+@pytest.mark.parametrize(
+    "source_error",
+    (
+        "standalone credential mutation requires a clean tracked worktree",
+        "standalone credential mutation requires a clean untracked worktree",
+        "configured credential mutation source Git SHA does not match HEAD",
+    ),
+)
+def test_source_attestation_fails_before_any_workspace_client_call(
+    monkeypatch: pytest.MonkeyPatch,
+    source_error: str,
+) -> None:
+    client = MagicMock()
+    monkeypatch.setattr(
+        pmo._credential_mutation,
+        "credential_source_git_sha",
+        lambda _repo_root: (_ for _ in ()).throw(
+            RuntimeError(source_error)
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match=source_error):
+        _provision(client)
+
+    assert client.mock_calls == []
 
 
 def test_help_exposes_role_group_and_secret_name_contract(
@@ -456,8 +878,6 @@ def test_pre_app_bootstrap_refuses_every_existing_identity(rotate: bool) -> None
 def test_pre_app_bootstrap_refuses_existing_credentialless_identity() -> None:
     existing = _sp()
     client = _make_client(existing_sp=existing, resource_access=False)
-    client.service_principal_secrets_proxy.list.return_value = iter([])
-
     with (
         patch.object(pmo, "_set_gh_secret") as set_secret,
         pytest.raises(SystemExit, match="creation-only"),
@@ -547,6 +967,7 @@ def test_pre_app_bootstrap_refuses_existing_identity_before_stale_resource_audit
         ("gateway_endpoint", "gateway"),
         ("warehouse_id", "warehouse"),
         ("revoke_gateway_endpoints", ("old-gateway",)),
+        ("preserve_gateway_endpoints", ("signed-blue-gateway",)),
     ],
 )
 def test_pre_app_bootstrap_rejects_resource_scope_before_sdk_calls(
@@ -659,6 +1080,7 @@ def test_pre_app_bootstrap_cli_forwards_credentials_only_contract() -> None:
     assert kwargs["grant_can_use"] is False
     assert kwargs["lakebase_instance"] is None
     assert kwargs["gateway_endpoint"] is None
+    assert kwargs["preserve_gateway_endpoints"] == ()
     assert kwargs["warehouse_id"] is None
     assert kwargs["set_gh_secrets"] is True
     assert kwargs["mint_secret"] is True
@@ -949,6 +1371,7 @@ def test_agent_proxy_partial_secret_sink_failure_revokes_minted_credential() -> 
             "_set_gh_secret",
             side_effect=RuntimeError("atomic bundle sink failed"),
         ) as set_secret,
+        patch.object(pmo, "_invalidate_gh_secrets") as invalidate_secrets,
         pytest.raises(RuntimeError, match="atomic bundle sink failed"),
     ):
         _provision(
@@ -977,11 +1400,17 @@ def test_agent_proxy_partial_secret_sink_failure_revokes_minted_credential() -> 
             ),
         ),
     ]
+    invalidate_secrets.assert_called_once_with(
+        _CANONICAL_GH_REPO,
+        frozenset({"DATABRICKS_AGENT_PROXY_CREDENTIAL_BUNDLE"}),
+    )
     client.service_principal_secrets_proxy.delete.assert_called_once_with(
         "proxy-sp-id",
         "secret-id-xyz",
     )
-    client.service_principal_secrets_proxy.list.assert_called_once_with("proxy-sp-id")
+    assert client.service_principal_secrets_proxy.list.call_args_list == [
+        call("proxy-sp-id")
+    ] * 15
     client.service_principals.delete.assert_called_once_with("proxy-sp-id")
 
 
@@ -1002,6 +1431,7 @@ def test_pre_app_sink_failure_requires_proven_new_principal_cleanup() -> None:
             "_set_gh_secret",
             side_effect=RuntimeError("atomic bundle sink failed"),
         ),
+        patch.object(pmo, "_invalidate_gh_secrets"),
         pytest.raises(RuntimeError, match="manual security reconciliation"),
     ):
         _provision(
@@ -1026,7 +1456,7 @@ def test_pre_app_sink_failure_requires_proven_new_principal_cleanup() -> None:
     client.service_principals.delete.assert_called_once_with("proxy-sp-id")
 
 
-def test_pre_app_ambiguous_mint_failure_deletes_new_service_principal() -> None:
+def test_sink_invalidation_failure_restores_provider_but_stays_quarantined() -> None:
     defaults = pmo.IDENTITY_DEFAULTS["agent_proxy"]
     new_sp = _sp(
         defaults.sp_name,
@@ -1034,11 +1464,24 @@ def test_pre_app_ambiguous_mint_failure_deletes_new_service_principal() -> None:
         application_id="proxy-application-id",
     )
     client = _make_client(create_returns=new_sp, resource_access=False)
-    client.service_principal_secrets_proxy.create.side_effect = RuntimeError(
-        "timeout after provider commit"
-    )
+    client.service_principal_secrets_proxy.list.return_value = iter([])
 
-    with pytest.raises(SystemExit, match="timeout after provider commit"):
+    with (
+        patch.object(
+            pmo,
+            "_set_gh_secret",
+            side_effect=RuntimeError("atomic bundle sink failed"),
+        ),
+        patch.object(
+            pmo,
+            "_invalidate_gh_secrets",
+            side_effect=RuntimeError("sink deletion unproven"),
+        ),
+        pytest.raises(
+            pmo.CredentialMutationQuarantineError,
+            match="GitHub sink invalidation is unproven",
+        ),
+    ):
         _provision(
             client,
             identity_role="agent_proxy",
@@ -1054,7 +1497,77 @@ def test_pre_app_ambiguous_mint_failure_deletes_new_service_principal() -> None:
             pre_app_bootstrap=True,
         )
 
-    client.service_principals.delete.assert_called_once_with("proxy-sp-id")
+    client.service_principal_secrets_proxy.delete.assert_called_once_with(
+        "proxy-sp-id",
+        "secret-id-xyz",
+    )
+    client.service_principals.delete.assert_not_called()
+
+
+def test_pre_app_ambiguous_mint_failure_quarantines_new_service_principal() -> None:
+    defaults = pmo.IDENTITY_DEFAULTS["agent_proxy"]
+    new_sp = _sp(
+        defaults.sp_name,
+        sp_id="proxy-sp-id",
+        application_id="proxy-application-id",
+    )
+    client = _make_client(create_returns=new_sp, resource_access=False)
+    client.service_principal_secrets_proxy.create.side_effect = RuntimeError(
+        "timeout after provider commit"
+    )
+
+    with pytest.raises(
+        pmo.CredentialMutationQuarantineError,
+        match="no attributable credential",
+    ):
+        _provision(
+            client,
+            identity_role="agent_proxy",
+            app_name="",
+            grant_can_use=False,
+            group_name=None,
+            create_group=False,
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            app_url_secret_name=None,
+            credential_id_secret_name=defaults.credential_id_secret_name,
+            pre_app_bootstrap=True,
+        )
+
+    client.service_principals.delete.assert_not_called()
+
+
+def test_existing_identity_rotation_commit_then_timeout_revokes_discovered_secret() -> None:
+    existing = _sp()
+    client = _make_client(existing_sp=existing, resource_access=False)
+    live_credentials: set[str] = set()
+    deleted: list[tuple[str, str]] = []
+
+    def list_credentials(_sp_id: str) -> object:
+        return (
+            SimpleNamespace(id=credential_id)
+            for credential_id in sorted(live_credentials)
+        )
+
+    def commit_then_timeout(**_kwargs: object) -> object:
+        live_credentials.add("committed-secret-id")
+        raise TimeoutError("response lost after provider commit")
+
+    def delete_credential(sp_id: str, credential_id: str) -> None:
+        live_credentials.remove(credential_id)
+        deleted.append((sp_id, credential_id))
+
+    client.service_principal_secrets_proxy.list.side_effect = list_credentials
+    client.service_principal_secrets_proxy.create.side_effect = commit_then_timeout
+    client.service_principal_secrets_proxy.delete.side_effect = delete_credential
+
+    with pytest.raises(SystemExit, match="response lost after provider commit"):
+        _provision(client, rotate=True)
+
+    assert live_credentials == set()
+    assert deleted == [("1234", "committed-secret-id")]
+    client.service_principals.delete.assert_not_called()
 
 
 def test_pre_app_resource_audit_failure_deletes_new_service_principal() -> None:
@@ -1084,6 +1597,48 @@ def test_pre_app_resource_audit_failure_deletes_new_service_principal() -> None:
 
     client.service_principal_secrets_proxy.create.assert_not_called()
     client.service_principals.delete.assert_called_once_with("proxy-sp-id")
+
+
+def test_pre_app_terminal_credential_fence_preserves_delivered_principal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    defaults = pmo.IDENTITY_DEFAULTS["agent_proxy"]
+    created = _sp(
+        defaults.sp_name,
+        sp_id="proxy-sp-id",
+        application_id="proxy-application-id",
+    )
+    client = _make_client(create_returns=created, resource_access=False)
+    monkeypatch.setattr(
+        pmo._credential_mutation,
+        "mint_and_deliver_oauth_credential",
+        MagicMock(
+            side_effect=pmo.CredentialMutationTerminalFenceError(
+                "delivered credential is terminal but lease release is unproven"
+            )
+        ),
+    )
+
+    with pytest.raises(
+        pmo.CredentialMutationTerminalFenceError,
+        match="lease release is unproven",
+    ):
+        _provision(
+            client,
+            identity_role="agent_proxy",
+            app_name="",
+            grant_can_use=False,
+            group_name=None,
+            create_group=False,
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            app_url_secret_name=None,
+            credential_id_secret_name=defaults.credential_id_secret_name,
+            pre_app_bootstrap=True,
+        )
+
+    client.service_principals.delete.assert_not_called()
 
 
 def test_pre_app_ambiguous_create_never_deletes_name_only_identity() -> None:
@@ -1205,17 +1760,7 @@ def test_pre_app_cleanup_proves_immutable_service_principal_id_absent() -> None:
     client.service_principals.get.assert_called_once_with("proxy-sp-id")
 
 
-@pytest.mark.parametrize(
-    "mint_response",
-    [
-        SimpleNamespace(id=None, secret="s" * 48),
-        SimpleNamespace(id="credential-id", secret=""),
-    ],
-    ids=["missing-id", "missing-secret"],
-)
-def test_pre_app_invalid_mint_response_deletes_new_service_principal(
-    mint_response: SimpleNamespace,
-) -> None:
+def test_pre_app_missing_credential_id_quarantines_new_service_principal() -> None:
     defaults = pmo.IDENTITY_DEFAULTS["agent_proxy"]
     new_sp = _sp(
         defaults.sp_name,
@@ -1223,9 +1768,15 @@ def test_pre_app_invalid_mint_response_deletes_new_service_principal(
         application_id="proxy-application-id",
     )
     client = _make_client(create_returns=new_sp, resource_access=False)
-    client.service_principal_secrets_proxy.create.return_value = mint_response
+    client.service_principal_secrets_proxy.create.return_value = SimpleNamespace(
+        id=None,
+        secret="s" * 48,
+    )
 
-    with pytest.raises(SystemExit, match="mint returned"):
+    with pytest.raises(
+        pmo.CredentialMutationQuarantineError,
+        match="no attributable credential",
+    ):
         _provision(
             client,
             identity_role="agent_proxy",
@@ -1241,10 +1792,48 @@ def test_pre_app_invalid_mint_response_deletes_new_service_principal(
             pre_app_bootstrap=True,
         )
 
+    client.service_principals.delete.assert_not_called()
+
+
+def test_pre_app_missing_credential_secret_restores_and_deletes_new_principal() -> None:
+    defaults = pmo.IDENTITY_DEFAULTS["agent_proxy"]
+    new_sp = _sp(
+        defaults.sp_name,
+        sp_id="proxy-sp-id",
+        application_id="proxy-application-id",
+    )
+    client = _make_client(create_returns=new_sp, resource_access=False)
+    client.service_principal_secrets_proxy.create.return_value = SimpleNamespace(
+        id="credential-id",
+        secret="",
+    )
+
+    with pytest.raises(SystemExit, match="incomplete or ambiguous"):
+        _provision(
+            client,
+            identity_role="agent_proxy",
+            app_name="",
+            grant_can_use=False,
+            group_name=None,
+            create_group=False,
+            lakebase_instance=None,
+            gateway_endpoint=None,
+            warehouse_id=None,
+            app_url_secret_name=None,
+            credential_id_secret_name=defaults.credential_id_secret_name,
+            pre_app_bootstrap=True,
+        )
+
+    client.service_principal_secrets_proxy.delete.assert_called_once_with(
+        "proxy-sp-id",
+        "credential-id",
+    )
     client.service_principals.delete.assert_called_once_with("proxy-sp-id")
 
 
-def test_agent_proxy_bundle_sink_failure_preserves_old_bundle_and_retry_is_atomic() -> None:
+def test_atomic_bundle_writer_failure_preserves_old_value_before_production_compensation() -> None:
+    """The primitive is atomic; production separately clears every armed name."""
+
     old_bundle = canonical_agent_proxy_credential_bundle(
         client_id="proxy-application-id",
         credential_id="old-credential",
@@ -1602,6 +2191,7 @@ def test_verifier_reuses_safely_bootstrapped_lakebase_role_without_admin_or_app_
                 identity_type=DatabaseInstanceRoleIdentityType.SERVICE_PRINCIPAL,
             )
         ],
+        managed_serving_access=True,
     )
 
     result = _provision(
@@ -1618,21 +2208,23 @@ def test_verifier_reuses_safely_bootstrapped_lakebase_role_without_admin_or_app_
         gh_repo=None,
     )
 
-    client.groups.list.assert_called_once()
+    managed_group_lookup = call(
+        filter=(
+            "displayName eq "
+            f"'{managed_query_group_name(endpoint_id='mip-gateway-endpoint-id', application_id='verifier-application-id')}'"
+        )
+    )
+    assert client.groups.list.call_args_list[0] == call(attributes="id,displayName")
+    assert client.groups.list.call_args_list[1:]
+    assert all(
+        group_call == managed_group_lookup
+        for group_call in client.groups.list.call_args_list[1:]
+    )
     client.groups.patch.assert_not_called()
     client.apps.update_permissions.assert_not_called()
     client.database.create_database_instance_role.assert_not_called()
-    client.serving_endpoints.update_permissions.assert_called_once()
+    client.serving_endpoints.update_permissions.assert_not_called()
     client.serving_endpoints.get.assert_called_once_with("mip-agent-gateway")
-    (endpoint_id,) = client.serving_endpoints.update_permissions.call_args.args
-    endpoint_acl = client.serving_endpoints.update_permissions.call_args.kwargs[
-        "access_control_list"
-    ]
-    assert endpoint_id == "mip-gateway-endpoint-id"
-    assert endpoint_acl[0].service_principal_name == "verifier-application-id"
-    assert getattr(endpoint_acl[0].permission_level, "value", endpoint_acl[0].permission_level) == (
-        "CAN_QUERY"
-    )
     assert result.created_lakebase_role is False
     assert result.granted_can_query is True
     client.warehouses.update_permissions.assert_called_once()
@@ -1645,6 +2237,60 @@ def test_verifier_reuses_safely_bootstrapped_lakebase_role_without_admin_or_app_
         == "CAN_USE"
     )
     assert result.granted_warehouse_can_use is True
+
+
+def test_verifier_grants_green_before_revoke_and_preserves_signed_blue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    verifier = _sp(
+        "mip-ai-gateway-verifier-ci-sp",
+        sp_id="verifier-scim-id",
+        application_id="verifier-application-id",
+    )
+    client = _make_client(existing_sp=verifier, resource_access=False)
+    events: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        pmo,
+        "_reserved_gateway_endpoints",
+        lambda _client: {"green-gateway", "signed-blue-gateway", "stale-gateway"},
+    )
+    monkeypatch.setattr(
+        pmo,
+        "_grant_can_query_on_endpoint",
+        lambda _client, endpoint, *_args, **_kwargs: events.append(("grant", endpoint)),
+    )
+    monkeypatch.setattr(
+        pmo,
+        "_revoke_can_query_on_obsolete_endpoint",
+        lambda _client, endpoint, *_args, **_kwargs: events.append(("revoke", endpoint)),
+    )
+    monkeypatch.setattr(
+        pmo,
+        "_grant_can_use_on_warehouse",
+        lambda *_args, **_kwargs: None,
+    )
+
+    result = _provision(
+        client,
+        sp_name=verifier.display_name,
+        grant_can_use=False,
+        group_name=None,
+        gateway_endpoint="green-gateway",
+        warehouse_id="warehouse-123",
+        identity_role="verifier",
+        mint_secret=False,
+        set_gh_secrets=False,
+        gh_repo=None,
+        revoke_gateway_endpoints=("explicit-obsolete",),
+        preserve_gateway_endpoints=("signed-blue-gateway",),
+    )
+
+    assert events == [
+        ("grant", "green-gateway"),
+        ("revoke", "explicit-obsolete"),
+        ("revoke", "stale-gateway"),
+    ]
+    assert result.granted_can_query is True
 
 
 def test_provision_rejects_verifier_app_can_use_before_client_or_any_mutation() -> None:
@@ -2489,7 +3135,7 @@ def test_mint_missing_secret_fails_without_printing_response_values(
     client = _make_client(create_returns=_sp(), mint_secret_value="")
     with (
         patch.object(pmo, "_set_gh_secret"),
-        pytest.raises(SystemExit, match="no .secret"),
+        pytest.raises(SystemExit, match="incomplete or ambiguous"),
     ):
         _provision(client)
     captured = capsys.readouterr()

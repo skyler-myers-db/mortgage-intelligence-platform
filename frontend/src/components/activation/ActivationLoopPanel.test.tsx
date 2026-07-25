@@ -120,7 +120,9 @@ describe('ActivationLoopPanel', () => {
 
   function stageButton(): HTMLButtonElement {
     const button = Array.from(document.querySelectorAll('button')).find((candidate) =>
-      candidate.textContent?.includes('Stage') || candidate.textContent?.includes('Staged')
+      candidate.textContent?.includes('Stage')
+      || candidate.textContent?.includes('Staged')
+      || candidate.textContent?.includes('Retry')
     );
     expect(button).toBeTruthy();
     return button as HTMLButtonElement;
@@ -161,6 +163,27 @@ describe('ActivationLoopPanel', () => {
     expect(button.disabled).toBe(true);
     expect(button.textContent).toContain('Staged');
     expect(apiMocks.stageActivation).not.toHaveBeenCalled();
+  });
+
+  it('retries a failed activation through the business-key-safe stage endpoint', async () => {
+    apiMocks.activationOutbox.mockResolvedValue([outboxItem({ status: 'failed' })]);
+
+    await render();
+
+    const button = stageButton();
+    expect(button.disabled).toBe(false);
+    expect(button.textContent).toContain('Retry');
+
+    await act(async () => {
+      button.click();
+    });
+    await settle();
+
+    expect(apiMocks.stageActivation).toHaveBeenCalledWith(expect.objectContaining({
+      borrower_id: 'B-48291',
+      destination_key: 'salesforce_crm',
+      approval_id: APPROVAL_ID,
+    }));
   });
 
   it('marks activation operations unavailable when the registry cannot be read', async () => {

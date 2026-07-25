@@ -14,6 +14,7 @@ from tools.databricks.app_rollback_secret_scope import (
     assert_owned_app_rollback_scope,
     ensure_owned_app_rollback_scope,
     expected_app_rollback_scope,
+    historical_supervisor_cleanup_journal_key,
 )
 
 APP_NAME = "mip-app"
@@ -184,6 +185,9 @@ def test_existing_owned_scope_allows_only_same_app_record_keys() -> None:
     ensure_owned_app_rollback_scope(workspace, app_name=APP_NAME, scope=SCOPE)
     secrets.keys[SCOPE]["app-last-good-v5-mip-app"] = "legacy"
     secrets.keys[SCOPE]["app-last-good-v6-mip-app"] = "current"
+    secrets.keys[SCOPE][historical_supervisor_cleanup_journal_key(APP_NAME)] = (
+        "pending-exact-tuple"
+    )
 
     binding = assert_owned_app_rollback_scope(
         workspace,

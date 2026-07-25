@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.main import app
@@ -12,9 +13,10 @@ from backend.schemas.activation import (
     ActivationDestination,
     ActivationOutboxItem,
 )
+from backend.services.activation_campaign_proof import CampaignActivationProof
 from backend.services.activation_state import ActivationWriteResult, get_activation_state_store
 from backend.services.lakebase import LakebaseError
-from backend.services.repositories import get_borrower_repository
+from backend.services.repositories import get_borrower_repository, get_lead_repository
 from backend.services.sales_state import get_sales_state_store
 from tests.fixtures import mock_population as mock_data
 
@@ -79,7 +81,22 @@ def _approval_decision(
         "actor_email": "skyler@entrada.ai",
         "offer_code": offer_code,
         "campaign_id": campaign_id,
+        "channel": "email",
     }
+
+
+def _campaign_proof(campaign_id: str) -> CampaignActivationProof:
+    return CampaignActivationProof(
+        campaign_id=campaign_id,
+        channel="email",
+        offer_code="refi",
+        materialization_id=str(uuid4()),
+        delta_version=17,
+        treatment_fingerprint="a" * 64,
+        suppression_policy={"default": "eligible_only", "frequency_cap_days": 30},
+        decision_intent="{}",
+        decision_payload_hash="b" * 64,
+    )
 
 
 class _ActivationStore:
@@ -90,6 +107,7 @@ class _ActivationStore:
         approved_decisions: dict[str, dict[str, object]] | None = None,
         fail_stage: bool = False,
         campaign_status: str | None = "active",
+        treatment_state: str = "ready",
     ) -> None:
         self.destination = destination or _destination()
         self.outbox: list[ActivationOutboxItem] = []
@@ -97,6 +115,7 @@ class _ActivationStore:
         self.fail_stage = fail_stage
         self.approved_decisions = approved_decisions or {}
         self.campaign_status = campaign_status
+        self.treatment_state = treatment_state
         self.last_approved_decision: dict[str, object] | None = None
         self.delivery_guard_entered = False
         self.activation: ActivationOutboxItem | None = None
@@ -130,37 +149,50 @@ class _ActivationStore:
             return decision
         return None
 
-    def campaign_status_for_approval(
+    def campaign_activation_proof_for_approval(
         self,
         *,
         approval_id: str,
         borrower_id: str,
         campaign_id: str,
-    ) -> str | None:
+    ) -> CampaignActivationProof | None:
         decision = self.approved_decision_for(
             approval_id=approval_id,
             borrower_id=borrower_id,
         )
         if decision is None or str(decision.get("campaign_id") or "") != campaign_id:
             return None
-        return self.campaign_status
+        if self.campaign_status != "active" or self.treatment_state != "ready":
+            raise PermissionError(
+                "campaign must be active with a valid saved treatment proof at activation time"
+            )
+        return _campaign_proof(campaign_id)
 
     @contextmanager
     def delivery_guard(
         self,
         *,
-        activation: ActivationOutboxItem,
+        activation_id: str,
+        lead_repo: _TreatmentMembership,
     ) -> Iterator[_ActivationStore]:
         self.delivery_guard_entered = True
+        activation = next(
+            row for row in self.outbox if row.activation_id == activation_id
+        )
         self.activation = activation
         campaign_active = not activation.campaign_id or (
-            self.campaign_status_for_approval(
-                approval_id=str(activation.approval_id or ""),
-                borrower_id=str(activation.borrower_id or ""),
-                campaign_id=activation.campaign_id,
-            )
-            == "active"
+            self.campaign_status == "active" and self.treatment_state == "ready"
         )
+        if campaign_active and activation.campaign_id:
+            proof = _campaign_proof(activation.campaign_id)
+            campaign_active = lead_repo.is_campaign_treatment_member(
+                borrower_id=activation.borrower_id,
+                campaign_id=proof.campaign_id,
+                materialization_id=proof.materialization_id,
+                delta_version=proof.delta_version,
+                treatment_fingerprint=proof.treatment_fingerprint,
+                frequency_cap_days=30,
+            )
         self.should_deliver = campaign_active and activation.status in {"staged", "failed"}
         yield self
 
@@ -179,7 +211,16 @@ class _ActivationStore:
         self.should_deliver = False
         return self.activation
 
-    def stage_borrower(self, *, borrower, destination, payload, approved_decision, actor: str) -> ActivationWriteResult:
+    def stage_borrower(
+        self,
+        *,
+        borrower,
+        destination,
+        payload,
+        approved_decision,
+        campaign_proof,
+        actor: str,
+    ) -> ActivationWriteResult:
         self.stage_calls += 1
         if self.fail_stage:
             raise LakebaseError("activation staging failed")
@@ -208,6 +249,16 @@ class _Borrowers:
         return None
 
 
+class _TreatmentMembership:
+    def __init__(self, *, result: bool = True) -> None:
+        self.result = result
+        self.calls: list[dict[str, object]] = []
+
+    def is_campaign_treatment_member(self, **kwargs: object) -> bool:
+        self.calls.append(dict(kwargs))
+        return self.result
+
+
 class _SalesState:
     def __init__(self, approval_status: str = "approved", approval_id: str | None = None) -> None:
         self.approval_status = approval_status
@@ -230,9 +281,11 @@ def _activation_overrides(
     *,
     store: _ActivationStore | None = None,
     borrowers: _Borrowers | None = None,
+    treatment_membership: _TreatmentMembership | None = None,
     sales_state: _SalesState | None = None,
 ) -> Iterator[_ActivationStore]:
     borrowers = borrowers or _Borrowers()
+    treatment_membership = treatment_membership or _TreatmentMembership()
     sales_state = sales_state or _SalesState()
     store = store or _ActivationStore()
     if sales_state.approval_status == "approved" and sales_state.approval_id:
@@ -243,6 +296,7 @@ def _activation_overrides(
     deps = {
         get_activation_state_store: lambda: store,
         get_borrower_repository: lambda: borrowers,
+        get_lead_repository: lambda: treatment_membership,
         get_sales_state_store: lambda: sales_state,
     }
     previous = {dep: app.dependency_overrides.get(dep) for dep in deps}
@@ -330,7 +384,89 @@ def test_stage_campaign_activation_requires_current_active_campaign() -> None:
         )
 
     assert response.status_code == 409
-    assert response.json()["detail"] == "campaign must be active at activation staging time"
+    assert (
+        response.json()["detail"]
+        == "campaign must be active with a valid saved treatment proof at activation time"
+    )
+    assert store.stage_calls == 0
+
+
+def test_stage_campaign_activation_rejects_active_legacy_unbound_campaign() -> None:
+    borrower_id = mock_data.BORROWERS[0].borrower_id
+    approval_id = str(uuid4())
+    campaign_id = str(uuid4())
+    store = _ActivationStore(
+        approved_decisions={
+            approval_id: _approval_decision(
+                approval_id,
+                borrower_id,
+                campaign_id=campaign_id,
+            )
+        },
+        campaign_status="active",
+        treatment_state="legacy_unbound",
+    )
+
+    with _activation_overrides(store=store, sales_state=_SalesState(approval_id=approval_id)):
+        response = client.post(
+            "/api/activation/stage",
+            json={
+                "borrower_id": borrower_id,
+                "destination_key": "salesforce_crm",
+                "campaign_id": campaign_id,
+                "approval_id": approval_id,
+                "request_id": str(uuid4()),
+            },
+        )
+
+    assert response.status_code == 409
+    assert "valid saved treatment proof" in response.json()["detail"]
+    assert store.stage_calls == 0
+
+
+@pytest.mark.parametrize(
+    "excluded_assignment",
+    ["holdout", "household_dedup_suppressed", "not_materialized"],
+)
+def test_stage_campaign_activation_rejects_non_treatment_members(
+    excluded_assignment: str,
+) -> None:
+    borrower_id = mock_data.BORROWERS[0].borrower_id
+    approval_id = str(uuid4())
+    campaign_id = str(uuid4())
+    store = _ActivationStore(
+        approved_decisions={
+            approval_id: _approval_decision(
+                approval_id,
+                borrower_id,
+                campaign_id=campaign_id,
+            )
+        },
+    )
+    membership = _TreatmentMembership(result=False)
+
+    with _activation_overrides(
+        store=store,
+        treatment_membership=membership,
+        sales_state=_SalesState(approval_id=approval_id),
+    ):
+        response = client.post(
+            "/api/activation/stage",
+            json={
+                "borrower_id": borrower_id,
+                "destination_key": "salesforce_crm",
+                "campaign_id": campaign_id,
+                "approval_id": approval_id,
+                "request_id": str(uuid4()),
+            },
+        )
+
+    assert excluded_assignment
+    assert response.status_code == 409
+    assert response.json()["detail"] == "borrower is not in the saved campaign treatment cohort"
+    assert len(membership.calls) == 1
+    assert membership.calls[0]["borrower_id"] == borrower_id
+    assert membership.calls[0]["campaign_id"] == campaign_id
     assert store.stage_calls == 0
 
 
@@ -349,7 +485,12 @@ def test_stage_campaign_activation_accepts_current_active_campaign() -> None:
         campaign_status="active",
     )
 
-    with _activation_overrides(store=store, sales_state=_SalesState(approval_id=approval_id)):
+    membership = _TreatmentMembership()
+    with _activation_overrides(
+        store=store,
+        treatment_membership=membership,
+        sales_state=_SalesState(approval_id=approval_id),
+    ):
         response = client.post(
             "/api/activation/stage",
             json={
@@ -363,6 +504,14 @@ def test_stage_campaign_activation_accepts_current_active_campaign() -> None:
 
     assert response.status_code == 202, response.text
     assert response.json()["activation"]["campaign_id"] == campaign_id
+    assert len(membership.calls) == 1
+    membership_call = membership.calls[0]
+    assert membership_call["borrower_id"] == borrower_id
+    assert membership_call["campaign_id"] == campaign_id
+    assert membership_call["delta_version"] == 17
+    assert membership_call["treatment_fingerprint"] == "a" * 64
+    assert membership_call["frequency_cap_days"] == 30
+    assert str(membership_call["materialization_id"])
 
 
 def test_stage_activation_requires_request_id_and_approval_id() -> None:

@@ -983,6 +983,21 @@ CREATE TRIGGER trg_campaigns_treatment_boundary
     FOR EACH ROW
     EXECUTE FUNCTION mip_app.enforce_campaign_treatment_boundary();
 
+-- Activation may only consume an immutable T0 treatment. Quarantine any
+-- pre-treatment campaigns that were historically seeded or promoted as
+-- active, then make the invariant database-enforced for every future writer.
+UPDATE mip_app.campaigns
+SET status = 'archived',
+    updated_at = now()
+WHERE status = 'active'
+  AND treatment_state <> 'ready';
+
+ALTER TABLE mip_app.campaigns
+    DROP CONSTRAINT IF EXISTS campaigns_active_requires_ready_treatment_chk;
+ALTER TABLE mip_app.campaigns
+    ADD CONSTRAINT campaigns_active_requires_ready_treatment_chk
+    CHECK (status <> 'active' OR treatment_state = 'ready');
+
 -- The post-seed NOT VALID checks retain the legacy-version escape hatch on
 -- unchanged payloads. The trigger above closes that hatch for inserts and any
 -- governed JSON modification, promoting successful remediations to version 1.
@@ -1440,10 +1455,63 @@ ALTER TABLE mip_app.activation_outbox
 DROP INDEX IF EXISTS mip_app.idx_activation_outbox_request_id;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_outbox_request_id
     ON mip_app.activation_outbox (request_id);
+
+-- Install the delivery-time campaign proof gate exactly once. schema.sql is
+-- intentionally replayable on every deploy, so an unguarded UPDATE here would
+-- cancel rows produced by the new proof-bound writer on every later release.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM mip_app.schema_migrations
+        WHERE version = '2026_07_25_campaign_activation_delivery_reproof'
+    ) THEN
+        UPDATE mip_app.activation_outbox
+        SET status = 'cancelled',
+            delivery_metadata = COALESCE(delivery_metadata, '{}'::jsonb)
+                || '{"cancelled_reason":"campaign_treatment_reproof_required"}'::jsonb,
+            updated_at = now()
+        WHERE campaign_id IS NOT NULL
+          AND status IN ('dry_run','staged','failed');
+
+        INSERT INTO mip_app.schema_migrations (version, description)
+        VALUES (
+            '2026_07_25_campaign_activation_delivery_reproof',
+            'Cancel only pre-gate campaign activation rows before delivery-time treatment reproof becomes authoritative'
+        );
+    END IF;
+END;
+$$;
+
+-- A historical failed handoff may share a business key with another active
+-- row because the former index excluded failures. Preserve the oldest,
+-- highest-authority row (and therefore its stable external idempotency key)
+-- and cancel only additional duplicates before widening the unique boundary.
+WITH ranked_activation_business_keys AS (
+    SELECT activation_id,
+           ROW_NUMBER() OVER (
+               PARTITION BY destination_key, approval_id, borrower_id, channel
+               ORDER BY
+                   CASE WHEN status = 'delivered' THEN 0 ELSE 1 END,
+                   created_at ASC,
+                   activation_id ASC
+           ) AS business_key_rank
+    FROM mip_app.activation_outbox
+    WHERE status IN ('dry_run','staged','failed','delivered')
+)
+UPDATE mip_app.activation_outbox AS activation
+SET status = 'cancelled',
+    delivery_metadata = COALESCE(activation.delivery_metadata, '{}'::jsonb)
+        || '{"cancelled_reason":"duplicate_business_key_reconciled"}'::jsonb,
+    updated_at = now()
+FROM ranked_activation_business_keys AS ranked
+WHERE activation.activation_id = ranked.activation_id
+  AND ranked.business_key_rank > 1;
+
 DROP INDEX IF EXISTS mip_app.idx_activation_outbox_business_key;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_activation_outbox_business_key
     ON mip_app.activation_outbox (destination_key, approval_id, borrower_id, channel)
-    WHERE status IN ('dry_run','staged','delivered');
+    WHERE status IN ('dry_run','staged','failed','delivered');
 CREATE INDEX IF NOT EXISTS idx_activation_outbox_created
     ON mip_app.activation_outbox (created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_activation_outbox_borrower

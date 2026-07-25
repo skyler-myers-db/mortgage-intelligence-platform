@@ -49,3 +49,28 @@ Before 2026-07-31:
    orchestration so advisory-lock and idempotency behavior remain independently
    testable.
 3. Remove both allowlist entries when the extracted modules land.
+
+## 2026-07-23 deploy command-of-record addendum
+
+The release-hardening work exposed that `scripts/deploy.sh` was outside the
+file-size gate because neither `scripts/` nor `.sh` sources were inspected.
+The gate now covers both. The newly added agent-proxy, verifier-Gateway, and
+durable cutover-journal lifecycle functions were extracted to focused sourced
+libraries under `scripts/lib/`; every new library remains below the 900-line
+hard limit without an allowlist.
+
+The remaining `scripts/deploy.sh` monolith predates this extraction and is
+temporarily allowlisted only through 2026-08-15 so the command-of-record can
+retain its reviewed ordering while the release completes. Before that date:
+
+1. Extract App rollback, first-install recovery, and failure-compensation
+   functions into a sourced App lifecycle library.
+2. Extract credential minting and bounded-identity execution functions into a
+   sourced identity library without exporting private credentials.
+3. Extract Unity Catalog grant and job-refresh functions into a sourced data
+   lifecycle library.
+4. Keep orchestration order, argument parsing, and top-level traps in
+   `scripts/deploy.sh`, then remove its allowlist entry.
+
+Do not extend this exception without a new dated decision and concrete split
+evidence. New shell libraries are never covered by this exception.

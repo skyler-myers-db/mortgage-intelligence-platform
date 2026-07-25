@@ -137,6 +137,8 @@ class _AtomicConn:
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> _TxnResult:
         params = params or {}
         self.owner.executed_sql.append(sql)
+        if "pg_advisory_xact_lock" in sql:
+            return _TxnResult(None)
         if "INSERT INTO mip_app.approvals" in sql:
             if self.owner.conflict:
                 self.owner.last_attempt_params = dict(params)
@@ -236,6 +238,8 @@ class _ConcurrentDecisionConn:
 
     def execute(self, sql: str, params: dict[str, Any] | None = None) -> _TxnResult:
         values = params or {}
+        if "pg_advisory_xact_lock" in sql:
+            return _TxnResult(None)
         if "INSERT INTO mip_app.approvals" in sql:
             request_id = str(values["request_id"])
             if request_id in self.owner.approvals:
@@ -736,6 +740,13 @@ def test_atomic_conflict_does_not_write_audit_for_uninserted_approval(
     assert resp.status_code == 200, resp.text
     assert resp.json()["approval_id"] == existing_id
     assert resp.json()["audit_event_id"] == "22222222-2222-4222-8222-222222222222"
+    lock_index = next(
+        i for i, sql in enumerate(lakebase.executed_sql) if "pg_advisory_xact_lock" in sql
+    )
+    insert_index = next(
+        i for i, sql in enumerate(lakebase.executed_sql) if "INSERT INTO mip_app.approvals" in sql
+    )
+    assert lock_index < insert_index
     assert lakebase.audit_insert_count == 0
     assert lakebase.committed_approvals == []
     assert trigger_calls == []

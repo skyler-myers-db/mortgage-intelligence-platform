@@ -63,7 +63,9 @@ DO UPDATE SET
 
 -- Campaigns -----------------------------------------------------------
 -- Fixed UUIDs so re-running the seed is a no-op and so approvals below
--- can reference the same campaigns without a lookup.
+-- can reference the same campaigns without a lookup. These predate immutable
+-- T0 treatment materialization, so they remain archived narrative evidence;
+-- activation must use a newly built treatment-ready campaign.
 INSERT INTO mip_app.campaigns (
     campaign_id, name, owner_email, status, criteria,
     suppression_policy, channel_cascade, send_window, created_at
@@ -73,7 +75,7 @@ VALUES
         '11111111-1111-4111-8111-111111111111',
         'Summit Mortgage Refi — In the Money Q2',
         'skyler@entrada.ai',
-        'active',
+        'archived',
         '{"segment": "itm", "min_spread_bps": 75, "states": ["IL","CA","WA","CO"], "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
         '{"default": "eligible_only", "require_marketing_eligible": true, "frequency_cap_days": 30}'::jsonb,
         '[{"step": 1, "channel": "email"}, {"step": 2, "channel": "sms", "after_days": 3}]'::jsonb,
@@ -84,7 +86,7 @@ VALUES
         '22222222-2222-4222-8222-222222222222',
         'Summit Mortgage Cash-Out — High Equity',
         'skyler@entrada.ai',
-        'active',
+        'archived',
         '{"segment": "cashout", "min_equity_pct": 25, "states": ["IL","FL","TX"], "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
         '{"default": "eligible_only", "require_marketing_eligible": true, "frequency_cap_days": 30}'::jsonb,
         '[{"step": 1, "channel": "email"}, {"step": 2, "channel": "direct_mail", "after_days": 10}]'::jsonb,
@@ -95,7 +97,7 @@ VALUES
         '33333333-3333-4333-8333-333333333333',
         'Summit Mortgage HELOC — Equity/Propensity Intent',
         'skyler@entrada.ai',
-        'active',
+        'archived',
         '{"segment": "heloc", "heloc_equity_min_pct": 35, "heloc_propensity_min": 700, "intent_signal": "cotality_heloc_propensity", "filed_permits": "pending_not_inferred", "marketing_eligibility": "Eligible only", "consent_status": "Opt-in", "recency": "Untouched 30d"}'::jsonb,
         '{"default": "eligible_only", "require_marketing_eligible": true, "frequency_cap_days": 30}'::jsonb,
         '[{"step": 1, "channel": "email"}, {"step": 2, "channel": "sms", "after_days": 3}]'::jsonb,
@@ -105,6 +107,7 @@ VALUES
 ON CONFLICT (campaign_id)
 DO UPDATE SET
     name = EXCLUDED.name,
+    status = EXCLUDED.status,
     criteria = EXCLUDED.criteria,
     suppression_policy = EXCLUDED.suppression_policy,
     channel_cascade = EXCLUDED.channel_cascade,

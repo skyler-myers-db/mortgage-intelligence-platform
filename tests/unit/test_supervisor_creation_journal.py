@@ -1,0 +1,1000 @@
+from __future__ import annotations
+
+import base64
+import io
+import json
+from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from databricks.sdk.errors import ResourceAlreadyExists, ResourceDoesNotExist
+
+from backend.services.ai_gateway_proof_attestation import (
+    derive_gateway_proof_verify_key,
+)
+from tools.databricks import agentic_supervisor_endpoint as supervisor_endpoint
+from tools.databricks import historical_supervisor_creation_admission as creation_admission
+from tools.databricks import provision_agentic_resources as provision
+from tools.databricks import reconcile_historical_agent_endpoints as historical
+from tools.databricks import signed_blue_supervisor_recovery as signed_blue
+from tools.databricks import supervisor_creation_control as control
+from tools.databricks import supervisor_creation_journal as journal
+from tools.databricks import supervisor_creation_runtime as runtime
+
+_SIGNING_KEY = base64.urlsafe_b64encode(bytes(range(32))).decode().rstrip("=")
+_VERIFY_KEY = derive_gateway_proof_verify_key(_SIGNING_KEY)
+_APP = "mip-app"
+_RUNTIME = "runtime-client"
+_LEASE = str(uuid4())
+_ROOT = str(uuid4())
+_SOURCE = "a" * 40
+_NOW = datetime(2026, 7, 25, 12, tzinfo=UTC)
+_LEASE_EXPIRES = datetime(2099, 1, 1, tzinfo=UTC)
+
+
+class _Files:
+    def __init__(self) -> None:
+        self.data: dict[str, bytes] = {}
+
+    def upload(
+        self,
+        path: str,
+        content: io.BytesIO,
+        *,
+        format: object,
+        overwrite: bool,
+    ) -> None:
+        del format
+        if path in self.data and not overwrite:
+            raise ResourceAlreadyExists("exists")
+        self.data[path] = content.read()
+
+    def download(self, path: str) -> io.BytesIO:
+        if path not in self.data:
+            raise ResourceDoesNotExist("missing")
+        return io.BytesIO(self.data[path])
+
+    def delete(self, path: str) -> None:
+        if path not in self.data:
+            raise ResourceDoesNotExist("missing")
+        del self.data[path]
+
+
+class _Api:
+    def __init__(self, owner: _Workspace) -> None:
+        self.owner = owner
+
+    def do(
+        self,
+        method: str,
+        path: str,
+        *,
+        query: dict[str, Any] | None = None,
+    ) -> Any:
+        del query
+        assert method == "GET"
+        if path == "/api/2.1/supervisor-agents":
+            return {"supervisor_agents": list(self.owner.agents.values())}
+        parts = path.split("/")
+        supervisor_id = parts[4]
+        if path.endswith("/tools"):
+            return {"tools": list(self.owner.tools[supervisor_id].values())}
+        if path.endswith("/examples"):
+            return {"examples": []}
+        return dict(self.owner.agents[supervisor_id])
+
+
+class _Workspace:
+    def __init__(self) -> None:
+        self.workspace = _Files()
+        self.api_client = _Api(self)
+        self.agents: dict[str, dict[str, Any]] = {}
+        self.tools: dict[str, dict[str, dict[str, Any]]] = {}
+        self.serving_endpoints = SimpleNamespace(get=self._endpoint)
+
+    def get_workspace_id(self) -> int:
+        return 123456789
+
+    def _endpoint(self, name: str) -> dict[str, str]:
+        return {"id": f"{name}-id", "creator": _RUNTIME}
+
+
+@pytest.fixture(autouse=True)
+def _keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_SIGNING_KEY", _SIGNING_KEY)
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_VERIFY_KEY", _VERIFY_KEY)
+    monkeypatch.setenv("MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS", "")
+    monkeypatch.setattr(
+        journal,
+        "assert_held",
+        lambda *_args, **_kwargs: {
+            "lease_id": _LEASE,
+            "source_git_sha": _SOURCE,
+            "writer_application_id": _RUNTIME,
+            "recovery_root_lease_id": _ROOT,
+            "expires_at": _LEASE_EXPIRES.isoformat(),
+        },
+    )
+
+
+def _prepare(workspace: _Workspace) -> dict[str, Any]:
+    return journal.prepare(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        canonical_name="Mortgage Growth Agent",
+        target_name="Mortgage Growth Agent",
+        genie_space_id="genie-space",
+        catalog="mip",
+        now=_NOW,
+    )
+
+
+def _create(workspace: _Workspace, record: dict[str, Any]) -> dict[str, str]:
+    def create(payload: dict[str, str]) -> dict[str, str]:
+        supervisor_id = "supervisor-created"
+        workspace.agents[supervisor_id] = {
+            "supervisor_agent_id": supervisor_id,
+            **payload,
+            "endpoint_name": "supervisor-endpoint",
+            "creator": _RUNTIME,
+            "create_time": "2026-07-25T12:00:01Z",
+        }
+        workspace.tools[supervisor_id] = {}
+        return {
+            "supervisor_agent_id": supervisor_id,
+            "endpoint_name": "supervisor-endpoint",
+        }
+
+    return runtime.create_from_intent(
+        workspace,
+        record,
+        assert_single_writer=lambda: None,
+        create=create,
+        now=_NOW,
+    )
+
+
+def test_origin_is_immutable_while_successor_lease_is_adopted(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    original = _prepare(workspace)
+    successor = str(uuid4())
+    monkeypatch.setattr(
+        journal,
+        "assert_held",
+        lambda *_args, **_kwargs: {
+            "lease_id": successor,
+            "source_git_sha": "b" * 40,
+            "writer_application_id": _RUNTIME,
+            "recovery_root_lease_id": _ROOT,
+            "expires_at": _LEASE_EXPIRES.isoformat(),
+        },
+    )
+
+    adopted = journal.prepare(
+        workspace,
+        app_name=_APP,
+        lease_id=successor,
+        source_git_sha="b" * 40,
+        runtime_application_id=_RUNTIME,
+        canonical_name=original["canonical_name"],
+        target_name=original["target_name"],
+        genie_space_id=original["genie_space_id"],
+        catalog=original["catalog"],
+        now=_NOW,
+    )
+
+    assert adopted["origin_lease_id"] == _LEASE
+    assert adopted["origin_source_git_sha"] == _SOURCE
+    assert adopted["admitted_lease_id"] == successor
+    assert adopted["admitted_source_git_sha"] == "b" * 40
+    assert adopted["intent_id"] == original["intent_id"]
+    assert adopted["disposition"] == "active"
+
+
+def test_successor_contract_change_marks_historical_intent_retire_only(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    original = _prepare(workspace)
+    created = _create(workspace, original)
+    original = journal.claim(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        **created,
+        proof_kind="create_response",
+        now=_NOW + timedelta(seconds=2),
+    )
+    legacy = {**original, "version": 1}
+    legacy.pop("disposition")
+    workspace.workspace.data[journal.path(_APP)] = journal._canonical(  # noqa: SLF001
+        journal._sign(legacy)  # noqa: SLF001
+    ).encode()
+    original = journal.download(
+        workspace,
+        app_name=_APP,
+        runtime_application_id=_RUNTIME,
+    )
+    assert original is not None
+    assert original["version"] == 1
+    historical_contract = json.loads(original["contract_json"])
+    successor = str(uuid4())
+    successor_contract = {
+        **historical_contract,
+        "instructions": "Successor instructions with a changed governance contract.",
+        "tools": [
+            {
+                "tool_id": "successor_tool",
+                "tool_type": "uc_function",
+                "description": "A successor-only reviewed tool.",
+                "uc_function": {"name": "successor.gold.fn_successor"},
+            }
+        ],
+    }
+    monkeypatch.setattr(
+        journal,
+        "canonical_supervisor_contract_json",
+        lambda **_kwargs: json.dumps(
+            successor_contract,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
+    monkeypatch.setattr(
+        journal,
+        "SUPERVISOR_INSTRUCTIONS",
+        successor_contract["instructions"],
+    )
+    monkeypatch.setattr(
+        journal,
+        "assert_held",
+        lambda *_args, **_kwargs: {
+            "lease_id": successor,
+            "source_git_sha": "b" * 40,
+            "writer_application_id": _RUNTIME,
+            "recovery_root_lease_id": _ROOT,
+                "expires_at": _LEASE_EXPIRES.isoformat(),
+        },
+    )
+
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == original
+    )
+    adopted = journal.prepare(
+        workspace,
+        app_name=_APP,
+        lease_id=successor,
+        source_git_sha="b" * 40,
+        runtime_application_id=_RUNTIME,
+        canonical_name="Successor Agent",
+        target_name="Successor Agent",
+        genie_space_id="successor-space",
+        catalog="successor",
+        now=_NOW,
+    )
+    assert adopted["contract_json"] == original["contract_json"]
+    assert adopted["temporary_instructions"] == original["temporary_instructions"]
+    assert adopted["admitted_lease_id"] == successor
+    assert adopted["admitted_source_git_sha"] == "b" * 40
+    assert adopted["disposition"] == "retire_only"
+
+    mutations: list[str] = []
+    with pytest.raises(RuntimeError, match="retire-only"):
+        runtime.converge_claimed(
+            workspace,
+            adopted,
+            assert_single_writer=lambda: mutations.append("lease"),
+            create_tool=lambda *_args, **_kwargs: mutations.append("tool"),
+            update_field=lambda *_args, **_kwargs: mutations.append("field"),
+        )
+    assert mutations == []
+    assert workspace.tools[adopted["supervisor_id"]] == {}
+    direct = workspace.agents[adopted["supervisor_id"]]
+    disposition, reviewed = creation_admission.pending_creation_candidate_disposition(
+        workspace,
+        adopted,
+        direct,
+        direct,
+        adopted["endpoint_id"],
+        _RUNTIME,
+        canonical_name="Successor Agent",
+        genie_space_id="successor-space",
+        catalog="successor",
+    )
+    assert disposition == "retire"
+    assert reviewed is not None
+    assert reviewed.supervisor_id == adopted["supervisor_id"]
+    assert reviewed.contract_json == adopted["contract_json"]
+    with pytest.raises(RuntimeError, match="retire-only"):
+        control.complete_and_clear(workspace, adopted)
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == adopted
+    )
+
+    plan = control.plan_and_prepare(
+        workspace,
+        app_name=_APP,
+        lease_id=successor,
+        source_git_sha="b" * 40,
+        runtime_application_id=_RUNTIME,
+        canonical_name="Successor Agent",
+        genie_space_id="successor-space",
+        catalog="successor",
+        proxy_application_id="proxy-client",
+        approved_query_application_ids=("app-client",),
+    )
+    assert plan["action"] == "handoff_required"
+
+    journal.clear(
+        workspace,
+        app_name=_APP,
+        lease_id=successor,
+        source_git_sha="b" * 40,
+        runtime_application_id=_RUNTIME,
+        expected=adopted,
+    )
+    successor_plan = control.plan_and_prepare(
+        workspace,
+        app_name=_APP,
+        lease_id=successor,
+        source_git_sha="b" * 40,
+        runtime_application_id=_RUNTIME,
+        canonical_name="Successor Agent",
+        genie_space_id="successor-space",
+        catalog="successor",
+        proxy_application_id="proxy-client",
+        approved_query_application_ids=("app-client",),
+    )
+    assert successor_plan["action"] == "create"
+    successor_record = journal.download(
+        workspace,
+        app_name=_APP,
+        runtime_application_id=_RUNTIME,
+    )
+    assert successor_record is not None
+    assert successor_record["disposition"] == "active"
+    assert successor_record["contract_json"] == json.dumps(
+        successor_contract,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    assert workspace.tools[adopted["supervisor_id"]] == {}
+
+
+def test_adoption_rejects_another_recovery_root(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    original = _prepare(workspace)
+    successor = str(uuid4())
+    monkeypatch.setattr(
+        journal,
+        "assert_held",
+        lambda *_args, **_kwargs: {
+            "lease_id": successor,
+            "source_git_sha": "b" * 40,
+            "writer_application_id": _RUNTIME,
+            "recovery_root_lease_id": str(uuid4()),
+            "expires_at": _LEASE_EXPIRES.isoformat(),
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="another recovery scope"):
+        journal.prepare(
+            workspace,
+            app_name=_APP,
+            lease_id=successor,
+            source_git_sha="b" * 40,
+            runtime_application_id=_RUNTIME,
+            canonical_name=original["canonical_name"],
+            target_name=original["target_name"],
+            genie_space_id=original["genie_space_id"],
+            catalog=original["catalog"],
+            now=_NOW,
+        )
+
+
+def test_signed_journal_tamper_and_claim_overwrite_fail_closed() -> None:
+    workspace = _Workspace()
+    _prepare(workspace)
+    journal_path = journal.path(_APP)
+    signed = json.loads(workspace.workspace.data[journal_path])
+    signed["target_name"] = "attacker target"
+    workspace.workspace.data[journal_path] = json.dumps(signed).encode()
+    with pytest.raises(RuntimeError, match="signature is invalid"):
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    claimed = journal.claim(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        **created,
+        proof_kind="create_response",
+        now=_NOW + timedelta(seconds=2),
+    )
+    with pytest.raises(RuntimeError, match="already claims another tuple"):
+        journal.claim(
+            workspace,
+            app_name=_APP,
+            lease_id=_LEASE,
+            source_git_sha=_SOURCE,
+            runtime_application_id=_RUNTIME,
+            **{**created, "endpoint_id": "different-endpoint-id"},
+            proof_kind="create_response",
+            now=_NOW + timedelta(seconds=3),
+        )
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == claimed
+    )
+
+
+def test_signed_blue_finalization_precedes_mq1_journaled_creation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    canonical_name = "Mortgage Growth Agent"
+    empty = supervisor_endpoint.supervisor_candidates(
+        [],
+        display_name=canonical_name,
+        genie_space_id="genie-space",
+        catalog="mip",
+    )
+    workspace.agents["signed-blue"] = {
+        "supervisor_agent_id": "signed-blue",
+        "display_name": empty.replacement_name,
+        "endpoint_name": "signed-blue-endpoint",
+        "creator": _RUNTIME,
+        "create_time": "2026-07-25T11:00:00Z",
+    }
+    workspace.tools["signed-blue"] = {}
+    monkeypatch.setattr(
+        signed_blue,
+        "exact_supervisor_endpoint_id",
+        lambda *_args, **_kwargs: "signed-blue-endpoint-id",
+    )
+    monkeypatch.setattr(
+        signed_blue,
+        "supervisor_endpoint_requires_managed_query_rotation",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        supervisor_endpoint,
+        "supervisor_endpoint_requires_managed_query_rotation",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        provision,
+        "assert_exact_supervisor_contract",
+        lambda *_args, **_kwargs: None,
+    )
+    mutations: list[str] = []
+
+    def rename(supervisor_id: str, display_name: str) -> None:
+        mutations.append("rename")
+        workspace.agents[supervisor_id]["display_name"] = display_name
+
+    finalized = runtime.finalize_signed_blue_for_planning(
+        workspace,
+        signed_blue_pin={
+            "supervisor_id": "signed-blue",
+            "endpoint": "signed-blue-endpoint",
+            "endpoint_id": "signed-blue-endpoint-id",
+            "creator": _RUNTIME,
+        },
+        canonical_name=canonical_name,
+        genie_space_id="genie-space",
+        catalog="mip",
+        runtime_application_id=_RUNTIME,
+        proxy_application_id="proxy-client",
+        approved_query_application_ids=("app-client",),
+        assert_single_writer=lambda: None,
+        list_agents=lambda: list(workspace.agents.values()),
+        rename_agent=rename,
+        assert_contract=lambda *_args, **_kwargs: None,
+    )
+    assert finalized == {
+        "status": "finalized",
+        "supervisor_id": "signed-blue",
+    }
+    assert mutations == ["rename"]
+
+    planned = control.plan_and_prepare(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        canonical_name=canonical_name,
+        genie_space_id="genie-space",
+        catalog="mip",
+        proxy_application_id="proxy-client",
+        approved_query_application_ids=("app-client",),
+    )
+    assert planned["action"] == "create"
+    assert planned["target_name"] == empty.managed_query_name
+    pending = journal.download(
+        workspace,
+        app_name=_APP,
+        runtime_application_id=_RUNTIME,
+    )
+    assert pending is not None
+    assert pending["target_name"] == empty.managed_query_name
+
+
+def test_crash_after_intent_and_each_incremental_mutation_converges() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+
+    # A fresh invocation after the durable intent creates exactly the marked
+    # temporary candidate, but never creates any tools before proof claim.
+    created = _create(workspace, intent)
+    assert workspace.tools[created["supervisor_id"]] == {}
+    claimed = journal.claim(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        **created,
+        proof_kind="create_response",
+        now=_NOW + timedelta(seconds=2),
+    )
+
+    crash_points = [
+        "instructions",
+        *[tool["tool_id"] for tool in __import__("json").loads(claimed["contract_json"])["tools"]],
+        "display_name",
+    ]
+
+    def update_field(supervisor_id: str, field: str, value: str) -> None:
+        workspace.agents[supervisor_id][field] = value
+        if crash_points and crash_points[0] == field:
+            crash_points.pop(0)
+            raise KeyboardInterrupt(field)
+
+    def create_tool(
+        supervisor_id: str,
+        tool_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        workspace.tools[supervisor_id][tool_id] = {
+            "tool_id": tool_id,
+            **payload,
+        }
+        if crash_points and crash_points[0] == tool_id:
+            crash_points.pop(0)
+            raise KeyboardInterrupt(tool_id)
+
+    while crash_points:
+        with pytest.raises(KeyboardInterrupt):
+            runtime.converge_claimed(
+                workspace,
+                journal.download(
+                    workspace,
+                    app_name=_APP,
+                    runtime_application_id=_RUNTIME,
+                )
+                or {},
+                assert_single_writer=lambda: None,
+                create_tool=create_tool,
+                update_field=update_field,
+            )
+
+    result = runtime.converge_claimed(
+        workspace,
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        or {},
+        assert_single_writer=lambda: None,
+        create_tool=create_tool,
+        update_field=update_field,
+    )
+    assert result["display_name"] == "Mortgage Growth Agent"
+    assert len(workspace.tools[created["supervisor_id"]]) == 4
+
+
+def _claimed_complete(workspace: _Workspace) -> dict[str, Any]:
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    claimed = journal.claim(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        **created,
+        proof_kind="create_response",
+        now=_NOW + timedelta(seconds=2),
+    )
+    canonical = json.loads(claimed["contract_json"])
+    workspace.agents[created["supervisor_id"]]["instructions"] = canonical["instructions"]
+    for tool in canonical["tools"]:
+        workspace.tools[created["supervisor_id"]][tool["tool_id"]] = dict(tool)
+    return claimed
+
+
+def test_claimed_journal_clear_resolves_committed_and_uncommitted_timeouts() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    original_delete = workspace.workspace.delete
+
+    def timeout_without_commit(_path: str) -> None:
+        raise TimeoutError("request never committed")
+
+    workspace.workspace.delete = timeout_without_commit  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="deletion did not converge"):
+        journal.clear(
+            workspace,
+            app_name=_APP,
+            lease_id=_LEASE,
+            source_git_sha=_SOURCE,
+            runtime_application_id=_RUNTIME,
+            expected=claimed,
+        )
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == claimed
+    )
+
+    def commit_then_timeout(path: str) -> None:
+        original_delete(path)
+        raise TimeoutError("response lost after commit")
+
+    workspace.workspace.delete = commit_then_timeout  # type: ignore[method-assign]
+    journal.clear(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        expected=claimed,
+    )
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        is None
+    )
+
+
+def test_ambiguous_target_rename_commit_resolves_only_exact_singleton() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+
+    def commit_then_timeout(supervisor_id: str, field: str, value: str) -> None:
+        workspace.agents[supervisor_id][field] = value
+        raise TimeoutError("provider response lost")
+
+    result = runtime.converge_claimed(
+        workspace,
+        claimed,
+        assert_single_writer=lambda: None,
+        create_tool=lambda *_args, **_kwargs: None,
+        update_field=commit_then_timeout,
+    )
+
+    assert result["supervisor_id"] == claimed["supervisor_id"]
+    assert (
+        runtime.assert_unique_target_claim(workspace, claimed)["supervisor_agent_id"]
+        == (claimed["supervisor_id"])
+    )
+
+
+def test_target_collision_during_rename_fails_runtime_postflight() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+
+    def rename_with_collision(supervisor_id: str, field: str, value: str) -> None:
+        workspace.agents["intruder"] = {
+            "supervisor_agent_id": "intruder",
+            "display_name": value,
+            "instructions": "foreign",
+            "description": "foreign",
+            "endpoint_name": "intruder-endpoint",
+            "creator": "foreign",
+            "create_time": "2026-07-25T12:00:03Z",
+        }
+        workspace.tools["intruder"] = {}
+        workspace.agents[supervisor_id][field] = value
+
+    with pytest.raises(RuntimeError, match="absent, duplicated, or bound"):
+        runtime.converge_claimed(
+            workspace,
+            claimed,
+            assert_single_writer=lambda: None,
+            create_tool=lambda *_args, **_kwargs: None,
+            update_field=rename_with_collision,
+        )
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == claimed
+    )
+
+
+def test_unique_target_claim_scans_every_inventory_page() -> None:
+    target = "Mortgage Growth Agent"
+
+    class _PagedApi:
+        def do(
+            self,
+            method: str,
+            path: str,
+            *,
+            query: dict[str, Any] | None = None,
+        ) -> dict[str, Any]:
+            assert method == "GET"
+            assert path == "/api/2.1/supervisor-agents"
+            if query == {"page_size": 100}:
+                return {
+                    "supervisor_agents": [
+                        {
+                            "supervisor_agent_id": "claimed",
+                            "display_name": target,
+                        }
+                    ],
+                    "next_page_token": "second-page",
+                }
+            assert query == {"page_size": 100, "page_token": "second-page"}
+            return {
+                "supervisor_agents": [
+                    {
+                        "supervisor_agent_id": "intruder",
+                        "display_name": target,
+                    }
+                ]
+            }
+
+    workspace = SimpleNamespace(api_client=_PagedApi())
+    with pytest.raises(RuntimeError, match="absent, duplicated, or bound"):
+        runtime.assert_unique_target_claim(
+            workspace,
+            {"supervisor_id": "claimed", "target_name": target},
+        )
+
+
+def test_full_postflight_rejects_duplicate_target_before_journal_clear(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    workspace.agents[claimed["supervisor_id"]]["display_name"] = claimed["target_name"]
+    workspace.agents["intruder"] = {
+        "supervisor_agent_id": "intruder",
+        "display_name": claimed["target_name"],
+        "instructions": "foreign",
+        "description": "foreign",
+        "endpoint_name": "intruder-endpoint",
+        "creator": "foreign",
+        "create_time": "2026-07-25T12:00:03Z",
+    }
+    workspace.tools["intruder"] = {}
+    cleared = False
+
+    def clear(*_args: object, **_kwargs: object) -> None:
+        nonlocal cleared
+        cleared = True
+
+    monkeypatch.setattr(journal, "clear", clear)
+    with pytest.raises(RuntimeError, match="absent, duplicated, or bound"):
+        control.complete_and_clear(workspace, claimed)
+    assert cleared is False
+
+
+def test_complete_verification_retains_signed_handoff_journal() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    workspace.agents[claimed["supervisor_id"]]["display_name"] = claimed["target_name"]
+
+    control.verify_complete(workspace, claimed)
+
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == claimed
+    )
+
+
+def test_claimed_retry_survives_cleanup_binding_handoff_then_clears() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    workspace.agents[claimed["supervisor_id"]]["display_name"] = claimed["target_name"]
+
+    control.verify_complete(workspace, claimed)
+    cleanup_inventory = historical.RuntimeEndpointInventory(
+        version=1,
+        runtime_application_id=_RUNTIME,
+        gateways=(),
+        supervisors=(),
+        pending_supervisor_cleanup=None,
+        pending_supervisor_creation=claimed,
+    )
+    assert historical.cleanup_postflight_is_complete(cleanup_inventory)
+    endpoint_id = runtime.assert_unique_live_supervisor_binding(
+        workspace,
+        supervisor_id=claimed["supervisor_id"],
+        display_name=claimed["target_name"],
+        endpoint=claimed["endpoint"],
+        runtime_application_id=_RUNTIME,
+    )
+    assert endpoint_id == claimed["endpoint_id"]
+
+    control.complete_and_clear(workspace, claimed)
+
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        is None
+    )
+
+
+def test_ambiguous_create_commit_is_never_reissued_by_runtime() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    create_calls = 0
+
+    def commit_then_timeout(payload: dict[str, str]) -> dict[str, str]:
+        nonlocal create_calls
+        create_calls += 1
+        supervisor_id = "ambiguous-supervisor"
+        workspace.agents[supervisor_id] = {
+            "supervisor_agent_id": supervisor_id,
+            **payload,
+            "endpoint_name": "ambiguous-endpoint",
+            "creator": _RUNTIME,
+            "create_time": "2026-07-25T12:00:01Z",
+        }
+        workspace.tools[supervisor_id] = {}
+        raise TimeoutError("provider response lost")
+
+    with pytest.raises(RuntimeError, match="audit recovery"):
+        runtime.create_from_intent(
+            workspace,
+            intent,
+            assert_single_writer=lambda: None,
+            create=commit_then_timeout,
+            now=_NOW,
+        )
+    with pytest.raises(RuntimeError, match="audit recovery"):
+        runtime.create_from_intent(
+            workspace,
+            intent,
+            assert_single_writer=lambda: None,
+            create=commit_then_timeout,
+            now=_NOW,
+        )
+    assert create_calls == 1
+
+
+def test_unclaimed_intent_clears_only_after_settled_negative_audit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    absence_reads = 0
+    cleared = False
+
+    def absent(*_args: object, **_kwargs: object) -> None:
+        nonlocal absence_reads
+        absence_reads += 1
+
+    def no_event(*_args: object, **_kwargs: object) -> object:
+        raise RuntimeError("Supervisor create audit proof is not available yet")
+
+    def clear_absent(*_args: object, **kwargs: object) -> None:
+        nonlocal cleared
+        assert_live_absent = kwargs["assert_live_absent"]
+        assert callable(assert_live_absent)
+        assert_live_absent()
+        cleared = True
+
+    monkeypatch.setattr(control, "_assert_intent_live_absent", absent)
+    monkeypatch.setattr(control, "find_supervisor_create_proof", no_event)
+    monkeypatch.setattr(journal, "clear_absent_intent", clear_absent)
+    with pytest.raises(RuntimeError, match="settlement remains open"):
+        control.abandon_settled_absent(
+            workspace,
+            intent,
+            warehouse_id="warehouse",
+            now=_NOW,
+        )
+    control.abandon_settled_absent(
+        workspace,
+        intent,
+        warehouse_id="warehouse",
+        now=datetime.fromisoformat(intent["audit_settlement_until"]) + timedelta(seconds=1),
+    )
+    assert cleared is True
+    assert absence_reads == 3
+
+
+def test_absence_check_finds_instruction_marker_after_display_name_changes() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    workspace.agents[created["supervisor_id"]]["display_name"] = "renamed elsewhere"
+
+    with pytest.raises(RuntimeError, match="still has a live candidate"):
+        control._assert_intent_live_absent(workspace, intent)
+
+
+def test_full_postflight_rejects_temporary_instructions(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    claimed = journal.claim(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        **created,
+        proof_kind="create_response",
+        now=_NOW + timedelta(seconds=2),
+    )
+    workspace.agents[created["supervisor_id"]]["display_name"] = claimed["target_name"]
+    for tool in json.loads(claimed["contract_json"])["tools"]:
+        workspace.tools[created["supervisor_id"]][tool["tool_id"]] = dict(tool)
+    cleared = False
+
+    def clear(*_args: object, **_kwargs: object) -> None:
+        nonlocal cleared
+        cleared = True
+
+    monkeypatch.setattr(journal, "clear", clear)
+    with pytest.raises(RuntimeError, match="full postflight is incomplete"):
+        control.complete_and_clear(workspace, claimed)
+    assert cleared is False

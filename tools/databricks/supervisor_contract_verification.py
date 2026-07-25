@@ -19,6 +19,7 @@ def assert_exact_supervisor_contract(
     run: Callable[[list[str]], Any],
     exact_tools: Callable[..., Any],
     expected_contract: dict[str, Any] | None = None,
+    expected_display_name: str | None = None,
 ) -> None:
     parent = f"supervisor-agents/{supervisor_id}"
     details = run(["supervisor-agents", "get-supervisor-agent", parent])
@@ -37,6 +38,8 @@ def assert_exact_supervisor_contract(
         or contract.get("examples") != []
     ):
         raise SupervisorContractDrift("stored Supervisor contract is invalid")
+    if expected_display_name is not None and details.get("display_name") != expected_display_name:
+        raise SupervisorContractDrift("Supervisor display name changed during verification")
     specs: list[tuple[str, str, str, dict[str, Any]]] = []
     for tool in tools:
         if not isinstance(tool, dict):

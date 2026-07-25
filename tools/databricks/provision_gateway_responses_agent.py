@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Collection
 from typing import Any
 
 import mlflow
@@ -89,6 +89,7 @@ from tools.databricks.gateway_resource_identity import (
     gateway_inference_table_prefix,
 )
 from tools.databricks.mlflow_responses_packaging import responses_agent_packaging_validation
+from tools.databricks.serving_endpoint_acl import endpoint_has_legacy_direct_query_principal
 
 AGENT_SOURCE = GATEWAY_PROXY_SOURCE
 SOURCE_HASH_TAG = GATEWAY_PROXY_SOURCE_HASH_TAG
@@ -106,7 +107,6 @@ _BURST_SCALING_ENABLED = GATEWAY_BURST_SCALING_ENABLED
 _ROUTE_OPTIMIZED = GATEWAY_ROUTE_OPTIMIZED
 _TRAFFIC_PERCENTAGE = GATEWAY_TRAFFIC_PERCENTAGE
 _ENDPOINT_DESCRIPTION = GATEWAY_ENDPOINT_DESCRIPTION
-
 
 def gateway_resource_hash(
     *,
@@ -503,6 +503,7 @@ def ensure_gateway_responses_agent(
     proxy_caller_application_id: str,
     proxy_caller_credential_id: str,
     proxy_caller_secret_reference: str,
+    approved_query_application_ids: Collection[str] = (),
     deployment_app_name: str | None = None,
     deployment_lease_id: str | None = None,
     deployment_source_git_sha: str | None = None,
@@ -829,21 +830,27 @@ def ensure_gateway_responses_agent(
             and _endpoint_policy_matches(current)
         )
 
+    def managed_query_safe(candidate: str, current: Any) -> bool:
+        return exact(current) and not endpoint_has_legacy_direct_query_principal(
+            workspace,
+            endpoint_name=candidate,
+            runtime_manager_application_id=expected_creator_application_id,
+            approved_managed_query_application_ids=approved_query_application_ids,
+        )
     details = read(endpoint, require_runtime_creator=False)
     actual_endpoint = endpoint
     if details is not None and (
         str(getattr(details, "creator", None) or "").strip() != expected_creator_application_id
-        or not exact(details)
+        or not managed_query_safe(endpoint, details)
     ):
-        actual_endpoint = f"{endpoint_prefix}-{contract_hash[:12]}"
+        actual_endpoint = f"{endpoint_prefix}-{contract_hash[:12]}-mq1"
         if actual_endpoint == endpoint:
             raise RuntimeError("Gateway green endpoint name collides with the live endpoint")
         details = read(actual_endpoint, require_runtime_creator=True)
-        if details is not None and not exact(details):
+        if details is not None and not managed_query_safe(actual_endpoint, details):
             raise RuntimeError(
                 "immutable green Gateway candidate drifted; refusing in-place repair"
             )
-
     if details is None:
         lease_check()
         print(

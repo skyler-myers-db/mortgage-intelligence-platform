@@ -20,6 +20,7 @@ import io
 import json
 import urllib.error
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
@@ -31,6 +32,7 @@ from backend.schemas.activation import ActivationOutboxItem
 from backend.services import activation_delivery
 from backend.services.activation_delivery import (
     REASON_NOT_CONFIGURED,
+    DeliveryResult,
     deliver_to_salesforce,
 )
 from backend.services.resilience import (
@@ -131,10 +133,26 @@ def _outbox_row(status: str = "staged") -> ActivationOutboxItem:
 
 
 class _FakeStore:
-    """Captures update_delivery_state calls and returns an updated row."""
+    """Governed-store double that yields only its activation-bound guard."""
 
-    def __init__(self) -> None:
+    def __init__(self, row: ActivationOutboxItem | None = None) -> None:
+        self.activation = row or _outbox_row()
+        self.should_deliver = self.activation.status in {"staged", "failed"}
+        self.guard_entries = 0
         self.updates: list[dict[str, Any]] = []
+
+    @contextmanager
+    def delivery_guard(
+        self,
+        *,
+        activation_id: str,
+        lead_repo: object,
+    ) -> Iterator[_FakeStore]:
+        del lead_repo
+        if activation_id != self.activation.activation_id:
+            raise PermissionError("guard is bound to a different activation")
+        self.guard_entries += 1
+        yield self
 
     def update_delivery_state(
         self,
@@ -150,9 +168,27 @@ class _FakeStore:
                 "delivery_metadata": delivery_metadata,
             }
         )
-        row = _outbox_row(status=status)
-        row = row.model_copy(update={"delivery_metadata": delivery_metadata})
-        return row
+        self.activation = self.activation.model_copy(
+            update={"status": status, "delivery_metadata": delivery_metadata}
+        )
+        self.should_deliver = False
+        return self.activation
+
+
+def _deliver(
+    row: ActivationOutboxItem,
+    *,
+    store: _FakeStore,
+    client: object | None = None,
+) -> DeliveryResult:
+    store.activation = row
+    store.should_deliver = row.status in {"staged", "failed"}
+    return deliver_to_salesforce(
+        row.activation_id,
+        store=store,
+        lead_repo=object(),  # campaign proof behavior belongs to state-store tests
+        client=client,  # type: ignore[arg-type]
+    )
 
 
 def _real_client(monkeypatch: pytest.MonkeyPatch, responses: list[Any]) -> ResilientSalesforceClient:
@@ -204,7 +240,7 @@ def test_delivery_success_marks_delivered_and_carries_no_pii(
     client = _real_client(monkeypatch, [token_body, create_body])
     store = _FakeStore()
     captured = _patch_urlopen(monkeypatch, [token_body, create_body])
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+    result = _deliver(_outbox_row(), store=store, client=client)
 
     assert result.delivered is True
     assert result.attempted is True
@@ -253,7 +289,7 @@ def test_delivery_salesforce_error_marks_failed(
         ],
     )
     store = _FakeStore()
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+    result = _deliver(_outbox_row(), store=store, client=client)
 
     assert result.delivered is False
     assert result.attempted is True
@@ -350,18 +386,39 @@ def test_delivery_unconfigured_is_clean_noop(monkeypatch: pytest.MonkeyPatch) ->
         "backend.services.salesforce_client.urllib.request.urlopen", _boom
     )
     store = _FakeStore()
-    row = _outbox_row(status="dry_run")
-    result = deliver_to_salesforce(row, store=store)
+    row = _outbox_row(status="staged")
+    result = _deliver(row, store=store)
 
     assert result.delivered is False
     assert result.attempted is False
     # Status UNCHANGED -- never claims delivery.
-    assert result.status == "dry_run"
+    assert result.status == "staged"
     assert result.delivery_metadata == {
         "delivered": False,
         "reason": REASON_NOT_CONFIGURED,
     }
     # No DB update on the unconfigured path.
+    assert store.updates == []
+
+
+def test_delivery_guard_block_is_zero_side_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _boom(*_a: Any, **_k: Any) -> None:  # pragma: no cover - must not run
+        raise AssertionError("governance-blocked delivery must not touch the network")
+
+    monkeypatch.setattr(
+        "backend.services.salesforce_client.urllib.request.urlopen", _boom
+    )
+    row = _outbox_row(status="cancelled")
+    store = _FakeStore(row)
+
+    result = _deliver(row, store=store)
+
+    assert result.delivered is False
+    assert result.attempted is False
+    assert result.status == "cancelled"
+    assert store.guard_entries == 1
     assert store.updates == []
 
 
@@ -383,14 +440,14 @@ def test_breaker_opens_after_repeated_failures(monkeypatch: pytest.MonkeyPatch) 
     store = _FakeStore()
 
     for _ in range(3):
-        result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+        result = _deliver(_outbox_row(), store=store, client=client)
         assert result.delivered is False
         assert result.status == "failed"
 
     # Breaker should now be OPEN -- a fourth call short-circuits to a
     # DependencyDownError, which the adapter records as a 'failed' row
     # WITHOUT any further HTTP (no responses left to consume).
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=client)
+    result = _deliver(_outbox_row(), store=store, client=client)
     assert result.delivered is False
     assert result.status == "failed"
     assert "DependencyDownError" in result.delivery_metadata["error"]
@@ -413,7 +470,7 @@ def test_breaker_open_records_dependency_down(monkeypatch: pytest.MonkeyPatch) -
             )
 
     store = _FakeStore()
-    result = deliver_to_salesforce(_outbox_row(), store=store, client=_OpenClient())  # type: ignore[arg-type]
+    result = _deliver(_outbox_row(), store=store, client=_OpenClient())
     assert result.delivered is False
     assert result.status == "failed"
     assert result.delivery_metadata["delivered"] is False
@@ -429,7 +486,7 @@ def test_delivered_replay_never_calls_salesforce_or_updates_state() -> None:
         update={"delivery_metadata": {"delivered": True, "salesforce_id": "00T-existing"}}
     )
 
-    result = deliver_to_salesforce(row, store=store, client=_ExplodingClient())  # type: ignore[arg-type]
+    result = _deliver(row, store=store, client=_ExplodingClient())
 
     assert result.delivered is True
     assert result.attempted is False
@@ -469,9 +526,9 @@ def test_retry_after_remote_success_uses_same_external_id() -> None:
     store = _FailFirstStore()
     row = _outbox_row()
     with pytest.raises(RuntimeError, match="commit connection failed"):
-        deliver_to_salesforce(row, store=store, client=sf)  # type: ignore[arg-type]
+        _deliver(row, store=store, client=sf)
 
-    result = deliver_to_salesforce(row, store=store, client=sf)  # type: ignore[arg-type]
+    result = _deliver(row, store=store, client=sf)
 
     assert result.delivered is True
     assert sf.calls == [row.activation_id, row.activation_id]

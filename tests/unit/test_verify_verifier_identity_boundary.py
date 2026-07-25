@@ -7,9 +7,26 @@ import pytest
 from databricks.sdk.errors import PermissionDenied
 from databricks.sdk.service.apps import ComputeState
 
+from tests.fixtures.oauth_credential_session import (
+    install_in_memory_credential_mutation_session,
+)
+from tools.databricks import oauth_credential_creation
 from tools.databricks import verify_verifier_identity_boundary as boundary
 
 verify_boundary = boundary.verify_boundary
+
+
+@pytest.fixture(autouse=True)
+def _disable_credential_inventory_wait(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        oauth_credential_creation,
+        "_STABILITY_INTERVAL_SECONDS",
+        0,
+    )
+    install_in_memory_credential_mutation_session(
+        monkeypatch,
+        oauth_credential_creation,
+    )
 
 
 def _verifier_main_args(
@@ -118,9 +135,22 @@ def test_main_captures_admin_then_binds_exact_verifier_m2m(
     def verify(**kwargs: object) -> None:
         observed.update(kwargs)
 
+    def collect_groups(workspace: object, **_kwargs: object) -> tuple[str, ...]:
+        observed["managed_inventory_workspace"] = workspace
+        observed["managed_inventory_auth"] = (
+            os.environ.get("DATABRICKS_AUTH_TYPE"),
+            os.environ.get("DATABRICKS_TOKEN"),
+        )
+        return ("managed-group-id",)
+
     monkeypatch.setattr(boundary, "WorkspaceClient", workspace_client)
     monkeypatch.setattr(boundary, "AccountClient", account_client)
     monkeypatch.setattr(boundary, "verify_boundary", verify)
+    monkeypatch.setattr(
+        boundary.boundary_probes,
+        "collect_attached_managed_query_group_ids",
+        collect_groups,
+    )
 
     assert boundary.main(_verifier_main_args()) == 0
 
@@ -135,6 +165,11 @@ def test_main_captures_admin_then_binds_exact_verifier_m2m(
     assert observed["account"] is account
     assert observed["admin_workspace"] is clients[0]
     assert observed["allow_attested_app_401"] is True
+    assert observed["preserved_endpoints"] == ()
+    assert observed["account_id"] == "account-id"
+    assert observed["managed_query_group_ids"] == ("managed-group-id",)
+    assert observed["managed_inventory_workspace"] is clients[0]
+    assert observed["managed_inventory_auth"] == ("pat", "admin-token")
     assert "DATABRICKS_VERIFIER_CLIENT_SECRET" not in os.environ
 
 
@@ -318,7 +353,11 @@ class _Serving:
     def get(self, endpoint: str):
         if endpoint == "other" and not self.extra_access:
             raise PermissionDenied("endpoint permission required")
-        return SimpleNamespace(name=endpoint, id=f"{endpoint}-id")
+        return SimpleNamespace(
+            name=endpoint,
+            id=f"{endpoint}-id",
+            task="agent_v1_responses",
+        )
 
     def get_permissions(self, _endpoint_id: str):
         if not self.target_admin:
@@ -345,6 +384,39 @@ class _Warehouses:
         return SimpleNamespace(access_control_list=[])
 
 
+def _gateway_response(endpoint: str) -> dict[str, object]:
+    return {
+        "id": f"response-{endpoint}",
+        "object": "response",
+        "model": endpoint,
+        "status": "completed",
+        "error": None,
+        "incomplete_details": None,
+        "output": [
+            {
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "ready"}],
+            }
+        ],
+    }
+
+
+class _GatewayApi:
+    def __init__(self, *, response: object | None = None, error: BaseException | None = None):
+        self.response = response
+        self.error = error
+        self.calls: list[tuple[str, str, dict[str, object]]] = []
+
+    def do(self, method: str, path: str, *, body: dict[str, object]) -> object:
+        self.calls.append((method, path, body))
+        if self.error is not None:
+            raise self.error
+        endpoint = str(body.get("model") or "")
+        return self.response if self.response is not None else _gateway_response(endpoint)
+
+
 def _workspace(
     *,
     extra_relation: bool = False,
@@ -364,6 +436,9 @@ def _workspace(
     non_target_owner: bool = False,
     hidden_group_table_modify: bool = False,
     missing_target_table_select: bool = False,
+    group_manager_succeeds: bool = False,
+    gateway_response: object | None = None,
+    gateway_error: BaseException | None = None,
 ):
     apps = SimpleNamespace()
     if app_permissions_denied:
@@ -380,10 +455,8 @@ def _workspace(
             else lambda _id: (_ for _ in ()).throw(PermissionDenied("metastore admin required"))
         ),
     )
-    return SimpleNamespace(
-        current_user=SimpleNamespace(
-            me=lambda: SimpleNamespace(user_name="verifier-client-id")
-        ),
+    workspace = SimpleNamespace(
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="verifier-client-id")),
         apps=apps,
         metastores=metastores,
         service_principal_secrets_proxy=SimpleNamespace(
@@ -412,11 +485,22 @@ def _workspace(
             extra_access=warehouse_extra_access,
             target_admin=warehouse_target_admin,
         ),
+        account_access_control_proxy=SimpleNamespace(
+            get_rule_set=(
+                (lambda *_args: object())
+                if group_manager_succeeds
+                else lambda *_args: (_ for _ in ()).throw(
+                    PermissionDenied("account group manager required")
+                )
+            )
+        ),
+        api_client=_GatewayApi(response=gateway_response, error=gateway_error),
         config=SimpleNamespace(
             host="https://workspace.cloud.databricks.com",
             authenticate=lambda: {"Authorization": "Bearer redacted"},
         ),
     )
+    return workspace
 
 
 def _http_get(app_status: int, *, identity_status: int = 200):
@@ -484,6 +568,8 @@ def _verify(**overrides: object) -> None:
         "workspace": _workspace(),
         "account": SimpleNamespace(service_principals=_DeniedAccountPrincipals()),
         "expected_application_id": "verifier-client-id",
+        "account_id": "account-id",
+        "managed_query_group_ids": ("managed-group-id",),
         "app_name": "mip-app",
         "app_url": "https://mip-app.databricksapps.com",
         "protected_service_principal_id": "protected-scim-id",
@@ -498,6 +584,116 @@ def _verify(**overrides: object) -> None:
 
 def test_effective_boundary_accepts_targets_and_all_expected_denials() -> None:
     _verify()
+
+
+def test_effective_boundary_executes_exact_gateway_responses_path() -> None:
+    workspace = _workspace()
+
+    _verify(workspace=workspace)
+
+    assert len(workspace.api_client.calls) == 2
+    for method, path, body in workspace.api_client.calls:
+        assert (method, path) == ("POST", "/serving-endpoints/responses")
+        assert body["model"] == "outer"
+        assert body["stream"] is False
+        assert body["max_output_tokens"] == 64
+        assert str(body["client_request_id"]).startswith(
+            ("mip-warmup-", "mip-verifier-boundary-")
+        )
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        {"status": "completed", "output": "ready"},
+        {
+            "id": "response-outer",
+            "object": "response",
+            "model": "wrong-gateway",
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+        {
+            "id": "response-outer",
+            "object": "response",
+            "model": "",
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "output": [
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "ready"}],
+                }
+            ],
+        },
+        {
+            "id": "response-outer",
+            "object": "response",
+            "model": "outer",
+            "status": "failed",
+            "error": {"message": "failed"},
+            "incomplete_details": None,
+            "output": [],
+        },
+        {
+            "id": "response-outer",
+            "object": "response",
+            "model": "outer",
+            "status": "completed",
+            "error": None,
+            "incomplete_details": None,
+            "output": [{"type": "message", "role": "assistant", "content": []}],
+        },
+    ),
+)
+def test_rejects_malformed_or_wrong_endpoint_gateway_payload(response: object) -> None:
+    with pytest.raises(RuntimeError, match="exact terminal Gateway Responses payload"):
+        _verify(workspace=_workspace(gateway_response=response))
+
+
+def test_rejects_gateway_authorization_denial_as_failed_positive_proof() -> None:
+    with pytest.raises(RuntimeError, match="Gateway query outer was inconclusive"):
+        _verify(
+            workspace=_workspace(
+                gateway_error=PermissionDenied("serving endpoint query denied")
+            )
+        )
+
+
+def test_rejects_gateway_authentication_failure_as_failed_positive_proof() -> None:
+    error = RuntimeError("expired verifier credential")
+    error.status_code = 401  # type: ignore[attr-defined]
+    with pytest.raises(RuntimeError, match="Gateway query outer was inconclusive"):
+        _verify(workspace=_workspace(gateway_error=error))
+
+
+def test_gateway_warmup_never_retries_authorization_denial_as_cold_start() -> None:
+    error = PermissionDenied("temporarily unavailable: permission denied")
+
+    with pytest.raises(RuntimeError, match="Gateway query outer was inconclusive"):
+        boundary.boundary_probes.prove_exact_gateway_responses_execution(
+            _workspace(gateway_error=error),
+            endpoint="outer",
+            sleep=lambda _seconds: pytest.fail("authorization denial was retried"),
+        )
+
+
+def test_rejects_managed_query_group_administration_capability() -> None:
+    with pytest.raises(
+        RuntimeError,
+        match="managed serving-query group administration managed-group-id.*succeeded",
+    ):
+        _verify(workspace=_workspace(group_manager_succeeds=True))
 
 
 def test_rejects_provider_401_without_admin_attestation() -> None:
@@ -533,14 +729,14 @@ class _AuthenticationFailure(RuntimeError):
 def test_rejects_expired_control_plane_authentication() -> None:
     account = SimpleNamespace(
         service_principals=SimpleNamespace(
-            list=lambda **_kwargs: (_ for _ in ()).throw(
-                _AuthenticationFailure("token expired")
-            )
+            list=lambda **_kwargs: (_ for _ in ()).throw(_AuthenticationFailure("token expired"))
         )
     )
 
     with pytest.raises(RuntimeError, match="inconclusive"):
-        _verify(account=account, http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=401))
+        _verify(
+            account=account, http_get=lambda *_args, **_kwargs: SimpleNamespace(status_code=401)
+        )
 
 
 def test_rejects_metastore_admin_get_access() -> None:
@@ -682,6 +878,32 @@ def test_rejects_non_target_endpoint_metadata_access() -> None:
         _verify(workspace=_workspace(endpoint_extra_access=True))
 
 
+def test_rejects_reviewed_gateway_task_protocol_drift_before_invocation() -> None:
+    workspace = _workspace()
+    original_get = workspace.serving_endpoints.get
+
+    def get(endpoint: str) -> object:
+        details = original_get(endpoint)
+        if endpoint == "outer":
+            details.task = "llm/v1/chat"
+        return details
+
+    workspace.serving_endpoints.get = get
+    with pytest.raises(RuntimeError, match="Agent Responses protocol drifted"):
+        _verify(workspace=workspace)
+    assert workspace.api_client.calls == []
+
+
+def test_accepts_reviewed_signed_blue_endpoint_during_cutover() -> None:
+    workspace = _workspace(endpoint_extra_access=True)
+    _verify(
+        workspace=workspace,
+        preserved_endpoints=("other",),
+    )
+    queried = [str(body["model"]) for _method, _path, body in workspace.api_client.calls]
+    assert queried == ["other", "other", "outer", "outer"]
+
+
 def test_rejects_non_target_warehouse_metadata_access() -> None:
     with pytest.raises(RuntimeError, match="non-target warehouse.*unexpectedly"):
         _verify(workspace=_workspace(warehouse_extra_access=True))
@@ -705,3 +927,485 @@ def test_rejects_actual_app_http_access() -> None:
 def test_rejects_workspace_app_permission_administration() -> None:
     with pytest.raises(RuntimeError, match="App permission-administration.*unexpectedly"):
         _verify(workspace=_workspace(app_permissions_denied=False))
+
+
+def _managed_group_admin_workspace(
+    *,
+    duplicate: bool = False,
+    contract_drift: bool = False,
+    retired_contract_drift: bool = False,
+) -> object:
+    prefix = boundary.boundary_probes.MANAGED_QUERY_GROUP_PREFIX
+    external_prefix = boundary.boundary_probes.MANAGED_QUERY_GROUP_EXTERNAL_ID_PREFIX
+    managed_name = f"{prefix}{'a' * 20}-{'b' * 20}"
+    managed = SimpleNamespace(id="managed-id", display_name=managed_name)
+    retired_endpoint_id = "retired-endpoint-id"
+    retired_name = boundary.boundary_probes.managed_query_group_name(
+        endpoint_id=retired_endpoint_id,
+        application_id="verifier-client-id",
+    )
+    retired_external_id = boundary.boundary_probes.managed_query_group_external_id(
+        endpoint_id=retired_endpoint_id,
+        application_id="verifier-client-id",
+    )
+    summaries = [
+        managed,
+        SimpleNamespace(id="retired-managed-id", display_name=retired_name),
+        SimpleNamespace(id="ordinary-id", display_name="ordinary"),
+    ]
+    if duplicate:
+        summaries.append(
+            SimpleNamespace(id="managed-id-2", display_name=managed.display_name)
+        )
+
+    def get_group(group_id: str) -> object:
+        if group_id == "retired-managed-id":
+            return SimpleNamespace(
+                id=group_id,
+                display_name=retired_name,
+                external_id=(
+                    f"{external_prefix}{'Z' * 43}"
+                    if retired_contract_drift
+                    else retired_external_id
+                ),
+                members=[],
+            )
+        return SimpleNamespace(
+            id=group_id,
+            display_name=(
+                "drifted-name" if contract_drift else managed_name
+            ),
+            external_id=f"{external_prefix}{'A' * 43}",
+            members=[
+                SimpleNamespace(value="verifier-scim-id"),
+                SimpleNamespace(value="other-scim-id"),
+            ],
+        )
+
+    return SimpleNamespace(
+        service_principals=SimpleNamespace(
+            list=lambda **_kwargs: iter(
+                [
+                    SimpleNamespace(
+                        id="verifier-scim-id",
+                        application_id="verifier-client-id",
+                    )
+                ]
+            )
+        ),
+        groups=SimpleNamespace(
+            list=lambda **_kwargs: iter(summaries),
+            get=get_group,
+        ),
+        serving_endpoints=SimpleNamespace(
+            list=lambda: iter([SimpleNamespace(name="retired-gateway")]),
+            get=lambda name: SimpleNamespace(
+                name=name,
+                id=retired_endpoint_id,
+                task="agent_v1_responses",
+            ),
+        ),
+    )
+
+
+def test_admin_inventory_includes_empty_endpoint_bound_verifier_group() -> None:
+    workspace = _managed_group_admin_workspace()
+
+    group_ids = boundary.boundary_probes.collect_attached_managed_query_group_ids(
+        workspace,
+        expected_application_id="verifier-client-id",
+    )
+
+    assert group_ids == ("managed-id", "retired-managed-id")
+
+
+@pytest.mark.parametrize(
+    ("workspace", "message"),
+    (
+        (_managed_group_admin_workspace(duplicate=True), "inventory is ambiguous"),
+        (_managed_group_admin_workspace(contract_drift=True), "contract drifted"),
+        (
+            _managed_group_admin_workspace(retired_contract_drift=True),
+            "deterministic contract drifted",
+        ),
+    ),
+)
+def test_admin_inventory_rejects_ambiguous_or_drifted_managed_group(
+    workspace: object,
+    message: str,
+) -> None:
+    with pytest.raises(RuntimeError, match=message):
+        boundary.boundary_probes.collect_attached_managed_query_group_ids(
+            workspace,
+            expected_application_id="verifier-client-id",
+        )
+
+
+def test_credential_probes_every_attached_managed_group_administration_path() -> None:
+    calls: list[tuple[str, str]] = []
+
+    def denied(path: str, etag: str) -> object:
+        calls.append((path, etag))
+        raise PermissionDenied("group manager permission required")
+
+    workspace = SimpleNamespace(
+        account_access_control_proxy=SimpleNamespace(get_rule_set=denied)
+    )
+    boundary.boundary_probes.verify_managed_query_group_administration_denied(
+        workspace,
+        account_id="account-id",
+        group_ids=("group-b", "group-a"),
+    )
+
+    assert calls == [
+        ("accounts/account-id/groups/group-a/ruleSets/default", ""),
+        ("accounts/account-id/groups/group-b/ruleSets/default", ""),
+    ]
+
+
+def test_managed_group_authentication_failure_is_inconclusive_not_denial() -> None:
+    error = RuntimeError("expired group probe credential")
+    error.status_code = 401  # type: ignore[attr-defined]
+    workspace = SimpleNamespace(
+        account_access_control_proxy=SimpleNamespace(
+            get_rule_set=lambda *_args: (_ for _ in ()).throw(error)
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="administration group-id was inconclusive"):
+        boundary.boundary_probes.verify_managed_query_group_administration_denied(
+            workspace,
+            account_id="account-id",
+            group_ids=("group-id",),
+        )
+
+
+def test_target_credential_proves_hidden_parent_and_group_admin_denial() -> None:
+    deleted: list[tuple[str, str]] = []
+    rule_calls: list[tuple[str, str]] = []
+    factory_kwargs: dict[str, object] = {}
+    live_credentials: set[str] = set()
+
+    def create_credential(principal_id: str, **kwargs: object) -> object:
+        assert (principal_id, kwargs) == ("app-scim", {"lifetime": "300s"})
+        live_credentials.add("secret-id")
+        return SimpleNamespace(id="secret-id", secret="one-use-secret")
+
+    def delete_credential(principal_id: str, secret_id: str) -> None:
+        live_credentials.remove(secret_id)
+        deleted.append((principal_id, secret_id))
+
+    account = SimpleNamespace(
+        service_principal_secrets=SimpleNamespace(
+            list=lambda principal_id: (
+                SimpleNamespace(id=credential_id)
+                for credential_id in sorted(live_credentials)
+            ),
+            create=create_credential,
+            delete=delete_credential,
+        )
+    )
+
+    def denied(path: str, etag: str) -> object:
+        rule_calls.append((path, etag))
+        raise PermissionDenied("group manager permission required")
+
+    target_workspace = SimpleNamespace(
+        api_client=SimpleNamespace(
+            do=lambda method, path, **kwargs: (
+                {
+                    "id": "app-scim",
+                    "userName": "app-client",
+                    "groups": [
+                        {
+                            "value": "hidden-parent-id",
+                            "display": "hidden-account-parent",
+                        }
+                    ],
+                }
+                if (
+                    method,
+                    path,
+                    kwargs,
+                )
+                == (
+                    "GET",
+                    "/api/2.0/preview/scim/v2/Me",
+                    {
+                        "query": {"attributes": "id,userName,groups"},
+                        "headers": {"Accept": "application/json"},
+                    },
+                )
+                else (_ for _ in ()).throw(
+                    AssertionError((method, path, kwargs))
+                )
+            )
+        ),
+        account_access_control_proxy=SimpleNamespace(get_rule_set=denied),
+    )
+
+    def workspace_factory(**kwargs: object) -> object:
+        factory_kwargs.update(kwargs)
+        return target_workspace
+
+    groups = (
+        boundary.boundary_probes
+        .probe_target_managed_query_group_administration_boundary(
+            account,
+            account_sp_id="app-scim",
+            application_id="app-client",
+            expected_workspace_scim_id="app-scim",
+            workspace_host="https://workspace.cloud.databricks.com",
+            account_id="account-id",
+            group_ids=("managed-group-id",),
+            assert_single_writer=lambda: None,
+            workspace_factory=workspace_factory,
+        )
+    )
+
+    assert groups == {"hidden-parent-id": "hidden-account-parent"}
+    assert factory_kwargs == {
+        "host": "https://workspace.cloud.databricks.com",
+        "client_id": "app-client",
+        "client_secret": "one-use-secret",
+        "auth_type": "oauth-m2m",
+    }
+    assert rule_calls == [
+        (
+            "accounts/account-id/groups/managed-group-id/ruleSets/default",
+            "",
+        )
+    ]
+    assert deleted == [("app-scim", "secret-id")]
+
+
+def test_target_credential_admin_capability_fails_and_deletes_secret() -> None:
+    deleted: list[tuple[str, str]] = []
+    live_credentials: set[str] = set()
+
+    def create_credential(*_args: object, **_kwargs: object) -> object:
+        live_credentials.add("secret-id")
+        return SimpleNamespace(
+            id="secret-id",
+            secret="one-use-secret",
+        )
+
+    def delete_credential(principal_id: str, secret_id: str) -> None:
+        live_credentials.remove(secret_id)
+        deleted.append((principal_id, secret_id))
+
+    account = SimpleNamespace(
+        service_principal_secrets=SimpleNamespace(
+            list=lambda _principal_id: (
+                SimpleNamespace(id=credential_id)
+                for credential_id in sorted(live_credentials)
+            ),
+            create=create_credential,
+            delete=delete_credential,
+        )
+    )
+    target_workspace = SimpleNamespace(
+        api_client=SimpleNamespace(
+            do=lambda *_args, **_kwargs: {
+                "id": "app-scim",
+                "userName": "app-client",
+                "groups": [],
+            }
+        ),
+        account_access_control_proxy=SimpleNamespace(
+            get_rule_set=lambda *_args: SimpleNamespace()
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="unexpectedly succeeded"):
+        (
+            boundary.boundary_probes
+            .probe_target_managed_query_group_administration_boundary(
+                account,
+                account_sp_id="app-scim",
+                application_id="app-client",
+                expected_workspace_scim_id="app-scim",
+                workspace_host="https://workspace.cloud.databricks.com",
+                account_id="account-id",
+                group_ids=("managed-group-id",),
+                assert_single_writer=lambda: None,
+                workspace_factory=lambda **_kwargs: target_workspace,
+            )
+        )
+
+    assert deleted == [("app-scim", "secret-id")]
+
+
+def test_target_credential_commit_then_timeout_is_discovered_and_revoked() -> None:
+    live_credentials: set[str] = set()
+    deleted: list[tuple[str, str]] = []
+
+    def create_credential(*_args: object, **_kwargs: object) -> object:
+        live_credentials.add("committed-secret-id")
+        raise TimeoutError("response lost after provider commit")
+
+    def delete_credential(principal_id: str, secret_id: str) -> None:
+        live_credentials.remove(secret_id)
+        deleted.append((principal_id, secret_id))
+
+    account = SimpleNamespace(
+        service_principal_secrets=SimpleNamespace(
+            list=lambda _principal_id: (
+                SimpleNamespace(id=credential_id)
+                for credential_id in sorted(live_credentials)
+            ),
+            create=create_credential,
+            delete=delete_credential,
+        )
+    )
+
+    with pytest.raises(TimeoutError, match="response lost"):
+        boundary.boundary_probes.probe_target_managed_query_group_administration_boundary(
+            account,
+            account_sp_id="app-scim",
+            application_id="app-client",
+            expected_workspace_scim_id="app-scim",
+            workspace_host="https://workspace.cloud.databricks.com",
+            account_id="account-id",
+            group_ids=(),
+            assert_single_writer=lambda: None,
+            workspace_factory=lambda **_kwargs: pytest.fail(
+                "workspace constructed after ambiguous credential create"
+            ),
+        )
+
+    assert live_credentials == set()
+    assert deleted == [("app-scim", "committed-secret-id")]
+
+
+def _global_denied(*_args: object, **_kwargs: object) -> object:
+    raise PermissionDenied("denied")
+
+
+def _global_denial_workspace() -> object:
+    return SimpleNamespace(
+        current_user=SimpleNamespace(me=lambda: SimpleNamespace(user_name="verifier-client-id")),
+        serving_endpoints=SimpleNamespace(
+            get=_global_denied,
+            get_permissions=_global_denied,
+        ),
+        genie=SimpleNamespace(get_space=_global_denied),
+        api_client=SimpleNamespace(do=_global_denied),
+    )
+
+
+def _global_inventory() -> boundary.VerifierCustomerResourceDenialInventory:
+    return boundary.VerifierCustomerResourceDenialInventory(
+        serving_endpoints=(("customer-endpoint", "endpoint-id", "agent_v1_responses", False),),
+        genie_space_ids=("genie-space",),
+    )
+
+
+def test_global_denial_probes_every_customer_serving_and_genie_axis(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    queries: list[tuple[object, str]] = []
+
+    def denied_query(workspace: object, endpoint: str, **_kwargs: object) -> object:
+        queries.append((workspace, endpoint))
+        raise PermissionDenied("denied")
+
+    workspace = _global_denial_workspace()
+    monkeypatch.setattr(boundary, "query_serving_endpoint_with_proof", denied_query)
+
+    boundary.verify_customer_resource_denial_boundary(
+        workspace=workspace,
+        inventory=_global_inventory(),
+        expected_application_id="verifier-client-id",
+    )
+    assert queries == [(workspace, "customer-endpoint")]
+
+
+def test_global_denial_rejects_hidden_serving_query_capability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        boundary,
+        "query_serving_endpoint_with_proof",
+        lambda *_args, **_kwargs: object(),
+    )
+
+    with pytest.raises(RuntimeError, match="query capability.*unexpectedly"):
+        boundary.verify_customer_resource_denial_boundary(
+            workspace=_global_denial_workspace(),
+            inventory=_global_inventory(),
+            expected_application_id="verifier-client-id",
+        )
+
+
+def test_global_denial_cli_captures_admin_inventory_before_binding_credentials(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    admin, verifier = object(), object()
+    clients = iter((admin, verifier))
+    observed: list[tuple[str, object]] = []
+    inventory = _global_inventory()
+    monkeypatch.setattr(boundary, "WorkspaceClient", lambda: next(clients))
+    monkeypatch.setattr(
+        boundary,
+        "assert_workspace_admin_inventory_identity",
+        lambda workspace, *, expected_principal: observed.append(
+            (f"admin:{expected_principal}", workspace)
+        ),
+    )
+    monkeypatch.setattr(
+        boundary,
+        "collect_admin_customer_resource_denial_inventory",
+        lambda workspace: observed.append(("inventory", workspace)) or inventory,
+    )
+    monkeypatch.setattr(
+        boundary,
+        "bind_exact_workspace_m2m_auth",
+        lambda **kwargs: (
+            observed.append(("bind", kwargs["admin_workspace"])) or ("verifier-client-id", "secret")
+        ),
+    )
+    monkeypatch.setattr(
+        boundary,
+        "verify_customer_resource_denial_boundary",
+        lambda **kwargs: observed.append(("verify", kwargs["workspace"])),
+    )
+
+    assert (
+        boundary.main(
+            [
+                "--expected-application-id",
+                "verifier-client-id",
+                "--expected-inventory-principal",
+                "deployer@example.com",
+                "--customer-resource-denial",
+            ]
+        )
+        == 0
+    )
+    assert observed == [
+        ("admin:deployer@example.com", admin),
+        ("inventory", admin),
+        ("bind", admin),
+        ("verify", verifier),
+    ]
+    output = capsys.readouterr().out
+    assert "customer-created serving and Genie denial boundary" in output
+    assert "foundation invocation not asserted" in output
+    assert "global serving" not in output
+
+
+def test_global_denial_cli_rejects_positive_target_arguments() -> None:
+    with pytest.raises(SystemExit, match="target arguments"):
+        boundary.main(
+            [
+                "--expected-application-id",
+                "verifier-client-id",
+                "--expected-inventory-principal",
+                "deployer@example.com",
+                "--endpoint",
+                "green-gateway",
+                "--customer-resource-denial",
+            ]
+        )

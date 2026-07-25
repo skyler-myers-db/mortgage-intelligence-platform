@@ -595,10 +595,12 @@ def test_lakebase_startup_warm_obeys_shared_caller_deadline(
     from backend.services import health_probes
 
     release = Event()
+    finished = Event()
 
     class _BlockingClient:
         def fetchone(self, _sql: str) -> dict[str, int]:
             release.wait(timeout=2.0)
+            finished.set()
             return {"one": 1}
 
     monkeypatch.setattr(main_mod.settings, "lakebase_host", "lakebase.local")
@@ -614,7 +616,13 @@ def test_lakebase_startup_warm_obeys_shared_caller_deadline(
     started = time.monotonic()
     try:
         main_mod._warm_lakebase()
-        assert time.monotonic() - started < 0.25
+        elapsed = time.monotonic() - started
+        # The semantic contract is that startup returns before the blocked
+        # dependency, not that an xdist worker is always scheduled within a
+        # 250 ms wall-clock window. Keep a generous bound well below the
+        # dependency's two-second block and prove the probe is still pending.
+        assert elapsed < 1.0
+        assert not finished.is_set()
     finally:
         release.set()
         health_probes._probe_cache.clear()

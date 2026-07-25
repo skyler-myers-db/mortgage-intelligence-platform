@@ -27,6 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--catalog", required=True)
         command.add_argument("--genie-space-id", required=True)
         command.add_argument("--preserve-endpoint", action="append", default=[])
+        command.add_argument("--verifier-application-id", required=True)
+        command.add_argument("--verifier-scim-id", required=True)
     retire = subparsers.choices["retire"]
     for flag in (
         "--old-id",
@@ -40,6 +42,7 @@ def build_parser() -> argparse.ArgumentParser:
     ):
         retire.add_argument(flag)
     retire.add_argument("--old-gateway-delete-allowed", action="store_true")
+    retire.add_argument("--proxy-application-id", required=True)
     retire.add_argument("--timeout-s", type=int, default=900)
     finalize = subparsers.choices["finalize"]
     finalize.add_argument("--catalog", required=True)
@@ -62,6 +65,18 @@ def build_parser() -> argparse.ArgumentParser:
     refresh.add_argument("--runtime-application-id", required=True)
     clear = subparsers.add_parser("clear-journal")
     clear.add_argument("--runtime-application-id", required=True)
+    clear.add_argument("--app-application-id", required=True)
+    clear.add_argument("--app-scim-id", required=True)
+    clear.add_argument("--verifier-application-id", required=True)
+    clear.add_argument("--verifier-scim-id", required=True)
+    clear.add_argument("--proxy-application-id", required=True)
+    resume = subparsers.add_parser("resume-stale-journal")
+    resume.add_argument("--runtime-application-id", required=True)
+    resume.add_argument("--app-application-id", required=True)
+    resume.add_argument("--verifier-application-id", required=True)
+    resume.add_argument("--verifier-scim-id", required=True)
+    resume.add_argument("--proxy-application-id", required=True)
+    resume.add_argument("--timeout-s", type=int, default=900)
     acl = subparsers.add_parser("converge-app-acl")
     acl.add_argument("--gateway-endpoint", required=True)
     acl.add_argument("--supervisor-endpoint", required=True)

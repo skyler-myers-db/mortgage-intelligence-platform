@@ -6,11 +6,35 @@ import sys
 from collections.abc import Iterable
 from typing import Any
 
+from backend.agents.gateway_contract import DEFAULT_GATEWAY_ENDPOINT, LEGACY_GATEWAY_ENDPOINT
+
 DOCS_RUNBOOK = "docs/security/m2m-oauth-setup.md"
+
+
+def is_reserved_gateway_endpoint(name: str) -> bool:
+    """Return whether a name belongs to the platform-owned Gateway family."""
+
+    normalized = name.strip()
+    return normalized in (DEFAULT_GATEWAY_ENDPOINT, LEGACY_GATEWAY_ENDPOINT) or (
+        normalized.startswith(f"{DEFAULT_GATEWAY_ENDPOINT}-")
+    )
 
 
 def _diag(msg: str) -> None:
     print(f"[mip-m2m-provision] {msg}", file=sys.stderr)
+
+
+def reserved_gateway_endpoints(client: Any) -> set[str]:
+    """Return every visible endpoint in the governed Gateway name family."""
+
+    names: set[str] = set()
+    for item in client.serving_endpoints.list():
+        name = str(
+            (item.get("name") if isinstance(item, dict) else getattr(item, "name", "")) or ""
+        ).strip()
+        if is_reserved_gateway_endpoint(name):
+            names.add(name)
+    return names
 
 
 def wrap_admin_error(exc: Exception, *, step: str) -> SystemExit:

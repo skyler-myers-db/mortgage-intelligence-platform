@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import wraps
 from pathlib import Path
@@ -15,16 +16,11 @@ from typing import Any
 REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
-
-from backend.agents.gateway_contract import (  # noqa: E402
-    DEFAULT_GATEWAY_ENDPOINT,
-    LEGACY_GATEWAY_ENDPOINT,
-)
 from databricks.sdk.errors import NotFound, ResourceDoesNotExist  # noqa: E402
 from tools.databricks import m2m_access_policy as _access_policy  # noqa: E402
 from tools.databricks import m2m_oauth_cli as _cli_helpers  # noqa: E402
 from tools.databricks import m2m_oauth_config as _config_helpers  # noqa: E402
-from tools.databricks import m2m_oauth_credential_delivery as _credential_delivery  # noqa: E402
+from tools.databricks import m2m_oauth_credential_mutation as _credential_mutation  # noqa: E402
 from tools.databricks import m2m_oauth_github as _github_helpers  # noqa: E402
 from tools.databricks.m2m_identity_contract import (  # noqa: E402
     DEFAULT_ADMIN_GROUP,
@@ -36,9 +32,19 @@ from tools.databricks.m2m_identity_contract import (  # noqa: E402
     validate_provisioning_contract,
 )
 from tools.databricks.m2m_provisioning_summary import print_summary as _print_summary  # noqa: E402
+from tools.databricks.oauth_credential_boundary import (  # noqa: E402
+    app_credential_mutation_boundary,
+)
+from tools.databricks.oauth_credential_quarantine import (  # noqa: E402
+    CredentialMutationQuarantineError,
+    CredentialMutationTerminalFenceError,
+)
 
 _GH_SECRET_NAME_RE = _github_helpers.GH_SECRET_NAME_RE
+_credential_delivery = _credential_mutation.credential_delivery
 _gh_available = _github_helpers.gh_available
+_confirm_gh_secrets = _github_helpers.confirm_gh_secrets
+_invalidate_gh_secrets = _github_helpers.invalidate_gh_secrets
 _set_gh_secret = _github_helpers.set_gh_secret
 _which = _github_helpers.which
 _assert_no_app_permission = _access_policy.assert_no_app_permission
@@ -48,25 +54,12 @@ _ensure_group_membership = _access_policy.ensure_group_membership
 _find_group = _access_policy.find_group
 _grant_can_use_on_warehouse = _access_policy.grant_can_use_on_warehouse
 _grant_can_query_on_endpoint = _access_policy.grant_can_query_on_endpoint
+_reserved_gateway_endpoints = _access_policy.reserved_gateway_endpoints
 _resolve_effective_groups = _access_policy.resolve_effective_groups
 _revoke_can_query_on_obsolete_endpoint = _access_policy.revoke_can_query_on_obsolete_endpoint
 _wrap_admin_error = _access_policy.wrap_admin_error
 _validate_app_access_contract = validate_app_access_contract
 _validate_provisioning_contract = validate_provisioning_contract
-
-
-def _reserved_gateway_endpoints(client: Any) -> set[str]:
-    names: set[str] = set()
-    for item in client.serving_endpoints.list():
-        name = str(
-            (item.get("name") if isinstance(item, dict) else getattr(item, "name", "")) or ""
-        ).strip()
-        if name in (DEFAULT_GATEWAY_ENDPOINT, LEGACY_GATEWAY_ENDPOINT) or name.startswith(
-            f"{DEFAULT_GATEWAY_ENDPOINT}-"
-        ):
-            names.add(name)
-    return names
-
 
 DATABRICKS_YML = REPO_ROOT / "databricks.yml"
 DOCS_RUNBOOK = _access_policy.DOCS_RUNBOOK
@@ -111,12 +104,6 @@ def _validate_gh_repo(gh_repo: str | None, *, bind_secret_sink: bool = False) ->
             f"--gh-repo must match the reviewed credential sink {reviewed_repo!r}; "
             f"refusing target {gh_repo!r}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Core steps (each accepts an injected client so unit tests can mock)
-# ---------------------------------------------------------------------------
-
 
 def _find_existing_sp(client: Any, display_name: str) -> Any | None:
     """Return the unique exact display-name match, else None.
@@ -199,6 +186,16 @@ def _compensate_pre_app_creation(function: Any) -> Any:
         state = _PreAppCleanupState()
         try:
             result = function(*args, _pre_app_cleanup=state, **kwargs)
+        except (
+            CredentialMutationQuarantineError,
+            CredentialMutationTerminalFenceError,
+        ):
+            # An unresolved mutation or a terminal mutation whose lease
+            # release is still unproven must preserve the immutable principal.
+            # Deleting it outside the signed recovery path would either erase
+            # the only attributable target or strand a delivered GitHub sink
+            # that still names this principal.
+            raise
         except BaseException:
             if state.armed:
                 try:
@@ -307,15 +304,6 @@ def _grant_can_use_on_app(
         raise _wrap_admin_error(exc, step="update_permissions on app") from exc
 
 
-def _mint_oauth_secret(client: Any, sp_id: str) -> Any:
-    """Mint a new OAuth client_secret for the SP. Returned once, never again."""
-    _diag(f"minting OAuth secret for service_principal_id={sp_id}")
-    try:
-        return client.service_principal_secrets_proxy.create(service_principal_id=sp_id)
-    except Exception as exc:  # noqa: BLE001
-        raise _wrap_admin_error(exc, step="mint OAuth secret") from exc
-
-
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
@@ -345,8 +333,11 @@ def provision(
     identity_role: IdentityRole = "normal",
     client_factory: Any | None = None,
     revoke_gateway_endpoints: tuple[str, ...] = (),
+    preserve_gateway_endpoints: tuple[str, ...] = (),
     pre_app_bootstrap: bool = False,
     _pre_app_cleanup: _PreAppCleanupState | None = None,
+    credential_boundary_factory: Callable[..., Any] | None = None,
+    credential_writer_application_id: str | None = None,
 ) -> ProvisionResult:
     """Provision or refresh the M2M SP and return a structured result.
 
@@ -358,7 +349,7 @@ def provision(
             incompatible.append("App CAN_USE")
         if lakebase_instance:
             incompatible.append("Lakebase instance")
-        if gateway_endpoint or revoke_gateway_endpoints:
+        if gateway_endpoint or revoke_gateway_endpoints or preserve_gateway_endpoints:
             incompatible.append("Gateway endpoint")
         if warehouse_id:
             incompatible.append("SQL warehouse")
@@ -371,6 +362,15 @@ def provision(
                 "--pre-app-bootstrap requires one-shot OAuth minting through "
                 "--set-gh-secrets and a reviewed --gh-repo sink"
             )
+    preserved_gateway_endpoints = {
+        str(name).strip() for name in preserve_gateway_endpoints if str(name).strip()
+    }
+    if len(preserved_gateway_endpoints) != len(preserve_gateway_endpoints):
+        raise SystemExit("preserved Gateway endpoint names must be non-empty and distinct")
+    if preserved_gateway_endpoints and not gateway_endpoint:
+        raise SystemExit("--preserve-gateway-endpoint requires --gateway-endpoint")
+    if gateway_endpoint in preserved_gateway_endpoints:
+        raise SystemExit("the green Gateway cannot also be a preserved signed-blue endpoint")
     try:
         expected_application_id = _validate_provisioning_contract(
             identity_role=identity_role,
@@ -394,14 +394,14 @@ def provision(
         _validate_gh_repo(gh_repo, bind_secret_sink=mint_secret)
     except ValueError as exc:
         raise SystemExit(str(exc)) from exc
-
+    credential_source_git_sha = (
+        _credential_mutation.credential_source_git_sha(REPO_ROOT)
+        if mint_secret else ""
+    )
     if client_factory is None:
-
         def client_factory() -> Any:
             from databricks.sdk import WorkspaceClient
-
             return WorkspaceClient()
-
     if create_group and not group_name:
         raise SystemExit("--create-group requires an identity role with --group-name")
     if mint_secret and (not set_gh_secrets or not gh_repo):
@@ -440,6 +440,7 @@ def provision(
 
     sp = _find_existing_sp(client, sp_name)
     created_sp = False
+    cleanup = _pre_app_cleanup
     if sp is None:
         if expected_application_id:
             raise SystemExit(
@@ -447,17 +448,18 @@ def provision(
                 "identity because --expected-application-id was supplied"
             )
         if pre_app_bootstrap:
-            assert _pre_app_cleanup is not None
-            _pre_app_cleanup.arm(client=client, sp_name=sp_name)
+            assert cleanup is not None
+            cleanup.arm(client=client, sp_name=sp_name)
         sp = _create_sp(client, sp_name)
         if pre_app_bootstrap:
-            _pre_app_cleanup.sp_id = str(getattr(sp, "id", "") or "").strip() or None
+            assert cleanup is not None
+            cleanup.sp_id = str(getattr(sp, "id", "") or "").strip() or None
             exact = _find_existing_sp(client, sp_name)
             if (
                 exact is None
-                or not _pre_app_cleanup.sp_id
+                or not cleanup.sp_id
                 or str(getattr(exact, "id", "") or "").strip()
-                != _pre_app_cleanup.sp_id
+                != cleanup.sp_id
             ):
                 raise RuntimeError(
                     "new pre-App service principal did not converge to one exact "
@@ -636,15 +638,6 @@ def provision(
     obsolete_gateway_endpoints = set(revoke_gateway_endpoints)
     if gateway_endpoint:
         obsolete_gateway_endpoints.update(_reserved_gateway_endpoints(client))
-    for obsolete_endpoint in sorted(obsolete_gateway_endpoints):
-        if obsolete_endpoint and obsolete_endpoint != gateway_endpoint:
-            _revoke_can_query_on_obsolete_endpoint(
-                client,
-                obsolete_endpoint,
-                sp.application_id,
-                sp_id=sp.id,
-                effective_group_names=set(effective_groups.values()),
-            )
     if gateway_endpoint:
         _grant_can_query_on_endpoint(
             client,
@@ -654,6 +647,17 @@ def provision(
             effective_group_names=set(effective_groups.values()),
         )
         granted_can_query = True
+    for obsolete_endpoint in sorted(
+        obsolete_gateway_endpoints.difference(preserved_gateway_endpoints)
+    ):
+        if obsolete_endpoint and obsolete_endpoint != gateway_endpoint:
+            _revoke_can_query_on_obsolete_endpoint(
+                client,
+                obsolete_endpoint,
+                sp.application_id,
+                sp_id=sp.id,
+                effective_group_names=set(effective_groups.values()),
+            )
 
     granted_warehouse_can_use = False
     if warehouse_id:
@@ -674,58 +678,58 @@ def provision(
 
     # New identities and explicit rotations mint only when the caller enabled
     # the secure GitHub sink. --no-mint-secret supports idempotent grant repair.
-    secret_value: str | None = None
     credential_id: str | None = None
     client_id = sp.application_id
     should_mint = mint_secret and (created_sp or rotate)
-    if should_mint:
-        resp = _mint_oauth_secret(client, sp.id)
-        secret_value = getattr(resp, "secret", None)
-        credential_id = str(getattr(resp, "id", "") or "").strip() or None
-        if not secret_value:
-            raise SystemExit(
-                "mint returned no .secret value; SDK contract violation. "
-                f"Response fields: {list(resp.__dict__.keys()) if hasattr(resp, '__dict__') else 'unknown'}"
-            )
-        if not credential_id:
-            raise SystemExit(
-                "mint returned no immutable credential id; refusing a credential "
-                "that cannot be revoked after sink failure"
-            )
-    elif mint_secret:
+    if not should_mint and mint_secret:
         _diag(
             "SP already exists and --rotate was not passed; skipping mint. "
             "Pass --rotate to generate a fresh secret."
         )
-    else:
+    elif not mint_secret:
         _diag("skipping OAuth secret mint (--no-mint-secret)")
 
     wrote_secrets = False
-    if secret_value is not None:
-        assert gh_repo is not None  # validated before any SDK mutation
-        assert credential_id is not None
-        _credential_delivery.deliver_oauth_credential(
-            writer=_set_gh_secret,
-            revoker=lambda **kwargs: _credential_delivery.revoke_oauth_secret(
+    if should_mint:
+        boundary_name = app_name or _load_app_name_from_bundle()
+        boundary_factory = (
+            credential_boundary_factory or app_credential_mutation_boundary
+        )
+        boundary_writer = (
+            credential_writer_application_id
+            or _credential_mutation.credential_lease_writer_application_id(
                 client,
-                sp_id=sp.id,
-                error_factory=_wrap_admin_error,
-                **kwargs,
-            ),
+                target=sp,
+                identity_role=identity_role,
+                find_existing_sp=_find_existing_sp,
+            )
+        )
+        assert gh_repo is not None  # validated before any SDK mutation
+        credential_id = _credential_mutation.mint_and_deliver_oauth_credential(
+            client=client,
+            sp_id=sp.id,
+            client_id=client_id,
+            identity_role=identity_role,
+            app_name=boundary_name,
+            writer_application_id=boundary_writer,
+            source_git_sha=credential_source_git_sha,
+            boundary_factory=boundary_factory,
+            secret_writer=_set_gh_secret,
+            sink_acknowledger=_confirm_gh_secrets,
+            secret_invalidator=_invalidate_gh_secrets,
+            diagnostic=_diag,
+            error_factory=_wrap_admin_error,
             gh_repo=gh_repo,
             client_id_secret_name=client_id_secret_name,
-            client_id=client_id,
             client_secret_secret_name=client_secret_secret_name,
-            client_secret=secret_value,
-            credential_id=credential_id,
             credential_id_secret_name=credential_id_secret_name,
-            app_url_secret_name=(app_url_secret_name if not pre_app_bootstrap else None),
+            app_url_secret_name=(
+                app_url_secret_name if not pre_app_bootstrap else None
+            ),
             app_url=resolved_app_url,
             atomic_credential_bundle=identity_role == "agent_proxy",
         )
         wrote_secrets = True
-        secret_value = None
-
     return ProvisionResult(
         sp_id=sp.id,
         sp_application_id=sp.application_id,
@@ -767,8 +771,14 @@ def main(argv: list[str] | None = None) -> int:
             incompatible.append("--grant-can-use/--no-grant-can-use")
         if args.lakebase_instance is not None:
             incompatible.append("--lakebase-instance")
-        if args.gateway_endpoint is not None or args.revoke_gateway_endpoint:
-            incompatible.append("--gateway-endpoint/--revoke-gateway-endpoint")
+        if (
+            args.gateway_endpoint is not None
+            or args.revoke_gateway_endpoint
+            or args.preserve_gateway_endpoint
+        ):
+            incompatible.append(
+                "--gateway-endpoint/--revoke-gateway-endpoint/--preserve-gateway-endpoint"
+            )
         if args.warehouse_id is not None:
             incompatible.append("--warehouse-id")
         if args.no_app_url_secret or args.app_url_secret_name is not None:
@@ -872,6 +882,7 @@ def main(argv: list[str] | None = None) -> int:
             credential_id_secret_name=credential_id_secret_name,
             identity_role=role,
             revoke_gateway_endpoints=tuple(args.revoke_gateway_endpoint),
+            preserve_gateway_endpoints=tuple(args.preserve_gateway_endpoint),
             pre_app_bootstrap=args.pre_app_bootstrap,
         )
     except SystemExit:

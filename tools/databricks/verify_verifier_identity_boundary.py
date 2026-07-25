@@ -13,13 +13,22 @@ from __future__ import annotations
 import argparse
 import re
 from collections.abc import Callable
+from dataclasses import dataclass
 from functools import partial
 from typing import Any
+from urllib.parse import quote
+from uuid import uuid4
 
 import requests
 
+from backend.services.capability_serving_probes import query_serving_endpoint_with_proof
 from databricks.sdk import AccountClient, WorkspaceClient
 from databricks.sdk.service.sql import ExecuteStatementRequestOnWaitTimeout
+from tools.databricks import identity_boundary_probes as boundary_probes
+from tools.databricks.agent_runtime_access import _genie_spaces
+from tools.databricks.audit_global_m2m_access import (
+    assert_workspace_admin_inventory_identity,
+)
 from tools.databricks.authenticated_app_denial import (
     verify_authenticated_app_denial,
 )
@@ -28,12 +37,22 @@ from tools.databricks.m2m_workspace_auth import (
     bind_exact_workspace_m2m_auth,
     reviewed_databricks_account_origin,
 )
+from tools.databricks.serving_endpoint_acl import is_platform_foundation_endpoint
 
 _RELATION_RE = re.compile(
     r"^(?P<catalog>[A-Za-z_][A-Za-z0-9_]*)\."
     r"(?P<schema>[A-Za-z_][A-Za-z0-9_]*)\."
     r"(?P<table>[A-Za-z_][A-Za-z0-9_]*)$"
 )
+_MAX_GLOBAL_INVENTORY = 1000
+_DENIAL_PROMPT = "Confirm readiness without calling tools or including borrower data."
+
+
+def _text(value: object, name: str) -> str:
+    raw = value.get(name) if isinstance(value, dict) else getattr(value, name, None)
+    return str(getattr(raw, "value", raw) or "").strip()
+
+
 def _is_denied(exc: BaseException) -> bool:
     return is_authorization_denied(exc)
 
@@ -46,6 +65,120 @@ def _expect_denied(label: str, operation: Callable[[], object]) -> None:
             return
         raise RuntimeError(f"{label} was inconclusive: {type(exc).__name__}: {exc}") from exc
     raise RuntimeError(f"{label} unexpectedly succeeded")
+
+
+@dataclass(frozen=True)
+class VerifierCustomerResourceDenialInventory:
+    serving_endpoints: tuple[tuple[str, str, str, bool], ...]
+    genie_space_ids: tuple[str, ...]
+
+
+def _bounded_unique(values: list[str], *, label: str) -> tuple[str, ...]:
+    if (
+        len(values) > _MAX_GLOBAL_INVENTORY
+        or any(not value for value in values)
+        or len(values) != len(set(values))
+    ):
+        raise RuntimeError(f"{label} inventory is empty, duplicated, or unbounded")
+    return tuple(sorted(values))
+
+
+def collect_admin_customer_resource_denial_inventory(
+    workspace: Any,
+) -> VerifierCustomerResourceDenialInventory:
+    """Capture customer serving targets, foundation metadata, and all Genie targets."""
+
+    names = _bounded_unique(
+        [_text(item, "name") for item in workspace.serving_endpoints.list()],
+        label="serving endpoint",
+    )
+    endpoints: list[tuple[str, str, str, bool]] = []
+    for name in names:
+        details = workspace.serving_endpoints.get(name)
+        foundation = is_platform_foundation_endpoint(details)
+        endpoint_id = _text(details, "id")
+        task = _text(details, "task")
+        if not foundation and (_text(details, "name") != name or not endpoint_id or not task):
+            raise RuntimeError(
+                f"non-foundation serving endpoint {name!r} lacks identity or query protocol"
+            )
+        endpoints.append((name, endpoint_id, task, foundation))
+    genie_ids = _bounded_unique(list(_genie_spaces(workspace)), label="Genie")
+    return VerifierCustomerResourceDenialInventory(
+        serving_endpoints=tuple(endpoints),
+        genie_space_ids=genie_ids,
+    )
+
+
+def verify_customer_resource_denial_boundary(
+    *,
+    workspace: Any,
+    inventory: VerifierCustomerResourceDenialInventory,
+    expected_application_id: str,
+) -> None:
+    """Prove no customer-serving or Genie capability for the verifier credential.
+
+    System foundation endpoints are metadata-classified only because their
+    invocation protocol is not a customer serving securable.
+    """
+
+    me = workspace.current_user.me()
+    authenticated = {
+        value for value in (_text(me, "application_id"), _text(me, "user_name")) if value
+    }
+    if authenticated != {expected_application_id}:
+        raise RuntimeError(
+            "authenticated verifier identity does not match the configured application id"
+        )
+    for name, endpoint_id, task, foundation in inventory.serving_endpoints:
+        if foundation:
+            try:
+                details = workspace.serving_endpoints.get(name)
+            except Exception as exc:  # noqa: BLE001 - classify provider denial
+                if _is_denied(exc):
+                    continue
+                raise RuntimeError(
+                    f"foundation endpoint metadata {name} was inconclusive: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
+            if not is_platform_foundation_endpoint(details):
+                raise RuntimeError(
+                    f"visible endpoint {name!r} is not a system.ai foundation endpoint"
+                )
+            continue
+        _expect_denied(
+            f"serving endpoint metadata {name}",
+            partial(workspace.serving_endpoints.get, name),
+        )
+        _expect_denied(
+            f"serving endpoint permission administration {name}",
+            partial(workspace.serving_endpoints.get_permissions, endpoint_id),
+        )
+        _expect_denied(
+            f"serving endpoint query capability {name}",
+            partial(
+                query_serving_endpoint_with_proof,
+                workspace,
+                name,
+                task=task,
+                prompt=_DENIAL_PROMPT,
+                client_request_id=f"mip-verifier-denial-{uuid4().hex}",
+                max_tokens=16,
+            ),
+        )
+    for space_id in inventory.genie_space_ids:
+        _expect_denied(
+            f"Genie space metadata {space_id}",
+            partial(workspace.genie.get_space, space_id),
+        )
+        _expect_denied(
+            f"Genie permission administration {space_id}",
+            partial(
+                workspace.api_client.do,
+                "GET",
+                f"/api/2.0/permissions/genie/{quote(space_id, safe='')}",
+            ),
+        )
 
 
 def _state(response: object) -> str:
@@ -265,10 +398,7 @@ def _verify_global_uc_container_scope(
     )
     if metastore_rows:
         for metastore_id, privilege, grantee, through_group in metastore_rows:
-            if not all(
-                str(value or "").strip()
-                for value in (metastore_id, privilege, grantee)
-            ):
+            if not all(str(value or "").strip() for value in (metastore_id, privilege, grantee)):
                 raise RuntimeError("effective UC metastore grants returned an empty value")
             is_group_grant = _sql_bool(
                 through_group,
@@ -426,8 +556,7 @@ def _verify_exact_uc_table_scope(
         width=6,
     ):
         relation = ".".join(
-            str(value or "").strip()
-            for value in (catalog_name, schema_name, table_name)
+            str(value or "").strip() for value in (catalog_name, schema_name, table_name)
         )
         action = str(privilege or "").strip().upper()
         principal_name = str(grantee or "").strip()
@@ -487,12 +616,15 @@ def verify_boundary(
     workspace: Any,
     account: Any,
     expected_application_id: str,
+    account_id: str,
+    managed_query_group_ids: tuple[str, ...],
     app_name: str,
     app_url: str,
     protected_service_principal_id: str,
     warehouse_id: str,
     relation_prefix: str,
     endpoint: str,
+    preserved_endpoints: tuple[str, ...] = (),
     admin_workspace: Any | None = None,
     allow_attested_app_401: bool = False,
     http_get: Callable[..., Any] = requests.get,
@@ -502,11 +634,15 @@ def verify_boundary(
     authenticated_ids = {
         str(getattr(me, field, "") or "").strip()
         for field in ("application_id", "user_name")
+        if str(getattr(me, field, "") or "").strip()
     }
-    if expected_application_id not in authenticated_ids:
+    if authenticated_ids != {expected_application_id}:
         raise RuntimeError(
             "authenticated verifier identity does not match the configured application id"
         )
+    boundary_probes.verify_managed_query_group_administration_denied(
+        workspace, account_id=account_id, group_ids=managed_query_group_ids
+    )
 
     _expect_denied(
         "account administrator service-principal listing probe",
@@ -565,8 +701,7 @@ def verify_boundary(
     unexpected_relations = sorted(visible_relations - targets)
     if unexpected_relations:
         raise RuntimeError(
-            "verifier can see non-target UC relations: "
-            + ", ".join(unexpected_relations[:10])
+            "verifier can see non-target UC relations: " + ", ".join(unexpected_relations[:10])
         )
     _verify_exact_uc_scope(
         workspace,
@@ -587,25 +722,38 @@ def verify_boundary(
     }
     if "" in endpoint_names:
         raise RuntimeError("workspace returned a serving endpoint without a name")
-    if endpoint not in endpoint_names:
-        raise RuntimeError("target serving endpoint was not visible to the verifier")
-    target_endpoint = workspace.serving_endpoints.get(endpoint)
-    target_endpoint_id = str(getattr(target_endpoint, "id", "") or "").strip()
-    if not target_endpoint_id:
-        raise RuntimeError("target serving endpoint has no immutable id")
-    _expect_denied(
-        "target serving endpoint permission-administration probe",
-        partial(workspace.serving_endpoints.get_permissions, target_endpoint_id),
-    )
-    for other_endpoint in sorted(endpoint_names - {endpoint}):
+    preserved = {name.strip() for name in preserved_endpoints if name.strip()}
+    if len(preserved) != len(preserved_endpoints) or endpoint in preserved:
+        raise ValueError("preserved serving endpoints must be distinct from the target")
+    reviewed_endpoints = {endpoint, *preserved}
+    missing_endpoints = reviewed_endpoints.difference(endpoint_names)
+    if missing_endpoints:
+        raise RuntimeError(
+            "reviewed serving endpoint was not visible to the verifier: "
+            + ", ".join(sorted(missing_endpoints))
+        )
+    for reviewed_endpoint in sorted(reviewed_endpoints):
+        details = workspace.serving_endpoints.get(reviewed_endpoint)
+        reviewed_endpoint_id = boundary_probes.exact_agent_responses_endpoint_id(
+            details, endpoint=reviewed_endpoint
+        )
+        endpoint_role = "target" if reviewed_endpoint == endpoint else "preserved"
+        _expect_denied(
+            f"{endpoint_role} serving endpoint permission-administration probe "
+            f"{reviewed_endpoint}",
+            partial(workspace.serving_endpoints.get_permissions, reviewed_endpoint_id),
+        )
+        boundary_probes.prove_exact_gateway_responses_execution(
+            workspace, endpoint=reviewed_endpoint
+        )
+    for other_endpoint in sorted(endpoint_names - reviewed_endpoints):
         _expect_denied(
             f"non-target serving endpoint metadata {other_endpoint}",
             partial(workspace.serving_endpoints.get, other_endpoint),
         )
 
     warehouse_ids = {
-        str(getattr(candidate, "id", "") or "").strip()
-        for candidate in workspace.warehouses.list()
+        str(getattr(candidate, "id", "") or "").strip() for candidate in workspace.warehouses.list()
     }
     if "" in warehouse_ids:
         raise RuntimeError("workspace returned a SQL warehouse without an immutable id")
@@ -628,29 +776,77 @@ def verify_boundary(
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--expected-application-id", required=True)
-    parser.add_argument("--account-host", required=True)
-    parser.add_argument("--account-id", required=True)
-    parser.add_argument("--app-name", required=True)
-    parser.add_argument("--app-url", required=True)
-    parser.add_argument("--protected-service-principal-id", required=True)
-    parser.add_argument("--warehouse-id", required=True)
-    parser.add_argument("--relation-prefix", required=True)
-    parser.add_argument("--endpoint", required=True)
+    parser.add_argument("--expected-inventory-principal")
+    parser.add_argument("--account-host")
+    parser.add_argument("--account-id")
+    parser.add_argument("--app-name")
+    parser.add_argument("--app-url")
+    parser.add_argument("--protected-service-principal-id")
+    parser.add_argument("--warehouse-id")
+    parser.add_argument("--relation-prefix")
+    parser.add_argument("--endpoint")
+    parser.add_argument("--preserve-endpoint", action="append", default=[])
+    parser.add_argument("--customer-resource-denial", action="store_true")
     parser.add_argument("--allow-attested-app-401", action="store_true")
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    account_host = reviewed_databricks_account_origin(
-        args.account_host,
-        label="verifier account host",
-    )
-    if not args.allow_attested_app_401:
-        raise RuntimeError(
-            "verifier CLI requires the dual-authority App attestation mode"
+    if args.customer_resource_denial and not args.expected_inventory_principal:
+        raise SystemExit(
+            "--customer-resource-denial requires --expected-inventory-principal"
         )
+    required = (
+        "account_host",
+        "account_id",
+        "app_name",
+        "app_url",
+        "protected_service_principal_id",
+        "warehouse_id",
+        "relation_prefix",
+        "endpoint",
+    )
+    missing = [name for name in required if not getattr(args, name)]
+    if missing and not args.customer_resource_denial:
+        raise SystemExit(
+            "positive boundary mode requires: "
+            + ", ".join(f"--{name.replace('_', '-')}" for name in missing)
+        )
+    if args.customer_resource_denial and any(getattr(args, name) for name in required):
+        raise SystemExit(
+            "--customer-resource-denial rejects positive-boundary target arguments"
+        )
+    if args.customer_resource_denial and (
+        args.preserve_endpoint or args.allow_attested_app_401
+    ):
+        raise SystemExit(
+            "--customer-resource-denial rejects --preserve-endpoint and "
+            "--allow-attested-app-401"
+        )
+    if not args.customer_resource_denial and not args.allow_attested_app_401:
+        raise RuntimeError("verifier CLI requires the dual-authority App attestation mode")
+    account_host = (
+        reviewed_databricks_account_origin(
+            args.account_host,
+            label="verifier account host",
+        )
+        if not args.customer_resource_denial
+        else ""
+    )
     admin_workspace = WorkspaceClient()
+    customer_inventory: VerifierCustomerResourceDenialInventory | None = None
+    managed_query_group_ids: tuple[str, ...] = ()
+    if args.customer_resource_denial:
+        assert_workspace_admin_inventory_identity(
+            admin_workspace,
+            expected_principal=args.expected_inventory_principal,
+        )
+        customer_inventory = collect_admin_customer_resource_denial_inventory(admin_workspace)
+    else:
+        managed_query_group_ids = boundary_probes.collect_attached_managed_query_group_ids(
+            admin_workspace, expected_application_id=args.expected_application_id
+        )
     client_id, client_secret = bind_exact_workspace_m2m_auth(
         admin_workspace=admin_workspace,
         expected_application_id=args.expected_application_id,
@@ -659,6 +855,18 @@ def main(argv: list[str] | None = None) -> int:
         label="verifier",
     )
     workspace = WorkspaceClient()
+    if args.customer_resource_denial:
+        assert customer_inventory is not None
+        verify_customer_resource_denial_boundary(
+            workspace=workspace,
+            inventory=customer_inventory,
+            expected_application_id=args.expected_application_id,
+        )
+        print(
+            "verifier customer-created serving and Genie denial boundary: PASS "
+            "(system foundation invocation not asserted)"
+        )
+        return 0
     account = AccountClient(
         host=account_host,
         account_id=args.account_id,
@@ -670,12 +878,15 @@ def main(argv: list[str] | None = None) -> int:
         workspace=workspace,
         account=account,
         expected_application_id=args.expected_application_id,
+        account_id=args.account_id,
+        managed_query_group_ids=managed_query_group_ids,
         app_name=args.app_name,
         app_url=args.app_url,
         protected_service_principal_id=args.protected_service_principal_id,
         warehouse_id=args.warehouse_id,
         relation_prefix=args.relation_prefix,
         endpoint=args.endpoint,
+        preserved_endpoints=tuple(args.preserve_endpoint),
         admin_workspace=admin_workspace,
         allow_attested_app_401=True,
     )

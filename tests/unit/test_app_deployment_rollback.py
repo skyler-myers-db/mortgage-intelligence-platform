@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,6 +17,7 @@ from backend.agents.gateway_contract import (
 from backend.services.ai_gateway_proof_attestation import derive_gateway_proof_verify_key
 from tools.databricks import app_deployment_health as deployment_health
 from tools.databricks import app_deployment_rollback as rollback
+from tools.databricks import app_deployment_rollback_cli as rollback_cli
 from tools.databricks import app_deployment_rollback_inputs as rollback_inputs
 from tools.databricks import app_rollback_record_contract as rollback_contract
 from tools.databricks.app_health_contract import ActiveAppDeploymentPin
@@ -63,11 +65,16 @@ RESOURCE_CONTRACT = {
         catalog="mip",
     ),
     "supervisor_id": "supervisor-id",
+    "supervisor_creator": "runtime-client",
     "supervisor_endpoint": "supervisor-endpoint",
+    "supervisor_endpoint_id": "supervisor-endpoint-id",
     "gateway_endpoint": "green-gateway",
+    "gateway_endpoint_id": "green-gateway-id",
+    "gateway_endpoint_creator": "runtime-client",
     "gateway_model_name": "mip.audit.proxy",
     "gateway_model_version": "7",
     "gateway_model_source": "models:/mip.audit.proxy/7",
+    "gateway_inference_table_family": "mip.audit.mip_agent_gateway_growth_agent",
     "gateway_experiment_name": "/Users/runtime-client/proxy-deadbeef",
     "gateway_experiment_id": "experiment-7",
     "gateway_inference_table": "mip.audit.inference",
@@ -104,9 +111,12 @@ def _attestation_env(monkeypatch: pytest.MonkeyPatch) -> None:
     )
     monkeypatch.setenv("MIP_LAKEBASE_INSTANCE", "mip-app-state")
     monkeypatch.setenv("LAKEBASE_INSTANCE_NAME", "mip-app-state")
-    monkeypatch.setattr(rollback, "grant_direct_can_query", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        rollback,
+        "preserve_blue_and_revoke_managed_candidates",
+        lambda *_a, **_kw: "managed",
+    )
     monkeypatch.setattr(rollback, "assert_deployment_lease_held", lambda *_a, **_kw: {})
-    monkeypatch.setattr(rollback, "revoke_direct_permissions", lambda *_a, **_kw: True)
     monkeypatch.setattr(
         rollback_contract,
         "assert_owned_app_rollback_scope",
@@ -427,15 +437,216 @@ def test_verified_signed_last_good_contract_is_read_only(
         scope="mip",
     )
 
+    assert contract.record_version == 6
+    assert contract.proxy_rollback_mode == "exact-proxy"
     assert contract.deployment_id == "deployment-blue"
     assert contract.deployment_lease_id == LEASE_ID
     assert contract.git_sha == GIT_SHA
     assert contract.gateway_binding_sha256 == _binding()
+    assert contract.gateway_endpoint == "green-gateway"
+    assert contract.gateway_endpoint_id == "green-gateway-id"
+    assert contract.gateway_endpoint_creator == "runtime-client"
+    assert contract.gateway_inference_table_family == "mip.audit.mip_agent_gateway_growth_agent"
+    assert contract.supervisor_id == "supervisor-id"
+    assert contract.supervisor_creator == "runtime-client"
+    assert contract.supervisor_endpoint == "supervisor-endpoint"
+    assert contract.supervisor_endpoint_id == "supervisor-endpoint-id"
+    assert contract.runtime_application_id == "runtime-client"
+    assert contract.genie_space_id == GENIE_SPACE_ID
+    assert contract.proxy_application_id == PROXY_CLIENT_ID
     assert contract.active_proxy_credential_id == PROXY_CREDENTIAL_ID
     assert contract.pending_proxy_credential_retirement_ids == ()
     assert workspace.secrets.values == before
     assert workspace.apps.resource_updates == resource_updates
     assert workspace.apps.started == starts
+
+
+@pytest.mark.parametrize("missing_field", ["gateway_endpoint_id", "gateway_endpoint_creator"])
+def test_signed_last_good_rejects_missing_immutable_gateway_identity(
+    monkeypatch: pytest.MonkeyPatch,
+    missing_field: str,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(
+        rollback,
+        "_health",
+        lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID),
+    )
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+    record = _record(workspace)
+    resources = dict(record["gateway_resources"])
+    resources.pop("resource_digest")
+    resources.pop(missing_field)
+    record["gateway_resources"] = {
+        **resources,
+        "resource_digest": gateway_exact_resource_digest(resources),
+    }
+
+    with pytest.raises(RuntimeError, match="lacks immutable Gateway identity"):
+        rollback_contract._validated_record(
+            record,
+            app_name=APP_NAME,
+            expected_lakebase_instance="mip-app-state",
+        )
+
+
+def test_ensure_cli_exports_exact_signed_blue_proxy_binding(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out_env = tmp_path / "blue.env"
+    monkeypatch.setenv("MIP_TEST_TOKEN", "token")
+    monkeypatch.setattr(rollback_cli, "WorkspaceClient", lambda: object())
+    monkeypatch.setattr(rollback, "ensure_current", lambda **_kwargs: "blue-gateway")
+    monkeypatch.setattr(
+        rollback,
+        "verified_signed_last_good_contract",
+        lambda *_args, **_kwargs: rollback.SignedLastGoodAppContract(
+            record_version=6,
+            proxy_rollback_mode="exact-proxy",
+            deployment_id="deployment-blue",
+            deployment_lease_id=LEASE_ID,
+            git_sha=GIT_SHA,
+            gateway_binding_sha256=_binding(),
+            gateway_endpoint="blue-gateway",
+            gateway_endpoint_id="blue-gateway-id",
+            gateway_endpoint_creator="runtime-client",
+            gateway_inference_table_family=("mip.audit.mip_agent_gateway_growth_agent"),
+            supervisor_id="supervisor-id",
+            supervisor_creator="runtime-client",
+            supervisor_endpoint="supervisor-endpoint",
+            supervisor_endpoint_id="supervisor-endpoint-id",
+            runtime_application_id="runtime-client",
+            genie_space_id=GENIE_SPACE_ID,
+            proxy_application_id=PROXY_CLIENT_ID,
+            active_proxy_credential_id=PROXY_CREDENTIAL_ID,
+            pending_proxy_credential_retirement_ids=("retired-credential",),
+        ),
+    )
+
+    assert (
+        rollback_cli.main(
+            [
+                "ensure",
+                "--app-name",
+                APP_NAME,
+                "--scope",
+                "mip",
+                "--base-url",
+                "https://mip.example",
+                "--token-env",
+                "MIP_TEST_TOKEN",
+                "--treatment-warehouse-id",
+                "warehouse-id",
+                "--out-env",
+                str(out_env),
+            ]
+        )
+        == 0
+    )
+
+    values = dict(line.split("=", 1) for line in out_env.read_text(encoding="utf-8").splitlines())
+    assert values == {
+        "MIP_APP_ROLLBACK_RECORD_VERSION": "6",
+        "MIP_APP_ROLLBACK_PROXY_MODE": "exact-proxy",
+        "MIP_APP_ROLLBACK_DEPLOYMENT_ID": "deployment-blue",
+        "MIP_APP_ROLLBACK_GATEWAY_ENDPOINT": "blue-gateway",
+        "MIP_APP_ROLLBACK_GATEWAY_ENDPOINT_ID": "blue-gateway-id",
+        "MIP_APP_ROLLBACK_GATEWAY_CREATOR": "runtime-client",
+        "MIP_APP_ROLLBACK_GATEWAY_PIN_JSON": (
+            """'{"creator":"runtime-client","endpoint_id":"blue-gateway-id","name":"""
+            """"blue-gateway"}'"""
+        ),
+        "MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX": (
+            "mip.audit.mip_agent_gateway_growth_agent"
+        ),
+        "MIP_APP_ROLLBACK_SUPERVISOR_ID": "supervisor-id",
+        "MIP_APP_ROLLBACK_SUPERVISOR_CREATOR": "runtime-client",
+        "MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT": "supervisor-endpoint",
+        "MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID": "supervisor-endpoint-id",
+        "MIP_APP_ROLLBACK_SUPERVISOR_PIN_JSON": (
+            """'{"creator":"runtime-client","endpoint":"supervisor-endpoint","endpoint_id":"""
+            """"supervisor-endpoint-id","supervisor_id":"supervisor-id"}'"""
+        ),
+        "MIP_APP_ROLLBACK_RUNTIME_APPLICATION_ID": "runtime-client",
+        "MIP_APP_ROLLBACK_GENIE_SPACE_ID": GENIE_SPACE_ID,
+        "MIP_APP_ROLLBACK_PROXY_APPLICATION_ID": PROXY_CLIENT_ID,
+        "MIP_APP_ROLLBACK_PROXY_CREDENTIAL_IDS": "retired-credential",
+    }
+
+
+def test_inspect_cli_exports_explicit_legacy_proxyless_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    out_env = tmp_path / "legacy.env"
+    monkeypatch.setenv("MIP_TEST_TOKEN", "token")
+    monkeypatch.setattr(rollback_cli, "WorkspaceClient", lambda: object())
+    monkeypatch.setattr(
+        rollback,
+        "verified_signed_last_good_contract",
+        lambda *_args, **_kwargs: rollback.SignedLastGoodAppContract(
+            record_version=5,
+            proxy_rollback_mode="legacy-proxyless",
+            deployment_id="legacy-deployment",
+            deployment_lease_id=LEASE_ID,
+            git_sha=GIT_SHA,
+            gateway_binding_sha256=_binding(),
+            gateway_endpoint="legacy-gateway",
+            gateway_endpoint_id="legacy-gateway-id",
+            gateway_endpoint_creator="runtime-client",
+            gateway_inference_table_family="legacy-gateway_inference_table_family",
+            supervisor_id="legacy-supervisor",
+            supervisor_creator="runtime-client",
+            supervisor_endpoint="legacy-endpoint",
+            supervisor_endpoint_id="legacy-endpoint-id",
+            runtime_application_id="runtime-client",
+            genie_space_id=GENIE_SPACE_ID,
+            proxy_application_id=None,
+            active_proxy_credential_id=None,
+            pending_proxy_credential_retirement_ids=(),
+        ),
+    )
+
+    assert (
+        rollback_cli.main(
+            [
+                "inspect",
+                "--app-name",
+                APP_NAME,
+                "--scope",
+                "mip",
+                "--base-url",
+                "https://mip.example",
+                "--token-env",
+                "MIP_TEST_TOKEN",
+                "--out-env",
+                str(out_env),
+            ]
+        )
+        == 0
+    )
+
+    values = dict(line.split("=", 1) for line in out_env.read_text(encoding="utf-8").splitlines())
+    assert values["MIP_APP_ROLLBACK_RECORD_VERSION"] == "5"
+    assert values["MIP_APP_ROLLBACK_PROXY_MODE"] == "legacy-proxyless"
+    assert values["MIP_APP_ROLLBACK_DEPLOYMENT_ID"] == "legacy-deployment"
+    assert (
+        values["MIP_APP_ROLLBACK_GATEWAY_INFERENCE_TABLE_PREFIX"]
+        == "legacy-gateway_inference_table_family"
+    )
+    assert values["MIP_APP_ROLLBACK_SUPERVISOR_ENDPOINT_ID"] == "legacy-endpoint-id"
+    assert values["MIP_APP_ROLLBACK_PROXY_APPLICATION_ID"] == "''"
 
 
 def test_proxy_retirement_derives_only_from_prior_signed_identity() -> None:
@@ -491,8 +702,7 @@ def test_signed_proxy_retirement_journal_survives_process_loss_and_completes(
 
     green_credential_id = "green-credential"
     green_secret_reference = (
-        "{{secrets/mip-agent-proxy/"
-        f"oauth-client-secret-{green_credential_id}}}}}"
+        "{{secrets/mip-agent-proxy/" f"oauth-client-secret-{green_credential_id}}}}}"
     )
     green_contract = {
         **RESOURCE_CONTRACT,
@@ -555,9 +765,7 @@ def test_signed_proxy_retirement_journal_survives_process_loss_and_completes(
         scope="mip",
     )
     assert recovered.active_proxy_credential_id == green_credential_id
-    assert recovered.pending_proxy_credential_retirement_ids == (
-        PROXY_CREDENTIAL_ID,
-    )
+    assert recovered.pending_proxy_credential_retirement_ids == (PROXY_CREDENTIAL_ID,)
 
     provider_checks: list[str] = []
     rollback.complete_proxy_credential_retirement(
@@ -849,8 +1057,7 @@ def test_stored_v6_proof_authenticates_bounded_pre_owner_contract(
     payload["env_vars"] = [
         item
         for item in payload["env_vars"]
-        if isinstance(item, dict)
-        and item.get("name") != "MIP_REVIEWED_FUNCTION_OWNER"
+        if isinstance(item, dict) and item.get("name") != "MIP_REVIEWED_FUNCTION_OWNER"
     ]
     authenticated: dict[str, object] = {}
     observed: dict[str, object] = {}
@@ -893,10 +1100,7 @@ def test_stored_v6_proof_authenticates_bounded_pre_owner_contract(
 
 
 def _legacy_gateway_resources() -> dict[str, str]:
-    contract = {
-        field: f"legacy-{field}"
-        for field in LEGACY_GATEWAY_RESOURCE_FIELDS
-    }
+    contract = {field: f"legacy-{field}" for field in LEGACY_GATEWAY_RESOURCE_FIELDS}
     contract["proof_version"] = GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
     return {
         **contract,
@@ -1017,6 +1221,16 @@ def test_load_falls_back_to_genuinely_signed_v5_record(
 
     assert loaded["version"] == 5
     assert loaded["gateway_resources"] == _legacy_gateway_resources()
+    monkeypatch.setattr(rollback, "_stored_resource_proof", lambda *_args, **_kwargs: None)
+    signed = rollback.verified_signed_last_good_contract(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+    )
+    assert signed.record_version == 5
+    assert signed.proxy_rollback_mode == "legacy-proxyless"
+    assert signed.proxy_application_id is None
+    assert signed.supervisor_endpoint_id == "legacy-supervisor_endpoint_id"
 
 
 def test_v6_capture_deletes_legacy_key_only_after_durable_readback(
@@ -1274,6 +1488,37 @@ def test_restore_rejects_signed_record_without_exact_lakebase_binding(
     assert workspace.apps.deployed_payload is None
 
 
+def test_restore_rejects_contract_changed_after_proxy_identity_binding(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _workspace()
+    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
+    rollback.capture_current(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+        payload=_payload(),
+        base_url="https://mip.example",
+        bearer_token="token",
+        expected_git_sha=GIT_SHA,
+        expected_gateway_binding=_binding(),
+        **CAPTURE_ARGS,
+    )
+
+    with pytest.raises(RuntimeError, match="changed after identity binding"):
+        rollback.restore_last_good(
+            workspace,
+            app_name=APP_NAME,
+            scope="mip",
+            base_url="https://mip.example",
+            bearer_token="token",
+            expected_rollback_deployment_id="different-deployment",
+            **TREATMENT_ARGS,
+        )
+
+    assert workspace.apps.deployed_payload is None
+
+
 def test_restore_ignores_pre_v5_rollback_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1398,11 +1643,11 @@ def test_ensure_rejects_live_resource_drift_before_start_or_acl_mutation(
         expected_gateway_binding=_binding(),
         **CAPTURE_ARGS,
     )
-    grants: list[str] = []
+    acl_reads: list[str] = []
     monkeypatch.setattr(
         rollback,
-        "grant_direct_can_query",
-        lambda *_args, **_kwargs: grants.append("grant"),
+        "preserve_blue_and_revoke_managed_candidates",
+        lambda *_args, **_kwargs: acl_reads.append("inspect") or "managed",
     )
     monkeypatch.setattr(
         rollback,
@@ -1423,7 +1668,7 @@ def test_ensure_rejects_live_resource_drift_before_start_or_acl_mutation(
         )
 
     assert workspace.apps.started == 0
-    assert grants == []
+    assert acl_reads == []
 
 
 def test_ensure_restores_signed_resources_after_interrupted_candidate_update(
@@ -1611,7 +1856,7 @@ def test_restore_redeploys_exact_payload_and_advances_server_contract(
     assert _record(workspace)["deployment_id"] == "deployment-restored"
 
 
-def test_restore_reconciles_signed_resources_before_blue_source(
+def test_inspect_allows_resource_drift_then_restore_reconciles_blue_resources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
@@ -1638,12 +1883,23 @@ def test_restore_reconciles_signed_resources_before_blue_source(
         }
     )
 
+    signed = rollback.verified_signed_last_good_contract(
+        workspace,
+        app_name=APP_NAME,
+        scope="mip",
+    )
+
+    assert signed.deployment_id == "deployment-blue"
+    assert workspace.apps.resource_updates == 0
+    assert workspace.apps.resources != APP_RESOURCES
+
     rollback.restore_last_good(
         workspace,
         app_name=APP_NAME,
         scope="mip",
         base_url="https://mip.example",
         bearer_token="token",
+        expected_rollback_deployment_id=signed.deployment_id,
         **TREATMENT_ARGS,
     )
 
@@ -1765,7 +2021,7 @@ def test_capture_rejects_ambiguous_server_secret_write(
         )
 
 
-def test_restore_regrants_blue_gateway_and_revokes_unverified_green(
+def test_restore_preserves_legacy_blue_and_revokes_only_managed_candidate(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     workspace = _workspace()
@@ -1781,16 +2037,11 @@ def test_restore_regrants_blue_gateway_and_revokes_unverified_green(
         expected_gateway_binding=_binding(),
         **CAPTURE_ARGS,
     )
-    events: list[tuple[str, str]] = []
+    calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         rollback,
-        "grant_direct_can_query",
-        lambda *_a, **kw: events.append(("grant", str(kw["endpoint_name"]))),
-    )
-    monkeypatch.setattr(
-        rollback,
-        "revoke_direct_permissions",
-        lambda *_a, **kw: events.append(("revoke", str(kw["endpoint_name"]))) or True,
+        "preserve_blue_and_revoke_managed_candidates",
+        lambda *_a, **kw: calls.append(kw) or "legacy",
     )
 
     rollback.restore_last_good(
@@ -1803,53 +2054,14 @@ def test_restore_regrants_blue_gateway_and_revokes_unverified_green(
         revoke_endpoints=("unverified-green",),
     )
 
-    assert ("grant", "green-gateway") in events
-    assert ("revoke", "unverified-green") in events
-
-
-def test_ensure_reconciles_every_reserved_versioned_gateway_after_crash(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace = _workspace()
-    workspace.serving_endpoints = SimpleNamespace(
-        list=lambda: iter(
-            [
-                SimpleNamespace(name="green-gateway"),
-                SimpleNamespace(name="mip-growth-agent-gateway-deadbeef1234"),
-                SimpleNamespace(name="unrelated-endpoint"),
-            ]
-        )
-    )
-    monkeypatch.setattr(rollback, "_health", lambda *_a, **_kw: (GIT_SHA, _binding(), LEASE_ID))
-    rollback.capture_current(
-        workspace,
-        app_name=APP_NAME,
-        scope="mip",
-        payload=_payload(),
-        base_url="https://mip.example",
-        bearer_token="token",
-        expected_git_sha=GIT_SHA,
-        expected_gateway_binding=_binding(),
-        **CAPTURE_ARGS,
-    )
-    revoked: list[str] = []
-    monkeypatch.setattr(
-        rollback,
-        "revoke_direct_permissions",
-        lambda *_a, **kw: revoked.append(str(kw["endpoint_name"])) or True,
-    )
-
-    rollback.ensure_current(
-        workspace,
-        app_name=APP_NAME,
-        scope="mip",
-        base_url="https://mip.example",
-        bearer_token="token",
-        **TREATMENT_ARGS,
-    )
-
-    assert "mip-growth-agent-gateway-deadbeef1234" in revoked
-    assert "unrelated-endpoint" not in revoked
+    assert calls == [
+        {
+            "blue_endpoint": "green-gateway",
+            "app_client_id": "app-client",
+            "app_scim_id": "app-scim-id",
+            "candidate_endpoints": ("unverified-green",),
+        }
+    ]
 
 
 def test_tampered_server_record_fails_signature_verification(

@@ -40,6 +40,15 @@ def expected_app_rollback_scope(app_name: str) -> str:
     return scope
 
 
+def historical_supervisor_cleanup_journal_key(app_name: str) -> str:
+    """Return the single App-bound key reserved for interrupted cleanup."""
+
+    normalized = app_name.strip()
+    if _APP_NAME_RE.fullmatch(normalized) is None:
+        raise ValueError("cleanup-journal App name is invalid")
+    return f"historical-supervisor-cleanup-v1-{normalized}"
+
+
 @dataclass(frozen=True)
 class AppRollbackScopeBinding:
     app_name: str
@@ -166,6 +175,7 @@ def _expected_keys(app_name: str) -> set[str]:
         MARKER_KEY,
         f"app-last-good-v5-{app_name}",
         f"app-last-good-v6-{app_name}",
+        historical_supervisor_cleanup_journal_key(app_name),
     }
 
 

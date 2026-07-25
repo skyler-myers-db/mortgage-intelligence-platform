@@ -26,6 +26,9 @@ from databricks.sdk.errors import (
 from tools.databricks.converge_campaign_treatment_access import (
     target_group_membership_probe,
 )
+from tools.databricks.oauth_credential_boundary import (
+    held_deployment_credential_assertion,
+)
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     TargetServicePrincipal,
@@ -98,6 +101,7 @@ def _owner_policies(
     forbidden_principals: set[str],
     account_factory: Callable[[], AccountClient],
     group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None,
+    assert_single_writer: Callable[[], None] | None,
 ) -> tuple[ApprovedOwnerPolicy, ...]:
     workspace_host = str(
         getattr(getattr(workspace, "config", None), "host", "")
@@ -105,29 +109,44 @@ def _owner_policies(
         or os.environ.get("DATABRICKS_HOST", "")
     ).strip()
     targets = _forbidden_targets(workspace, forbidden_principals)
+
+    def reviewed_probe(
+        target: TargetServicePrincipal,
+    ) -> Callable[[AccountClient, str, str, str, str], bool]:
+        if group_membership_probe is not None:
+            return group_membership_probe
+        if assert_single_writer is None:
+            raise RuntimeError(
+                "pipeline owner verification requires the credential mutation lease"
+            )
+
+        def probe(
+            account: AccountClient,
+            account_sp_id: str,
+            application_id: str,
+            owner_group_id: str,
+            owner_group: str,
+        ) -> bool:
+            return target_group_membership_probe(
+                account,
+                account_sp_id,
+                application_id,
+                owner_group_id,
+                owner_group,
+                expected_workspace_scim_id=target.scim_id,
+                workspace_host=workspace_host,
+                assert_single_writer=assert_single_writer,
+            )
+
+        return probe
+
     policies = tuple(
         ApprovedOwnerPolicy(
             workspace=workspace,
             target=target,
             configured_principals=set(configured_principals),
             account_factory=account_factory,
-            group_membership_probe=group_membership_probe
-            or (
-                lambda account,
-                account_sp_id,
-                application_id,
-                owner_group_id,
-                owner_group,
-                expected_workspace_scim_id=target.scim_id: target_group_membership_probe(
-                    account,
-                    account_sp_id,
-                    application_id,
-                    owner_group_id,
-                    owner_group,
-                    expected_workspace_scim_id=expected_workspace_scim_id,
-                    workspace_host=workspace_host,
-                )
-            ),
+            group_membership_probe=reviewed_probe(target),
         )
         for target in targets
     )
@@ -196,6 +215,7 @@ def ensure_pipeline_namespace(
     forbidden_owner_principals: set[str] | None = None,
     account_factory: Callable[[], AccountClient] = account_client_from_env,
     group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None,
+    assert_single_writer: Callable[[], None] | None = None,
     workspace: WorkspaceClient | None = None,
 ) -> tuple[bool, bool]:
     """Create and verify only the empty namespace needed by the DAB pipeline."""
@@ -207,12 +227,16 @@ def ensure_pipeline_namespace(
     metastore_id = str(getattr(current_metastore, "metastore_id", "") or "").strip()
     if not metastore_id:
         raise RuntimeError("Workspace has no authoritative current metastore id")
+    credential_lease = assert_single_writer
+    if group_membership_probe is None and credential_lease is None:
+        credential_lease = held_deployment_credential_assertion(client)
     owner_policies = _owner_policies(
         client,
         configured_principals=approved_owner_principals or set(),
         forbidden_principals=forbidden_owner_principals or set(),
         account_factory=account_factory,
         group_membership_probe=group_membership_probe,
+        assert_single_writer=credential_lease,
     )
 
     catalog_object = _get_or_none(client.catalogs.get, catalog_name)

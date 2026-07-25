@@ -104,6 +104,15 @@ def build_parser(*, default_sync_tables: tuple[str, ...]) -> argparse.ArgumentPa
         default=os.environ.get("MIP_AGENT_PROXY_SECRET_REFERENCE", ""),
     )
     parser.add_argument(
+        "--approved-query-application-id",
+        action="append",
+        default=[],
+        help=(
+            "Explicit application ID whose deterministic endpoint-bound managed "
+            "CAN_QUERY group may be reused after exact contract inspection."
+        ),
+    )
+    parser.add_argument(
         "--deployment-lease-id",
         default=os.environ.get("MIP_APP_DEPLOYMENT_LEASE_ID", ""),
     )

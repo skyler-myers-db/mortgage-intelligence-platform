@@ -21,6 +21,7 @@ Honesty contract (commercial product -- do not weaken):
 from __future__ import annotations
 
 import logging
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -33,6 +34,7 @@ from backend.services.salesforce_client import (
 )
 
 if TYPE_CHECKING:
+    from backend.services.repositories import LeadRepository
     from backend.services.salesforce_client import ResilientSalesforceClient
 
 log = logging.getLogger(__name__)
@@ -40,7 +42,10 @@ log = logging.getLogger(__name__)
 REASON_NOT_CONFIGURED = "salesforce_not_configured"
 
 
-class DeliveryStateWriter(Protocol):
+class GovernedDeliveryGuard(Protocol):
+    activation: ActivationOutboxItem
+    should_deliver: bool
+
     def update_delivery_state(
         self,
         *,
@@ -48,6 +53,15 @@ class DeliveryStateWriter(Protocol):
         status: str,
         delivery_metadata: dict[str, Any],
     ) -> ActivationOutboxItem | None: ...
+
+
+class GovernedDeliveryStore(Protocol):
+    def delivery_guard(
+        self,
+        *,
+        activation_id: str,
+        lead_repo: LeadRepository,
+    ) -> AbstractContextManager[GovernedDeliveryGuard]: ...
 
 
 @dataclass(frozen=True)
@@ -94,34 +108,57 @@ def _task_fields(row: ActivationOutboxItem, sobject: str) -> dict[str, Any]:
 
 
 def deliver_to_salesforce(
-    row: ActivationOutboxItem,
+    activation_id: str,
     *,
-    store: DeliveryStateWriter,
+    store: GovernedDeliveryStore,
+    lead_repo: LeadRepository,
     sobject: str | None = None,
     client: ResilientSalesforceClient | None = None,
 ) -> DeliveryResult:
-    """Attempt real Salesforce delivery for a staged outbox row.
+    """Attempt one governed Salesforce delivery from the locked outbox row.
 
-    When Salesforce is unconfigured (no client) this is a clean no-op: the
-    row keeps its staged/dry_run status and we record the honest
-    ``salesforce_not_configured`` metadata WITHOUT writing it as delivered.
-    On success the row flips to ``delivered`` with the Salesforce id; on a
-    REST/breaker failure it flips to ``failed`` with the error.
+    The public adapter accepts only an activation id. The state store must
+    reload and lock the real row, prove its approval/campaign boundary, and
+    recheck exact Delta treatment membership before ``should_deliver`` can be
+    true. The guard is also the only object allowed to persist an outcome.
     """
+    with store.delivery_guard(
+        activation_id=activation_id,
+        lead_repo=lead_repo,
+    ) as delivery:
+        row = delivery.activation
+        if not delivery.should_deliver:
+            return DeliveryResult(
+                delivered=row.status == "delivered",
+                attempted=False,
+                status=row.status,
+                delivery_metadata=dict(row.delivery_metadata or {}),
+                activation=row,
+                salesforce_id=(
+                    str((row.delivery_metadata or {}).get("salesforce_id") or "") or None
+                ),
+            )
+        return _deliver_locked_to_salesforce(
+            row,
+            state_writer=delivery,
+            sobject=sobject,
+            client=client,
+        )
+
+
+def _deliver_locked_to_salesforce(
+    row: ActivationOutboxItem,
+    *,
+    state_writer: GovernedDeliveryGuard,
+    sobject: str | None,
+    client: ResilientSalesforceClient | None,
+) -> DeliveryResult:
+    """Perform the remote side effect while the governed delivery guard is held."""
     from backend.config.settings import settings
 
     resolved_sobject = sobject or settings.salesforce_sobject
     external_id_field = str(settings.salesforce_external_id_field or "").strip()
 
-    if row.status in {"delivered", "cancelled"}:
-        return DeliveryResult(
-            delivered=row.status == "delivered",
-            attempted=False,
-            status=row.status,
-            delivery_metadata=dict(row.delivery_metadata or {}),
-            activation=row,
-            salesforce_id=str((row.delivery_metadata or {}).get("salesforce_id") or "") or None,
-        )
     sf_client = client if client is not None else get_salesforce_client()
 
     if sf_client is None or not external_id_field:
@@ -164,7 +201,7 @@ def deliver_to_salesforce(
             activation_id=row.activation_id,
             exc_type=type(exc).__name__,
         )
-        refreshed = store.update_delivery_state(
+        refreshed = state_writer.update_delivery_state(
             activation_id=row.activation_id,
             status="failed",
             delivery_metadata=metadata,
@@ -191,7 +228,7 @@ def deliver_to_salesforce(
         salesforce_id=salesforce_id,
         sobject=resolved_sobject,
     )
-    refreshed = store.update_delivery_state(
+    refreshed = state_writer.update_delivery_state(
         activation_id=row.activation_id,
         status="delivered",
         delivery_metadata=metadata,

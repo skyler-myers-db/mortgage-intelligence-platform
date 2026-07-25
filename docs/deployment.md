@@ -124,10 +124,26 @@ credentials-only mode never lists or grants an App, Lakebase instance, Gateway
 endpoint, or SQL warehouse; it creates/resolves the reserved service principal,
 optionally creates/joins the reviewed admin group, and sends only that role's
 client ID and one-shot client secret to the repository bound to `origin`.
+Export the verifier proof signing key and its derived public verify key before
+these commands. Each operation holds its outer signed App deployment lease and
+also acquires the fixed global `mip-oauth-credential-mutations` lease before its
+first provider inventory read. The global name is independent of App and
+principal names, so alternate valid App names cannot create an overlapping
+bootstrap, rotation, audit, or temporary identity probe.
+Every standalone bootstrap or rotation also requires `HEAD` to equal the
+configured source SHA (when set) and a completely clean tracked and untracked
+worktree. A deploy-owned mutation instead borrows the already-acquired signed
+outer lease and requires its explicit preflighted source SHA.
+Bootstrap `agent_runtime` first: it is the only service-principal reader on the
+shared signed-lease root and the delegated lease writer for every later
+credential mutation.
 The live workspace does not initially contain `mip-admin`, so creating that
 group remains a separately reviewed, explicit action:
 
 ```bash
+python tools/databricks/provision_m2m_oauth.py \
+  --pre-app-bootstrap --identity-role agent_runtime --set-gh-secrets \
+  --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role normal --set-gh-secrets \
   --gh-repo skyler-myers-db/mortgage-intelligence-platform
@@ -144,17 +160,58 @@ python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role verifier \
   --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 python tools/databricks/provision_m2m_oauth.py \
-  --pre-app-bootstrap --identity-role agent_runtime \
-  --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
-python tools/databricks/provision_m2m_oauth.py \
   --pre-app-bootstrap --identity-role agent_proxy \
   --set-gh-secrets --gh-repo skyler-myers-db/mortgage-intelligence-platform
 ```
 
-If a reserved principal already exists but its one-shot secret is unavailable,
-repeat that role's command with `--rotate` when any OAuth credential remains.
-If a compensated partial delivery left the exact principal with zero
-credentials, the same bootstrap command resumes safely without `--rotate`.
+Pre-App bootstrap is creation-only and refuses every existing reserved
+principal. If a failed bootstrap was fully compensated, prove that the
+credentialless principal is removed before repeating the bootstrap command; do
+not add `--rotate` to a bootstrap retry. After the App exists, a reviewed
+rotation uses normal mode with that role's canonical
+`--expected-application-id`, `--rotate`, and `--set-gh-secrets`.
+Before provider create, the provisioner writes and reads back a signed,
+immutable intent containing the exact authority, principal, sink descriptor,
+global lease generation, and prior credential IDs. It records the returned
+credential ID before exposing the one-shot secret and arms the exact GitHub
+sink before its first write. No journal phase contains the secret.
+If exact restoration or delivery is unproven, an operation-bound quarantine
+record under `/.mip-deployment-leases` blocks every later credential baseline,
+even under another App name. A quarantine is cleared only by a signed terminal
+resolution whose provider inventory and sink disposition validate against the
+intent; lease expiry or deleting a record is never recovery proof.
+Recovery is an explicit deploy mode, not a fresh-create retry. First inspect the
+signed record with
+`python -m tools.databricks.oauth_credential_recovery_cli inspect
+--intent-path <workspace-path>`. After governance review, set all four
+`MIP_OAUTH_CREDENTIAL_RECOVERY_INTENT_PATH`,
+`MIP_OAUTH_CREDENTIAL_RECOVERY_PRINCIPAL_ID`,
+`MIP_OAUTH_CREDENTIAL_RECOVERY_AUTHORITY_IDENTITY`, and
+`MIP_OAUTH_CREDENTIAL_RECOVERY_PROVIDER_API`, then rerun `scripts/deploy.sh`.
+The deploy takes over only the intent's signed recovery root after expiry,
+re-proves the exact provider identity and full credential inventory, revokes
+only the observed or sole attributable delta, deletes only the armed GitHub
+secret names and proves their repeated absence, appends a signed
+resolver-lease resolution, and releases the resolver lease. A zero-delta intent
+without a durable observation remains quarantined: a bounded inventory read
+cannot prove that a delayed provider create will never commit. It may be
+resolved only with provider-specific durable non-commit evidence, which the
+current Databricks credential APIs do not expose. Multiple deltas, missing
+prior IDs, a delete exception, or mismatched operator confirmation likewise
+remain quarantined.
+If failure occurred after the global mutation lease was acquired but before an
+intent was durably committed, inspect it with
+`python -m tools.databricks.oauth_credential_recovery_cli
+inspect-orphan-lease`. Only when `intent_present` is false may a reviewer set
+both `MIP_OAUTH_CREDENTIAL_ORPHAN_LEASE_ID` and
+`MIP_OAUTH_CREDENTIAL_ORPHAN_RECOVERY_ROOT_LEASE_ID` to those exact reviewed
+coordinates and rerun `scripts/deploy.sh`. The deploy first acquires and
+heartbeats a new signed outer App lease, then invokes
+`recover-orphan-lease` with both confirmations before any later deployment
+mutation. Directly invoking the recovery subcommand after the failed deploy is
+unsupported because no live outer deployment lease exists. Orphan recovery and
+intent recovery are mutually exclusive, and an authoritative intent always
+requires the intent-recovery path.
 Create the separate account-SCIM OAuth principal and store
 `DATABRICKS_ACCOUNT_ID`, `DATABRICKS_ACCOUNT_CLIENT_ID`, and
 `DATABRICKS_ACCOUNT_CLIENT_SECRET` independently; it must not reuse any of the
@@ -291,23 +348,31 @@ the data it can observe: the same runtime already processes those request and
 response payloads in flight, and it receives no access to any other audit or
 borrower table.
 The agent-proxy identity is independently excluded from every App, Lakebase
-instance, SQL warehouse, and serving endpoint ACL. It receives direct
-`CAN_QUERY` on exactly one managed Supervisor, direct `CAN_RUN` on one Genie
+instance, SQL warehouse, and direct serving endpoint ACL. It receives
+`CAN_QUERY` through exactly one endpoint-bound managed group whose sole member
+is the proxy, direct `CAN_RUN` on one Genie
 space, and direct `USE CATALOG`, `USE SCHEMA`, and `EXECUTE` only for the three
 reviewed `mip.gold` functions. A target-authenticated dual-authority audit
 enumerates every visible UC catalog, schema, function, table, volume, and
 registered model before cutover and again after blue retirement; inherited,
 foreign, ownership, or fourth-function authority fails deployment.
+The proxy's own OAuth SCIM projection must expose the exact managed group before
+the query gate runs. Deployment retries only `PermissionDenied` during bounded
+provider propagation; deadline exhaustion fails closed. Removing the group's
+sole member atomically revokes query authority before group retirement.
 Before green activation, a principal-pinned workspace-admin global audit
 enumerates every admin-visible Genie space and customer-created serving
 endpoint. ID-less, creator-less Databricks foundation-model endpoints are
 routed to the fixed `system.ai` Unity Catalog inventory instead of being
 mistaken for customer ACL securables. The audit requires runtime direct
 `CAN_MANAGE` only on the exact green Supervisor/Gateway pair (plus any pinned,
-runtime-owned blue endpoint during side-by-side cutover), direct `CAN_RUN` only
-on the reviewed Genie space, and verifier direct `CAN_QUERY` only on the green
-Gateway. Inherited/group/broader access and access to any unrelated resource
-fail the deploy. The same endpoint audits run again after blue retirement.
+runtime-owned blue endpoint during side-by-side cutover) and direct `CAN_RUN`
+only on the reviewed Genie space. Query-only identities, including verifier and
+agent proxy, receive `CAN_QUERY` only through an endpoint-bound managed group
+whose immutable name, external ID, group ID, endpoint ID, and sole member are
+re-proven. Unrelated group-derived, inherited, or broader access and access to
+any unrelated resource fail the deploy. The same endpoint audits run again
+after blue retirement.
 Isolation provisioning likewise enumerates every visible Databricks App and
 every Lakebase instance rather than checking only the named deployment.
 For an existing principal whose prior client secret is unavailable or being

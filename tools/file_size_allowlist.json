@@ -16,6 +16,7 @@
     "frontend/src/components/mortgage/USChoroplethMap.tsx": "2026-07-31",
     "frontend/src/design-system/components.css": "2026-07-31",
     "frontend/src/lib/api.ts": "2026-07-31",
+    "scripts/deploy.sh": "2026-08-15",
     "tools/e2e_borrower_audit.py": "2026-07-31"
   },
   "_policy": "2026-06-14 schedule decision: allowlist expiry moved from 2026-06-21 to 2026-07-31 because listed-for-sale/HELOC evidence hardening took priority before Data+AI Summit. See docs/maintenance/file-size-refactor-plan.md. Do not extend again without either splitting files or updating that documented schedule."

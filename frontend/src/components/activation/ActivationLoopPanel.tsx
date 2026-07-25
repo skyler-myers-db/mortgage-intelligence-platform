@@ -91,15 +91,17 @@ export function ActivationLoopPanel({
   }, [selectedDestination, stageableDestinations]);
 
   const selected = stageableDestinations.find((destination) => destination.destination_key === selectedDestination);
-  const existingActivation = (outbox ?? []).find((item) =>
+  const matchingActivation = (outbox ?? []).find((item) =>
     item.destination_key === selectedDestination
     && item.approval_id === approvalId
-    && ['dry_run', 'staged', 'delivered'].includes(item.status)
+    && ['dry_run', 'staged', 'failed', 'delivered'].includes(item.status)
   ) ?? (
     stageResult && stageResult.destination_key === selectedDestination
       ? stageResult
       : null
   );
+  const retryActivation = matchingActivation?.status === 'failed' ? matchingActivation : null;
+  const existingActivation = retryActivation ? null : matchingActivation;
   const canStage = Boolean(
     borrowerId
     && approved
@@ -176,7 +178,7 @@ export function ActivationLoopPanel({
                 onClick={() => void stage()}
                 disabled={!canStage}
               >
-                {existingActivation ? 'Staged' : staging ? 'Staging' : 'Stage'}
+                {existingActivation ? 'Staged' : staging ? 'Staging' : retryActivation ? 'Retry' : 'Stage'}
               </Button>
             </div>
           </div>

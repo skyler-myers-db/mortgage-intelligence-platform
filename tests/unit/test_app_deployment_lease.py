@@ -1134,6 +1134,35 @@ def test_release_appends_signed_terminal_and_never_deletes_history() -> None:
     assert record["operation"] == "release"
 
 
+def test_release_preserves_only_holder_and_reserved_writer_root_acl() -> None:
+    workspace = _workspace()
+    lease_id = lease.acquire(
+        workspace,
+        app_name="mip-app",
+        source_git_sha="a" * 40,
+        writer_application_id=WRITER_ID,
+        now=NOW,
+    )
+    calls_before = workspace.workspace.set_permissions_calls
+    acl_before = list(workspace.workspace.access_control_list)
+
+    lease.release(workspace, app_name="mip-app", lease_id=lease_id)
+
+    assert workspace.workspace.set_permissions_calls == calls_before
+    assert workspace.workspace.access_control_list == acl_before
+    assert {
+        (
+            entry.user_name,
+            entry.service_principal_name,
+            entry.all_permissions[0].permission_level,
+        )
+        for entry in acl_before
+    } == {
+        ("deployer@example.com", None, "CAN_MANAGE"),
+        (None, WRITER_ID, "CAN_READ"),
+    }
+
+
 def test_release_accepts_successor_create_that_commits_then_times_out() -> None:
     workspace = _workspace()
     lease_id = lease.acquire(workspace, app_name="mip-app", source_git_sha="a" * 40, now=NOW)

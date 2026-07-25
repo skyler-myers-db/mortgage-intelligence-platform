@@ -21,6 +21,18 @@ from tools.databricks.m2m_access_policy import (
     assert_non_admin_service_principal,
     resolve_effective_groups,
 )
+from tools.databricks.oauth_credential_boundary import (
+    held_deployment_credential_assertion,
+)
+from tools.databricks.oauth_credential_creation import (
+    ExactOAuthCredential,
+    create_exact_oauth_credential,
+    revoke_exact_oauth_credential,
+)
+from tools.databricks.oauth_credential_quarantine import (
+    CredentialMutationContext,
+    CredentialMutationQuarantineError,
+)
 from tools.databricks.uc_owner_policy import (
     ApprovedOwnerPolicy,
     TargetServicePrincipal,
@@ -67,6 +79,7 @@ def target_identity_groups_probe(
     *,
     expected_workspace_scim_id: str,
     workspace_host: str,
+    assert_single_writer: Callable[[], None],
     workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
 ) -> dict[str, str]:
     """Return authoritative effective groups as the target App identity.
@@ -88,22 +101,40 @@ def target_identity_groups_probe(
     workspace_principal_id = expected_workspace_scim_id.strip()
     if not workspace_principal_id:
         raise RuntimeError("Workspace service-principal id is required for identity proof")
-    secret_id = ""
+    credential: ExactOAuthCredential | None = None
     probe_error: BaseException | None = None
     effective_groups: dict[str, str] = {}
     try:
-        created = account.service_principal_secrets.create(
-            principal_id,
-            lifetime=_TEMPORARY_PROBE_SECRET_LIFETIME,
+        credential = create_exact_oauth_credential(
+            principal_id=principal_id,
+            list_credentials=lambda: account.service_principal_secrets.list(
+                principal_id
+            ),
+            create_credential=lambda: account.service_principal_secrets.create(
+                principal_id,
+                lifetime=_TEMPORARY_PROBE_SECRET_LIFETIME,
+            ),
+            delete_credential=lambda credential_id: (
+                account.service_principal_secrets.delete(
+                    principal_id,
+                    credential_id,
+                )
+            ),
+            assert_single_writer=assert_single_writer,
+            mutation_context=CredentialMutationContext(
+                authority_scope="account",
+                authority_identity=application_id,
+                provider_api="account.service_principal_secrets",
+                operation_mode="temporary_probe",
+                sink_descriptor="temporary:target-identity-membership-probe",
+                credential_lifetime_seconds=300,
+            ),
+            label="temporary target identity",
         )
-        secret_id = str(getattr(created, "id", "") or "").strip()
-        secret = str(getattr(created, "secret", "") or "").strip()
-        if not secret_id or not secret:
-            raise RuntimeError("Temporary target identity credential did not return id and secret")
         target_workspace = workspace_factory(
             host=host,
             client_id=application_id,
-            client_secret=secret,
+            client_secret=credential.secret,
             auth_type="oauth-m2m",
         )
         identity = target_workspace.api_client.do(
@@ -178,9 +209,25 @@ def target_identity_groups_probe(
     except BaseException as exc:
         probe_error = exc
     finally:
-        if secret_id:
+        if credential is not None:
             try:
-                account.service_principal_secrets.delete(principal_id, secret_id)
+                revoke_exact_oauth_credential(
+                    credential,
+                    principal_id=principal_id,
+                    list_credentials=lambda: account.service_principal_secrets.list(
+                        principal_id
+                    ),
+                    delete_credential=lambda credential_id: (
+                        account.service_principal_secrets.delete(
+                            principal_id,
+                            credential_id,
+                        )
+                    ),
+                    assert_single_writer=assert_single_writer,
+                    label="temporary target identity",
+                )
+            except CredentialMutationQuarantineError:
+                raise
             except BaseException as cleanup_error:
                 raise RuntimeError(
                     "Temporary target identity credential cleanup could not be proven"
@@ -199,6 +246,7 @@ def target_group_membership_probe(
     *,
     expected_workspace_scim_id: str,
     workspace_host: str,
+    assert_single_writer: Callable[[], None],
     workspace_factory: Callable[..., WorkspaceClient] = WorkspaceClient,
 ) -> bool:
     """Evaluate one owner group against the target's authoritative snapshot."""
@@ -215,6 +263,7 @@ def target_group_membership_probe(
         application_id,
         expected_workspace_scim_id=expected_workspace_scim_id,
         workspace_host=workspace_host,
+        assert_single_writer=assert_single_writer,
         workspace_factory=workspace_factory,
     )
     expected_name = _canonical(group_name)
@@ -423,6 +472,7 @@ def converge_campaign_treatment_access(
     approved_owner_principals: set[str] | None = None,
     account_factory: Callable[[], AccountClient] | None = None,
     group_membership_probe: Callable[[AccountClient, str, str, str, str], bool] | None = None,
+    assert_single_writer: Callable[[], None] | None = None,
     workspace: WorkspaceClient | None = None,
 ) -> bool:
     warehouse = warehouse_id.strip()
@@ -444,6 +494,9 @@ def converge_campaign_treatment_access(
         getattr(getattr(client, "config", None), "host", "")
         or os.environ.get("DATABRICKS_HOST", "")
     ).strip()
+    credential_lease = assert_single_writer
+    if group_membership_probe is None and credential_lease is None:
+        credential_lease = held_deployment_credential_assertion(client)
     membership_probe = group_membership_probe or (
         lambda account, account_sp_id, application_id, owner_group_id, owner_group: (
             target_group_membership_probe(
@@ -454,6 +507,7 @@ def converge_campaign_treatment_access(
                 owner_group,
                 expected_workspace_scim_id=target.scim_id,
                 workspace_host=workspace_host,
+                assert_single_writer=credential_lease,  # type: ignore[arg-type]
             )
         )
     )
