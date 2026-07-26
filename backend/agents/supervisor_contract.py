@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from typing import Any
 
 RUNTIME_REPLACEMENT_SUFFIX = " [mip-agent-runtime]"
@@ -18,6 +19,32 @@ SUPERVISOR_INSTRUCTIONS = (
 
 class SupervisorContractDrift(RuntimeError):
     """The live Supervisor exists but does not match the reviewed contract."""
+
+
+def supervisor_tool_resource_is_exact(
+    tool_type: str,
+    actual: object,
+    expected: object,
+) -> bool:
+    """Allow only the provider's redundant, equal Genie-space identifier alias."""
+
+    if tool_type != "genie_space":
+        return actual == expected
+    if not isinstance(expected, Mapping) or set(expected) != {"id"}:
+        return False
+    expected_id = expected.get("id")
+    if (
+        not isinstance(expected_id, str)
+        or not expected_id
+        or expected_id.strip() != expected_id
+        or not isinstance(actual, Mapping)
+    ):
+        return False
+    if set(actual) == {"id"}:
+        return actual.get("id") == expected_id
+    return set(actual) == {"id", "space_id"} and (
+        actual.get("id") == expected_id == actual.get("space_id")
+    )
 
 
 def supervisor_tool_specs(

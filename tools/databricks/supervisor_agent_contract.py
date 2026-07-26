@@ -10,6 +10,7 @@ from backend.agents.supervisor_contract import (
     supervisor_contract_document,
     supervisor_contract_hash,
     supervisor_replacement_name,
+    supervisor_tool_resource_is_exact,
     supervisor_tool_specs,
 )
 
@@ -23,5 +24,6 @@ __all__ = [
     "supervisor_contract_document",
     "supervisor_contract_hash",
     "supervisor_replacement_name",
+    "supervisor_tool_resource_is_exact",
     "supervisor_tool_specs",
 ]

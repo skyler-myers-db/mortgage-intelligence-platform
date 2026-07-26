@@ -8,7 +8,10 @@ from collections.abc import Mapping
 from typing import Any
 from urllib.parse import quote
 
-from backend.agents.supervisor_contract import supervisor_contract_document
+from backend.agents.supervisor_contract import (
+    supervisor_contract_document,
+    supervisor_tool_resource_is_exact,
+)
 from tools.databricks.cutover_journal_store import read_cutover_journal
 from tools.databricks.historical_agent_endpoint_types import SupervisorPin
 
@@ -58,17 +61,11 @@ def _assert_reviewed_tool(
             raise RuntimeError(f"historical Supervisor tool {tool_id!r} provider identity drifted")
     if set(row) != allowed_fields:
         raise RuntimeError(f"historical Supervisor tool {tool_id!r} contains unexpected fields")
-    actual_body = row.get(tool_type)
-    expected_body = expected[tool_type]
-    if tool_type == "genie_space":
-        if (
-            not isinstance(actual_body, Mapping)
-            or set(actual_body) not in ({"id"}, {"id", "space_id"})
-            or actual_body.get("id") != expected_body["id"]
-            or ("space_id" in actual_body and actual_body.get("space_id") != expected_body["id"])
-        ):
-            raise RuntimeError(f"historical Supervisor tool {tool_id!r} reviewed body drifted")
-    elif actual_body != expected_body:
+    if not supervisor_tool_resource_is_exact(
+        tool_type,
+        row.get(tool_type),
+        expected[tool_type],
+    ):
         raise RuntimeError(f"historical Supervisor tool {tool_id!r} reviewed body drifted")
 
 

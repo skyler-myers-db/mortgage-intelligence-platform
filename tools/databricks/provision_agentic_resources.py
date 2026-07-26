@@ -61,7 +61,10 @@ from tools.databricks.signed_blue_supervisor_recovery import (  # noqa: E402
     recover_interrupted_signed_blue_finalization,
     signed_blue_supervisor_pin_from_env,
 )
-from tools.databricks.supervisor_agent_contract import SupervisorContractDrift  # noqa: E402
+from tools.databricks.supervisor_agent_contract import (  # noqa: E402
+    SupervisorContractDrift,
+    supervisor_tool_resource_is_exact,
+)
 from tools.databricks.supervisor_agent_contract import (  # noqa: E402
     supervisor_tool_specs as _supervisor_tool_specs,
 )
@@ -548,7 +551,11 @@ def _exact_supervisor_tools(
         if not (
             existing.get("tool_type") == tool_type
             and existing.get("description") == description
-            and existing.get(tool_type) == body[tool_type]
+            and supervisor_tool_resource_is_exact(
+                tool_type,
+                existing.get(tool_type),
+                body[tool_type],
+            )
         ):
             raise SupervisorContractDrift(f"Supervisor tool {tool_id!r} failed exact postflight")
     return current_by_id
@@ -610,7 +617,11 @@ def _ensure_supervisor_tools(
             existing
             and existing.get("tool_type") == tool_type
             and existing.get("description") == description
-            and existing.get(tool_type) == expected_resource
+            and supervisor_tool_resource_is_exact(
+                tool_type,
+                existing.get(tool_type),
+                expected_resource,
+            )
         )
         if existing:
             if exact:

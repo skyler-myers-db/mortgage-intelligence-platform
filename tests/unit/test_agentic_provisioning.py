@@ -1379,6 +1379,7 @@ def test_exact_supervisor_tools_are_idempotent_and_read_back(
             )
         )
     ]
+    rows[0]["genie_space"]["space_id"] = rows[0]["genie_space"]["id"]
     calls: list[str] = []
 
     def run(args: list[str], *, input_json: object | None = None) -> object:
@@ -1405,6 +1406,55 @@ def test_exact_supervisor_tools_are_idempotent_and_read_back(
     )
 
     assert calls == ["list-tools", "list-examples", "list-tools", "list-examples"]
+
+
+@pytest.mark.parametrize(
+    "genie_space",
+    (
+        {"id": "space-123", "space_id": "other-space"},
+        {"space_id": "space-123"},
+        {"id": "space-123", "space_id": "space-123", "permission": "CAN_EDIT"},
+    ),
+)
+def test_exact_supervisor_tools_reject_noncanonical_genie_alias(
+    monkeypatch: pytest.MonkeyPatch,
+    genie_space: dict[str, str],
+) -> None:
+    rows = [
+        {
+            "tool_id": tool_id,
+            "tool_type": tool_type,
+            "description": description,
+            **body,
+        }
+        for tool_id, tool_type, description, body in (
+            provision_agentic_resources._supervisor_tool_specs(
+                genie_space_id="space-123",
+                catalog="mip",
+            )
+        )
+    ]
+    rows[0]["genie_space"] = genie_space
+
+    def run(args: list[str], *, input_json: object | None = None) -> object:
+        assert input_json is None
+        if args[1] == "list-tools":
+            return rows
+        if args[1] == "list-examples":
+            return []
+        raise AssertionError(args)
+
+    monkeypatch.setattr(provision_agentic_resources, "_run", run)
+
+    with pytest.raises(
+        provision_agentic_resources.SupervisorContractDrift,
+        match="mortgage_data_analyst.*failed exact postflight",
+    ):
+        provision_agentic_resources._exact_supervisor_tools(
+            "supervisor-1",
+            genie_space_id="space-123",
+            catalog="mip",
+        )
 
 
 def test_converge_app_gateway_permissions_grants_outer_and_revokes_bypasses(monkeypatch) -> None:

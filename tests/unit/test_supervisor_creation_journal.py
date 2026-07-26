@@ -11,6 +11,7 @@ from uuid import uuid4
 import pytest
 from databricks.sdk.errors import ResourceAlreadyExists, ResourceDoesNotExist
 
+from backend.agents import supervisor_contract
 from backend.services.ai_gateway_proof_attestation import (
     derive_gateway_proof_verify_key,
 )
@@ -213,6 +214,97 @@ def test_recovery_rejects_other_malformed_tool_inventory(payload: object) -> Non
     workspace.tool_payload = payload
 
     with pytest.raises(RuntimeError, match="tool inventory is malformed"):
+        runtime.exact_tool_subset(
+            workspace,
+            intent,
+            supervisor_id=created["supervisor_id"],
+        )
+
+
+def test_recovery_accepts_live_duplicate_genie_space_identifier() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    expected = json.loads(intent["contract_json"])["tools"][0]
+    live = {**expected, "genie_space": {**expected["genie_space"]}}
+    live["genie_space"]["space_id"] = expected["genie_space"]["id"]
+    workspace.tool_payload = {"tools": [live]}
+
+    assert runtime.exact_tool_subset(
+        workspace,
+        intent,
+        supervisor_id=created["supervisor_id"],
+    ) == {"mortgage_data_analyst"}
+
+
+@pytest.mark.parametrize(
+    ("actual", "expected", "is_exact"),
+    (
+        ({"id": "space"}, {"id": "space"}, True),
+        ({"id": "space", "space_id": "space"}, {"id": "space"}, True),
+        ({}, {}, False),
+        ({"id": ""}, {"id": ""}, False),
+        ({"id": " space "}, {"id": " space "}, False),
+        (
+            {"id": "space", "permission": "CAN_EDIT"},
+            {"id": "space", "permission": "CAN_EDIT"},
+            False,
+        ),
+    ),
+)
+def test_shared_genie_resource_matcher_requires_canonical_expected_contract(
+    actual: object,
+    expected: object,
+    is_exact: bool,
+) -> None:
+    assert (
+        supervisor_contract.supervisor_tool_resource_is_exact(
+            "genie_space",
+            actual,
+            expected,
+        )
+        is is_exact
+    )
+
+
+@pytest.mark.parametrize(
+    "genie_space",
+    (
+        {"id": "genie-space", "space_id": "other-space"},
+        {"id": "other-space", "space_id": "genie-space"},
+        {"id": "other-space"},
+        {"space_id": "genie-space"},
+        {"id": "genie-space", "space_id": "genie-space", "permission": "CAN_EDIT"},
+        "genie-space",
+    ),
+)
+def test_recovery_rejects_noncanonical_genie_space_readback(
+    genie_space: object,
+) -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    expected = json.loads(intent["contract_json"])["tools"][0]
+    workspace.tool_payload = {"tools": [{**expected, "genie_space": genie_space}]}
+
+    with pytest.raises(RuntimeError, match="mortgage_data_analyst.*drifted"):
+        runtime.exact_tool_subset(
+            workspace,
+            intent,
+            supervisor_id=created["supervisor_id"],
+        )
+
+
+def test_recovery_keeps_uc_function_resource_comparison_exact() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    expected = json.loads(intent["contract_json"])["tools"][1]
+    workspace.tool_payload = {
+        "tools": [{**expected, "uc_function": {"name": "mip.gold.other_function"}}]
+    }
+
+    with pytest.raises(RuntimeError, match="build_cohort.*drifted"):
         runtime.exact_tool_subset(
             workspace,
             intent,
@@ -763,6 +855,7 @@ def test_crash_after_intent_and_each_incremental_mutation_converges() -> None:
         *[tool["tool_id"] for tool in __import__("json").loads(claimed["contract_json"])["tools"]],
         "display_name",
     ]
+    created_payloads: dict[str, dict[str, Any]] = {}
 
     def update_field(supervisor_id: str, field: str, value: str) -> None:
         workspace.agents[supervisor_id][field] = value
@@ -775,6 +868,7 @@ def test_crash_after_intent_and_each_incremental_mutation_converges() -> None:
         tool_id: str,
         payload: dict[str, Any],
     ) -> None:
+        created_payloads[tool_id] = dict(payload)
         workspace.tools[supervisor_id][tool_id] = {
             "tool_id": tool_id,
             **payload,
@@ -812,6 +906,13 @@ def test_crash_after_intent_and_each_incremental_mutation_converges() -> None:
     )
     assert result["display_name"] == "Mortgage Growth Agent"
     assert len(workspace.tools[created["supervisor_id"]]) == 4
+    assert created_payloads["mortgage_data_analyst"] == {
+        "tool_type": "genie_space",
+        "description": (
+            "Answers governed data questions over the Mortgage Lead Intelligence Genie Space."
+        ),
+        "genie_space": {"id": "genie-space"},
+    }
 
 
 def _claimed_complete(workspace: _Workspace) -> dict[str, Any]:
@@ -832,6 +933,51 @@ def _claimed_complete(workspace: _Workspace) -> dict[str, Any]:
     for tool in canonical["tools"]:
         workspace.tools[created["supervisor_id"]][tool["tool_id"]] = dict(tool)
     return claimed
+
+
+def test_claimed_convergence_resumes_live_genie_alias_without_recreating_it() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    claimed = journal.claim(
+        workspace,
+        app_name=_APP,
+        lease_id=_LEASE,
+        source_git_sha=_SOURCE,
+        runtime_application_id=_RUNTIME,
+        **created,
+        proof_kind="create_response",
+        now=_NOW + timedelta(seconds=2),
+    )
+    tools = json.loads(claimed["contract_json"])["tools"]
+    genie = dict(tools[0])
+    genie["genie_space"] = {
+        **genie["genie_space"],
+        "space_id": genie["genie_space"]["id"],
+    }
+    workspace.tools[created["supervisor_id"]][genie["tool_id"]] = genie
+    created_tool_ids: list[str] = []
+
+    def create_tool(
+        supervisor_id: str,
+        tool_id: str,
+        payload: dict[str, Any],
+    ) -> None:
+        created_tool_ids.append(tool_id)
+        workspace.tools[supervisor_id][tool_id] = {"tool_id": tool_id, **payload}
+
+    def update_field(supervisor_id: str, field: str, value: str) -> None:
+        workspace.agents[supervisor_id][field] = value
+
+    runtime.converge_claimed(
+        workspace,
+        claimed,
+        assert_single_writer=lambda: None,
+        create_tool=create_tool,
+        update_field=update_field,
+    )
+
+    assert created_tool_ids == ["build_cohort", "segment_counts", "lead_queue_url"]
 
 
 def test_claimed_journal_clear_resolves_committed_and_uncommitted_timeouts() -> None:
@@ -1081,6 +1227,48 @@ def test_complete_clears_after_exact_paginated_child_inventories() -> None:
             runtime_application_id=_RUNTIME,
         )
         is None
+    )
+
+
+def test_complete_clears_with_live_duplicate_genie_space_identifier() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    workspace.agents[supervisor_id]["display_name"] = claimed["target_name"]
+    genie = workspace.tools[supervisor_id]["mortgage_data_analyst"]["genie_space"]
+    genie["space_id"] = genie["id"]
+
+    control.complete_and_clear(workspace, claimed)
+
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        is None
+    )
+
+
+def test_complete_rejects_conflicting_genie_alias_without_clearing() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    supervisor_id = claimed["supervisor_id"]
+    workspace.agents[supervisor_id]["display_name"] = claimed["target_name"]
+    workspace.tools[supervisor_id]["mortgage_data_analyst"]["genie_space"]["space_id"] = (
+        "other-space"
+    )
+
+    with pytest.raises(RuntimeError, match="mortgage_data_analyst.*drifted"):
+        control.complete_and_clear(workspace, claimed)
+
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == claimed
     )
 
 

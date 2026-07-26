@@ -16,6 +16,7 @@ from tools.databricks.agent_runtime_access import (
     assert_current_runtime_identity,
     assert_runtime_creator,
 )
+from tools.databricks.supervisor_agent_contract import supervisor_tool_resource_is_exact
 from tools.databricks.supervisor_creation_journal import (
     base_create_payload,
     download,
@@ -282,7 +283,11 @@ def exact_tool_subset(
         if (
             row.get("tool_type") != tool_type
             or row.get("description") != tool.get("description")
-            or row.get(tool_type) != tool.get(tool_type)
+            or not supervisor_tool_resource_is_exact(
+                tool_type,
+                row.get(tool_type),
+                tool.get(tool_type),
+            )
         ):
             raise RuntimeError(f"journaled Supervisor tool {tool_id!r} drifted")
     return set(actual)
