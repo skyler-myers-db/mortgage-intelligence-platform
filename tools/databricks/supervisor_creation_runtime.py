@@ -22,6 +22,8 @@ from tools.databricks.supervisor_creation_journal import (
     matches_current_policy,
 )
 
+_MAX_CHILD_INVENTORY_PAGES = 1_000
+
 
 def _text(value: object) -> str:
     return str(getattr(value, "value", value) or "").strip()
@@ -66,7 +68,7 @@ def supervisor_rows(workspace: Any) -> list[dict[str, Any]]:
             identities.add(supervisor_id)
             rows.append(row)
         next_token = payload.get("next_page_token")
-        if next_token in {None, ""}:
+        if next_token is None or next_token == "":
             return rows
         if not isinstance(next_token, str) or not next_token.strip():
             raise RuntimeError("Supervisor creation inventory page token is malformed")
@@ -169,14 +171,54 @@ def assert_unique_live_supervisor_binding(
     return endpoint_id
 
 
+def _paged_child_rows(
+    workspace: Any,
+    supervisor_id: str,
+    *,
+    collection: str,
+    resource: str,
+) -> list[Any]:
+    """Return a complete child inventory, including every provider page."""
+
+    rows: list[Any] = []
+    token = ""
+    seen_tokens: set[str] = set()
+    for _page_number in range(_MAX_CHILD_INVENTORY_PAGES):
+        query: dict[str, Any] = {"page_size": 100}
+        if token:
+            query["page_token"] = token
+        payload = workspace.api_client.do(
+            "GET",
+            f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}/{collection}",
+            query=query,
+        )
+        if payload == {} and not token:
+            return []
+        if not isinstance(payload, Mapping):
+            raise RuntimeError(f"Supervisor creation {resource} inventory is malformed")
+        page = payload.get(collection)
+        if not isinstance(page, list):
+            raise RuntimeError(f"Supervisor creation {resource} inventory is malformed")
+        rows.extend(page)
+        next_token = payload.get("next_page_token")
+        if next_token is None or next_token == "":
+            return rows
+        if not isinstance(next_token, str) or not next_token.strip():
+            raise RuntimeError(f"Supervisor creation {resource} inventory page token is malformed")
+        token = next_token.strip()
+        if token in seen_tokens:
+            raise RuntimeError(f"Supervisor creation {resource} inventory pagination cycled")
+        seen_tokens.add(token)
+    raise RuntimeError(f"Supervisor creation {resource} inventory exceeded the page limit")
+
+
 def _tool_rows(workspace: Any, supervisor_id: str) -> list[dict[str, Any]]:
-    payload = workspace.api_client.do(
-        "GET",
-        f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}/tools",
+    rows = _paged_child_rows(
+        workspace,
+        supervisor_id,
+        collection="tools",
+        resource="tool",
     )
-    rows = payload if isinstance(payload, list) else _field(payload, "tools")
-    if not isinstance(rows, list):
-        raise RuntimeError("Supervisor creation tool inventory is malformed")
     normalized: list[dict[str, Any]] = []
     identities: set[str] = set()
     for raw in rows:
@@ -194,16 +236,12 @@ def _tool_rows(workspace: Any, supervisor_id: str) -> list[dict[str, Any]]:
 
 
 def _example_rows(workspace: Any, supervisor_id: str) -> list[Any]:
-    payload = workspace.api_client.do(
-        "GET",
-        f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}/examples",
+    return _paged_child_rows(
+        workspace,
+        supervisor_id,
+        collection="examples",
+        resource="example",
     )
-    if payload == {}:
-        return []
-    rows = payload if isinstance(payload, list) else _field(payload, "examples")
-    if not isinstance(rows, list):
-        raise RuntimeError("Supervisor creation example inventory is malformed")
-    return rows
 
 
 def _expected_tools(record: Mapping[str, Any]) -> dict[str, dict[str, Any]]:

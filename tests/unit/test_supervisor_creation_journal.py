@@ -32,6 +32,7 @@ _ROOT = str(uuid4())
 _SOURCE = "a" * 40
 _NOW = datetime(2026, 7, 25, 12, tzinfo=UTC)
 _LEASE_EXPIRES = datetime(2099, 1, 1, tzinfo=UTC)
+_DEFAULT_TOOL_PAYLOAD = object()
 
 
 class _Files:
@@ -73,15 +74,20 @@ class _Api:
         *,
         query: dict[str, Any] | None = None,
     ) -> Any:
-        del query
         assert method == "GET"
         if path == "/api/2.1/supervisor-agents":
             return {"supervisor_agents": list(self.owner.agents.values())}
         parts = path.split("/")
         supervisor_id = parts[4]
         if path.endswith("/tools"):
+            if self.owner.tool_payload is not _DEFAULT_TOOL_PAYLOAD:
+                if callable(self.owner.tool_payload):
+                    return self.owner.tool_payload(query or {})
+                return self.owner.tool_payload
             return {"tools": list(self.owner.tools[supervisor_id].values())}
         if path.endswith("/examples"):
+            if callable(self.owner.example_payload):
+                return self.owner.example_payload(query or {})
             return self.owner.example_payload
         return dict(self.owner.agents[supervisor_id])
 
@@ -92,6 +98,7 @@ class _Workspace:
         self.api_client = _Api(self)
         self.agents: dict[str, dict[str, Any]] = {}
         self.tools: dict[str, dict[str, dict[str, Any]]] = {}
+        self.tool_payload: object = _DEFAULT_TOOL_PAYLOAD
         self.example_payload: object = {"examples": []}
         self.serving_endpoints = SimpleNamespace(get=self._endpoint)
 
@@ -167,6 +174,157 @@ def test_create_accepts_provider_omitted_empty_examples() -> None:
     created = _create(workspace, _prepare(workspace))
 
     assert created["supervisor_id"] == "supervisor-created"
+
+
+def test_audit_recovery_accepts_provider_omitted_empty_tools(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    workspace.tool_payload = {}
+    monkeypatch.setattr(
+        control,
+        "find_supervisor_create_proof",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            supervisor_id=created["supervisor_id"],
+            event_id="audit-event",
+            request_id="audit-request",
+        ),
+    )
+
+    claimed = control.recover_from_audit(
+        workspace,
+        intent,
+        warehouse_id="warehouse",
+    )
+
+    assert claimed["supervisor_id"] == created["supervisor_id"]
+    assert claimed["claim_proof_kind"] == "system_access_audit"
+    assert claimed["create_audit_event_id"] == "audit-event"
+    assert claimed["create_audit_request_id"] == "audit-request"
+
+
+@pytest.mark.parametrize("payload", ({"unexpected": []}, None))
+def test_recovery_rejects_other_malformed_tool_inventory(payload: object) -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    workspace.tool_payload = payload
+
+    with pytest.raises(RuntimeError, match="tool inventory is malformed"):
+        runtime.exact_tool_subset(
+            workspace,
+            intent,
+            supervisor_id=created["supervisor_id"],
+        )
+
+
+def test_recovery_rejects_unexpected_tool_on_second_page() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    expected = json.loads(intent["contract_json"])["tools"][0]
+
+    def pages(query: dict[str, Any]) -> object:
+        if query == {"page_size": 100}:
+            return {"tools": [expected], "next_page_token": "second-page"}
+        assert query == {"page_size": 100, "page_token": "second-page"}
+        return {
+            "tools": [
+                {
+                    "tool_id": "unreviewed",
+                    "tool_type": "function",
+                    "description": "unreviewed",
+                    "function": {"name": "mip.gold.unreviewed"},
+                }
+            ]
+        }
+
+    workspace.tool_payload = pages
+    with pytest.raises(RuntimeError, match="unexpected tools: unreviewed"):
+        runtime.exact_tool_subset(
+            workspace,
+            intent,
+            supervisor_id=created["supervisor_id"],
+        )
+
+
+def test_recovery_rejects_cross_page_duplicate_tool() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+    expected = json.loads(intent["contract_json"])["tools"][0]
+
+    def pages(query: dict[str, Any]) -> object:
+        if query == {"page_size": 100}:
+            return {"tools": [expected], "next_page_token": "second-page"}
+        assert query == {"page_size": 100, "page_token": "second-page"}
+        return {"tools": [expected]}
+
+    workspace.tool_payload = pages
+    with pytest.raises(RuntimeError, match="duplicate or missing identities"):
+        runtime.exact_tool_subset(
+            workspace,
+            intent,
+            supervisor_id=created["supervisor_id"],
+        )
+
+
+@pytest.mark.parametrize(
+    ("first_token", "second_payload", "error"),
+    (
+        ([], None, "page token is malformed"),
+        (
+            "cycle",
+            {"tools": [], "next_page_token": "cycle"},
+            "pagination cycled",
+        ),
+        ("second-page", {}, "tool inventory is malformed"),
+    ),
+)
+def test_recovery_rejects_malformed_tool_pagination(
+    first_token: object,
+    second_payload: object,
+    error: str,
+) -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    created = _create(workspace, intent)
+
+    def pages(query: dict[str, Any]) -> object:
+        if query == {"page_size": 100}:
+            return {"tools": [], "next_page_token": first_token}
+        assert query == {"page_size": 100, "page_token": first_token}
+        return second_payload
+
+    workspace.tool_payload = pages
+    with pytest.raises(RuntimeError, match=error):
+        runtime.exact_tool_subset(
+            workspace,
+            intent,
+            supervisor_id=created["supervisor_id"],
+        )
+
+
+def test_recovery_rejects_example_on_second_page() -> None:
+    workspace = _Workspace()
+    intent = _prepare(workspace)
+    _create(workspace, intent)
+
+    def pages(query: dict[str, Any]) -> object:
+        if query == {"page_size": 100}:
+            return {"examples": [], "next_page_token": "second-page"}
+        assert query == {"page_size": 100, "page_token": "second-page"}
+        return {"examples": [{"instructions": "unreviewed"}]}
+
+    workspace.example_payload = pages
+    with pytest.raises(RuntimeError, match="must contain zero examples"):
+        runtime.exact_journaled_candidate(
+            workspace,
+            intent,
+            require_claim=False,
+        )
 
 
 @pytest.mark.parametrize("payload", ({"unexpected": []}, None))
@@ -867,6 +1025,62 @@ def test_complete_verification_retains_signed_handoff_journal() -> None:
             runtime_application_id=_RUNTIME,
         )
         == claimed
+    )
+
+
+@pytest.mark.parametrize("child", ("tools", "examples"))
+def test_complete_rejects_bare_child_list_without_clearing(child: str) -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    workspace.agents[claimed["supervisor_id"]]["display_name"] = claimed["target_name"]
+    if child == "tools":
+        workspace.tool_payload = list(workspace.tools[claimed["supervisor_id"]].values())
+    else:
+        workspace.example_payload = []
+
+    with pytest.raises(RuntimeError, match=f"{child[:-1]} inventory is malformed"):
+        control.complete_and_clear(workspace, claimed)
+
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        == claimed
+    )
+
+
+def test_complete_clears_after_exact_paginated_child_inventories() -> None:
+    workspace = _Workspace()
+    claimed = _claimed_complete(workspace)
+    workspace.agents[claimed["supervisor_id"]]["display_name"] = claimed["target_name"]
+    tools = list(workspace.tools[claimed["supervisor_id"]].values())
+
+    def tool_pages(query: dict[str, Any]) -> object:
+        if query == {"page_size": 100}:
+            return {"tools": tools[:2], "next_page_token": "second-page"}
+        assert query == {"page_size": 100, "page_token": "second-page"}
+        return {"tools": tools[2:]}
+
+    def example_pages(query: dict[str, Any]) -> object:
+        if query == {"page_size": 100}:
+            return {"examples": [], "next_page_token": "second-page"}
+        assert query == {"page_size": 100, "page_token": "second-page"}
+        return {"examples": []}
+
+    workspace.tool_payload = tool_pages
+    workspace.example_payload = example_pages
+
+    control.complete_and_clear(workspace, claimed)
+
+    assert (
+        journal.download(
+            workspace,
+            app_name=_APP,
+            runtime_application_id=_RUNTIME,
+        )
+        is None
     )
 
 
