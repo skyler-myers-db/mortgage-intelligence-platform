@@ -176,11 +176,11 @@ def _verified_resource_environment(
         if str(key) in GATEWAY_RUNTIME_RESOURCE_ENV
     }
     contract_json = json.dumps(dict(contract), sort_keys=True, separators=(",", ":"))
-    if (
-        environment.get("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON") != contract_json
-        or environment.get("MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256")
-        != legacy_gateway_resource_digest(contract)
-    ):
+    if environment.get(
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"
+    ) != contract_json or environment.get(
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"
+    ) != legacy_gateway_resource_digest(contract):
         raise RuntimeError("legacy Gateway served resource binding drifted")
     trusted = {
         os.environ.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "").strip(),
@@ -199,9 +199,7 @@ def _verified_resource_environment(
         )
         public.verify(
             signature,
-            GATEWAY_RUNTIME_RESOURCE_ATTESTATION_ALG.encode()
-            + b"\0"
-            + contract_json.encode(),
+            GATEWAY_RUNTIME_RESOURCE_ATTESTATION_ALG.encode() + b"\0" + contract_json.encode(),
         )
     except (InvalidSignature, RuntimeError, ValueError) as exc:
         raise RuntimeError("legacy Gateway served resource signature is invalid") from exc
@@ -342,13 +340,11 @@ def assert_live_legacy_gateway_resources(
         genie_space_id=contract["genie_space_id"],
         catalog=contract["catalog"],
     )
-    if (
-        contract["supervisor_contract_json"] != expected_supervisor
-        or contract["supervisor_contract_sha256"]
-        != supervisor_contract_hash(
-            genie_space_id=contract["genie_space_id"],
-            catalog=contract["catalog"],
-        )
+    if contract["supervisor_contract_json"] != expected_supervisor or contract[
+        "supervisor_contract_sha256"
+    ] != supervisor_contract_hash(
+        genie_space_id=contract["genie_space_id"],
+        catalog=contract["catalog"],
     ):
         raise RuntimeError("legacy managed Supervisor contract drifted")
     environment = _assert_endpoint(workspace, contract=contract)
@@ -408,12 +404,8 @@ def assert_live_legacy_gateway_resources(
     )
     experiments = tracking_client or MlflowClient(tracking_uri="databricks")
     experiment = experiments.get_experiment(contract["gateway_experiment_id"])
-    experiment_owner = str(
-        (field(experiment, "tags") or {}).get("mlflow.ownerEmail") or ""
-    ).strip()
-    acl_json = _experiment_acl_contract(
-        workspace, experiment_id=contract["gateway_experiment_id"]
-    )
+    experiment_owner = str((field(experiment, "tags") or {}).get("mlflow.ownerEmail") or "").strip()
+    acl_json = _experiment_acl_contract(workspace, experiment_id=contract["gateway_experiment_id"])
     if (
         str(field(experiment, "experiment_id") or "") != contract["gateway_experiment_id"]
         or str(field(experiment, "name") or "") != contract["gateway_experiment_name"]

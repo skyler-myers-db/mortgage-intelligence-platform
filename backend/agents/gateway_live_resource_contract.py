@@ -99,6 +99,8 @@ except ModuleNotFoundError:  # MLflow may place backend/ directly on sys.path.
 
 _IMMUTABLE_MODEL_SOURCE = re.compile(r"models:/m-[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 _MODEL_CONTRACT_FIELDS = GATEWAY_MODEL_CONTRACT_FIELDS
+
+
 def _text(value: object) -> str:
     return str(_field(value, "value") or value or "").strip()
 
@@ -335,10 +337,11 @@ def _assert_endpoint_contract(
         raise RuntimeError("Gateway inference-table contract drifted")
 
 
-def assert_live_gateway_runtime_resources(
+def _assert_live_gateway_runtime_resources(
     workspace: Any,
     *,
     environment: Mapping[str, str],
+    require_current_source: bool,
     model_registry: Any | None = None,
     tracking_client: Any | None = None,
     supervisor_metadata: Mapping[str, Any] | None = None,
@@ -378,13 +381,15 @@ def assert_live_gateway_runtime_resources(
         environment=environment,
         supervisor_endpoint_details=supervisor_endpoint_details,
     )
-    source_hash = gateway_proxy_source_hash(
+    source_hash = contract["gateway_source_hash"]
+    inference_family = contract["gateway_inference_table_family"].split(".", 2)
+    if len(inference_family) != 3:
+        raise RuntimeError("Gateway reviewed proxy source contract drifted")
+    if require_current_source and source_hash != gateway_proxy_source_hash(
         upstream_endpoint=contract["supervisor_endpoint"],
         catalog=contract["catalog"],
         genie_space_id=contract["genie_space_id"],
-    )
-    inference_family = contract["gateway_inference_table_family"].split(".", 2)
-    if len(inference_family) != 3 or source_hash != contract["gateway_source_hash"]:
+    ):
         raise RuntimeError("Gateway reviewed proxy source contract drifted")
     resource_hash = gateway_resource_allocation_hash(
         source_hash=source_hash,
@@ -487,3 +492,47 @@ def assert_live_gateway_runtime_resources(
     ):
         raise RuntimeError("Gateway MLflow experiment ACL contract drifted")
     return contract
+
+
+def assert_live_gateway_runtime_resources(
+    workspace: Any,
+    *,
+    environment: Mapping[str, str],
+    model_registry: Any | None = None,
+    tracking_client: Any | None = None,
+    supervisor_metadata: Mapping[str, Any] | None = None,
+    supervisor_endpoint_details: object | None = None,
+) -> dict[str, str]:
+    """Re-prove the active Gateway, including parity with current source bytes."""
+
+    return _assert_live_gateway_runtime_resources(
+        workspace,
+        environment=environment,
+        require_current_source=True,
+        model_registry=model_registry,
+        tracking_client=tracking_client,
+        supervisor_metadata=supervisor_metadata,
+        supervisor_endpoint_details=supervisor_endpoint_details,
+    )
+
+
+def assert_live_historical_gateway_runtime_resources(
+    workspace: Any,
+    *,
+    environment: Mapping[str, str],
+    model_registry: Any | None = None,
+    tracking_client: Any | None = None,
+    supervisor_metadata: Mapping[str, Any] | None = None,
+    supervisor_endpoint_details: object | None = None,
+) -> dict[str, str]:
+    """Re-prove a signed historical Gateway without requiring current source bytes."""
+
+    return _assert_live_gateway_runtime_resources(
+        workspace,
+        environment=environment,
+        require_current_source=False,
+        model_registry=model_registry,
+        tracking_client=tracking_client,
+        supervisor_metadata=supervisor_metadata,
+        supervisor_endpoint_details=supervisor_endpoint_details,
+    )

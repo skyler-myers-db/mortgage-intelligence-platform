@@ -11,6 +11,7 @@ from databricks.sdk.errors import NotFound
 from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_ENDPOINT,
     GATEWAY_ENDPOINT_DESCRIPTION,
+    GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION,
 )
 from backend.agents.supervisor_contract import (
     canonical_supervisor_contract_json,
@@ -24,8 +25,16 @@ from tests.fixtures.gateway_runtime_resources import (
 )
 from tools.databricks import historical_agent_endpoint_cleanup as cleanup
 from tools.databricks import historical_gateway_attestation as legacy_attestation
+from tools.databricks import historical_gateway_runtime_attestation as gateway_attestation
 from tools.databricks import historical_supervisor_creation_retirement as creation_retirement
+from tools.databricks import (
+    historical_supervisor_retirement_attestation as supervisor_retirement_attestation,
+)
 from tools.databricks import reconcile_historical_agent_endpoints as inventory
+from tools.databricks.gateway_legacy_rollback import (
+    LEGACY_GATEWAY_RESOURCE_FIELDS,
+    legacy_gateway_resource_digest,
+)
 from tools.databricks.serving_query_group_access import (
     managed_query_group_external_id,
     managed_query_group_name,
@@ -146,6 +155,8 @@ class _ApiClient:
     def __init__(self, supervisors: list[dict[str, str]], serving: _ServingEndpoints) -> None:
         self.supervisors = {row["supervisor_agent_id"]: dict(row) for row in supervisors}
         self.tools = {row["supervisor_agent_id"]: [] for row in supervisors}
+        self.examples = {row["supervisor_agent_id"]: [] for row in supervisors}
+        self.omit_empty_examples = False
         self.serving = serving
         self.deleted: list[str] = []
         self.delete_endpoint_with_agent = True
@@ -163,7 +174,10 @@ class _ApiClient:
         if method == "GET" and path.endswith("/tools"):
             return {"tools": list(self.tools[path.split("/")[-2]])}
         if method == "GET" and path.endswith("/examples"):
-            return {"examples": []}
+            examples = list(self.examples[path.split("/")[-2]])
+            if self.omit_empty_examples and not examples:
+                return {}
+            return {"examples": examples}
         supervisor_id = path.rsplit("/", 1)[-1]
         if method == "GET":
             if supervisor_id not in self.supervisors:
@@ -273,7 +287,9 @@ def _inventory(
     client: _Client,
     *,
     gateway_pins: tuple[inventory.GatewayPin, ...] = (),
+    retirement_gateway_pins: tuple[inventory.GatewayPin, ...] = (),
     supervisor_pins: tuple[inventory.SupervisorPin, ...] = (),
+    retirement_supervisor_pins: tuple[inventory.SupervisorPin, ...] = (),
     pending_cleanup: inventory.SupervisorCleanupProof | None = None,
     pending_creation: dict[str, Any] | None = None,
     contracts: list[dict[str, Any]] | None = None,
@@ -287,12 +303,24 @@ def _inventory(
         catalog=_CATALOG,
         genie_space_id=_GENIE,
         gateway_pins=gateway_pins,
+        retirement_gateway_pins=retirement_gateway_pins,
         supervisor_pins=supervisor_pins,
+        retirement_supervisor_pins=retirement_supervisor_pins,
         pending_supervisor_cleanup=pending_cleanup,
         pending_supervisor_creation=pending_creation,
         assert_single_writer=lambda: None,
         assert_supervisor_contract=lambda _supervisor_id, **kwargs: (
             contracts.append(kwargs["expected_contract"]) if contracts is not None else None
+        ),
+    )
+
+
+def _trust_signed_historical(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_historical_gateway_runtime_resources",
+        lambda _workspace, *, environment: json.loads(
+            environment["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"]
         ),
     )
 
@@ -447,16 +475,7 @@ def test_inventory_emits_every_attested_historical_gateway_and_supervisor(
         },
         [supervisor],
     )
-    monkeypatch.setattr(
-        inventory,
-        "gateway_endpoint_configuration_matches",
-        lambda _details, _deployment: True,
-    )
-    monkeypatch.setattr(
-        inventory,
-        "verify_gateway_responses_agent",
-        lambda *_args, **_kwargs: None,
-    )
+    _trust_signed_historical(monkeypatch)
     gateway_pin = inventory.GatewayPin(blue_name, "gateway-blue-id", _RUNTIME)
     supervisor_pin = inventory.SupervisorPin(
         supervisor_id=supervisor["supervisor_agent_id"],
@@ -546,7 +565,7 @@ def test_partial_modern_resource_envelope_never_falls_back_to_legacy(
     )
     legacy_calls: list[str] = []
     monkeypatch.setattr(
-        inventory,
+        gateway_attestation,
         "attest_legacy_gateway",
         lambda *_args, **_kwargs: legacy_calls.append("legacy"),
     )
@@ -565,6 +584,268 @@ def test_partial_modern_resource_envelope_never_falls_back_to_legacy(
         )
 
     assert legacy_calls == []
+
+
+def test_exact_signed_v2_resource_envelope_uses_narrow_legacy_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = DEFAULT_GATEWAY_ENDPOINT
+    supervisor = _supervisor()
+    current = _contract(
+        gateway=candidate,
+        gateway_id="runtime-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    legacy = {key: value for key, value in current.items() if key in LEGACY_GATEWAY_RESOURCE_FIELDS}
+    legacy["proof_version"] = GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    contract_json = json.dumps(legacy, sort_keys=True, separators=(",", ":"))
+    binding = {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": contract_json,
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": legacy_gateway_resource_digest(legacy),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": "signed-v2",
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": TEST_GATEWAY_VERIFY_KEY,
+    }
+    details = SimpleNamespace(
+        id=legacy["gateway_endpoint_id"],
+        creator=_RUNTIME,
+        pending_config=None,
+        config=SimpleNamespace(served_entities=[SimpleNamespace(environment_vars=binding)]),
+    )
+    verified: list[dict[str, str]] = []
+
+    def _verify_legacy(
+        _workspace: object,
+        *,
+        expected: dict[str, str],
+    ) -> dict[str, str]:
+        verified.append(expected)
+        return expected
+
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_legacy_gateway_resources",
+        _verify_legacy,
+    )
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_historical_gateway_runtime_resources",
+        lambda *_args, **_kwargs: pytest.fail(
+            "proxyless v2 must use the exact legacy live verifier"
+        ),
+    )
+
+    result = inventory._live_gateway_contract(
+        _Client({candidate: details}, [supervisor]),
+        details,
+        name=candidate,
+        gateway_prefixes=(DEFAULT_GATEWAY_ENDPOINT,),
+        runtime_application_id=_RUNTIME,
+        supervisor_name=_SUPERVISOR_NAME,
+        catalog=_CATALOG,
+        genie_space_id=_GENIE,
+        assert_single_writer=lambda: None,
+    )
+
+    assert result == legacy
+    assert verified == [
+        {
+            **legacy,
+            "resource_digest": legacy_gateway_resource_digest(legacy),
+        }
+    ]
+
+
+def test_proxy_aware_v2_resource_envelope_uses_historical_current_schema_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = f"{DEFAULT_GATEWAY_ENDPOINT}-aa68b2596e3c"
+    supervisor = _supervisor()
+    contract = _contract(
+        gateway=candidate,
+        gateway_id="runtime-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    details = _gateway_details(contract)
+    verified: list[dict[str, str]] = []
+
+    def _verify_current(
+        _workspace: object,
+        *,
+        environment: dict[str, str],
+    ) -> dict[str, str]:
+        decoded = json.loads(environment["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON"])
+        verified.append(decoded)
+        return decoded
+
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_historical_gateway_runtime_resources",
+        _verify_current,
+    )
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_legacy_gateway_resources",
+        lambda *_args, **_kwargs: pytest.fail(
+            "proxy-aware v2 must not enter the proxyless verifier"
+        ),
+    )
+
+    result = inventory._live_gateway_contract(
+        _Client({candidate: details}, [supervisor]),
+        details,
+        name=candidate,
+        gateway_prefixes=(DEFAULT_GATEWAY_ENDPOINT,),
+        runtime_application_id=_RUNTIME,
+        supervisor_name=_SUPERVISOR_NAME,
+        catalog=_CATALOG,
+        genie_space_id=_GENIE,
+        assert_single_writer=lambda: None,
+    )
+
+    assert result == contract
+    assert verified == [contract]
+
+
+def test_incomplete_v2_resource_envelope_never_uses_legacy_verifier(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    candidate = DEFAULT_GATEWAY_ENDPOINT
+    supervisor = _supervisor()
+    current = _contract(
+        gateway=candidate,
+        gateway_id="runtime-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    legacy = {key: value for key, value in current.items() if key in LEGACY_GATEWAY_RESOURCE_FIELDS}
+    legacy["proof_version"] = GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    legacy.pop("gateway_experiment_owner")
+    binding = {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": json.dumps(
+            legacy,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": "digest",
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": "signed-v2",
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": TEST_GATEWAY_VERIFY_KEY,
+    }
+    details = SimpleNamespace(
+        id="runtime-gateway-id",
+        creator=_RUNTIME,
+        pending_config=None,
+        config=SimpleNamespace(served_entities=[SimpleNamespace(environment_vars=binding)]),
+    )
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_legacy_gateway_resources",
+        lambda *_args, **_kwargs: pytest.fail("partial v2 must remain fail-closed"),
+    )
+
+    with pytest.raises(RuntimeError, match="invalid runtime-resource proof"):
+        inventory._live_gateway_contract(
+            _Client({candidate: details}, [supervisor]),
+            details,
+            name=candidate,
+            gateway_prefixes=(DEFAULT_GATEWAY_ENDPOINT,),
+            runtime_application_id=_RUNTIME,
+            supervisor_name=_SUPERVISOR_NAME,
+            catalog=_CATALOG,
+            genie_space_id=_GENIE,
+            assert_single_writer=lambda: None,
+        )
+
+
+def _mixed_gateway_inventory_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[_Client, dict[str, str], tuple[str, ...]]:
+    supervisor = _supervisor()
+    supervisor_endpoint_id = "supervisor-endpoint-id"
+    proxyless_name = DEFAULT_GATEWAY_ENDPOINT
+    proxy_aware_names = (
+        f"{DEFAULT_GATEWAY_ENDPOINT}-aa68b2596e3c",
+        f"{DEFAULT_GATEWAY_ENDPOINT}-f5bb6383fe3d",
+    )
+    unsigned_name = f"{DEFAULT_GATEWAY_ENDPOINT}-14609944fa02"
+    names = (proxyless_name, unsigned_name, *proxy_aware_names)
+    contracts = {
+        name: _contract(
+            gateway=name,
+            gateway_id=f"{name}-id",
+            supervisor=supervisor,
+            supervisor_endpoint_id=supervisor_endpoint_id,
+        )
+        for name in names
+    }
+    proxyless = {
+        key: value
+        for key, value in contracts[proxyless_name].items()
+        if key in LEGACY_GATEWAY_RESOURCE_FIELDS
+    }
+    proxyless["proof_version"] = GATEWAY_RUNTIME_RESOURCE_PROOF_VERSION
+    proxyless_binding = {
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_CONTRACT_JSON": json.dumps(
+            proxyless,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256": legacy_gateway_resource_digest(proxyless),
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE": "signed-v2",
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY": TEST_GATEWAY_VERIFY_KEY,
+    }
+    client = _Client(
+        {
+            proxyless_name: SimpleNamespace(
+                id=proxyless["gateway_endpoint_id"],
+                creator=_RUNTIME,
+                pending_config=None,
+                config=SimpleNamespace(
+                    served_entities=[SimpleNamespace(environment_vars=proxyless_binding)]
+                ),
+            ),
+            **{name: _gateway_details(contracts[name]) for name in proxy_aware_names},
+            unsigned_name: SimpleNamespace(
+                id=contracts[unsigned_name]["gateway_endpoint_id"],
+                creator=_RUNTIME,
+                pending_config=None,
+                config=SimpleNamespace(served_entities=[SimpleNamespace(environment_vars={})]),
+            ),
+            supervisor["endpoint_name"]: SimpleNamespace(
+                id=supervisor_endpoint_id,
+                creator=_RUNTIME,
+            ),
+        },
+        [supervisor],
+    )
+    monkeypatch.setattr(
+        gateway_attestation,
+        "assert_live_legacy_gateway_resources",
+        lambda _workspace, *, expected: expected,
+    )
+    _trust_signed_historical(monkeypatch)
+    monkeypatch.setattr(
+        gateway_attestation,
+        "attest_legacy_gateway",
+        lambda _workspace, _details, *, endpoint_name, **_kwargs: contracts[endpoint_name],
+    )
+    return client, supervisor, names
+
+
+def test_mixed_proxyless_proxy_aware_and_unsigned_inventory_is_complete(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, supervisor, names = _mixed_gateway_inventory_fixture(monkeypatch)
+
+    result = _inventory(client)
+
+    assert [(item.name, item.preserved) for item in result.gateways] == [
+        (name, False) for name in sorted(names)
+    ]
+    assert [item.supervisor_id for item in result.supervisors] == [
+        supervisor["supervisor_agent_id"]
+    ]
 
 
 def test_legacy_attestation_requires_hash_derived_name_and_signed_model_scope(
@@ -726,16 +1007,7 @@ def test_inventory_rejects_preserved_tuple_drift(
         },
         [supervisor],
     )
-    monkeypatch.setattr(
-        inventory,
-        "gateway_endpoint_configuration_matches",
-        lambda _details, _deployment: True,
-    )
-    monkeypatch.setattr(
-        inventory,
-        "verify_gateway_responses_agent",
-        lambda *_args, **_kwargs: None,
-    )
+    _trust_signed_historical(monkeypatch)
 
     with pytest.raises(RuntimeError, match="preserved Gateway tuple"):
         _inventory(
@@ -774,6 +1046,18 @@ def test_inventory_tolerates_absent_exact_pins_after_partial_retirement() -> Non
 
     assert result.gateways == ()
     assert result.supervisors == ()
+
+
+def test_live_gateway_pin_cannot_escape_attestation_outside_governed_family() -> None:
+    name = "renamed-runtime-gateway"
+    pin = inventory.GatewayPin(name, "renamed-gateway-id", _RUNTIME)
+    client = _Client(
+        {name: SimpleNamespace(id=pin.endpoint_id, creator=pin.creator)},
+        [],
+    )
+
+    with pytest.raises(RuntimeError, match="Gateway remains live but was not attested"):
+        _inventory(client, gateway_pins=(pin,))
 
 
 def test_inventory_preserves_live_supervisor_after_gateway_retirement() -> None:
@@ -969,16 +1253,7 @@ def test_inventory_rejects_preserved_gateway_without_signed_upstream_supervisor(
         },
         [supervisor],
     )
-    monkeypatch.setattr(
-        inventory,
-        "gateway_endpoint_configuration_matches",
-        lambda _details, _deployment: True,
-    )
-    monkeypatch.setattr(
-        inventory,
-        "verify_gateway_responses_agent",
-        lambda *_args, **_kwargs: None,
-    )
+    _trust_signed_historical(monkeypatch)
 
     with pytest.raises(RuntimeError, match="signed upstream Supervisor"):
         _inventory(
@@ -990,6 +1265,476 @@ def test_inventory_rejects_preserved_gateway_without_signed_upstream_supervisor(
                     _RUNTIME,
                 ),
             ),
+        )
+
+
+def _trust_retirement_journal(
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    supervisor_pin: inventory.SupervisorPin,
+    supervisor_create_time: str,
+    gateway_pin: inventory.GatewayPin | None = None,
+) -> None:
+    journal = {
+        "canonical_name": _SUPERVISOR_NAME,
+        "old_id": supervisor_pin.supervisor_id,
+        "old_endpoint": supervisor_pin.endpoint,
+        "old_endpoint_id": supervisor_pin.endpoint_id,
+        "old_creator": supervisor_pin.creator,
+        "old_create_time": supervisor_create_time,
+    }
+    if gateway_pin is not None:
+        journal.update(
+            old_gateway_endpoint=gateway_pin.name,
+            old_gateway_endpoint_id=gateway_pin.endpoint_id,
+            old_gateway_creator=gateway_pin.creator,
+            old_gateway_delete_allowed="1",
+        )
+
+    def read(_workspace: object, *, runtime_application_id: str) -> dict[str, str] | None:
+        return journal if runtime_application_id == _RUNTIME else None
+
+    monkeypatch.setattr(
+        supervisor_retirement_attestation,
+        "read_cutover_journal",
+        read,
+    )
+    monkeypatch.setattr(
+        gateway_attestation,
+        "read_cutover_journal",
+        read,
+    )
+
+
+def _retirement_supervisor_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+) -> tuple[
+    _Client,
+    inventory.SupervisorPin,
+    dict[str, str],
+]:
+    contract = json.loads(
+        canonical_supervisor_contract_json(
+            genie_space_id=_GENIE,
+            catalog=_CATALOG,
+        )
+    )
+    supervisor = {
+        **_supervisor(
+            supervisor_id="retirement-supervisor",
+            endpoint="retirement-supervisor-endpoint",
+        ),
+        "description": contract["description"],
+        "instructions": contract["instructions"],
+    }
+    endpoint_id = "retirement-supervisor-endpoint-id"
+    client = _Client(
+        {
+            supervisor["endpoint_name"]: SimpleNamespace(
+                id=endpoint_id,
+                creator=_RUNTIME,
+                pending_config=None,
+                task="agent/v1/responses",
+                state=SimpleNamespace(
+                    ready="READY",
+                    config_update="NOT_UPDATING",
+                ),
+            )
+        },
+        [supervisor],
+    )
+    reviewed_tool = contract["tools"][0]
+    client.api_client.tools[supervisor["supervisor_agent_id"]] = [
+        {
+            **reviewed_tool,
+            "name": (
+                f"supervisor-agents/{supervisor['supervisor_agent_id']}/tools/"
+                f"{reviewed_tool['tool_id']}"
+            ),
+            "genie_space": {
+                **reviewed_tool["genie_space"],
+                "space_id": reviewed_tool["genie_space"]["id"],
+            },
+        }
+    ]
+    client.api_client.omit_empty_examples = True
+    pin = inventory.SupervisorPin(
+        supervisor_id=supervisor["supervisor_agent_id"],
+        endpoint=supervisor["endpoint_name"],
+        endpoint_id=endpoint_id,
+        creator=_RUNTIME,
+    )
+    _trust_retirement_journal(
+        monkeypatch,
+        supervisor_pin=pin,
+        supervisor_create_time=supervisor["create_time"],
+    )
+    return client, pin, supervisor
+
+
+def test_retirement_only_supervisor_pin_accepts_exact_reviewed_historical_subset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+
+    result = _inventory(
+        client,
+        retirement_supervisor_pins=(pin,),
+    )
+
+    assert len(result.supervisors) == 1
+    reviewed = result.supervisors[0]
+    assert reviewed.preserved is True
+    assert reviewed.supervisor_id == pin.supervisor_id
+    evidence = json.loads(reviewed.contract_json)
+    assert evidence["kind"] == "signed-cutover-retirement-predecessor"
+    assert [tool["tool_id"] for tool in evidence["tools"]] == ["mortgage_data_analyst"]
+    assert (
+        reviewed.contract_sha256
+        == __import__("hashlib").sha256(reviewed.contract_json.encode()).hexdigest()
+    )
+
+
+def test_retirement_supervisor_name_drift_cannot_escape_attestation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    client.api_client.supervisors[pin.supervisor_id]["display_name"] = "Renamed Agent"
+
+    with pytest.raises(RuntimeError, match="Supervisor remains live but was not attested"):
+        _inventory(client, retirement_supervisor_pins=(pin,))
+
+
+def test_retirement_only_supervisor_pin_requires_signed_cutover_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    monkeypatch.setattr(
+        supervisor_retirement_attestation,
+        "read_cutover_journal",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError, match="not bound to the signed cutover journal"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_retirement_only_supervisor_pin_rejects_signed_create_time_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    monkeypatch.setattr(
+        supervisor_retirement_attestation,
+        "read_cutover_journal",
+        lambda *_args, **_kwargs: {
+            "canonical_name": _SUPERVISOR_NAME,
+            "old_id": pin.supervisor_id,
+            "old_endpoint": pin.endpoint,
+            "old_endpoint_id": pin.endpoint_id,
+            "old_creator": pin.creator,
+            "old_create_time": "2026-07-23T00:00:00Z",
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="not bound to the signed cutover journal"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_retirement_only_supervisor_pin_rejects_unreviewed_tool(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    client.api_client.tools[pin.supervisor_id].append(
+        {
+            "tool_id": "unreviewed",
+            "tool_type": "uc_function",
+            "description": "outside policy",
+            "uc_function": {"name": "other.schema.function"},
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="outside the reviewed contract"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    (
+        ("name", "supervisor-agents/other/tools/mortgage_data_analyst", "provider identity"),
+        ("unexpected", "value", "unexpected fields"),
+    ),
+)
+def test_retirement_only_supervisor_pin_rejects_provider_tool_metadata_drift(
+    field: str,
+    value: str,
+    message: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    client.api_client.tools[pin.supervisor_id][0][field] = value
+
+    with pytest.raises(RuntimeError, match=message):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_retirement_only_supervisor_pin_rejects_provider_space_id_drift(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    client.api_client.tools[pin.supervisor_id][0]["genie_space"]["space_id"] = "other-space"
+
+    with pytest.raises(RuntimeError, match="reviewed body drifted"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_retirement_only_supervisor_pin_requires_reviewed_tool_evidence(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    client.api_client.tools[pin.supervisor_id] = []
+
+    with pytest.raises(RuntimeError, match="no reviewed tool evidence"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_retirement_only_supervisor_pin_rejects_examples_and_unstable_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+    client.api_client.examples[pin.supervisor_id] = [{"example_id": "unreviewed"}]
+
+    with pytest.raises(RuntimeError, match="unreviewed examples"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+    client.api_client.examples[pin.supervisor_id] = []
+    client.serving_endpoints.details[pin.endpoint].state.config_update = "UPDATING"
+    with pytest.raises(RuntimeError, match="endpoint is not stable"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_retirement_only_supervisor_pin_cannot_cover_active_gateway_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, supervisor = _retirement_supervisor_fixture(monkeypatch)
+    gateway = _contract(
+        gateway=DEFAULT_GATEWAY_ENDPOINT,
+        gateway_id="gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id=pin.endpoint_id,
+    )
+    client.serving_endpoints.details[DEFAULT_GATEWAY_ENDPOINT] = _gateway_details(gateway)
+    _trust_signed_historical(monkeypatch)
+    gateway_pin = inventory.GatewayPin(
+        DEFAULT_GATEWAY_ENDPOINT,
+        "gateway-id",
+        _RUNTIME,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="still referenced by an active preserved Gateway",
+    ):
+        _inventory(
+            client,
+            gateway_pins=(gateway_pin,),
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_signed_journal_gateway_and_supervisor_pair_are_preserved_for_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, supervisor_pin, supervisor = _retirement_supervisor_fixture(monkeypatch)
+    gateway_name = f"{DEFAULT_GATEWAY_ENDPOINT}-deadbeef0000"
+    gateway_id = "retirement-gateway-id"
+    gateway = _contract(
+        gateway=gateway_name,
+        gateway_id=gateway_id,
+        supervisor=supervisor,
+        supervisor_endpoint_id=supervisor_pin.endpoint_id,
+    )
+    client.serving_endpoints.details[gateway_name] = _gateway_details(gateway)
+    gateway_pin = inventory.GatewayPin(gateway_name, gateway_id, _RUNTIME)
+    _trust_signed_historical(monkeypatch)
+    _trust_retirement_journal(
+        monkeypatch,
+        supervisor_pin=supervisor_pin,
+        supervisor_create_time=supervisor["create_time"],
+        gateway_pin=gateway_pin,
+    )
+
+    result = _inventory(
+        client,
+        retirement_gateway_pins=(gateway_pin,),
+        retirement_supervisor_pins=(supervisor_pin,),
+    )
+
+    assert [(item.name, item.preserved) for item in result.gateways] == [(gateway_name, True)]
+    assert [(item.supervisor_id, item.preserved) for item in result.supervisors] == [
+        (supervisor_pin.supervisor_id, True)
+    ]
+
+
+def test_signed_journal_gateway_preserves_its_strict_current_supervisor_dependency(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = _supervisor()
+    gateway_name = f"{DEFAULT_GATEWAY_ENDPOINT}-deadbeef0000"
+    gateway_id = "retirement-gateway-id"
+    gateway = _contract(
+        gateway=gateway_name,
+        gateway_id=gateway_id,
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    client = _Client(
+        {
+            gateway_name: _gateway_details(gateway),
+            supervisor["endpoint_name"]: SimpleNamespace(
+                id="supervisor-endpoint-id",
+                creator=_RUNTIME,
+            ),
+        },
+        [supervisor],
+    )
+    gateway_pin = inventory.GatewayPin(gateway_name, gateway_id, _RUNTIME)
+    _trust_signed_historical(monkeypatch)
+    monkeypatch.setattr(
+        gateway_attestation,
+        "read_cutover_journal",
+        lambda _workspace, *, runtime_application_id: {
+            "canonical_name": _SUPERVISOR_NAME,
+            "old_gateway_endpoint": gateway_pin.name,
+            "old_gateway_endpoint_id": gateway_pin.endpoint_id,
+            "old_gateway_creator": gateway_pin.creator,
+            "old_gateway_delete_allowed": "1",
+        }
+        if runtime_application_id == _RUNTIME
+        else None,
+    )
+
+    result = _inventory(
+        client,
+        retirement_gateway_pins=(gateway_pin,),
+    )
+
+    assert result.gateways[0].preserved is True
+    assert result.supervisors[0].preserved is True
+    assert json.loads(result.supervisors[0].contract_json)["tools"][0]["tool_id"] == (
+        "mortgage_data_analyst"
+    )
+
+
+def test_retirement_only_gateway_requires_signed_cutover_journal(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = _supervisor()
+    gateway_name = f"{DEFAULT_GATEWAY_ENDPOINT}-deadbeef0000"
+    gateway = _contract(
+        gateway=gateway_name,
+        gateway_id="retirement-gateway-id",
+        supervisor=supervisor,
+        supervisor_endpoint_id="supervisor-endpoint-id",
+    )
+    client = _Client(
+        {
+            gateway_name: _gateway_details(gateway),
+            supervisor["endpoint_name"]: SimpleNamespace(
+                id="supervisor-endpoint-id",
+                creator=_RUNTIME,
+            ),
+        },
+        [supervisor],
+    )
+    _trust_signed_historical(monkeypatch)
+    monkeypatch.setattr(
+        gateway_attestation,
+        "read_cutover_journal",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(RuntimeError, match="not bound to the signed cutover journal"):
+        _inventory(
+            client,
+            retirement_gateway_pins=(
+                inventory.GatewayPin(
+                    gateway_name,
+                    "retirement-gateway-id",
+                    _RUNTIME,
+                ),
+            ),
+        )
+
+
+def test_active_and_retirement_only_supervisor_pins_must_be_disjoint(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+
+    with pytest.raises(ValueError, match="must be disjoint"):
+        _inventory(
+            client,
+            supervisor_pins=(pin,),
+            retirement_supervisor_pins=(pin,),
+        )
+
+
+def test_active_and_retirement_only_gateway_pins_must_be_disjoint() -> None:
+    client = _Client({}, [])
+    pin = inventory.GatewayPin(DEFAULT_GATEWAY_ENDPOINT, "gateway-id", _RUNTIME)
+
+    with pytest.raises(ValueError, match="Gateway preservation pins must be disjoint"):
+        _inventory(
+            client,
+            gateway_pins=(pin,),
+            retirement_gateway_pins=(pin,),
+        )
+
+
+def test_retirement_only_supervisor_preservation_rejects_more_than_one_tuple(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, pin, _supervisor_row = _retirement_supervisor_fixture(monkeypatch)
+
+    with pytest.raises(ValueError, match="one signed journal tuple"):
+        _inventory(
+            client,
+            retirement_supervisor_pins=(pin, pin),
+        )
+
+
+def test_retirement_only_gateway_preservation_rejects_more_than_one_tuple() -> None:
+    client = _Client({}, [])
+    pin = inventory.GatewayPin(DEFAULT_GATEWAY_ENDPOINT, "gateway-id", _RUNTIME)
+
+    with pytest.raises(ValueError, match="one signed journal tuple"):
+        _inventory(
+            client,
+            retirement_gateway_pins=(pin, pin),
         )
 
 
@@ -1042,16 +1787,7 @@ def test_inventory_allows_signed_replacement_to_be_renamed_canonical(
         },
         [current],
     )
-    monkeypatch.setattr(
-        inventory,
-        "gateway_endpoint_configuration_matches",
-        lambda _details, _deployment: True,
-    )
-    monkeypatch.setattr(
-        inventory,
-        "verify_gateway_responses_agent",
-        lambda *_args, **_kwargs: None,
-    )
+    _trust_signed_historical(monkeypatch)
 
     result = _inventory(client)
 
@@ -1083,16 +1819,7 @@ def test_cleanup_deletes_only_unpreserved_exact_resources_and_rechecks_lease(
         },
         [supervisor],
     )
-    monkeypatch.setattr(
-        inventory,
-        "gateway_endpoint_configuration_matches",
-        lambda _details, _deployment: True,
-    )
-    monkeypatch.setattr(
-        inventory,
-        "verify_gateway_responses_agent",
-        lambda *_args, **_kwargs: None,
-    )
+    _trust_signed_historical(monkeypatch)
     initial = _inventory(client)
     empty = inventory.RuntimeEndpointInventory(1, _RUNTIME, (), ())
     after_gateway = inventory.RuntimeEndpointInventory(
@@ -1126,6 +1853,77 @@ def test_cleanup_deletes_only_unpreserved_exact_resources_and_rechecks_lease(
     assert client.serving_endpoints.deleted == [gateway_name]
     assert client.api_client.deleted == ["old-supervisor"]
     assert lease_checks == ["lease", "lease"]
+
+
+def test_mixed_inventory_cleanup_recovers_interruption_and_preserves_signed_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client, active_supervisor, gateway_names = _mixed_gateway_inventory_fixture(monkeypatch)
+    retirement_client, retirement_pin, retirement_supervisor = _retirement_supervisor_fixture(
+        monkeypatch
+    )
+    client.serving_endpoints.details[retirement_pin.endpoint] = (
+        retirement_client.serving_endpoints.details[retirement_pin.endpoint]
+    )
+    client.api_client.supervisors[retirement_pin.supervisor_id] = dict(retirement_supervisor)
+    client.api_client.tools[retirement_pin.supervisor_id] = list(
+        retirement_client.api_client.tools[retirement_pin.supervisor_id]
+    )
+    client.api_client.examples[retirement_pin.supervisor_id] = []
+    client.api_client.omit_empty_examples = True
+
+    def read_inventory() -> inventory.RuntimeEndpointInventory:
+        return _inventory(
+            client,
+            retirement_supervisor_pins=(retirement_pin,),
+        )
+
+    initial = read_inventory()
+    assert len(initial.gateways) == 4
+    assert len(initial.supervisors) == 2
+
+    # A previous process committed one exact Gateway deletion and died before
+    # recording completion. The retry starts from a freshly attested inventory.
+    interrupted_gateway = sorted(gateway_names)[0]
+    client.serving_endpoints.delete(interrupted_gateway)
+    retry_inventory = read_inventory()
+    assert len(retry_inventory.gateways) == 3
+
+    original_delete = client.serving_endpoints.delete
+    timeout_injected = False
+
+    def timeout_once_after_commit(name: str) -> None:
+        nonlocal timeout_injected
+        original_delete(name)
+        if not timeout_injected:
+            timeout_injected = True
+            raise TimeoutError("response lost after committed Gateway delete")
+
+    client.serving_endpoints.delete = timeout_once_after_commit  # type: ignore[method-assign]
+    final = inventory.cleanup_runtime_endpoints(
+        client,
+        retry_inventory,
+        assert_single_writer=lambda: None,
+        query_principals=inventory.QueryGroupPrincipals(
+            "app-client",
+            "app-scim",
+            "verifier-client",
+            "verifier-scim",
+            "proxy-client",
+            "proxy-scim",
+        ),
+        timeout_s=1,
+        sleep=lambda _seconds: None,
+        inventory_again=read_inventory,
+        cleanup_journal=_MemoryCleanupJournal(),
+    )
+
+    assert timeout_injected is True
+    assert sorted(client.serving_endpoints.deleted) == sorted(gateway_names)
+    assert client.api_client.deleted == [active_supervisor["supervisor_agent_id"]]
+    assert [item.supervisor_id for item in final.supervisors] == [retirement_pin.supervisor_id]
+    assert final.supervisors[0].preserved is True
+    assert creation_retirement.cleanup_postflight_is_complete(final) is True
 
 
 def test_cleanup_aborts_when_inventory_changes_before_first_mutation() -> None:
@@ -1466,6 +2264,26 @@ def test_cli_pin_parsers_require_complete_exact_json() -> None:
     parsed = parser.parse_args(
         [
             *common,
+            "--preserve-retirement-gateway-json",
+            json.dumps(
+                {
+                    "name": f"{DEFAULT_GATEWAY_ENDPOINT}-deadbeef0000",
+                    "endpoint_id": "retirement-endpoint-id",
+                    "creator": _RUNTIME,
+                }
+            ),
+        ]
+    )
+    assert parsed.preserve_retirement_gateway_json == [
+        inventory.GatewayPin(
+            f"{DEFAULT_GATEWAY_ENDPOINT}-deadbeef0000",
+            "retirement-endpoint-id",
+            _RUNTIME,
+        )
+    ]
+    parsed = parser.parse_args(
+        [
+            *common,
             "--preserve-supervisor-json",
             json.dumps(
                 {
@@ -1482,6 +2300,28 @@ def test_cli_pin_parsers_require_complete_exact_json() -> None:
             "supervisor-id",
             "supervisor-endpoint",
             "supervisor-endpoint-id",
+            _RUNTIME,
+        )
+    ]
+    parsed = parser.parse_args(
+        [
+            *common,
+            "--preserve-retirement-supervisor-json",
+            json.dumps(
+                {
+                    "supervisor_id": "retirement-supervisor-id",
+                    "endpoint": "retirement-supervisor-endpoint",
+                    "endpoint_id": "retirement-supervisor-endpoint-id",
+                    "creator": _RUNTIME,
+                }
+            ),
+        ]
+    )
+    assert parsed.preserve_retirement_supervisor_json == [
+        inventory.SupervisorPin(
+            "retirement-supervisor-id",
+            "retirement-supervisor-endpoint",
+            "retirement-supervisor-endpoint-id",
             _RUNTIME,
         )
     ]

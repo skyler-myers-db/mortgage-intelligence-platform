@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+from collections.abc import Callable
 from types import SimpleNamespace
 
 import pytest
@@ -42,9 +43,7 @@ def _entity(
         )
     )
     signature = private.sign(
-        GATEWAY_RUNTIME_RESOURCE_ATTESTATION_ALG.encode()
-        + b"\0"
-        + contract_json.encode()
+        GATEWAY_RUNTIME_RESOURCE_ATTESTATION_ALG.encode() + b"\0" + contract_json.encode()
     )
     return SimpleNamespace(
         environment_vars={
@@ -71,10 +70,9 @@ def test_legacy_served_resource_binding_requires_its_original_signature(
 
     environment = _verified_resource_environment(entity, contract=contract)
 
-    assert (
-        environment["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"]
-        == legacy_gateway_resource_digest(contract)
-    )
+    assert environment[
+        "MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"
+    ] == legacy_gateway_resource_digest(contract)
 
 
 def test_legacy_served_resource_binding_rejects_tampering(
@@ -87,9 +85,62 @@ def test_legacy_served_resource_binding_rejects_tampering(
         "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
         entity.environment_vars["MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY"],
     )
-    entity.environment_vars["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE"] = _encode(
-        b"x" * 64
-    )
+    entity.environment_vars["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SIGNATURE"] = _encode(b"x" * 64)
 
     with pytest.raises(RuntimeError, match="signature is invalid"):
         _verified_resource_environment(entity, contract=contract)
+
+
+def test_legacy_served_resource_binding_rejects_untrusted_signer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.from_private_bytes(b"l" * 32)
+    contract = _contract()
+    entity = _entity(contract=contract, private=private)
+    other = Ed25519PrivateKey.from_private_bytes(b"o" * 32)
+    monkeypatch.setenv(
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
+        _encode(
+            other.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+        ),
+    )
+
+    with pytest.raises(RuntimeError, match="signer is not trusted"):
+        _verified_resource_environment(entity, contract=contract)
+
+
+def test_legacy_served_resource_binding_rejects_digest_tampering(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private = Ed25519PrivateKey.from_private_bytes(b"l" * 32)
+    contract = _contract()
+    entity = _entity(contract=contract, private=private)
+    monkeypatch.setenv(
+        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
+        entity.environment_vars["MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY"],
+    )
+    entity.environment_vars["MIP_EXPECTED_AGENT_GATEWAY_RESOURCE_SHA256"] = "a" * 64
+
+    with pytest.raises(RuntimeError, match="resource binding drifted"):
+        _verified_resource_environment(entity, contract=contract)
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    (
+        lambda contract: contract.pop("gateway_experiment_owner"),
+        lambda contract: contract.update(extra_field="unexpected"),
+        lambda contract: contract.update(proof_version="gateway-runtime-resource-proof-v1"),
+    ),
+)
+def test_legacy_resource_digest_rejects_non_exact_schema(
+    mutate: Callable[[dict[str, str]], object],
+) -> None:
+    contract = _contract()
+    mutate(contract)
+
+    with pytest.raises(ValueError, match="legacy Gateway resource contract"):
+        legacy_gateway_resource_digest(contract)

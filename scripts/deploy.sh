@@ -3943,12 +3943,14 @@ if [[ -s "$HISTORICAL_CUTOVER_JOURNAL_ENV" ]]; then
   else
     if [[ -n "${MIP_REPLACED_AGENT_GATEWAY_PIN_JSON:-}" ]]; then
       HISTORICAL_ENDPOINT_PRESERVE_ARGS+=(
-        --preserve-gateway-json "$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"
+        --preserve-retirement-gateway-json \
+        "$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"
       )
     fi
     if [[ -n "${MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON:-}" ]]; then
       HISTORICAL_ENDPOINT_PRESERVE_ARGS+=(
-        --preserve-supervisor-json "$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"
+        --preserve-retirement-supervisor-json \
+        "$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"
       )
     fi
   fi

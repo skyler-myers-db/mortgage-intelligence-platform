@@ -6556,10 +6556,10 @@ def test_historical_runtime_cleanup_precedes_green_provisioning_and_preserves_si
     assert "STALE_CUTOVER_JOURNAL_PENDING=1" in _shell_function(
         "merge_historical_cutover_journal_preservation"
     )
-    assert '--preserve-gateway-json "$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"' in (historical_journal)
-    assert '--preserve-supervisor-json "$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"' in (
-        historical_journal
-    )
+    assert "--preserve-retirement-gateway-json" in historical_journal
+    assert '"$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"' in historical_journal
+    assert "--preserve-retirement-supervisor-json" in historical_journal
+    assert '"$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"' in historical_journal
     assert "--preserve-gateway-name" not in cleanup_block
     assert "--preserve-supervisor-id" not in cleanup_block
     stale_clear = script.index(
@@ -6665,8 +6665,40 @@ printf '%s\\n' "${{HISTORICAL_ENDPOINT_PRESERVE_ARGS[@]}}"
         gateway_json,
         "--preserve-supervisor-json",
         supervisor_json,
-        "--preserve-supervisor-json",
+        "--preserve-retirement-supervisor-json",
         historical_supervisor_json,
+    ]
+
+    historical_gateway = {
+        "name": "historical-gateway",
+        "endpoint_id": "historical-gateway-id",
+        "creator": "runtime-client",
+    }
+    historical_gateway_json = json.dumps(historical_gateway)
+    gateway_harness = tmp_path / "gateway-current-cutover-journal.sh"
+    gateway_harness.write_text(
+        harness.read_text(encoding="utf-8").replace(
+            shlex.quote(json.dumps(current_gateway)),
+            shlex.quote(historical_gateway_json),
+        ),
+        encoding="utf-8",
+    )
+    gateway_only = subprocess.run(
+        ["bash", str(gateway_harness)],
+        cwd=REPO,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert gateway_only.returncode == 0, gateway_only.stderr
+    assert gateway_only.stdout.splitlines() == [
+        "--preserve-gateway-json",
+        gateway_json,
+        "--preserve-supervisor-json",
+        supervisor_json,
+        "--preserve-retirement-gateway-json",
+        historical_gateway_json,
     ]
 
     colliding_gateway = {**current_gateway, "endpoint_id": "reused-name-new-id"}

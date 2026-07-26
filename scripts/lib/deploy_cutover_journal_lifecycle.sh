@@ -66,12 +66,14 @@ merge_historical_cutover_journal_preservation() {
     current)
       if [[ "$preserve_gateway" == "1" ]]; then
         HISTORICAL_ENDPOINT_PRESERVE_ARGS+=(
-          --preserve-gateway-json "$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"
+          --preserve-retirement-gateway-json \
+          "$MIP_REPLACED_AGENT_GATEWAY_PIN_JSON"
         )
       fi
       if [[ "$preserve_supervisor" == "1" ]]; then
         HISTORICAL_ENDPOINT_PRESERVE_ARGS+=(
-          --preserve-supervisor-json "$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"
+          --preserve-retirement-supervisor-json \
+          "$MIP_REPLACED_AGENT_SUPERVISOR_PIN_JSON"
         )
       fi
       ;;

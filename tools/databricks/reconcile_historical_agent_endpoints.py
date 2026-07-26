@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import re
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -21,11 +20,8 @@ if str(REPO) not in sys.path:
 
 from backend.agents.gateway_contract import (  # noqa: E402
     DEFAULT_GATEWAY_ENDPOINT,
-    GATEWAY_ENDPOINT_DESCRIPTION,
-    GATEWAY_RUNTIME_RESOURCE_ENV,
     LEGACY_GATEWAY_ENDPOINT,
     gateway_exact_resource_digest,
-    verified_gateway_runtime_resource_environment,
 )
 from backend.agents.supervisor_contract import (  # noqa: E402
     RUNTIME_REPLACEMENT_PREFIX,
@@ -37,10 +33,6 @@ from databricks.sdk.errors import NotFound, ResourceDoesNotExist  # noqa: E402
 from tools.databricks import app_deployment_lease  # noqa: E402
 from tools.databricks import historical_supervisor_creation_admission as creation  # noqa: E402
 from tools.databricks.agent_runtime_access import assert_runtime_creator  # noqa: E402
-from tools.databricks.gateway_resource_identity import GatewayAgentDeployment  # noqa: E402
-from tools.databricks.gateway_runtime_resource_binding import (  # noqa: E402
-    gateway_runtime_resource_binding_environment,
-)
 from tools.databricks.historical_agent_endpoint_cleanup import (  # noqa: E402
     cleanup_runtime_endpoints,
 )
@@ -53,8 +45,14 @@ from tools.databricks.historical_agent_endpoint_types import (  # noqa: E402
     SupervisorCleanupProof,
     SupervisorPin,
 )
-from tools.databricks.historical_gateway_attestation import (  # noqa: E402
-    attest_legacy_gateway,
+from tools.databricks.historical_gateway_runtime_attestation import (  # noqa: E402
+    assert_retirement_gateway_pin_from_signed_journal,
+)
+from tools.databricks.historical_gateway_runtime_attestation import (  # noqa: E402
+    gateway_family as _gateway_family,
+)
+from tools.databricks.historical_gateway_runtime_attestation import (  # noqa: E402
+    live_gateway_contract as _live_gateway_contract,
 )
 from tools.databricks.historical_supervisor_cleanup_journal import (  # noqa: E402
     HistoricalSupervisorCleanupJournal,
@@ -65,15 +63,11 @@ from tools.databricks.historical_supervisor_creation_retirement import (  # noqa
     cleanup_postflight_is_complete,
     resolved_scim_id,
 )
-from tools.databricks.m2m_access_policy import (  # noqa: E402
-    is_reserved_gateway_endpoint,
+from tools.databricks.historical_supervisor_retirement_attestation import (  # noqa: E402
+    attest_historical_supervisor_retirement_predecessor,
 )
 from tools.databricks.provision_agentic_resources import (  # noqa: E402
     assert_exact_supervisor_contract,
-)
-from tools.databricks.provision_gateway_responses_agent import (  # noqa: E402
-    gateway_endpoint_configuration_matches,
-    verify_gateway_responses_agent,
 )
 from tools.databricks.serving_endpoint_acl import (  # noqa: E402
     is_platform_foundation_endpoint,
@@ -90,20 +84,6 @@ def _item_name(value: object) -> str:
     if isinstance(value, Mapping):
         return _text(value.get("name"))
     return _text(getattr(value, "name", None))
-
-
-def _gateway_family(name: str, prefix: str) -> bool:
-    if prefix == LEGACY_GATEWAY_ENDPOINT:
-        return name == prefix
-    if prefix == DEFAULT_GATEWAY_ENDPOINT:
-        return is_reserved_gateway_endpoint(name)
-    return (
-        re.fullmatch(
-            rf"{re.escape(prefix)}(?:-{_HASH}(?:-mq1)?)?",
-            name,
-        )
-        is not None
-    )
 
 
 def _supervisor_family(name: str, canonical_name: str) -> bool:
@@ -167,136 +147,6 @@ def _supervisor_by_id(client: Any, supervisor_id: str) -> dict[str, Any] | None:
     if not isinstance(payload, Mapping):
         raise RuntimeError("Supervisor metadata is malformed")
     return {str(key): value for key, value in payload.items()}
-
-
-def _gateway_deployment(contract: Mapping[str, str]) -> GatewayAgentDeployment:
-    try:
-        model_version = int(contract["gateway_model_version"])
-        _catalog, _schema, inference_prefix = contract["gateway_inference_table_family"].split(
-            ".", 2
-        )
-    except (KeyError, ValueError) as exc:
-        raise RuntimeError("signed Gateway resource contract is malformed") from exc
-    return GatewayAgentDeployment(
-        endpoint=contract["gateway_endpoint"],
-        supervisor_id=contract["supervisor_id"],
-        supervisor_endpoint_id=contract["supervisor_endpoint_id"],
-        upstream_endpoint=contract["supervisor_endpoint"],
-        runtime_application_id=contract["runtime_application_id"],
-        proxy_caller_application_id=contract["proxy_caller_application_id"],
-        proxy_caller_credential_id=contract["proxy_caller_credential_id"],
-        proxy_caller_secret_reference=contract["proxy_caller_secret_reference"],
-        model_name=contract["gateway_model_name"],
-        model_version=model_version,
-        model_source=contract["gateway_model_source"],
-        model_attestation_verify_key="",
-        model_family=contract["gateway_model_family"],
-        source_hash=contract["gateway_source_hash"],
-        resource_hash=contract["gateway_resource_hash"],
-        inference_table=contract["gateway_inference_table"],
-        inference_table_prefix=inference_prefix,
-        experiment_base=contract["gateway_experiment_base"],
-        experiment_name=contract["gateway_experiment_name"],
-        experiment_id=contract["gateway_experiment_id"],
-        catalog=contract["catalog"],
-        genie_space_id=contract["genie_space_id"],
-    )
-
-
-def _live_gateway_contract(
-    workspace: Any,
-    details: Any,
-    *,
-    name: str,
-    gateway_prefixes: Sequence[str],
-    runtime_application_id: str,
-    supervisor_name: str,
-    catalog: str,
-    genie_space_id: str,
-    assert_single_writer: Callable[[], None],
-) -> dict[str, str]:
-    if not any(_gateway_family(name, prefix) for prefix in gateway_prefixes):
-        raise RuntimeError("Gateway candidate is outside the governed name family")
-    endpoint_id = _text(getattr(details, "id", None))
-    creator = _text(getattr(details, "creator", None))
-    if not endpoint_id:
-        raise RuntimeError(f"Gateway endpoint {name!r} has no immutable ID")
-    assert_runtime_creator(
-        creator,
-        application_id=runtime_application_id,
-        resource=f"historical Gateway endpoint {name}",
-    )
-    if getattr(details, "pending_config", None) is not None:
-        raise RuntimeError(f"historical Gateway endpoint {name!r} has a pending update")
-    binding = gateway_runtime_resource_binding_environment(details)
-    proof_fields = GATEWAY_RUNTIME_RESOURCE_ENV - {
-        "MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY",
-        "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
-    }
-    if set(binding) & proof_fields:
-        trusted_resource_keys = {
-            os.environ.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "").strip(),
-            os.environ.get(
-                "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
-                "",
-            ).strip(),
-        } - {""}
-        embedded_resource_keys = {
-            binding.get("MIP_GATEWAY_MODEL_ATTESTATION_VERIFY_KEY", "").strip(),
-            binding.get(
-                "MIP_GATEWAY_MODEL_ATTESTATION_PREVIOUS_VERIFY_KEY",
-                "",
-            ).strip(),
-        } - {""}
-        if (
-            not trusted_resource_keys
-            or not embedded_resource_keys
-            or not embedded_resource_keys.issubset(trusted_resource_keys)
-        ):
-            raise RuntimeError(
-                f"Gateway endpoint {name!r} resource-proof trust epoch is not configured"
-            )
-        try:
-            contract = verified_gateway_runtime_resource_environment(binding)
-        except (RuntimeError, ValueError) as exc:
-            raise RuntimeError(
-                f"Gateway endpoint {name!r} has an invalid runtime-resource proof"
-            ) from exc
-    else:
-        return attest_legacy_gateway(
-            workspace,
-            details,
-            endpoint_name=name,
-            endpoint_prefixes=gateway_prefixes,
-            runtime_application_id=runtime_application_id,
-            supervisor_name=supervisor_name,
-            catalog=catalog,
-            genie_space_id=genie_space_id,
-            assert_single_writer=assert_single_writer,
-        )
-    exact_scope = {
-        "gateway_endpoint": name,
-        "gateway_endpoint_id": endpoint_id,
-        "gateway_endpoint_creator": creator,
-        "runtime_application_id": runtime_application_id,
-        "supervisor_canonical_name": supervisor_name,
-        "catalog": catalog,
-        "genie_space_id": genie_space_id,
-        "gateway_endpoint_description": GATEWAY_ENDPOINT_DESCRIPTION,
-    }
-    if any(contract.get(key) != expected for key, expected in exact_scope.items()):
-        raise RuntimeError(f"Gateway endpoint {name!r} signed identity or scope drifted")
-    if not gateway_endpoint_configuration_matches(
-        details,
-        _gateway_deployment(contract),
-    ):
-        raise RuntimeError(f"Gateway endpoint {name!r} live configuration drifted")
-    verify_gateway_responses_agent(
-        workspace,
-        _gateway_deployment(contract),
-        assert_single_writer=assert_single_writer,
-    )
-    return contract
 
 
 def _supervisor_pin(
@@ -379,8 +229,14 @@ def _validate_pin_sets(
         raise RuntimeError(
             "multiple Supervisor agents share an immutable agent or endpoint identity"
         )
-    if not actual_gateways.issubset(set(observed_gateways)) or not actual_supervisors.issubset(
-        set(observed_supervisors)
+    observed_gateway_set = set(observed_gateways)
+    observed_supervisor_set = set(observed_supervisors)
+    if (set(gateway_pins) & observed_gateway_set) - actual_gateways:
+        raise RuntimeError("preserved Gateway remains live but was not attested")
+    if (set(supervisor_pins) & observed_supervisor_set) - actual_supervisors:
+        raise RuntimeError("preserved Supervisor remains live but was not attested")
+    if not actual_gateways.issubset(observed_gateway_set) or not actual_supervisors.issubset(
+        observed_supervisor_set
     ):
         raise RuntimeError("reviewed runtime endpoint inventory is internally inconsistent")
 
@@ -416,7 +272,9 @@ def inventory_runtime_endpoints(
     catalog: str,
     genie_space_id: str,
     gateway_pins: Sequence[GatewayPin] = (),
+    retirement_gateway_pins: Sequence[GatewayPin] = (),
     supervisor_pins: Sequence[SupervisorPin] = (),
+    retirement_supervisor_pins: Sequence[SupervisorPin] = (),
     pending_supervisor_cleanup: SupervisorCleanupProof | None = None,
     pending_supervisor_creation: dict[str, Any] | None = None,
     assert_single_writer: Callable[[], None],
@@ -436,6 +294,19 @@ def inventory_runtime_endpoints(
     normalized_prefixes = tuple(prefix.strip() for prefix in gateway_prefixes if prefix.strip())
     if not normalized_prefixes or len(set(normalized_prefixes)) != len(normalized_prefixes):
         raise ValueError("historical endpoint inventory requires distinct Gateway prefixes")
+    if set(supervisor_pins) & set(retirement_supervisor_pins):
+        raise ValueError("active and retirement-only Supervisor preservation pins must be disjoint")
+    if set(gateway_pins) & set(retirement_gateway_pins):
+        raise ValueError("active and retirement-only Gateway preservation pins must be disjoint")
+    if len(retirement_gateway_pins) > 1:
+        raise ValueError("retirement-only Gateway preservation requires one signed journal tuple")
+    if len(retirement_supervisor_pins) > 1:
+        raise ValueError(
+            "retirement-only Supervisor preservation requires one signed journal tuple"
+        )
+    all_supervisor_pins = (*supervisor_pins, *retirement_supervisor_pins)
+    all_gateway_pins = (*gateway_pins, *retirement_gateway_pins)
+    retirement_gateway_names = {pin.name for pin in retirement_gateway_pins}
     gateway_contracts: dict[str, dict[str, str]] = {}
     gateway_details: dict[str, Any] = {}
     observed_gateway_pins: list[GatewayPin] = []
@@ -461,8 +332,8 @@ def inventory_runtime_endpoints(
         _assert_complete_gateway_pin(observed_pin)
         observed_gateway_pins.append(observed_pin)
     protected_endpoint_names = {
-        *(pin.name for pin in gateway_pins),
-        *(pin.endpoint for pin in supervisor_pins),
+        *(pin.name for pin in all_gateway_pins),
+        *(pin.endpoint for pin in all_supervisor_pins),
     }
     if pending_supervisor_cleanup is not None:
         protected_endpoint_names.add(pending_supervisor_cleanup.endpoint)
@@ -502,10 +373,19 @@ def inventory_runtime_endpoints(
             genie_space_id=genie_space_id,
             assert_single_writer=assert_single_writer,
         )
+        if observed_pin in retirement_gateway_pins:
+            assert_retirement_gateway_pin_from_signed_journal(
+                client,
+                pin=observed_pin,
+                runtime_application_id=runtime_application_id,
+                canonical_name=supervisor_name,
+            )
 
     signed_supervisors: dict[str, dict[str, str]] = {}
-    for contract in gateway_contracts.values():
+    signed_supervisor_gateways: dict[str, set[str]] = {}
+    for gateway_name, contract in gateway_contracts.items():
         supervisor_id = contract["supervisor_id"]
+        signed_supervisor_gateways.setdefault(supervisor_id, set()).add(gateway_name)
         existing = signed_supervisors.get(supervisor_id)
         signed_fields = {
             key: contract[key]
@@ -578,7 +458,7 @@ def inventory_runtime_endpoints(
             creation_candidate_seen = True
             if creation_disposition == "preserve":
                 continue
-            if pin in supervisor_pins or supervisor_id in signed_supervisors:
+            if pin in all_supervisor_pins or supervisor_id in signed_supervisors:
                 raise RuntimeError("revoked pending Supervisor creation collides with signed blue")
             if historical_creation is None:
                 raise RuntimeError("revoked pending Supervisor classification is incomplete")
@@ -610,6 +490,40 @@ def inventory_runtime_endpoints(
             application_id=runtime_application_id,
             resource=f"historical Supervisor endpoint {pin.endpoint}",
         )
+        if pin in retirement_supervisor_pins:
+            active_dependencies = signed_supervisor_gateways.get(
+                supervisor_id,
+                set(),
+            ) & {item.name for item in gateway_pins}
+            if active_dependencies:
+                raise RuntimeError(
+                    "retirement-only Supervisor is still referenced by an active "
+                    "preserved Gateway"
+                )
+            historical_json, historical_sha256 = (
+                attest_historical_supervisor_retirement_predecessor(
+                    client,
+                    direct=direct,
+                    endpoint_details=details,
+                    pin=pin,
+                    canonical_name=supervisor_name,
+                    genie_space_id=genie_space_id,
+                    catalog=catalog,
+                    runtime_application_id=runtime_application_id,
+                )
+            )
+            actual_supervisor_pins.add(pin)
+            reviewed_supervisors.append(
+                ReviewedSupervisor(
+                    **asdict(pin),
+                    display_name=_text(direct.get("display_name")),
+                    create_time=_text(direct.get("create_time")),
+                    contract_json=historical_json,
+                    contract_sha256=historical_sha256,
+                    preserved=True,
+                )
+            )
+            continue
         signed = signed_supervisors.get(supervisor_id)
         if signed is None:
             expected_json = canonical_supervisor_contract_json(
@@ -672,7 +586,13 @@ def inventory_runtime_endpoints(
                 create_time=_text(direct.get("create_time")),
                 contract_json=expected_json,
                 contract_sha256=contract_sha256,
-                preserved=pin in supervisor_pins,
+                preserved=(
+                    pin in all_supervisor_pins
+                    or bool(
+                        signed_supervisor_gateways.get(supervisor_id, set())
+                        & retirement_gateway_names
+                    )
+                ),
             )
         )
     missing_signed = set(signed_supervisors) - {item.supervisor_id for item in reviewed_supervisors}
@@ -699,15 +619,15 @@ def inventory_runtime_endpoints(
         validate_pending_cleanup_inventory(
             pending_supervisor_cleanup,
             runtime_application_id=runtime_application_id,
-            supervisor_pins=supervisor_pins,
+            supervisor_pins=all_supervisor_pins,
             observed_supervisors=observed_supervisor_pins,
             endpoint_details=endpoint_details,
         )
     _validate_pin_sets(
         actual_gateway_pins,
         actual_supervisor_pins,
-        gateway_pins=gateway_pins,
-        supervisor_pins=supervisor_pins,
+        gateway_pins=all_gateway_pins,
+        supervisor_pins=all_supervisor_pins,
         observed_gateways=observed_gateway_pins,
         observed_supervisors=observed_supervisor_pins,
     )
@@ -720,7 +640,7 @@ def inventory_runtime_endpoints(
             supervisor_endpoint=gateway_contracts[pin.name]["supervisor_endpoint"],
             supervisor_endpoint_id=gateway_contracts[pin.name]["supervisor_endpoint_id"],
             contract_digest=gateway_exact_resource_digest(gateway_contracts[pin.name]),
-            preserved=pin in gateway_pins,
+            preserved=pin in all_gateway_pins,
         )
         for pin in sorted(actual_gateway_pins)
     )
@@ -773,7 +693,19 @@ def build_parser() -> argparse.ArgumentParser:
         type=lambda value: _json_pin(value, GatewayPin),
     )
     parser.add_argument(
+        "--preserve-retirement-gateway-json",
+        action="append",
+        default=[],
+        type=lambda value: _json_pin(value, GatewayPin),
+    )
+    parser.add_argument(
         "--preserve-supervisor-json",
+        action="append",
+        default=[],
+        type=lambda value: _json_pin(value, SupervisorPin),
+    )
+    parser.add_argument(
+        "--preserve-retirement-supervisor-json",
         action="append",
         default=[],
         type=lambda value: _json_pin(value, SupervisorPin),
@@ -836,7 +768,9 @@ def main(argv: list[str] | None = None) -> int:
             catalog=args.catalog,
             genie_space_id=args.genie_space_id,
             gateway_pins=gateway_pins,
+            retirement_gateway_pins=tuple(args.preserve_retirement_gateway_json),
             supervisor_pins=supervisor_pins,
+            retirement_supervisor_pins=tuple(args.preserve_retirement_supervisor_json),
             pending_supervisor_cleanup=cleanup_journal.read(),
             pending_supervisor_creation=creation.read_pending_creation(
                 client,

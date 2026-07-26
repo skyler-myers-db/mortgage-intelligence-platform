@@ -13,6 +13,7 @@ from tests.unit.test_reconcile_historical_agent_endpoints import (
     _gateway_details,
     _inventory,
     _supervisor,
+    _trust_signed_historical,
 )
 from tools.databricks import reconcile_historical_agent_endpoints as inventory
 
@@ -168,16 +169,7 @@ def test_inventory_attests_non_hash_legacy_name_in_platform_reserved_family(
         },
         [supervisor],
     )
-    monkeypatch.setattr(
-        inventory,
-        "gateway_endpoint_configuration_matches",
-        lambda _details, _deployment: True,
-    )
-    monkeypatch.setattr(
-        inventory,
-        "verify_gateway_responses_agent",
-        lambda *_args, **_kwargs: None,
-    )
+    _trust_signed_historical(monkeypatch)
 
     result = _inventory(client)
 

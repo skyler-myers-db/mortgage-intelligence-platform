@@ -9,6 +9,7 @@ from typing import Any
 
 import pytest
 
+from backend.agents import gateway_live_resource_contract as live_resource_contract
 from backend.agents.gateway_contract import (
     DEFAULT_GATEWAY_AGENT_EXPERIMENT,
     GATEWAY_BURST_SCALING_ENABLED,
@@ -32,6 +33,7 @@ from backend.agents.gateway_contract import (
 )
 from backend.agents.gateway_live_resource_contract import (
     assert_live_gateway_runtime_resources,
+    assert_live_historical_gateway_runtime_resources,
 )
 from backend.agents.supervisor_contract import (
     canonical_supervisor_contract_json,
@@ -502,6 +504,43 @@ def test_live_gateway_runtime_resources_accept_exact_signed_release_state() -> N
     assert _verify_live(resources) == resources.contract
 
 
+def test_historical_gateway_verifier_accepts_signed_prior_source_only_for_retirement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resources = _live_resources()
+    monkeypatch.setattr(
+        live_resource_contract,
+        "gateway_proxy_source_hash",
+        lambda **_kwargs: "f" * 64,
+    )
+
+    with pytest.raises(RuntimeError, match="reviewed proxy source contract drifted"):
+        _verify_live(resources)
+
+    assert (
+        assert_live_historical_gateway_runtime_resources(
+            resources.workspace,
+            environment=resources.environment,
+            model_registry=resources.model_registry,
+            tracking_client=resources.tracking_client,
+        )
+        == resources.contract
+    )
+
+
+def test_historical_gateway_verifier_still_rejects_immutable_identity_drift() -> None:
+    resources = _live_resources()
+    resources.gateway.id = "attacker-replacement"
+
+    with pytest.raises(RuntimeError, match="immutable endpoint contract drifted"):
+        assert_live_historical_gateway_runtime_resources(
+            resources.workspace,
+            environment=resources.environment,
+            model_registry=resources.model_registry,
+            tracking_client=resources.tracking_client,
+        )
+
+
 def test_served_binding_preserves_previous_model_attestation_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -604,9 +643,9 @@ def test_served_binding_preserves_previous_model_attestation_key(
 
 def test_live_gateway_runtime_resources_reject_private_supervisor_endpoint_id_drift() -> None:
     resources = _live_resources()
-    resources.workspace.serving_endpoints.resources[_SUPERVISOR_ENDPOINT].id = (
-        "se-attacker-replacement"
-    )
+    resources.workspace.serving_endpoints.resources[
+        _SUPERVISOR_ENDPOINT
+    ].id = "se-attacker-replacement"
 
     with pytest.raises(RuntimeError, match="Supervisor immutable endpoint contract drifted"):
         _verify_live(resources)
