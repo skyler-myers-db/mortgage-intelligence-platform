@@ -198,6 +198,8 @@ def _example_rows(workspace: Any, supervisor_id: str) -> list[Any]:
         "GET",
         f"/api/2.1/supervisor-agents/{quote(supervisor_id, safe='')}/examples",
     )
+    if payload == {}:
+        return []
     rows = payload if isinstance(payload, list) else _field(payload, "examples")
     if not isinstance(rows, list):
         raise RuntimeError("Supervisor creation example inventory is malformed")

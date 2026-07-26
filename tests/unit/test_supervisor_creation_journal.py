@@ -82,7 +82,7 @@ class _Api:
         if path.endswith("/tools"):
             return {"tools": list(self.owner.tools[supervisor_id].values())}
         if path.endswith("/examples"):
-            return {"examples": []}
+            return self.owner.example_payload
         return dict(self.owner.agents[supervisor_id])
 
 
@@ -92,6 +92,7 @@ class _Workspace:
         self.api_client = _Api(self)
         self.agents: dict[str, dict[str, Any]] = {}
         self.tools: dict[str, dict[str, dict[str, Any]]] = {}
+        self.example_payload: object = {"examples": []}
         self.serving_endpoints = SimpleNamespace(get=self._endpoint)
 
     def get_workspace_id(self) -> int:
@@ -157,6 +158,32 @@ def _create(workspace: _Workspace, record: dict[str, Any]) -> dict[str, str]:
         create=create,
         now=_NOW,
     )
+
+
+def test_create_accepts_provider_omitted_empty_examples() -> None:
+    workspace = _Workspace()
+    workspace.example_payload = {}
+
+    created = _create(workspace, _prepare(workspace))
+
+    assert created["supervisor_id"] == "supervisor-created"
+
+
+@pytest.mark.parametrize("payload", ({"unexpected": []}, None))
+def test_create_rejects_other_malformed_example_inventory(payload: object) -> None:
+    workspace = _Workspace()
+    workspace.example_payload = payload
+
+    with pytest.raises(RuntimeError, match="example inventory is malformed"):
+        _create(workspace, _prepare(workspace))
+
+
+def test_create_rejects_nonempty_example_inventory() -> None:
+    workspace = _Workspace()
+    workspace.example_payload = {"examples": [{"instructions": "unreviewed"}]}
+
+    with pytest.raises(RuntimeError, match="must contain zero examples"):
+        _create(workspace, _prepare(workspace))
 
 
 def test_origin_is_immutable_while_successor_lease_is_adopted(
@@ -262,7 +289,7 @@ def test_successor_contract_change_marks_historical_intent_retire_only(
             "source_git_sha": "b" * 40,
             "writer_application_id": _RUNTIME,
             "recovery_root_lease_id": _ROOT,
-                "expires_at": _LEASE_EXPIRES.isoformat(),
+            "expires_at": _LEASE_EXPIRES.isoformat(),
         },
     )
 
