@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import os
 import re
@@ -15,6 +16,9 @@ from typing import Any
 import pytest
 import yaml
 
+from backend.services.ai_gateway_proof_attestation import (
+    derive_gateway_proof_verify_key,
+)
 from backend.services.databricks_jobs import MANAGED_JOBS
 from tools.databricks import lakebase_oauth_role_bootstrap_admission as admission
 from tools.databricks import lakebase_oauth_role_bootstrap_orchestration as orchestration
@@ -1578,13 +1582,16 @@ def test_deploy_binds_deployer_auth_and_keeps_normal_app_oauth_shell_scoped() ->
     assert len(audit_invocations) == 10
     assert all("--expected-inventory-principal" in block for block in audit_invocations)
     direct_audit = '"$PYTHON" -m tools.databricks.audit_global_m2m_access'
-    assert len(
-        re.findall(
-            r"run_with_account_identity run_with_proof_signing_authority \\\n"
-            r'\s+"\$PYTHON" -m tools\.databricks\.audit_global_m2m_access',
-            text,
+    assert (
+        len(
+            re.findall(
+                r"run_with_account_identity run_with_proof_signing_authority \\\n"
+                r'\s+"\$PYTHON" -m tools\.databricks\.audit_global_m2m_access',
+                text,
+            )
         )
-    ) == 5
+        == 5
+    )
     assert text.count(direct_audit) == 5
     for args_name in (
         "captured_audit_args",
@@ -4417,7 +4424,7 @@ def test_deploy_dev_wires_separate_required_gateway_signing_keys() -> None:
             "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: "
             "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
         )
-        == 1
+        == 2
     )
     model_binding = (
         "MIP_GATEWAY_MODEL_ATTESTATION_SIGNING_KEY: "
@@ -4989,16 +4996,13 @@ def test_deploy_exports_exact_source_and_quarantine_marker_under_signed_lease() 
     source_assignment = script.index('MIP_DEPLOYMENT_SOURCE_GIT_SHA="$SOURCE_GIT_SHA"')
     source_export = script.index("export MIP_DEPLOYMENT_SOURCE_GIT_SHA")
     lease_acquire = script.index("tools.databricks.app_deployment_lease acquire")
-    lease_assignment = script.index(
-        'APP_DEPLOYMENT_LEASE_ID="${MIP_APP_DEPLOYMENT_LEASE_ID:'
-    )
+    lease_assignment = script.index('APP_DEPLOYMENT_LEASE_ID="${MIP_APP_DEPLOYMENT_LEASE_ID:')
     marker_assignment = script.index(
         'OAUTH_CREDENTIAL_QUARANTINE_FILE="$(',
         lease_assignment,
     )
     marker_export = script.index(
-        'export MIP_OAUTH_CREDENTIAL_QUARANTINE_FILE='
-        '"$OAUTH_CREDENTIAL_QUARANTINE_FILE"',
+        "export MIP_OAUTH_CREDENTIAL_QUARANTINE_FILE=" '"$OAUTH_CREDENTIAL_QUARANTINE_FILE"',
         marker_assignment,
     )
     trap = _shell_function("restore_rendered_sql_fail_closed")
@@ -5032,20 +5036,11 @@ def test_oauth_credential_recovery_is_explicit_complete_and_lease_bound() -> Non
         start,
     )
     recovery = script[start:end]
-    assert (
-        "run_with_account_identity run_with_proof_signing_authority"
-        in recovery
-    )
+    assert "run_with_account_identity run_with_proof_signing_authority" in recovery
     assert "tools.databricks.oauth_credential_recovery_cli recover" in recovery
-    assert recovery.index("--intent-path") < recovery.index(
-        "--confirm-principal-id"
-    )
-    assert recovery.index("--confirm-principal-id") < recovery.index(
-        "--confirm-authority-identity"
-    )
-    assert recovery.index("--confirm-authority-identity") < recovery.index(
-        "--confirm-provider-api"
-    )
+    assert recovery.index("--intent-path") < recovery.index("--confirm-principal-id")
+    assert recovery.index("--confirm-principal-id") < recovery.index("--confirm-authority-identity")
+    assert recovery.index("--confirm-authority-identity") < recovery.index("--confirm-provider-api")
 
 
 def test_oauth_orphan_lease_recovery_is_complete_exclusive_and_lease_bound() -> None:
@@ -5069,9 +5064,7 @@ def test_oauth_orphan_lease_recovery_is_complete_exclusive_and_lease_bound() -> 
         "tools.databricks.app_deployment_lease heartbeat",
         lease_acquire,
     )
-    start = script.index(
-        'step "recover the explicitly confirmed orphan OAuth credential lease"'
-    )
+    start = script.index('step "recover the explicitly confirmed orphan OAuth credential lease"')
     end = script.index(
         'step "recover the explicitly confirmed interrupted OAuth credential intent"',
         start,
@@ -5080,12 +5073,9 @@ def test_oauth_orphan_lease_recovery_is_complete_exclusive_and_lease_bound() -> 
     assert lease_acquire < lease_heartbeat < start
     assert "run_with_proof_signing_authority" in recovery
     assert (
-        "tools.databricks.oauth_credential_recovery_cli "
-        "\\\n      recover-orphan-lease"
+        "tools.databricks.oauth_credential_recovery_cli " "\\\n      recover-orphan-lease"
     ) in recovery
-    assert recovery.index("--confirm-lease-id") < recovery.index(
-        "--confirm-recovery-root-lease-id"
-    )
+    assert recovery.index("--confirm-lease-id") < recovery.index("--confirm-recovery-root-lease-id")
 
 
 @pytest.mark.parametrize("state", ("blue_active", "green_verified"))
@@ -6725,33 +6715,23 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
     repair_input = workflow_inputs["repair_normal_credential"]
     assert repair_input["type"] == "boolean"
     assert repair_input["default"] == "false"
-    break_glass_input = workflow_inputs[
-        "acknowledge_single_maintainer_break_glass"
-    ]
+    break_glass_input = workflow_inputs["acknowledge_single_maintainer_break_glass"]
     assert break_glass_input["type"] == "boolean"
     assert break_glass_input["default"] == "false"
 
     steps = workflow["jobs"]["deploy"]["steps"]
     refusal_job = workflow["jobs"]["refuse-unacknowledged"]
     deploy_job = workflow["jobs"]["deploy"]
-    assert refusal_job["if"] == (
-        "${{ !inputs.acknowledge_single_maintainer_break_glass }}"
-    )
+    assert refusal_job["if"] == ("${{ !inputs.acknowledge_single_maintainer_break_glass }}")
     refusal_steps = refusal_job["steps"]
     assert len(refusal_steps) == 1
-    assert refusal_steps[0]["name"] == (
-        "Refuse an unacknowledged single-maintainer deployment"
-    )
+    assert refusal_steps[0]["name"] == ("Refuse an unacknowledged single-maintainer deployment")
     assert "exit 1" in refusal_steps[0]["run"]
-    assert deploy_job["if"] == (
-        "${{ inputs.acknowledge_single_maintainer_break_glass }}"
-    )
+    assert deploy_job["if"] == ("${{ inputs.acknowledge_single_maintainer_break_glass }}")
     repair_steps = [
         step for step in steps if step.get("name") == "Repair normal operator OAuth credential"
     ]
-    deploy_steps = [
-        step for step in steps if step.get("name") == "Deploy dev Databricks App"
-    ]
+    deploy_steps = [step for step in steps if step.get("name") == "Deploy dev Databricks App"]
     assert len(repair_steps) == 1
     assert len(deploy_steps) == 1
     repair = repair_steps[0]
@@ -6762,17 +6742,91 @@ def test_dev_workflow_credential_repair_is_explicit_bounded_and_non_deploying() 
         "DATABRICKS_TOKEN": "${{ secrets.DATABRICKS_TOKEN }}",
         "DATABRICKS_CLIENT_ID": "${{ secrets.DATABRICKS_CLIENT_ID }}",
         "GH_TOKEN": "${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}",
-        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": (
-            "${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"
+        "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": ("${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}"),
+        "MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY": (
+            "${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}"
+        ),
+        "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS": (
+            "${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}"
         ),
         "MIP_APP_NAME": "${{ vars.MIP_APP_NAME || 'mip-app' }}",
         "MIP_DEPLOYMENT_SOURCE_GIT_SHA": "${{ github.sha }}",
         "MIP_M2M_GITHUB_REPOSITORY": "${{ github.repository }}",
     }
+    assert 'MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$(' in repair["run"]
+    assert "derive_gateway_proof_verify_key" in repair["run"]
+    assert 'os.environ["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"]' in repair["run"]
+    assert "export MIP_AI_GATEWAY_PROOF_VERIFY_KEY" in repair["run"]
+    assert "MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid" in repair["run"]
+    repair_preflight = repair["run"].partition("python -m tools.databricks.provision_m2m_oauth")[0]
+
+    def encoded_seed(byte: int) -> str:
+        return base64.urlsafe_b64encode(bytes([byte]) * 32).rstrip(b"=").decode()
+
+    def run_preflight(
+        *,
+        signing_key: str,
+        previous_verify_key: str = "",
+        historical_verify_keys: str = "",
+        post_preflight: str,
+    ) -> subprocess.CompletedProcess[str]:
+        preflight_env = {
+            **os.environ,
+            "PATH": f"{Path(sys.executable).parent}:{os.environ['PATH']}",
+            "DATABRICKS_HOST": "https://example.invalid",
+            "DATABRICKS_TOKEN": "test-token",
+            "DATABRICKS_CLIENT_ID": "test-client-id",
+            "GH_TOKEN": "test-github-token",
+            "MIP_AI_GATEWAY_PROOF_SIGNING_KEY": signing_key,
+            "MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY": previous_verify_key,
+            "MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS": historical_verify_keys,
+            "MIP_APP_NAME": "test-app",
+            "MIP_DEPLOYMENT_SOURCE_GIT_SHA": "a" * 40,
+            "MIP_M2M_GITHUB_REPOSITORY": "owner/repo",
+        }
+        return subprocess.run(
+            ["bash", "-c", repair_preflight + post_preflight],
+            cwd=REPO,
+            env=preflight_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+    historical_verify_key = derive_gateway_proof_verify_key(encoded_seed(1))
+    previous_verify_key = derive_gateway_proof_verify_key(encoded_seed(2))
+    current_signing_key = encoded_seed(3)
+    current_verify_key = derive_gateway_proof_verify_key(current_signing_key)
+    ordered_probe = run_preflight(
+        signing_key=current_signing_key,
+        previous_verify_key=previous_verify_key,
+        historical_verify_keys=historical_verify_key,
+        post_preflight=(
+            "\npython - <<'PY'\n"
+            "import json\n"
+            "from tools.databricks.app_deployment_lease_support import key_registry\n"
+            "print(json.dumps(key_registry()))\n"
+            "PY\n"
+        ),
+    )
+    assert ordered_probe.returncode == 0, ordered_probe.stdout + ordered_probe.stderr
+    assert json.loads(ordered_probe.stdout) == [
+        historical_verify_key,
+        previous_verify_key,
+        current_verify_key,
+    ]
+
+    invalid_signing_key = "A" * 42
+    invalid_probe = run_preflight(
+        signing_key=invalid_signing_key,
+        post_preflight="\nprintf 'PROVISION_SENTINEL\\n'\n",
+    )
+    assert invalid_probe.returncode != 0
+    assert "::error::MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid" in invalid_probe.stdout
+    assert "PROVISION_SENTINEL" not in invalid_probe.stdout
+    assert invalid_signing_key not in invalid_probe.stdout + invalid_probe.stderr
     assert deploy_steps[0]["if"] == "${{ !inputs.repair_normal_credential }}"
-    assert _continued_command_tokens(
-        repair["run"], "tools.databricks.provision_m2m_oauth"
-    ) == [
+    assert _continued_command_tokens(repair["run"], "tools.databricks.provision_m2m_oauth") == [
         "python",
         "-m",
         "tools.databricks.provision_m2m_oauth",

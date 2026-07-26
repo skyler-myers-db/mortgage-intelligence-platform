@@ -255,6 +255,8 @@ jobs:
           DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
           GH_TOKEN: ${{ secrets.MIP_GITHUB_CREDENTIAL_SINK_TOKEN }}
           MIP_AI_GATEWAY_PROOF_SIGNING_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_SIGNING_KEY }}
+          MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY: ${{ secrets.MIP_AI_GATEWAY_PROOF_PREVIOUS_VERIFY_KEY }}
+          MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS: ${{ vars.MIP_AI_GATEWAY_PROOF_HISTORICAL_VERIFY_KEYS }}
           MIP_APP_NAME: ${{ vars.MIP_APP_NAME || 'mip-app' }}
           MIP_DEPLOYMENT_SOURCE_GIT_SHA: ${{ github.sha }}
           MIP_M2M_GITHUB_REPOSITORY: ${{ github.repository }}
@@ -272,6 +274,24 @@ jobs:
             echo "::error::Missing required credential-repair input(s):$missing"
             exit 1
           fi
+          if ! MIP_AI_GATEWAY_PROOF_VERIFY_KEY="$(
+            python - <<'PY'
+          import os
+          from backend.services.ai_gateway_proof_attestation import (
+              derive_gateway_proof_verify_key,
+          )
+
+          print(
+              derive_gateway_proof_verify_key(
+                  os.environ["MIP_AI_GATEWAY_PROOF_SIGNING_KEY"]
+              )
+          )
+          PY
+          )"; then
+            echo "::error::MIP_AI_GATEWAY_PROOF_SIGNING_KEY is invalid"
+            exit 1
+          fi
+          export MIP_AI_GATEWAY_PROOF_VERIFY_KEY
           python -m tools.databricks.provision_m2m_oauth \
             --identity-role normal \
             --expected-application-id "$DATABRICKS_CLIENT_ID" \
